@@ -17,12 +17,20 @@ export function prototypeCriticGate(pipeline: Pipeline | null, publishingStageId
   if (!pipeline || !pipeline.stages.some(s => s.id === publishingStageId)) {
     return { ok: false, missing: "this caller is not a stage of a prototype lane" };
   }
-  const critics = pipeline.stages.filter(s => s.id !== publishingStageId && s.effectiveRole.roleId === "visual-critic");
+  const critics = pipeline.stages.filter(s => {
+    if (s.id === publishingStageId) return false;
+    const attempt = latest(pipeline.runs.find(r => r.stageId === s.id)?.attempts ?? []);
+    return s.effectiveRole.roleId === "visual-critic" || attempt?.effectiveRole.roleId === "visual-critic";
+  });
   if (!critics.length) return { ok: false, missing: "this lane has no visual-critic stage" };
   const missing: string[] = [];
   for (const critic of critics) {
     const attempt = latest(pipeline.runs.find(r => r.stageId === critic.id)?.attempts ?? []);
     const pass = { pipelineId: pipeline.id, stageId: critic.id, attempt: attempt?.n ?? 0 };
+    if (attempt && attempt.effectiveRole.roleId !== "visual-critic") {
+      missing.push(`visual-critic stage ${critic.id} attempt ${attempt.n} ran as ${attempt.effectiveRole.roleId}, not visual-critic`);
+      continue;
+    }
     if (attempt?.state === "passed") return { ok: true, pass: { ...pass, outcome: "passed" } };
     const prefix = `visual-critic stage ${critic.id} has not passed`;
     if (attempt?.state === "failed" && attempt.verdict?.status === "fail") {

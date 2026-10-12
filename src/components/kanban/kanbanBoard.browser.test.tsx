@@ -28814,6 +28814,12 @@ describe("prototype review: none fits and the tile gallery", () => {
         await context.addInitScript(language => localStorage.setItem("llv_lang", language), locale);
         const page = await context.newPage();
         await page.route("**/api/operator/settings", route => route.fulfill({ json: { language: locale } }));
+        await page.route("**/api/tasks/t-search/prototypes*", async route => {
+          const response = await route.fetch();
+          const body = await response.json() as { rounds: Array<{ variants: Array<{ frames: Array<{ image: { url: string } }> }> }> };
+          body.rounds[0]!.variants[1]!.frames[0]!.image.url = body.rounds[0]!.variants[0]!.frames[0]!.image.url;
+          await route.fulfill({ response, json: body });
+        });
         await page.goto(`${server.base}?proto=1&lang=${locale}`);
         await page.evaluate(theme => { document.documentElement.setAttribute("data-theme", theme); localStorage.setItem("llv-theme", theme); }, theme);
         await page.locator('[data-prototype-button="t-search"], [data-phone-card-prototype-button="t-search"]').first().waitFor();
@@ -28855,6 +28861,19 @@ describe("prototype review: none fits and the tile gallery", () => {
         await page.waitForFunction(() => document.activeElement?.getAttribute("data-prototype-tile") === "1:f0");
         const returned = await tile.evaluate(el => { const box = el.getBoundingClientRect(); const body = el.closest<HTMLElement>("[data-mobile2-sheet-body]"); const scroll = (body ?? el.closest<HTMLElement>("[data-prototype-gallery]")!).getBoundingClientRect(); const context = body?.querySelector<HTMLElement>("[data-prototype-context]")?.getBoundingClientRect(); return box.top >= Math.max(scroll.top, context?.bottom ?? scroll.top) - .5 && box.bottom <= scroll.bottom + .5; });
         expect(returned).toBe(true);
+        const duplicateTile = page.locator('[data-prototype-tile="2:f0"]');
+        await duplicateTile.click(); await page.locator('[data-lightbox-position]').waitFor();
+        const duplicateOpened = { position: await page.locator('[data-lightbox-position]').innerText(), caption: await page.locator('[data-lightbox-caption]').innerText() };
+        expect(duplicateOpened.position).toBe("4 / 48");
+        expect(duplicateOpened.caption).toContain(locale === "uk" ? "2 · Дві колонки" : "2 · Two columns");
+        await capture("duplicate-frame");
+        await page.keyboard.press("ArrowLeft");
+        expect(await page.locator('[data-lightbox-position]').innerText()).toBe("3 / 48");
+        await page.keyboard.press("ArrowRight");
+        expect(await page.locator('[data-lightbox-position]').innerText()).toBe("4 / 48");
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => document.activeElement?.getAttribute("data-prototype-tile") === "2:f0");
+        const duplicateReturned = await page.evaluate(() => (document.activeElement as HTMLElement | null)?.getAttribute("data-prototype-tile"));
         await page.locator('[data-prototype-choose="1"]').first().click(); await capture("picked");
         await page.locator('[data-prototype-comment-field]').fill(locale === "uk" ? "Спростити всі варіанти." : "Simplify every variant."); await capture("pickedtext");
         await page.locator('[data-prototype-comment-field]').fill("");
@@ -28895,7 +28914,7 @@ describe("prototype review: none fits and the tile gallery", () => {
           await row.waitFor();
           expect(await row.innerText()).toContain(locale === "uk" ? "відхилено" : "rejected");
         }
-        readings[name] = { geometry, returned, armed, footer, posted, frames: ["rest", "enlarged", "picked", "pickedtext", "asks", "armed", "rejected"].map(state => `.artifacts/prototype-review/${name}-${state}.png`) };
+        readings[name] = { geometry, returned, duplicateOpened, duplicateReturned, armed, footer, posted, frames: ["rest", "enlarged", "duplicate-frame", "picked", "pickedtext", "asks", "armed", "rejected"].map(state => `.artifacts/prototype-review/${name}-${state}.png`) };
         fs.mkdirSync(path.dirname(evidencePath), { recursive: true }); fs.writeFileSync(evidencePath, `${JSON.stringify(readings, null, 2)}\n`);
         await context.close();
       }

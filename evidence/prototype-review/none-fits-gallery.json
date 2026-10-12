@@ -210,6 +210,11 @@
       ]
     },
     "returned": true,
+    "duplicateOpened": {
+      "position": "4 / 48",
+      "caption": "2 · Two columns — results page, before and after · Changed\n· Search results layout"
+    },
+    "duplicateReturned": "2:f0",
     "armed": true,
     "footer": {
       "chipHeight": 32,
@@ -232,6 +237,7 @@
     "frames": [
       ".artifacts/prototype-review/desktop-1440-en-light-rest.png",
       ".artifacts/prototype-review/desktop-1440-en-light-enlarged.png",
+      ".artifacts/prototype-review/desktop-1440-en-light-duplicate-frame.png",
       ".artifacts/prototype-review/desktop-1440-en-light-picked.png",
       ".artifacts/prototype-review/desktop-1440-en-light-pickedtext.png",
       ".artifacts/prototype-review/desktop-1440-en-light-asks.png",
@@ -2130,6 +2136,11 @@
       ]
     },
     "returned": true,
+    "duplicateOpened": {
+      "position": "4 / 48",
+      "caption": "2 · Two columns — results page, before and after · Changed\nSearch results layout"
+    },
+    "duplicateReturned": "2:f0",
     "armed": true,
     "footer": {
       "chipHeight": 44,
@@ -2152,6 +2163,7 @@
     "frames": [
       ".artifacts/prototype-review/phone-390-en-light-rest.png",
       ".artifacts/prototype-review/phone-390-en-light-enlarged.png",
+      ".artifacts/prototype-review/phone-390-en-light-duplicate-frame.png",
       ".artifacts/prototype-review/phone-390-en-light-picked.png",
       ".artifacts/prototype-review/phone-390-en-light-pickedtext.png",
       ".artifacts/prototype-review/phone-390-en-light-asks.png",

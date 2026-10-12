@@ -467,6 +467,19 @@ test("publication gate refuses unreviewed variants without storing a round and n
   expect(outside.status).toBe(409);
   expect((await outside.json()).error).toContain("not a stage");
 });
+test("publication refuses a builder pass after the critic stage is changed, until a visual-critic attempt passes", async () => {
+  const lane = criticLane();
+  criticAttempt(lane).effectiveRole = { ...lane.stages[1]!.effectiveRole, roleId: "builder" };
+  const refused = await gatedPublishPOST(request("/api/prototype-reviews", await fullInput("builder-pass")), { ...reviewedWorld, pipeline: () => lane });
+  expect(refused.status).toBe(409);
+  expect((await refused.json()).error).toContain("builder");
+  expect(loadTasks()[0]!.prototypeReviews).toBeUndefined();
+
+  lane.runs[0]!.attempts.push({ ...criticAttempt(lane), n: 2, state: "passed", effectiveRole: { ...lane.stages[1]!.effectiveRole }, verdict: { status: "pass" } });
+  const published = await gatedPublishPOST(request("/api/prototype-reviews", await fullInput("critic-pass")), { ...reviewedWorld, pipeline: () => lane });
+  expect(published.status).toBe(200);
+  expect((await published.json()).critic).toEqual({ stageId: "critic", attempt: 2, outcome: "passed" });
+});
 test("question-only forms bypass the gate and a reviewed publication stores local provenance", async () => {
   const questionnaire = await gatedPublishPOST(request("/api/prototype-reviews", { clientRequestId: "only-questions", taskId: "task-prototype", title: "Questions", questions }), prototypeWorld);
   expect(questionnaire.status).toBe(200);

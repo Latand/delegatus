@@ -39,6 +39,15 @@ test("a failed critic is fixed only by its passed fix started after that failure
   delete fix.historical; fix.state = "running";
   expect(prototypeCriticGate(lane, "publish").ok).toBe(false);
 });
+test("a builder failure and its passed fix cannot count as a visual-critic review", () => {
+  const lane = criticLane();
+  criticAttempt(lane).state = "failed";
+  criticAttempt(lane).verdict!.status = "fail";
+  criticAttempt(lane).effectiveRole = { ...criticAttempt(lane).effectiveRole, roleId: "builder" };
+  const result = prototypeCriticGate(lane, "publish");
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.missing).toContain("ran as builder, not visual-critic");
+});
 test("a later unpassed critic attempt invalidates its earlier pass and fix", () => {
   const lane = criticLane();
   lane.runs[0]!.attempts.push({ ...criticAttempt(lane), n: 2, state: "running" });

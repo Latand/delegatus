@@ -78,12 +78,13 @@ function galleryOf(t: TFunction, round: PrototypeRoundView, slides: readonly Sli
     const named = (side?: "original" | "changed") => (side ? `${label} · ${t(`proto.pair.${side}`)}` : label);
     const { image, original } = slide.frame;
     const frames = slides.filter(s => s.frame);
-    const place = `${frames.indexOf(slide) + 1} / ${frames.length}`;
+    const at = frames.indexOf(slide);
+    const place = `${at + 1} / ${frames.length}`;
     const changed = shown(image, broken);
     const before = shown(original, broken);
-    if (changed && before) return [{ src: image.url, alt: named("changed"), caption: named("changed"), detail: round.title, place, before: { src: original.url, alt: named("original"), caption: named("original") } }];
-    if (changed) return [{ src: image.url, alt: named(original ? "changed" : undefined), caption: named(original ? "changed" : undefined), detail: round.title, place }];
-    if (before) return [{ src: original.url, alt: named("original"), caption: named("original"), detail: round.title, place }];
+    if (changed && before) return [{ src: image.url, alt: named("changed"), caption: named("changed"), detail: round.title, place, owner: null, at, before: { src: original.url, alt: named("original"), caption: named("original") } }];
+    if (changed) return [{ src: image.url, alt: named(original ? "changed" : undefined), caption: named(original ? "changed" : undefined), detail: round.title, place, owner: null, at }];
+    if (before) return [{ src: original.url, alt: named("original"), caption: named("original"), detail: round.title, place, owner: null, at }];
     return [];
   });
 }
@@ -302,13 +303,14 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   const zoom = (media: PrototypeMediaView | undefined, of: Slide) => {
     if (!round || !media?.url) return;
     const gallery = galleryOf(t, round, slides, broken);
-    const image = gallery.find((entry) => entry.src === media.url || entry.before?.src === media.url);
+    const at = slides.filter(slide => slide.frame).findIndex(slide => slide.key === of.key);
+    const image = gallery.find((entry) => entry.at === at && (entry.src === media.url || entry.before?.src === media.url));
     if (image) { viewerTile.current = of.key; setViewer({ src: media.url, image, gallery }); }
   };
   /* Closing the viewer returns to the last picture it showed. */
   const follow = (image: GalleryImage) => {
-    const at = slides.findIndex((entry) => entry.frame && (entry.frame.image.url === image.src || entry.frame.original?.url === image.src));
-    if (at >= 0) viewerTile.current = slides[at]!.key;
+    const frame = slides.filter(entry => entry.frame)[image.at ?? -1];
+    if (frame) viewerTile.current = frame.key;
   };
   const markBroken = (id: string) => setBroken((held) => (held.has(id) ? held : new Set([...held, id])));
 
@@ -716,7 +718,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
 
   const lightbox = viewer ? (
     <ImageGalleryProvider value={() => viewer.gallery}>
-      <Lightbox src={viewer.src} alt={viewer.image.alt} caption={viewer.image.caption} detail={viewer.image.detail} onShow={follow} onClose={() => { setViewer(null); requestAnimationFrame(() => { const tile = galleryRef.current?.querySelector<HTMLElement>(`[data-prototype-tile="${viewerTile.current}"]`); tile?.focus({ preventScroll: true }); tile?.scrollIntoView({ block: "nearest" }); }); }} />
+      <Lightbox src={viewer.src} alt={viewer.image.alt} caption={viewer.image.caption} detail={viewer.image.detail} at={viewer.image.at} onShow={follow} onClose={() => { setViewer(null); requestAnimationFrame(() => { const tile = galleryRef.current?.querySelector<HTMLElement>(`[data-prototype-tile="${viewerTile.current}"]`); tile?.focus({ preventScroll: true }); tile?.scrollIntoView({ block: "nearest" }); }); }} />
     </ImageGalleryProvider>
   ) : null;
 

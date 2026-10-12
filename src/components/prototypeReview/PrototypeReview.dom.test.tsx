@@ -482,6 +482,28 @@ describe("the full-screen viewer", () => {
     expect(document.activeElement?.getAttribute("data-prototype-tile")).toBe("2:f0");
   });
 
+  test("identical frame URLs keep each tile's caption, position and return focus on desktop and phone", async () => {
+    for (const phone of [false, true]) {
+      phoneLayout = phone;
+      const read = reviewRead();
+      read.rounds[0]!.variants[0]!.frames[0]!.image = available("c");
+      read.rounds[0]!.variants[1]!.frames[0]!.image = read.rounds[0]!.variants[0]!.frames[0]!.image;
+      await mountReview(read);
+      await press('[data-prototype-tile="2:f0"]');
+      expect([place(), caption()?.includes("2 · Roomy — Board")]).toEqual(["2 / 2", true]);
+      await key("ArrowLeft");
+      expect([place(), caption()?.includes("1 · Compact — Board")]).toEqual(["1 / 2", true]);
+      await key("ArrowRight");
+      expect([place(), caption()?.includes("2 · Roomy — Board")]).toEqual(["2 / 2", true]);
+      await key("Escape");
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+      expect(document.activeElement?.getAttribute("data-prototype-tile")).toBe("2:f0");
+      await act(async () => root?.unmount());
+      root = null;
+      dom.document.body.innerHTML = "";
+    }
+  });
+
   test("a pair is one picture: the switch puts the original in its place at the same zoom, and a step returns to the changed side unzoomed", async () => {
     await mountReview(pairRead());
     /* The desktop draws the pair side by side; a press on the original opens the pair showing it. */
