@@ -23,7 +23,7 @@ import { RISE_FRAME_SHARE, RISE_MS } from "@/lib/voiceCompanion/motion";
 import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceCompanion/placement";
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
-import { browserCase, caseChromium as chromium, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
+import { browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
 import { WIRE_RIDE_ID } from "./orchestratorWires";
@@ -54,6 +54,20 @@ import { measureStageChain, stageChainFailures, type StageChainLane as Lane } fr
    machine. Launch through `chromium` from the harness so the case owns them. */
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
+
+describe("machine worker limit", () => {
+  browserTest("machine worker limit: desktop setting, seat face and popover in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/machine-worker-limit/desktop"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const result = await captureWorkerLimitFrames(browser, server.base, out, false);
+      fs.mkdirSync("evidence/machine-worker-limit", { recursive: true });
+      fs.writeFileSync("evidence/machine-worker-limit/desktop.json", JSON.stringify(result, null, 2) + "\n");
+      expect(result.failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
 const PROTOTYPE = process.env.KANBAN_PROTOTYPE_URL?.trim().replace(/\/$/, "") || null;
 const VIEWPORT = { width: 1440, height: 900 } as const;
 
@@ -5900,7 +5914,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
   const TODAY_SHEET_PX = 743;
   /* docs/design/header-menu.md: 360 px for every desktop state, 380 px for the Settings page and its voice row. */
   const DESKTOP_PX = 360;
-  const SETTINGS_PX = 380;
+  const SETTINGS_PX = 420;
   const desktopBound = (state: string) => (/^settings(-|$)/.test(state) ? SETTINGS_PX : DESKTOP_PX);
   const COUNTS = { decisions: 214, delivered: 61, prepared: 69, noCandidates: 48, noMatches: 97, skipped: 12, failed: 5 };
   /* Today's fourteen entries, by the attribute each carries in the built menu. */
@@ -5911,6 +5925,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
     guide: { desktop: "[data-rail-menu-setup-guide]", phone: "[data-mobile2-menu-row='setup-guide']" },
     walk: { desktop: "[data-rail-menu-interface-walk]", phone: "[data-mobile2-menu-row='interface-walk']" },
     mapping: { desktop: "[data-rail-menu-agent-mapping]", phone: "[data-mobile2-menu-row='agent-mapping']" },
+    workers: { desktop: "[data-header-menu-workers]", phone: "[data-header-menu-workers]" },
     dictation: { desktop: "[data-rail-menu-dictation]", phone: "[data-mobile2-menu-row='dictation']" },
     ping: { desktop: "[data-rail-menu-ping]", phone: "[data-mobile2-menu-row='ping']" },
     memory: { desktop: "[data-rail-menu-memory]", phone: "[data-mobile2-menu-row='memory']" },

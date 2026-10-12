@@ -32,6 +32,7 @@ globalThis.fetch = (async (input: unknown) => {
   const url = String(input);
   if (url.includes("/api/memory/settings")) return Response.json(working);
   if (url.includes("/api/asks-you/key")) return Response.json({ present: true, source: "file" });
+  if (url.includes("/api/operator/worker-limit")) return Response.json({ machine: { value: 8 }, project: { key: "atlas", value: null, effective: 8, source: "machine" }, running: { here: 7, machine: 19 } });
   return Response.json({}, { status: 404 });
 }) as typeof fetch;
 
@@ -69,7 +70,7 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: at rest, three cells an
   const settings = host.querySelector("[data-rail-menu-settings]")!;
   expect(settings.textContent).toContain(translate(lang, "headerMenu.settings"));
   expect(settings.querySelector("[data-memory-state]")!.textContent).toBe(translate(lang, "memoryState.short", { state: translate(lang, "memoryState.short.working") }));
-  expect(settings.textContent).toContain("10");
+  expect(settings.textContent).toContain("11");
   /* Nothing of the settings page shows at rest, and no entry appears twice. */
   expect(host.querySelector("[data-rail-menu-agent-mapping]")).toBeNull();
   expect(host.querySelector("[data-rail-menu-memory]")).toBeNull();
@@ -83,6 +84,7 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: at rest, three cells an
   expect(page.querySelector("[data-rail-menu-memory] [data-memory-state]")!.textContent).toBe(translate(lang, "memoryState.working", { count: 61 }));
   expect(page.querySelector("[data-rail-menu-key] [data-key-state]")!.textContent).toBe(translate(lang, "keyPage.saved"));
   expect(page.querySelector("[data-rail-menu-agent-mapping]")!.textContent).toBe(translate(lang, "headerMenu.mapping"));
+  expect(page.querySelector("[data-header-menu-workers]")!.textContent).toContain(translate(lang, "workers.hereRunning", { here: 7, machine: 19 }));
   expect(page.querySelector("[data-rail-menu-external-relay]")!.textContent).toBe(translate(lang, "headerMenu.relay"));
 
   await click(page.querySelector("[data-rail-menu-memory]"));
@@ -153,7 +155,7 @@ test("the overview has no project: Settings carries no memory state and its page
   const host = await mount(<HeaderMenuPanel project={null} onClose={() => {}} />);
   const settings = host.querySelector("[data-rail-menu-settings]")!;
   expect(settings.querySelector("[data-memory-state]")).toBeNull();
-  expect(settings.textContent).toContain("9");
+  expect(settings.textContent).toContain("10");
   await click(settings);
   expect(host.querySelector("[data-rail-menu-memory]")).toBeNull();
   expect(host.querySelector("[data-rail-menu-key]")).not.toBeNull();

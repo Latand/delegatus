@@ -217,9 +217,9 @@ test("an orchestrator pipeline stage carries the shared rules", () => {
   expect(scaffold).toContain("The project's own rules govern the work");
 });
 
-test("pipeline role lookup defaults omitted orchestrator maxWorkers to three", () => {
-  expect(pipelineRoleLookup("orchestrator")?.promptScaffold).toContain("keep at most 3 workers running at once");
-  expect(pipelineRoleLookup("orchestrator", { maxWorkers: 1 })?.promptScaffold).toContain("keep at most 1 workers running at once");
+test("pipeline role lookup ignores the retired orchestrator maxWorkers parameter", () => {
+  expect(pipelineRoleLookup("orchestrator")?.promptScaffold).not.toContain("keep at most");
+  expect(pipelineRoleLookup("orchestrator", { maxWorkers: 1 })?.promptScaffold).toBe(pipelineRoleLookup("orchestrator")?.promptScaffold);
   expect(pipelineRoleLookup("reviewer")?.promptScaffold).toContain("Run 1 independent pass(es)");
 });
 

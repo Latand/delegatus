@@ -18,7 +18,7 @@ import { heldDeliveryOccurrences, orchestratorMandateDeliveries } from "@/lib/ru
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
-import { capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
 import { translate } from "@/lib/i18n";
@@ -57,6 +57,20 @@ const runningPath = (account: string) => `/state/agent-log-viewer/shared/account
 const RUNNING_PATH = runningPath("spare");
 const VIEWPORTS = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
 const SCHEMES = ["light", "dark"] as const;
+
+describe("machine worker limit", () => {
+  browserTest("machine worker limit: phone setting, seat face and popover in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/machine-worker-limit/phone"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
+    try {
+      const result = await captureWorkerLimitFrames(browser, server.base, out, true);
+      fs.mkdirSync("evidence/machine-worker-limit", { recursive: true });
+      fs.writeFileSync("evidence/machine-worker-limit/phone.json", JSON.stringify(result, null, 2) + "\n");
+      expect(result.failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
 
 describe("shared memory settings", () => {
   browserTest("project switch and explanation render in both languages at desktop and phone widths", async () => {

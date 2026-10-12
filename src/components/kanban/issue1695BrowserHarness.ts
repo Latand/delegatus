@@ -186,6 +186,112 @@ export async function openFixture(
   return { context, page, pageErrors };
 }
 
+/** Worker-limit frames shared by the board and phone drivers. The fixture
+    serves invented counts and the frame's own operator language. */
+export async function captureWorkerLimitFrames(browser: Browser, base: string, out: string, phone: boolean) {
+  const readings: unknown[] = [];
+  const failures: string[] = [];
+  async function frame(page: Page, selector: string, name: string, budget?: number) {
+    const target = page.locator(selector).first();
+    await target.waitFor();
+    await target.scrollIntoViewIfNeeded();
+    const measurement = await target.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const clipped: string[] = [];
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      let node: Node | null;
+      while ((node = walker.nextNode())) {
+        if (!node.textContent?.trim() || !node.parentElement) continue;
+        const range = document.createRange(); range.selectNodeContents(node);
+        const text = range.getBoundingClientRect(); const parent = node.parentElement.getBoundingClientRect();
+        if (!text.width || !text.height) continue;
+        if (text.left < parent.left - 1 || text.right > parent.right + 1 || text.top < parent.top - 1 || text.bottom > parent.bottom + 1) clipped.push(node.textContent.trim());
+      }
+      const input = element.querySelector("input");
+      const dot = element.querySelector("[data-worker-limit-own]")?.getBoundingClientRect();
+      let left = 0, right = innerWidth, top = 0, bottom = innerHeight;
+      for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        const style = getComputedStyle(ancestor); const rect = ancestor.getBoundingClientRect();
+        if (/hidden|clip|auto|scroll/.test(style.overflowX)) { left = Math.max(left, rect.left); right = Math.min(right, rect.right); }
+        if (/hidden|clip|auto|scroll/.test(style.overflowY)) { top = Math.max(top, rect.top); bottom = Math.min(bottom, rect.bottom); }
+      }
+      return { rect: [box.x, box.y, box.width, box.height], clipped, clippedControl: box.left < left - .5 || box.right > right + .5 || box.top < top - .5 || box.bottom > bottom + .5, inputWidth: input?.getBoundingClientRect().width ?? null, dot: dot ? [dot.width, dot.height] : null, text: element.textContent, overflow: document.documentElement.scrollWidth > innerWidth };
+    });
+    const picture = selector === "[data-worker-limit-chip]" ? page.locator(phone ? "[data-mobile2-sheet='seat']" : "[data-orchestrator-incumbent]").first() : target;
+    readings.push({ name, ...measurement, frameRect: await picture.boundingBox() });
+    if (measurement.clipped.length) failures.push(`${name}: clipped labels ${measurement.clipped.join(" | ")}`);
+    if (measurement.overflow) failures.push(`${name}: horizontal page overflow`);
+    if (measurement.clippedControl) failures.push(`${name}: control is sliced by its visible band`);
+    if (budget && measurement.rect[3]! > budget + 1) failures.push(`${name}: height ${measurement.rect[3]} exceeds ${budget}`);
+    if (selector === "[data-header-menu-workers]" && Math.abs((measurement.inputWidth ?? 0) - (phone ? 80 : 48)) > .5) failures.push(`${name}: wrong field width ${measurement.inputWidth}`);
+    if (selector.includes("popover")) {
+      const viewport = page.viewportSize()!;
+      const [x, y, w, h] = measurement.rect as [number, number, number, number];
+      if (x < 8 - .5 || x + w > viewport.width - 8 + .5 || y < 8 - .5 || y + h > viewport.height - 8 + .5) failures.push(`${name}: popover leaves viewport margins`);
+      if (Math.abs(w - 256) > 1) failures.push(`${name}: popover width ${w}`);
+    }
+    await picture.screenshot({ path: path.join(out, `${name}.png`) });
+    return measurement;
+  }
+  for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const scene of ["machine", "own", "over"] as const) {
+    const name = `${phone ? 390 : 1440}-${lang}-${theme}-${scene}`;
+    const { page, context, pageErrors } = await openFixture(browser, `${base}?scenario=seat-head&workers=${scene}&lang=${lang}`, { width: phone ? 390 : 1440, height: phone ? 844 : 900 }, theme, lang, "reduce", phone);
+    try {
+      await page.waitForTimeout(350);
+      await page.evaluate(() => { for (const button of document.querySelectorAll<HTMLElement>("[data-attention-toast] button")) button.click(); });
+      if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+      const chip = page.locator("[data-worker-limit-chip]").first(); await chip.waitFor();
+      const closed = await frame(page, "[data-worker-limit-chip]", `${name}-closed`, phone ? 44 : undefined);
+      if (phone && Math.abs(closed.rect[3]! - 44) > .5) failures.push(`${name}: phone row is not 44 px`);
+      if ((scene === "machine") !== (closed.dot === null)) failures.push(`${name}: wrong override dot`);
+      if (closed.dot && (closed.dot[0] !== 4 || closed.dot[1] !== 4)) failures.push(`${name}: dot is not 4 px`);
+      const warning = await chip.evaluate(element => element.classList.contains("text-warning"));
+      if (warning !== (scene === "over")) failures.push(`${name}: wrong warning tone`);
+      await chip.click();
+      await frame(page, "[data-worker-limit-popover]", `${name}-popover`);
+      await page.keyboard.press("Escape");
+      if (!phone && scene === "machine") {
+        // The same production incumbent row in the dock's 360 px budget.
+        await page.locator("[data-orchestrator-incumbent]").first().evaluate(element => { (element as HTMLElement).style.width = "360px"; });
+        await frame(page, "[data-worker-limit-chip]", `${name}-floor360`);
+      }
+      if (phone) {
+        // Escape closes the seat's layer before opening the board menu.
+        await page.keyboard.press("Escape");
+        await page.locator('[data-mobile2-open="menu"]').first().click();
+        await page.locator('[data-mobile2-menu-row="settings"]').click();
+      } else {
+        await page.locator("[data-rail-menu]").first().click();
+        await page.locator("[data-rail-menu-settings]").click();
+      }
+      await page.locator("[data-header-menu-workers] input").waitFor();
+      await frame(page, "[data-header-menu-workers]", `${name}-settings-row`);
+      await frame(page, phone ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]", `${name}-settings`, phone ? 743 : 420);
+      if (!phone && scene === "machine") {
+        await page.keyboard.press("Escape");
+        await page.locator("[data-rail-overview]").click();
+        await page.locator("[data-rail-menu]").first().click();
+        await page.locator("[data-rail-menu-settings]").click();
+        await page.locator("[data-header-menu-workers] input").waitFor();
+        await frame(page, "[data-header-menu-workers]", `${name}-overview`);
+      }
+      if (phone && scene === "machine") {
+        await page.keyboard.press("Escape");
+        await page.locator("[data-mobile2-open='projects']").first().click();
+        await page.locator("[data-mobile2-project='__overview__']").click();
+        await page.locator("[data-mobile2-open='menu']").first().click();
+        await page.locator("[data-mobile2-menu-row='settings']").click();
+        await page.locator("[data-header-menu-workers] input").waitFor();
+        const overview = await frame(page, "[data-header-menu-workers]", `${name}-overview`);
+        if (overview.text?.includes(lang === "en" ? " here" : " тут")) failures.push(`${name}: overview names a project's running count`);
+      }
+      if (pageErrors.length) failures.push(`${name}: ${pageErrors.join(" | ")}`);
+    } catch (error) { failures.push(`${name}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`); }
+    finally { await context.close(); }
+  }
+  return { readings, failures };
+}
+
 /** Waits until an opened `<details>` shows all of its content. The board's
  * sections ease their content open from no height under `overflow: clip`, so
  * a control near the end is clipped for a moment; a click there lands on the

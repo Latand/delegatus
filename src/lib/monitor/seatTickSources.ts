@@ -1,4 +1,6 @@
 import { readSeatTurnOutcome, type SeatTurnOutcome } from "./seatAuthIncident";
+import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
+import { projectWorkerCounts } from "@/lib/orchestrator/workerCount";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { contextReading, readOrchestratorTranscriptFacts } from "@/lib/orchestrator/health";
 import type { SeatContextUsage } from "./seatAutoRotation";
@@ -483,6 +485,7 @@ export interface SeatTickSources {
   seatEverHeld?: (project: string) => boolean;
   /** Projects that currently hold an active seat. */
   activeSeats: () => string[];
+  workerCounts?: typeof projectWorkerCounts;
   pipelines: () => readonly Pipeline[];
   /** Settled lanes the hot store has already let go of (#1289). Cold storage,
       so it is read only once a check has decided it would pay for a `gh`
@@ -688,6 +691,7 @@ export function defaultSeatTickSources(): SeatTickSources {
     seatFor: (project) => orchestratorSeatForCurrentProject(project),
     seatEverHeld: (project) => orchestratorSeatEverHeld(project),
     activeSeats: () => activeSeatsByCurrentProject().map((seat) => seat.project),
+    workerCounts: projectWorkerCounts,
     pipelines: () => loadPipelinesForList(),
     archivedPipelines: () => loadArchivedPipelines(),
     tasks: () => loadTasks(),
@@ -2468,6 +2472,10 @@ export async function gatherSeatTickInput(
     project: canonical,
     now,
     seat,
+    workers: { ...(() => {
+      const limit = effectiveWorkerLimit(canonical);
+      return { limit: limit.value, source: limit.source, machine: limit.machine };
+    })(), running: sources.workerCounts?.().byProject.get(canonical) ?? 0 },
     ...(seat ? {} : { seatEverHeld: sources.seatEverHeld?.(canonical) ?? true }),
     pipelines,
     tasks,

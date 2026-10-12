@@ -27,6 +27,7 @@ import { useTeamView } from "@/components/team/teamClient";
 import { openTelemetrySettings } from "@/components/telemetry/TelemetrySettings";
 import { openVoiceCompanionSettings } from "@/components/voiceCompanion/VoiceCompanionSetting";
 import { useLocale } from "@/lib/i18n";
+import { WorkerLimitSettingsRow } from "@/components/orchestrator/WorkerLimitChip";
 
 import { HEADER_LAYOUTS, type HeaderItem } from "./headerMenuModel";
 
@@ -135,6 +136,8 @@ export function HeaderMenuPanel({ project, onClose }: { project: string | null; 
         );
       case "mapping":
         return <button key={item} type="button" data-rail-menu-agent-mapping="" className={ROW} onClick={act(() => openOnboarding("mapping"))}><Icon icon={SlidersHorizontal} /><Title>{t("headerMenu.mapping")}</Title></button>;
+      case "workers":
+        return <WorkerLimitSettingsRow key={item} project={project} />;
       case "dictation":
         return <button key={item} type="button" data-rail-menu-dictation="" className={ROW} onClick={act(() => openOnboarding("voice"))}><Icon icon={Mic} /><Title>{t("onboarding.menu.voice")}</Title></button>;
       case "voice":
@@ -319,6 +322,8 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
         return row("key", KeyRound, t("providerKey.label"), () => go("key"), <><KeyStateWord size="sheet" />{chevron}</>);
       case "mapping":
         return mapping?.kind === "row" ? { ...mapping, label: t("headerMenu.mapping") } : null;
+      case "workers":
+        return { kind: "custom", key: "workers", node: <WorkerLimitSettingsRow project={project} phone /> };
       case "dictation":
         return dictation ?? null;
       case "voice":

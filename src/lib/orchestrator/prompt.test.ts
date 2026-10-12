@@ -79,8 +79,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 45, and a v44 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(45);
+test("the default mandate is at version 46, and a v45 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(46);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -128,7 +128,8 @@ test("the default mandate is at version 45, and a v44 seat reads as stale", () =
   expect(orchestratorMandateStale(42)).toBe(true);
   expect(orchestratorMandateStale(43)).toBe(true);
   expect(orchestratorMandateStale(44)).toBe(true);
-  expect(orchestratorMandateStale(45)).toBe(false);
+  expect(orchestratorMandateStale(45)).toBe(true);
+  expect(orchestratorMandateStale(46)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -180,6 +181,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   43: "4c55ef1e031677516bba9dbd27fcc0e86e3805bc57f5080c1f8317400c726c0f",
   44: "34697f21c8943d0cdeb8ae45260d613de72c91cac67fd8888f06ced89cf79cbc",
   45: "13f8d5ab3ce3a2770245d7c87fd1f534139b76c3cd02c48c518e0f6056adb26c",
+  46: "a722e19c448a57367f6fbec9cae6e0028db200d7b4d8d0750ad43dad5ee55227",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -864,7 +866,7 @@ test("the delivered default names no stack and teaches one verdict vocabulary (v
   /* The worker cap holds in every mode, in the scaffold's words. */
   /* A seat designated onto an existing conversation gets no scaffold, so the
      mandate names the default cap itself (review of #2301). */
-  expect(delivered).toContain("Keep no more workers running at once than your role parameters allow (3 when they name none), in every mode: each running lane and each live spawned agent counts as one.");
+  expect(delivered).toContain("Keep no more workers running at once than the worker limit each wake and get_orchestrator state, in every mode: each running lane and each live spawned agent counts as one.");
 });
 
 /* The operator, 2026-09-27: a friend who teases a little, speaks their way,

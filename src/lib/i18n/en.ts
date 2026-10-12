@@ -4,6 +4,24 @@ import type { Dictionary } from "./core";
    Plural entries use Intl.LDMLPluralRule forms; {name} placeholders are
    filled from t()'s params. uk.ts must mirror this key set. */
 export const en = {
+  "workers.title": "Worker limit",
+  "workers.face": "workers {running} / {limit}",
+  "workers.phoneFace": "Workers {running} / {limit}",
+  "workers.aria": "{running} running · limit {limit}, {source}",
+  "workers.ownAria": "this project's own",
+  "workers.machineAria": "from the machine default",
+  "workers.own": "own limit",
+  "workers.inherited": "from the machine default",
+  "workers.running": "{here} running · {machine} on machine",
+  "workers.reset": "Reset to machine default ({value})",
+  "workers.pointer": "Machine default: ⋯ → Settings",
+  "workers.bounds": "From 1 to 64",
+  "workers.saveFailed": "Could not save. Try again.",
+  "workers.readFailed": "Could not read. Reopen to retry.",
+  "workers.settingsTitle": "Workers per project",
+  "workers.hereOwn": "Here: own limit {value}",
+  "workers.hereRunning": "{here} here · {machine} on machine",
+  "workers.machineRunning": "{machine} on machine",
 
   "memory.save.failed": "Could not save the shared memory switch. Try again.",
   "memory.last.projectOff": "Last operator turn: shared memory was off for this project.",
@@ -1329,8 +1347,6 @@ export const en = {
   "roleCopy.orchestrator.param.issueQuery.description": "GitHub issue query for backlog-campaign mode.",
   "roleCopy.orchestrator.param.urgent.label": "Urgent list",
   "roleCopy.orchestrator.param.urgent.description": "Comma-separated urgent issue ids.",
-  "roleCopy.orchestrator.param.maxWorkers.label": "Maximum workers",
-  "roleCopy.orchestrator.param.maxWorkers.description": "Worker cap for backlog-campaign mode.",
   "roleCopy.orchestrator.param.mergePolicy.label": "Merge policy",
   "roleCopy.orchestrator.param.mergePolicy.description": "Delivery policy for backlog-campaign mode.",
   "roleCopy.orchestrator.param.mergePolicy.option.pr": "Pull request",

@@ -224,6 +224,7 @@ export function seatTickPromptPreview(monitorPrompt: string, limit = SEAT_TICK_P
 
 export function seatTickWakeMessage(input: {
   project: string;
+  workers?: { limit: number; source: string; machine: number; running: number };
   /** Oldest evidence time, preserved across transport retention and replay. */
   snapshotAt?: string;
   reasons: readonly SeatTickWakeReason[];
@@ -302,13 +303,14 @@ export function seatTickWakeMessage(input: {
     ...(input.reportLines && input.reportLines.length > 0 ? ["", "Bridge reports:", ...input.reportLines.map((line) => `- ${line}`)] : []),
     ...(input.operatorInstructions ? ["", "Operator instructions for every wake:", input.operatorInstructions] : []),
     ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true),
+    ...(input.workers ? ["", `Worker limit here: ${input.workers.limit} (${input.workers.source === "project" ? `this project's own; machine default ${input.workers.machine}` : "the machine default"}). It replaces any number your mandate or launch text names. Running here now: ${input.workers.running}.`] : []),
     ...seatTickContractLines(input.mandateCarriesContract === true),
   ];
   // Large report ledgers keep all their keys. Shorten the note's explicitly
   // marked preview when that tail would exceed the payload bound.
   if (input.reportLines?.length && redactMonitorText(reserved.join("\n")).length > SEAT_TICK_MESSAGE_LIMIT - 700) {
     const note = seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true);
-    reserved.splice(reserved.length - seatTickContractLines(input.mandateCarriesContract === true).length - note.length, note.length,
+    reserved.splice(reserved.length - seatTickContractLines(input.mandateCarriesContract === true).length - (input.workers ? 2 : 0) - note.length, note.length,
       ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, 100));
   }
   return boundedSeatTickMessage(lines, reserved);

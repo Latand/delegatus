@@ -28,6 +28,7 @@ import { boardContext } from "../orchestrator/IncumbentHeader";
 import { RunsOnRow } from "../orchestrator/RunsOnRow";
 import { MobilePreviousSeatsRow, MobilePreviousSeatsScreen } from "../orchestrator/PreviousSeats";
 import type { OrchestratorIncumbent } from "../orchestrator/incumbent";
+import { WorkerLimitChip } from "../orchestrator/WorkerLimitChip";
 import {
   deriveRotateDraftState,
   mandateSummaryOf,
@@ -1065,6 +1066,7 @@ function LiveView({
       {/* The tick, directly under who holds the seat: whether the Viewer wakes
           this seat, and how often, is a property of the seat (#1681). */}
       <MobileSeatTickRow project={project} onOpen={onOpenTick} />
+      <WorkerLimitChip project={project} workers={incumbent?.workers} phone />
       {onOpenReports ? <MobileSeatReportsRow project={project} onOpen={onOpenReports} /> : null}
       {previousRow}
       {state.bindFailure ? (

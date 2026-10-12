@@ -3158,6 +3158,16 @@ const pickerAccounts = SIDEBAR_WEEKLY ? {
 /* The header menu's driver block (kanbanBoard.browser.test.tsx, "the header's menu, built"): `&header=1`
    hands shared memory, the key, the ping and the team to the driver, and `&member=1` signs a member in. */
 const HEADER_MENU = new URLSearchParams(location.search).has("header");
+const WORKER_SCENE = new URLSearchParams(location.search).get("workers");
+let workerMachine = WORKER_SCENE ? 8 : 3;
+let workerProject: number | null = WORKER_SCENE === "own" || WORKER_SCENE === "over" ? 10 : null;
+const workerRunning = WORKER_SCENE === "over" ? 11 : WORKER_SCENE ? 7 : 0;
+const workerSource = () => workerProject === null ? "machine" : "project";
+const workerAnswer = (project: string | null) => ({
+  machine: { value: workerMachine, default: 3, min: 1, max: 64, source: "machine", changedAt: null, changedBy: null },
+  project: project ? { key: project, value: workerProject, effective: workerProject ?? workerMachine, source: workerSource() } : null,
+  running: { here: project ? workerRunning : null, machine: WORKER_SCENE ? 19 : 0 },
+});
 const HEADER_ROUTES = ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/team"];
 const ROLE_MEMORY = new URLSearchParams(location.search).has("rolememory");
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
@@ -3165,6 +3175,18 @@ const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
+  if (WORKER_SCENE && url.pathname === "/api/operator/settings") {
+    return json({ ok: true, locale: { value: new URLSearchParams(location.search).get("lang") ?? "en", source: "chosen", changedAt: iso(0) }, timeZone: null });
+  }
+  if (url.pathname === "/api/operator/worker-limit") {
+    let project = url.searchParams.get("project");
+    if (method === "PUT") {
+      const body = JSON.parse(String(init?.body));
+      if (body.project) { project = body.project; workerProject = body.value; }
+      else workerMachine = body.value ?? 3;
+    }
+    return json(workerAnswer(project));
+  }
   if (ACCOUNT_PICKER && url.pathname === "/api/accounts" && method === "GET") {
     const held = Number(PICKER_PARAMS.get("pickerdelay") ?? 0);
     if (held > 0) await new Promise((resolve) => setTimeout(resolve, held));
@@ -3859,6 +3881,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if ((SEAT_HEAD || (FM_SEAT && fm.confirmed)) && url.pathname === "/api/orchestrator/seat/status") {
     return json({
+      ...(WORKER_SCENE ? { workers: { running: workerRunning, runningMachine: 19, limit: workerProject ?? workerMachine, source: workerSource(), machine: workerMachine } } : {}),
       project: PROJECT, designated: true, conversationId: orchestrator.conversationId, predecessorConversationId: null,
       engine: "claude", model: "claude-opus-4-5-1m", effort: "high", accountId: "primary", cwd: "/repo/atlas", transcriptPath: orchestrator.path,
       liveness: { lifecycle: "running", hostState: "alive", silentForMs: 1_000 },

@@ -1471,6 +1471,87 @@ export class SqliteAgentRegistryStore {
     }
   }
 
+  /** Advisory worker inventory. This reads indexed live hosts and their own
+      lineage only; the general lazy registry reader inventories historical keys. */
+  liveWorkerChildren(): { conversationId: string; parentConversationId: string; pipeline: boolean; deputy: boolean }[] {
+    this.db.exec("BEGIN");
+    try {
+      const rows = this.db.query<{ artifactPath: string }, []>(`
+        SELECT json_extract(value_json, '$.artifactPath') AS artifactPath
+        FROM ${this.recordsSource}
+        WHERE collection = 'entries' AND json_extract(value_json, '$.status') IN ('starting', 'live', 'idle', 'handoff')
+          AND json_type(value_json, '$.structuredHost') = 'object'
+        ORDER BY row_order
+      `).all();
+      this.onRowPayloadRead?.("entries", rows.length);
+      const children = new Map<string, { conversationId: string; parentConversationId: string; pipeline: boolean; deputy: boolean }>();
+      const parents = new Map<string, string>();
+      const canonicalParent = (parent: string): string => {
+        const cached = parents.get(parent);
+        if (cached) return cached;
+        const current = this.workerConversationId(parent);
+        parents.set(parent, current);
+        return current;
+      };
+      for (const row of rows) {
+        // Literal keyed lookups keep the hot/cold records view from being
+        // materialized by a join across its independently ordered histories.
+        const owners = this.db.query<{ conversation_id: string }, [string]>("SELECT conversation_id FROM registry_conversation_paths WHERE path = ?").all(row.artifactPath);
+        const ordered = owners.flatMap(owner => {
+          const record = this.db.query<{ row_order: number }, [string]>(`SELECT row_order FROM ${this.recordsSource} WHERE collection = 'conversations' AND row_key = ?`).get(owner.conversation_id);
+          return record ? [{ id: owner.conversation_id, order: record.row_order }] : [];
+        }).sort((left, right) => left.order - right.order);
+        const conversationId = ordered[0]?.id;
+        if (!conversationId || children.has(conversationId)) continue;
+        const edge = this.db.query<{ parent: string; source: string }, [string]>(`SELECT json_extract(value_json, '$.parentConversationId') AS parent, json_extract(value_json, '$.source') AS source FROM ${this.recordsSource} WHERE collection = 'lineageEdges' AND row_key = ?`).get(conversationId);
+        if (!edge || edge.source !== "viewer-spawn") continue;
+        const stored = this.db.query<{ value_json: string }, [string]>(`SELECT value_json FROM ${this.recordsSource} WHERE collection = 'memberships' AND row_key = ?`).get(conversationId);
+        const memberships = stored ? JSON.parse(stored.value_json) as { kind: string }[] : [];
+        this.onRowPayloadRead?.("lineageEdges", 1);
+        this.onRowPayloadRead?.("memberships", stored ? 1 : 0);
+        children.set(conversationId, { conversationId, parentConversationId: canonicalParent(edge.parent), pipeline: memberships.some(item => item.kind === "pipeline"), deputy: memberships.some(item => item.kind === "orchestrator") });
+      }
+      this.db.exec("COMMIT");
+      return [...children.values()];
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      throw error;
+    }
+  }
+
+  private workerConversationId(id: string): string {
+    const seen = new Set<string>();
+    let current = id;
+    while (!seen.has(current) && seen.size < 64) {
+      seen.add(current);
+      const alias = this.db.query<{ value_json: string }, [string]>(`SELECT value_json FROM ${this.recordsSource} WHERE collection = 'conversationAliases' AND row_key = ?`).get(current);
+      if (!alias) break;
+      const next: unknown = JSON.parse(alias.value_json);
+      if (typeof next !== "string") break;
+      current = next;
+    }
+    return current;
+  }
+
+  workerSeatContexts(ids: readonly string[]): Map<string, { conversationId: string; directories: string[] }> {
+    this.db.exec("BEGIN");
+    try {
+      const result = new Map<string, { conversationId: string; directories: string[] }>();
+      for (const id of new Set(ids)) {
+        const conversationId = this.workerConversationId(id);
+        const row = this.db.query<{ generations: string }, [string]>(`SELECT json_extract(value_json, '$.generations') AS generations FROM ${this.recordsSource} WHERE collection = 'conversations' AND row_key = ?`).get(conversationId);
+        this.onRowPayloadRead?.("conversations", row ? 1 : 0);
+        const generations = row?.generations ? JSON.parse(row.generations) as { launchProfile?: { cwd?: string } }[] : [];
+        result.set(id, { conversationId, directories: generations.toReversed().flatMap(generation => generation.launchProfile?.cwd ? [generation.launchProfile.cwd] : []) });
+      }
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      throw error;
+    }
+  }
+
   seatTickConversation(id: string): Pick<RegistryFile["conversations"][string], "id" | "turn"> | null {
     this.db.exec("BEGIN");
     try {

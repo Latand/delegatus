@@ -5505,6 +5505,40 @@ export class AgentRegistry {
     });
   }
 
+  /** Worker inventory: only live host rows and their keyed lineage/membership.
+      No complete registry snapshot or historical seat-child page is read. */
+  liveWorkerChildren(): { conversationId: string; parentConversationId: string; pipeline: boolean; deputy: boolean }[] {
+    if (this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")) return this.sqliteStore.liveWorkerChildren();
+    return this.readKeyed(file => {
+      const children = new Map<string, { conversationId: string; parentConversationId: string; pipeline: boolean; deputy: boolean }>();
+      for (const host of registryRowsMatching(file, "entries", "status", ["starting", "live", "idle", "handoff"])) {
+        if (!host.structuredHost) continue;
+        const conversation = registryConversationsForPath(file, host.artifactPath)[0];
+        if (!conversation) continue;
+        const edge = file.lineageEdges[conversation.id];
+        if (!edge || edge.source !== "viewer-spawn") continue;
+        const memberships = file.memberships[conversation.id] ?? [];
+        children.set(conversation.id, {
+          conversationId: conversation.id,
+          parentConversationId: resolveConversationAlias(file, edge.parentConversationId),
+          pipeline: memberships.some(row => row.kind === "pipeline"),
+          deputy: memberships.some(row => row.kind === "orchestrator"),
+        });
+      }
+      return [...children.values()];
+    });
+  }
+
+  /** Latest launch directories for worker counting, without registry inventory. */
+  workerSeatContexts(ids: readonly string[]): Map<string, { conversationId: string; directories: string[] }> {
+    if (this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")) return this.sqliteStore.workerSeatContexts(ids);
+    return this.readKeyed(file => new Map(ids.map(id => {
+      const conversationId = resolveConversationAlias(file, id as ViewerConversationId);
+      const conversation = file.conversations[conversationId];
+      return [id, { conversationId, directories: (conversation?.generations ?? []).toReversed().flatMap(generation => generation.launchProfile?.cwd ? [generation.launchProfile.cwd] : []) }];
+    })));
+  }
+
   /** Current credential identity for the seat's stdio MCP heartbeat. */
   seatMcpReceipt(conversationId: string): { spawnCapabilityDigest: string; createdAt: string; viewerMcpTransport: "stdio" | "http" | null } | null {
     if (this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")) {

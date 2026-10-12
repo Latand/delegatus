@@ -624,10 +624,10 @@ test("spawn_agent coerces and clamps bounded role params before the control requ
   });
 
   expect(reviewer).toMatchObject({ ok: true, clamped: { "roleParams.parallelN": 4 } });
-  expect(orchestrator).toMatchObject({ ok: true, clamped: { "roleParams.maxWorkers": 20 } });
+  expect(orchestrator).toMatchObject({ ok: true, ignored: { "roleParams.maxWorkers": expect.stringContaining("role_presets workerLimit") } });
   expect(bodies.map((body) => body.roleParams)).toEqual([
     { diffSource: "PR #915", parallelN: 4 },
-    { maxWorkers: 20 },
+    {},
   ]);
 });
 

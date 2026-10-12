@@ -283,6 +283,22 @@ function gather(over: Parameters<typeof sources>[0], state: SeatTickProjectState
   return gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources(over));
 }
 
+test("an unrotated seat's next gather reads changed machine and project worker limits", async () => {
+  const { setMachineWorkerLimit, setProjectWorkerLimit } = await import("@/lib/operator/workerLimit");
+  const ports = sources({});
+  ports.workerCounts = () => ({ byProject: new Map([[PROJECT, 7]]), machine: 19 });
+  const actor = { kind: "operator", via: "settings" } as const;
+  setMachineWorkerLimit(10, actor, null);
+  const first = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(first.workers).toEqual({ limit: 10, source: "machine", machine: 10, running: 7 });
+  setProjectWorkerLimit(PROJECT, 12, actor, null);
+  const second = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(second.seat?.conversationId).toBe(first.seat?.conversationId);
+  expect(second.workers).toEqual({ limit: 12, source: "project", machine: 10, running: 7 });
+  setProjectWorkerLimit(PROJECT, null, actor, null);
+  setMachineWorkerLimit(null, actor, null);
+});
+
 test("a note edited during evidence gathering renders the refreshed length", async () => {
   const { seatTickNoteRevision, seatTickWakeMessage } = await import("./report");
   const oldNote = "a".repeat(7_155);

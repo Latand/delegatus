@@ -1344,6 +1344,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
   const payload = verdict.kind === "wake"
     ? seatTickWakePayload({
       project: input.project,
+      workers: input.workers,
       snapshotAt,
       reasons: verdict.reasons,
       /* A settled child's final message rides on its line (#1881), read from

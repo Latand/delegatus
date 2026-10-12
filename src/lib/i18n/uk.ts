@@ -4,6 +4,24 @@ import type { en } from "./en";
 /* Ukrainian mirror of en.ts. The `Record<keyof typeof en, …>` annotation fails
    the build if a key is missing or extra, keeping both locales in lockstep. */
 export const uk: Record<keyof typeof en, Message> = {
+  "workers.title": "Ліміт воркерів",
+  "workers.face": "воркери {running} / {limit}",
+  "workers.phoneFace": "Воркери {running} / {limit}",
+  "workers.aria": "{running} працюють · ліміт {limit}, {source}",
+  "workers.ownAria": "свій ліміт проєкту",
+  "workers.machineAria": "з глобальних",
+  "workers.own": "свій ліміт",
+  "workers.inherited": "з глобальних",
+  "workers.running": "Працюють {here} · на машині {machine}",
+  "workers.reset": "Скинути до глобального ({value})",
+  "workers.pointer": "Глобальний: ⋯ → Налаштування",
+  "workers.bounds": "Від 1 до 64",
+  "workers.saveFailed": "Не збережено. Спробуйте ще раз.",
+  "workers.readFailed": "Не вдалося прочитати. Відкрийте знову.",
+  "workers.settingsTitle": "Воркерів на проєкт",
+  "workers.hereOwn": "Тут свій ліміт: {value}",
+  "workers.hereRunning": "{here} тут · {machine} на машині",
+  "workers.machineRunning": "{machine} на машині",
 
   "memory.save.failed": "Не вдалося зберегти перемикач спільної пам’яті. Спробуйте ще раз.",
   "memory.last.projectOff": "Останній хід оператора: спільну пам’ять для проєкту було вимкнено.",
@@ -1308,8 +1326,6 @@ export const uk: Record<keyof typeof en, Message> = {
   "roleCopy.orchestrator.param.issueQuery.description": "GitHub-запит задач для кампанії по беклогу.",
   "roleCopy.orchestrator.param.urgent.label": "Термінові",
   "roleCopy.orchestrator.param.urgent.description": "Список термінових задач через кому.",
-  "roleCopy.orchestrator.param.maxWorkers.label": "Максимум воркерів",
-  "roleCopy.orchestrator.param.maxWorkers.description": "Ліміт воркерів для кампанії по беклогу.",
   "roleCopy.orchestrator.param.mergePolicy.label": "Політика злиття",
   "roleCopy.orchestrator.param.mergePolicy.description": "Спосіб доставлення для кампанії по беклогу.",
   "roleCopy.orchestrator.param.mergePolicy.option.pr": "пул-реквест",
