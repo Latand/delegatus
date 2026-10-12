@@ -2399,7 +2399,7 @@ test("CPU pressure holds a fresh stage start with a visible reason and releases 
   const held = loadPipelines()[0]!;
   expect(held.cursor?.state).toBe("pending");
   expect(held.runs[0]!.attempts[0]!.spawnCalls ?? 0).toBe(0);
-  expect(held.stateDetail).toBe("stage start held for CPU pressure since 2026-10-06T12:00:00.000Z (avg10 45% ≥ 20%)");
+  expect(held.stateDetail).toBe("stage start held for CPU pressure since 2026-10-06T12:00:00.000Z (avg10 45% ≥ 30%)");
   expect(wakes).toContain(5_000);
   clock += 120_000;
   await tickPipelines([], h.ports);
