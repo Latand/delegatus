@@ -837,6 +837,14 @@ const SEAT_STORE_BUSY_REPLAYS = 3;
     operator chose and nothing they can act on. */
 export const SEAT_STORE_BUSY_REASON = "the account store stayed busy, so the designation could not be recorded; try again";
 
+/** SQLite reports contention either as a driver code or as an HTTP error. */
+function isSqliteBusy(error: unknown): boolean {
+  const code = error && typeof error === "object" && "code" in error ? error.code : null;
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error :
+    error && typeof error === "object" && "error" in error ? String(error.error) : "";
+  return code === "SQLITE_BUSY" || /\bSQLITE_BUSY\b|database is (?:locked|busy)/i.test(message);
+}
+
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -873,7 +881,8 @@ async function seatStoreReleased(deadline: number, attempt: number): Promise<boo
  * on the intent, which terminalizes it into `intentHistory`, and the caller is
  * answered with that row and a code it can act on.
  *
- * A BUSY STORE IS WAITED OUT FIRST. That lock is one lock for every account
+ * A BUSY STORE IS WAITED OUT FIRST. SQLite contention uses the same replay
+ * and time limits and retains its original reason when those limits run out. That lock is one lock for every account
  * write on the machine, and the account controller takes it on its own once a
  * minute for each Codex account with a login on record. A creation that asked
  * in the same few milliseconds failed with a message about an engine the
@@ -899,10 +908,17 @@ async function guardedSeatTransition(
     try {
       return await run();
     } catch (thrown) {
-      const storeBusy = isAccountAdmissionRetryable(thrown);
-      if (storeBusy && busy.replay && attempt <= SEAT_STORE_BUSY_REPLAYS && await seatStoreReleased(deadline, attempt)) continue;
+      const sqliteBusy = isSqliteBusy(thrown);
+      const storeBusy = sqliteBusy || isAccountAdmissionRetryable(thrown);
+      if (storeBusy && busy.replay && attempt <= SEAT_STORE_BUSY_REPLAYS) {
+        if (sqliteBusy) {
+          await delay(Math.min(25 * attempt, Math.max(0, deadline - performance.now())));
+          if (performance.now() < deadline) continue;
+        } else if (await seatStoreReleased(deadline, attempt)) continue;
+      }
       const admissionChanged = thrown instanceof AccountAdmissionChangedError;
-      const reason = admissionChanged ? thrown.message : storeBusy ? SEAT_STORE_BUSY_REASON : thrown instanceof Error ? thrown.message : String(thrown);
+      const message = thrown instanceof Error ? thrown.message : String(thrown);
+      const reason = storeBusy && !sqliteBusy && !admissionChanged ? SEAT_STORE_BUSY_REASON : message;
       const named = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
       const clientRequestId = text(rawBody.clientRequestId);
       let terminalized: OrchestratorSeatTerminalization | null = null;
@@ -1289,6 +1305,7 @@ async function runOrchestratorSeatRequest(
     /* The spawn route answers its own busy store as a plain failure. It is the
        same wait as ours: nothing was launched, and the replay asks again under
        the same attempt id. */
+    if (isSqliteBusy(spawned.body)) throw Object.assign(new Error(text(spawned.body.error) || "SQLITE_BUSY"), { code: "SQLITE_BUSY" });
     if (spawned.body.code === "account_admission_changed" || text(spawned.body.error) === "spawn account changed during admission") throw new AccountAdmissionChangedError();
     if (spawned.body.code === "account_store_busy" || text(spawned.body.error) === ACCOUNT_STORE_BUSY_MESSAGE || text(spawned.body.error).startsWith("account mutation is busy")) throw new AccountMutationBusyError();
     const error = text(spawned.body.error)

@@ -10416,3 +10416,84 @@ describe("phone ⋯ menus", () => {
     expect(failures).toEqual([]);
   }, 3_600_000);
 });
+
+
+describe("seat recovery failure history", () => {
+  browserTest("healthy seats clear stale failures and the phone dates a current failure", async () => {
+    const out = path.resolve(".artifacts/seat-recovery"); fs.mkdirSync(out, { recursive: true });
+    const failedAt = "2026-10-11T17:11:00.000Z";
+    const failure = { error: "database is locked", clientRequestId: "seat-host-recovery-failure", seatEpoch: 2,
+      designatedAt: "2026-10-11T17:10:00.000Z", terminalizedAt: failedAt,
+      automaticReplacement: { conversationId: "conversation_orchestrator", seatEpoch: 1 } };
+    const seat = { project: "atlas", seatEpoch: 1, conversationId: "conversation_orchestrator", path: "/repo/orchestrator.jsonl",
+      mandate: "Run the board.", promptVersion: null, predecessorConversationId: null, state: "active",
+      intent: { clientRequestId: "first_designation", mode: "existing", launchId: null, error: null },
+      designatedAt: "2026-10-11T16:00:00.000Z", activatedAt: "2026-10-11T16:01:00.000Z" };
+    let locale = "en";
+    let mode = "healthy";
+    const server = await serveEvidenceFixture(out, "src/components/kanban/issue1695Evidence.fixture.tsx", {
+      "/api/operator/settings": () => Response.json({ locale, source: "chosen" }),
+      "/api/orchestrator/seat": (request: Request) => Response.json(new URL(request.url).searchParams.get("scope") === "all"
+        ? { all: { active: [seat.conversationId], pending: [], previous: [] } }
+        : { seat: mode === "failed" ? null : mode === "later" ? { ...seat, seatEpoch: 3, activatedAt: failedAt } : seat,
+          pending: null, lastFailure: failure, exists: true, viewerMcpRegistered: true,
+          hostObservation: mode === "healthy" ? { conversationId: seat.conversationId, seatEpoch: 1, hostState: "alive", observedAt: "2026-10-12T12:00:00.000Z" } : null }),
+      "/api/orchestrator/seat/status": () => Response.json({ project: "atlas", designated: mode !== "failed", conversationId: mode === "failed" ? null : seat.conversationId,
+        liveness: { lifecycle: "idle", hostState: mode === "failed" ? "unknown" : "alive", silentForMs: 0 } }),
+    });
+    const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const evidence = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) for (const state of ["healthy", "failed", "later"]) {
+        locale = lang; mode = state;
+        const { page, context, pageErrors } = await openFixture(browser, `${server.base}?kanban=1&scenario=seat-head&seatfailure=1#p=atlas`, { width, height: 900 }, "light", lang, "reduce", width === 390);
+        try {
+          if (width === 390) {
+            await page.locator("[data-mobile2-seat-open]").first().click();
+            if (state !== "failed") {
+              await page.locator('[data-mobile2-open="menu"]').click();
+              await page.locator('[data-testid="mobile-menu-seat"]').click();
+            }
+          } else {
+            await page.locator("[data-seat-collapse]").first().waitFor();
+            const fold = page.locator('[data-seat-collapse][aria-expanded="false"]').first();
+            if (await fold.count()) await fold.click();
+          }
+          const root = page.locator(width === 390 ? '[data-testid="mobile-orchestrator-sheet"]' : '[data-orchestrator-state]');
+          await root.waitFor();
+          const alert = root.locator("[data-orchestrator-intent-error]");
+          if (state === "failed") {
+            await alert.waitFor();
+            expect(await alert.innerText()).toContain("database is locked");
+            if (width === 390) {
+              const time = alert.locator("[data-orchestrator-failure-time]");
+              await time.waitFor();
+              expect(await time.getAttribute("datetime")).toBe(failedAt);
+              expect(await time.innerText()).not.toMatch(/AM|PM/);
+            }
+          } else {
+            await page.waitForFunction(() => document.querySelector('[data-orchestrator-state="live"], [data-orchestrator-sheet-state="live"]'));
+            expect(await alert.count()).toBe(0);
+          }
+          const reading = await root.evaluate((element, viewportWidth) => {
+            const error = element.querySelector<HTMLElement>("[data-orchestrator-intent-error]");
+            const time = error?.querySelector("time");
+            const box = time?.getBoundingClientRect();
+            return { error: Boolean(error), time: time?.textContent ?? null, overflow: document.documentElement.scrollWidth > viewportWidth,
+              timeVisible: box ? box.width > 0 && box.left >= 0 && box.right <= viewportWidth && box.top >= 0 && box.bottom <= innerHeight : null };
+          }, width);
+          expect(reading.overflow).toBe(false);
+          if (width === 390 && state === "failed") expect(reading.timeVisible).toBe(true);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${state}-${lang}-${width}.png`) });
+          evidence.push({ state, locale: lang, width, ...reading });
+        } catch (error) {
+          await page.screenshot({ path: path.join(out, `failed-${state}-${lang}-${width}.png`) });
+          throw error;
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/seat-recovery", { recursive: true });
+      fs.writeFileSync("evidence/seat-recovery/geometry.json", JSON.stringify({ cases: evidence }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});

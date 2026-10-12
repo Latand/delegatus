@@ -1,0 +1,112 @@
+{
+  "cases": [
+    {
+      "state": "healthy",
+      "locale": "en",
+      "width": 1440,
+      "error": false,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    },
+    {
+      "state": "failed",
+      "locale": "en",
+      "width": 1440,
+      "error": true,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    },
+    {
+      "state": "later",
+      "locale": "en",
+      "width": 1440,
+      "error": false,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    },
+    {
+      "state": "healthy",
+      "locale": "en",
+      "width": 390,
+      "error": false,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    },
+    {
+      "state": "failed",
+      "locale": "en",
+      "width": 390,
+      "error": true,
+      "time": "11 Oct 2026, 20:11",
+      "overflow": false,
+      "timeVisible": true
+    },
+    {
+      "state": "later",
+      "locale": "en",
+      "width": 390,
+      "error": false,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    },
+    {
+      "state": "healthy",
+      "locale": "uk",
+      "width": 1440,
+      "error": false,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    },
+    {
+      "state": "failed",
+      "locale": "uk",
+      "width": 1440,
+      "error": true,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    },
+    {
+      "state": "later",
+      "locale": "uk",
+      "width": 1440,
+      "error": false,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    },
+    {
+      "state": "healthy",
+      "locale": "uk",
+      "width": 390,
+      "error": false,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    },
+    {
+      "state": "failed",
+      "locale": "uk",
+      "width": 390,
+      "error": true,
+      "time": "11 жовт. 2026 р., 20:11",
+      "overflow": false,
+      "timeVisible": true
+    },
+    {
+      "state": "later",
+      "locale": "uk",
+      "width": 390,
+      "error": false,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    }
+  ]
+}

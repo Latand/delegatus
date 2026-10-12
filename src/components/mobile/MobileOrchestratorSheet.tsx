@@ -607,7 +607,7 @@ function SeatDraftSheet({
           <>
             <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3">
               {state.kind === "intent-error" ? (
-                <IntentError error={state.error} retry={state.retry} rotate={false} />
+                <IntentError error={state.error} retry={state.retry} failedAt={state.failedAt ?? state.designatedAt} rotate={false} />
               ) : state.kind === "draft" && state.vacated ? (
                 <p className="shrink-0 text-ui leading-4 text-muted">
                   {t("orchPanel.draftHintVacated", { project: projectName })}
@@ -797,7 +797,7 @@ function RotateDraft({
             the vacancy stated above it — until it says where it landed. */}
         {vacated ? <Note tone="quiet">{t("orchPanel.rotateVacated")}</Note> : null}
         {errored ? (
-          <IntentError error={state.error} retry={state.retry} rotate />
+          <IntentError error={state.error} retry={state.retry} failedAt={state.failedAt ?? state.designatedAt} rotate />
         ) : (
           /* The heading is the sheet's own header (the prototype titles the
              sheet by its mode); what the body owes is the sentence that says
@@ -1309,7 +1309,7 @@ function MandateView({ seat }: { seat: OrchestratorSeat }) {
 /** A failed designation — or a failed ROTATION, which says something different:
     the incumbent is still running, and «nothing is running» would be a lie
     exactly when the operator is deciding whether to try again. */
-function IntentError({ error, retry, rotate }: { error: string; retry: "fresh" | "same"; rotate: boolean }) {
+function IntentError({ error, retry, rotate, failedAt }: { error: string; retry: "fresh" | "same"; rotate: boolean; failedAt?: string }) {
   const { t } = useLocale();
   const failureCopy = seatFailureCopy(error, retry);
   return (
@@ -1320,6 +1320,7 @@ function IntentError({ error, retry, rotate }: { error: string; retry: "fresh" |
           ? rotate ? "orchPanel.rotateErrorUnknownTitle" : "orchPanel.errorUnknownTitle"
           : rotate ? "orchPanel.rotateErrorTitle" : "orchPanel.errorTitle")}
       </p>
+      <FailureTime at={failedAt} />
       <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-sans text-ui leading-4 text-secondary" data-orchestrator-failure-text>
         {failureCopy ? t(failureCopy.text) : error}
       </pre>
@@ -1332,6 +1333,16 @@ function IntentError({ error, retry, rotate }: { error: string; retry: "fresh" |
       </p>
     </div>
   );
+}
+
+function FailureTime({ at }: { at?: string }) {
+  const { locale } = useLocale();
+  const timestamp = Date.parse(at ?? "");
+  if (!at || !Number.isFinite(timestamp)) return null;
+  const label = new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", {
+    year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).format(timestamp);
+  return <time dateTime={at} className="mt-0.5 block text-caption text-muted" data-orchestrator-failure-time>{label}</time>;
 }
 
 function TransitionCard({ transition }: { transition: SeatTransition }) {
@@ -1351,6 +1362,7 @@ function TransitionCard({ transition }: { transition: SeatTransition }) {
         <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden />
         {t("orchPanel.transitionFailed")}
       </p>
+      <FailureTime at={transition.failedAt} />
       <p className="mt-0.5 whitespace-pre-wrap break-words text-caption leading-4 text-secondary" data-orchestrator-failure-text>{failureCopy ? t(failureCopy.text) : transition.error}</p>
     </div>
   );
