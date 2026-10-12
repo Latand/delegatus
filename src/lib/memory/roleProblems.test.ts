@@ -73,7 +73,7 @@ test("the production controller credits a landed problem before losing the seat 
   await runSeatTickCheck(PROJECT, {
     sources: { ...sources, now: () => NOW + 60_000 },
     readState: () => landed, writeState: () => {}, appendRecord: () => {},
-    ensureCard: async () => false, deliver: async () => { throw Error("no seat should receive a message"); },
+    ensureCard: () => false, deliver: async () => { throw Error("no seat should receive a message"); },
     curation: null, maintenance: null,
   });
   expect(lessonRequest(source.pipelineId, source.stageId, source.attempt)?.problemDeliveredAt).toBeTruthy();
