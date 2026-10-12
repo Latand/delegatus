@@ -68,3 +68,7 @@ Use isolated HOME, XDG_CONFIG_HOME, TMPDIR, CLAUDE_CODE_TMPDIR and LLV_STATE_DIR
 for every run. [readings.json](../../evidence/long-text-attachment/readings.json)
 records zero horizontal overflow and the whole chip inside both viewports.
 Frames are written to `.artifacts/long-text-attachment/`.
+
+Rendered frames retained in review history: [desktop send](https://raw.githubusercontent.com/Latand/delegatus/c5cd826d2a8932ebc9cfdfacbeefb9fa15041704/.artifacts/long-text-attachment/1280-send.png),
+[desktop retry](https://raw.githubusercontent.com/Latand/delegatus/c5cd826d2a8932ebc9cfdfacbeefb9fa15041704/.artifacts/long-text-attachment/1280-retry.png), [phone send](https://raw.githubusercontent.com/Latand/delegatus/c5cd826d2a8932ebc9cfdfacbeefb9fa15041704/.artifacts/long-text-attachment/390-send.png),
+[phone retry](https://raw.githubusercontent.com/Latand/delegatus/c5cd826d2a8932ebc9cfdfacbeefb9fa15041704/.artifacts/long-text-attachment/390-retry.png).
