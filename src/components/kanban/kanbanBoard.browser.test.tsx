@@ -170,17 +170,21 @@ describe("memory profile", () => {
           const geometry = await page.evaluate(() => {
             const profile = document.querySelector<HTMLElement>("[data-memory-profile]")!;
             const window = document.querySelector<HTMLElement>("[data-rules-window]")!;
-            const headline = profile.querySelector<HTMLElement>("[data-profile-ready] > div h3")!;
+            const headline = profile.querySelector<HTMLElement>("[data-profile-ready] > h3")!;
             const summarize = profile.querySelector<HTMLElement>("[data-profile-summarize]")!;
             const headlineRect = headline.getBoundingClientRect();
+            const card = headline.parentElement!.getBoundingClientRect();
+            const chipHeights = [...profile.querySelectorAll<HTMLElement>("[data-profile-pill]")].map(chip => Math.round(chip.getBoundingClientRect().height));
             const summarizeRect = summarize.getBoundingClientRect();
-            const pills = [...profile.querySelectorAll<HTMLElement>("button.truncate")];
-            return { overflow: profile.scrollWidth - profile.clientWidth, left: window.getBoundingClientRect().left, right: window.getBoundingClientRect().right,
+            const pills = [...profile.querySelectorAll<HTMLElement>("[data-profile-pill] > span")];
+            return { overflow: profile.scrollWidth - profile.clientWidth, fullWidthHeadline: Math.abs(headlineRect.left - (card.left + 17)) <= 1 && Math.abs(headlineRect.right - (card.right - 17)) <= 1, maxChipHeight: Math.max(...chipHeights), left: window.getBoundingClientRect().left, right: window.getBoundingClientRect().right,
               headlineButtonOverlap: headlineRect.left < summarizeRect.right && headlineRect.right > summarizeRect.left && headlineRect.top < summarizeRect.bottom && headlineRect.bottom > summarizeRect.top,
               truncatedPills: pills.filter(pill => pill.scrollWidth > pill.clientWidth).length, pills: pills.map(pill => ({ width: pill.getBoundingClientRect().width, maxWidth: getComputedStyle(pill).maxWidth })) };
           });
           expect(geometry.overflow).toBeLessThanOrEqual(1); expect(geometry.left).toBeGreaterThanOrEqual(0); expect(geometry.right).toBeLessThanOrEqual(width);
           expect(geometry.headlineButtonOverlap).toBe(false);
+          expect(geometry.fullWidthHeadline).toBe(true);
+          expect(geometry.maxChipHeight).toBeLessThanOrEqual(30);
           expect(geometry.truncatedPills).toBeGreaterThan(0);
           readings.push({ width, scheme, lang, geometry });
           await page.locator("[data-profile-slice] button").last().scrollIntoViewIfNeeded();
