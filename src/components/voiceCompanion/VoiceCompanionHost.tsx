@@ -18,8 +18,9 @@ import { openVoiceCompanionSettings } from "./VoiceCompanionSetting";
  * turns it on in the settings. Never on the phone.
  *
  * It talks about the project in view and, on request, to that project's
- * designated orchestrator, through the official live voice API minted by the
- * Viewer. On is that real voice and nothing else: the simulator and its
+ * designated orchestrator, through the voice the settings choose: the
+ * official live voice API minted by the Viewer, or a Codex V3 call on a
+ * managed account's plan. On is that real voice and nothing else: the simulator and its
  * scripts are test fixtures and rendered-evidence drivers, which no setting
  * reaches. Mounting starts no call: only the tap on Talk does.
  */
@@ -32,7 +33,9 @@ export function VoiceCompanionHost({ project, mobile }: { project: string | null
     return () => window.removeEventListener(COMPANION_SETTINGS_EVENT, reread);
   }, [mobile, refresh]);
   if (mobile || !settings?.enabled) return null;
-  return <MountedCompanion project={project} keyMissing={settings.keySource === "missing"} capReached={settings.usageUsd + settings.reservedUsd >= settings.monthlyCapUsd} onSessionEnd={refresh} />;
+  /* The key and the cap belong to the API; a Codex call needs neither. */
+  const api = settings.backend !== "codex";
+  return <MountedCompanion project={project} keyMissing={api && settings.keySource === "missing"} capReached={api && settings.usageUsd + settings.reservedUsd >= settings.monthlyCapUsd} onSessionEnd={refresh} />;
 }
 
 function MountedCompanion({ project, keyMissing, capReached, onSessionEnd }: { project: string | null; keyMissing: boolean; capReached: boolean; onSessionEnd: () => Promise<void> }) {

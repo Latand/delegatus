@@ -1,7 +1,7 @@
 {
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
   "fixture": "?scenario=voice-companion&mount=product",
-  "rule": "nothing is mounted until the switch in the settings dialog, reached from the header menu's Settings page, is on; the key is typed masked, sent once, cleared, and never present in the page afterwards; a key from the environment takes precedence and closes the field; the cap is kept with the month's usage beside it; on is the real voice, with no backend to choose and no demo, and the shell mounts it",
+  "rule": "nothing is mounted until the switch in the settings dialog, reached from the header menu's Settings page, is on; on, one choice says how the voice talks, the API with its key (the default) or Codex V3 on a managed account's plan; for the API the key is typed masked, sent once, cleared, and never present in the page afterwards, a key from the environment takes precedence and closes the field, and the cap is kept with the month's usage beside it; for Codex nothing asks for or mentions a key, the last Codex call shows with the plan window of the account it ran on, and Talk with no key asks the session route to start; on is a real voice and never a demo, and the shell mounts it",
   "note": "the settings routes are answered by the fixture from memory and the key is a made-up string; no provider, microphone or orchestrator is reached",
   "cases": [
     {
@@ -9,8 +9,19 @@
       "lang": "en",
       "scheme": "light",
       "choices": {
-        "backendControls": 0,
-        "controls": 4,
+        "choice": [
+          [
+            "api",
+            true,
+            "Through the API (with a key)"
+          ],
+          [
+            "codex",
+            false,
+            "Codex V3 (subscription)"
+          ]
+        ],
+        "controls": 6,
         "demoWords": false
       },
       "mountedBeforeEnable": 0,
@@ -20,6 +31,9 @@
         },
         {
           "monthlyCapUsd": 35
+        },
+        {
+          "backend": "codex"
         },
         {
           "enabled": false
@@ -33,7 +47,24 @@
         "insideViewport": true,
         "sectionWidth": 470,
         "overflowsDialog": false,
-        "cut": []
+        "cut": [],
+        "placeholder": {
+          "text": "Paste a new key to replace it",
+          "width": 167,
+          "room": 332
+        }
+      },
+      "codex": {
+        "lastCall": "Last call: 7:51 · Oct 10.",
+        "rows": {
+          "controls": 3,
+          "keyWords": false
+        },
+        "dialog": {
+          "insideViewport": true,
+          "overflowsDialog": false,
+          "cut": []
+        }
       },
       "shellMount": {
         "block": {
@@ -57,8 +88,19 @@
       "lang": "uk",
       "scheme": "dark",
       "choices": {
-        "backendControls": 0,
-        "controls": 4,
+        "choice": [
+          [
+            "api",
+            true,
+            "Через API (за ключем)"
+          ],
+          [
+            "codex",
+            false,
+            "Codex V3 (підписка)"
+          ]
+        ],
+        "controls": 6,
         "demoWords": false
       },
       "mountedBeforeEnable": 0,
@@ -68,6 +110,9 @@
         },
         {
           "monthlyCapUsd": 35
+        },
+        {
+          "backend": "codex"
         },
         {
           "enabled": false
@@ -81,7 +126,24 @@
         "insideViewport": true,
         "sectionWidth": 470,
         "overflowsDialog": false,
-        "cut": []
+        "cut": [],
+        "placeholder": {
+          "text": "Вставте новий ключ",
+          "width": 121,
+          "room": 304
+        }
+      },
+      "codex": {
+        "lastCall": "Остання розмова: 7:51 · 10 жовтня.",
+        "rows": {
+          "controls": 3,
+          "keyWords": false
+        },
+        "dialog": {
+          "insideViewport": true,
+          "overflowsDialog": false,
+          "cut": []
+        }
       },
       "shellMount": {
         "block": {
@@ -105,8 +167,19 @@
       "lang": "uk",
       "scheme": "light",
       "choices": {
-        "backendControls": 0,
-        "controls": 4,
+        "choice": [
+          [
+            "api",
+            true,
+            "Через API (за ключем)"
+          ],
+          [
+            "codex",
+            false,
+            "Codex V3 (підписка)"
+          ]
+        ],
+        "controls": 6,
         "demoWords": false
       },
       "mountedBeforeEnable": 0,
@@ -116,6 +189,9 @@
         },
         {
           "monthlyCapUsd": 35
+        },
+        {
+          "backend": "codex"
         },
         {
           "enabled": false
@@ -129,7 +205,24 @@
         "insideViewport": true,
         "sectionWidth": 470,
         "overflowsDialog": false,
-        "cut": []
+        "cut": [],
+        "placeholder": {
+          "text": "Вставте новий ключ",
+          "width": 121,
+          "room": 304
+        }
+      },
+      "codex": {
+        "lastCall": "Остання розмова: 7:51 · 10 жовтня.",
+        "rows": {
+          "controls": 3,
+          "keyWords": false
+        },
+        "dialog": {
+          "insideViewport": true,
+          "overflowsDialog": false,
+          "cut": []
+        }
       },
       "shellMount": {
         "block": {
@@ -153,8 +246,19 @@
       "lang": "en",
       "scheme": "dark",
       "choices": {
-        "backendControls": 0,
-        "controls": 4,
+        "choice": [
+          [
+            "api",
+            true,
+            "Through the API (with a key)"
+          ],
+          [
+            "codex",
+            false,
+            "Codex V3 (subscription)"
+          ]
+        ],
+        "controls": 6,
         "demoWords": false
       },
       "mountedBeforeEnable": 0,
@@ -164,6 +268,9 @@
         },
         {
           "monthlyCapUsd": 35
+        },
+        {
+          "backend": "codex"
         },
         {
           "enabled": false
@@ -177,7 +284,24 @@
         "insideViewport": true,
         "sectionWidth": 470,
         "overflowsDialog": false,
-        "cut": []
+        "cut": [],
+        "placeholder": {
+          "text": "Paste a new key to replace it",
+          "width": 167,
+          "room": 332
+        }
+      },
+      "codex": {
+        "lastCall": "Last call: 7:51 · Oct 10.",
+        "rows": {
+          "controls": 3,
+          "keyWords": false
+        },
+        "dialog": {
+          "insideViewport": true,
+          "overflowsDialog": false,
+          "cut": []
+        }
       },
       "shellMount": {
         "block": {
@@ -204,10 +328,27 @@
         "insideViewport": true,
         "sectionWidth": 316,
         "overflowsDialog": false,
-        "cut": []
+        "cut": [],
+        "placeholder": {
+          "text": "Paste a new key to replace it",
+          "width": 167,
+          "room": 204
+        }
       },
       "monthSpend": "Used in October: $3.40 of $35.00.",
       "lastCall": "Last call: $0.40 · 7:51 · Oct 10.",
+      "codex": {
+        "lastCall": "Last call: 7:51 · Oct 10.",
+        "rows": {
+          "controls": 3,
+          "keyWords": false
+        },
+        "dialog": {
+          "insideViewport": true,
+          "overflowsDialog": false,
+          "cut": []
+        }
+      },
       "phoneSettingsMounted": true,
       "openedThrough": "header menu Settings → Voice Delegatus"
     },
@@ -219,10 +360,27 @@
         "insideViewport": true,
         "sectionWidth": 316,
         "overflowsDialog": false,
-        "cut": []
+        "cut": [],
+        "placeholder": {
+          "text": "Вставте новий ключ",
+          "width": 121,
+          "room": 176
+        }
       },
       "monthSpend": "Витрачено за жовтень: $3.40 із $35.00.",
       "lastCall": "Остання розмова: $0.40 · 7:51 · 10 жовтня.",
+      "codex": {
+        "lastCall": "Остання розмова: 7:51 · 10 жовтня.",
+        "rows": {
+          "controls": 3,
+          "keyWords": false
+        },
+        "dialog": {
+          "insideViewport": true,
+          "overflowsDialog": false,
+          "cut": []
+        }
+      },
       "phoneSettingsMounted": true,
       "openedThrough": "header menu Settings → Voice Delegatus"
     },
@@ -241,6 +399,16 @@
     {
       "lang": "uk",
       "environmentKey": "said to take precedence; the field and Save are disabled"
+    },
+    {
+      "lang": "en",
+      "codexWithoutKey": "Talk started with no key; the start reached the session route and its plan-limit refusal names the reset",
+      "notice": "Every Codex account Delegatus can use has reached its plan limit. The first one resets: ‹time›."
+    },
+    {
+      "lang": "uk",
+      "codexWithoutKey": "Talk started with no key; the start reached the session route and its plan-limit refusal names the reset",
+      "notice": "Усі акаунти Codex, які може взяти Delegatus, вичерпали ліміт плану. Найближче оновлення: ‹time›."
     }
   ]
 }

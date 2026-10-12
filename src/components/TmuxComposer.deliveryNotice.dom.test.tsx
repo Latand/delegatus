@@ -421,8 +421,10 @@ for (const reason of [HOST_DOWN, "The connection to the structured recovery proc
     expect(detail).not.toBeNull();
     expect(history.contains(detail)).toBe(false);
     expect(detail.nextElementSibling).toBe(history);
-    expect(classes(history)).toContain("max-h-36");
-    expect(classes(history)).toContain("overflow-y-auto");
+    /* The open frame is the scroller, behind its sticky header. */
+    expect(classes(mounted.stack())).toContain("max-h-[12rem]");
+    expect(classes(mounted.stack())).toContain("overflow-y-auto");
+    expect(classes(history)).not.toContain("overflow-y-auto");
     const sentence = detail.querySelector("[data-delivery-notice-sentence]")!;
     expect(sentence.textContent).toBe(reason.split(";")[0]);
     expect(classes(sentence)).toContain("whitespace-pre-wrap");

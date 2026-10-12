@@ -98,7 +98,7 @@ import { identityMaterializationFence } from "./identityMaterialization";
 import type { ResumePaneRecord } from "@/lib/resumePanesFile";
 import type { RuntimeDeliveryMode } from "@/lib/runtime/contracts";
 import { parseMessageOrigin, sameMessageOrigin } from "@/lib/runtime/messageOrigin";
-import { normalizePendingPermissions, type PendingPermissionRequest } from "@/lib/runtime/permissionRequests";
+import { normalizePendingPermissions, normalizePendingToolUses, type PendingPermissionRequest, type PendingToolUse } from "@/lib/runtime/permissionRequests";
 import type { ProviderRetryEvidence } from "@/lib/runtime/engineHost";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { admitReservedLaunch, settleFailedLaunch } from "@/lib/tasks/launchMembership";
@@ -140,6 +140,9 @@ export interface StructuredHostColumns {
   pendingAttention: string[];
   /** The pending attentions that are tool permission requests (#2215). */
   pendingPermissions?: PendingPermissionRequest[];
+  /** The pending attentions that are native questions or plans, with the
+      transcript tool use each answers. */
+  pendingToolUses?: PendingToolUse[];
   /** The provider retry the engine reported for the open turn (#2215). */
   providerRetry?: ProviderRetryEvidence | null;
   activeFlags: string[];
@@ -2116,6 +2119,9 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
       : [],
     ...(Array.isArray(host.pendingPermissions) && host.pendingPermissions.length > 0
       ? { pendingPermissions: normalizePendingPermissions(host.pendingPermissions) }
+      : {}),
+    ...(normalizePendingToolUses(host.pendingToolUses).length > 0
+      ? { pendingToolUses: normalizePendingToolUses(host.pendingToolUses) }
       : {}),
     ...(normalizeHostMemory(host.memory) ? { memory: normalizeHostMemory(host.memory)! } : {}),
     ...(normalizeProviderRetry(host.providerRetry) ? { providerRetry: normalizeProviderRetry(host.providerRetry) } : {}),

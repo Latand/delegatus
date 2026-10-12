@@ -238,7 +238,8 @@ export function CompanionTranscript({ record, usage = record.usage, left, top, w
     >
       <div className="vc-tr-head">
         <span className="vc-tr-title">{L.title}</span>
-        <span className="vc-tr-sub">{ended ? L.ended : L.live} · {clock(last)}</span>
+        {/* A Codex call's footer carries its length on the server clock, so the header does not add a second one. */}
+        <span className="vc-tr-sub">{ended ? L.ended : L.live}{usage?.backend === "codex" ? null : ` · ${clock(last)}`}</span>
         <button type="button" className="vc-btn vc-tr-close" aria-label={L.close} title={L.close} data-transcript-close onClick={onClose}><X size={14} aria-hidden /></button>
       </div>
       <div ref={body} className="vc-tr-body" data-transcript-body onScroll={(event) => { const node = event.currentTarget; following.current = node.scrollTop + node.clientHeight >= node.scrollHeight - 40; }}>
@@ -272,8 +273,11 @@ export const TRANSCRIPT_CSS = `
 .vc-tr-spend-meter > span { position: absolute; inset: 0; transform-origin: left; }
 .vc-tr-spend-meter [data-spend-month-fill] { background: color-mix(in srgb, var(--color-secondary) 40%, transparent); }
 .vc-tr-spend-meter [data-spend-call-fill] { background: var(--vc-teal-ink); }
+.vc-tr-spend-meter [data-window-fill] { background: color-mix(in srgb, var(--color-secondary) 40%, transparent); }
+.vc-tr-spend-meter [data-rise-fill] { background: var(--vc-teal-ink); }
 .vc-tr-spend-value { color: var(--color-primary); font-weight: 600; }
 .vc-tr-spend-cap { color: var(--color-muted); }
+.vc-tr-spend-muted { color: var(--color-muted); }
 .vc-tr-spend [data-tone="warning"], .vc-tr-spend [data-tone="warning"] .vc-tr-spend-value { color: var(--color-warning); }
 .vc-tr-spend [data-tone="danger"], .vc-tr-spend [data-tone="danger"] .vc-tr-spend-value { color: var(--color-danger); }
 .vc-tr-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; user-select: text; padding: 10px 12px 12px; }
