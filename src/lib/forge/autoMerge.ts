@@ -1,4 +1,5 @@
 import os from "node:os";
+import { refreshAdmission, refreshRequest, refreshReservation, type RefreshLineage, type RefreshOptions } from "./autoRefresh";
 import { realExec } from "@/lib/workflows/provision";
 
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
@@ -27,7 +28,8 @@ import { githubRepositoryOfRemote, type PullRequestState } from "./workLinks";
  * lease: the `gh` calls happen with no lock held, and each result is written
  * under the pipeline lock against the record read again inside it.
  *
- * Nothing here resolves a conflict, pushes, posts a comment or adds a trailer.
+ * A conflict starts visible refresh work (docs/design/auto-refresh-conflicting-prs.md).
+ * The refresh stage resolves it and publishes through the pipeline gate.
  * What cannot be settled by waiting blocks with one plain sentence and goes to
  * the operator (§4.6).
  */
@@ -66,6 +68,8 @@ export interface AutoMergePorts {
   /** What the forge cache last read for a pull request, for a merge the
       runner no longer polls (blocked or cancelled) that someone merged. */
   cachedState: (repository: string, number: number) => PullRequestState | null;
+  startRefresh?: (request: ReturnType<typeof refreshRequest>, options: RefreshOptions) => Promise<{ pipeline?: Pipeline; error?: string }>;
+  activeSeat?: (project: string) => Promise<RefreshLineage | null>;
   log?: (message: string, error?: unknown) => void;
   /** Moves a board task to Done for the finish sweep (#2187 §5.3) and says
       what it found. Absent, the finish sweep does not run. */
@@ -381,9 +385,9 @@ function block(merge: PipelineMerge, reason: string, now: number): void {
 async function commit(ports: AutoMergePorts, read: Pipeline, change: (merge: PipelineMerge, live: Pipeline) => void): Promise<boolean> {
   const readAt = read.merge!.updatedAt;
   return ports.mutate(read.id, (live) => {
-    if (live.state !== "completed" || !live.merge || live.merge.updatedAt !== readAt) return false;
+    if (live.state !== "completed" || !live.merge || live.merge.updatedAt !== readAt || live.merge.state !== read.merge!.state || live.merge.attempts !== read.merge!.attempts) return false;
     change(live.merge, live);
-    live.merge.updatedAt = iso(ports.now());
+    live.merge.updatedAt = iso(Math.max(ports.now(), Date.parse(readAt) + 1));
     return true;
   });
 }
@@ -420,6 +424,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
   }
   let view: PullRequestView | null = null;
   let required: string[] = [];
+  let decision: Step;
   try {
     view = parsePullRequestView(await ports.run(["pr", "view", String(merge.prNumber), "--repo", merge.repository, "--json", PR_FIELDS]));
     if (!view) throw new Error("gh returned no parsable pull request");
@@ -442,6 +447,32 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
        update; anything else stays outside, and decideMerge blocks on it. */
     if (view.state === "OPEN" && !merge.chain.includes(view.headRefOid)) await admitUpdateHead(merge, view.headRefOid, ports);
     if (view.state === "OPEN") required = await requiredContexts(merge.repository, view.baseRefName || "main", ports);
+    decision = decideMerge(merge, view, required, now);
+    if (decision.kind === "block" && decision.reason === MERGE_REASONS.conflict && ports.startRefresh
+      && refreshAdmission(read, ports.loadPipelines(), ports.setting(read.project))) {
+      const base = (await ports.run(["api", `repos/${merge.repository}/branches/${encodeURIComponent(view.baseRefName || "main")}`, "--jq", ".commit.sha"])).trim();
+      if (!/^[0-9a-f]{40}$/i.test(base)) throw new Error("gh returned no base tip");
+      if (!refreshAdmission(read, ports.loadPipelines(), ports.setting(read.project))) {
+        await commit(ports, read, (live) => block(live, MERGE_REASONS.conflict, now));
+        return;
+      }
+      if (read.refreshOf?.base === base) {
+        await commit(ports, read, (live) => block(live, MERGE_REASONS.refreshSameBase, now));
+        return;
+      }
+      const reserved = await commit(ports, read, (live) => {
+        live.state = "refreshing";
+        live.reason = null;
+        live.nextReadAt = null;
+        live.refresh = refreshReservation(read, base, view!.headRefOid, now);
+        live.readFailures = 0;
+      });
+      if (reserved) {
+        const current = ports.loadPipelines().find((lane) => lane.id === read.id);
+        if (current) await startRefresh(current, ports);
+      }
+      return;
+    }
   } catch (error) {
     const failures = (merge.readFailures ?? 0) + 1;
     ports.log?.(`[auto merge] ${read.id}: read failed (${failures})`, error);
@@ -453,7 +484,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
     });
     return;
   }
-  const step = decideMerge(merge, view, required, now);
+  const step = decision!;
   const bookkeeping = (live: PipelineMerge) => {
     live.chain = merge.chain;
     live.updates = merge.updates;
@@ -566,6 +597,35 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
   });
 }
 
+/** Create without the lock, then attach the answer to this reservation only. */
+async function startRefresh(read: Pipeline, ports: AutoMergePorts): Promise<void> {
+  if (!ports.startRefresh || !read.merge?.refresh || read.merge.refresh.pipelineId) return;
+  const reservation = read.merge.refresh;
+  try {
+    if (!ports.setting(read.project).enabled) return;
+    const lineage = await ports.activeSeat?.(read.project) ?? {
+      srcPath: read.srcPath, srcConversationId: read.srcConversationId, srcDeputyConversationId: read.srcDeputyConversationId ?? undefined,
+    };
+    const current = ports.loadPipelines().find((lane) => lane.id === read.id);
+    if (!ports.setting(read.project).enabled || current?.merge?.state !== "refreshing"
+      || current.merge.refresh?.key !== reservation.key || current.merge.refresh.pipelineId) return;
+    const result = await ports.startRefresh(refreshRequest(read), {
+      creationRequest: { key: reservation.key, digest: reservation.digest },
+      refreshOf: { pipelineId: read.id, base: reservation.base, lineage },
+    });
+    // A replay may race another sweep; write only while this reservation waits.
+    await commit(ports, read, (live) => {
+      if (result.pipeline) { live.refresh!.pipelineId = result.pipeline.id; live.readFailures = 0; }
+      else block(live, `Delegatus could not start the refresh: ${result.error ?? "no lane returned"}`, ports.now());
+    });
+  } catch (error) {
+    await commit(ports, read, (live) => {
+      live.readFailures = (live.readFailures ?? 0) + 1;
+      if (live.readFailures >= MERGE_READ_FAILURE_LIMIT) block(live, `Delegatus could not start the refresh: ${githubMessage(error)}`, ports.now());
+    });
+  }
+}
+
 /* ── The sweep ──────────────────────────────────────────────────────────── */
 
 /**
@@ -595,8 +655,25 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
       });
       continue;
     }
-    if (PIPELINE_MERGE_LIVE_STATES.has(merge.state) && merge.state !== "merging" && !setting.enabled) {
+    if ((PIPELINE_MERGE_LIVE_STATES.has(merge.state) || merge.state === "refreshing") && merge.state !== "merging" && !setting.enabled) {
       await commit(ports, pipeline, (live) => { live.state = "cancelled"; live.reason = MERGE_REASONS.settingOff; live.nextReadAt = null; });
+      continue;
+    }
+    if (merge.state === "refreshing") {
+      const refreshed = ports.loadPipelines().find((lane) => lane.id === merge.refresh?.pipelineId);
+      const cached = merge.prNumber ? ports.cachedState(merge.repository, merge.prNumber) : null;
+      if (refreshed?.merge?.state === "merged" || cached === "merged") {
+        await commit(ports, pipeline, (live) => {
+          live.state = "merged";
+          live.by = refreshed?.merge?.by ?? "outside";
+          live.mergedAt = refreshed?.merge?.mergedAt ?? iso(now);
+          live.mergedHead = refreshed?.merge?.mergedHead ?? null;
+          live.mergeCommit = refreshed?.merge?.mergeCommit ?? null;
+          live.reason = null;
+        });
+      } else if (cached === "closed" || refreshed?.state === "closed") {
+        await commit(ports, pipeline, (live) => block(live, cached === "closed" ? MERGE_REASONS.closed : MERGE_REASONS.refreshClosed, now));
+      } else if (!merge.refresh?.pipelineId) await startRefresh(pipeline, ports);
       continue;
     }
     const pr = merge.prNumber === null ? ports.pullRequestOf(pipeline) : { repository: merge.repository, number: merge.prNumber };
@@ -756,6 +833,11 @@ export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pi
     pullRequestOf: lanePullRequest,
     cachedState: (repository, number) => forgeCacheView().repository(repository)?.pr(number)?.state ?? null,
     finishTask: finishBoardTask,
+    startRefresh: async (request, options) => (await import("@/lib/pipelines/engine")).createPipelineFromRequest(request, undefined, options),
+    activeSeat: async (project) => {
+      const seat = (await import("@/lib/orchestrator/seats")).orchestratorSeatFor(project).active;
+      return seat ? { srcPath: seat.path, srcConversationId: seat.conversationId } : null;
+    },
     log: (message, error) => console.error(message, error ?? ""),
     ...overrides,
   };

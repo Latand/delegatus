@@ -2455,3 +2455,14 @@ test("a held-wake withdrawal that finds its row still held after the wait ends i
     registry.close();
   }
 });
+
+
+test("automatic refresh belongs to its seat: parent PR is held and a semantic park wakes its creator", async () => {
+  const parent = finishedLane({ merge: { state: "refreshing", refresh: { pipelineId: "refresh-one" } } } as never);
+  const refresh = lane({ id: "refresh-one", srcConversationId: CONVERSATION, state: "needs_decision",
+    stateDetail: "src/example.ts:12 @@ -9,6 +9,7 @@ either resolution changes behaviour",
+    refreshOf: { pipelineId: "pipeline_z9", base: "a".repeat(40) } });
+  const input = await gather({ pipelines: [parent, refresh], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
+  expect(input.pullRequests).toEqual([]);
+  expect(input.ownLanes).toEqual(expect.arrayContaining([expect.objectContaining({ id: "refresh-one", settled: "needs_decision" })]));
+});

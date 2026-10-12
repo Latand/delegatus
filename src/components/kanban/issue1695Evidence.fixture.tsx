@@ -315,7 +315,8 @@ const REVIEW_STOPS = SCENARIO === "review-stops";
    waiting for checks, updating from main, merge stopped with its two answers,
    merged by Delegatus — and the project's merge setting in the board's ⋯,
    on by default and off with `&merge=off`. */
-const MERGE_STATES = SCENARIO === "merge-states";
+const AUTO_REFRESH = SCENARIO === "auto-refresh";
+const MERGE_STATES = SCENARIO === "merge-states" || AUTO_REFRESH;
 /* #2187 §5.3, §6 (mockup D4): a lane marked as finishing its task, running;
    a task whose marked lane merged while a second lane still runs, so its move
    to Done waits; and a Done task its marked lane finished. */
@@ -1086,6 +1087,33 @@ const mergeStatePipelines: Pipeline[] = MERGE_STATES ? (() => {
   ];
 })() : [];
 
+if (AUTO_REFRESH) {
+  const parent = mergeStatePipelines[0]!;
+  parent.merge!.state = "refreshing";
+  parent.merge!.refresh = { attempt: 0, base: "a".repeat(40), head: "b".repeat(40), key: "auto-refresh:parent:zero", digest: "c".repeat(64), requestedAt: iso(MIN), pipelineId: "p-refresh" };
+  const successor = structuredClone(parent);
+  successor.id = "p-refresh";
+  successor.task = L("Refresh the delivery branch", "Оновити гілку PR");
+  successor.state = "running";
+  delete successor.merge;
+  successor.closedAt = null;
+  successor.stages = [stage("refresh", "builder", "review"), stage("review", "reviewer", null, { onFail: { to: "fix", maxRounds: 1, onExhausted: "advance" } }), stage("fix", "builder", "review")] as Pipeline["stages"];
+  successor.runs = [{ stageId: "refresh", attempts: [attempt(1, "running", add(conversation("refresh-builder", "Refresh delivery", { mtime: now - MIN })))] }] as Pipeline["runs"];
+  successor.cursor = { stageId: "refresh", state: "running", input: null, activatedBy: null };
+  successor.stateDetail = "refreshing the delivery branch";
+  mergeStatePipelines.push(successor);
+  for (const [index, reason] of [
+    [1, "the refresh was closed before the PR merged"],
+    [2, "the refresh did not clear the conflict, and main has not moved since"],
+    [3, "Delegatus could not start the refresh: target already owned"],
+  ] as const) {
+    const record = mergeStatePipelines[index]!.merge!;
+    record.state = "blocked";
+    record.reason = reason;
+    record.blockedAt = iso(MIN);
+  }
+}
+
 const taskFinishPipelines: Pipeline[] = TASK_FINISH ? (() => {
   const readOnly = { ...role("reviewer", "codex"), access: "read-only" };
   const pass = { status: "pass", findings: [] };
@@ -1793,7 +1821,7 @@ const tasks: BoardTask[] = [
     task("t-merge-wait", "assigned", L("Deploy failure notifies the seat and the phone", "Сповіщення, коли деплой падає"), "", 12 * MIN),
     task("t-merge-update", "assigned", L("Composer model pills: one width at 390", "Кнопки моделі в композері однієї ширини"), "", 20 * MIN),
     task("t-merge-stop", "assigned", L("Per-feature screenshot catalog and one capture command", "Каталог скриншотів по фічах і одна команда зйомки"), "", 30 * MIN),
-    task("t-merge-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 70 * MIN),
+    task("t-merge-done", AUTO_REFRESH ? "assigned" : "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 70 * MIN),
   ] : []),
   ...(TASK_FINISH ? [
     task("t-finish-marked", "assigned", L("Pipelines that finish their task", "Пайплайни, що завершують задачу"), "", 25 * MIN),

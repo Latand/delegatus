@@ -10318,6 +10318,7 @@ export function resolvePipelineCreatorLineage(
 }
 
 type CreatePipelineOptions = {
+  refreshOf?: { pipelineId: string; base: string; lineage: PipelineCreatorLineage };
   creationRequest?: { key: string; digest: string };
   ensureTask?: BoardTask;
   spawnParams?: TaskPipelineSpawnParams;
@@ -10443,7 +10444,9 @@ export async function createPipelineFromRequest(
   const operatorDraftWithoutLineage = options.allowOperatorDraftWithoutLineage
     && req.autoStart === false
     && (typeof req.src !== "string" || !req.src.trim());
-  const creator = taskSpawn
+  const creator = options.refreshOf
+    ? { lineage: options.refreshOf.lineage }
+    : taskSpawn
     ? taskSpawnCreatorLineage(taskSpawn.params, ports)
     : operatorDraftWithoutLineage
       ? { lineage: { srcPath: null, srcConversationId: null } }
@@ -10564,6 +10567,7 @@ export async function createPipelineFromRequest(
   const target = { repository, remote: origin, branch: targetInput?.branch ?? `refs/heads/${pipeline.branch}`,
     ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(targetInput?.rejectedHead ? { rejectedHead: targetInput.rejectedHead } : {}) };
   pipeline.creationRequest = options.creationRequest;
+  if (options.refreshOf) pipeline.refreshOf = { pipelineId: options.refreshOf.pipelineId, base: options.refreshOf.base };
   if (!options.ensureTask) {
     const tasks = loadTasks();
     const taskLinkError = pipelineTaskLinkError(pipeline, taskIds, tasks);
@@ -10572,8 +10576,9 @@ export async function createPipelineFromRequest(
     if (elsewhere) return elsewhere;
     let created: Pipeline;
     try {
-      created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison);
+      created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison, { requireOwner: !!options.refreshOf });
     } catch (error) {
+      if (options.refreshOf && error instanceof Error && error.message.startsWith("target already owned")) return { error: error.message, status: 409 };
       if (!options.queueWhenBusy || !(error instanceof StoreBusyBeforeAdmissionError)) throw error;
       const entry = queuePipelineCreation(pipeline, target, targetInput?.comparison === true, error.message);
       return { pipeline, queued: { reason: entry.reason, queuedAt: entry.queuedAt }, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer };

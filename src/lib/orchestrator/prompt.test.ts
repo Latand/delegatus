@@ -79,8 +79,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 45, and a v44 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(45);
+test("the default mandate is at version 46, and a v45 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(46);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -128,7 +128,8 @@ test("the default mandate is at version 45, and a v44 seat reads as stale", () =
   expect(orchestratorMandateStale(42)).toBe(true);
   expect(orchestratorMandateStale(43)).toBe(true);
   expect(orchestratorMandateStale(44)).toBe(true);
-  expect(orchestratorMandateStale(45)).toBe(false);
+  expect(orchestratorMandateStale(45)).toBe(true);
+  expect(orchestratorMandateStale(46)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -180,6 +181,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   43: "4c55ef1e031677516bba9dbd27fcc0e86e3805bc57f5080c1f8317400c726c0f",
   44: "34697f21c8943d0cdeb8ae45260d613de72c91cac67fd8888f06ced89cf79cbc",
   45: "13f8d5ab3ce3a2770245d7c87fd1f534139b76c3cd02c48c518e0f6056adb26c",
+  46: "b5640fe536df8622b6e84e9500e27418742d6b25b830a7821d795e82d5651222",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -191,7 +193,7 @@ test("the merge bar follows the project's merge setting, and the mandate says wh
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("Merge bar: merge only on an APPROVE verdict");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("governs every automatic merge, yours included");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask.');
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging)");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating, refreshing or merging)");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("then pipeline_action retry-merge");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Red checks hold merging");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent");

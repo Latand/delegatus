@@ -154,3 +154,15 @@ test("the report's bounded read finds stale rows beyond the first panel page", (
   expect(report.count).toBe(60);
   expect(report.staleCount).toBe(1);
 });
+
+
+test("a refreshing parent asks nothing while its semantic successor carries the decision", () => {
+  const parent = lane("parent", "completed");
+  parent.merge = { state: "refreshing", updatedAt: at } as Pipeline["merge"];
+  const refresh = lane("refresh", "needs_decision");
+  refresh.stateDetail = "src/example.ts:12 @@ -9,6 +9,7 @@ either resolution changes behaviour";
+  const body = { files: [], pipelines: [parent, refresh], tasks: [] };
+  const answer = needsYouAnswer(body, null, now, "project-a", ports(body));
+  expect(answer.rows.map(row => row.kind)).toEqual(["lane-decision"]);
+  expect(answer.rows[0]!.subject.pipelineId).toBe("refresh");
+});

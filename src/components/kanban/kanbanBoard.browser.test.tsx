@@ -28837,3 +28837,70 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
     }
   }, 300_000);
 });
+
+describe("automatic conflict refresh", () => {
+  browserTest("refresh and stopped reasons fit at 1440 and 390 in en and uk", async () => {
+    const out = path.resolve(".artifacts/auto-refresh");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=auto-refresh`, { width, height: 900 }, "light", lang, "reduce", width === 390);
+        try {
+          if (width === 390) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          const openTask = async (id: string) => {
+            if (width === 390) {
+              await page.locator(`[data-phone-card="task:${id}"]`).click();
+              await page.locator("[data-phone-task-body] .pblock").first().waitFor();
+              return page.locator("[data-phone-task-body]");
+            }
+            return page.locator(card(id));
+          };
+          const back = async () => {
+            if (width === 390) {
+              await page.locator("[data-mobile2-back]").first().click();
+              await page.locator("[data-phone-kanban]").waitFor();
+            }
+          };
+          const parent = await openTask("t-merge-wait");
+          await parent.scrollIntoViewIfNeeded();
+          await parent.locator('[data-merge-state="updating"]').waitFor();
+          expect(await parent.locator('[data-merge-state="updating"]').textContent()).toBe(translate(lang, "pipelineBlock.merge.updating"));
+          expect(await parent.locator('[data-answer-action="retry-merge"]').count()).toBe(0);
+          expect(await parent.textContent()).toContain(lang === "en" ? "Refresh the delivery branch" : "Оновити гілку PR");
+          await parent.screenshot({ path: path.join(out, `refresh-${width}-${lang}.png`) });
+          await back();
+          for (const [id, key, message] of [
+            ["t-merge-update", "refreshClosed", null], ["t-merge-stop", "refreshSameBase", null], ["t-merge-done", "refusedRefresh", "target already owned"],
+          ] as const) {
+            const target = await openTask(id);
+            await target.scrollIntoViewIfNeeded();
+            const line = target.locator("[data-merge-stop]");
+            await line.waitFor();
+            expect(await line.innerText()).toContain(translate(lang, `pipelineBlock.mergeReason.${key}`, message ? { message } : undefined));
+            const geometry = await line.evaluate((element) => {
+              const frame = element.closest('[data-phone-task-body], .card')!.getBoundingClientRect();
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const ink = [...range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0);
+              const controls = [...element.closest(".pblock")!.querySelectorAll("button")].map(button => button.getBoundingClientRect());
+              return {
+                escapes: ink.filter(rect => rect.left < frame.left - 1 || rect.right > frame.right + 1).length,
+                overlaps: ink.filter(rect => controls.some(control => Math.min(rect.right, control.right) - Math.max(rect.left, control.left) > 1 && Math.min(rect.bottom, control.bottom) - Math.max(rect.top, control.top) > 1)).length,
+              };
+            });
+            readings.push({ lang, width, id, ...geometry });
+            expect(geometry).toEqual({ escapes: 0, overlaps: 0 });
+            await target.screenshot({ path: path.join(out, `${id}-${width}-${lang}.png`) });
+            await back();
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/auto-refresh", { recursive: true });
+      fs.writeFileSync("evidence/auto-refresh/readings.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 60_000);
+});
