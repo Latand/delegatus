@@ -162,6 +162,9 @@ function sandboxEnvironment(root: string): Record<string, string> {
     /* Claude Code's task directory follows this before TMPDIR; inherited, the
        scanner would list another session's task output. */
     CLAUDE_CODE_TMPDIR: path.join(root, "tmp"),
+    /* tmux finds its server under this; inherited from a host, the Viewer
+       would observe the operator's own panes and processes. */
+    TMUX_TMPDIR: path.join(root, "tmux"),
     LLV_STATE_DIR: path.join(root, "state"),
     LLV_AGENT_REGISTRY_SQLITE: "sqlite",
     /* No control URL is reachable from here: ticks and notifications fail fast. */
@@ -842,7 +845,10 @@ async function browserPhase(input: {
         registry: input.registry, keys: input.keys, stopFile: path.join(input.root, "browser-writers-stop"),
       },
     });
-    for (const view of result.diagnostics) input.note(`browser view ${view.view}: slowest ${JSON.stringify(view.slowest.slice(0, 2))}`);
+    for (const view of result.diagnostics) {
+      input.note(`browser view ${view.view}: slowest ${JSON.stringify(view.slowest.slice(0, 2))}`
+        + (view.failures.length ? `; failed ${JSON.stringify(view.failures)}` : ""));
+    }
     return result.measurements;
   } finally {
     server.kill("SIGTERM");
@@ -876,7 +882,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
   const workerPids: number[] = [];
   try {
     const env = sandboxEnvironment(root);
-    for (const directory of [env.HOME!, env.XDG_CONFIG_HOME!, env.CLAUDE_CODE_TMPDIR!, env.LLV_STATE_DIR!, path.join(root, "w")]) {
+    for (const directory of [env.HOME!, env.XDG_CONFIG_HOME!, env.CLAUDE_CODE_TMPDIR!, env.TMUX_TMPDIR!, env.LLV_STATE_DIR!, path.join(root, "w")]) {
       fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     }
     /* The dataset is built here, under the sandbox's state directory and

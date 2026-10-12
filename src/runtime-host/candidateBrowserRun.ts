@@ -289,7 +289,11 @@ export async function measureBoardInBrowser(options: {
         slowest: slowest.slice(0, 5),
         opening: [...view.requests].sort((a, b) => a.at - b.at).slice(0, 60),
         unfinished: [...view.open.values()].sort((a, b) => a.at - b.at).slice(0, 10),
-        failures: view.failed.slice(0, 5),
+        /* A failed request, and an answer the server refused, with its status. */
+        failures: [
+          ...view.failed.filter((failure) => failure.error !== "net::ERR_ABORTED"),
+          ...view.requests.filter((request) => request.status >= 500).map((request) => ({ route: request.route, error: `HTTP ${request.status}` })),
+        ].slice(0, 5),
         document: documentTiming,
         assets,
       });
