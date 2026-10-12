@@ -5735,6 +5735,7 @@ export class AgentRegistry {
         const receipt = file.receipts[result.receipt.launchId];
         if (receipt) receipt.membershipAdmitted = true;
       });
+      result.receipt.membershipAdmitted = true;
     }
     return result;
   }
