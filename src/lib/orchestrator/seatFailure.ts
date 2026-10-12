@@ -7,6 +7,7 @@ export interface SeatFailureRecord {
   seatEpoch: number;
   designatedAt: string;
   terminalizedAt: string;
+  predecessorConversationId?: string | null;
   automaticReplacement?: { conversationId: string; seatEpoch: number };
 }
 
@@ -26,11 +27,15 @@ export function currentSeatFailure(
   if (!failure || !active || !active.conversationId || active.state !== "active" || active.intent.error !== null) return failure;
   const failedAt = Date.parse(failure.terminalizedAt);
   const activatedAt = Date.parse(active.activatedAt ?? "");
-  if (active.seatEpoch > failure.seatEpoch || activatedAt > failedAt) return null;
+  const rollback = Boolean(failure.predecessorConversationId
+    && failure.predecessorConversationId === active.conversationId
+    && Number.isFinite(Date.parse(active.designatedAt))
+    && Date.parse(active.designatedAt) <= failedAt);
+  const laterDesignation = active.intent.clientRequestId !== failure.clientRequestId
+    && (active.seatEpoch > failure.seatEpoch || activatedAt > failedAt);
+  if (laterDesignation && !rollback) return null;
   const live = observation?.hostState === "alive" && observation.conversationId === active.conversationId
     && observation.seatEpoch === active.seatEpoch && Number.isFinite(Date.parse(observation.observedAt));
   if (!live) return failure;
-  const replacement = failure.automaticReplacement;
-  if (replacement?.conversationId === active.conversationId && replacement.seatEpoch === active.seatEpoch) return null;
   return Date.parse(observation.observedAt) > failedAt ? null : failure;
 }

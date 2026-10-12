@@ -263,6 +263,7 @@ function failureOf(value: unknown): SeatFailureRecord | null {
     error: failure.error,
     clientRequestId: failure.clientRequestId,
     seatEpoch: typeof failure.seatEpoch === "number" ? failure.seatEpoch : 0,
+    ...(typeof failure.predecessorConversationId === "string" ? { predecessorConversationId: failure.predecessorConversationId } : {}),
     designatedAt: typeof failure.designatedAt === "string" ? failure.designatedAt : "",
     terminalizedAt: typeof failure.terminalizedAt === "string" ? failure.terminalizedAt : "",
   };

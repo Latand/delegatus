@@ -73,6 +73,7 @@ interface SeatFailure {
   clientRequestId: string;
   seatEpoch: number;
   conversationId: string | null;
+  predecessorConversationId?: string | null;
   designatedAt: string;
   terminalizedAt: string;
   automaticReplacement?: { conversationId: string; seatEpoch: number };
@@ -101,6 +102,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
     clientRequestId: failed.seat.intent.clientRequestId,
     seatEpoch: failed.seat.seatEpoch,
     conversationId: failed.seat.conversationId,
+    predecessorConversationId: failed.seat.predecessorConversationId ?? null,
     designatedAt: failed.seat.designatedAt,
     terminalizedAt: failed.terminalizedAt,
     ...(failed.seat.intent.automaticReplacement ? { automaticReplacement: failed.seat.intent.automaticReplacement } : {}),

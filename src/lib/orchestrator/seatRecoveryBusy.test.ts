@@ -3,9 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { NextRequest } from "next/server";
 
 import { executeOrchestratorRotation, executeOrchestratorSeatRequest, type SeatCommandDependencies } from "./seatCommand";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "./seats";
+import { AgentRegistry } from "@/lib/agent/registry";
+import { executeSpawnRequest, type SpawnCommandDependencies } from "@/lib/agent/spawnCommand";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
 
 let sandbox = "";
 let previousState: string | undefined;
@@ -87,6 +91,86 @@ test("automatic host recovery retries SQLite busy before replacing its incumbent
   expect(result.status).toBe(200);
   expect(calls).toBe(2);
   expect(orchestratorSeatFor("atlas")).toMatchObject({ active: { conversationId: successor }, pending: null, history: [] });
+});
+
+test("the real spawn receipt stays replayable when its pinned queue write is busy", async () => {
+  const previous = {
+    transport: process.env.LLV_SPAWN_TRANSPORT,
+    hosts: process.env.LLV_STRUCTURED_HOSTS,
+    events: process.env.LLV_RUNTIME_EVENTS,
+    ui: process.env.NEXT_PUBLIC_RUNTIME_UI,
+    socket: process.env.LLV_RUNTIME_HOST_SOCKET,
+  };
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_STRUCTURED_HOSTS = "1";
+  process.env.LLV_RUNTIME_EVENTS = "1";
+  process.env.NEXT_PUBLIC_RUNTIME_UI = "1";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(sandbox, "unused.sock");
+  const cwd = path.join(sandbox, "repo");
+  fs.mkdirSync(cwd, { recursive: true });
+  const registry = new AgentRegistry(path.join(sandbox, "registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", sqliteFilename: path.join(sandbox, "registry.sqlite"),
+  });
+  const account = {
+    engine: "claude" as const,
+    accountId: "queued-account",
+    kind: "managed" as const,
+    home: path.join(sandbox, "account"),
+    transcriptRoot: path.join(sandbox, "account", "sessions"),
+    env: { NODE_ENV: "test" as const },
+  };
+  const retryAt = new Date(Date.now() + 60_000).toISOString();
+  const spawnDependencies: SpawnCommandDependencies = {
+    registry: () => registry,
+    assertStructuredRuntime: () => {},
+    resolveHealthySpawnAccount: async () => ({ ...account, requestedAdmission: {
+      kind: "retry-at", reason: "hard-limit", stale: false, retryAt,
+    } }),
+    resolveSpawnAccount: () => account,
+    resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+    runtimeHostClient: () => ({} as RuntimeHostClient),
+    defer: () => {},
+    storeImages: () => [],
+    spawnStructuredConversation: async () => { throw new Error("queued launch should not dispatch"); },
+  };
+  const queuePinnedSpawn = registry.queuePinnedSpawn.bind(registry);
+  let queueWrites = 0;
+  registry.queuePinnedSpawn = ((...args: Parameters<AgentRegistry["queuePinnedSpawn"]>) => {
+    queueWrites += 1;
+    if (queueWrites === 1) throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    return queuePinnedSpawn(...args);
+  }) as AgentRegistry["queuePinnedSpawn"];
+  const routeSpawn: SeatCommandDependencies["spawn"] = async body => executeSpawnRequest(
+    new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST",
+      headers: {
+        origin: "http://127.0.0.1", host: "127.0.0.1", "sec-fetch-site": "same-origin",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    }),
+    spawnDependencies,
+  ).then(async response => ({ status: response.status, body: await response.json() }));
+  try {
+    const result = await executeOrchestratorSeatRequest({ ...request, cwd, accountId: account.accountId }, dependencies(routeSpawn));
+    const receipt = registry.spawnReceiptForClientAttempt(request.clientRequestId);
+    expect(result.status).toBe(202);
+    expect(queueWrites).toBe(2);
+    expect(receipt).toMatchObject({ state: "starting", accountPin: true, accountId: account.accountId, queuedPinnedSpawn: { retryAt } });
+    expect(Object.values(registry.readOnlySnapshot().receipts).filter(row => row.clientAttemptId === request.clientRequestId)).toHaveLength(1);
+    expect(orchestratorSeatFor("atlas")).toMatchObject({ pending: null, history: [] });
+  } finally {
+    registry.close();
+    for (const [key, value] of Object.entries({
+      LLV_SPAWN_TRANSPORT: previous.transport,
+      LLV_STRUCTURED_HOSTS: previous.hosts,
+      LLV_RUNTIME_EVENTS: previous.events,
+      NEXT_PUBLIC_RUNTIME_UI: previous.ui,
+      LLV_RUNTIME_HOST_SOCKET: previous.socket,
+    })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
 });
 
 test("other spawn errors retain immediate terminal behavior", async () => {
