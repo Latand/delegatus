@@ -3697,7 +3697,7 @@ async function claudeLoginMain(): Promise<void> {
       await shoot("expired");
       const cardSelector = phone ? `[data-mobile2-account="${accountId}"]` : `[data-account-row="${accountId}"]`;
       await page.locator(cardSelector).getByRole("button", { name: translate(lang, "accounts.retry"), exact: true }).click();
-      await page.waitForFunction(({ selector, text }) => document.querySelector(selector)?.textContent?.includes(text), { selector: cardSelector, text: translate(lang, "accounts.auth.error") });
+      await page.waitForFunction(({ selector, text }) => document.querySelector(selector)?.textContent?.includes(text), { selector: cardSelector, text: translate(lang, "accounts.claudeLogin.verifying") });
       const measureCard = () => page.evaluate(({ selector, retryText }) => {
         const card = document.querySelector(selector);
         const panel = card?.closest('[role="dialog"]') ?? card?.closest("[data-mobile2-accounts]");
@@ -3705,6 +3705,17 @@ async function claudeLoginMain(): Promise<void> {
         const box = (element: Element | null | undefined) => { const r = element?.getBoundingClientRect(); return r ? { x: r.x, y: r.y, w: r.width, h: r.height } : null; };
         return { text: card?.textContent?.replace(/\s+/g, " ").trim() ?? "", badgeText: [...(card?.querySelectorAll("span.rounded-full") ?? [])].map((badge) => badge.textContent?.trim() ?? ""),
           limitRows: card?.querySelectorAll("[data-limit-row]").length ?? 0,
+          rowFit: [...(card?.querySelectorAll("[data-limit-row]") ?? [])].map((row) => {
+            const label = row.querySelector("dt");
+            const bar = row.querySelector('span[aria-hidden="true"], [role="meter"]');
+            const range = document.createRange();
+            if (label) range.selectNodeContents(label);
+            return { label: label?.textContent?.trim() ?? "", labelOverflow: label ? label.scrollWidth > label.clientWidth + 1 : false,
+              gap: label && bar ? bar.getBoundingClientRect().left - range.getBoundingClientRect().right : null,
+              clipped: [...row.querySelectorAll("*")].filter((element) => element.scrollWidth > element.clientWidth + 1 && getComputedStyle(element).overflowX !== "visible").map((element) => element.textContent?.trim() ?? ""),
+              text: row.textContent?.replace(/\s+/g, " ").trim() ?? "" };
+          }),
+          weeklyFigures: (card?.textContent?.match(/69%/g) ?? []).length,
           retry: [...(card?.querySelectorAll("button") ?? [])].some((button) => button.textContent?.trim() === retryText),
           targets: [...(card?.querySelectorAll("button, a[href]") ?? [])].map((element) => ({ text: element.textContent?.trim(), box: box(element)! })),
           card: box(card), panel: box(panel), footer: box(footer), footerText: footer?.textContent?.replace(/\s+/g, " ").trim() ?? null,
@@ -3712,7 +3723,8 @@ async function claudeLoginMain(): Promise<void> {
       }, { selector: cardSelector, retryText: translate(lang, "accounts.retry") });
       await page.locator(cardSelector).scrollIntoViewIfNeeded();
       const before = await measureCard();
-      must(before.text.includes(translate(lang, "accounts.auth.error")), `${tag}: verifying lost the old auth error`);
+      must(!before.text.includes(translate(lang, "accounts.auth.error")), `${tag}: verifying still shows the old auth error`);
+      must(!before.text.includes(translate(lang, "limits.noDataYet")), `${tag}: verifying still says no data next to a running verification`);
       must(before.text.includes(translate(lang, "accounts.claudeLogin.verifying")), `${tag}: verifying line absent`);
       await shoot("verifying");
       const readsBeforeSuccess = polls;
@@ -3728,8 +3740,14 @@ async function claudeLoginMain(): Promise<void> {
       must(after.text.includes(translate(lang, phone ? "accounts.active" : "accounts.auth.authenticated")), `${tag}: success badge absent`);
       must(polls - readsBeforeSuccess >= 1 && successfulReads >= 1, `${tag}: success arrived without an accounts poll`);
       if (!phone) must(limitsReads > limitsBeforeSuccess, `${tag}: footer did not re-read limits at success`);
+      must(!phone || after.weeklyFigures === 1, `${tag}: the weekly figure is stated ${after.weeklyFigures} times on the card`);
       for (const [name, measured] of [["before", before], ["after", after]] as const) {
         must(!measured.overflow, `${tag} ${name}: card overflows horizontally`);
+        for (const row of measured.rowFit) {
+          must(!row.labelOverflow, `${tag} ${name}: «${row.label}» overflows its label column`);
+          must(phone || row.gap === null || row.gap >= 4, `${tag} ${name}: «${row.label}» touches its bar (gap ${row.gap})`);
+          must(row.clipped.length === 0, `${tag} ${name}: «${row.label}» row cuts ${JSON.stringify(row.clipped)}`);
+        }
         if (measured.card && measured.panel) must(measured.card.x >= measured.panel.x - 1 && measured.card.x + measured.card.w <= measured.panel.x + measured.panel.w + 1 && measured.card.y >= measured.panel.y - 1 && measured.card.y + measured.card.h <= measured.panel.y + measured.panel.h + 1, `${tag} ${name}: card clipped by panel`);
         for (const target of measured.targets) {
           must(target.box.w > 0 && target.box.h > 0, `${tag} ${name}: zero-sized control`);

@@ -28801,7 +28801,7 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
           } finally { await context.close(); }
         }
 
-        /* The phone: its account lines are the accounts screen behind the menu; each corner names the week. */
+        /* The phone: its account lines are the accounts screen behind the menu; each collapsed card's corner names the week, and the active card, which lists its windows, repeats none. */
         {
           const name = `accounts-390-${lang}`;
           const { context, page, pageErrors } = await openFixture(browser, `${server.base}?accountpicker=1&sidebarweekly=1`, { width: 390, height: 844 }, "dark", lang, "reduce", true);
@@ -28809,7 +28809,7 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
             await page.waitForSelector('[data-mobile2-screen="board"]', { timeout: 40_000 });
             await page.click('[data-mobile2-open="menu"]');
             await page.click('[data-mobile2-go="accounts"]');
-            await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account-corner]').nth(4).waitFor({ timeout: 15_000 });
+            await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account-corner]').nth(2).waitFor({ timeout: 15_000 });
             await page.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
             const cards = await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account]').evaluateAll((elements) => elements.map((card) => {
               const corner = card.querySelector<HTMLElement>("[data-mobile2-account-corner]");
@@ -28820,7 +28820,7 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
               };
             }));
             const week = (percent: number) => `${tr("mobile2.meter.left", { left: percent })} ${tr("limits.week")}`;
-            expect(cards.map((card) => card.corner), `${name} corners`).toEqual([week(77), week(41), tr("limits.noWeekly"), week(78), week(23)]);
+            expect(cards.map((card) => card.corner), `${name} corners`).toEqual([null, week(41), tr("limits.noWeekly"), null, week(23)]);
             expect(cards.every((card) => card.inside !== false), `${name} corners inside the screen`).toBe(true);
             expect(await page.evaluate(() => Math.max(0, document.documentElement.scrollWidth - innerWidth)), `${name} no sideways scroll`).toBe(0);
             await page.screenshot({ path: path.join(out, `${name}.png`) });

@@ -882,7 +882,10 @@ test("a watched retry clears an old login error and shows live limits without a 
     await store.refresh();
     const view = await mount(store);
     mounted.push(view);
-    expect(view.host.textContent).toContain("Auth error");
+    // A sign-in in flight shows no result of the attempt before it.
+    expect(view.host.textContent).toContain("signing in…");
+    expect(view.host.textContent).not.toContain("Auth error");
+    expect(view.host.textContent).not.toContain("no data yet");
     phase = "authenticated";
     await store.refresh();
     await view.rerender(store);

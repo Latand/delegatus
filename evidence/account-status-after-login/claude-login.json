@@ -1,5 +1,5 @@
 {
-  "commit": "f88a31631250a958a22c35babe0f6add068a67b6",
+  "commit": "11fdddaa5b501110aa2b144000e191406e263bda",
   "1440-en-light": {
     "polls": 13,
     "held": {
@@ -8,7 +8,7 @@
       "link": "https://claude.ai/oauth/authorize?state=fixture",
       "group": {
         "x": 974,
-        "y": 582.5,
+        "y": 576.265625,
         "w": 398,
         "h": 109.625
       },
@@ -47,28 +47,29 @@
       "retry": "Retry"
     },
     "before": {
-      "text": "Account Baccount-bAuth errorsigning in…no data yetRefreshVerifying…CancelCopy CLIRemove",
+      "text": "Account Baccount-bsigning in…RefreshVerifying…CancelCopy CLIRemove",
       "badgeText": [
-        "",
-        "Auth error"
+        ""
       ],
       "limitRows": 0,
+      "rowFit": [],
+      "weeklyFigures": 0,
       "retry": false,
       "targets": [
         {
-          "text": "Account Baccount-bAuth errorsigning in…",
+          "text": "Account Baccount-bsigning in…",
           "box": {
             "x": 974,
             "y": 514.25,
             "w": 398,
-            "h": 50.25
+            "h": 44.015625
           }
         },
         {
           "text": "Refresh",
           "box": {
             "x": 1292.75,
-            "y": 564.5,
+            "y": 558.265625,
             "w": 65.25,
             "h": 24
           }
@@ -77,7 +78,7 @@
           "text": "Cancel",
           "box": {
             "x": 1305.921875,
-            "y": 592.5,
+            "y": 586.265625,
             "w": 54.078125,
             "h": 21.9375
           }
@@ -86,7 +87,7 @@
           "text": "Copy CLI",
           "box": {
             "x": 1004,
-            "y": 622.4375,
+            "y": 616.203125,
             "w": 78.09375,
             "h": 28
           }
@@ -95,7 +96,7 @@
           "text": "Remove",
           "box": {
             "x": 1289.140625,
-            "y": 622.4375,
+            "y": 616.203125,
             "w": 68.859375,
             "h": 28
           }
@@ -105,7 +106,7 @@
         "x": 974,
         "y": 514.25,
         "w": 398,
-        "h": 145.1875
+        "h": 138.953125
       },
       "panel": {
         "x": 973,
@@ -123,7 +124,7 @@
       "overflow": false
     },
     "after": {
-      "text": "Account Baccount-bmaxAuthenticated69%activeChecked · 09:44Refresh5h93%leftWeek69%leftCopy CLIRemove",
+      "text": "Account Baccount-bmaxAuthenticated69%activeChecked · 11:35Refresh5h93%leftWeek69%leftCopy CLIRemove",
       "badgeText": [
         "",
         "max",
@@ -135,6 +136,23 @@
         ""
       ],
       "limitRows": 2,
+      "rowFit": [
+        {
+          "label": "5h",
+          "labelOverflow": false,
+          "gap": 48.328125,
+          "clipped": [],
+          "text": "5h93%left"
+        },
+        {
+          "label": "Week",
+          "labelOverflow": false,
+          "gap": 34.046875,
+          "clipped": [],
+          "text": "Week69%left"
+        }
+      ],
+      "weeklyFigures": 2,
       "retry": false,
       "targets": [
         {
@@ -207,7 +225,7 @@
       "link": "https://claude.ai/oauth/authorize?state=fixture",
       "group": {
         "x": 974,
-        "y": 582.5,
+        "y": 576.265625,
         "w": 398,
         "h": 109.625
       },
@@ -246,28 +264,29 @@
       "retry": "Retry"
     },
     "before": {
-      "text": "Account Baccount-bAuth errorsigning in…no data yetRefreshVerifying…CancelCopy CLIRemove",
+      "text": "Account Baccount-bsigning in…RefreshVerifying…CancelCopy CLIRemove",
       "badgeText": [
-        "",
-        "Auth error"
+        ""
       ],
       "limitRows": 0,
+      "rowFit": [],
+      "weeklyFigures": 0,
       "retry": false,
       "targets": [
         {
-          "text": "Account Baccount-bAuth errorsigning in…",
+          "text": "Account Baccount-bsigning in…",
           "box": {
             "x": 974,
             "y": 514.25,
             "w": 398,
-            "h": 50.25
+            "h": 44.015625
           }
         },
         {
           "text": "Refresh",
           "box": {
             "x": 1292.75,
-            "y": 564.5,
+            "y": 558.265625,
             "w": 65.25,
             "h": 24
           }
@@ -276,7 +295,7 @@
           "text": "Cancel",
           "box": {
             "x": 1305.921875,
-            "y": 592.5,
+            "y": 586.265625,
             "w": 54.078125,
             "h": 21.9375
           }
@@ -285,7 +304,7 @@
           "text": "Copy CLI",
           "box": {
             "x": 1004,
-            "y": 622.4375,
+            "y": 616.203125,
             "w": 78.09375,
             "h": 28
           }
@@ -294,7 +313,7 @@
           "text": "Remove",
           "box": {
             "x": 1289.140625,
-            "y": 622.4375,
+            "y": 616.203125,
             "w": 68.859375,
             "h": 28
           }
@@ -304,7 +323,7 @@
         "x": 974,
         "y": 514.25,
         "w": 398,
-        "h": 145.1875
+        "h": 138.953125
       },
       "panel": {
         "x": 973,
@@ -322,7 +341,7 @@
       "overflow": false
     },
     "after": {
-      "text": "Account Baccount-bmaxAuthenticated69%activeChecked · 09:44Refresh5h93%leftWeek69%leftCopy CLIRemove",
+      "text": "Account Baccount-bmaxAuthenticated69%activeChecked · 11:35Refresh5h93%leftWeek69%leftCopy CLIRemove",
       "badgeText": [
         "",
         "max",
@@ -334,6 +353,23 @@
         ""
       ],
       "limitRows": 2,
+      "rowFit": [
+        {
+          "label": "5h",
+          "labelOverflow": false,
+          "gap": 48.328125,
+          "clipped": [],
+          "text": "5h93%left"
+        },
+        {
+          "label": "Week",
+          "labelOverflow": false,
+          "gap": 34.046875,
+          "clipped": [],
+          "text": "Week69%left"
+        }
+      ],
+      "weeklyFigures": 2,
       "retry": false,
       "targets": [
         {
@@ -399,14 +435,14 @@
     "phoneFooter": null
   },
   "1440-uk-light": {
-    "polls": 13,
+    "polls": 12,
     "held": {
       "value": "fixture-code#state",
       "focusable": true,
       "link": "https://claude.ai/oauth/authorize?state=fixture",
       "group": {
         "x": 974,
-        "y": 582.5,
+        "y": 592.015625,
         "w": 398,
         "h": 109.625
       },
@@ -445,28 +481,29 @@
       "retry": "Повторити"
     },
     "before": {
-      "text": "Account Baccount-bПомилка входувхід…поки немає данихОновитиПеревіряємо…СкасуватиКопіювати CLIВидалити",
+      "text": "Account Baccount-bвхід…ОновитиПеревіряємо…СкасуватиКопіювати CLIВидалити",
       "badgeText": [
-        "",
-        "Помилка входу"
+        ""
       ],
       "limitRows": 0,
+      "rowFit": [],
+      "weeklyFigures": 0,
       "retry": false,
       "targets": [
         {
-          "text": "Account Baccount-bПомилка входувхід…",
+          "text": "Account Baccount-bвхід…",
           "box": {
             "x": 974,
-            "y": 514.25,
+            "y": 498,
             "w": 398,
-            "h": 50.25
+            "h": 44.015625
           }
         },
         {
           "text": "Оновити",
           "box": {
             "x": 1286.71875,
-            "y": 564.5,
+            "y": 542.015625,
             "w": 71.28125,
             "h": 24
           }
@@ -475,7 +512,7 @@
           "text": "Скасувати",
           "box": {
             "x": 1285.3125,
-            "y": 592.5,
+            "y": 570.015625,
             "w": 74.6875,
             "h": 21.9375
           }
@@ -484,7 +521,7 @@
           "text": "Копіювати CLI",
           "box": {
             "x": 1004,
-            "y": 622.4375,
+            "y": 599.953125,
             "w": 106.640625,
             "h": 28
           }
@@ -493,7 +530,7 @@
           "text": "Видалити",
           "box": {
             "x": 1278.734375,
-            "y": 622.4375,
+            "y": 599.953125,
             "w": 79.265625,
             "h": 28
           }
@@ -501,19 +538,19 @@
       ],
       "card": {
         "x": 974,
-        "y": 514.25,
+        "y": 498,
         "w": 398,
-        "h": 145.1875
+        "h": 138.953125
       },
       "panel": {
         "x": 973,
-        "y": 261.5,
+        "y": 258.5,
         "w": 400,
         "h": 669.34375
       },
       "footer": {
         "x": 0,
-        "y": 772,
+        "y": 769,
         "w": 247,
         "h": 26
       },
@@ -521,7 +558,7 @@
       "overflow": false
     },
     "after": {
-      "text": "Account Baccount-bmaxАвторизовано69%активнийПеревірено · 09:45Оновити5 год93%лишилосьТиждень69%лишилосьКопіювати CLIВидалити",
+      "text": "Account Baccount-bmaxАвторизовано69%активнийПеревірено · 11:35Оновити5 год93%лишилосьТиждень69%лишилосьКопіювати CLIВидалити",
       "badgeText": [
         "",
         "max",
@@ -533,13 +570,30 @@
         ""
       ],
       "limitRows": 2,
+      "rowFit": [
+        {
+          "label": "5 год",
+          "labelOverflow": false,
+          "gap": 35.296875,
+          "clipped": [],
+          "text": "5 год93%лишилось"
+        },
+        {
+          "label": "Тиждень",
+          "labelOverflow": false,
+          "gap": 16.9375,
+          "clipped": [],
+          "text": "Тиждень69%лишилось"
+        }
+      ],
+      "weeklyFigures": 2,
       "retry": false,
       "targets": [
         {
           "text": "Account Baccount-bmaxАвторизовано69%активний",
           "box": {
             "x": 974,
-            "y": 514.25,
+            "y": 498,
             "w": 398,
             "h": 50.25
           }
@@ -548,7 +602,7 @@
           "text": "Оновити",
           "box": {
             "x": 1286.71875,
-            "y": 564.5,
+            "y": 548.25,
             "w": 71.28125,
             "h": 24
           }
@@ -557,7 +611,7 @@
           "text": "Копіювати CLI",
           "box": {
             "x": 1004,
-            "y": 628,
+            "y": 611.75,
             "w": 106.640625,
             "h": 28
           }
@@ -566,7 +620,7 @@
           "text": "Видалити",
           "box": {
             "x": 1278.734375,
-            "y": 628,
+            "y": 611.75,
             "w": 79.265625,
             "h": 28
           }
@@ -574,26 +628,26 @@
       ],
       "card": {
         "x": 974,
-        "y": 514.25,
+        "y": 498,
         "w": 398,
         "h": 150.75
       },
       "panel": {
         "x": 973,
-        "y": 261.5,
+        "y": 258.5,
         "w": 400,
         "h": 669.34375
       },
       "footer": {
         "x": 0,
-        "y": 772,
+        "y": 769,
         "w": 247,
         "h": 26
       },
       "footerText": "Account Bтиждень 69%",
       "overflow": false
     },
-    "successAccountReads": 1,
+    "successAccountReads": 3,
     "successLimitsReads": 1,
     "phoneFooter": null
   },
@@ -605,7 +659,7 @@
       "link": "https://claude.ai/oauth/authorize?state=fixture",
       "group": {
         "x": 974,
-        "y": 582.5,
+        "y": 592.015625,
         "w": 398,
         "h": 109.625
       },
@@ -644,28 +698,29 @@
       "retry": "Повторити"
     },
     "before": {
-      "text": "Account Baccount-bПомилка входувхід…поки немає данихОновитиПеревіряємо…СкасуватиКопіювати CLIВидалити",
+      "text": "Account Baccount-bвхід…ОновитиПеревіряємо…СкасуватиКопіювати CLIВидалити",
       "badgeText": [
-        "",
-        "Помилка входу"
+        ""
       ],
       "limitRows": 0,
+      "rowFit": [],
+      "weeklyFigures": 0,
       "retry": false,
       "targets": [
         {
-          "text": "Account Baccount-bПомилка входувхід…",
+          "text": "Account Baccount-bвхід…",
           "box": {
             "x": 974,
-            "y": 514.25,
+            "y": 498,
             "w": 398,
-            "h": 50.25
+            "h": 44.015625
           }
         },
         {
           "text": "Оновити",
           "box": {
             "x": 1286.71875,
-            "y": 564.5,
+            "y": 542.015625,
             "w": 71.28125,
             "h": 24
           }
@@ -674,7 +729,7 @@
           "text": "Скасувати",
           "box": {
             "x": 1285.3125,
-            "y": 592.5,
+            "y": 570.015625,
             "w": 74.6875,
             "h": 21.9375
           }
@@ -683,7 +738,7 @@
           "text": "Копіювати CLI",
           "box": {
             "x": 1004,
-            "y": 622.4375,
+            "y": 599.953125,
             "w": 106.640625,
             "h": 28
           }
@@ -692,7 +747,7 @@
           "text": "Видалити",
           "box": {
             "x": 1278.734375,
-            "y": 622.4375,
+            "y": 599.953125,
             "w": 79.265625,
             "h": 28
           }
@@ -700,19 +755,19 @@
       ],
       "card": {
         "x": 974,
-        "y": 514.25,
+        "y": 498,
         "w": 398,
-        "h": 145.1875
+        "h": 138.953125
       },
       "panel": {
         "x": 973,
-        "y": 261.5,
+        "y": 258.5,
         "w": 400,
         "h": 669.34375
       },
       "footer": {
         "x": 0,
-        "y": 772,
+        "y": 769,
         "w": 247,
         "h": 26
       },
@@ -720,7 +775,7 @@
       "overflow": false
     },
     "after": {
-      "text": "Account Baccount-bmaxАвторизовано69%активнийПеревірено · 09:45Оновити5 год93%лишилосьТиждень69%лишилосьКопіювати CLIВидалити",
+      "text": "Account Baccount-bmaxАвторизовано69%активнийПеревірено · 11:35Оновити5 год93%лишилосьТиждень69%лишилосьКопіювати CLIВидалити",
       "badgeText": [
         "",
         "max",
@@ -732,13 +787,30 @@
         ""
       ],
       "limitRows": 2,
+      "rowFit": [
+        {
+          "label": "5 год",
+          "labelOverflow": false,
+          "gap": 35.296875,
+          "clipped": [],
+          "text": "5 год93%лишилось"
+        },
+        {
+          "label": "Тиждень",
+          "labelOverflow": false,
+          "gap": 16.9375,
+          "clipped": [],
+          "text": "Тиждень69%лишилось"
+        }
+      ],
+      "weeklyFigures": 2,
       "retry": false,
       "targets": [
         {
           "text": "Account Baccount-bmaxАвторизовано69%активний",
           "box": {
             "x": 974,
-            "y": 514.25,
+            "y": 498,
             "w": 398,
             "h": 50.25
           }
@@ -747,7 +819,7 @@
           "text": "Оновити",
           "box": {
             "x": 1286.71875,
-            "y": 564.5,
+            "y": 548.25,
             "w": 71.28125,
             "h": 24
           }
@@ -756,7 +828,7 @@
           "text": "Копіювати CLI",
           "box": {
             "x": 1004,
-            "y": 628,
+            "y": 611.75,
             "w": 106.640625,
             "h": 28
           }
@@ -765,7 +837,7 @@
           "text": "Видалити",
           "box": {
             "x": 1278.734375,
-            "y": 628,
+            "y": 611.75,
             "w": 79.265625,
             "h": 28
           }
@@ -773,19 +845,19 @@
       ],
       "card": {
         "x": 974,
-        "y": 514.25,
+        "y": 498,
         "w": 398,
         "h": 150.75
       },
       "panel": {
         "x": 973,
-        "y": 261.5,
+        "y": 258.5,
         "w": 400,
         "h": 669.34375
       },
       "footer": {
         "x": 0,
-        "y": 772,
+        "y": 769,
         "w": 247,
         "h": 26
       },
@@ -843,12 +915,14 @@
       "retry": "Retry"
     },
     "before": {
-      "text": "Account Bsigning inAuth errorVerifying…Cancel",
+      "text": "Account Bsigning inVerifying…Cancel",
       "badgeText": [
         "",
         "signing in"
       ],
       "limitRows": 0,
+      "rowFit": [],
+      "weeklyFigures": 0,
       "retry": false,
       "targets": [
         {
@@ -878,12 +952,29 @@
       "overflow": false
     },
     "after": {
-      "text": "Account BactiveMax plan·checked 09:4569% leftWeek5h93% leftWeek69% leftRefresh",
+      "text": "Account BactiveMax plan·checked 11:365h93% leftWeek69% leftRefresh",
       "badgeText": [
         "",
         "active"
       ],
       "limitRows": 2,
+      "rowFit": [
+        {
+          "label": "5h",
+          "labelOverflow": false,
+          "gap": 75.15625,
+          "clipped": [],
+          "text": "5h93% left"
+        },
+        {
+          "label": "Week",
+          "labelOverflow": false,
+          "gap": 59.453125,
+          "clipped": [],
+          "text": "Week69% left"
+        }
+      ],
+      "weeklyFigures": 1,
       "retry": false,
       "targets": [
         {
@@ -963,12 +1054,14 @@
       "retry": "Retry"
     },
     "before": {
-      "text": "Account Bsigning inAuth errorVerifying…Cancel",
+      "text": "Account Bsigning inVerifying…Cancel",
       "badgeText": [
         "",
         "signing in"
       ],
       "limitRows": 0,
+      "rowFit": [],
+      "weeklyFigures": 0,
       "retry": false,
       "targets": [
         {
@@ -998,12 +1091,29 @@
       "overflow": false
     },
     "after": {
-      "text": "Account BactiveMax plan·checked 09:4569% leftWeek5h93% leftWeek69% leftRefresh",
+      "text": "Account BactiveMax plan·checked 11:365h93% leftWeek69% leftRefresh",
       "badgeText": [
         "",
         "active"
       ],
       "limitRows": 2,
+      "rowFit": [
+        {
+          "label": "5h",
+          "labelOverflow": false,
+          "gap": 75.15625,
+          "clipped": [],
+          "text": "5h93% left"
+        },
+        {
+          "label": "Week",
+          "labelOverflow": false,
+          "gap": 59.453125,
+          "clipped": [],
+          "text": "Week69% left"
+        }
+      ],
+      "weeklyFigures": 1,
       "retry": false,
       "targets": [
         {
@@ -1083,12 +1193,14 @@
       "retry": "Повторити"
     },
     "before": {
-      "text": "Account Bвхід триваєПомилка входуПеревіряємо…Скасувати",
+      "text": "Account Bвхід триваєПеревіряємо…Скасувати",
       "badgeText": [
         "",
         "вхід триває"
       ],
       "limitRows": 0,
+      "rowFit": [],
+      "weeklyFigures": 0,
       "retry": false,
       "targets": [
         {
@@ -1118,12 +1230,29 @@
       "overflow": false
     },
     "after": {
-      "text": "Account Bактивнийплан Max·перевірено 09:4669% лишилосьТиждень5 год93% лишилосьТиждень69% лишилосьОновити",
+      "text": "Account Bактивнийплан Max·перевірено 11:365 год93% лишилосьТиждень69% лишилосьОновити",
       "badgeText": [
         "",
         "активний"
       ],
       "limitRows": 2,
+      "rowFit": [
+        {
+          "label": "5 год",
+          "labelOverflow": false,
+          "gap": 60.828125,
+          "clipped": [],
+          "text": "5 год93% лишилось"
+        },
+        {
+          "label": "Тиждень",
+          "labelOverflow": false,
+          "gap": 40.625,
+          "clipped": [],
+          "text": "Тиждень69% лишилось"
+        }
+      ],
+      "weeklyFigures": 1,
       "retry": false,
       "targets": [
         {
@@ -1203,12 +1332,14 @@
       "retry": "Повторити"
     },
     "before": {
-      "text": "Account Bвхід триваєПомилка входуПеревіряємо…Скасувати",
+      "text": "Account Bвхід триваєПеревіряємо…Скасувати",
       "badgeText": [
         "",
         "вхід триває"
       ],
       "limitRows": 0,
+      "rowFit": [],
+      "weeklyFigures": 0,
       "retry": false,
       "targets": [
         {
@@ -1238,12 +1369,29 @@
       "overflow": false
     },
     "after": {
-      "text": "Account Bактивнийплан Max·перевірено 09:4669% лишилосьТиждень5 год93% лишилосьТиждень69% лишилосьОновити",
+      "text": "Account Bактивнийплан Max·перевірено 11:365 год93% лишилосьТиждень69% лишилосьОновити",
       "badgeText": [
         "",
         "активний"
       ],
       "limitRows": 2,
+      "rowFit": [
+        {
+          "label": "5 год",
+          "labelOverflow": false,
+          "gap": 60.828125,
+          "clipped": [],
+          "text": "5 год93% лишилось"
+        },
+        {
+          "label": "Тиждень",
+          "labelOverflow": false,
+          "gap": 40.625,
+          "clipped": [],
+          "text": "Тиждень69% лишилось"
+        }
+      ],
+      "weeklyFigures": 1,
       "retry": false,
       "targets": [
         {
