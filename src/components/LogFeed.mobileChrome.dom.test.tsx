@@ -108,7 +108,7 @@ mock.module("@/hooks/useLogTail", () => ({
 }));
 mock.module("@/hooks/useToolActivityCues", () => ({ ...actualToolCues, useToolActivityCues: () => undefined }));
 
-const { LogFeed } = await import("./LogFeed");
+const { JUMP_FADE_PX, LogFeed } = await import("./LogFeed");
 
 const roots = new Set<Root>();
 beforeEach(() => {
@@ -221,10 +221,11 @@ const conversation = (name: string): FileEntry => ({
 
 /*
  * #2072 defect D: the «down» control sat over the feed, centred at its bottom
- * edge, and it only exists while the reader is away from the tail — exactly
- * when a line of text is under it. It now takes its own 44 px row below the
- * feed, in flow: the feed's viewport ends above it, so no text can sit under
- * it, and the same row serves the desktop readers.
+ * edge, over a line of text. It then took its own 44 px row below the feed.
+ * The operator's decision of 2026-10-11 (round 1) floats it again, at the
+ * transcript's bottom right, so it costs the transcript no row: while it
+ * shows, the feed's last 44 px band fades out under it, so the pill lies on
+ * the faded edge and covers no line the reader is reading.
  */
 async function releaseTail(host: HTMLElement): Promise<{ scroller: HTMLElement; jump: HTMLButtonElement }> {
   const scroller = host.querySelector("[data-log-feed-scroller]") as HTMLElement;
@@ -242,29 +243,31 @@ async function releaseTail(host: HTMLElement): Promise<{ scroller: HTMLElement; 
 }
 
 for (const surface of ["phone", "desktop"] as const) {
-  test(`${surface}: the jump control is a row of its own below the feed, never over it`, async () => {
+  test(`${surface}: the jump control floats at the feed's bottom right, over a faded edge, and takes no row`, async () => {
     mobile = surface === "phone";
     const host = render(conversation(`jump-strip-${surface}`));
     expect(host.querySelector("[data-feed-jump-strip]")).toBeNull();
     const { scroller, jump } = await releaseTail(host);
-
     expect(jump).toBeTruthy();
     const strip = jump.closest("[data-feed-jump-strip]") as HTMLElement | null;
     expect(strip).toBeTruthy();
-    /* Not inside the box that overlays the scroller, and after it in flow. */
-    expect(scroller.parentElement!.contains(strip)).toBe(false);
-    expect(scroller.compareDocumentPosition(strip!) & dom.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    for (const element of [strip!, jump]) {
-      expect(element.className.split(/\s+/)).not.toContain("absolute");
-    }
-    /* A 44 px row and a 44 px target around the 32 px pill. */
-    expect(strip!.className.split(/\s+/)).toEqual(expect.arrayContaining(["h-11", "shrink-0"]));
-    expect(jump.className.split(/\s+/)).toEqual(expect.arrayContaining(["h-11", "min-w-11"]));
+    /* Inside the box that overlays the scroller, pinned to its bottom right:
+       nothing after the scroller in flow, so its viewport is as tall as before. */
+    expect(scroller.parentElement!.contains(strip)).toBe(true);
+    expect(strip!.className.split(/\s+/)).toEqual(expect.arrayContaining(["absolute", "bottom-0", "right-2"]));
+    expect(scroller.nextElementSibling?.matches("[data-feed-jump-strip]") ?? false).toBe(false);
+    /* The edge under it fades out, as tall as its 44 px target. */
+    expect(scroller.hasAttribute("data-feed-faded")).toBe(true);
+    expect(scroller.style.maskImage).toContain(`calc(100% - ${JUMP_FADE_PX}px)`);
+    expect(JUMP_FADE_PX).toBe(44);
+    /* A 44 px target around the 32 px pill, which still says where it goes. */
+    expect(jump.className.split(/\s+/)).toEqual(expect.arrayContaining(["h-11", "min-w-11", "pointer-events-auto"]));
     expect(jump.querySelector("[data-feed-jump-pill]")?.className.split(/\s+/)).toContain("h-8");
     expect(jump.textContent).toContain("down");
 
     flushSync(() => { jump.click(); });
     expect(host.querySelector("[data-feed-jump-strip]")).toBeNull();
+    expect(scroller.hasAttribute("data-feed-faded")).toBe(false);
   });
 }
 

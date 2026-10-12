@@ -1,14 +1,10 @@
 "use client";
 
-import { useMemo, useSyncExternalStore } from "react";
-
-import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceBus";
+import { viewBus } from "@/hooks/viewPresenceBus";
 
 import {
   captureSelectedContext,
-  selectedContextPreview,
   type SelectedCardIdentity,
-  type SelectedContextPreview,
   type SelectedContextRef,
 } from "./selectedContext";
 
@@ -23,9 +19,8 @@ import {
  * one synchronous pass, which is what makes "change the selection right after
  * sending" leave the admitted turn alone.
  *
- * For rendering the badge BEFORE submission there is a subscribing hook (see
- * `useViewerSelectedContext`), because that surface does want to follow the
- * selection as it moves.
+ * The voice call reads it per utterance (#1629). A composer's turn does not:
+ * see `composerSelectedContext`.
  */
 export function viewerSelectedContext(now: number = Date.now()): SelectedContextRef {
   return captureSelectedContext({
@@ -39,25 +34,26 @@ export function viewerSelectedContext(now: number = Date.now()): SelectedContext
 }
 
 const NO_CARDS: readonly SelectedCardIdentity[] = [];
+const NO_SELECTION = { focusedPath: null, selectedPaths: [] as readonly string[] };
 
 /**
- * The subscribing read, for the composer badge.
+ * What a composer's turn carries about the board (operator, 2026-10-11): never
+ * the card the operator happens to have open. The «eye» chip that previewed
+ * it and the reference it attached to every message are gone; a task is named
+ * by the card's own button (#2420), whose chips the caller adds on top.
  *
- * Follows the selection as the operator moves it, which is exactly what the
- * capture path must NOT do — hence two entry points over one bus rather than one
- * shared value. The badge is a preview of what the next submission will carry;
- * `viewerSelectedContext()` is what that submission actually carries.
- *
- * Returns the time-free PREVIEW, not a reference: nothing has been captured yet,
- * and stamping a capture time on a badge the operator is still looking at would
- * make the preview claim something the submission has not done. Every input is
- * subscribed to individually and memoized over exactly those, and the bus hands
- * back the same object until something is reported — so a camera settle or a
- * scroll recomputes nothing.
+ * Still a whole reference — the explicit empty selection, with the same
+ * binding evidence and capture time — because a retained generation replays
+ * exactly what it was admitted with, and that record is how a replay knows
+ * its payload is complete. What goes on the wire is the caller's to omit.
  */
-export function useViewerSelectedContext(): SelectedContextPreview {
-  const context = useSyncExternalStore(viewBus.subscribe, viewBus.getContext, () => OVERVIEW_CONTEXT);
-  const slice = useSyncExternalStore(viewBus.subscribe, viewBus.getSlice, () => OVERVIEW_SLICE);
-  const cards = useSyncExternalStore(viewBus.subscribe, viewBus.getCards, () => NO_CARDS);
-  return useMemo(() => selectedContextPreview({ context, slice, cards }), [context, slice, cards]);
+export function composerSelectedContext(now: number = Date.now()): SelectedContextRef {
+  return captureSelectedContext({
+    context: viewBus.getContext(),
+    slice: NO_SELECTION,
+    cards: NO_CARDS,
+    identity: viewBus.getIdentity(),
+    revision: viewBus.getSelectionRevision(),
+    now,
+  });
 }
