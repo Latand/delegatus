@@ -65,7 +65,12 @@ test("only allowlisted pure reads may omit keys; explicit keys still replay afte
   try {
     const tools = await mcp.client.listTools();
     for (const name of OPTIONAL_READ_KEY_TOOLS) expect(tools.tools.find(tool => tool.name === name)!.inputSchema.required ?? []).not.toContain("clientRequestId");
-    for (const name of MUTATING_MCP_TOOL_NAMES) expect(tools.tools.find(tool => tool.name === name)!.inputSchema.required).toContain("clientRequestId");
+    for (const name of MUTATING_MCP_TOOL_NAMES) {
+      const required = tools.tools.find(tool => tool.name === name)!.inputSchema.required ?? [];
+      // Backfill defaults to a keyless preview; its write path above requires a key.
+      if (name === "backfill_worktree_projects") expect(required).not.toContain("clientRequestId");
+      else expect(required).toContain("clientRequestId");
+    }
     expect((await mcp.client.callTool({ name: "get_pipeline", arguments: { pipelineId: "fixture" } })).isError).toBeUndefined();
   } finally { await mcp.close(); }
 });
