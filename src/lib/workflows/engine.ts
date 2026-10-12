@@ -262,18 +262,22 @@ function cpuWorkflowKey(wf: Workflow, phase: "setup" | "stage"): string {
   return `${cpuWorkflowPrefix()}${wf.id}:${phase === "setup" ? "setup" : `stage:${wf.stageIndex}`}`;
 }
 
+function cpuWorkflowPhase(wf: Workflow): "setup" | "stage" | null {
+  const phase = phaseOf(wf), run = currentRun(wf);
+  if (phase === "provisioning" && wf.template.setup && wf.setupPid == null) return "setup";
+  if ((phase === "implementing" || phase === "reviewing") && run && !run.startedAt && !run.doneAt) return "stage";
+  return null;
+}
+
 /** Parked work and update holds retain their place without blocking callers.
  * Reconcile from durable records so a restart also removes superseded phases. */
 function reconcileCpuAdmission(): void {
   const active = new Set<string>(), eligible = new Set<string>();
   const drain = activeDrain();
   if (machineCpuPressureGate()) for (const wf of loadWorkflows()) {
-    const phase = phaseOf(wf);
-    const run = currentRun(wf);
-    let key: string;
-    if (phase === "provisioning" && wf.template.setup && wf.setupPid == null) key = cpuWorkflowKey(wf, "setup");
-    else if ((phase === "implementing" || phase === "reviewing") && run && !run.startedAt && !run.doneAt) key = cpuWorkflowKey(wf, "stage");
-    else continue;
+    const phase = cpuWorkflowPhase(wf);
+    if (!phase) continue;
+    const key = cpuWorkflowKey(wf, phase);
     active.add(key);
     if (!PARKED_STATES.has(wf.state) && !(wf.mode === "auto" && drain)) eligible.add(key);
   }
@@ -593,27 +597,56 @@ export async function tickWorkflows(entries: FileEntry[], ports: WorkflowPorts =
     return { workflows: loadWorkflows(), changed: false };
   }
   store.__llvWorkflowTick = true;
+  const entriesByPath = new Map(entries.map((entry) => [entry.path, entry]));
+  const running = new Set<string>();
+  let admissionWork: Promise<void> | null = null, admissionChanged = false;
+  const serviceStarts = async () => {
+    ports.cpuAdmissionReconcile?.();
+    const current = loadWorkflows();
+    for (const wf of current) {
+      const phase = cpuWorkflowPhase(wf);
+      if (!phase || running.has(wf.id) || PARKED_STATES.has(wf.state) || TERMINAL_STATES.has(wf.state)
+        || (phase === "setup" && !wf.baseRef) || (wf.mode === "auto" && activeDrain())) continue;
+      running.add(wf.id);
+      try {
+        if (await tickWorkflow(wf, entries, entriesByPath, ports, () => saveWorkflows(current))) {
+          admissionChanged = true;
+          saveWorkflows(current);
+        }
+      } finally { running.delete(wf.id); }
+    }
+  };
   // The controller serializes passes. Keep update holds observable while a
-  // finish command waits behind another workflow's ticket in the CPU queue.
+  // finish command waits, and keep eligible starts polling that same queue.
   const admissionWatch = ports.cpuAdmissionReconcile ? setInterval(() => {
-    try { ports.cpuAdmissionReconcile?.(); }
-    catch (error) { console.error("[workflows] CPU admission reconciliation failed", error); }
+    if (admissionWork) return;
+    admissionWork = serviceStarts()
+      .catch(error => { console.error("[workflows] CPU admission reconciliation failed", error); })
+      .finally(() => { admissionWork = null; });
   }, machineCpuPressurePollMs()) : null;
   admissionWatch?.unref();
   try {
     ports.cpuAdmissionReconcile?.();
     const workflows = loadWorkflows();
-    const entriesByPath = new Map(entries.map((entry) => [entry.path, entry]));
     let changed = false;
-    for (const wf of workflows) {
+    for (let index = 0; index < workflows.length; index++) {
+      if (TERMINAL_STATES.has(workflows[index]!.state) || PARKED_STATES.has(workflows[index]!.state)) continue;
+      const wf = loadWorkflows().find(item => item.id === workflows[index]!.id);
+      if (!wf || running.has(wf.id)) continue;
+      workflows[index] = wf;
       if (TERMINAL_STATES.has(wf.state) || PARKED_STATES.has(wf.state)) continue;
-      if (await tickWorkflow(wf, entries, entriesByPath, ports, () => saveWorkflows(workflows))) changed = true;
+      running.add(wf.id);
+      try {
+        if (await tickWorkflow(wf, entries, entriesByPath, ports, () => saveWorkflows(workflows))) changed = true;
+      } finally { running.delete(wf.id); }
       if (changed) saveWorkflows(workflows);
     }
+    await admissionWork;
     if (changed) saveWorkflows(workflows);
-    return { workflows, changed };
+    return { workflows: loadWorkflows(), changed: changed || admissionChanged };
   } finally {
     if (admissionWatch) clearInterval(admissionWatch);
+    await admissionWork;
     store.__llvWorkflowTick = false;
     ports.cpuAdmissionReconcile?.();
   }

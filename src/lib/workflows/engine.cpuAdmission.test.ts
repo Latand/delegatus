@@ -255,3 +255,31 @@ test.each(["poll", "timer", "retry"] as const)("%s reconciles held tickets while
   } finally { errors?.mockRestore(); release(); await pending; }
   expect(h.starts).toEqual([]);
 });
+
+test("an eligible workflow reaches admission while an earlier workflow awaits a finish command", async () => {
+  const h = harness();
+  saveWorkflows([workflow("one", "setup")]);
+  await tickWorkflows([], h.ports);
+  const finishing = workflow("two", "stage");
+  finishing.state = "finishing";
+  saveWorkflows([finishing, ...loadWorkflows()]);
+  machineCpuAdmissionQueue().check("command:finish-check", false);
+  now += CPU_QUEUE_MAX_WAIT_MS;
+  let release!: () => void, entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const began = new Promise<void>(resolve => { entered = resolve; });
+  h.ports.exec = async () => { entered(); await held; return { code: 1, stdout: "", stderr: "finish probe completed" }; };
+  setMachineCpuPressureForTests(undefined, 10);
+  const pending = tickWorkflows([], h.ports);
+  try {
+    await began;
+    const until = performance.now() + 2_000;
+    while (!h.starts.length && performance.now() < until) await Bun.sleep(10);
+    expect(h.starts).toEqual(["one:setup"]);
+    now += CPU_QUEUE_SPACING_MS;
+    expect(machineCpuAdmissionQueue().check("command:finish-check", true)).toBeNull();
+    // The original pass must observe the start the timer already persisted.
+    setMachineCpuPressureForTests(null);
+  } finally { release(); await pending; }
+  expect(h.starts).toEqual(["one:setup"]);
+});
