@@ -388,6 +388,12 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
     .reduce((latest, change) => Math.max(latest, change.revision), 0);
   const awaitingCuration = !row.curatedAt || (agentRevision && curatorRevision ? agentRevision > curatorRevision
     : row.revisedBy?.by === "agent" && row.revisedBy.at > row.curatedAt);
+  /* A text equal to the one in force is not an earlier text: returning to it would change nothing. */
+  const earlier = (row.versions ?? []).flatMap(id => {
+    const prior = byId.get(id);
+    return prior && !(prior.rule === row.rule && prior.why === row.why)
+      ? [{ id: prior.id, rule: prior.rule, why: prior.why, hints: prior.hints, createdAt: prior.createdAt, ...(prior.revisedBy ? { revisedBy: revisionView(prior.revisedBy) } : {}) }] : [];
+  });
   return {
     id: row.id, rule: row.rule, why: row.why, state: row.state, hints: row.hints,
     ...(row.reason ? { reason: row.reason } : {}), ...(row.mergedInto ? { mergedInto: row.mergedInto } : {}),
@@ -399,10 +405,7 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
     ...(row.keptByOperatorAt ? { keptByOperatorAt: row.keptByOperatorAt } : {}),
     ...(row.note ? { note: row.note } : {}), ...(row.where ? { where: row.where } : {}), ...(row.against ? { against: row.against } : {}),
     ...(row.mergedFrom ? { mergedFrom: row.mergedFrom } : {}), ...(row.movedFrom ? { movedFrom: row.movedFrom } : {}), ...(row.splitFrom ? { splitFrom: row.splitFrom } : {}),
-    ...(row.versions?.length ? { versions: row.versions.flatMap(id => {
-      const prior = byId.get(id);
-      return prior ? [{ id: prior.id, rule: prior.rule, why: prior.why, hints: prior.hints, createdAt: prior.createdAt, ...(prior.revisedBy ? { revisedBy: revisionView(prior.revisedBy) } : {}) }] : [];
-    }) } : {}),
+    ...(earlier.length ? { versions: earlier } : {}),
   };
 }
 

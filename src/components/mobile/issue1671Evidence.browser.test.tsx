@@ -8848,8 +8848,24 @@ describe("role memory curation: reversible window", () => {
           await page.locator("[data-curation-skipped]").waitFor();
           expect(await page.locator(`[data-learned-rule="${candidate}"]`).count()).toBe(1);
           expect(await page.locator(`[data-curation-undo="${pass.id}"]`).isDisabled()).toBe(true);
+          /* The skipped note counts what it left and names no rule id; the rule just returned offers no Return for the text already in force. */
+          const skipped = await page.locator("[data-curation-skipped]").first().innerText();
+          expect(skipped).toBe(translate(lang, "roleMemory.pass.skipped", { count: 2 }));
+          expect(await page.locator("[data-curation-pass]").first().innerText()).not.toMatch(/\br_[0-9a-f]{8,}/);
+          const returned = page.locator(`[data-learned-rule="${ids[0]}"]`);
+          if (!await returned.locator(`[data-rule-versions="${ids[0]}"]`).count()) await returned.locator("button").first().click();
+          const earlier = returned.locator(`[data-rule-versions="${ids[0]}"] li`);
+          expect(await earlier.count()).toBe(1);
+          expect(await earlier.first().innerText()).not.toContain(texts[0]);
+          /* Every card shows all of its content: on the phone the window scrolls as one and no card scrolls inside itself. */
+          const cards = await window.evaluate(node => [...node.querySelectorAll<HTMLElement>("[data-rules-section]")].map(section => {
+            const body = section.lastElementChild as HTMLElement;
+            return { kind: section.getAttribute("data-rules-section"), cardScrolls: section.scrollHeight - section.clientHeight, bodyScrolls: body.scrollHeight - body.clientHeight };
+          }));
+          if (width === 390) for (const card of cards) { expect(card.cardScrolls).toBeLessThanOrEqual(1); expect(card.bodyScrolls).toBeLessThanOrEqual(1); }
+          const undoneFrame = `variant-1-${width}-${lang}-undone.png`; await page.screenshot({ path: path.join(out, undoneFrame) });
           expect(pageErrors).toEqual([]);
-          cases.push({ lang, width, frame, archiveFrame, geometry, revertedVersion: true, returnedRule: true, undoSkippedLaterWrites: true });
+          cases.push({ lang, width, frame, archiveFrame, undoneFrame, geometry, cards, revertedVersion: true, returnedRule: true, undoSkippedLaterWrites: true });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/role-memory-curation", { recursive: true });

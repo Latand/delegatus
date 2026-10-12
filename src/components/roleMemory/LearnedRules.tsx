@@ -269,7 +269,7 @@ export function RuleSection({ kind, title, subtitle, scope, additionalScope, pic
   const additionalRows: ReactNode[] = additionalScope?.active.slice().reverse().map(rule => <RuleRow key={rule.id} rule={rule} kind={kind} focused={rule.id === focusRule} scopeRole={additionalScope.roleId} onDelete={onDelete} onRevert={onRevert} />) ?? [];
   if (removed && additionalScope?.scope === removed.scope) additionalRows.splice(Math.min(removed.at, additionalRows.length), 0, <UndoRow key="additional-undo" onUndo={() => onRestore(removed.rule)} />);
   return (
-    <section data-rules-section={kind} data-rules-scope-page={scope?.scope ?? ""} className={`flex min-h-0 min-w-0 flex-col rounded-[10px] border border-border border-t-[3px] bg-card ${KIND_TONE[kind].bar}`}>
+    <section data-rules-section={kind} data-rules-scope-page={scope?.scope ?? ""} className={`flex min-w-0 flex-col rounded-[10px] border border-border border-t-[3px] bg-card md:min-h-0 ${KIND_TONE[kind].bar}`}>
       <header className="flex flex-col gap-1 px-3 pb-1.5 pt-2">
         <div className="flex items-baseline gap-2">
           <h3 className={`m-0 text-[13px] font-semibold ${KIND_TONE[kind].text}`}>{title}</h3>
@@ -279,7 +279,7 @@ export function RuleSection({ kind, title, subtitle, scope, additionalScope, pic
         <span className="text-[11px] leading-4 text-muted">{subtitle}</span>
         {picker}
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-1">
+      <div className="px-1 pb-1 md:min-h-0 md:flex-1 md:overflow-y-auto">
         {kind === "role" ? <p className="m-0 px-2 py-1 text-[11px] font-semibold text-muted">{t("roleMemory.thisProject")}</p> : null}
         {rows.length ? <ol className="m-0 flex list-none flex-col p-0">{rows}</ol> : <p className="m-0 px-2 py-1.5 text-[11.5px] text-muted">{t("roleMemory.empty")}</p>}
         {kind === "role" ? <div data-rules-every-project="" className="border-t border-border">
@@ -377,13 +377,15 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
         {view?.curation ? <details data-curation-history="" className="shrink-0 border-b border-border px-4 py-1.5 text-[11.5px] leading-4 text-secondary">
           <summary className="cursor-pointer">{t("roleMemory.curator")} · {t("roleMemory.lastRun", { at: view.curation.lastAt ? new Date(view.curation.lastAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US") : t("roleMemory.never") })} · {view.enabled ? t("roleMemory.nextRun", { at: view.curation.nextAt ? new Date(view.curation.nextAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US") : t("roleMemory.noActive") }) : t("roleMemory.off")}</summary>
           <ol className="m-0 max-h-32 list-none overflow-y-auto p-0">{view.curation.passes.map(pass => <li key={pass.id} data-curation-pass={pass.id} className="border-t border-border py-1">
-            {t("roleMemory.curator")} · {new Date(pass.claimedAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US")} · {t(`roleMemory.pass.${pass.state}`)}{pass.failure ? ` · ${failures[pass.failure] ?? pass.failure}` : ""} · {t("roleMemory.pass.counts", pass.counts)}
-            {pass.state === "succeeded" || pass.state === "failed" ? <button type="button" disabled={!!pass.revertedAt} data-curation-undo={pass.id} onClick={() => void act("revert-pass", pass.id)} className="min-h-9 px-2 font-semibold text-accent disabled:text-muted">{t(pass.revertedAt ? "roleMemory.pass.undone" : "roleMemory.pass.undo")}</button> : null}
-            {pass.skipped?.length ? <span data-curation-skipped="">{t("roleMemory.pass.skipped", { count: pass.skipped.length })} · {pass.skipped.join(", ")}</span> : null}
+            <div className="flex flex-wrap items-center gap-x-2">
+              <span className="min-w-0">{t("roleMemory.curator")} · {new Date(pass.claimedAt).toLocaleString(locale === "uk" ? "uk-UA" : "en-US")} · {t(`roleMemory.pass.${pass.state}`)}{pass.failure ? ` · ${failures[pass.failure] ?? pass.failure}` : ""} · {t("roleMemory.pass.counts", pass.counts)}</span>
+              {pass.state === "succeeded" || pass.state === "failed" ? <button type="button" disabled={!!pass.revertedAt} data-curation-undo={pass.id} onClick={() => void act("revert-pass", pass.id)} className="min-h-9 pr-2 font-semibold text-accent disabled:text-muted">{t(pass.revertedAt ? "roleMemory.pass.undone" : "roleMemory.pass.undo")}</button> : null}
+            </div>
+            {pass.skipped?.length ? <p data-curation-skipped="" className="m-0 text-muted">{t("roleMemory.pass.skipped", { count: pass.skipped.length })}</p> : null}
           </li>)}</ol>
         </details> : null}
         {view ? (
-          <div className="grid min-h-0 flex-1 grid-cols-1 content-start gap-3 overflow-y-auto p-3 md:grid-cols-3 md:grid-rows-[minmax(0,1fr)] md:overflow-hidden">
+          <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-1 content-start gap-3 overflow-y-auto p-3 md:auto-rows-auto md:grid-cols-3 md:grid-rows-[minmax(0,1fr)] md:overflow-hidden">
             <RuleSection kind="role" title={t("roleMemory.roleSection")} subtitle={picker ? t("roleMemory.roleSubtitle.chosen") : t("roleMemory.roleSubtitle", { role: roleName })} scope={roleScope} additionalScope={everyRoleScope} picker={picker} focusRule={localFocus} allRules={scopes.flatMap(s => s.active)} onFocus={id => { setLocalFocus(id); setChosenRole(null); }} removed={undo} onDelete={remove} onRestore={restore} onRevert={id => void act("revert", id)} />
             <RuleSection kind="project" title={t("roleMemory.projectSection")} subtitle={t("roleMemory.projectSubtitle")} scope={projectScope} focusRule={localFocus} allRules={scopes.flatMap(s => s.active)} onFocus={id => { setLocalFocus(id); setChosenRole(null); }} removed={undo} onDelete={remove} onRestore={restore} onRevert={id => void act("revert", id)} />
             <RuleSection kind="machine" title={t("roleMemory.machineSection")} subtitle={t("roleMemory.machineSubtitle")} scope={machineScope} focusRule={localFocus} allRules={scopes.flatMap(s => s.active)} onFocus={id => { setLocalFocus(id); setChosenRole(null); }} removed={undo} onDelete={remove} onRestore={restore} onRevert={id => void act("revert", id)} />

@@ -6,6 +6,7 @@
       "width": 1440,
       "frame": "variant-1-1440-en-history.png",
       "archiveFrame": "variant-1-1440-en-archive.png",
+      "undoneFrame": "variant-1-1440-en-undone.png",
       "geometry": {
         "width": 1120,
         "overflow": 0,
@@ -24,6 +25,23 @@
           }
         ]
       },
+      "cards": [
+        {
+          "kind": "role",
+          "cardScrolls": 0,
+          "bodyScrolls": 64
+        },
+        {
+          "kind": "project",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "machine",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        }
+      ],
       "revertedVersion": true,
       "returnedRule": true,
       "undoSkippedLaterWrites": true
@@ -33,6 +51,7 @@
       "width": 390,
       "frame": "variant-1-390-en-history.png",
       "archiveFrame": "variant-1-390-en-archive.png",
+      "undoneFrame": "variant-1-390-en-undone.png",
       "geometry": {
         "width": 390,
         "overflow": 0,
@@ -51,6 +70,23 @@
           }
         ]
       },
+      "cards": [
+        {
+          "kind": "role",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "project",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "machine",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        }
+      ],
       "revertedVersion": true,
       "returnedRule": true,
       "undoSkippedLaterWrites": true
@@ -60,6 +96,7 @@
       "width": 1440,
       "frame": "variant-1-1440-uk-history.png",
       "archiveFrame": "variant-1-1440-uk-archive.png",
+      "undoneFrame": "variant-1-1440-uk-undone.png",
       "geometry": {
         "width": 1120,
         "overflow": 0,
@@ -78,6 +115,23 @@
           }
         ]
       },
+      "cards": [
+        {
+          "kind": "role",
+          "cardScrolls": 0,
+          "bodyScrolls": 64
+        },
+        {
+          "kind": "project",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "machine",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        }
+      ],
       "revertedVersion": true,
       "returnedRule": true,
       "undoSkippedLaterWrites": true
@@ -87,6 +141,7 @@
       "width": 390,
       "frame": "variant-1-390-uk-history.png",
       "archiveFrame": "variant-1-390-uk-archive.png",
+      "undoneFrame": "variant-1-390-uk-undone.png",
       "geometry": {
         "width": 390,
         "overflow": 0,
@@ -105,6 +160,23 @@
           }
         ]
       },
+      "cards": [
+        {
+          "kind": "role",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "project",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "machine",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        }
+      ],
       "revertedVersion": true,
       "returnedRule": true,
       "undoSkippedLaterWrites": true
