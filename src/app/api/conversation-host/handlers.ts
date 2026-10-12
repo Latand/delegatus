@@ -472,8 +472,8 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
   }
   /* #1224: a general attachment is admitted against the same shared policy the
      composer refuses against, so an over-budget file is answered with the reason
-     rather than dropped from the batch on its way through. Imported lazily: only
-     a request that actually carries files touches the inbox module. */
+     rather than dropped from the batch on its way through. Validation finishes
+     before the message's inbox batch is planned or written. */
   const rawFiles = (body as { files?: unknown }).files;
   const fileAdmission: InboxFileAdmissionResult = rawFiles === undefined || rawFiles === null
     ? { files: [], error: null }

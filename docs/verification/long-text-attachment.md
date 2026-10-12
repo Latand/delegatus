@@ -38,6 +38,7 @@ accepted file. Unknown delivery outcomes keep their attachments.
 The outbox preserves the original text for retry and Copy. The sent bubble
 shows the text-file chip. The delivered marker lets the shared message row
 show that chip after transcript adoption and on another device.
+The chip recognizes POSIX, Windows drive and UNC inbox paths.
 
 ## Verification
 

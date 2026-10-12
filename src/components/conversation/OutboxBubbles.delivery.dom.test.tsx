@@ -346,6 +346,20 @@ test("the transcript's converted marker survives a following image path", async 
   expect(host.querySelector("[data-text-attachment]")?.textContent).toContain("message-2.txt");
 });
 
+test("a converted message shows its chip for Windows drive and UNC inbox paths", async () => {
+  const slash = String.fromCharCode(92);
+  for (const pointer of [
+    ["C:", "inbox", "files", "message.txt"].join(slash),
+    slash.repeat(2) + ["files.example", "inbox", "message.txt"].join(slash),
+  ]) {
+    const text = `The full message is attached as message.txt. Read the file in full before responding.\n${pointer}`;
+    const host = await bubble({ text, state: "delivered" }, SUBMITTED_AT + 1_000);
+    const chip = host.querySelector("[data-text-attachment]");
+    expect(chip?.textContent).toContain("message.txt");
+    expect(chip?.getAttribute("href")).toBe(`#f=${encodeURIComponent(pointer)}`);
+  }
+});
+
 /**
  * Sending into a host that is gone.
  *
