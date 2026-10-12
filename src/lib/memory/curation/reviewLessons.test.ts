@@ -108,3 +108,14 @@ test("another project's curator transfers a misfiled machine rule to its author 
   expect(row(id).problem).toBeUndefined();
   expect(memoryProblemSignals(PROJECT, [])).toEqual([]);
 });
+
+test("a newly created split part cannot file a concrete defect as a rule", () => {
+  const id = leave("first", "task-one");
+  const pass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 10 })!;
+  expect(() => applyCuration(pass, input({ [scope()]: [id, `split:${id}:1`] }, { split: [{ id, note: "Separate generic checks from concrete evidence.", parts: [
+    { to: scope(), rule: RULE },
+    { to: scope(), rule: "The locale list in config/supported-locales.js disagrees with the instructions." },
+  ] }] }), at(20))).toThrow("answer problem");
+  expect(active().map(rule => rule.id)).toEqual([id]);
+  expect(row(id).rule).toBe(RULE);
+});

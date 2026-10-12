@@ -340,7 +340,8 @@ A proposed lesson or rewrite naming a concrete file path or describing a
 specific broken/mismatched behaviour is refused with `LESSON_IS_PROBLEM` and a
 hint to answer problem with evidence. Machine rules tied to this project's facts
 are refused with `LESSON_WRONG_LEVEL`, directing the agent to a narrower generic
-rule or a problem report. These structural checks leave the request open; they
+rule or a problem report. Generic instructions can describe a missing or broken
+state as the condition for a check. These structural checks leave the request open; they
 do not attempt to judge every possible wording. Privacy checks retain their hints
 and publication protection.
 
@@ -354,6 +355,7 @@ Undo restores the earlier rule and removes the transferred report from pending
 agenda projection; delivery already made cannot be recalled. Operator-kept rules
 retain their existing protection. Nothing deletes a rule silently. The brief tells
 the curator to transfer concrete problems before applying the remaining checks.
+The same misfiling guard covers edited rules and newly created split parts.
 
 The tool's existing answers and refusals keep their contracts; problem is a
 fourth mutually exclusive answer.

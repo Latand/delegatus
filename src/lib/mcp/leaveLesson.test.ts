@@ -206,6 +206,12 @@ test("path-specific and defective rules are steered to problem without consuming
   expect(await call("conversation_fix", "leave_lesson", { lesson: { scope: "role", rule: "When a locale list is mismatched, verify the authoritative list before changing translations.", why: "The locale gate rejected a missing language." } })).toMatchObject({ ok: true });
 });
 
+test("generic imperative checks can name a missing or broken state as their condition", () => {
+  for (const rule of ["Check the retry path when a durable owner is missing.", "Verify the recovery boundary when a successor is broken.", "Never replay a write while its acknowledgement is missing."]) {
+    expect(parseLessons({ lesson: { scope: "role", rule, why: "A missing owner exposed an unchecked recovery branch." } }, "builder").lessons).toHaveLength(1);
+  }
+});
+
 test("text limits count Unicode code points in the schema and in the store alike", async () => {
   /* A Gothic letter: a supplementary character that is a letter, so a rule of them is words. */
   const wide = (n: number) => "\u{10330}".repeat(n);

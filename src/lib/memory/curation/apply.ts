@@ -166,7 +166,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
     }
     for (const [id, rule] of work) {
       if (rule.state === "active" && !ordered.has(id)) refuse("CURATE_PARTITION", "every active rule needs an order or disposition");
-      if (rule.state === "active" && touched.has(id)) assertGenericRule(rule.rule, scopeKind(rule.scope));
+      if (rule.state === "active" && (touched.has(id) || created.has(id))) assertGenericRule(rule.rule, scopeKind(rule.scope));
       if (rule.against) {
         const against = work.get(rule.against) ?? tx.get(`r:${rule.against}`);
         if (rule.against === id || against?.kind !== "rule" || against.versionOf || against.state !== "active" || !allowedScopes.has(canonicalScope(against.scope))) refuse("CURATE_INVALID", "against must name a rule active after this call");

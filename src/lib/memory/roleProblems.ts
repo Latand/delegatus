@@ -12,7 +12,8 @@ export function assertGenericRule(rule: string, scope: ScopeKind): void {
   const normalized = rule.normalize("NFKC");
   const file = /(?:^|[\s`"'(])(?:[A-Z]:)?[\\/]*(?:[\w.@~-]+[\\/])*[\w.@~-]+\.(?:[cm]?[jt]sx?|json|ya?ml|toml|mdx?|ftl|py|sh|sql|go|rs|css|html|xml)(?=[:\s`"'),;.!?]|$)/iu;
   const home = /(?:\/(?:home|Users)\/|[A-Z]:\\Users\\)/iu;
-  const conditional = /^(?:when|whenever|if|unless|before|after|коли|якщо|когда|если)\b/iu.test(normalized);
+  const conditional = /^(?:when|whenever|if|unless|before|after|коли|якщо|когда|если)(?=\s|$)/iu.test(normalized)
+    || /^(?:check|verify|validate|test|measure|keep|retain|use|run|read|write|preserve|require|ensure|confirm|always|never)\s.+\b(?:when|whenever|if|unless|while|before|after)\s/iu.test(normalized);
   const defect = !conditional && (/\b(?:is|are|was|were)\s+(?:broken|mismatched|missing|incorrect|inconsistent|failing|wrong)\b/iu.test(normalized)
     || /^(?:the|this|our)\s.+\b(?:fails?|omits?|accepts?|rejects?|disagrees?|requires?|uses?|supports?|lists?)\b/iu.test(normalized)
     || /(?:зламан|не\s+збіга|несумісн|сломан|не\s+совпада)/iu.test(normalized));
