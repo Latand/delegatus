@@ -10,6 +10,7 @@ import { BAR_MENU_ROW } from "@/components/ProjectBar";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStageReportEntry } from "@/lib/pipelines/types";
 import type { RoleMemoryProjectView, RuleView, ScopeKind, ScopeView, StageLessonView } from "@/lib/memory/roleTypes";
+import { MemoryProfile } from "./MemoryProfile";
 
 /* Role memory on the operator's surfaces (docs/design/role-memory.md §3.1).
    The operator chose the rules window and the rule line (2026-10-07) and then
@@ -109,7 +110,7 @@ export function LearnedRulesWindowHost() {
     return () => window.removeEventListener(OPEN_EVENT, open);
   }, []);
   const close = useCallback(() => setRequest(null), []);
-  return request ? <RulesWindow project={request.project} focusRule={request.focusRule} onClose={close} /> : null;
+  return request ? <RulesWindow key={`${request.project}/${request.focusRule ?? ""}`} project={request.project} focusRule={request.focusRule} onClose={close} /> : null;
 }
 
 /** Only a whole answer is drawn; anything else reads as a failed read. */
@@ -254,7 +255,7 @@ const NEAR_BOUND = 0.8;
 /** One kind of rule: its heading in its colour with its count when it has rules, its rows, what left it behind one toggle, and its size once it nears 10 000. A picker carries the counts itself; an empty kind says so once, in its body. */
 export function RuleSection({ kind, title, subtitle, scope, additionalScope, picker, focusRule, removed, onDelete, onRestore, onRevert, allRules, onFocus }: {
   allRules?: RuleView[]; onFocus?: (id: string) => void;
-  kind: ScopeKind; title: string; subtitle: string; scope: ScopeView | null; additionalScope?: ScopeView | null; picker?: ReactNode; focusRule?: string; removed?: Removed | null;
+  kind: ScopeKind; title: string; subtitle?: string; scope: ScopeView | null; additionalScope?: ScopeView | null; picker?: ReactNode; focusRule?: string; removed?: Removed | null;
   onDelete: (rule: RuleView) => void; onRestore: (rule: RuleView) => void; onRevert?: (id: string) => void;
 }) {
   const { t, locale } = useLocale();
@@ -272,17 +273,17 @@ export function RuleSection({ kind, title, subtitle, scope, additionalScope, pic
     <section data-rules-section={kind} data-rules-scope-page={scope?.scope ?? ""} className={`flex min-w-0 flex-col rounded-[10px] border border-border border-t-[3px] bg-card md:min-h-0 ${KIND_TONE[kind].bar}`}>
       <header className="flex flex-col gap-1 px-3 pb-1.5 pt-2">
         <div className="flex items-baseline gap-2">
-          <h3 className={`m-0 text-[13px] font-semibold ${KIND_TONE[kind].text}`}>{title}</h3>
+          <h3 className={`m-0 min-w-0 text-[13px] font-semibold [overflow-wrap:anywhere] ${KIND_TONE[kind].text}`}>{title}</h3>
           {picker || !count ? null : <span data-rules-count="" className="text-[11.5px] tabular-nums text-muted">{count}</span>}
           {chars >= bound * NEAR_BOUND ? <span className="ml-auto text-[10.5px] tabular-nums text-warning" data-rules-size="">{t("roleMemory.size", { chars: number(chars, locale), bound: number(bound, locale) })}</span> : null}
         </div>
-        <span className="text-[11px] leading-4 text-muted">{subtitle}</span>
+        {subtitle ? <span className="text-[11px] leading-4 text-muted">{subtitle}</span> : null}
         {picker}
       </header>
       <div className="px-1 pb-1 md:min-h-0 md:flex-1 md:overflow-y-auto">
-        {kind === "role" ? <p className="m-0 px-2 py-1 text-[11px] font-semibold text-muted">{t("roleMemory.thisProject")}</p> : null}
+        {kind === "role" && additionalScope !== undefined ? <p className="m-0 px-2 py-1 text-[11px] font-semibold text-muted">{t("roleMemory.thisProject")}</p> : null}
         {rows.length ? <ol className="m-0 flex list-none flex-col p-0">{rows}</ol> : <p className="m-0 px-2 py-1.5 text-[11.5px] text-muted">{t("roleMemory.empty")}</p>}
-        {kind === "role" ? <div data-rules-every-project="" className="border-t border-border">
+        {kind === "role" && additionalScope !== undefined ? <div data-rules-every-project="" className="border-t border-border">
           <p className="m-0 px-2 py-1 text-[11px] font-semibold text-muted">{t("roleMemory.everyProject")}</p>
           {additionalRows.length ? <ol className="m-0 list-none p-0">{additionalRows}</ol> : <p className="m-0 px-2 py-1.5 text-[11.5px] text-muted">{t("roleMemory.empty")}</p>}
           {additionalScope && additionalScope.chars >= additionalScope.bound * NEAR_BOUND ? <p data-rules-size="" className="m-0 px-2 text-[10.5px] text-warning">{t("roleMemory.size", { chars: number(additionalScope.chars, locale), bound: number(additionalScope.bound, locale) })}</p> : null}
@@ -301,7 +302,7 @@ export function RuleSection({ kind, title, subtitle, scope, additionalScope, pic
   );
 }
 
-/** The rules window: the role, project and machine rules a new agent of the chosen role starts with, side by side on the desktop and stacked on the phone. */
+/** Project memory profile and the source rules its agents start with. */
 export function RulesWindow({ project, focusRule, onClose }: { project: string; focusRule?: string; onClose: () => void }) {
   const { t, locale } = useLocale();
   const failures: Record<string, string> = {
@@ -313,8 +314,10 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
   const [focus, setFocus] = useState({ prop: focusRule, rule: focusRule });
   const localFocus = focus.prop === focusRule ? focus.rule : focusRule;
   const setLocalFocus = (id: string) => setFocus({ prop: focusRule, rule: id });
+  const [page, setPage] = useState<"profile" | "rules">(focusRule ? "rules" : "profile");
   const [chosenRole, setChosenRole] = useState<string | null>(null);
   const [undo, setUndo] = useState<Removed | null>(null);
+  const [drilled, setDrilled] = useState(false);
   useEffect(() => {
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", escape);
@@ -356,17 +359,17 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
       })}
     </div>
   ) : null;
-  /* On the desktop the window's top stays where the tallest window would start, so a chip switch or a removal moves only its bottom edge. */
+  /* On the desktop the window's top stays where the tallest window would start, on both pages, so a tab, a chip or a removal moves only its bottom edge. The rules page cap is the old 640 px plus the tab bar (49 px) that now sits above its columns. */
   return createPortal(
-    <div className={`fixed inset-0 ${Z.overlay} flex items-stretch justify-center bg-black/40 md:items-start md:px-6 md:pb-6 md:pt-[max(1.5rem,calc((100dvh_-_min(640px,90dvh))/2))]`} onClick={onClose}>
+    <div className={`fixed inset-0 ${Z.overlay} flex items-stretch justify-center bg-black/40 md:items-start md:px-6 md:pb-6 md:pt-[max(1.5rem,calc((100dvh_-_min(820px,90dvh))/2))]`} onClick={onClose}>
       <section data-rules-window="" role="dialog" aria-modal="true" aria-labelledby="rules-window-title"
-        className="flex h-full w-full flex-col overflow-hidden bg-canvas text-primary shadow-xl md:h-auto md:max-h-[min(640px,90dvh)] md:max-w-[1120px] md:rounded-xl md:border md:border-border"
+        className={`flex h-full w-full flex-col overflow-hidden bg-canvas text-primary shadow-xl md:h-auto md:max-w-[1120px] md:rounded-xl md:border md:border-border ${page === "profile" ? "md:max-h-[min(820px,90dvh)]" : "md:max-h-[min(689px,90dvh)]"}`}
         onClick={(event) => event.stopPropagation()}>
-        <header className="flex min-h-12 items-center gap-2 border-b border-border px-4 py-2">
+        <header className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border px-4 py-2">
           <SparkGlyph />
           <div className="flex min-w-0 flex-1 flex-col">
-            <h2 id="rules-window-title" className="m-0 truncate text-[15px] font-semibold">{t("roleMemory.window.title", { project: view?.project ?? project })}</h2>
-            <p data-rules-starts="" className="m-0 truncate text-[11.5px] leading-4 text-muted">{t("roleMemory.startsWith")}</p>
+            <h2 id="rules-window-title" className="m-0 truncate text-[15px] font-semibold">{t(page === "profile" ? "memoryProfile.title" : "roleMemory.window.title", { project: view?.project ?? project })}</h2>
+            <p data-rules-starts="" className="m-0 truncate text-[11.5px] leading-4 text-muted">{t(page === "profile" ? "memoryProfile.subtitle" : "roleMemory.startsWith")}</p>
           </div>
           <button type="button" data-rules-window-close="" autoFocus aria-label={t("roleMemory.window.close")} onClick={onClose}
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[8px] text-[20px] text-muted hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">×</button>
@@ -384,7 +387,11 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
             {pass.skipped?.length ? <p data-curation-skipped="" className="m-0 text-muted">{t("roleMemory.pass.skipped", { count: pass.skipped.length })}</p> : null}
           </li>)}</ol>
         </details> : null}
-        {view ? (
+        {drilled && page === "profile" ? null : <nav className="flex shrink-0 gap-2 border-b border-border px-3 py-2" aria-label={t("memoryProfile.navigation")}>
+          {(["profile", "rules"] as const).map(id => <button key={id} type="button" aria-pressed={page === id} onClick={() => setPage(id)} className={`min-h-8 rounded-full px-3 text-[12px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:min-h-11 ${page === id ? "bg-accent-soft text-accent" : "text-secondary hover:bg-sunken"}`}>{t(id === "profile" ? "memoryProfile.profile" : "memoryProfile.allRules")}</button>)}
+        </nav>}
+        {view && page === "profile" ? <MemoryProfile key={`${view.project}/${locale}`} rules={view} onDrill={setDrilled} renderRules={(scope, ids, heading) => <RuleSection kind={scope.kind} title={ids ? heading?.title ?? t("memoryProfile.topicRules") : scope.kind === "role" ? roleNameById(t, scope.roleId ?? "") : t(scope.kind === "project" ? "roleMemory.projectSection" : "roleMemory.machineSection")} subtitle={ids ? heading?.subtitle : undefined} scope={ids ? { ...scope, active: scope.active.filter(rule => ids.includes(rule.id)), left: [] } : scope} focusRule={localFocus} allRules={scopes.flatMap(s => s.active)} onFocus={id => { setLocalFocus(id); setChosenRole(null); setPage("rules"); }} removed={undo} onDelete={remove} onRestore={restore} onRevert={id => void act("revert", id)} />} /> : null}
+        {view && page === "rules" ? (
           <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-1 content-start gap-3 overflow-y-auto p-3 md:auto-rows-auto md:grid-cols-3 md:grid-rows-[minmax(0,1fr)] md:overflow-hidden">
             <RuleSection kind="role" title={t("roleMemory.roleSection")} subtitle={picker ? t("roleMemory.roleSubtitle.chosen") : t("roleMemory.roleSubtitle", { role: roleName })} scope={roleScope} additionalScope={everyRoleScope} picker={picker} focusRule={localFocus} allRules={scopes.flatMap(s => s.active)} onFocus={id => { setLocalFocus(id); setChosenRole(null); }} removed={undo} onDelete={remove} onRestore={restore} onRevert={id => void act("revert", id)} />
             <RuleSection kind="project" title={t("roleMemory.projectSection")} subtitle={t("roleMemory.projectSubtitle")} scope={projectScope} focusRule={localFocus} allRules={scopes.flatMap(s => s.active)} onFocus={id => { setLocalFocus(id); setChosenRole(null); }} removed={undo} onDelete={remove} onRestore={restore} onRevert={id => void act("revert", id)} />

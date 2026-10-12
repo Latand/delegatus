@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Bot, GitMerge, Users, Columns3, EyeOff, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
+import { Archive, Bot, GitMerge, Users, EyeOff, Info, LayoutGrid, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { queueColumnOpen, useBoardState } from "@/hooks/useBoardState";
@@ -73,7 +73,7 @@ import { topScreen, useMobileNav, useMobileNavStore, type MobileScreen, type Mob
 import { TaskSheet, type TaskSheetView } from "./tasks/TaskSheet";
 import { Badge } from "@/components/ui/Badge";
 import { navigateToFragment } from "@/lib/navigation/fragmentNavigation";
-import { KanbanBoard } from "./kanban/KanbanBoard";
+import { KanbanBoard, type BarTrailExtra } from "./kanban/KanbanBoard";
 import { KanbanSeat } from "./kanban/KanbanSeat";
 import { useKanbanSeat, useSeatSignal } from "./kanban/kanbanSeatStore";
 import { onTaskChipOpen } from "./orchestrator/taskChips";
@@ -107,7 +107,7 @@ import { MergeOnReviewRow } from "./MergeOnReviewRow";
 import { ShareProjectRow } from "./links/ShareProjectRow";
 import { LearnedRulesRow } from "./roleMemory/LearnedRules";
 import { SoundToggle } from "./SoundToggle";
-import { BAR_MENU_ROW, BarCreateGroup, BarMenuGroup, BarMenuSection, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
+import { BAR_MENU_ROW, BarMenuGroup, BarMenuSection, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
 
 /** How long an opened node keeps its highlight ring on the scheme. */
 const HIGHLIGHT_MS = 1800;
@@ -262,62 +262,6 @@ export function boardFirstPaintReady(scanLoaded: boolean, boardLoaded: boolean):
    direct global mutation (location.hash = ...) inside a component body. */
 function gotoProject(project: string) {
   navigateToFragment("#p=" + encodeURIComponent(project));
-}
-
-/** A desktop view: the Board (the kanban, #1695) or Conversations (the list). The phone keeps its own views. */
-type DesktopView = "kanban" | "list";
-
-/**
- * The desktop view switch: Board and Conversations (#1614, #1695, #1801).
- *
- * One outlined 32 px group in the header bar, whichever leaf shows; the
- * selected segment is pressed (accent fill), the other quiet. `compact` drops
- * the words below the bar's wide tier, leaving them as the accessible name.
- */
-function ProjectViewTabs({
-  value,
-  onChange,
-  compact = false,
-  modes = ["kanban", "list"],
-}: {
-  value: DesktopView;
-  onChange: (next: DesktopView) => void;
-  compact?: boolean;
-  /** The views this project can show on the desktop: the Board, and Conversations when there are any. */
-  modes?: readonly DesktopView[];
-}) {
-  const { t } = useLocale();
-  const labelOf = (mode: DesktopView) => t(mode === "kanban" ? "kanban.viewTab" : "dash.viewList");
-  const iconOf = (mode: DesktopView) => mode === "kanban"
-    ? <Columns3 className="h-[15px] w-[15px]" aria-hidden />
-    : <List className="h-[15px] w-[15px]" aria-hidden />;
-  return (
-    <div
-      data-project-view-tabs
-      data-bar-control=""
-      className="inline-flex h-8 shrink-0 items-stretch overflow-hidden rounded-control border border-border bg-card shadow-1"
-    >
-      {/* The segments fill the group edge to edge, split by one rule, so the group's border
-          is the switch's visible edge and its neighbours sit 8 / 16 px from it. */}
-      {modes.map((mode, index) => (
-        <button
-          key={mode}
-          type="button"
-          aria-pressed={value === mode}
-          data-view-tab={mode}
-          onClick={() => onChange(mode)}
-          aria-label={labelOf(mode)}
-          title={compact ? labelOf(mode) : undefined}
-          className={`inline-flex items-center justify-center gap-1.5 text-[12px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 ${
-            compact ? "w-8" : "px-3"
-          } ${index > 0 ? "border-l border-border" : ""} ${value === mode ? "bg-accent/10 text-accent" : "bg-transparent text-secondary hover:bg-well hover:text-primary"}`}
-        >
-          {iconOf(mode)}
-          {compact ? null : labelOf(mode)}
-        </button>
-      ))}
-    </div>
-  );
 }
 
 /**
@@ -611,11 +555,6 @@ function ProjectDashboardView({
      preference — the operator's saved view returns with one tap on the
      Схема/Список control, which is what clears this. */
   const [openedConversation, setOpenedConversation] = useState<string | null>(null);
-  /* A view the kanban board opened for one look (#1695): the scheme for a
-     surface the kanban does not draw yet, the list for conversations beyond
-     the board. Session-only and desktop-only, so a card's link never rewrites
-     the saved view another device, or the phone, reads. Choosing a tab ends it. */
-  const [transientView, setTransientView] = useState<ProjectView | null>(null);
   /* Wall clock for the worker auto-collapse idle window (issue #112). Starts at
      0 so the server render and first client render agree (no hydration skew);
      the first tick lands the real time, and reviewer verdicts collapse without
@@ -1187,7 +1126,6 @@ function ProjectDashboardView({
     /* Another project is another board with its own saved view: the landing
        that forced this one's conversation surface does not travel with it. */
     setOpenedConversation(null);
-    setTransientView(null);
   }, [project]);
 
   /* A task chip in the orchestrator's composer or on a sent message was
@@ -1372,40 +1310,24 @@ function ProjectDashboardView({
      standing on a conversation a search opened. */
   const chooseEmptyView = (next: ProjectView) => {
     setOpenedConversation(null);
-    setTransientView(null);
     board.setViewMode(next);
   };
-  /* The desktop's two views (#1695): the Board, which is the kanban, and Conversations. Board writes the
-     board view mode with the kanban face, so a build from before the kanban became the only desktop board
-     still opens it; Conversations keeps the list preference it always had. */
-  const chooseDesktopView = (next: DesktopView) => {
-    if (next === "list") {
-      chooseEmptyView("list");
-      return;
-    }
+  /* The desktop has one view, the Board, which is the kanban (#1695). The setup guide still
+     writes the board view mode with the kanban face (#2166 §3.3), so the phone and a build from
+     before the Board became the only desktop view open the same project on its board. */
+  const openDesktopBoard = () => {
     setOpenedConversation(null);
-    setTransientView(null);
     board.setDesktopBoard("kanban", "scheme");
   };
-
-  /* The setup guide opens this project on its Board (#2166 §3.3), whatever
-     view was saved for it: the orchestrator's draft sits above the columns. */
-  const chooseDesktopViewRef = useRef(chooseDesktopView);
-  chooseDesktopViewRef.current = chooseDesktopView;
+  const openDesktopBoardRef = useRef(openDesktopBoard);
+  openDesktopBoardRef.current = openDesktopBoard;
   useEffect(() => {
     if (isMobile) return;
-    if (takePendingBoardView(project)) chooseDesktopViewRef.current("kanban");
+    if (takePendingBoardView(project)) openDesktopBoardRef.current();
     return onOrchestratorDraftRequest((request) => {
-      if (request.project === project && takePendingBoardView(project)) chooseDesktopViewRef.current("kanban");
+      if (request.project === project && takePendingBoardView(project)) openDesktopBoardRef.current();
     });
   }, [isMobile, project]);
-
-  /* A card's link to Conversations (#1695): the list for one look, written nowhere. It ends a standing landing,
-     which would otherwise keep the Board it opened in front of the list the operator just asked for. */
-  const openConversationsForOneLook = () => {
-    setOpenedConversation(null);
-    setTransientView("list");
-  };
 
   /* randomUUID needs a secure context; LAN http access gets the fallback. */
   const newDraftId = () =>
@@ -1822,22 +1744,20 @@ function ProjectDashboardView({
      the list exactly as before, and the landing's own node is what makes the
      scheme available in the first place. */
   const landedOnConversation = openedConversation !== null && schemeAvailable;
-  /* Conversations for one look (a card's link to more conversations): the desktop has no other face to visit. */
-  const transientFace = !isMobile && transientView === "list" && listAvailable ? "list" : null;
-  /* The desktop Board is a view even before the project has a card (#1695 K9a): chosen over Conversations,
-     it draws its empty columns with + Task and + Agent, so a project whose catalog is known and whose board is
-     empty still reaches creation. The phone keeps its own resolution. */
-  /* A desktop project nobody chose a view for opens on its Board (#2166 §3.4),
-     where its orchestrator's draft sits above the columns: a project created a
-     moment ago used to land on an empty conversation list instead. */
-  const preferredView = isMobile ? board.prefs.viewMode : board.prefs.viewMode ?? "scheme";
-  const desktopEmptyBoard = !isMobile && !schemeAvailable && listAvailable && preferredView === "scheme";
-  const projectView = landedOnConversation ? "scheme" : transientFace ?? (desktopEmptyBoard ? "scheme" : resolveProjectView({
+  /* The desktop has one view, the Board, whatever view was saved for the project: the list of
+     every agent opens from the board's header instead. The Board is a view even before the project
+     has a card (#1695 K9a): it draws its empty columns with the create control, so a project whose
+     catalog is known and whose board is empty still reaches creation, and a project created a
+     moment ago opens with its orchestrator's draft above the columns (#2166 §3.4). The phone keeps
+     its own resolution and its saved view. */
+  const preferredView = isMobile ? board.prefs.viewMode : "scheme";
+  const desktopEmptyBoard = !isMobile && !schemeAvailable && listAvailable;
+  const projectView = landedOnConversation || desktopEmptyBoard ? "scheme" : resolveProjectView({
     preferredView,
     hasNodes,
     hasArchiveNodes,
     hasHistoryRows: listAvailable,
-  }));
+  });
   const viewToggle = schemeAvailable && listAvailable;
 
   /* The phone's board (mobile v2 lane 2, README §4.1): the switchboard's triage
@@ -1997,7 +1917,6 @@ function ProjectDashboardView({
     onKanbanFace?.(kanbanFaceReported);
   }, [kanbanFaceReported, onKanbanFace]);
   useLayoutEffect(() => () => onKanbanFace?.(true), [onKanbanFace]);
-  const desktopViewModes: readonly DesktopView[] = listAvailable ? ["kanban", "list"] : ["kanban"];
   /* Which conversations the phone board is showing, in the order it shows them,
      as a signature so the presence effect below compares BY VALUE — a fresh
      array every render would re-report the same view on every poll. Null
@@ -2177,21 +2096,22 @@ function ProjectDashboardView({
   };
 
   /* The header bar's two ends (#1801, docs/design/board-header.md), shared by the Board's bar and
-     the other leaves' bar. Lead: where am I — the project and, when the bar is wide, its account
-     switches (#1331). Trail: the two panel toggles and the ⋯ menu, which holds message search
-     (on the Board, whose find field filters cards), sound, archive, delete and, when narrow, one
-     row per account switch. Undo and redo left the header (#1801; a kanban undo is #1856). */
+     the other leaves' bar. Lead: where am I — the project and its account switches (#1331), which
+     the bar hides once the row has no room for them. Trail: the panel group and the ⋯ menu, which
+     holds message search (on the Board, whose find field filters cards), the board's own rows
+     (Hidden), sound, archive, delete and, once the row gave them up, one row per account switch.
+     Undo and redo left the header (#1801; a kanban undo is #1856). */
   const panelTasks = useMemo(() => (seatTaskIds.size ? tasks.filter((task) => !seatTaskIds.has(task.id)) : tasks), [seatTaskIds, tasks]);
-  const barLead = (wide: boolean) => (
+  const barLead = () => (
     <>
-      <h1 className="min-w-12 max-w-[220px] truncate text-[13.5px] font-bold" title={knownProjectName ?? undefined}>{projectTitleNode}</h1>
-      {wide ? <ProjectAccounts project={project} appearance="bar" /> : null}
+      <h1 className="min-w-12 truncate text-[13.5px] font-bold" title={knownProjectName ?? undefined}>{projectTitleNode}</h1>
+      <ProjectAccounts project={project} appearance="bar" />
     </>
   );
-  const barTrail = (wide: boolean, withSearch: boolean) => (
+  const barTrail = (accountsInMenu: boolean, withSearch: boolean, extra?: BarTrailExtra) => (
     <>
       <BarPanelToggles
-        wide={wide}
+        tail={extra?.panelsTail}
         orchestrator={onToggleOrchestratorPanel ? {
           open: kanbanLeaf ? !kanbanSeat.collapsed : orchestratorPanelOpen,
           onToggle: kanbanLeaf ? kanbanSeat.toggle : onToggleOrchestratorPanel,
@@ -2209,6 +2129,7 @@ function ProjectDashboardView({
                 </button>
               </BarMenuGroup>
             ) : null}
+            {extra ? <BarMenuGroup name="board">{extra.menuRows(close)}</BarMenuGroup> : null}
             <BarMenuGroup name="sound">
               <SoundToggle variant="menu" rowClassName={BAR_MENU_ROW} />
             </BarMenuGroup>
@@ -2217,11 +2138,11 @@ function ProjectDashboardView({
               <LearnedRulesRow project={project} size="menu" onOpened={close} />
             </BarMenuGroup>
             <BarMenuGroup name="sections">
-              {wide ? null : (
+              {accountsInMenu ? (
                 <BarMenuSection id="accounts" title={t("dash.menu.accounts")} icon={<Users className="h-[15px] w-[15px] shrink-0" aria-hidden />}>
                   <ProjectAccounts project={project} appearance="menu" />
                 </BarMenuSection>
-              )}
+              ) : null}
               {/* The four project switches carry their explanations, so each pair is a page of its own. */}
               <BarMenuSection id="merging" title={t("dash.menu.merging")} icon={<GitMerge className="h-[15px] w-[15px] shrink-0" aria-hidden />} page>
                 <MergeOnReviewRow project={project} variant="menu" />
@@ -2288,9 +2209,9 @@ function ProjectDashboardView({
     <FavoritesProvider value={favoritesApi}>
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       {/* The desktop header bar on every leaf the board does not draw (#1801): the loading
-          skeleton, Conversations and the empty project. The Board draws the same bar itself,
-          with its own find, view and create groups between the same two ends. The phone
-          renders the shell's bar instead (mobile v2 lane 1). */}
+          skeleton and the empty project. The Board draws the same bar itself, with its own
+          find and create groups between the same two ends. The phone renders the shell's bar
+          instead (mobile v2 lane 1). */}
       {isMobile || (boardReady && kanbanLeaf) ? null : (
         <DashboardBar
           lead={barLead}
@@ -2325,11 +2246,7 @@ function ProjectDashboardView({
               <span className="min-w-0 truncate">{wide ? t("search.open") : t("dash.searchShort")}</span>
             </button>
           ) : null}
-          view={(wide) => (boardReady && listAvailable
-            ? <ProjectViewTabs value="list" onChange={chooseDesktopView} modes={desktopViewModes} compact={!wide} />
-            : null)}
-          create={(wide) => (boardReady && listAvailable ? <BarCreateGroup wide={wide} reserve /> : null)}
-          trail={(wide) => barTrail(wide, false)}
+          trail={(accountsInMenu) => barTrail(accountsInMenu, false)}
         />
       )}
 
@@ -2617,7 +2534,6 @@ function ProjectDashboardView({
                 seat={(boardId) => (
                   <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} tasks={projectTasks} boardId={boardId} seatRead={desktopSeatRead} />
                 )}
-                onOpenConversations={openConversationsForOneLook}
                 onNewAgent={addDraft}
                 onAddAgent={addBandAgentDraft}
                 onDraftClose={removeDraft}
@@ -2625,13 +2541,13 @@ function ProjectDashboardView({
                 onHandoff={addHandoffDraft}
                 onSpawnRetry={retryLaunch}
                 onCloseConversation={(file) => closeNode(file.path)}
-                viewSwitch={(wide) => <ProjectViewTabs value="kanban" onChange={chooseDesktopView} modes={desktopViewModes} compact={!wide} />}
                 barLead={barLead}
-                barTrail={(wide) => barTrail(wide, true)}
+                barTrail={(accountsInMenu, extra) => barTrail(accountsInMenu, true, extra)}
+                recentAgents={(close, countSlot) => (
+                  <DesktopConversations project={project} enabled={loaded} countSlot={countSlot} onOpen={(file) => { close(); openFullCatalogFile(file); }} />
+                )}
                 aside={taskPanel}
               />
-            ) : listAvailable ? (
-              <DesktopConversations project={project} enabled={loaded && projectView === "list"} onOpen={openFullCatalogFile} />
             ) : (
               <EmptyProjectLeaf
                 projectName={projectName}

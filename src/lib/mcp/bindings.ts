@@ -145,9 +145,10 @@ import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAut
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
-import { leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
+import { splitRelayMessageText } from "@/lib/orchestrator/relayText";
+import { leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
 import { readMemoryProblem } from "@/lib/memory/roleProblems";
-import { RoleMemoryRefusal, storedLessonTexts } from "@/lib/memory/roleStore";
+import { RoleMemoryRefusal, storedLessonTexts, withoutStoredLessons } from "@/lib/memory/roleStore";
 import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt, latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
@@ -1891,7 +1892,7 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     return {
       ...view({ ...(markIssueReportShown(digest, seat, { directory }) ?? stored), hints: stored.hints, hintWarnings: stored.hintWarnings }),
       approvalReplies, approvalReplyDrafts: issueReportApprovalDrafts(digest),
-      next: "Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Then suggest_replies with the approvalReplyDrafts entry in the operator's language (its label and its text, unchanged) as the yes, beside a no and an edit. Publication is admitted only when that text is the operator's last message here.",
+      next: "Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Then suggest_replies with the approvalReplyDrafts entry in the operator's language (its label and its text, unchanged) as the yes, beside a no and an edit. Publication is admitted when the operator's last message here, sent after this reading, contains the approving reply with its whole digest in either language, ignoring case and surrounding whitespace or punctuation. The reply may be part of a longer message; one message may approve several previews. An explicit refusal of the same report overrides its approving reply. A free-form yes without the digest does not approve it.",
     };
   }
   if (action !== "publish") throw refuse("action is hints, preview, show or publish", "issue_report_invalid", { field: "action" });
@@ -1928,10 +1929,15 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     : operatorMessagesOf(seat, dependencies.registrySnapshot()));
   const approval = issueReportApproval(messages, digest, Date.parse(shownAt));
   if (!approval.approved) {
+    const explanation = approval.reason === "no_operator_message" ? {
+      en: "The operator has not answered since you read this preview back, so nothing was published. Put the exact title and body in chat and offer the approving reply with suggest_replies.",
+      uk: "Оператор ще не відповів після показу цього звіту, тому нічого не опубліковано. Покажіть точні заголовок і текст у чаті та запропонуйте відповідь для схвалення через suggest_replies.",
+    } : {
+      en: `Nothing was published. To approve this preview, send “${approvalReplies.en}” or its Ukrainian equivalent after reading the preview. The approving reply may be part of a longer message, and one message may approve several previews. An explicit refusal of the same report overrides approval. A free-form yes without the digest does not approve it.`,
+      uk: `Нічого не опубліковано. Щоб схвалити цей звіт, після його перегляду надішліть «${approvalReplies.uk}» або англійський відповідник. Відповідь для схвалення може бути частиною довшого повідомлення, і одне повідомлення може схвалювати кілька звітів. Явна відмова щодо цього самого звіту скасовує схвалення. Довільне «так» без digest не схвалює звіт.`,
+    };
     throw refuse(
-      approval.reason === "no_operator_message"
-        ? "the operator has not answered since you read this preview back, so nothing was published. Put the exact title and body in chat and offer the approving reply with suggest_replies"
-        : "the operator's last message in this conversation is not the approving reply of this preview, so nothing was published. A no or an edit goes back to the reporter; a yes is the approving reply, sent by the operator",
+      explanation[previewLanguage],
       "issue_report_approval_required", { status: 403, reason: approval.reason, approvalReplies },
     );
   }
@@ -2458,9 +2464,20 @@ function stageLessonRequest(result: { pipelineId?: string; stageId?: string; att
 }
 
 async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
-  const pipelines = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [];
   try {
-    const result = leaveLessonForConversation(pipelines, attributionOf(dependencies).conversationId, { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem });
+    const caller = attributionOf(dependencies);
+    /* Root conversations stay gateway-attributed for ordinary tool behavior,
+       but a freshly authorized designation is enough to establish seat
+       identity for this role-memory write. */
+    const seat = caller.conversationId && (caller.kind === "manager" || caller.kind === "gateway")
+      ? (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources())).find(row => row.conversationId === caller.conversationId)
+      : null;
+    if (caller.kind === "manager" && !seat) throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this caller has no active project designation");
+    if (caller.kind === "gateway" && !seat) throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this gateway conversation has no active project designation");
+    const answer = { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem };
+    const result = seat ? leaveLessonForSeat(seat, answer) : leaveLessonForConversation(
+      dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [], caller.conversationId, answer,
+    );
     return { ...result };
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) {
@@ -5042,7 +5059,9 @@ async function sendMessageToOrchestrator(
     if (link) {
       try {
         return await dispatchControl(control)("/api/orchestrator/message", {
-          project, machine: link.install, text: requiredMessageText(args),
+          project, machine: link.install, text: bound?.sendPayload
+            ? splitRelayMessageText(bound.sendPayload.text)?.body ?? bound.sendPayload.text
+            : orchestratorRelayEgressText(requiredMessageText(args)),
           clientMessageId: bound?.downstreamKey ?? orchestratorSendDownstreamKey(key),
         }, callerCapabilityHeaders());
       } catch (error) {
@@ -7070,6 +7089,15 @@ function orchestratorSendDownstreamKey(key: string): string {
   return `mcp_orchestrator_${crypto.createHash("sha256").update(key).digest("hex")}`;
 }
 
+/** Only a send leaving this installation crosses the learned-rule boundary. */
+function orchestratorRelayEgressText(message: string): string {
+  try { return withoutStoredLessons(message); }
+  catch (error) {
+    if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
+    throw error;
+  }
+}
+
 async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, forRecovery = false): Promise<McpRequestBindingInput> {
   requireOrchestratorRelayCaller(dependencies);
   const named = required(args, "project");
@@ -7091,11 +7119,12 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
     throw new McpToolRefusal("the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", { code: "owner_report_seat_unavailable", retryable: false });
   }
   const link = project && text(args.machine) ? resolveRemoteSeatMachine(text(args.machine), project, dependencies) : null;
+  const outgoing = link ? orchestratorRelayEgressText(message) : message;
   return {
     // Relay receipts belong to the exact sender, never its successor seat.
     caller: { kind: caller.kind, conversationId: caller.conversationId, project: caller.project },
     target: { project, identity: link ? `machine:${link.install}` : project ? orchestratorSeatFor(project).active?.conversationId ?? null : null },
-    sendPayload: seat ? orchestratorRelayPayload(message, seat) : owner ?? {
+    sendPayload: seat ? orchestratorRelayPayload(outgoing, seat) : owner ?? {
       text: message, origin: { kind: "agent", role: "gateway", conversationId: attribution.conversationId! },
     },
     // Separate from direct send: equal client keys on different tools are

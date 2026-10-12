@@ -1,5 +1,6 @@
+import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 /**
- * Pure composition of the "attach in your terminal" command (issue #247 item 2).
+ * Composition of the "attach in your terminal" command (issue #247 item 2).
  *
  * Every datum needed already sits in the registry / account manager — the
  * account home (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`), the cwd, and the resumable
@@ -152,6 +153,7 @@ export interface LaunchAttachReceipt {
   engine: AgentEngine;
   cwd: string;
   accountId: string | null;
+  agentRole?: string | null;
   key: { engine: AgentEngine; sessionId: string } | null;
   launchProfile: { model: string | null; effort: string | null; fast: boolean | null; serviceTier?: string | null; allowSubagents?: boolean; mcpServers?: readonly string[] };
   transport: SpawnReceipt["transport"];
@@ -172,7 +174,7 @@ export interface LaunchAttachDeps {
     sessionId: string,
     cwd: string,
     home: string,
-    options?: { model?: string | null; effort?: string | null; fast?: boolean | null; serviceTier?: string | null; allowSubagents?: boolean; mcpServers?: readonly string[]; hostTerminal?: boolean },
+    options?: { model?: string | null; effort?: string | null; fast?: boolean | null; serviceTier?: string | null; allowSubagents?: boolean; operatorDecisionForms?: boolean; mcpServers?: readonly string[]; hostTerminal?: boolean },
   ) => ResumeSpec | null;
   homeForAccount: (engine: AgentEngine, accountId: string) => string | null;
   accountLabelFor: (engine: AgentEngine, accountId: string) => string;
@@ -181,7 +183,7 @@ export interface LaunchAttachDeps {
 /**
  * Resolve the terminal command for a `spawn:<launchId>` launch window. A
  * provisional receipt stays unavailable; after finalization, the scanned path
- * leads and durable receipt data covers scan lag. Pure: all I/O is injected.
+ * leads and durable receipt data covers scan lag. Native question policy also reads the active seat designation.
  */
 export function resolveLaunchAttachCommand(deps: LaunchAttachDeps): AttachResolution {
   const receipt = deps.receipt;
@@ -206,6 +208,7 @@ export function resolveLaunchAttachCommand(deps: LaunchAttachDeps): AttachResolu
     fast: receipt.launchProfile.fast,
     serviceTier: receipt.launchProfile.serviceTier,
     allowSubagents: receipt.launchProfile.allowSubagents,
+    operatorDecisionForms: operatorDecisionFormsRequired(receipt.agentRole, receipt.artifactPath),
     /* Re-apply the launch's recorded MCP allowlist (PR #610) so the resumed
        command enforces the same server scope the launch ran under. */
     mcpServers: receipt.launchProfile.mcpServers,

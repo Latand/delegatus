@@ -3153,3 +3153,22 @@ for (const mechanism of ["scope", "watchdog"] as const) for (const platform of [
     expect(child.stderr.destroyed).toBe(true);
   } finally { child.emit("close", null, "SIGKILL"); await host.release(); memory.dispose(); }
 });
+
+
+test("seat launches deny native questions while workers keep them on fresh and adopted Claude", async () => {
+  for (const seat of [false, true]) for (const resumed of [false, true]) {
+    const captured: { args?: string[] } = {};
+    const options = {
+      cwd: "/repo", operatorDecisionForms: seat, allowSubagents: true,
+      eventStore: new MemoryEventStore(), readTranscript: () => [],
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured),
+    };
+    const host = resumed ? await ClaudeStreamBrokerHost.adopt(crypto.randomUUID(), options) : await ClaudeStreamBrokerHost.start(options);
+    try {
+      const denied = captured.args![captured.args!.indexOf("--disallowedTools") + 1]?.split(",") ?? [];
+      for (const tool of ["AskUserQuestion", "ExitPlanMode"]) expect(denied.includes(tool)).toBe(seat);
+      if (!seat) expect(captured.args).not.toContain("--disallowedTools");
+    } finally { await host.release(); }
+  }
+});
