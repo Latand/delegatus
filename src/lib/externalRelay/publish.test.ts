@@ -88,9 +88,12 @@ test("the final 429 holds the pairing queue until its supplied delay expires", a
 
 for (const status of [403, 404]) test(`queued publications share the ${status} cooldown and recover later`, async () => {
   let calls = 0, time = 0;
-  const server = await startTestRelay(() => { calls++; return calls === 1
-    ? { status, body: { error: { code: "fixture" } } }
-    : { body: { message_key: "m_fixture", replayed: false } }; });
+  const server = await startTestRelay((_request, body) => {
+    const published = body as NonNullable<ReturnType<typeof relayPublishBody>>;
+    calls++; return calls === 1
+      ? { status, body: { error: { code: "fixture" } } }
+      : { body: { message_key: `m_${published.chat_id}_${published.message_id}`, replayed: false } };
+  });
   const paired = { id: "fixture", api_base: `${server.origin}/v1`, credential: "q".repeat(43) } as PairedRelay;
   const publisher = createRelayPublisher(botId => botId === receipt.botId ? { relay: paired, targetId: "fixture" } : null,
     { now: () => time });

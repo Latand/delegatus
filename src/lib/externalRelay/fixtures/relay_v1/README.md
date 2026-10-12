@@ -88,13 +88,54 @@ Regenerate the install capture through the existing runner test only:
 with HOME, XDG, TMPDIR and LLV_STATE_DIR isolated and the Viewer control URL
 pointing at a closed loopback port. No service fixture generator is added here.
 
+### Corrected R8 capture
+
+The X4 double formerly returned bare arrays for grid lists and clone
+activation. It also modeled two short grid route pages as relay fragments,
+so concatenation produced two JSON documents. These values came from the
+runner test's HTTP double. The production loop forwards the service's output
+text unchanged and stores each result separately; it constructs no public
+route response bodies and performs no page concatenation.
+
+The corrected reads run follows the grid route's `output.next_cursor` in
+the next call's `arguments.cursor`. Both responses are complete compact JSON
+documents containing `items` and `next_cursor`; their items are combined
+after parsing each document. Relay fragment paging uses the outer `cursor`
+for one long document and remains exercised by the existing X2 capture.
+Pending polling, cached repetition, sequential writes, 204, rate-limit
+retries, inner 404, lease loss and confirmation retain their X4 coverage.
+
+| Capture | Bytes | SHA-256 |
+|---|---:|---|
+| `evidence/external-relay/install_tool_loop_owner.json` | 23,596 | `daeae4b1cdb703768f37a0cde9adb6f4092f4a6eff5ac3dbb9f75f8d6e14f2d0` |
+
+`ownerCapture.test.ts` validates every captured ToolCallResult envelope and
+every successful body with Draft 2020-12, including nested response items
+and formats, and checks the transport refusals, 204 and inner error bodies.
+The same response validator runs inside the existing X4 runner test before
+it writes a capture, so its regeneration command rejects invalid R8 bodies
+even when the standalone capture test is filtered out.
+`owner-tools-response-schemas.json` contains the 14 public operation response
+schemas and their reference closure, copied from the agreed OpenAPI revision
+and identified by its source path and digest. CI uses that public snapshot.
+For a cross-repository check, set `LLV_CELESTIA_OPENAPI_FILE` to a read-only
+export of Celestia's `apps/backend/docs/openapi/public_moderation_openapi.json`
+and run the test by path through the isolated gate runner. The test requires
+all 14 responses and every referenced definition to match the snapshot.
+They also match Celestia main `0997461ccf4d6e8752d03d3df2ed40ebc8187659`
+(full OpenAPI digest `a517e69dc0f0b19ed604dfe8d2612efdbcb4ca1396cfcfdf187fc6cdfe7bcb11`).
+
+The amended wire list retains its agreed bytes. Owner tools stay OFF on both
+sides; this capture authorizes neither enablement nor deployment.
+
 | File | Bytes | SHA-256 |
 |---|---:|---|
 | `owner-tools-index.json` | 6730 | `13ffb1c99fde7ce1e74f3c7127f870b2a2c56dfc9e08a05984ae729dc926b93f` |
 | `owner-tools-off-v3-hashes.json` | 4760 | `bff586d8e1b96c2e3225d19b3227035c8da2c650d6c838dcc8ffa5814b4bde38` |
 | `owner-tools-off-runner-hashes.json` | 2879 | `709baf921762e4e9fdab4ab70eafd6141b0f7da7bac342d65ea7741374f9e9e2` |
 
-Install X4 capture: 22956 bytes, SHA-256 `791d1c97d8da0359927fb909dca6cc05839ff88e772ac2c65fd591695599367b`.
+Original X4 capture before the R8 correction: 22,956 bytes, SHA-256
+`791d1c97d8da0359927fb909dca6cc05839ff88e772ac2c65fd591695599367b`.
 
 ## Owner private chat and publication
 

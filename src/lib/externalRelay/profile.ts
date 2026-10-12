@@ -1,5 +1,6 @@
 import type { ExternalRelayRequest, ExternalRelayRequester } from "./protocol";
 import type { RelayTargetSettings } from "./store";
+import type { OwnerBridgeContext } from "./ownerBridgeContext";
 
 /**
  * What one relay answer may use (relay.md §B.6). Every requester gets the
@@ -8,7 +9,7 @@ import type { RelayTargetSettings } from "./store";
  */
 export type RelayAnswerProfile = { webSearch: boolean; owner?: true; prototype?: string };
 
-export type OwnerInstruction = { messageId: string; text: string; requestText: string | null };
+export type OwnerInstruction = { messageId: string; text: string; requestText: string | null; bridgeReport?: OwnerBridgeContext | null };
 /** Only the triggering message authored by the service-identified owner grants host access. */
 export function ownerTierFor(target: Pick<RelayTargetSettings, "ownerTier">, request: ExternalRelayRequest): OwnerInstruction | null {
   if (target.ownerTier !== true) return null;

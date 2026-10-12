@@ -1,7 +1,8 @@
 import { ownerRelayAuthorized } from "./ownerAuthority";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
-import { runOwnerAgent, type OwnerRunPorts } from "./ownerRun";
+import { resolveOwnerBridgeContext, ownerNeedsClarification } from "./ownerBridgeContext";
+import { runOwnerAgent, ownerClarificationAnswer, type OwnerRunPorts } from "./ownerRun";
 import { readRelaySwitches } from "./switches";
 import { compactRequestSchema } from "./protocol";
 import { runCompactRequest } from "./compact";
@@ -286,6 +287,10 @@ export async function runClaimedRequest(
     && previousAnswer.chatKey === (request.chat?.key ?? null) ? previousAnswer.profile.prototype : undefined;
   const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId) : null;
   const owner = prototype ? ownerMessage : ownerTierFor(target, request);
+  if (owner && !prototype) {
+    try { owner.bridgeReport = resolveOwnerBridgeContext(request, owner, relay.api_base); }
+    catch { owner.bridgeReport = null; }
+  }
   if (owner) allowOwnerReply = () => ownerRelayAuthorized(relay.id, target.id, requestId);
   if (activeDrain()) return finish(declined(leaseId, "busy"));
   let conversation: RelayConversation | null = null;
@@ -307,6 +312,8 @@ export async function runClaimedRequest(
     if (!ownerIdentity) throw new Error("viewer process identity unavailable");
     const record = {
       ...(owner ? { ownerTurn: { clientAttemptId: `relay-owner-${requestId}`,
+        request: { text: owner.text, requestText: owner.requestText },
+        ...(owner.bridgeReport ? { bridgeReport: owner.bridgeReport } : {}),
         ...(prototype && target.ownerTier !== true ? { prototype: true as const } : {}) } } : {}),
       requestId,
       leaseId,
@@ -324,6 +331,7 @@ export async function runClaimedRequest(
     if (admission === "full") return await finish(declined(leaseId, "busy"));
     recorded = true;
     markActive(relay, target);
+    if (owner && !prototype && ownerNeedsClarification(owner)) return await finish({ lease_id: leaseId, outcome: "answered", answer: ownerClarificationAnswer(request, owner), duration_ms: 0 });
     const context = conversationContext(request.input.requester);
     if (!owner && readRelaySwitches().chat_conversations && request.chat && context) {
       sweepConversations([relay], readRunLedger().runs.filter((r) => r.requestId !== requestId), Date.now(), undefined, relay.id);

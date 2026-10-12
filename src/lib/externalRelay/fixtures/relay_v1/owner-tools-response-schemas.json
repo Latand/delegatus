@@ -1,0 +1,675 @@
+{
+  "source": {
+    "revision": "03de645506e35bac73de6d61207b9b6df40c7744",
+    "path": "apps/backend/docs/openapi/public_moderation_openapi.json",
+    "sha256": "451e8775dc9cf39bb10baae3e4029295c9af1023b59a05e6f1a31918903e42f4"
+  },
+  "operations": {
+    "owner_activate_clone": {
+      "$ref": "#/components/schemas/ActivateCloneResponse"
+    },
+    "owner_attach_grid_chats": null,
+    "owner_bind_clone_chats": null,
+    "owner_create_grid": {
+      "$ref": "#/components/schemas/ChatGridResponse"
+    },
+    "owner_deactivate_clone": {
+      "$ref": "#/components/schemas/DeactivateCloneResponse"
+    },
+    "owner_detach_grid_chat": null,
+    "owner_get_clone": {
+      "$ref": "#/components/schemas/CloneDetailResponse"
+    },
+    "owner_get_grid": {
+      "$ref": "#/components/schemas/ChatGridLandingResponse"
+    },
+    "owner_list_clone_chats": {
+      "$ref": "#/components/schemas/CloneChatBindingsResponse"
+    },
+    "owner_list_clones": {
+      "$ref": "#/components/schemas/CloneListResponse"
+    },
+    "owner_list_grid_chats": {
+      "$ref": "#/components/schemas/SettingsGridChatsResponse"
+    },
+    "owner_list_grids": {
+      "$ref": "#/components/schemas/ChatGridListResponse"
+    },
+    "owner_sync_grid_section_chats": null,
+    "owner_update_clone": {
+      "$ref": "#/components/schemas/UpdateCloneResponse"
+    }
+  },
+  "components": {
+    "schemas": {
+      "ActivateCloneResponse": {
+        "properties": {
+          "bot_id": {
+            "type": "integer",
+            "title": "Bot Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CelestiaCloneStatus"
+          },
+          "webhook_url": {
+            "type": "string",
+            "title": "Webhook Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "bot_id",
+          "status",
+          "webhook_url"
+        ],
+        "title": "ActivateCloneResponse"
+      },
+      "CelestiaCloneAccessMode": {
+        "type": "string",
+        "enum": [
+          "public",
+          "selected"
+        ],
+        "title": "CelestiaCloneAccessMode"
+      },
+      "CelestiaCloneStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "active",
+          "error",
+          "deleted"
+        ],
+        "title": "CelestiaCloneStatus"
+      },
+      "ChatGridKind": {
+        "type": "string",
+        "enum": [
+          "settings",
+          "shared_blocklist"
+        ],
+        "title": "ChatGridKind"
+      },
+      "ChatGridLandingResponse": {
+        "properties": {
+          "grid_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Grid Id"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ChatGridKind"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "role": {
+            "$ref": "#/components/schemas/ChatGridRole"
+          },
+          "active_chat_count": {
+            "type": "integer",
+            "title": "Active Chat Count"
+          },
+          "admin_count": {
+            "type": "integer",
+            "title": "Admin Count"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/ChatGridSectionCoverageResponse"
+            },
+            "type": "array",
+            "title": "Sections"
+          }
+        },
+        "type": "object",
+        "required": [
+          "grid_id",
+          "kind",
+          "name",
+          "role",
+          "active_chat_count",
+          "admin_count",
+          "sections"
+        ],
+        "title": "ChatGridLandingResponse"
+      },
+      "ChatGridListItemResponse": {
+        "properties": {
+          "grid_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Grid Id"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ChatGridKind"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "role": {
+            "$ref": "#/components/schemas/ChatGridRole"
+          },
+          "active_chat_count": {
+            "type": "integer",
+            "title": "Active Chat Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "grid_id",
+          "kind",
+          "name",
+          "role",
+          "active_chat_count"
+        ],
+        "title": "ChatGridListItemResponse"
+      },
+      "ChatGridListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ChatGridListItemResponse"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ChatGridListResponse"
+      },
+      "ChatGridResponse": {
+        "properties": {
+          "grid_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Grid Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "grid_id",
+          "kind",
+          "name"
+        ],
+        "title": "ChatGridResponse"
+      },
+      "ChatGridRole": {
+        "type": "string",
+        "enum": [
+          "owner",
+          "admin"
+        ],
+        "title": "ChatGridRole"
+      },
+      "ChatGridSectionCoverageResponse": {
+        "properties": {
+          "section_key": {
+            "type": "string",
+            "title": "Section Key"
+          },
+          "synced_chat_count": {
+            "type": "integer",
+            "title": "Synced Chat Count"
+          },
+          "sync_supported": {
+            "type": "boolean",
+            "title": "Sync Supported"
+          }
+        },
+        "type": "object",
+        "required": [
+          "section_key",
+          "synced_chat_count",
+          "sync_supported"
+        ],
+        "title": "ChatGridSectionCoverageResponse"
+      },
+      "CloneChatBindingResponse": {
+        "properties": {
+          "chat_id": {
+            "type": "integer",
+            "title": "Chat Id"
+          },
+          "added_by": {
+            "type": "integer",
+            "title": "Added By"
+          },
+          "allowed_by_owner": {
+            "type": "boolean",
+            "title": "Allowed By Owner"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "added_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Added At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chat_id",
+          "added_by",
+          "allowed_by_owner",
+          "is_active",
+          "added_at"
+        ],
+        "title": "CloneChatBindingResponse"
+      },
+      "CloneChatBindingsResponse": {
+        "properties": {
+          "chats": {
+            "items": {
+              "$ref": "#/components/schemas/CloneChatBindingResponse"
+            },
+            "type": "array",
+            "title": "Chats"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chats"
+        ],
+        "title": "CloneChatBindingsResponse"
+      },
+      "CloneDetailResponse": {
+        "properties": {
+          "bot_id": {
+            "type": "integer",
+            "title": "Bot Id"
+          },
+          "owner_id": {
+            "type": "integer",
+            "title": "Owner Id"
+          },
+          "bot_username": {
+            "type": "string",
+            "title": "Bot Username"
+          },
+          "bot_first_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bot First Name"
+          },
+          "is_managed": {
+            "type": "boolean",
+            "title": "Is Managed"
+          },
+          "access_mode": {
+            "$ref": "#/components/schemas/CelestiaCloneAccessMode"
+          },
+          "allow_adult_content": {
+            "type": "boolean",
+            "title": "Allow Adult Content"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CelestiaCloneStatus"
+          },
+          "tier": {
+            "type": "string",
+            "const": "free",
+            "title": "Tier",
+            "default": "free"
+          },
+          "subscription_status": {
+            "type": "null",
+            "title": "Subscription Status"
+          },
+          "subscription_expires_at": {
+            "type": "null",
+            "title": "Subscription Expires At"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "default_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Prompt"
+          },
+          "features_enabled": {
+            "items": {
+              "$ref": "#/components/schemas/CloneFeature"
+            },
+            "type": "array",
+            "title": "Features Enabled"
+          },
+          "days_remaining": {
+            "type": "null",
+            "title": "Days Remaining"
+          }
+        },
+        "type": "object",
+        "required": [
+          "bot_id",
+          "owner_id",
+          "bot_username",
+          "bot_first_name",
+          "is_managed",
+          "access_mode",
+          "allow_adult_content",
+          "status",
+          "error_message",
+          "created_at",
+          "updated_at",
+          "default_prompt",
+          "features_enabled"
+        ],
+        "title": "CloneDetailResponse"
+      },
+      "CloneFeature": {
+        "type": "string",
+        "enum": [
+          "ai",
+          "custom_prompt",
+          "moderation",
+          "captcha",
+          "greetings",
+          "farewell",
+          "statistics",
+          "event_journal",
+          "adult_content"
+        ],
+        "title": "CloneFeature"
+      },
+      "CloneListItem": {
+        "properties": {
+          "bot_id": {
+            "type": "integer",
+            "title": "Bot Id"
+          },
+          "bot_username": {
+            "type": "string",
+            "title": "Bot Username"
+          },
+          "bot_first_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bot First Name"
+          },
+          "is_managed": {
+            "type": "boolean",
+            "title": "Is Managed"
+          },
+          "tier": {
+            "type": "string",
+            "const": "free",
+            "title": "Tier",
+            "default": "free"
+          },
+          "subscription_expires_at": {
+            "type": "null",
+            "title": "Subscription Expires At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CelestiaCloneStatus"
+          },
+          "active_chats_count": {
+            "type": "integer",
+            "title": "Active Chats Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "bot_id",
+          "bot_username",
+          "bot_first_name",
+          "is_managed",
+          "status",
+          "active_chats_count"
+        ],
+        "title": "CloneListItem"
+      },
+      "CloneListResponse": {
+        "properties": {
+          "clones": {
+            "items": {
+              "$ref": "#/components/schemas/CloneListItem"
+            },
+            "type": "array",
+            "title": "Clones"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clones"
+        ],
+        "title": "CloneListResponse"
+      },
+      "DeactivateCloneResponse": {
+        "properties": {
+          "bot_id": {
+            "type": "integer",
+            "title": "Bot Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CelestiaCloneStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "bot_id",
+          "status"
+        ],
+        "title": "DeactivateCloneResponse"
+      },
+      "SettingsGridChatItemResponse": {
+        "properties": {
+          "chat_id": {
+            "type": "integer",
+            "title": "Chat Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          },
+          "avatar_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Url"
+          },
+          "total_participants": {
+            "type": "integer",
+            "title": "Total Participants"
+          },
+          "synced_section_count": {
+            "type": "integer",
+            "title": "Synced Section Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chat_id",
+          "name",
+          "username",
+          "avatar_url",
+          "total_participants",
+          "synced_section_count"
+        ],
+        "title": "SettingsGridChatItemResponse"
+      },
+      "SettingsGridChatsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SettingsGridChatItemResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/SettingsGridPendingChatResponse"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "SettingsGridChatsResponse"
+      },
+      "SettingsGridJoinRequestStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "approved",
+          "rejected",
+          "expired",
+          "canceled",
+          "owner_changed",
+          "already_connected",
+          "grid_deactivated",
+          "subscription_expired"
+        ],
+        "title": "SettingsGridJoinRequestStatus"
+      },
+      "SettingsGridPendingChatResponse": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Request Id"
+          },
+          "chat_id": {
+            "type": "integer",
+            "title": "Chat Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "avatar_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Url"
+          },
+          "total_participants": {
+            "type": "integer",
+            "title": "Total Participants"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SettingsGridJoinRequestStatus"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "chat_id",
+          "name",
+          "avatar_url",
+          "total_participants",
+          "status",
+          "expires_at"
+        ],
+        "title": "SettingsGridPendingChatResponse"
+      },
+      "UpdateCloneResponse": {
+        "properties": {
+          "clone": {
+            "$ref": "#/components/schemas/CloneDetailResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clone"
+        ],
+        "title": "UpdateCloneResponse"
+      }
+    }
+  }
+}
