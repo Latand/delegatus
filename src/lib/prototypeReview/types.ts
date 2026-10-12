@@ -1,3 +1,5 @@
+import type { PrototypeCriticPass } from "./criticGate";
+
 /** Client-safe contract shared by the task card, review and orchestrator pane. */
 export interface PrototypeFrameInput {
   path: string;
@@ -59,6 +61,7 @@ export type PrototypeDeliveryPhase = "saved" | "delivering" | "delivered" | "wai
 export interface PrototypeDecision {
   answers?: PrototypeAnswer[];
   skipped?: true;
+  rejected?: true;
   chosen: number[];
   comment: string;
   at: string;
@@ -83,20 +86,23 @@ export interface PrototypeDecision {
 export interface PrototypeReviewRound {
   id: string;
   title: string;
-  taskId: string;
+  /** Null for a round the project's orchestrator published without a task
+      (docs/design/operator-decision-forms.md §2.2). */
+  taskId: string | null;
   project: string;
   createdAt: string;
   source: { conversationId: string | null; pipelineId?: string; stageId?: string; attempt?: number };
   /** Stable publication key and argument digest survive source-file removal. */
   publicationKey: string;
   inputDigest: string;
+  critic?: PrototypeCriticPass;
   variants: PrototypeVariant[];
   questions?: PrototypeQuestion[];
   decision?: PrototypeDecision;
   mediaRemovedAt?: string;
 }
 export interface PrototypeMediaView extends PrototypeMedia { available: boolean; url: string | null }
-export interface PrototypeRoundView extends Omit<PrototypeReviewRound, "publicationKey" | "inputDigest" | "decision" | "variants"> {
+export interface PrototypeRoundView extends Omit<PrototypeReviewRound, "publicationKey" | "inputDigest" | "critic" | "decision" | "variants"> {
   variants: Array<Omit<PrototypeVariant, "frames" | "videos"> & {
     frames: Array<Omit<PrototypeFrame, "image" | "original"> & { image: PrototypeMediaView; original?: PrototypeMediaView }>;
     videos: Array<{ media: PrototypeMediaView; caption: string }>;
@@ -110,7 +116,8 @@ export interface PrototypeRoundRead extends PrototypeRoundView {
   hidden?: { at: string; by: import("@/lib/attention/dismissalTypes").DismissedBy };
 }
 export interface PrototypeReviewRead {
-  taskId: string;
+  /** Null for the seat's own rounds, read without a task. */
+  taskId: string | null;
   rounds: PrototypeRoundRead[];
   waitingReviewId: string | null;
   /** Replicated metadata has no local media and cannot be decided here. */
@@ -127,7 +134,7 @@ export interface PrototypeReviewSummary {
   title: string;
   rounds: number;
   createdAt: string;
-  decision?: { answered?: true; chosen: Array<{ number: number; name: string }>; comment: string; at: string; delivery: PrototypeDeliveryState; phase?: PrototypeDeliveryPhase };
+  decision?: { answered?: true; rejected?: true; chosen: Array<{ number: number; name: string }>; comment: string; at: string; delivery: PrototypeDeliveryState; phase?: PrototypeDeliveryPhase };
 }
 export interface PrototypeReviewNotice {
   asks?: "questions";
@@ -135,14 +142,28 @@ export interface PrototypeReviewNotice {
   undelivered?: true;
   id: string;
   project: string;
-  taskId: string;
+  /** Null for a question the orchestrator asked without a task. */
+  taskId: string | null;
   reviewId: string;
   /** The task's first line: the card the jump lands on. */
   title: string;
   /** The waiting round's own title, shown second. */
   roundTitle?: string;
   createdAt: string;
-  /** The UI focuses this task and opens this round in its review surface. */
-  target: { kind: "prototype-review"; taskId: string; reviewId: string };
+  /** The UI focuses this task and opens this round in its review surface; a
+      seat's own question opens in the seat's «Рішення» column. */
+  target: { kind: "prototype-review"; taskId: string; reviewId: string } | { kind: "seat-decision"; project: string; reviewId: string };
 }
-export interface DecidePrototypeInput { reviewId: string; chosen: number[]; comment: string; answers?: PrototypeAnswer[]; skip?: true }
+/** One open decision of a project, as the «Рішення» column draws it: a seat
+    round or a task's waiting round, with the task it waits on. */
+export interface OperatorDecisionView extends PrototypeRoundRead {
+  taskTitle?: string;
+}
+export interface OperatorDecisionsRead {
+  project: string;
+  decisions: OperatorDecisionView[];
+  /** The one round a read asked for by id, open or answered: the record the
+      seat's feed draws where it asked. Null when the project holds no such round. */
+  round?: OperatorDecisionView | null;
+}
+export interface DecidePrototypeInput { reviewId: string; chosen: number[]; comment: string; answers?: PrototypeAnswer[]; skip?: true; reject?: true }

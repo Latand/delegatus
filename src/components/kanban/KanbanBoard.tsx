@@ -154,9 +154,6 @@ export interface KanbanBoardProps {
   /** The recent agents' list, which the bar opens under its icon: every agent of the project,
       reached without leaving the board. */
   recentAgents?: (close: () => void, countSlot: HTMLElement | null) => ReactNode;
-  /** A panel beside the board and under the bar (the project's Tasks panel), so the bar spans it
-      and the panel's own header starts under the row (#1801). */
-  aside?: ReactNode;
   /** The orchestrator seat above the columns (#1695 K3), given the id of the
       board region its skip link lands on. */
   seat?: (boardId: string) => ReactNode;
@@ -199,7 +196,7 @@ export interface KanbanBoardProps {
   projectCwd?: string;
   /** The project's seat as its owner read it: every conversation the seat
       record names, or null while that is unknown. Required, because the board
-      does not read the seat itself — the page that owns the Tasks panel does
+      does not read the seat itself — the page that owns it does
       (#1841), and a second reader here would poll the same route twice. */
   seatRefs: SeatRefs | null;
   mutationPorts?: TaskMutationPorts;
@@ -241,7 +238,7 @@ export interface BarTrailExtra {
   panelsTail: ReactNode;
 }
 
-const VIEWER_OWNED = ".kb-aside, [data-bar-group=\"where\"], [data-bar-group=\"trail\"], [data-bar-island-slot]";
+const VIEWER_OWNED = "[data-bar-group=\"where\"], [data-bar-group=\"trail\"], [data-bar-island-slot]";
 const NO_CREATED: ReadonlyArray<{ task: BoardTask; basis: readonly BoardTask[] }> = [];
 
 function browserStorage(): Pick<Storage, "getItem" | "setItem"> | null {
@@ -365,8 +362,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
       window.removeEventListener("blur", clear);
     };
   }, []);
-  const asideRef = useRef<HTMLDivElement>(null);
-  const hasAside = Boolean(props.aside);
   const [mode, setMode] = useState<KanbanLayoutMode>("wide");
   /* The header bar (#1801): one row that measures itself and gives up, in a fixed order, the
      fewest things at which it fits (`useBarFit`). */
@@ -720,18 +715,16 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useLayoutEffect(() => {
     const element = rootRef.current;
     if (!element) return;
-    /* The bar spans the board, its aside and a seat docked at the side; the
-       columns' mode follows what those leave them (#1841). */
-    const aside = asideRef.current;
+    /* The bar spans the board and a seat docked at the side; the columns'
+       mode follows what the seat leaves them (#1841). */
     const seat = seatSide ? element.querySelector<HTMLElement>(".kb-body > .seat") : null;
     let frame = 0;
     const apply = () => {
       // The helper owns intermediate widths; measure the settled layout.
       if (element.hasAttribute("data-column-layout")) return;
       const barWidth = element.getBoundingClientRect().width;
-      const beside = barWidth - (aside?.getBoundingClientRect().width ?? 0);
       const seatWidth = seat?.getBoundingClientRect().width ?? 0;
-      setMode(kanbanLayoutModeBeside(beside, seatWidth));
+      setMode(kanbanLayoutModeBeside(barWidth, seatWidth));
     };
     const settled = () => {
       // Release transient layers before asking for the settled layout. This
@@ -742,12 +735,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
     element.addEventListener(COLUMN_LAYOUT_END, settled);
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(apply) : null;
     observer?.observe(element);
-    if (aside) observer?.observe(aside);
     if (seat) observer?.observe(seat);
     return () => { observer?.disconnect(); element.removeEventListener(COLUMN_LAYOUT_END, settled); if (frame) cancelAnimationFrame(frame); };
-  }, [hasAside, seatSide]);
+  }, [seatSide]);
 
-  const barFit = useBarFit(barRef, [locale, hasAside, seatSide, mode]);
+  const barFit = useBarFit(barRef, [locale, seatSide, mode]);
 
   /* ── Flash, flights ──────────────────────────────────────────────────── */
   const flash = useCallback((cardId: string) => {
@@ -1834,8 +1826,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
       /* The bar's two ends and the island slot hold the Viewer's own controls (the project, its
-         accounts, the panel toggles, ⋯ and the attention island): the board's keys stay out of
-         them, as they stay out of the aside, so `/` and `u` mean there what they mean outside. */
+         accounts, the orchestrator toggle, ⋯ and the attention island): the board's keys stay out
+         of them, so `/` and `u` mean there what they mean outside. */
       const inBoard = Boolean(target && rootRef.current?.contains(target) && !target.closest(VIEWER_OWNED));
       if (event.key === "/") {
         /* Outside the board `/` stays the Viewer's global search. Inside it,
@@ -2963,7 +2955,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
       </div>
       <KanbanReceipts receipts={receipts} onDismiss={dismiss} />
       </div>
-      {props.aside ? <div ref={asideRef} className="kb-aside">{props.aside}</div> : null}
       </div>
       <div ref={parkRef} className="reader-park" aria-hidden="true" />
       {sheetView}
@@ -3160,12 +3151,11 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
       holdEditing={holdEditingId === card.id}
     />
   );
-  // Motion ordering keeps stopped work in a trailing suffix, including
-  // tasks whose finished conversations are still attached.
-  let split = shown.length;
-  if (status === "assigned") while (split > 0 && shown[split - 1]!.motion.key === "stopped") split -= 1;
-  const active = shown.slice(0, split);
-  const idle = shown.slice(split);
+  // The long-quiet stopped cards gather under the divider, in column order;
+  // a card that stopped after recent work stays among the live ones.
+  const parked = new Set(column.parked);
+  const active = shown.filter((card) => !parked.has(card.id));
+  const idle = shown.filter((card) => parked.has(card.id));
   const held = (card: KanbanCardModel) => !card.task && !card.drafts.length && card.members.length > 0
     && card.members.every((member) => heldLaunches.has(conversationIdentity(member.file)));
   const unlinked = status === "inbox" ? model.unlinkedShown.filter((card) => !(holdsOnlyDrafts(card) && card.status === "assigned") && !held(card)) : [];

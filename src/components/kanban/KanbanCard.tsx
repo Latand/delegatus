@@ -1,5 +1,8 @@
 "use client";
 
+import { CardStatusBadge } from "@/components/CardStatusBadge";
+import { rowStateWord } from "@/components/mobile/mobileBoardModel";
+
 import { ArrowDown, ArrowUp, Bot, Flag } from "lucide-react";
 import { memo, useState } from "react";
 
@@ -40,7 +43,7 @@ import { CardDrafts } from "./KanbanDrafts";
 import { engineWord } from "./identityMarks";
 import { CheckGlyph, ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./kanbanGlyphs";
 import type { KanbanCard as KanbanCardModel, KanbanMember, KanbanPipeline, KanbanUnstartedLaunch } from "./kanbanModel";
-import { PastAttempts, stageNames } from "./PipelineSection";
+import { cardWaitsForCpu, PastAttempts, stageNames } from "./PipelineSection";
 import type { PastAttempt } from "./pipelineGraph";
 import type { PipelinePorts } from "./pipelinePorts";
 import { StageDraftPanel } from "./StageDraft";
@@ -147,7 +150,7 @@ const MemberTile = memo(function MemberTile({ member, workspace, open, onOpen }:
   const parts = member.stage && place ? stageCardLabelParts(t, member.stage.stage, place) : null;
   const engine = member.file.engine === "claude" || member.file.engine === "codex" ? engineWord(member.file.engine) : null;
   const hint = member.stage && place ? stageLabelTitle(t, member.stage.stage, place, engine) : undefined;
-  const state = t(`kanban.memberState.${member.state}`);
+  const state = rowStateWord(t, member);
   const stateClass = member.needsYou ? "needs" : member.working ? "working" : member.state;
   return (
     <button
@@ -164,7 +167,7 @@ const MemberTile = memo(function MemberTile({ member, workspace, open, onOpen }:
         <EngineMark engine={member.file.engine} size={12} className="engine" label={member.file.engine} />
         <span className="role" title={hint}>{parts ? parts.name : role}</span>
         {parts && parts.attempt !== null ? <span className="attempt"> · {parts.attempt}</span> : null}
-        <span className={`state ${stateClass}`}>{state}</span>
+        {member.file.agentActivity && member.file.proc === "running" ? <CardStatusBadge file={member.file} /> : <span className={`state ${stateClass}`}>{state}</span>}
       </span>
       {member.latest ? <span className="latest">{member.latest}</span> : null}
       <span className="age">{fmtAge(member.file.mtime)}</span>
@@ -395,6 +398,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const linkIndex = useWorkLinks();
   const onWorkLinks = props.onWorkLinks;
   const workspace = status === "assigned";
+  const footWorked = card.lastAgentWorkAtMs > 0;
   const title = card.titlePending ? t("kanban.untitled") : card.title;
   /* A placeholder's text is no title to guess an icon from: it gets the quiet default. */
   const iconTitle = card.titlePending ? "" : card.title;
@@ -485,6 +489,14 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const drawnLanes = collapsed ? [] : completedOpen ? card.pipelines : shownPipelines;
   const drawnLinks = new Set(drawnLanes.flatMap((summary) => linkIndex.of({ kind: "pipeline", id: summary.pipeline.id })?.links.map((link) => link.key) ?? []));
   const taskLinks = withoutShown(linkIndex.of({ kind: "task", id: card.task?.id ?? "" }), drawnLinks);
+  /* The foot dates the last agent work as a bare age, and a card nobody worked
+     on as its last edit, worded as one so the two never read alike. A lane row
+     or an agent row on screen already states when its work moved, so the foot
+     says it only where no row does. */
+  const rowDatesWork = drawnLanes.length > 0 || (!collapsed && tiles.length > 0);
+  const footAge = footWorked
+    ? rowDatesWork ? "" : ageLabel(t, card.lastAgentWorkAtMs, nowMs)
+    : card.updatedAtMs ? t("kanban.editedAge", { age: ageLabel(t, card.updatedAtMs, nowMs) }) : "";
   const onAnswer = props.onAnswer;
   const pipelineRow = (summary: KanbanPipeline) => (
     <PipelineBlock
@@ -631,7 +643,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           ) : null}
         </div>
       </div>
-      <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs}
+      <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} laneShown={!collapsed && card.pipelines.length > 0} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)}
         taskTitle={card.holdTarget ? `${card.holdTarget.title}${card.holdTarget.done ? ` (${statusLabel(t, "done")})` : ""}` : undefined}
         onOpenTask={card.holdTarget && card.task?.hold?.ref ? () => props.onFocusCard(`task:${card.task!.hold!.ref}`) : undefined}
         referenceUrl={card.task?.hold && ["pr", "issue"].includes(card.task.hold.kind)
@@ -858,7 +870,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
               {card.priority === "high" ? <ArrowUp aria-hidden /> : <ArrowDown aria-hidden />}
             </span>
           ) : null}
-          <span className="age num" title={t("kanban.updated", { age: ageLabel(t, card.updatedAtMs, nowMs) })}>{ageLabel(t, card.updatedAtMs, nowMs)}</span>
+          {footAge ? <span className="age num" title={t(footWorked ? "kanban.worked" : "kanban.updated", { age: footWorked ? footAge : ageLabel(t, card.updatedAtMs, nowMs) })}>{footAge}</span> : null}
           {footMeta}
           <span className="spacer" />
           {/* The task's prototype review: highlighted while a round waits. */}
@@ -889,7 +901,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       ) : (
         <div className="foot">
           <span className="origin-chip">{t(`kanban.origin.${card.origin}`)}</span>
-          <span className="age num">{ageLabel(t, card.updatedAtMs, nowMs)}</span>
+          {footAge ? <span className="age num">{footAge}</span> : null}
           {footMeta}
         </div>
       )}

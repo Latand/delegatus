@@ -266,8 +266,8 @@ test("discarding in the guard is what drops speech still being transcribed", asy
   expect(closed).toBe(1);
 });
 
-async function mountReview(read: PrototypeReviewRead) {
-  globalThis.fetch = (async () => new Response(JSON.stringify(read), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+async function mountReview(read: PrototypeReviewRead, posts?: Record<string, unknown>[]) {
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => { if (init?.method === "POST") posts?.push(JSON.parse(String(init.body))); return new Response(JSON.stringify(read), { status: 200, headers: { "content-type": "application/json" } }); }) as unknown as typeof fetch;
   const host = dom.document.createElement("div") as unknown as HTMLElement;
   dom.document.body.appendChild(host as never);
   root = createRoot(host);
@@ -275,26 +275,12 @@ async function mountReview(read: PrototypeReviewRead) {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
 }
 
-test("the line over the picture parts the variant's name from the picture's caption with the viewer's dash", async () => {
+test("every gallery tile names its variant and caption, with no stage or strip", async () => {
   await mountReview(reviewRead());
-  const line = document.querySelector<HTMLElement>("[data-prototype-caption]")!;
-  expect(line.querySelector("[data-prototype-caption-name]")?.textContent).toBe("Compact");
-  expect(line.querySelector("[data-prototype-caption-text]")?.textContent).toBe("Board");
-  expect(line.textContent).toBe("1Compact — Board");
-});
-
-test("in the slider comparison the two labels stand outside the box that draws the pictures", async () => {
-  const shownMedia = (id: string) => ({ ...media(id), available: true, url: `/media/${id}.png` });
-  const read = reviewRead();
-  read.rounds[0]!.variants[0]!.frames = [{ image: shownMedia("c"), original: shownMedia("o"), caption: "Board" }];
-  await mountReview(read);
-  await act(async () => { document.querySelector<HTMLElement>('[data-prototype-pair-mode="slider"]')!.click(); });
-  const pair = document.querySelector<HTMLElement>('[data-prototype-pair="slider"]')!;
-  const labels = [...pair.querySelectorAll<HTMLElement>("[data-prototype-pair-label]")];
-  expect(labels.map((label) => [label.dataset.prototypePairLabel, label.textContent])).toEqual([["original", "Original"], ["changed", "Changed"]]);
-  const pictures = [...pair.querySelectorAll("img")];
-  expect(pictures).toHaveLength(2);
-  for (const label of labels) for (const picture of pictures) expect(picture.parentElement!.contains(label)).toBe(false);
+  expect(document.querySelector("[data-prototype-stage]")).toBeNull();
+  expect(document.querySelector("[data-prototype-strip]")).toBeNull();
+  expect([...document.querySelectorAll("[data-prototype-tile-caption]")].map(el => el.textContent)).toEqual(["Board", "Board"]);
+  expect(document.querySelector('[data-prototype-tile="1:f0"]')?.getAttribute("aria-label")).toContain("1 · Compact — Board");
 });
 
 for (const state of ["no-orchestrator", "failed", "uncertain"] as const) {
@@ -415,17 +401,17 @@ test("a round a later decision retired says so where a waiting round asks for a 
   expect(document.querySelector("[data-prototype-save]")).not.toBeNull();
 });
 
-test("a decided round opens on its first chosen variant, and the accent marks the chosen rows only, never the row merely on the stage", async () => {
+test("a decided round frames its first chosen variant and tints only chosen rows", async () => {
   const read = reviewRead({ chosen: [2], comment: "" });
   read.rounds[0]!.variants.push(variant(3, "Wide"));
   await mountReview(read);
-  expect(document.querySelector<HTMLElement>("[data-prototype-stage]")?.dataset.prototypeStage).toBe("2:f0");
+  expect(document.querySelector('[data-prototype-show="2"]')?.getAttribute("aria-current")).toBe("true");
   const row = (number: number) => document.querySelector<HTMLElement>(`li[data-prototype-variant="${number}"]`)!;
   const tinted = (number: number) => row(number).className.split(/\s+/).includes("bg-accent-soft") || /\bborder-accent/.test(row(number).className);
   expect([1, 2, 3].map(tinted)).toEqual([false, true, false]);
   /* Stepping onto an unchosen variant frames it, in no accent. */
   await act(async () => { document.querySelector<HTMLElement>('[data-prototype-show="1"]')!.click(); });
-  expect(document.querySelector<HTMLElement>("[data-prototype-stage]")?.dataset.prototypeStage).toBe("1:f0");
+  expect(document.querySelector('[data-prototype-show="1"]')?.getAttribute("aria-current")).toBe("true");
   expect([1, 2, 3].map(tinted)).toEqual([false, true, false]);
   expect(row(1).className).toContain("border-strong");
 });
@@ -471,7 +457,7 @@ describe("the full-screen viewer", () => {
   const scale = () => lightbox()!.querySelector(`button[aria-label="Reset zoom"]`)!.textContent;
   const press = (selector: string) => act(async () => { document.querySelector<HTMLElement>(selector)!.click(); });
   const key = (name: string) => act(async () => { dom.document.body.dispatchEvent(new dom.KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true })); });
-  const stage = () => document.querySelector<HTMLElement>("[data-prototype-stage]")?.dataset.prototypeStage;
+
   /* One finger at fit, from one point to another, as the phone sends it. */
   const swipe = async (from: [number, number], to: [number, number]) => {
     const target = visible()[0]!;
@@ -482,38 +468,51 @@ describe("the full-screen viewer", () => {
     await act(async () => { fire("pointerup", to); });
   };
 
-  test("a press on a frame opens it with its caption and its place, steps only through its variant's pictures, and closing leaves the stage on the picture stepped to", async () => {
+  test("tiles open the round gallery across variants and close back to the last shown tile", async () => {
     await mountReview(pairRead());
-    /* The plain frame is the variant's second slide: the stage walks to it first. */
-    await press('[data-prototype-step="next"]');
-    await press(`[data-prototype-zoom="${"p".repeat(64)}"]`);
+    await press('[data-prototype-tile="1:f1"]');
     expect(place()).toBe("2 / 3");
     expect(caption()).toContain("1 · Compact — Phone");
-    expect(visible().map((image) => image.getAttribute("src"))).toEqual(["/media/p.png"]);
-    /* The video is not a picture and the next variant is not this one: the walk stops here. */
-    await key("ArrowRight");
-    expect(place()).toBe("2 / 3");
-    await key("ArrowLeft");
-    expect(place()).toBe("1 / 3");
-    await key("ArrowLeft");
-    expect(place()).toBe("1 / 3");
-    expect(stage()).toBe("1:f0");
-    /* The close is a button of its own; the review stays open under it. */
-    await act(async () => { lightbox()!.querySelector<HTMLElement>('button[aria-label="Close"]')!.click(); });
+    await key("ArrowRight"); expect(place()).toBe("3 / 3");
+    expect(caption()).toContain("2 · Roomy — Roomy board");
+    await key("Escape");
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
     expect(lightbox()).toBeNull();
     expect(document.querySelector("[data-prototype-review]")).not.toBeNull();
-    expect(stage()).toBe("1:f0");
+    expect(document.activeElement?.getAttribute("data-prototype-tile")).toBe("2:f0");
+  });
+
+  test("identical frame URLs keep each tile's caption, position and return focus on desktop and phone", async () => {
+    for (const phone of [false, true]) {
+      phoneLayout = phone;
+      const read = reviewRead();
+      read.rounds[0]!.variants[0]!.frames[0]!.image = available("c");
+      read.rounds[0]!.variants[1]!.frames[0]!.image = read.rounds[0]!.variants[0]!.frames[0]!.image;
+      await mountReview(read);
+      await press('[data-prototype-tile="2:f0"]');
+      expect([place(), caption()?.includes("2 · Roomy — Board")]).toEqual(["2 / 2", true]);
+      await key("ArrowLeft");
+      expect([place(), caption()?.includes("1 · Compact — Board")]).toEqual(["1 / 2", true]);
+      await key("ArrowRight");
+      expect([place(), caption()?.includes("2 · Roomy — Board")]).toEqual(["2 / 2", true]);
+      await key("Escape");
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+      expect(document.activeElement?.getAttribute("data-prototype-tile")).toBe("2:f0");
+      await act(async () => root?.unmount());
+      root = null;
+      dom.document.body.innerHTML = "";
+    }
   });
 
   test("a pair is one picture: the switch puts the original in its place at the same zoom, and a step returns to the changed side unzoomed", async () => {
     await mountReview(pairRead());
     /* The desktop draws the pair side by side; a press on the original opens the pair showing it. */
-    await press(`[data-prototype-zoom="${"o".repeat(64)}"]`);
+    await press('[data-prototype-tile="1:f0"]');
     expect(place()).toBe("1 / 3");
-    expect(visible().map((image) => image.getAttribute("src"))).toEqual(["/media/o.png"]);
-    expect(caption()).toContain("Board · Original");
+    expect(visible().map((image) => image.getAttribute("src"))).toEqual(["/media/c.png"]);
+    expect(caption()).toContain("Board · Changed");
     const side = (name: "before" | "after") => lightbox()!.querySelector<HTMLElement>(`[data-lightbox-compare-side="${name}"]`)!;
-    expect([side("before").getAttribute("aria-pressed"), side("after").getAttribute("aria-pressed")]).toEqual(["true", "false"]);
+    expect([side("before").getAttribute("aria-pressed"), side("after").getAttribute("aria-pressed")]).toEqual(["false", "true"]);
     /* Both sides are loaded with the pair, so the switch shows the other at once. */
     expect(lightbox()!.querySelectorAll("img[data-lightbox-side]")).toHaveLength(2);
     await act(async () => { side("after").click(); });
@@ -529,52 +528,45 @@ describe("the full-screen viewer", () => {
     expect(place()).toBe("2 / 3");
     expect(scale()).toBe("100%");
     expect(lightbox()!.querySelector("[data-lightbox-compare]")).toBeNull();
-    expect(stage()).toBe("1:f1");
+
   });
 
   test("a finger swipes to the neighbouring picture and back, and a drag down closes the viewer and nothing else", async () => {
     await mountReview(pairRead());
-    await press('[data-prototype-fullsize]');
+    await press('[data-prototype-tile="1:f0"]');
     expect(place()).toBe("1 / 3");
     await swipe([300, 400], [180, 404]);
     expect(place()).toBe("2 / 3");
-    expect(stage()).toBe("1:f1");
-    /* The last picture of the variant: a further swipe stays. */
+
+    /* A further swipe reaches the next variant. */
     await swipe([300, 400], [180, 400]);
-    expect(place()).toBe("2 / 3");
+    expect(place()).toBe("3 / 3");
     await swipe([180, 400], [300, 400]);
-    expect(place()).toBe("1 / 3");
+    expect(place()).toBe("2 / 3");
     await swipe([300, 200], [300, 360]);
     expect(lightbox()).toBeNull();
     expect(document.querySelector("[data-prototype-review]")).not.toBeNull();
   });
 
-  test("on the phone the sheet takes the screen, a frame takes the stage's width at its own height, a pair is compared on one frame, and a press on it opens the viewer", async () => {
+  test("the phone gallery has square contained images, pairs in the Lightbox and a fixed footer", async () => {
     phoneLayout = true;
     await mountReview(pairRead());
     const sheet = document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review]")!;
     expect(sheet.className).toContain("h-full");
     expect(document.querySelector("[data-prototype-pair-mode]")).toBeNull();
-    expect(document.querySelector('[data-prototype-pair="slider"]')).not.toBeNull();
-    /* The canvas is as tall as what it draws: no height of its own, no inset. */
-    const canvas = document.querySelector<HTMLElement>("[data-prototype-canvas]")!;
-    expect(canvas.className).not.toMatch(/\bh-\[/);
-    expect(canvas.querySelector('[data-prototype-pair="slider"]')!.className).not.toContain("absolute");
-    await press("[data-prototype-pair-frame]");
+    expect(document.querySelector("[data-prototype-grid]")?.className).toContain("grid-cols-2");
+    expect(document.querySelector("[data-prototype-tile-square]")?.className).toContain("aspect-square");
+    expect(document.querySelector("[data-prototype-tile] img")?.className).toContain("object-contain");
+    await press('[data-prototype-tile="1:f0"]');
     expect(place()).toBe("1 / 3");
-    expect(visible().map((image) => image.getAttribute("src"))).toEqual(["/media/c.png"]);
+    expect(visible().map(image => image.getAttribute("src"))).toEqual(["/media/c.png"]);
+    expect(lightbox()!.querySelector("[data-lightbox-compare]")).not.toBeNull();
     await key("Escape");
-    expect(lightbox()).toBeNull();
-    await press('[data-prototype-step="next"]');
-    const plain = document.querySelector<HTMLImageElement>("[data-prototype-canvas] img")!;
-    expect(plain.className.split(/\s+/)).toEqual(expect.arrayContaining(["w-full", "h-auto"]));
-    /* The choice and the comment stay in the sheet's footer, outside what scrolls. */
     expect(sheet.querySelector("[data-mobile2-sheet-body] [data-prototype-save]")).toBeNull();
     expect(sheet.querySelector("[data-prototype-save]")).not.toBeNull();
-    /* A video plays in the stage at its whole width. */
-    await press('[data-prototype-step="next"]');
-    expect(document.querySelector<HTMLElement>("[data-prototype-video]")!.className).toContain("w-full");
+    expect(document.querySelector("[data-prototype-video]")).not.toBeNull();
   });
+
 });
 
 
@@ -995,4 +987,30 @@ describe("a saved decision answers at once", () => {
     expect(document.querySelector("[data-prototype-retry]")).toBeNull();
     await act(async () => { release(); await new Promise((resolve) => setTimeout(resolve, 20)); });
   });
+});
+
+
+test.each([false, true])("none fits clears choices, asks for corrections without posting, and sends explicit rejection (phone: %s)", async phone => {
+  phoneLayout = phone;
+  const posts: Record<string, unknown>[] = [];
+  const read = reviewRead();
+  await mountReview(read, posts);
+  const press = (selector: string) => act(async () => { document.querySelector<HTMLElement>(selector)!.click(); });
+  await press('[data-prototype-choose="1"]');
+  await press('[data-prototype-reject]');
+  expect(document.querySelector('[data-prototype-choose="1"]')?.getAttribute("aria-checked")).toBe("false");
+  expect(document.querySelector('[data-prototype-reject]')?.getAttribute("aria-checked")).toBe("true");
+  await press('[data-prototype-save]');
+  expect(posts).toHaveLength(0);
+  expect(document.querySelector('[data-prototype-reject-needs]')?.textContent).toBe("First write or dictate what to redo");
+  expect(document.activeElement).toBe(document.querySelector('[data-prototype-comment-field]'));
+  await act(async () => { dom.document.body.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "2", bubbles: true })); });
+  expect(document.querySelector('[data-prototype-reject]')?.getAttribute("aria-checked")).toBe("false");
+  await press('[data-prototype-reject]');
+  const field = document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!;
+  const props = (field as unknown as Record<string, { onChange: (event: { target: { value: string } }) => void }>)[Object.keys(field).find(key => key.startsWith("__reactProps$"))!]!;
+  await act(async () => { props.onChange({ target: { value: "Simplify every frame." } }); });
+  await press('[data-prototype-save]');
+  expect(posts).toHaveLength(1);
+  expect(posts[0]).toEqual({ reviewId: read.rounds[0]!.id, chosen: [], comment: "Simplify every frame.", reject: true });
 });

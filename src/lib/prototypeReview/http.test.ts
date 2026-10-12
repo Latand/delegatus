@@ -4,7 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { saveTasks, loadTasks } from "@/lib/tasks/store";
-import { publishPOST, reviewGET, reviewPOST, reviewReadPOST } from "./http";
+import { publishPOST as gatedPublishPOST, reviewGET, reviewPOST, reviewReadPOST } from "./http";
 import { viewerMcpBindings } from "@/lib/mcp/bindings";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { GET as imageGET } from "@/app/api/image/route";
@@ -15,7 +15,7 @@ import { prototypeReviewReplica } from "./model";
 import { isPrototypeReplica } from "./replica";
 import { encodeTask, decodeWireRow, isWireTask } from "@/lib/links/taskWire";
 import { injectStateWriteFaultForTests } from "@/lib/state/sqliteStateStore";
-import { roundDirectory, roundMedia } from "./store";
+import { roundDirectory, roundMedia, mutatePrototypeRound } from "./store";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import { prototypeWorld } from "./world";
 import { settlePrototypeDeliveriesForTests } from "./deliveryWorker";
@@ -28,6 +28,14 @@ import type { PublishPrototypeInput, PrototypeReviewRead } from "./types";
 import { MCP_TOOL_NAMES, TOOL_INPUT_SCHEMAS, createMcpToolService, MemoryMcpReceiptStore } from "@/lib/mcp/server";
 
 import { questions } from "./questionnaire.fixture";
+
+import { criticLane, criticAttempt } from "./criticGate.fixture";
+const reviewedWorld: PrototypeWorld = {
+  ...prototypeWorld, caller: () => ({ conversationId: "conversation_publisher", project: "project-a" }),
+  stage: () => ({ taskIds: ["task-prototype"], project: "project-a", source: { conversationId: "conversation_publisher", pipelineId: "prototype-lane", stageId: "publish", attempt: 1 } }),
+  pipeline: () => criticLane(),
+};
+const publishPOST = (req: NextRequest, world: PrototypeWorld = reviewedWorld) => gatedPublishPOST(req, world);
 
 const roots: string[] = [];
 const PNG = Buffer.from([137,80,78,71,13,10,26,10]);
@@ -113,10 +121,10 @@ test("unreadable directories, escaping links, spoofed types and count/size overf
   expect(loadTasks()[0]!.prototypeReviews).toBeUndefined();
 });
 test("a pipeline caller inherits its task; another project's caller cannot read or publish; workers cannot decide", async () => {
-  const world: PrototypeWorld = { caller: () => ({ conversationId: "conversation_worker",project: "project-a" }),
-    stage: () => ({ taskIds: ["task-prototype"],project: "project-a",source: { conversationId: "conversation_worker",pipelineId: "pipeline-layout",stageId: "design",attempt: 2 } }),orchestrator: () => null };
+  const world: PrototypeWorld = { ...reviewedWorld, caller: () => ({ conversationId: "conversation_worker",project: "project-a" }),
+    stage: () => ({ taskIds: ["task-prototype"],project: "project-a",source: { conversationId: "conversation_worker",pipelineId: "prototype-lane",stageId: "publish",attempt: 2 } }),orchestrator: () => null };
   const input = await fullInput("pipeline"); delete input.taskId;
-  const id = await publish(input,world); expect(loadTasks()[0]!.prototypeReviews![0]!.source.stageId).toBe("design");
+  const id = await publish(input,world); expect(loadTasks()[0]!.prototypeReviews![0]!.source.stageId).toBe("publish");
   expect((await reviewPOST(request("/review",{ reviewId: id,chosen: [1],comment: "Choose" }),"task-prototype",world)).status).toBe(403);
   const foreign = { ...world,caller: () => ({ conversationId: "conversation_other",project: "project-b" }) };
   expect((await reviewGET(request("/review"),"task-prototype",foreign)).status).toBe(403);
@@ -236,10 +244,10 @@ test("cross-origin reads and writes and spoofed worker decisions are refused", a
 
 test("MCP publication and decision reads forward caller identity through the Viewer routes", async () => {
   const input = await fullInput("mcp-production"); delete input.taskId;
-  const world: PrototypeWorld = { caller: req => {
+  const world: PrototypeWorld = { ...reviewedWorld, caller: req => {
     expect(req.headers.get(VIEWER_SPAWN_CAPABILITY_HEADER)).toBe("a".repeat(43));
     return { conversationId: "conversation_worker", project: "project-a" };
-  }, stage: () => ({ taskIds: ["task-prototype"], project: "project-a", source: { conversationId: "conversation_worker", stageId: "design" } }), orchestrator: () => null };
+  }, stage: () => ({ taskIds: ["task-prototype"], project: "project-a", source: { conversationId: "conversation_worker", pipelineId: "prototype-lane", stageId: "publish" } }), orchestrator: () => null };
   const prior = process.env[VIEWER_SPAWN_CAPABILITY_ENV];
   process.env[VIEWER_SPAWN_CAPABILITY_ENV] = "a".repeat(43);
   try {
@@ -261,10 +269,12 @@ test("MCP publication and decision reads forward caller identity through the Vie
 test("publication resolves the caller's task from the production pipeline store", async () => {
   const role = { roleId: "builder" as const, engine: "codex" as const, model: null, effort: null, access: "read-write" as const, promptScaffold: "Build" };
   const pipeline = buildPipeline({ id: "prototype-binding", task: "Layout", taskIds: ["task-prototype"], project: "project-a", repoDir: "/repo",
-    stages: [{ id: "design", kind: "run", role: { roleId: "builder" }, prompt: "Design", next: null, effectiveRole: role }], srcPath: null, srcConversationId: null, now: new Date().toISOString() });
-  pipeline.runs[0]!.attempts.push({ n: 1, state: "running", conversationId: "conversation_bound", launchId: "launch_bound", effectiveRole: role,
+    stages: [{ id: "critic", kind: "run", role: { roleId: "visual-critic" }, prompt: "Judge", next: "design", effectiveRole: { ...role, roleId: "visual-critic" } }, { id: "design", kind: "run", role: { roleId: "builder" }, prompt: "Design", next: null, effectiveRole: role }], srcPath: null, srcConversationId: null, now: new Date().toISOString() });
+  pipeline.runs.find(r => r.stageId === "design")!.attempts.push({ n: 1, state: "running", conversationId: "conversation_bound", launchId: "launch_bound", effectiveRole: role,
     sessionId: null, agentPath: null, paneId: null, flowId: null, expectedReviewHeadSha: null, reviewHeadSha: null,
     startedAt: new Date().toISOString(), completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null });
+  const criticRole = pipeline.stages.find(s => s.id === "critic")!.effectiveRole;
+  pipeline.runs.find(r => r.stageId === "critic")!.attempts = [{ ...pipeline.runs.find(r => r.stageId === "design")!.attempts[0]!, n: 1, state: "passed", effectiveRole: criticRole, conversationId: "conversation_critic", completedAt: new Date().toISOString(), output: "All frames inspected", verdict: { status: "pass", findings: [] } }];
   savePipelines([pipeline]);
   try {
     const input = await fullInput("production-binding"); delete input.taskId;
@@ -443,4 +453,79 @@ test("oversized questionnaire answers are refused before saving or dispatching",
   expect(result.status).toBe(400);
   expect((await result.json()).error).toContain("shorten the comment");
   expect(loadTasks()[0]!.prototypeReviews![0]!.decision).toBeUndefined();
+});
+
+
+test("publication gate refuses unreviewed variants without storing a round and names a fresh request id", async () => {
+  const lane = criticLane(); criticAttempt(lane).state = "running";
+  const response = await gatedPublishPOST(request("/api/prototype-reviews", await fullInput("unreviewed")), { ...reviewedWorld, pipeline: () => lane });
+  expect(response.status).toBe(409);
+  const body = await response.json();
+  expect(body.error).toContain("critic"); expect(body.error).toContain("running"); expect(body.error).toContain("new clientRequestId");
+  expect(loadTasks()[0]!.prototypeReviews).toBeUndefined();
+  const outside = await gatedPublishPOST(request("/api/prototype-reviews", await fullInput("outside")), prototypeWorld);
+  expect(outside.status).toBe(409);
+  expect((await outside.json()).error).toContain("not a stage");
+});
+test("publication refuses a builder pass after the critic stage is changed, until a visual-critic attempt passes", async () => {
+  const lane = criticLane();
+  criticAttempt(lane).effectiveRole = { ...lane.stages[1]!.effectiveRole, roleId: "builder" };
+  const refused = await gatedPublishPOST(request("/api/prototype-reviews", await fullInput("builder-pass")), { ...reviewedWorld, pipeline: () => lane });
+  expect(refused.status).toBe(409);
+  expect((await refused.json()).error).toContain("builder");
+  expect(loadTasks()[0]!.prototypeReviews).toBeUndefined();
+
+  lane.runs[0]!.attempts.push({ ...criticAttempt(lane), n: 2, state: "passed", effectiveRole: { ...lane.stages[1]!.effectiveRole }, verdict: { status: "pass" } });
+  const published = await gatedPublishPOST(request("/api/prototype-reviews", await fullInput("critic-pass")), { ...reviewedWorld, pipeline: () => lane });
+  expect(published.status).toBe(200);
+  expect((await published.json()).critic).toEqual({ stageId: "critic", attempt: 2, outcome: "passed" });
+});
+test("question-only forms bypass the gate and a reviewed publication stores local provenance", async () => {
+  const questionnaire = await gatedPublishPOST(request("/api/prototype-reviews", { clientRequestId: "only-questions", taskId: "task-prototype", title: "Questions", questions }), prototypeWorld);
+  expect(questionnaire.status).toBe(200);
+  const published = await publishPOST(request("/api/prototype-reviews", await fullInput("reviewed")));
+  expect(published.status).toBe(200);
+  expect((await published.json()).critic).toEqual({ stageId: "critic", attempt: 1, outcome: "passed" });
+  expect(loadTasks()[0]!.prototypeReviews!.at(-1)!.critic?.pipelineId).toBe("prototype-lane");
+  expect(prototypeReviewReplica(loadTasks()[0]!)!.rounds.at(-1)).not.toHaveProperty("critic");
+});
+test("rejection is durable, explicitly shaped, amendable and requires corrections", async () => {
+  const id = await publish(await fullInput("reject"));
+  for (const [body, error] of [
+    [{ reject: false, chosen: [], comment: "Redo" }, "invalid reject"],
+    [{ reject: true, chosen: [1], comment: "Redo" }, "a rejection chooses no variant"],
+    [{ reject: true, chosen: [], comment: "  " }, "write or dictate what to redo"],
+  ] as const) {
+    const response = await reviewPOST(request("/review", { reviewId: id, ...body }), "task-prototype", { ...prototypeWorld, orchestrator: () => null });
+    expect(response.status).toBe(400); expect((await response.json()).error).toContain(error);
+    expect(loadTasks()[0]!.prototypeReviews![0]!.decision).toBeUndefined();
+  }
+  const response = await reviewPOST(request("/review", { reviewId: id, reject: true, chosen: [], comment: "  Simplify every frame.  " }), "task-prototype", { ...prototypeWorld, orchestrator: () => null });
+  expect(response.status).toBe(200);
+  const decision = loadTasks()[0]!.prototypeReviews![0]!.decision!;
+  expect({ chosen: decision.chosen, rejected: decision.rejected, comment: decision.comment }).toEqual({ chosen: [], rejected: true, comment: "  Simplify every frame.  " });
+  expect(decision.delivery.text).toContain("Corrections:"); expect(decision.delivery.text).not.toContain("Chosen:");
+  const taskRead = await read(); expect(taskRead.rounds[0]!.decision?.rejected).toBe(true); expect(taskRead.summary?.decision?.rejected).toBe(true);
+  expect(isPrototypeReplica(prototypeReviewReplica(loadTasks()[0]!), "task-prototype", "project-a")).toBe(true);
+});
+test("a question-only round has no variants to reject", async () => {
+  const id = await publish({ clientRequestId: "question-rejection", taskId: "task-prototype", title: "Questions", questions });
+  const response = await reviewPOST(request("/review", { reviewId: id, reject: true, chosen: [], comment: "Redo", skip: true }), "task-prototype");
+  expect(response.status).toBe(400); expect((await response.json()).error).toContain("no variants to reject");
+});
+
+
+test("a dispatched choice amended to rejection gets a new message identity and explicit rejection text", async () => {
+  const id = await publish(await fullInput("choice-to-rejection"));
+  await reviewPOST(request("/review", { reviewId: id, chosen: [1], comment: "Use compact." }), "task-prototype");
+  mutatePrototypeRound("task-prototype", id, round => { round.decision!.delivery.dispatchedAt = "2026-10-12T10:00:00Z"; });
+  const key = loadTasks()[0]!.prototypeReviews![0]!.decision!.delivery.clientMessageId;
+  const rejected = await reviewPOST(request("/review", { reviewId: id, reject: true, chosen: [], comment: "Redo everything." }), "task-prototype");
+  expect(rejected.status).toBe(200);
+  const decision = loadTasks()[0]!.prototypeReviews![0]!.decision!;
+  expect(decision.rejected).toBe(true); expect(decision.revision).toBe(2);
+  expect(decision.delivery.clientMessageId).not.toBe(key); expect(decision.delivery.text).toContain("(amended)");
+  expect(decision.delivery.text).not.toContain("Chosen:");
+  const repeated = await reviewPOST(request("/review", { reviewId: id, reject: true, chosen: [], comment: "Redo everything." }), "task-prototype");
+  expect(repeated.status).toBe(200); expect(loadTasks()[0]!.prototypeReviews![0]!.decision!.revision).toBe(2);
 });

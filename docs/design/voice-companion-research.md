@@ -618,6 +618,9 @@ mounts the companion only when they say it is on; mounting starts no call. The
 backend is one `OfficialVoiceCompanionAdapter`, and there is no other: on is
 the real voice. The shell passes the same three surface values the fixture does
 (`hostSurfaces.ts`), so the product computes the placement the driver measures.
+*Note, 2026-10-12:* the phone now reads the settings too and, when they say on,
+mounts the floating head the operator asked for, which they can hide; see
+`docs/design/phone-voice-head-build.md`.
 The component reads the adapter through `createCompanionStore`
 (`src/hooks/useVoiceCompanion.ts`), which applies the hook's session rules
 outside React: a played-audio level sample moves the mouth and renders nothing.
@@ -655,7 +658,8 @@ together) and `unconfirmed` (a send whose outcome stays unknown) serve the
 driver only.
 
 **Tests at the seams.** `src/components/voiceCompanion/voiceCompanionProduct.dom.test.tsx`:
-the shell mounts nothing while off and reads nothing on a phone; turned on it
+the shell mounts nothing while off (since 2026-10-12 the phone reads the settings
+and mounts its head when on, `docs/design/phone-voice-head-build.md`); turned on it
 starts no call; Talk with no key, a reached cap or no project is refused in
 words and no session route is asked for anything; the key is sent once, cleared
 and absent from the page and its storage afterwards; an environment key closes

@@ -16,12 +16,13 @@ export function prototypeDeliveryPhase(delivery: PrototypeDecision["delivery"], 
 
 /** Only presentation metadata crosses installation boundaries. */
 export function prototypeRoundMetadata(round: PrototypeReviewRound): PrototypeRoundView {
-  const { publicationKey: _key, inputDigest: _digest, decision, variants, ...publicRound } = round;
+  const { publicationKey: _key, inputDigest: _digest, critic: _critic, decision, variants, ...publicRound } = round;
+  void _critic;
   const media = (item: PrototypeMedia) => ({ ...item, available: false, url: null });
   return { ...publicRound, variants: variants.map(v => ({ ...v,
     frames: v.frames.map(({ image, original, ...frame }) => ({ ...frame, image: media(image), ...(original ? { original: media(original) } : {}) })),
     videos: v.videos.map(video => ({ ...video, media: media(video.media) })) })),
-    ...(decision ? { decision: { chosen: decision.chosen, ...(decision.answers ? { answers: decision.answers } : {}), ...(decision.skipped ? { skipped: decision.skipped } : {}), comment: decision.comment, at: decision.at,
+    ...(decision ? { decision: { chosen: decision.chosen, ...(decision.rejected ? { rejected: decision.rejected } : {}), ...(decision.answers ? { answers: decision.answers } : {}), ...(decision.skipped ? { skipped: decision.skipped } : {}), comment: decision.comment, at: decision.at,
       delivery: { state: decision.delivery.state, retryable: ["failed", "uncertain", "no-orchestrator", "pending"].includes(decision.delivery.state) } } } : {}) };
 }
 export function prototypeReviewReplica(task: BoardTask): PrototypeReviewReplica | undefined {
@@ -31,7 +32,7 @@ export function prototypeReviewReplica(task: BoardTask): PrototypeReviewReplica 
 
 /** What the summary reads of a round: a stored round and its public view both carry it. */
 type SummaryRound = Pick<PrototypeReviewRound, "id" | "title" | "createdAt" | "questions"> & { variants: ReadonlyArray<{ number: number; name: string }>;
-  decision?: Pick<PrototypeDecision, "chosen" | "comment" | "at"> & { delivery: { state: PrototypeDeliveryState } } };
+  decision?: Pick<PrototypeDecision, "chosen" | "comment" | "at" | "rejected"> & { delivery: { state: PrototypeDeliveryState } } };
 /** Pure selectors: at most one waiting round per task, and only the newest.
     A newer round replaces every undecided round before it, and a decision
     retires every older undecided round: the operator has answered the task.
@@ -41,7 +42,7 @@ export function prototypeReviewSummary(rounds: readonly SummaryRound[]): Prototy
   if (!latest) return undefined;
   return { latestReviewId: latest.id, waitingReviewId: latest.decision ? null : latest.id, title: latest.title,
     rounds: rounds.length, createdAt: latest.createdAt, ...(latest.questions?.length ? { asks: "questions" as const } : {}),
-    ...(latest.decision ? { decision: { ...(latest.questions?.length ? { answered: true as const } : {}), chosen: latest.variants.filter(v => latest.decision!.chosen.includes(v.number)).map(v => ({ number: v.number, name: v.name })),
+    ...(latest.decision ? { decision: { ...(latest.decision.rejected ? { rejected: true as const } : {}), ...(latest.questions?.length ? { answered: true as const } : {}), chosen: latest.variants.filter(v => latest.decision!.chosen.includes(v.number)).map(v => ({ number: v.number, name: v.name })),
       comment: latest.decision.comment, at: latest.decision.at, delivery: latest.decision.delivery.state } } : {}) };
 }
 /** A summary built elsewhere (an older installation's replica, a held poll)
@@ -61,8 +62,19 @@ export function prototypeRoundsSuperseded(rounds: ReadonlyArray<{ id: string; de
   }
   return superseded;
 }
-export function prototypeReviewNotices(tasks: readonly BoardTask[], now = Date.now()): PrototypeReviewNotice[] {
-  return tasks.flatMap((task): PrototypeReviewNotice[] => {
+/** A seat's own unanswered question as a notice: no task to land on, so it
+    opens in the seat's «Рішення» column (docs/design/operator-decision-forms.md §2.2). */
+export function seatRoundNotice(round: Pick<PrototypeReviewRound, "id" | "project" | "title" | "createdAt" | "questions">): PrototypeReviewNotice {
+  return { id: `prototype:${round.id}`, project: round.project, taskId: null, reviewId: round.id, title: round.title,
+    ...(round.questions?.length ? { asks: "questions" as const } : {}), createdAt: round.createdAt,
+    target: { kind: "seat-decision", project: round.project, reviewId: round.id } };
+}
+/** Every round waiting on the operator: one per task, then each open seat
+    question the page's read carried beside the tasks. */
+export function prototypeReviewNotices(tasks: readonly BoardTask[], seatOrNow: readonly PrototypeReviewNotice[] | number = [], now = Date.now()): PrototypeReviewNotice[] {
+  const seat = typeof seatOrNow === "number" ? [] : seatOrNow;
+  if (typeof seatOrNow === "number") now = seatOrNow;
+  return [...tasks.flatMap((task): PrototypeReviewNotice[] => {
     const summary = currentPrototypeSummary(task.prototypeReview ?? prototypeReviewSummary(task.prototypeReviews ?? []) ?? task.prototypeReviewReplica?.summary);
     const reviewId = summary?.waitingReviewId;
     /* A decided latest round whose message keeps failing waits on the operator too: the row opens the review, where the retry is. */
@@ -81,7 +93,7 @@ export function prototypeReviewNotices(tasks: readonly BoardTask[], now = Date.n
     return [{ id: `prototype:${reviewId}`, project: task.project, taskId: task.id, reviewId, title: firstLineTitle(task.text), ...(roundTitle ? { roundTitle } : {}),
       ...(waiting?.questions?.length || summary.asks === "questions" ? { asks: "questions" as const } : {}),
       createdAt: summary.createdAt, target: { kind: "prototype-review" as const, taskId: task.id, reviewId } }];
-  });
+  }), ...seat];
 }
 
 export function prototypeWaitsOnOperator(summary: PrototypeReviewSummary | undefined): boolean {

@@ -3,6 +3,7 @@ import { loadTasksForList } from "@/lib/tasks/store";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { attemptPrototypeDelivery, prototypeDelivery, type PrototypeDeliveryPorts } from "./decision";
 import type { PrototypeDecision } from "./types";
+import { loadSeatRounds } from "./seatRounds";
 import { prototypeWorld } from "./world";
 
 /*
@@ -32,7 +33,7 @@ const RESCAN_MS = 60_000;
 
 interface Running { again: boolean; done: Promise<void> }
 interface WorkerState {
-  owed: Map<string, string>;
+  owed: Map<string, string | null>;
   due: Map<string, number>;
   running: Map<string, Running>;
   scannedAt: number;
@@ -56,7 +57,7 @@ export function prototypeDeliveryDelay(delivery: PrototypeDecision["delivery"]):
 }
 
 /** Runs attempts for one round until nothing new asked for another; one runner per round in this process. */
-function run(taskId: string, reviewId: string, ports: PrototypeDeliveryPorts): Promise<void> {
+function run(taskId: string | null, reviewId: string, ports: PrototypeDeliveryPorts): Promise<void> {
   const state = workerState();
   const held = state.running.get(reviewId);
   if (held) { held.again = true; return held.done; }
@@ -86,18 +87,21 @@ function run(taskId: string, reviewId: string, ports: PrototypeDeliveryPorts): P
 }
 
 /** A decision was recorded, changed or asked to be retried: attempt it now. */
-export function deliverPrototypeDecision(taskId: string, reviewId: string, ports: PrototypeDeliveryPorts = productionPorts()): void {
+export function deliverPrototypeDecision(taskId: string | null, reviewId: string, ports: PrototypeDeliveryPorts = productionPorts()): void {
   void run(taskId, reviewId, ports);
 }
 
 /** Every decision on this installation whose message is still owed. */
 function scan(state: WorkerState, now: number): void {
-  const owed = new Map<string, string>();
+  const owed = new Map<string, string | null>();
   for (const task of loadTasksForList()) {
     if (runsElsewhere(task)) continue;
     for (const round of task.prototypeReviews ?? []) {
       if (round.decision && round.decision.delivery.state !== "sent") owed.set(round.id, task.id);
     }
+  }
+  for (const round of loadSeatRounds()) {
+    if (round.decision && round.decision.delivery.state !== "sent") owed.set(round.id, null);
   }
   state.owed = owed;
   for (const reviewId of [...state.due.keys()]) if (!owed.has(reviewId)) state.due.delete(reviewId);

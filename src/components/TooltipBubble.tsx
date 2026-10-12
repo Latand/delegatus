@@ -28,7 +28,7 @@ export function tooltipPlacement(
   const fitsAbove = above >= EDGE;
   const fitsBelow = below + size.height <= viewport.height - EDGE;
   const top = side === "top" ? (fitsAbove || !fitsBelow ? above : below) : fitsBelow || !fitsAbove ? below : above;
-  return { left, top: Math.max(EDGE, top) };
+  return { left, top: Math.max(EDGE, Math.min(top, viewport.height - size.height - EDGE)) };
 }
 
 /**
@@ -61,7 +61,7 @@ export function TooltipBubble({
       setPosition(
         tooltipPlacement(
           anchor.getBoundingClientRect(),
-          { width: bubble.offsetWidth, height: bubble.offsetHeight },
+          { width: bubble.getBoundingClientRect().width, height: bubble.getBoundingClientRect().height },
           { width: window.innerWidth, height: window.innerHeight },
           side,
           align,

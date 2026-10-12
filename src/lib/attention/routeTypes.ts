@@ -41,7 +41,8 @@ export interface AttentionRouteMark {
 
 /** One prototype-review round: a decision form the operator answers. */
 export interface AttentionFormRef {
-  taskId: string;
+  /** A null task is the seat's own decision form. */
+  taskId: string | null;
   reviewId: string;
 }
 
@@ -60,7 +61,7 @@ export interface AttentionEscalationMark extends AttentionFormRef {
 const ROUND_ID_MAX = 200;
 
 /** An escalation as a caller sent it, checked; a string names what is wrong.
-    Only the round is named: the task it belongs to is resolved on the server. */
+    Only the round is named: its task, or its taskless seat, is resolved on the server. */
 export function parseEscalation(value: unknown): { reviewId: string } | string {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "escalate must be an object { reviewId }: publish the question with publish_prototype_review first";
   const raw = value as Record<string, unknown>;
@@ -74,7 +75,7 @@ export function parseEscalationMark(value: unknown): AttentionEscalationMark | n
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
   const round = parseEscalation(raw);
-  if (typeof round === "string" || typeof raw.taskId !== "string" || !raw.taskId) return null;
+  if (typeof round === "string" || (raw.taskId !== null && (typeof raw.taskId !== "string" || !raw.taskId))) return null;
   if (typeof raw.key !== "string" || !raw.key || typeof raw.at !== "string") return null;
   return { key: raw.key, at: raw.at, seat: typeof raw.seat === "string" ? raw.seat : null, taskId: raw.taskId, reviewId: round.reviewId };
 }

@@ -1921,6 +1921,7 @@ describe("MCP tool service", () => {
         "deployment_status",
         "resources",
         "conversation_migration",
+        "agent_fleet",
         "agent_activity",
         "lifecycle_events",
         "request_attention",
@@ -1947,7 +1948,7 @@ describe("MCP tool service", () => {
         "telegram_bot_messages",
         "issue_report",
       ]);
-      const optionalReadKeys = new Set(["backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review"]);
+      const optionalReadKeys = new Set(["backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review", "agent_fleet"]);
       for (const tool of listed.tools) {
         if (optionalReadKeys.has(tool.name)) expect(tool.inputSchema.required ?? []).not.toContain("clientRequestId");
         else expect(tool.inputSchema.required).toContain("clientRequestId");
@@ -3122,3 +3123,22 @@ for (const tool of ["send_message", "spawn_agent"] as const) {
     });
   }
 }
+
+
+test("prototype publication tells callers about the critic gate and fresh refusal retries", async () => {
+  const bindings = Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, async () => ({})])) as unknown as McpToolBindings;
+  const server = createViewerMcpServer(createMcpToolService(bindings, new MemoryMcpReceiptStore()));
+  const client = new Client({ name: "prototype-gate-test", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const tool = (await client.listTools()).tools.find(entry => entry.name === "publish_prototype_review")!;
+    expect(tool.description).toContain("visual-critic pass or a passed fix after its last fail");
+    expect(tool.description).toContain("proto-fix (2 rounds)");
+    expect(tool.description).toContain("new clientRequestId");
+    expect(tool.description).toContain("questions without variants");
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});

@@ -10,7 +10,7 @@ import { createTask, type CreateTaskInput } from "./taskApi";
 
 /**
  * The project's task draft, wired to one create: what every surface that makes a task from the shared composer
- * does (the Tasks panel, the kanban board's new-task card).
+ * does (the kanban board's new-task card).
  *
  * The text (or a dictated override), the deadline, the staged images and the draft's request id go to the task
  * route, so a double press or a retry after a lost answer resolves to one task. Empty text, a busy composer or a

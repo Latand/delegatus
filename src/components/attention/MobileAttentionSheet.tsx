@@ -405,11 +405,11 @@ function PrototypeRow({ notice, age, onOpen }: { notice: PrototypeReviewNotice; 
   const Tag = onOpen ? "button" : "div";
   return (
     <Tag
-      {...(onOpen ? { type: "button" as const, onClick: onOpen, "aria-label": t(undelivered ? "proto.notice.undeliveredAria" : notice.asks === "questions" ? "proto.notice.answerAria" : "proto.notice.openAria", { title: notice.title }) } : {})}
+      {...(onOpen ? { type: "button" as const, onClick: onOpen, "aria-label": t(undelivered ? "proto.notice.undeliveredAria" : notice.taskId === null ? "decisions.expandAria" : notice.asks === "questions" ? "proto.notice.answerAria" : "proto.notice.openAria", { title: notice.title }) } : {})}
       data-needs-you-row={notice.id}
       data-attention-row={notice.id}
       data-mobile2-row="prototype"
-      data-attention-prototype={notice.taskId}
+      data-attention-prototype={notice.taskId ?? notice.reviewId}
       className={ROW}
     >
       {/* Built as a role row: the mark and its word over the title. */}

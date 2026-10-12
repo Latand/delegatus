@@ -300,3 +300,63 @@ export const VOICE_COMPANION_CSS = `
   .vc, .vc * { animation: none !important; transition: none !important; }
 }
 `;
+
+/*
+ * The phone's head (docs/design/phone-voice-head-build.md, variant 1), over the rules above: rendered by
+ * `PhoneVoiceCompanion` after them, so it inherits the ring, the character and the bubble and changes only what
+ * the phone draws differently. A 52 px round head with a dot for its state; one opaque bubble of two lines beside
+ * it, as tall as the head; the cleared page under them, which takes the touch; a popover of 44 px rows.
+ */
+export const PHONE_VOICE_CSS = `
+.pvc .pvc-head {
+  inset: auto; left: 0; top: 0; width: 52px; height: 52px; border-radius: 50%;
+  transition: transform 260ms var(--vc-ease), box-shadow 200ms ease-out; animation: none;
+}
+.pvc[data-dragging] .pvc-head { transition: none; box-shadow: 0 12px 26px rgb(20 20 30 / 0.28); cursor: grabbing; }
+.pvc-head:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.pvc-dot { position: absolute; right: -1px; bottom: -1px; width: 13px; height: 13px; border-radius: 50%; background: var(--vc-ring); border: 2px solid var(--color-raised); }
+/* No call: a hollow solid ring and a solid outline. Nothing dashed and nothing dimmed, so nothing reads as work in progress. */
+.pvc[data-phase="offline"]:not([data-starting]) .pvc-dot { background: var(--color-raised); border: 2px solid var(--color-muted); box-shadow: 0 0 0 1px var(--color-raised); }
+.pvc[data-phase="offline"] .pvc-head { border-style: solid; border-color: color-mix(in srgb, var(--color-muted) 60%, var(--color-border)); }
+.pvc[data-phase="offline"] .vc-char { filter: none; opacity: 1; }
+.pvc[data-phase="offline"] .vc-char-body, .pvc[data-phase="offline"] .vc-char-eyes { animation: none; }
+.pvc[data-phase="offline"] .pvc-status .vc-dot { border: 1.5px solid var(--color-muted); }
+.pvc[data-muted] .pvc-dot, .pvc[data-muted] .pvc-status .vc-dot { background: var(--color-danger); }
+/* The side safe areas of a landscape phone, read as this probe's width (left) and height (right): the root is a 0 px box. */
+.pvc-probe { position: absolute; left: 0; top: 0; width: env(safe-area-inset-left, 0px); height: env(safe-area-inset-right, 0px); visibility: hidden; pointer-events: none; }
+.pvc .pvc-lane { clip-path: none; display: flex; flex-direction: column; justify-content: center; pointer-events: none; }
+.pvc .pvc-lane[data-side="left"] { align-items: flex-end; }
+.pvc .pvc-lane[data-side="right"] { align-items: flex-start; }
+.pvc .pvc-lane > * { max-width: min(280px, 100%); }
+/* Two lines stand exactly as tall as the head, and the shadow stays inside the 8 px kept above the composer's line. */
+.pvc .pvc-lane .vc-bubble { padding: 5px 12px; box-shadow: var(--shadow-1); pointer-events: none; animation: pvc-out 180ms var(--vc-ease); }
+.pvc .pvc-lane[data-side="left"] .vc-bubble { transform-origin: 100% 50%; }
+.pvc .pvc-lane[data-side="right"] .vc-bubble { transform-origin: 0 50%; }
+@keyframes pvc-out { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: none; } }
+.pvc .pvc-lane .vc-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+/* Over a phone's page a bubble is opaque: the rows under glass read through it. */
+.pvc .vc-bubble[data-speaker="companion"], .pvc .vc-bubble[data-speaker="companion"][data-newest]::after { background: var(--color-raised); backdrop-filter: none; -webkit-backdrop-filter: none; }
+.pvc .vc-lane[data-side="left"] .vc-bubble[data-newest]::after, .pvc .vc-lane[data-side="right"] .vc-bubble[data-newest]::after { bottom: calc(50% - 5px); }
+/* What the head and its words stand on where they lie over the page: the pane's own colour, no border, no shadow. */
+.pvc-plate { position: absolute; pointer-events: auto; }
+.pvc-pop {
+  position: absolute; width: 236px; padding: 4px 0 6px; pointer-events: auto;
+  background: var(--color-raised); color: var(--color-primary); border: 1px solid var(--color-border); border-radius: 14px; box-shadow: var(--shadow-2);
+}
+.pvc-status { display: flex; align-items: center; gap: 7px; margin: 0; padding: 8px 14px 6px; font-size: 12px; line-height: 16px; color: var(--color-secondary); }
+.pvc-status b { font-weight: 600; color: var(--color-primary); }
+.pvc-status .vc-dot { width: 8px; height: 8px; }
+.pvc-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 0 14px; border: 0; background: none; color: var(--color-primary);
+  font: 600 14px/20px var(--font-sans); text-align: left; cursor: pointer;
+}
+.pvc-row:active { background: var(--color-sunken); }
+.pvc-row:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.pvc-row:disabled { opacity: 0.45; cursor: default; }
+.pvc-row svg { flex: none; color: var(--color-secondary); }
+.pvc-row[data-tone="danger"], .pvc-row[data-tone="danger"] svg { color: var(--color-danger); }
+.pvc-row[data-tone="primary"] { margin: 2px 10px 4px; width: calc(100% - 20px); justify-content: center; border-radius: 999px; background: var(--color-primary); color: var(--color-raised); }
+.pvc-row[data-tone="primary"] svg { color: inherit; }
+.pvc-slot { position: absolute; width: 52px; height: 52px; border-radius: 50%; border: 2px dashed color-mix(in srgb, var(--color-accent) 70%, transparent); background: color-mix(in srgb, var(--color-accent) 10%, transparent); pointer-events: none; }
+.pvc-slot[data-near] { border-style: solid; background: color-mix(in srgb, var(--color-accent) 24%, transparent); }
+`;

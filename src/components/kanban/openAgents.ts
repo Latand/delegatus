@@ -1,6 +1,6 @@
 import type { TFunction } from "@/lib/i18n";
 import type { FrameRole } from "@/lib/roleFrames";
-import { mobileRowState, type MobileRowDot, type MobileRowStateKey } from "@/components/mobile/mobileBoardModel";
+import { mobileRowState, type MobileRowDot, type MobileRowState, type MobileRowStateKey } from "@/components/mobile/mobileBoardModel";
 
 import { readerFrameRole, readerNames, type ReaderView } from "./KanbanReaders";
 
@@ -20,6 +20,7 @@ export interface OpenAgent {
   tone: MobileRowDot;
   live: boolean;
   state: MobileRowStateKey;
+  activity?: MobileRowState["activity"];
 }
 
 export function openAgents(t: TFunction, views: readonly ReaderView[], open: readonly { key: string }[], now: number): OpenAgent[] {
@@ -37,6 +38,7 @@ export function openAgents(t: TFunction, views: readonly ReaderView[], open: rea
       tone: row.dot,
       live: row.key === "working",
       state: row.key,
+      activity: row.activity,
     }];
   });
 }
