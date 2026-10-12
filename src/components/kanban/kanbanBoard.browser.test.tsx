@@ -28814,13 +28814,7 @@ describe("prototype review: none fits and the tile gallery", () => {
         await context.addInitScript(language => localStorage.setItem("llv_lang", language), locale);
         const page = await context.newPage();
         await page.route("**/api/operator/settings", route => route.fulfill({ json: { language: locale } }));
-        await page.route("**/api/tasks/t-search/prototypes*", async route => {
-          const response = await route.fetch();
-          const body = await response.json() as { rounds: Array<{ variants: Array<{ frames: Array<{ image: { url: string } }> }> }> };
-          body.rounds[0]!.variants[1]!.frames[0]!.image.url = body.rounds[0]!.variants[0]!.frames[0]!.image.url;
-          await route.fulfill({ response, json: body });
-        });
-        await page.goto(`${server.base}?proto=1&lang=${locale}`);
+        await page.goto(`${server.base}?proto=1&duplicate-frames=1&lang=${locale}`);
         await page.evaluate(theme => { document.documentElement.setAttribute("data-theme", theme); localStorage.setItem("llv-theme", theme); }, theme);
         await page.locator('[data-prototype-button="t-search"], [data-phone-card-prototype-button="t-search"]').first().waitFor();
         await page.locator(size.phone ? '[data-phone-card-prototype-button="t-search"]' : '[data-prototype-button="t-search"]').click();
@@ -28862,6 +28856,8 @@ describe("prototype review: none fits and the tile gallery", () => {
         const returned = await tile.evaluate(el => { const box = el.getBoundingClientRect(); const body = el.closest<HTMLElement>("[data-mobile2-sheet-body]"); const scroll = (body ?? el.closest<HTMLElement>("[data-prototype-gallery]")!).getBoundingClientRect(); const context = body?.querySelector<HTMLElement>("[data-prototype-context]")?.getBoundingClientRect(); return box.top >= Math.max(scroll.top, context?.bottom ?? scroll.top) - .5 && box.bottom <= scroll.bottom + .5; });
         expect(returned).toBe(true);
         const duplicateTile = page.locator('[data-prototype-tile="2:f0"]');
+        const duplicateSrc = await duplicateTile.locator("img").getAttribute("src");
+        expect(duplicateSrc).toBe(src);
         await duplicateTile.click(); await page.locator('[data-lightbox-position]').waitFor();
         const duplicateOpened = { position: await page.locator('[data-lightbox-position]').innerText(), caption: await page.locator('[data-lightbox-caption]').innerText() };
         expect(duplicateOpened.position).toBe("4 / 48");

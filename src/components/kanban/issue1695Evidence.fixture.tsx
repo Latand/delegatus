@@ -2852,6 +2852,13 @@ if (PROTO) {
       { image: image(390, 760, 330, "cards · 390", true), caption: L("results, phone", "результати, телефон"), width: 390, lang: "uk" },
     ], videos: [{ media: { id: "v1", mime: "video/webm", bytes: 210_000, available: !gone, url: gone ? null : "/proto-video.webm" }, caption: L("hover and keyboard walk", "наведення і прохід клавіатурою") }] },
   ])];
+  /* `&duplicate-frames=1` gives the gallery identity regression two distinct
+     frames that reference the same media, as can happen when a review reuses
+     one image for multiple views. */
+  if (params.has("duplicate-frames")) {
+    const variants = protoRounds["t-search"]![0]!.variants;
+    variants[1]!.frames[0]!.image = variants[0]!.frames[0]!.image;
+  }
   protoRounds["t-upload"] = [round("r-upload", "t-upload", L("Upload progress sheet", "Панель перебігу завантаження"), 9 * MIN, [
     { number: 1, name: L("Progress under the attached file with speed, size and a stop", "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп"), description: L("A new design: the bar sits under the attached file.\nNothing existing changes.", "Новий дизайн: смуга стоїть під прикріпленим файлом.\nНаявне не змінюється."), videos: [], frames: [
       { image: image(960, 600, 190, "upload · running"), caption: L("uploading", "завантажується"), width: 1440, lang: "en" },
