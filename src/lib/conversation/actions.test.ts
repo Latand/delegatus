@@ -413,3 +413,54 @@ test("provider recovery authority cannot fall through to a legacy kill", async (
   expect(await applyConversationAction({ conversationId: "conversation_fixture", transcriptPath: "/sessions/current.jsonl",
     action: "kill", providerRecovery })).toMatchObject({ status: 400 });
 });
+
+/* docs/design/attention-auto-resolve.md, acceptance 3: the seat answers a
+   worker's native question on the exact request its wake named; the answer
+   reaches that conversation's structured host as the question card's own
+   resolution, and a question that moved on is refused before anything is sent. */
+test("answer reaches the asking conversation's pending question as its chosen labels, and only that question", async () => {
+  const worker = conversation("conversation_worker", ["/sessions/worker.jsonl"]);
+  const controls: Array<Record<string, unknown>> = [];
+  const pending = {
+    kind: "question" as const, toolUseId: "toolu_roll", transcriptPath: "/sessions/worker.jsonl", pid: 1, paneTarget: null, askedAt: "2026-10-11T11:50:00.000Z",
+    questions: [{ question: "Roll out now?", header: "Rollout", multiSelect: false, options: [
+      { label: "Tonight", description: "", recommended: true }, { label: "Tomorrow", description: "", recommended: false },
+    ] }],
+  };
+  const dependencies = (structured = true) => ({
+    registry: () => ({
+      conversation: () => worker,
+      conversationForPath: () => worker,
+      canonicalConversationId: (id: string) => id,
+      readOnlySnapshot: () => ({ lineageEdges: {} }),
+    } as never),
+    structuredEnabled: () => structured,
+    dispatchStructuredControl: async (request: Record<string, unknown>) => {
+      controls.push(request);
+      return { status: 200 as const, body: { ok: true as const, structured: true as const, target: worker.id, operationId: "op-1", receipt: { operationId: "op-1", status: "answered" } } };
+    },
+    interruptConversation: async () => ({ ok: true as const, target: "%1" }),
+    killConversation: async () => ({ ok: true as const, target: "%1" }),
+    resumeConversation: async () => ({ ok: true as const, target: "%1" }),
+    compactConversation: async () => ({ ok: true as const, target: "%1" }),
+    answerDialogKey: async () => ({ ok: true as const, target: "%1" }),
+    pendingQuestion: async () => pending,
+  });
+  const answer = (extra: Record<string, unknown>, structured = true) => applyConversationAction({
+    operationId: "op-1", conversationId: worker.id, transcriptPath: "", action: "answer", actor: { kind: "agent", conversationId: "conversation_seat" }, ...extra,
+  }, dependencies(structured) as never);
+
+  expect(await answer({ requestId: "toolu_roll", answer: { answers: [2] } })).toMatchObject({ status: 200, body: { ok: true, target: worker.id } });
+  expect(controls).toEqual([expect.objectContaining({
+    path: "/sessions/worker.jsonl", conversationId: worker.id, action: "answer", operationId: "op-1", requestId: "toolu_roll",
+    resolution: { behavior: "allow", updatedInput: { answers: { "Roll out now?": "Tomorrow" } } },
+  })]);
+
+  /* A newer question replaced the one the seat read; no id at all; an option
+     that does not exist; a terminal-hosted conversation. */
+  expect(await answer({ requestId: "toolu_older", answer: { answers: [1] } })).toMatchObject({ status: 409 });
+  expect(await answer({ answer: { answers: [1] } })).toMatchObject({ status: 400 });
+  expect(await answer({ requestId: "toolu_roll", answer: { answers: [3] } })).toMatchObject({ status: 400 });
+  expect(await answer({ requestId: "toolu_roll", answer: { answers: [1] } }, false)).toMatchObject({ status: 409 });
+  expect(controls).toHaveLength(1);
+});

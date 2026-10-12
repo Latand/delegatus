@@ -734,7 +734,7 @@ function ownLaneLabel(lane: SeatTickOwnLaneInput): string {
     const review = lane.review;
     const short = (sha: string | null | undefined) => sha ? sha.slice(0, 12) : "unknown";
     const verdict = review ? `${review.stageId} said ${review.lastVerdict} with ${review.findings} finding${review.findings === 1 ? "" : "s"} on ${short(review.reviewedHead)}; ` : "";
-    return `${lane.title} — lane you launched: last review failed, head unreviewed: ${verdict}current head ${short(review?.currentHead)} was never reviewed. pipeline_action continue-review with addRounds resumes it`;
+    return `${lane.title} — lane you launched: last review failed, head unreviewed: ${verdict}current head ${short(review?.currentHead)} was never reviewed. The review budget is fixed: accept the head with pipeline_action accept-head when the findings are fixed, or ask the operator with publish_prototype_review and dismiss_attention escalate {reviewId}`;
   }
   const settled = lane.settled === "completed"
     ? "completed"
@@ -1307,6 +1307,15 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       candidates.push({ kind: "lane-event", detail: `${first.type} since the last delivered wake${more}` });
     }
   }
+  /* A worker or a stage waiting on the seat (docs/design/attention-auto-resolve.md)
+     is off the operator's list because the seat answers it first, so it is
+     due on the next check like a settled child: each wait is shown once per
+     seat, and the delivered-item ledger keeps it from repeating. */
+  const asks = input.workerAsks ?? [];
+  if (asks.length > 0) {
+    const more = asks.length > 1 ? ` and ${asks.length - 1} more` : "";
+    candidates.push({ kind: "worker-ask", detail: `a worker or stage waits on you first and is off the operator's list${more}: answer each where it asked, or ask the operator in a decision form (publish_prototype_review) and dismiss_attention escalate {reviewId}` });
+  }
   // A newly owed outcome is due on the next check, including after a recent
   // interval wake. Delivery accounting still discharges it exactly once.
   if (harvest.length > 0) {
@@ -1393,6 +1402,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       case "unmerged-pr": return item.kind === "pull-request";
       case "unstarted-task": return item.kind === "task";
       case "permission-request": return item.kind === "permission";
+      case "worker-ask": return item.kind === "ask";
       case "disk-pressure": return item.kind === "signal" && item.id === "disk-space";
       case "lane-event": return item.mergeEventSeq !== undefined;
       case "own-lane-settled": return !!item.laneAnnouncement;
@@ -1401,7 +1411,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       default: return false;
     }
   });
-  const versionedReasons = new Set<SeatTickWakeReasonKind>(["unmerged-pr", "unstarted-task", "own-lane-settled", "stalled", "interval", "permission-request", "disk-pressure"]);
+  const versionedReasons = new Set<SeatTickWakeReasonKind>(["unmerged-pr", "unstarted-task", "own-lane-settled", "stalled", "interval", "permission-request", "worker-ask", "disk-pressure"]);
   const cards: SeatTickCard[] = [];
   const reasons: SeatTickWakeReason[] = [];
   let guardHeld = 0;
@@ -1851,6 +1861,11 @@ function wakeItems(context: {
   for (const pipeline of seatPausedLanes(input)) {
     items.push({ kind: "pipeline", id: pipeline.id, label: `${pipeline.title} — paused by you; resume it with pipeline_action resume once what you paused it for is done` });
   }
+  /* A wait routed to the seat holds a worker up and is on nobody else's list,
+     so it comes before the seat's own news. */
+  for (const ask of input.workerAsks ?? []) {
+    items.push({ kind: "ask", id: ask.id, askKey: ask.key, label: ask.label.replace(/\s+/g, " ") });
+  }
   /* Named, not merely counted (#1289). The twelve hours were spent because the
      seat had no way to know a pull request was waiting; a wake that says one is
      and leaves the seat to rediscover which would have cost most of the same
@@ -2201,6 +2216,12 @@ function childrenShown(before: readonly string[], shown: readonly string[]): str
  * equal requests, and this projection has no durable request identity. */
 function agendaVersion(item: SeatTickItem, input: SeatTickCheckInput): string | undefined {
   if (item.mergeEventSeq !== undefined) return mergeEventVersion(item.mergeEventSeq);
+  /* A routed wait is shown once per wait and per seat: a successor seat was
+     never shown what its predecessor was. */
+  if (item.kind === "ask") {
+    const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+    return `${digest(["ask", item.id])}@${digest([item.askKey ?? item.label, input.seat?.conversationId ?? null])}`;
+  }
   if (!["pipeline", "provisioning", "task", "pull-request", "signal"].includes(item.kind)) return undefined;
   const kind = item.kind === "provisioning" ? "pipeline" : item.kind;
   const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");

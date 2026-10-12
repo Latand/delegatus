@@ -71,8 +71,8 @@ export function logQuotaEvent(fields: {
   /** Which reader produced the observation: the controller's periodic probe,
       an operator's per-account re-read (#1418), the re-read after a
       redeemed reset credit (#1373), or spawn admission's re-read of an
-      exhaustion that may be history (task 8feee404). */
-  probePhase: "account-rate-limits" | "operator-refresh" | "reset-credit-redeem" | "spawn-admission";
+      exhaustion that may be history (task 8feee404), or login completion. */
+  probePhase: "account-rate-limits" | "operator-refresh" | "reset-credit-redeem" | "spawn-admission" | "login-complete";
   provenance: "live" | "transcript" | "cache" | "unavailable";
   reasonCode: string | null;
 }): void {
