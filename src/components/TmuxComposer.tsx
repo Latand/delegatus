@@ -4220,6 +4220,16 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           if (receipt && (receipt.conversationId !== cardId || receipt.idempotencyKey !== clientMessageId
             || (result.operationId && result.operationId !== receipt.operationId))) return null;
           if (receipt && (receiptIsAdmitted(receipt.status) || receiptIsTerminal(receipt.status))) {
+            /* The timely path stores this server-created file metadata before
+               receipt settlement. A response beyond the admission deadline
+               reaches this callback instead, so retain it only after the
+               receipt has proved the same conversation, key and operation. */
+            if (outboxId && result.textAttachment && result.error !== "receipt-identity-mismatch") {
+              updateOutbox(cardId, outboxId, {
+                textAttachment: result.textAttachment,
+                echoText: result.textAttachment.text,
+              });
+            }
             return isMessageReceipt(receipt)
               && !receipt.text && payloadText.trim()
               ? { ...receipt, text: payloadText.trim() }
