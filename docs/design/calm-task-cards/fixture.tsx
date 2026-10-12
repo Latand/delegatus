@@ -6,7 +6,7 @@
  * they render today («original»: `KanbanCard` on the desktop, `MobileKanban`
  * and `MobileTaskScreen` on the phone) or as one of the three variants.
  *
- *   ?frame=board|open&variant=0..3&w=1440|390
+ *   ?frame=board|open&variant=0..3&w=1440|1000|390
  */
 import { createRoot } from "react-dom/client";
 import type { ReactNode } from "react";
@@ -144,7 +144,6 @@ function variantCard(card: KanbanCardModel, open: boolean, index: number): React
       popOpen={!open && card.task?.id === POPOVER}
       detailsOpen={open && first}
       historyOpen={open && card.task?.id === "t-node-modules"}
-      menuOpen={open && first}
     />
   );
 }

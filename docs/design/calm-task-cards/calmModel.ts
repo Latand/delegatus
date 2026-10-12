@@ -107,9 +107,22 @@ export function calmLane(t: TFunction, pipeline: Pipeline, siblings: readonly Pi
   const detail = cause.startsWith("merge") ? pipeline.merge?.reason ?? null : attempt?.error ?? pipeline.stateDetail ?? null;
   return {
     pipeline, cause, owner: causeOwner(raw, facts), stage, stageName: stage ? nameOf(stage) : "",
-    since: laneSince(pipeline), answers: pipelineAnswers(pipeline, nameOf), pr: facts.pr, detail: detail ? detail.split(" · Viewer publication")[0]!.trim() : null,
+    since: laneSince(pipeline), answers: pipelineAnswers(pipeline, nameOf), pr: facts.pr, detail: detail ? tidyDetail(detail) : null,
     ask: facts.escalated,
   };
+}
+
+/* A file path, with or without a line number: nothing the operator reads. */
+const PATH = /(?:\$HOME|~\/|\b(?:scripts|src|docs|bin)\/)\S*|\b[\w./-]+\.\w+:\d+/;
+
+/** The record's own words about a stop, as «Details» shows them: whole lines
+    and whole sentences only. The extract cuts long agent texts, so a sentence
+    that ends in the cut is dropped, and so is one that names a file; the full
+    record stays one tap away in the stage's conversation. */
+export function tidyDetail(raw: string): string {
+  const lines = raw.split(" · Viewer publication")[0]!.split("\n").map((line) =>
+    line.split(/(?<=[.!?])\s+/).filter((sentence) => !sentence.trimEnd().endsWith("…") && !PATH.test(sentence)).join(" ").trim());
+  return lines.filter((line) => line && !/^Require stack:/.test(line)).join("\n");
 }
 
 /** The lanes a card speaks about, the one that matters first. */
@@ -137,7 +150,11 @@ const UK: Copy = {
   "owner.seat": "Оркестратор розбирається",
   "owner.you": "Потрібна ваша відповідь",
   "owner.done": "Готово",
-  "since": "з {time}",
+  "pop.working": "Працює вже {age}",
+  "pop.waiting": "Чекає в черзі вже {age}",
+  "pop.seat": "Оркестратор розбирається вже {age}",
+  "pop.you": "Чекає вашої відповіді вже {age}",
+  "pop.done": "Готово {age} тому",
   "line.running": "{stage} працює",
   "line.done": "Готово",
   "line.paused": "На паузі",
@@ -182,7 +199,7 @@ const UK: Copy = {
   "seat.commit-other": "Читає помилку, виправляє середовище й повторює коміт.",
   "seat.publish": "Зливає свіжий main і повторює пуш.",
   "seat.transport": "Запускає етап наново з тим самим входом.",
-  "seat.transport-merged": "PR #{pr} уже в main, повтор рев'ю нічого не дасть. Оркестратор закриває лінію і позначає задачу виконаною.",
+  "seat.transport-merged": "PR #{pr} уже в main, повтор рев'ю нічого не дасть. Закриває лінію і позначає задачу виконаною.",
   "seat.auth": "Переводить етап на акаунт, що пройшов вхід. Якщо таких немає, попросить вас увійти.",
   "seat.review-budget": "Звіряє зауваження з правилом проєкту: N раундів, виправити останнє, мерджити.",
   "seat.review-stop": "Звіряє зауваження з правилом проєкту: N раундів, виправити останнє, мерджити.",
@@ -190,8 +207,8 @@ const UK: Copy = {
   "seat.question-you": "Сам відповісти не може: ці дані є лише у вас. Щойно ви надішлете вивід, діагностика продовжиться.",
   "seat.merge-conflict": "Запускає лінію оновлення: злити main, розв'язати конфлікт, одне рев'ю, мердж.",
   "seat.merge-refreshing": "Уже запустив лінію оновлення: вона зливає main і розв'язує конфлікт.",
-  "seat.merge-closed": "Зміни прийшли в main іншим PR. Оркестратор знімає це чекання — робити нічого.",
-  "seat.merge-no-pr": "Лінія лише писала документ; оркестратор знімає чекання мерджу.",
+  "seat.merge-closed": "Зміни прийшли в main іншим PR. Знімає це чекання, робити нічого.",
+  "seat.merge-no-pr": "Лінія лише писала документ. Знімає чекання мерджу.",
   "seat.merge-checks": "Повторює мердж, коли перевірки стануть зеленими.",
   "seat.merge-other": "Читає відповідь GitHub і повторює мердж.",
   "section.why": "Чому зупинилось",
@@ -200,17 +217,17 @@ const UK: Copy = {
   "section.next": "Далі",
   "section.history": "Хронологія",
   "details": "Подробиці",
+  "details.full": "Повний запис — у розмові етапу",
   "answer": "Відповісти",
   "ask": "Запитати оркестратора",
   "now": "зараз",
   "history.count": "Хронологія · {n}",
   "lanes.more": "+{n} лінія",
-  "menu.title": "Дії з лінією",
-  "menu.hint": "Дії з лінією — у меню ⋯",
-  "menu.hintPhone": "Дії з лінією — довгим натиском на картку",
+  "menu.card": "Меню картки",
   "summary.stopped": "Зупинилось",
   "summary.seat": "Оркестратор",
   "summary.next": "Далі",
+  "summary.self": "Самі",
   "next.seat": "Звіт прийде в розмову оркестратора",
   "next.you": "Після вашої відповіді лінія продовжиться сама",
   "next.working": "Після рев'ю мердж піде сам",
@@ -251,7 +268,11 @@ const EN: Copy = {
   "owner.seat": "The orchestrator is on it",
   "owner.you": "Needs your answer",
   "owner.done": "Done",
-  "since": "since {time}",
+  "pop.working": "Working for {age}",
+  "pop.waiting": "Waiting in a queue for {age}",
+  "pop.seat": "The orchestrator has been on it for {age}",
+  "pop.you": "Waiting for your answer for {age}",
+  "pop.done": "Done {age} ago",
   "line.running": "{stage} is running",
   "line.done": "Done",
   "line.paused": "Paused",
@@ -296,7 +317,7 @@ const EN: Copy = {
   "seat.commit-other": "Reads the error, fixes the environment and retries the commit.",
   "seat.publish": "Merges fresh main and retries the push.",
   "seat.transport": "Starts the stage again with the same input.",
-  "seat.transport-merged": "PR #{pr} is already in main, so another review changes nothing. The orchestrator closes the lane and marks the task done.",
+  "seat.transport-merged": "PR #{pr} is already in main, so another review changes nothing. Closes the lane and marks the task done.",
   "seat.auth": "Moves the stage to an account that is signed in. If none is, it asks you to sign in.",
   "seat.review-budget": "Weighs the findings against the project rule: N rounds, fix the last, merge.",
   "seat.review-stop": "Weighs the findings against the project rule: N rounds, fix the last, merge.",
@@ -304,8 +325,8 @@ const EN: Copy = {
   "seat.question-you": "It cannot answer this itself: only you have that data. Once you send the output, the diagnosis goes on.",
   "seat.merge-conflict": "Starts an update lane: merge main, resolve the conflict, one review, merge.",
   "seat.merge-refreshing": "Already started an update lane: it merges main and resolves the conflict.",
-  "seat.merge-closed": "The changes reached main through another PR. The orchestrator clears this wait; nothing to do.",
-  "seat.merge-no-pr": "The lane only wrote a document; the orchestrator clears the merge wait.",
+  "seat.merge-closed": "The changes reached main through another PR. Clears this wait; nothing to do.",
+  "seat.merge-no-pr": "The lane only wrote a document. Clears the merge wait.",
   "seat.merge-checks": "Retries the merge once the checks are green.",
   "seat.merge-other": "Reads GitHub's answer and retries the merge.",
   "section.why": "Why it stopped",
@@ -314,17 +335,17 @@ const EN: Copy = {
   "section.next": "Next",
   "section.history": "Timeline",
   "details": "Details",
+  "details.full": "Full record in the stage's conversation",
   "answer": "Answer",
   "ask": "Ask the orchestrator",
   "now": "now",
   "history.count": "Timeline · {n}",
   "lanes.more": "+{n} lane",
-  "menu.title": "Lane actions",
-  "menu.hint": "The lane's actions are in the ⋯ menu",
-  "menu.hintPhone": "The lane's actions: press and hold the card",
+  "menu.card": "Card menu",
   "summary.stopped": "Stopped",
   "summary.seat": "Orchestrator",
   "summary.next": "Next",
+  "summary.self": "Yourself",
   "next.seat": "The report arrives in the orchestrator's chat",
   "next.you": "Once you answer, the lane goes on by itself",
   "next.working": "After the review the merge goes on by itself",

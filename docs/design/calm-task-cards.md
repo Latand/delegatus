@@ -210,9 +210,13 @@ an owner. The prototype's version is
 | you | amber | §4 only, after the seat escalated | «Потрібна ваша відповідь: …» and «Відповісти» |
 | done | faded green | finished | «Готово» |
 
-The dot carries the owner and its popover says it in words with the time
-(«Оркестратор розбирається · з 13:10», clock in h23). The colour is never the
-only signal: the line says the same in words.
+The dot carries the owner and its popover says it in words, naming what the
+bare duration beside the state line counts («Оркестратор розбирається вже
+29 хв»); the time is said once, with no second clock. The popover opens as a
+row of the card under the state line, its tail on the dot, so it covers no
+text and no chip and the card's clip cannot cut it; the card grows by one line
+while it is open. The dot stands on the first line of a state line that wraps.
+The colour is never the only signal: the line says the same in words.
 
 The owner comes from the route the server already stamps
 (`stampAttentionRoutes`, `src/lib/attention/routing.ts`): a seat or system
@@ -281,7 +285,14 @@ kanban evidence harness (`serveEvidenceFixture`, `openFixture`). The variants
 reuse the board's card shell (`.kb .card`), the real task icon, the real
 one-line chain (`PipelineBlock` at card density with no reason line) and the
 real PR text (`WorkLinkText`); the state line, dot, popover and opened view
-are new.
+are new. On a card the orchestrator owns, the stopped stage's chip keeps the
+seat's indigo and carries no amber mark (no bang on the glyph, no amber round
+counter): amber stays on the one card that needs the operator.
+
+The frame's board keeps the product's column floor (280 px,
+`--kb-column-width`), so the 1000 px frame gives the wide column what is left.
+In a card under 300 px the age drops under the state line and the title may
+take four lines; nowhere is a title cut.
 
 ### Variant 1 · Причина в розгорнутій картці (Reason in the opened card)
 
@@ -289,8 +300,11 @@ Closed: icon, title, the dot and one state line with the age, the chain with
 the PR. Opened (the chevron or the state line): the task's description, «Чому
 зупинилось» in plain words with «Подробиці» showing the raw record, «Що робить
 оркестратор», and «Якщо хочете самі» with the lane's real answers in quiet
-buttons and «Запитати оркестратора». Closest to the quote: open, understand,
-then press.
+buttons and «Запитати оркестратора». «Подробиці» holds whole lines and whole
+sentences of the record with no file path, and a link to the full record in
+the stage's conversation. On the phone «Відповісти» takes its own full row,
+the lane's two answers stand side by side under it, and the question for the
+orchestrator comes last. Closest to the quote: open, understand, then press.
 
 ### Variant 2 · Хронологія задачі (Task chronology)
 
@@ -298,38 +312,49 @@ Same closed card. Opened: the task in order, oldest first, from the records
 (task created, each lane started, each attempt passed / failed / cut by a
 restart, merges queued, stopped, merged), the last eight entries with
 «Раніше · N» above them, ending on what happens now («зараз · Оркестратор:
-…»). The answers ride the stop's own entry as small links. Restarts that cut
+…», the actor named once). The answers ride the stop's own entry as small
+links, on one row. On the phone the time leads each entry's own line (there is
+no time column), which is what leaves the links their row. Restarts that cut
 one stage several times fold into one line.
 
 ### Variant 3 · Лише рішення (Decisions only)
 
-Closed: icon, title, dot and line; no chain at all. Opened: a three-line
-summary (Зупинилось / Оркестратор / Далі), the chain, «Хронологія · N»
-folded. The lane's answers never appear on the card: they stay in ⋯ (desktop)
-or the long press (phone); only «Відповісти» is a button. The quietest board,
-the furthest from «then I press».
+Closed: icon, title, dot and line; no chain at all. Opened: a short summary
+(Зупинилось / Оркестратор / Далі / Самі), the chain, «Хронологія · N» folded.
+The last row, «Самі», holds the lane's answers as quiet links, visible at
+every width with no gesture and no instruction line; only «Відповісти» is a
+button. The quietest board.
 
-### Measured (driver `render.ts`, all 64 renders, `geometry.json`)
+### Measured (driver `render.ts`, all 96 renders, `geometry.json`)
 
 - Closed cards: the original 1440 board draws **14 answer buttons and 5 ✓ on
   7 cards** with 5 amber cards; every variant draws **1 button** («Відповісти»
   on unsafe-root).
 - The five In-progress cards stand 1 969 px tall in the original at 1440
   (405, 439, 286, 550, 289); 520 px in variants 1 and 2 (104 each), 380 px in
-  variant 3 (76 each).
+  variant 3 (76 each). The frame shows one popover open, which adds its own
+  39 px row to that card (143 and 115). At 1000 the same five stand 699 px in
+  variants 1 and 2 and 559 px in variant 3, at 390 they stand 639 and 499.
 - The phone's closed cards carry no buttons today; its task screens carry 8
-  answer buttons for these 4 tasks. The variants' opened phone cards keep them
-  in variant 1 and 2 at 44 px or more, and only «Відповісти» in variant 3.
-- No variant frame overflows sideways at the driver's 1× density: the page
-  does not pan when its scroller is pushed right, and no element's fractional
-  right edge passes the width. No title or state line is cut (measured with a Range against
-  its box), the state line and «Відповісти» never overlap, the popover stays
-  inside the viewport, and no phone control in a variant is under 44 px. The
-  original phone board's widest element is the real pager's off-screen
-  columns; that page does not pan either.
+  answer buttons for these 4 tasks. Every variant's opened card shows the
+  lane's answers at every width (the driver compares the count with the
+  lane's own), at 44 px or more on the phone.
+- The driver checks every variant frame and fails the run on a miss
+  (`problems` in `geometry.json`; all 72 variant frames pass): no sideways
+  overflow (the page does not pan, no fractional right edge passes the
+  width); no cut title or state line (a Range against its box); the popover
+  inside its card, covering 0 px² of the title, the state line, the age, the
+  chips and the buttons, and holding no clock time; the dot within 2 px of the
+  state line's first line (0.1 measured); the state line on at most three
+  lines (two measured); no amber mark on a chip of a card that asks nothing;
+  one button on a closed card that needs the operator and none elsewhere; no
+  instruction line or menu standing in for the answers; an entry's links on
+  one row; on the phone «Відповісти» across its full row and no control under
+  44 px; «Подробиці» ending on a whole sentence, naming no file and offering
+  the full record; the «зараз» entry naming the orchestrator once.
 
-Frames: `/var/tmp/calm-task-cards/variant-N-<1440|390>-<uk|en>-<light|dark>-<board|open>-<original|changed>.png`,
-96 files, listed in `docs/design/calm-task-cards/frames.txt`. To render again:
+Frames: `/var/tmp/calm-task-cards/variant-N-<1440|1000|390>-<uk|en>-<light|dark>-<board|open>-<original|changed>.png`,
+144 files, listed in `docs/design/calm-task-cards/frames.txt`. To render again:
 `CHROME_BIN=<chrome> bun docs/design/calm-task-cards/render.ts [w=390] [variant=1] …`
 from the repository root (in a pipeline stage, give Chrome a short `TMPDIR`
 through a wrapper).
@@ -349,10 +374,11 @@ through a wrapper).
 1. **Which variant?** 1, 2 or 3. *Recommendation:* variant 1, with variant 2's
    chronology added as a folded «Хронологія» section at the end of the opened
    card (as variant 3 already folds it).
-2. **Where do Skip / Retry live for a stop the orchestrator owns?** In the
-   opened card (variants 1 and 2), or only in ⋯ and the long press (variant 3).
-   *Recommendation:* in the opened card under «Якщо хочете самі», which is
-   «раскрыть, понять … и тогда я уже нажимаю».
+2. **How loud are Skip / Retry for a stop the orchestrator owns?** Every
+   variant shows them in the opened card: quiet buttons under «Якщо хочете
+   самі» (variant 1), links on the stop's entry (variant 2), links in the
+   summary's «Самі» row (variant 3). *Recommendation:* the buttons of
+   variant 1, which is «раскрыть, понять … и тогда я уже нажимаю».
 3. **Does the closed card still say that the orchestrator is fixing
    something,** or does it read «Працює» until the seat gives up?
    *Recommendation:* keep the one indigo line; hiding it would make a stuck
@@ -366,13 +392,13 @@ through a wrapper).
   wake item names the cause and the step (§6.3), and §3 shows the tools exist
   and are already used.
 - «раскрыть, понять, почему она остановилась, и тогда я уже нажимаю»: the
-  opened card (§7, variants 1 and 2).
+  opened card (§7, every variant).
 - «хронологический порядок»: variant 2 and the recommended fold.
 - «карточка выглядит перегруженной»: 1 969 px to 520 px for the same five
   cards.
 - «research … насколько это viable»: §1–§3, 92% of 171 stops need no operator.
 - «по реальным карточкам … на проде … в разных видах»: real production
-  records, three variants, 1440 and 390, uk and en, light and dark.
+  records, three variants, 1440, 1000 and 390, uk and en, light and dark.
 
 ## Deferred — not currently justified
 

@@ -9,7 +9,8 @@
  *   2  Chronology: the task in order, the stop and the orchestrator's step at
  *      its end, the answers on the stop's entry.
  *   3  Decisions only: no chain on the closed card; the opened card is a
- *      three-line summary and a folded chronology, the answers stay in ⋯.
+ *      short summary whose last row holds the lane's answers as quiet links,
+ *      and a folded chronology.
  *
  * In every variant a closed card shows a button only when the operator must
  * answer, and that button is «Answer».
@@ -27,7 +28,7 @@ import type { ManagedOn } from "@/components/pipelines/remoteLaneSummary";
 import { WorkLinkText } from "@/components/workLinks/WorkLinkChips";
 import { useWorkLinks } from "@/components/workLinks/workLinksContext";
 
-import { clock, laneActions, laneWords, words, type CalmLane, type Owner, type TimelineEvent, type Words } from "./calmModel";
+import { laneActions, laneWords, words, type CalmLane, type Owner, type TimelineEvent, type Words } from "./calmModel";
 
 /* The real chain with no reason line, no PR tail and no answers: the state
    line above it says the rest once. */
@@ -42,24 +43,27 @@ export interface CalmCardProps {
   timeline: readonly TimelineEvent[];
   nowMs: number;
   phone: boolean;
-  /** The frame's starting state: opened, the dot's popover shown, details,
-      chronology or the ⋯ menu open. */
+  /** The frame's starting state: opened, the dot's popover shown, details or
+      chronology open. */
   open?: boolean;
   popOpen?: boolean;
   detailsOpen?: boolean;
   historyOpen?: boolean;
-  menuOpen?: boolean;
 }
 
 function age(locale: "en" | "uk", nowMs: number, since: number): string {
   return humanizeDuration(Math.max(60, Math.floor((nowMs - since) / 60_000) * 60), locale);
 }
 
-function StatusDot({ owner, text, open }: { owner: Owner; text: string; open: boolean }) {
+/* The dot opens its popover on hover and focus, and a tap pins it. The
+   popover itself is a row of the card, under the state line (see CalmCard). */
+function StatusDot({ owner, text, open, popId, onHover, onPin }: { owner: Owner; text: string; open: boolean; popId: string; onHover: (over: boolean) => void; onPin: () => void }) {
   return (
-    <span className="cc-dotwrap" data-cc-pop={open ? "open" : undefined}>
-      <button type="button" className="cc-dot" data-owner={owner} aria-label={text} aria-describedby={undefined} />
-      <span className="cc-pop" role="tooltip">{text}</span>
+    <span className="cc-dotwrap">
+      <button
+        type="button" className="cc-dot" data-owner={owner} aria-label={text} aria-expanded={open} aria-controls={popId}
+        onClick={onPin} onMouseEnter={() => onHover(true)} onMouseLeave={() => onHover(false)} onFocus={() => onHover(true)} onBlur={() => onHover(false)}
+      />
     </span>
   );
 }
@@ -85,24 +89,31 @@ function Timeline({ events, w, lane, phone }: { events: readonly TimelineEvent[]
   const { t } = useLocale();
   const [all, setAll] = useState(false);
   const hidden = all ? 0 : Math.max(0, events.length - RECENT);
+  const shown = events.slice(hidden);
+  /* The lane's answers ride the stop's own entry; when the records hold no
+     such entry in view (a stop with no parked attempt, or one folded under
+     «Earlier»), they ride the last entry, so they are never out of sight. */
+  const carrier = lane && laneActions(t, lane).length ? shown.findLast((event) => event.stop === lane) ?? shown.at(-1) : undefined;
   return (
     <ol className="cc-tl" data-cc-timeline={events.length}>
       {hidden ? (
         <li className="cc-tl-row cc-tl-fold" data-tone="info">
-          <span className="cc-tl-time" />
+          {phone ? null : <span className="cc-tl-time" />}
           <span className="cc-tl-mark" aria-hidden="true" />
           <span className="cc-tl-body">
             <button type="button" className="cc-disclose" aria-expanded={false} onClick={() => setAll(true)}><ChevronRight aria-hidden size={14} />{w("ev.earlier", { n: hidden })}</button>
           </span>
         </li>
       ) : null}
-      {events.slice(hidden).map((event, index) => (
+      {shown.map((event, index) => (
         <li key={index} className="cc-tl-row" data-tone={event.tone}>
-          <span className="cc-tl-time num">{event.time ?? w("now")}</span>
+          {phone ? null : <span className="cc-tl-time num">{event.time ?? w("now")}</span>}
           <span className="cc-tl-mark" aria-hidden="true" />
           <span className="cc-tl-body">
-            <span className="cc-tl-text">{event.text}</span>
-            {event.stop && lane && event.stop === lane && laneActions(t, lane).length ? (
+            {/* The phone has no room for a time column beside the text: the
+                time leads the entry's own line. */}
+            <span className="cc-tl-text">{phone ? <span className="cc-tl-when num">{event.time ?? w("now")}</span> : null}{event.text}</span>
+            {lane && event === carrier ? (
               <span className={`cc-tl-acts${phone ? " phone" : ""}`}>
                 {laneActions(t, lane).map((action) => (
                   <button key={action.action} type="button" className="cc-link" data-cc-action={action.action}>{action.label}</button>
@@ -138,7 +149,12 @@ function OpenReason({ lane, w, phone, detailsOpen, description }: { lane: CalmLa
               <button type="button" className="cc-disclose" aria-expanded={details} onClick={() => setDetails(!details)}>
                 {details ? <ChevronDown aria-hidden size={14} /> : <ChevronRight aria-hidden size={14} />}{w("details")}
               </button>
-              {details ? <pre className="cc-raw">{lane.detail}</pre> : null}
+              {details ? (
+                <>
+                  <pre className="cc-raw" data-cc-raw="">{lane.detail}</pre>
+                  <button type="button" className="cc-link cc-full" data-cc-full="">{w("details.full")}</button>
+                </>
+              ) : null}
             </>
           ) : null}
         </section>
@@ -159,7 +175,7 @@ function OpenReason({ lane, w, phone, detailsOpen, description }: { lane: CalmLa
   );
 }
 
-function OpenSummary({ lane, w, timeline, phone, historyOpen, menuOpen, description }: { lane: CalmLane; w: Words; timeline: readonly TimelineEvent[]; phone: boolean; historyOpen: boolean; menuOpen: boolean; description: string }) {
+function OpenSummary({ lane, w, timeline, phone, historyOpen, description }: { lane: CalmLane; w: Words; timeline: readonly TimelineEvent[]; phone: boolean; historyOpen: boolean; description: string }) {
   const { t } = useLocale();
   const said = laneWords(w, lane);
   const [history, setHistory] = useState(historyOpen);
@@ -171,16 +187,18 @@ function OpenSummary({ lane, w, timeline, phone, historyOpen, menuOpen, descript
         {said.why ? <><dt>{w("summary.stopped")}</dt><dd>{said.why}</dd></> : null}
         {said.seat ? <><dt>{w("summary.seat")}</dt><dd>{said.seat}</dd></> : null}
         <dt>{w("summary.next")}</dt><dd>{next}</dd>
+        {lane.answers ? (
+          <>
+            <dt>{w("summary.self")}</dt>
+            <dd>
+              <span className={`cc-tl-acts${phone ? " phone" : ""}`}>
+                {laneActions(t, lane).map((action) => <button key={action.action} type="button" className="cc-link" data-cc-action={action.action}>{action.label}</button>)}
+              </span>
+            </dd>
+          </>
+        ) : null}
       </dl>
       {lane.owner === "you" ? <ActionButtons lane={{ ...lane, answers: null }} w={w} phone={phone} primary /> : null}
-      {lane.answers ? (
-        menuOpen && !phone ? (
-          <div className="cc-menu" role="menu" aria-label={w("menu.title")}>
-            <span className="cc-menu-head">{w("menu.title")}</span>
-            {laneActions(t, lane).map((action) => <button key={action.action} type="button" role="menuitem" className="cc-menu-item" data-cc-action={action.action}>{action.label}</button>)}
-          </div>
-        ) : <p className="cc-hint">{w(phone ? "menu.hintPhone" : "menu.hint")}</p>
-      ) : null}
       <button type="button" className="cc-disclose" aria-expanded={history} onClick={() => setHistory(!history)}>
         {history ? <ChevronDown aria-hidden size={14} /> : <ChevronRight aria-hidden size={14} />}{w("history.count", { n: timeline.length })}
       </button>
@@ -191,10 +209,13 @@ function OpenSummary({ lane, w, timeline, phone, historyOpen, menuOpen, descript
 
 export function CalmCard(props: CalmCardProps) {
   const { variant, card, lanes, timeline, nowMs, phone } = props;
-  const { locale } = useLocale();
+  const { locale, t } = useLocale();
   const w = words(locale);
   const linkIndex = useWorkLinks();
   const [open, setOpen] = useState(Boolean(props.open));
+  const [pinned, setPinned] = useState(Boolean(props.popOpen));
+  const [hover, setHover] = useState(false);
+  const pop = pinned || hover;
   const top = lanes[0] ?? null;
   const owner: Owner = top?.owner ?? (card.status === "done" ? "done" : "waiting");
   const said = top ? laneWords(w, top) : null;
@@ -205,14 +226,17 @@ export function CalmCard(props: CalmCardProps) {
   /* The PR once, at the end of the chain: the top lane's, else any lane's. A
      lane with no PR says nothing about it. */
   const pr = lanes.map((lane) => linkIndex.of({ kind: "pipeline", id: lane.pipeline.id })).find((resolved) => resolved?.links.length) ?? null;
-  const ownerText = `${w(`owner.${owner}`)} · ${w("since", { time: clock(locale, since, nowMs) })}`;
+  /* The time on the card, said once and in words: the popover names what the
+     bare duration beside the state line counts. */
+  const ownerText = w(`pop.${owner}`, { age: age(locale, nowMs, since) });
+  const popId = `cc-pop-${card.id}`;
   const hex = card.color ? TASK_COLOR_HEX[card.color] : null;
   const style = hex ? ({ "--label": hex, "--label-strong": hex } as React.CSSProperties) : undefined;
   let body: ReactNode = null;
   if (open && top) {
     body = variant === 1 ? <OpenReason lane={top} w={w} phone={phone} detailsOpen={Boolean(props.detailsOpen)} description={card.description} />
       : variant === 2 ? <div className="cc-open" data-cc-open="timeline"><Description text={card.description} /><Timeline events={timeline} w={w} lane={top} phone={phone} />{top.owner === "you" ? null : <p className="cc-askline"><button type="button" className="cc-act quiet" data-cc-ask=""><Bot aria-hidden size={14} />{w("ask")}</button></p>}</div>
-      : <OpenSummary lane={top} w={w} timeline={timeline} phone={phone} historyOpen={Boolean(props.historyOpen)} menuOpen={Boolean(props.menuOpen)} description={card.description} />;
+      : <OpenSummary lane={top} w={w} timeline={timeline} phone={phone} historyOpen={Boolean(props.historyOpen)} description={card.description} />;
   }
   return (
     <article
@@ -221,6 +245,7 @@ export function CalmCard(props: CalmCardProps) {
       data-cc-owner={owner}
       data-cc-variant={variant}
       data-cc-state={open ? "open" : "closed"}
+      data-cc-answers={top ? laneActions(t, top).length : 0}
       data-color={card.color ?? "none"}
       style={style}
       onClick={phone ? (event) => { if (!(event.target as HTMLElement).closest("button")) setOpen(!open); } : undefined}
@@ -233,18 +258,19 @@ export function CalmCard(props: CalmCardProps) {
           <button type="button" className="icon-btn fold" aria-expanded={open} aria-label={card.title} onClick={() => setOpen(!open)}>
             {open ? <ChevronDown /> : <ChevronRight />}
           </button>
-          <button type="button" className="icon-btn" aria-haspopup="menu" aria-label={w("menu.title")} data-cc-menu="">
+          <button type="button" className="icon-btn" aria-haspopup="menu" aria-label={w("menu.card")} data-cc-menu="">
             <MoreHorizontal size={16} />
           </button>
         </div>
       </div>
       <div className="cc-state">
-        <StatusDot owner={owner} text={ownerText} open={Boolean(props.popOpen)} />
+        <StatusDot owner={owner} text={ownerText} open={pop} popId={popId} onHover={setHover} onPin={() => setPinned(!pinned)} />
         <button type="button" className="cc-line" data-cc-line="" aria-expanded={open} onClick={() => setOpen(!open)}>
           <span className="cc-line-text">{said?.line ?? w(`owner.${owner}`)}</span>
-          <span className="cc-age num">{age(locale, nowMs, since)}</span>
+          <span className="cc-age num" title={ownerText}>{age(locale, nowMs, since)}</span>
         </button>
       </div>
+      {pop ? <p className="cc-pop" id={popId} role="tooltip" data-cc-pop="">{ownerText}</p> : null}
       {owner === "you" && !open ? <div className="cc-answerrow"><button type="button" className="cc-act primary cc-answer" data-cc-answer="">{w("answer")}</button></div> : null}
       {(variant !== 3 || open) && (chainLane || pr) ? (
         <div className="cc-chain" data-cc-chain={chainLane?.pipeline.id ?? ""}>
