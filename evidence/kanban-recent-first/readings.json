@@ -43,6 +43,8 @@
         "t-rf-old",
         "t-rf-notes"
       ],
+      "doubleDated": [],
+      "tileCards": 2,
       "stateLines": {
         "t-rf-finished": "",
         "t-rf-decision": "Needs you",
@@ -116,6 +118,8 @@
         "t-rf-old",
         "t-rf-notes"
       ],
+      "doubleDated": [],
+      "tileCards": 2,
       "stateLines": {
         "t-rf-finished": "",
         "t-rf-decision": "Потрібні ви",

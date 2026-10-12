@@ -488,10 +488,11 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const taskLinks = withoutShown(linkIndex.of({ kind: "task", id: card.task?.id ?? "" }), drawnLinks);
   /* The foot dates the last agent work as a bare age, and a card nobody worked
      on as its last edit, worded as one so the two never read alike. A lane row
-     on screen already states when its work moved, so the foot says it only
-     where no row does. */
+     or an agent row on screen already states when its work moved, so the foot
+     says it only where no row does. */
+  const rowDatesWork = drawnLanes.length > 0 || (!collapsed && tiles.length > 0);
   const footAge = footWorked
-    ? drawnLanes.length ? "" : ageLabel(t, card.lastAgentWorkAtMs, nowMs)
+    ? rowDatesWork ? "" : ageLabel(t, card.lastAgentWorkAtMs, nowMs)
     : card.updatedAtMs ? t("kanban.editedAge", { age: ageLabel(t, card.updatedAtMs, nowMs) }) : "";
   const onAnswer = props.onAnswer;
   const pipelineRow = (summary: KanbanPipeline) => (

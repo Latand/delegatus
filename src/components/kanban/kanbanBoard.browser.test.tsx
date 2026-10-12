@@ -9424,6 +9424,11 @@ describe("recent first: columns order by the newest work, and a recently worked 
                     .filter((element) => Boolean(divider.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING))
                     .map((element) => (element.getAttribute("data-id") ?? "").replace(/^task:/, ""));
                 })(),
+                /* Cards whose foot dates work (not an edit) while an agent row or a lane row on the same card already does. */
+                doubleDated: [...document.querySelectorAll("[data-kanban-board] .card")]
+                  .filter((element) => element.querySelector(".foot .age") && element.querySelector(".members .tile, [data-pipeline]"))
+                  .map((element) => ({ id: element.getAttribute("data-id") ?? "", foot: (element.querySelector(".foot .age")?.textContent ?? "").trim() })),
+                tileCards: [...document.querySelectorAll("[data-kanban-board] .card")].filter((element) => element.querySelector(".members .tile")).length,
                 stateLines: Object.fromEntries(["t-rf-finished", "t-rf-decision", "t-rf-paused", "t-rf-old"].map((id) => [id,
                   (document.querySelector(`[data-kanban-board] .card[data-id="task:${id}"] .motion-line`)?.textContent ?? "").trim()])),
               };
@@ -9448,6 +9453,10 @@ describe("recent first: columns order by the newest work, and a recently worked 
             /* The finished lane says it finished: no «no reason given» line above its lane row. */
             if (read.stateLines["t-rf-finished"]) failures.push(`${label}: finished card state line ${JSON.stringify(read.stateLines["t-rf-finished"])}`);
             if (!read.stateLines["t-rf-decision"] || !read.stateLines["t-rf-paused"]) failures.push(`${label}: decision or paused card lost its state line ${JSON.stringify(read.stateLines)}`);
+            /* An agent row dates the work: the foot of that card says no work age (an «edited …» foot has no row to repeat). */
+            const repeated = read.doubleDated.filter((entry) => !editedWord.test(entry.foot));
+            if (repeated.length) failures.push(`${label}: foot repeats the age a row already shows ${JSON.stringify(repeated)}`);
+            if (read.tileCards < 2) failures.push(`${label}: only ${read.tileCards} cards drew an agent row, the repeat check has nothing to read`);
             for (const [name, foot] of Object.entries(read.foot)) {
               if (foot && (!foot.inside || foot.overlaps)) failures.push(`${label}: ${name} foot age ${JSON.stringify(foot)}`);
             }
