@@ -51,7 +51,7 @@ test("only allowlisted pure reads may omit keys; explicit keys still replay afte
     }
     const count = version;
     for (const name of MCP_TOOL_NAMES.filter(name => !OPTIONAL_READ_KEY_TOOLS.has(name))) {
-      expect(await service.callTool(name, {})).toMatchObject({ ok: false, code: "invalid_request" });
+      expect(await service.callTool(name, name === "backfill_worktree_projects" ? { dryRun: false } : {})).toMatchObject({ ok: false, code: "invalid_request" });
     }
     expect(version).toBe(count);
     const first = await service.callTool("get_pipeline", { clientRequestId: "stable", pipelineId: "fixture" });
