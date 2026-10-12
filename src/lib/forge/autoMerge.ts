@@ -14,7 +14,7 @@ import { mutateTasks } from "@/lib/tasks/store";
 
 import { forgeCacheView } from "./cache";
 import { checkFailedReason, MERGE_REASONS } from "./mergeReasons";
-import { lanePullRequest, pipelineRepository, pipelineWorkLinks } from "./resolve";
+import { lanePullRequest, pipelineRepository } from "./resolve";
 import { type PullRequestState } from "./workLinks";
 
 /*
@@ -128,7 +128,7 @@ export { lanePullRequest };
 
 export { rollupChecks } from "./checkRollup";
 export type { CheckVerdict, ReadCheck, PullRequestView } from "./checkRollup";
-import { rollupChecks, type PullRequestView, type ReadCheck } from "./checkRollup";
+import { rollupChecks, type PullRequestView } from "./checkRollup";
 
 export function parsePullRequestView(raw: string): PullRequestView | null {
   let parsed: unknown;
