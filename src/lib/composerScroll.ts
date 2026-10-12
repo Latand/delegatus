@@ -96,10 +96,6 @@ const MOBILE_COMPOSER_UNIT_MAX_VH = 0.38;
 export function mobileComposerUnitMax(layoutHeight: number): number {
   return Math.min(MOBILE_COMPOSER_UNIT_MAX_PX, Math.round(layoutHeight * MOBILE_COMPOSER_UNIT_MAX_VH));
 }
-/* One comfortable row at the 44px tap-target height: on a visible viewport too
-   small for chrome plus field, the field stays usable rather than collapsing
-   to zero. */
-const COMPOSER_CEILING_FLOOR_PX = 44;
 /* ONE RULE FOR THE ROOM ABOVE THE INPUT (#1629). The composer's box holds two
    things: the input unit — the field and the controls that send what is in it —
    and the ACCESSORY REGION above it, which is where every other surface the
@@ -139,19 +135,42 @@ export function accessoryReserve(surfaces: number, boxHeight: number): number {
   );
 }
 
-/* THE CARD COMPOSER'S OWN BUDGET, in the numbers its `max-height` is written
-   in: at most 60% of the conversation it sits in, and never less than 15rem of
-   that conversation left for the transcript above it, whichever binds first.
-   The class on the form is the bound the browser applies; this is the same
-   arithmetic for the code that has to know how much room is left INSIDE it —
-   the two are read together, and the capture measures the result of both. */
-const CARD_COMPOSER_MAX_SHARE = 0.6;
-const CARD_CONVERSATION_FLOOR_PX = 240;
-/** How tall a card composer may render inside a conversation of `boxHeight`
-    before its own budget binds. */
-export function cardComposerBudget(boxHeight: number): number {
-  return Math.min(Math.round(boxHeight * CARD_COMPOSER_MAX_SHARE), boxHeight - CARD_CONVERSATION_FLOOR_PX);
+/* THE TRANSCRIPT'S FLOOR (operator, 2026-10-11). Undelivered sends, the
+   own-message row, the agent's controls and a long dictated draft together
+   left a conversation about 100 px of transcript; whatever the composer gains,
+   the transcript now keeps at least this share of the box it shares with it.
+   Everything else — the composer and the rows beside it that never yield —
+   lives in the rest. */
+export const TRANSCRIPT_FLOOR_SHARE = 0.6;
+/* The card composer's chrome around the field, measured on the rendered card:
+   the form's own padding and top border (py-2 + 1px = 17px), the input box's
+   padding and borders (py-1 + two 1px edges = 10px), the quiet secondary row
+   under it holding the runtime pill, the picker and the agent's controls
+   (32px) and the 6px gap above that row. Every pixel of it is inside the
+   budget with the field, so a field taller than the budget minus this number
+   and the region's reserve is one that took room from a surface the operator
+   still has to reach. The region's own gap is not here: it belongs to the
+   region, which is not always there. */
+const CARD_COMPOSER_CHROME_PX = 65;
+/* One comfortable row at the 44px tap-target height: on a visible viewport too
+   small for chrome plus field, the field stays usable rather than collapsing
+   to zero. */
+const COMPOSER_CEILING_FLOOR_PX = 44;
+/* The composer at rest: its chrome and the field at one row. It never yields,
+   so in a box too small for it and the floor together the floor gives way. */
+export const COMPOSER_REST_PX = CARD_COMPOSER_CHROME_PX + COMPOSER_CEILING_FLOOR_PX;
+
+/** How tall a card composer may render inside a conversation of `boxHeight`,
+    beside `rows` px of rows that never yield (a divider, the turn's status
+    line): the share the transcript's floor leaves, less those rows. The class
+    on the form is the bound before the box is measured; this is the bound once
+    it is, and the field's ceiling is what is left inside it. */
+export function cardComposerBudget(boxHeight: number, rows = 0): number {
+  const others = Math.max(0, rows);
+  const share = Math.floor(boxHeight * (1 - TRANSCRIPT_FLOOR_SHARE)) - others;
+  return Math.max(Math.min(COMPOSER_REST_PX, boxHeight - others), share);
 }
+
 /* THE ORCHESTRATOR SEAT'S OWN BUDGET (#1734). The seat on top of the board is a
    box the operator sizes with a grip, down to 160 px, and the card budget above
    keeps 240 px of transcript: more than the whole conversation of a compact
@@ -168,10 +187,12 @@ export const SEAT_TRANSCRIPT_FLOOR_PX = 72;
 
 /** How tall the seat's composer may render: the conversation as tall as the
     seat can still make it (`room` is what is left between the seat's height
-    now and the height its grip stops at), less the rows that never yield (the
-    control strip) and the transcript's minimum. */
+    now and the height its grip stops at), less the rows that never yield and
+    the transcript's minimum — and at most what the transcript's floor leaves
+    at that height, so a seat grown to its stop still keeps the floor. */
 export function seatComposerBudget({ boxHeight, room, rows }: { boxHeight: number; room: number; rows: number }): number {
-  return boxHeight + Math.max(0, room) - Math.max(0, rows) - SEAT_TRANSCRIPT_FLOOR_PX;
+  const tallest = boxHeight + Math.max(0, room);
+  return Math.min(tallest - Math.max(0, rows) - SEAT_TRANSCRIPT_FLOOR_PX, cardComposerBudget(tallest, rows));
 }
 
 /** How many px past its set height the seat has to be, from what is rendered:
@@ -188,15 +209,6 @@ export function seatGrowth({ grown, transcriptHeight, overflow, room }: { grown:
   const wanted = Math.ceil(grown + SEAT_TRANSCRIPT_FLOOR_PX - transcriptHeight + Math.max(0, overflow));
   return Math.max(0, Math.min(Math.floor(Math.max(0, room)), wanted));
 }
-/* The card composer's chrome around the field, measured on the rendered card:
-   the form's own padding and top border (py-2 + 1px = 17px), the input box's
-   padding and borders (py-1 + two 1px edges = 10px), the quiet secondary row
-   under it holding the runtime pill and the picker (32px) and the 6px gap above
-   that row. Every pixel of it is inside the budget with the field, so a field
-   taller than the budget minus this number and the region's reserve is one that
-   took room from a surface the operator still has to reach. The region's own
-   gap is not here: it belongs to the region, which is not always there. */
-const CARD_COMPOSER_CHROME_PX = 65;
 
 /** The card grow ceiling: the same rule as the phone's, against the box a card
     composer actually has. The conversation is a card of whatever height the
@@ -210,8 +222,9 @@ const CARD_COMPOSER_CHROME_PX = 65;
     form's percentage budget does not resolve either. The fixed cap is the
     bound there, exactly as it was before this rule existed.
 
-    `budget` is the seat's (`seatComposerBudget`), where the box is one that
-    grows; without it the box is a card and the card's share applies. */
+    `budget` is the measured box's: the card's share less the rows beside the
+    composer (`cardComposerBudget`), or the seat's where the box is one that
+    grows (`seatComposerBudget`); without it the whole box is the card's. */
 export function cardComposerCeiling(boxHeight: number, surfaces: number, budget: number | null = null): number {
   if (!(boxHeight > 0)) return COMPOSER_MAX_PX;
   const within = budget ?? cardComposerBudget(boxHeight);
@@ -238,12 +251,18 @@ export function cardComposerCeiling(boxHeight: number, surfaces: number, budget:
     region sits inside the box AND above the keyboard. It is the same reserve a
     card composer takes (`cardComposerCeiling`) — one rule, two boxes.
 
+    `budget` is the measured conversation's (`cardComposerBudget`): the box
+    may not take more than the transcript's floor leaves it, whatever the
+    viewport would allow. `rows` is a row the box holds besides the field and
+    the region — the own-message navigator and the undelivered chip — which
+    comes off both bounds the same way.
+
     Below the one-row floor neither bound can be honored, and a usable field
     outranks them: the ceiling stops there. */
-export function mobileComposerCeiling(visibleHeight: number, layoutHeight: number, surfaces = 0): number {
+export function mobileComposerCeiling(visibleHeight: number, layoutHeight: number, surfaces = 0, budget: number | null = null, rows = 0): number {
   const grown = Math.max(COMPOSER_MAX_PX, Math.round(visibleHeight * COMPOSER_MAX_VH));
-  const box = mobileComposerUnitMax(layoutHeight);
-  const reserved = accessoryReserve(surfaces, box);
+  const box = budget === null ? mobileComposerUnitMax(layoutHeight) : Math.min(mobileComposerUnitMax(layoutHeight), budget);
+  const reserved = accessoryReserve(surfaces, box) + Math.max(0, rows);
   const insideTheBox = box - MOBILE_COMPOSER_UNIT_CHROME_PX - reserved;
   const aboveTheKeyboard = visibleHeight - MOBILE_COMPOSER_CHROME_PX - reserved;
   return Math.max(COMPOSER_CEILING_FLOOR_PX, Math.min(grown, insideTheBox, aboveTheKeyboard));

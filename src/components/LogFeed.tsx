@@ -24,7 +24,8 @@ import { mergeAssistantRows, retainedAssistantItems, useAssistantHandoff } from 
 import type { RuntimeLiveTurnItem } from "@/lib/runtime/liveTurn";
 import { LiveTurnRows, liveTurnTail } from "./conversation/LiveTurnRows";
 import { FeedMessageRow, useOutboxRowActions, type CanonicalMessage } from "./conversation/OutboxBubbles";
-import { isOwnMessageStepKey, OwnMessageStepRow, useOwnMessageSteps } from "./conversation/OwnMessageSteps";
+import { useComposerStepsSlot } from "./conversation/composerStepsSlot";
+import { isOwnMessageStepKey, OwnMessageStepControl, OwnMessageStepRow, useOwnMessageSteps } from "./conversation/OwnMessageSteps";
 import { messageRowModel } from "./conversation/messageRow";
 import { publishRenderedMessageRows } from "./conversation/renderedRows";
 import {
@@ -382,9 +383,16 @@ interface Props {
       poll for this conversation, which is empty for every non-seat feed. */
   deputies?: readonly SeatDeputyView[];
   /** The slot the pane keeps between the feed and its composer for the row
-      that steps between the operator's own messages. Absent: no such row. */
+      that steps between the operator's own messages. Absent: no such row.
+      While the pane's composer is on screen the navigator draws in the
+      composer's own bottom row instead, and the slot stays empty. */
   stepsMount?: HTMLElement | null;
 }
+
+/* The band at the feed's foot that fades out while the way back floats over
+   it: the 44 px target the pill sits in, so no line under the pill is read. */
+export const JUMP_FADE_PX = 44;
+const JUMP_FADE = `linear-gradient(to bottom, #000 calc(100% - ${JUMP_FADE_PX}px), transparent)`;
 
 export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, setFollow, compact = false, onLaunchRetry, deputies: deputiesProp, stepsMount = null }: Props) {
   /* Mobile v2 §3.4, §6: on the phone the transcript ends at the composer. The
@@ -1799,7 +1807,13 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
     && Boolean(item.deliveredMessage?.engineMessageId)
     && !provenanceLookup.forItem(item)
     && provenanceLookup.messagePending(item.deliveredMessage!.engineMessageId)), [feed.items, provenanceLookup]);
-  const stepsHost = file && logFeedDependencies().ownMessageSteps ? stepsMount : null;
+  /* The navigator's place (operator, 2026-10-11): the composer's own bottom
+     row when this pane's composer is on screen — the place it publishes for
+     this conversation, inside the pane that holds this feed's own slot — and
+     the pane's row above the composer otherwise. */
+  const composerSlot = useComposerStepsSlot(file ? conversationIdentity(file) : null);
+  const inComposer = Boolean(composerSlot && stepsMount?.parentElement?.contains(composerSlot));
+  const stepsHost = file && logFeedDependencies().ownMessageSteps ? (inComposer ? composerSlot : stepsMount) : null;
   /* The page shows the last rows of what is loaded, and that window slides
      on while the agent works. The own messages above it are counted from
      their records, by the verdict that marks a row on the page, so neither
@@ -1831,6 +1845,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const ownSteps = useOwnMessageSteps({
     scroller,
     mount: stepsHost,
+    keyRoot: stepsMount?.parentElement ?? null,
     identity: memoryKey && tailPath ? `${memoryKey}\0${tailPath}` : null,
     phone,
     atTail: magnet,
@@ -1865,26 +1880,22 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   /* The live-tail pill sits over the feed's bottom padding, so while it shows
      the padding is taller than the pill and its offset together. */
   const liveTailPill = Boolean(file && feed.items.length && magnet && file.activity === "live" && !phone);
-  /* On the phone the way back shares the step row while both are needed, so
-     only one row is spent under the feed. */
-  const wayBackInStepRow = phone && ownSteps.shown && stepsMount !== null;
-  const wayBack = (shared: boolean) => (
+  /* The way back to the tail floats at the feed's bottom right (operator,
+     2026-10-11): it takes no row from the transcript. While it shows, the
+     feed's last band fades out under it, so the pill lies on the faded edge
+     and covers no line the reader is reading. */
+  const wayBack = (
     <button
-      className="group inline-flex h-11 min-w-11 items-center justify-center px-1 focus-visible:outline-none"
+      className="group pointer-events-auto inline-flex h-11 min-w-11 items-center justify-center px-1 focus-visible:outline-none"
       aria-label={t("feed.backToLive")}
-      data-own-step-control={shared ? "latest" : undefined}
       onClick={jumpToTail}
     >
       <span
         data-feed-jump-pill
-        className={`inline-flex h-8 items-center whitespace-nowrap rounded-full border border-border bg-raised text-label font-semibold text-primary shadow-1 group-hover:border-accent/50 group-focus-visible:ring-2 group-focus-visible:ring-accent/40 ${shared ? "min-w-8 flex-col justify-center px-1" : "gap-1 px-3"}`}
+        className="inline-flex h-8 items-center gap-1 whitespace-nowrap rounded-full border border-border bg-raised px-3 text-label font-semibold text-primary shadow-1 group-hover:border-accent/50 group-focus-visible:ring-2 group-focus-visible:ring-accent/40"
       >
         <ArrowDown className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        {/* The shared cell is 44 px wide, so the arrow keeps its size and the
-            count of new rows goes under it, short. */}
-        {shared
-          ? newCount ? <span data-feed-jump-count className="font-mono text-[10px] leading-none tabular-nums">{newCount > 99 ? "99+" : newCount}</span> : null
-          : <>{" "}{newCount ? t("feed.newCount", { count: newCount }) : t("feed.down")}</>}
+        {" "}{newCount ? t("feed.newCount", { count: newCount }) : t("feed.down")}
       </span>
     </button>
   );
@@ -1910,13 +1921,18 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
           <ArrowDownToLine className="h-3 w-3" aria-hidden /> {t("feed.liveTail")}
         </div>
       ) : null}
+      {awayFromTail ? (
+        <div data-feed-jump-strip className="pointer-events-none absolute bottom-0 right-2 z-20 flex">
+          {wayBack}
+        </div>
+      ) : null}
       {/* #1202: with the latest turn off-screen the drafts follow the operator
-          to the bottom of the pane, just above the jump strip below it.
+          to the bottom of the pane, beside the way back to the tail.
           Empty wrapper space targets the feed; vertical pill gestures are
           forwarded because this overlay and the feed scroller are siblings. */}
       {file && !magnet ? (
         <div
-          className="pointer-events-none absolute inset-x-2 bottom-2 z-10 flex justify-center"
+          className="pointer-events-none absolute inset-x-2 bottom-2 z-10 flex justify-center pr-32"
           onWheel={(event) => {
             const row = event.currentTarget.querySelector<HTMLElement>("[data-reply-suggestions]");
             let scale = 1;
@@ -1959,7 +1975,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         data-log-feed-scroller
         // Prepend and resize share the reader's message anchor. Letting the
         // browser independently choose another row causes double restoration.
-        style={{ overflowAnchor: "none" }}
+        // Away from the tail the last band fades out under the way back.
+        style={awayFromTail ? { overflowAnchor: "none", maskImage: JUMP_FADE, WebkitMaskImage: JUMP_FADE } : { overflowAnchor: "none" }}
+        data-feed-faded={awayFromTail ? "" : undefined}
         data-tail-lines-start={tail.linesStart}
         data-tail-line-count={tail.lines.length}
         className={compact ? "min-h-0 flex-1 overflow-y-auto py-3" : "min-h-0 flex-1 overflow-y-auto py-6"}
@@ -2302,20 +2320,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
       <div ref={tailSpacer} aria-hidden data-feed-tail-spacer className="h-0" />
       </div>
     </div>
-    {/* The way back to the tail (#2072): a 44 px row of its own below the
-        feed, never over it. It exists only while the reader is away from the
-        tail, which is exactly when a line of text would sit under a floating
-        control. When it appears the feed's viewport ends 44 px higher and the
-        line being read, anchored at the top, stays where it is. On the phone,
-        beside the own-message step row, it is a cell of that row. */}
-    {awayFromTail && !wayBackInStepRow ? (
-      <div data-feed-jump-strip className="flex h-11 shrink-0 items-center justify-center border-t border-border">
-        {wayBack(false)}
-      </div>
-    ) : null}
-    {ownSteps.shown && stepsMount ? createPortal(
-      <OwnMessageStepRow steps={ownSteps} phone={phone} wayBack={awayFromTail ? wayBack(true) : null} />,
-      stepsMount,
+    {ownSteps.shown && stepsHost ? createPortal(
+      inComposer ? <OwnMessageStepControl steps={ownSteps} phone={phone} /> : <OwnMessageStepRow steps={ownSteps} phone={phone} />,
+      stepsHost,
     ) : null}
     {/* Bottom working-status slot: live elapsed from the transcript receipt.
         Completed totals stay beside their response rows in the scroller. Not on
