@@ -1,4 +1,5 @@
-import { learnedRulesForLaunchProfile } from "@/lib/memory/roleLaunch";
+import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
+import { learnedRulesForLaunchProfile, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
 import fs from "node:fs";
 
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
@@ -1728,6 +1729,7 @@ export function claudeStartupHostOptions(
   owner: ClaudeStartupOwner | null,
   capability: string | null,
   startupEnvironment: NodeJS.ProcessEnv,
+  agentRole?: string | null,
 ) {
   const access = materializeStructuredHostAccess(
     structuredHostAccessPolicy(entry.launchProfile),
@@ -1744,6 +1746,7 @@ export function claudeStartupHostOptions(
     providerAccount: Boolean(owner?.claudeProvider),
     spawnPolicyBaseSettingsPath: launchPaths?.spawnPolicyBaseSettingsPath ?? null,
     allowSubagents: entry.launchProfile?.allowSubagents ?? false,
+    operatorDecisionForms: operatorDecisionFormsRequired(agentRole, entry.artifactPath),
     cleanMemory: entry.launchProfile?.cleanMemory === true,
     appendSystemPrompt: learnedRulesForLaunchProfile(entry.launchProfile),
     mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
@@ -2086,10 +2089,25 @@ async function adoptStructuredHostsPass(
       registry,
       (entry) => {
         const memoryCell = adoptionCell(entry);
+        const conversation = registry.conversationForPath(entry.artifactPath);
+        const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer"
+          ? conversation.agentRole
+          : null;
+        const seatMembership = conversation
+          ? registry.readOnlySnapshot().memberships[conversation.id]?.find(row => row.kind === "orchestrator" && row.role === memoryRole)
+          : null;
+        const seatProject = seatMembership?.containerId ?? null;
+        const memoryProject = seatProject ?? conversation?.projectOwnership?.project ?? entry.launchProfile?.project;
+        const launchProfile = roleMemoryProfileForIdentity(
+          entry.launchProfile,
+          memoryRole,
+          memoryProject,
+          Boolean(seatMembership && seatMembership.containerId === memoryProject),
+        ) ?? undefined;
         const owner = resolveCodexOwner(entry);
         const capability = registry.rotateSpawnCapabilityForPath(entry.artifactPath);
         const access = materializeStructuredHostAccess(
-          structuredHostAccessPolicy(entry.launchProfile),
+          structuredHostAccessPolicy(launchProfile),
           startupEnvironment,
           capability,
         );
@@ -2097,18 +2115,19 @@ async function adoptStructuredHostsPass(
           cwd: entry.cwd,
           codexHome: owner?.home,
           fileAuthCredentials: owner?.kind === "managed",
-          model: entry.launchProfile?.model ?? undefined,
-          serviceTier: entry.launchProfile ? launchServiceTier(entry.launchProfile) : undefined,
-          effort: entry.launchProfile?.effort ?? undefined,
-          approvalPolicy: entry.launchProfile?.permissionMode ?? undefined,
-          allowSubagents: entry.launchProfile?.allowSubagents ?? false,
-          cleanMemory: entry.launchProfile?.cleanMemory === true,
-          developerInstructions: learnedRulesForLaunchProfile(entry.launchProfile),
-          mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
+          model: launchProfile?.model ?? undefined,
+          serviceTier: launchProfile ? launchServiceTier(launchProfile) : undefined,
+          effort: launchProfile?.effort ?? undefined,
+          approvalPolicy: launchProfile?.permissionMode ?? undefined,
+          allowSubagents: launchProfile?.allowSubagents ?? false,
+          operatorDecisionForms: operatorDecisionFormsRequired(conversation?.agentRole, entry.artifactPath),
+          cleanMemory: launchProfile?.cleanMemory === true,
+          developerInstructions: learnedRulesForLaunchProfile(launchProfile),
+          mcpServers: launchProfile?.mcpServers ?? ["viewer"],
           validateTelegramGrant: startupTelegramGrantCheck(registry, entry),
           /* Re-adoption replays the durable grant (issue #687) — a session never
              gains or loses Computer Use by being picked up again at startup. */
-          plugins: entry.launchProfile?.plugins ?? [],
+          plugins: launchProfile?.plugins ?? [],
           ...access.codex,
           ...access.host,
           env: access.env,
@@ -2132,12 +2151,28 @@ async function adoptStructuredHostsPass(
       registry,
       (entry) => {
         const memoryCell = adoptionCell(entry);
+        const conversation = registry.conversationForPath(entry.artifactPath);
+        const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer"
+          ? conversation.agentRole
+          : null;
+        const seatMembership = conversation
+          ? registry.readOnlySnapshot().memberships[conversation.id]?.find(row => row.kind === "orchestrator" && row.role === memoryRole)
+          : null;
+        const seatProject = seatMembership?.containerId ?? null;
+        const memoryProject = seatProject ?? conversation?.projectOwnership?.project ?? entry.launchProfile?.project;
+        const launchProfile = roleMemoryProfileForIdentity(
+          entry.launchProfile,
+          memoryRole,
+          memoryProject,
+          Boolean(seatMembership && seatMembership.containerId === memoryProject),
+        ) ?? undefined;
         const options = {
           ...claudeStartupHostOptions(
-            entry,
+            { ...entry, launchProfile },
             resolveClaudeOwner(entry),
             registry.rotateSpawnCapabilityForPath(entry.artifactPath),
             startupEnvironment,
+            registry.conversationForPath(entry.artifactPath)?.agentRole,
           ),
           validateTelegramGrant: startupTelegramGrantCheck(registry, entry),
         };

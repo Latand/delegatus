@@ -1,0 +1,150 @@
+{
+  "model": "claude-haiku-5-5",
+  "initialAttempt": {
+    "model": "claude-haiku-5-5",
+    "date": "2026-10-11",
+    "sourceRules": 106,
+    "slices": 6,
+    "directRequestStatus": 429,
+    "providerErrorType": "rate_limit_error",
+    "eligibleAccountsChecked": 2,
+    "credentialsCurrent": true,
+    "minimalRequestStatus": 429,
+    "delayedFinalAdapterRecheckStatus": 429,
+    "retryAfter": null,
+    "comparisonModel": "claude-haiku-4-5-20251001",
+    "comparisonStatus": 200,
+    "comparisonSingleSliceMs": 4249,
+    "firstVisibleMs": null,
+    "completeMs": null,
+    "timingVerdict": "blocked",
+    "renderedLayoutCasesPassed": 8,
+    "renderedPhoneStatesPassed": 5,
+    "focusedTestsPassed": 27
+  },
+  "continuation": {
+    "clientVersion": "2.1.296",
+    "modelMatchesClient": true,
+    "authKind": "subscription OAuth Bearer",
+    "capturedCredentialMatchesProbe": true,
+    "clientEndpointPath": "/v1/messages?beta=true",
+    "directEndpointPath": "/v1/messages",
+    "missingField": "system client identity",
+    "minimalProbes": [
+      {
+        "variant": "baseline",
+        "status": 429,
+        "error": "rate_limit_error",
+        "stopReason": null,
+        "retryAfter": null,
+        "elapsedMs": 267
+      },
+      {
+        "variant": "client-beta",
+        "status": 429,
+        "error": "rate_limit_error",
+        "stopReason": null,
+        "retryAfter": null,
+        "elapsedMs": 240
+      },
+      {
+        "variant": "client-beta-and-system",
+        "status": 200,
+        "error": null,
+        "stopReason": "end_turn",
+        "retryAfter": null,
+        "elapsedMs": 902
+      },
+      {
+        "variant": "client-envelope",
+        "status": 200,
+        "error": null,
+        "stopReason": "end_turn",
+        "retryAfter": null,
+        "elapsedMs": 878
+      },
+      {
+        "variant": "system-only",
+        "status": 200,
+        "error": null,
+        "stopReason": "end_turn"
+      }
+    ],
+    "accountChecks": [
+      {
+        "accountLabel": "A",
+        "status": 200,
+        "error": null,
+        "stopReason": "end_turn"
+      },
+      {
+        "accountLabel": "B",
+        "status": 200,
+        "error": null,
+        "stopReason": "end_turn"
+      }
+    ],
+    "sourceRules": 116,
+    "slices": 6,
+    "structuredRequest": {
+      "variant": "structured-650-token-request",
+      "status": 200,
+      "error": null,
+      "stopReason": "end_turn",
+      "elapsedMs": 2750,
+      "jsonObjectReturned": true
+    },
+    "recordedAt": "2026-10-11T21:16:24.589209+00:00",
+    "timings": [
+      {
+        "lang": "uk",
+        "mode": "cold",
+        "model": "claude-haiku-5-5",
+        "ruleCount": 116,
+        "firstMs": 1608,
+        "totalMs": 3992
+      },
+      {
+        "lang": "uk",
+        "mode": "cached",
+        "model": "claude-haiku-5-5",
+        "ruleCount": 116,
+        "firstMs": 61,
+        "totalMs": 67
+      },
+      {
+        "lang": "en",
+        "mode": "cold",
+        "model": "claude-haiku-5-5",
+        "ruleCount": 116,
+        "firstMs": 2003,
+        "totalMs": 5843
+      },
+      {
+        "lang": "en",
+        "mode": "cached",
+        "model": "claude-haiku-5-5",
+        "ruleCount": 116,
+        "firstMs": 39,
+        "totalMs": 45
+      }
+    ],
+    "timingVerdict": "passed",
+    "maxTokens": {
+      "overall": 4096,
+      "slice": 2048
+    },
+    "truncationControl": {
+      "maxTokens": 1100,
+      "status": 200,
+      "stopReason": "max_tokens",
+      "outputTokens": 1100,
+      "contentTypes": [
+        "thinking",
+        "text"
+      ],
+      "textChars": 517,
+      "validation": "invalid"
+    }
+  }
+}

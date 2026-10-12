@@ -68,6 +68,48 @@ test.each(["codex", "claude"] as const)("%s fresh and resumed starts reload the 
   }
 });
 
+test.each(["codex", "claude"] as const)("%s receives a seat-written rule on fresh and resumed engine starts from another account", async engine => {
+  const { leaveLessonForSeat } = await import("./roleStage");
+  for (const resumed of [false, true]) {
+    const cwd = fs.mkdtempSync(path.join(sandbox, "seat-host-"));
+    const project = `seat-delivery-${engine}-${resumed}`;
+    const rule = "Inspect recent transcript activity before reporting an agent as stalled.";
+    leaveLessonForSeat({ project, conversationId: "writer-seat" }, { lesson: { scope: "role", rule, why: "An activity signal missed ongoing transcript work." } });
+    leaveLessonForSeat({ project, conversationId: "writer-seat" }, { lesson: { scope: "project", rule: "Check the pinned acceptance criteria before reporting completed work.", why: "A brief omitted a required acceptance criterion." } });
+    const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const sessionId = crypto.randomUUID();
+    const transcript = resumed ? path.join(cwd, `${sessionId}.jsonl`) : null;
+    if (transcript) fs.writeFileSync(transcript, JSON.stringify(engine === "codex" ? { type: "session_meta", payload: { id: sessionId } } : { sessionId }) + "\n");
+    let conversationId: import("@/lib/accounts/migration/contracts").ViewerConversationId | undefined;
+    if (transcript) {
+      const original = beginLegacySpawnFixture(registry, { engine, cwd, role: "orchestrator", explicitProject: project, transport: "structured" });
+      if (original.kind !== "created") throw new Error("original seat admission failed");
+      registry.completeSpawn(original.receipt.launchId, { key: { engine, sessionId }, artifactPath: transcript, cwd, accountId: "writer-account", status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+      conversationId = original.receipt.conversationId;
+    }
+    const begun = beginLegacySpawnFixture(registry, { engine, cwd, role: "orchestrator", explicitProject: project, transport: "structured", ...(transcript ? { purpose: "resume-successor", expectedArtifactPath: transcript, conversationId } : {}) });
+    if (begun.kind !== "created") throw new Error("seat delivery admission failed");
+    const launchProfile = begun.receipt.launchProfile;
+    expect(JSON.stringify(begun.receipt)).not.toContain(rule);
+    const Host = engine === "codex" ? CodexAppServerHost : ClaudeStreamBrokerHost;
+    let delivered: Record<string, string> = {};
+    const capture = async (options: unknown) => { delivered = options as Record<string, string>; throw new Error("captured seat start"); };
+    const start = spyOn(Host, "start").mockImplementation(capture);
+    const adopt = spyOn(Host, "adopt").mockImplementation(async (_id: string, options: unknown) => capture(options));
+    try {
+      await expect(defaultStartHost({ engine, registry, receipt: begun.receipt, spec: { command: engine, engine, cwd, windowName: "seat", transcript: transcript ?? undefined, launchProfile }, account: { engine, accountId: "reader-account", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }, prompt: "Seat mandate", client: {} as import("@/lib/runtime/client").RuntimeHostClient }, "fixture-capability")).rejects.toThrow("captured seat start");
+      const channel = engine === "codex" ? "developerInstructions" : "appendSystemPrompt";
+      expect(delivered[channel]).toContain(rule);
+      expect(delivered[channel]).toContain("Earlier seats and stage agents");
+      expect(delivered[channel]).toContain("create_task");
+      expect(delivered[channel]).not.toContain("When you report with stage_report");
+      const builder = learnedRulesForLaunchProfile({ learnedRules: { project, roleId: "builder" } })!;
+      expect(builder).not.toContain(rule);
+      expect(builder).toContain("Check the pinned acceptance criteria");
+    } finally { start.mockRestore(); adopt.mockRestore(); }
+  }
+});
+
 test("clean profiles and the kill switch exclude rules on every engine start", () => {
   const profile = { learnedRules: { project: "delivery-trial", roleId: "builder" } };
   expect(learnedRulesForLaunchProfile(undefined)).toBeUndefined();

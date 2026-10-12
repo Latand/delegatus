@@ -22,8 +22,9 @@ export { issueReportApprovalDrafts, issueReportApprovalReplies } from "./approva
  * reply that carries the preview's whole digest, the seat offers that reply
  * as a suggested reply under the text, and the operator sends it. A reply for
  * another text carries another digest, so a "yes" cannot move from the text
- * the operator read to an edited one, and a "no" or any other sentence is no
- * approval however the seat reads it. The digest goes whole: a prefix of it
+ * the operator read to an edited one. The reply may share a message with other
+ * text or approvals; an explicit refusal of this report overrides it.
+ * The digest goes whole: a prefix of it
  * can be matched by a second text found by trying wordings, and the yes for
  * one would then publish the other.
  *
@@ -38,13 +39,36 @@ export interface OperatorMessage {
 }
 
 function normalized(text: string): string {
-  return text.normalize("NFKC").toLocaleLowerCase("uk-UA").replace(/[.,!]/g, " ").replace(/\s+/g, " ").trim();
+  return text.normalize("NFKC").toLocaleLowerCase("uk-UA")
+    .replace(/['’]/g, "").replace(/[\p{P}\p{S}]/gu, " ").replace(/\s+/g, " ").trim();
 }
 
-/** Whether one message is the approving reply of this preview, and nothing else. */
+/** Whether a message contains this preview's approving reply without refusing it. */
 export function approvesIssueReport(message: string, digest: string): boolean {
-  const said = normalized(message);
-  return Object.values(issueReportApprovalReplies(digest)).some((reply) => normalized(reply) === said);
+  const said = ` ${normalized(message)} `;
+  const contains = (phrase: string) => said.includes(` ${normalized(phrase)} `);
+  const replies = Object.values(issueReportApprovalReplies(digest));
+  if (!replies.some(contains)) return false;
+  /* Newlines are whitespace within a sentence, so keep them available to the
+     refusal matcher just as the affirmative matcher does. */
+  const refusalClauses = message.split(/[.!?;]+/).map((clause) => ` ${normalized(clause)} `);
+  /* A negated quotation and a separate refusal both veto this digest, even
+     when the same message contains an affirmative reply as well. */
+  const negations = ["не", "ні", "no", "not", "don't", "do not", "never"];
+  const escapedDigest = digest.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const refusalPatterns = [
+    /* English modifiers and articles may vary, while the full digest binds
+       the refusal to one preview. */
+    new RegExp(`(?:dont|do not|never)(?: [a-z]+){0,2} publish(?: (?:a|the|this|that))? report ${escapedDigest}`),
+    new RegExp(`(?:(?:a|the|this|that) )?report ${escapedDigest} (?:dont|do not|never)(?: [a-z]+){0,2} publish`),
+    /* Ukrainian report cases and both verb/object orders. */
+    new RegExp(`(?:ніколи )?не(?: [\\p{L}]+){0,2} публікуй (?:цей |цього |той |того )?звіт(?:у|а)? ${escapedDigest}`, "u"),
+    new RegExp(`(?:цей |цього |той |того )?звіт(?:у|а)? ${escapedDigest} (?:ніколи )?не(?: [\\p{L}]+){0,2} публікуй`, "u"),
+  ];
+  const refused = refusalClauses.some((clause) =>
+    replies.some((reply) => negations.some((no) => clause.includes(` ${normalized(`${no} ${reply}`)} `)))
+      || refusalPatterns.some((pattern) => pattern.test(clause)));
+  return !refused;
 }
 
 export type IssueReportApproval =

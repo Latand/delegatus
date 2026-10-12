@@ -198,17 +198,20 @@ test("one prototype read retains every choice and exact decision, and frame read
   const reads = new CompanionBoardReads(createCompanionBoardReadPaths());
   const before = JSON.stringify(loadTasksForList());
   const review = await reads.call("fixture","read_prototype_review",{taskId:round.taskId});
-  expect(review.item).toMatchObject({rounds:[{variants:[{number:1,name:"Header line",description:round.variants[0].description},{number:2,name:"Footer meter",description:round.variants[1].description}],questions,decision:{chosen:[1],answers:round.decision.answers,comment:round.decision.comment}}]});
+  expect(review.item).toMatchObject({variants:[{number:1,name:"Header line",description:round.variants[0].description},{number:2,name:"Footer meter",description:round.variants[1].description}],
+    questions:questions.map(q=>({id:q.id,text:q.text,options:q.options.map(o=>o.label),recommended:q.options.findIndex(o=>o.recommended)})),
+    decision:{chosen:[{number:1,name:"Header line"}],answers:[{question:"Where should this live?",options:["Existing review"]},
+      {question:"Which surfaces?",options:["Desktop","Phone"]},{question:"When should work start?",options:[],other:true}],comment:round.decision.comment}});
   expect(JSON.stringify(review)).not.toContain(round.decision.delivery.text);
-  const frame = await reads.call("fixture","view_prototype_frame",{taskId:round.taskId,reviewId,mediaId:media.id});
+  const frame = await reads.call("fixture","view_prototype_frame",{taskId:round.taskId,reviewId,variants:[1],view:"Desktop",width:1440,lang:"en"});
   expect(Reflect.get(frame, VOICE_IMAGES)).toEqual([{mime:"image/png",data:bytes.toString("base64")}]);
   expect(JSON.stringify(frame)).not.toContain(bytes.toString("base64"));
   expect(JSON.stringify(loadTasksForList())).toBe(before);
   await expect(reads.call("foreign","read_prototype_review",{taskId:round.taskId})).rejects.toThrow("PROJECT_REFUSED");
-  await expect(reads.call("fixture","view_prototype_frame",{taskId:round.taskId,reviewId,mediaId:"f".repeat(64)})).rejects.toThrow("FRAME_UNAVAILABLE");
+  expect(await reads.call("fixture","view_prototype_frame",{taskId:round.taskId,reviewId,variants:[1],view:"Missing"})).toMatchObject({status:"refused",code:"FRAME_UNAVAILABLE"});
   // A copied frame replaced by a link no longer names stored prototype bytes.
   const outside = path.join(root,"outside.png");fs.writeFileSync(outside,bytes);fs.unlinkSync(filename);fs.symlinkSync(outside,filename);
-  await expect(reads.call("fixture","view_prototype_frame",{taskId:round.taskId,reviewId,mediaId:media.id})).rejects.toThrow("FRAME_UNAVAILABLE");
+  expect(await reads.call("fixture","view_prototype_frame",{taskId:round.taskId,reviewId,variants:[1],view:"Desktop"})).toMatchObject({status:"refused",code:"FRAME_UNAVAILABLE"});
 });
 
 test("project names resolve from the real catalog and ambiguity never widens a voice read", async () => {

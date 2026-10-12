@@ -136,15 +136,15 @@ gate does.
 Heavy work starts only when the machine's CPU pressure allows it
 (`src/lib/runtime/cpuPressure.ts`, `scripts/gate-slot.sh`):
 
-- held once `/proc/pressure/cpu` `some avg10` reaches 20%;
-- released after it has stayed below 10% for ten seconds;
+- held once `/proc/pressure/cpu` `some avg10` reaches 30%;
+- released after it has stayed below 20% for ten seconds;
 - after 120 s of holding, the reason changes to "deferred" and stays visible;
 - a failed sample admits: the scope quotas still bound the work.
 
 A pipeline stage start is held before its spawn reservation, so a stage starts
 exactly once after admission and a stage that already launched is never held.
 The pipeline shows the reason in its detail line, for example
-`stage start held for CPU pressure since 2026-10-06T12:00:00.000Z (avg10 45% ≥ 20%)`,
+`stage start held for CPU pressure since 2026-10-06T12:00:00.000Z (avg10 45% ≥ 30%)`,
 and wakes itself every five seconds to check again.
 
 A workflow's setup and each of its stage agents are held the same way before
@@ -391,7 +391,7 @@ The affinity regressions pin to the first CPU in the test's own
   it in its scope, and closing the lane ends the wait with no install or push.
 - `src/lib/pipelines/engine.test.ts`: CPU pressure holds a stage start with a
   visible reason, defers after 120 s, releases one launch after ten seconds
-  below 10%, never holds a launched stage, and admits on a failed sample.
+  below 20%, never holds a launched stage, and admits on a failed sample.
 - `scripts/gate-slot.test.ts`: work slice and quotas, the explicit refusals
   (a scope or a work slice the kernel shows no quota for included),
   the hold, deferral and single start, admission on a failed sample, and
