@@ -308,6 +308,9 @@ export interface SpawnReceipt {
       never launched: no conversation, lineage edge, membership, transcript,
       or process exists for it. */
   rejection: SpawnRejection | null;
+  /** False only while a newly reserved receipt is waiting for task membership.
+      Missing on legacy receipts means their historical admission is complete. */
+  membershipAdmitted?: boolean;
   launchProfile: LaunchProfile;
   /** Validated explicit operator project. Becomes durable conversation
       ownership at admission; `launchProfile.project` stays a hint. */
@@ -3852,6 +3855,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     delegationDepth: normalizeDelegationDepth(value.delegationDepth),
     launcher: normalizeSpawnLauncher(value.launcher),
     rejection: normalizeSpawnRejection(value.rejection),
+    membershipAdmitted: value.membershipAdmitted === false ? false : true,
     launchProfile: receiptLaunchProfile(value, policy),
     explicitProject: validExplicitProject(value.explicitProject),
     launchDisplay: normalizeLaunchDisplay(value.launchDisplay),
@@ -5727,8 +5731,26 @@ export class AgentRegistry {
         if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason);
         else this.failSpawn(result.receipt.launchId, reason);
       });
+      this.mutate((file) => {
+        const receipt = file.receipts[result.receipt.launchId];
+        if (receipt) receipt.membershipAdmitted = true;
+      });
     }
     return result;
+  }
+
+  /** Terminalize only a reservation whose task membership never committed and
+      which has no host binding. The state check and owner release are one CAS. */
+  retireUnconsumedSpawn(clientAttemptId: string, reason: string): boolean {
+    return this.mutate((file) => {
+      const receipt = Object.values(file.receipts).find((row) => row.clientAttemptId === clientAttemptId);
+      if (!receipt || receipt.membershipAdmitted !== false || receipt.state !== "starting" || receipt.key || receipt.pane) return false;
+      receipt.state = "failed";
+      receipt.error = reason;
+      receipt.admissionOwner = null;
+      terminalizeFailedSpawnDeliveriesInFile(file, receipt.launchId);
+      return true;
+    });
   }
 
   private beginSpawnRequestInFile(
@@ -5970,6 +5992,7 @@ export class AgentRegistry {
         agentRole: childRole,
         delegationDepth: childDepth,
         rejection,
+        membershipAdmitted: false,
         launchProfile: profile,
         explicitProject,
         launchDisplay: normalizeLaunchDisplay(input.launchDisplay),

@@ -10,6 +10,7 @@ import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestrat
 import { AgentRegistry } from "@/lib/agent/registry";
 import { executeSpawnRequest, type SpawnCommandDependencies } from "@/lib/agent/spawnCommand";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
+import { productionLaunchMembershipPorts } from "@/lib/tasks/launchMembership";
 
 let sandbox = "";
 let previousState: string | undefined;
@@ -157,10 +158,110 @@ test("the real spawn receipt stays replayable when its pinned queue write is bus
     expect(result.status).toBe(202);
     expect(queueWrites).toBe(2);
     expect(receipt).toMatchObject({ state: "starting", accountPin: true, accountId: account.accountId, queuedPinnedSpawn: { retryAt } });
+    expect(receipt?.admissionOwner).toBeNull();
     expect(Object.values(registry.readOnlySnapshot().receipts).filter(row => row.clientAttemptId === request.clientRequestId)).toHaveLength(1);
     expect(orchestratorSeatFor("atlas")).toMatchObject({ pending: null, history: [] });
+    const reaperClaim = registry.claimStartingStructuredSpawn(receipt!.launchId);
+    expect(reaperClaim.claimed).toBe(true);
+    expect(reaperClaim.receipt.admissionOwner).not.toBeNull();
+    registry.releaseSpawnActuation(receipt!.launchId, reaperClaim.receipt.admissionOwner!);
   } finally {
     registry.close();
+    for (const [key, value] of Object.entries({
+      LLV_SPAWN_TRANSPORT: previous.transport,
+      LLV_STRUCTURED_HOSTS: previous.hosts,
+      LLV_RUNTIME_EVENTS: previous.events,
+      NEXT_PUBLIC_RUNTIME_UI: previous.ui,
+      LLV_RUNTIME_HOST_SOCKET: previous.socket,
+    })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
+test("real SQLite receipt retries transient membership contention without a terminal seat intent", async () => {
+  const previous = {
+    transport: process.env.LLV_SPAWN_TRANSPORT,
+    hosts: process.env.LLV_STRUCTURED_HOSTS,
+    events: process.env.LLV_RUNTIME_EVENTS,
+    ui: process.env.NEXT_PUBLIC_RUNTIME_UI,
+    socket: process.env.LLV_RUNTIME_HOST_SOCKET,
+  };
+  const originalCommit = productionLaunchMembershipPorts.commit;
+  process.env.LLV_SPAWN_TRANSPORT = "structured";
+  process.env.LLV_STRUCTURED_HOSTS = "1";
+  process.env.LLV_RUNTIME_EVENTS = "1";
+  process.env.NEXT_PUBLIC_RUNTIME_UI = "1";
+  process.env.LLV_RUNTIME_HOST_SOCKET = path.join(sandbox, "membership-unused.sock");
+  const cwd = path.join(sandbox, "membership-repo");
+  fs.mkdirSync(cwd, { recursive: true });
+  const registry = new AgentRegistry(path.join(sandbox, "membership-registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", sqliteFilename: path.join(sandbox, "membership-registry.sqlite"),
+  });
+  const account = {
+    engine: "claude" as const,
+    accountId: "membership-account",
+    kind: "managed" as const,
+    home: path.join(sandbox, "membership-account"),
+    transcriptRoot: path.join(sandbox, "membership-account", "sessions"),
+    env: { NODE_ENV: "test" as const },
+  };
+  const retryAt = new Date(Date.now() + 60_000).toISOString();
+  let membershipWrites = 0;
+  let keepMembershipBusy = false;
+  productionLaunchMembershipPorts.commit = input => {
+    membershipWrites += 1;
+    if (keepMembershipBusy || membershipWrites === 1) throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    return originalCommit(input);
+  };
+  const spawnDependencies: SpawnCommandDependencies = {
+    registry: () => registry,
+    assertStructuredRuntime: () => {},
+    resolveHealthySpawnAccount: async () => ({ ...account, requestedAdmission: {
+      kind: "retry-at", reason: "hard-limit", stale: false, retryAt,
+    } }),
+    resolveSpawnAccount: () => account,
+    resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+    runtimeHostClient: () => ({} as RuntimeHostClient),
+    defer: () => {},
+    storeImages: () => [],
+    spawnStructuredConversation: async () => { throw new Error("queued launch should not dispatch"); },
+  };
+  const routeSpawn: SeatCommandDependencies["spawn"] = async body => executeSpawnRequest(
+    new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST",
+      headers: {
+        origin: "http://127.0.0.1", host: "127.0.0.1", "sec-fetch-site": "same-origin",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    }),
+    spawnDependencies,
+  ).then(async response => ({ status: response.status, body: await response.json() }));
+  try {
+    const seatDependencies = dependencies(routeSpawn);
+    seatDependencies.retireUnconsumedLaunch = async (clientRequestId, reason) => { registry.retireUnconsumedSpawn(clientRequestId, reason); };
+    const result = await executeOrchestratorSeatRequest({ ...request, cwd, accountId: account.accountId }, seatDependencies);
+    const receipt = registry.spawnReceiptForClientAttempt(request.clientRequestId);
+    expect(result.status).toBe(202);
+    expect(membershipWrites).toBe(2);
+    expect(receipt).toMatchObject({ state: "starting", membershipAdmitted: true, accountPin: true, queuedPinnedSpawn: { retryAt } });
+    expect(receipt?.admissionOwner).toBeNull();
+    expect(Object.values(registry.readOnlySnapshot().receipts).filter(row => row.clientAttemptId === request.clientRequestId)).toHaveLength(1);
+    expect(orchestratorSeatFor("atlas")).toMatchObject({ active: { conversationId: receipt?.conversationId }, pending: null, history: [] });
+
+    keepMembershipBusy = true;
+    const exhaustedRequest = { ...request, project: "membership-retry-exhausted", clientRequestId: "sqlite_membership_exhausted", cwd, accountId: account.accountId };
+    const exhausted = await executeOrchestratorSeatRequest(exhaustedRequest, seatDependencies);
+    const retired = registry.spawnReceiptForClientAttempt(exhaustedRequest.clientRequestId);
+    expect(exhausted).toMatchObject({ status: 503, body: { error: "database is locked" } });
+    expect(exhausted.body.error).toBe("database is locked");
+    expect(membershipWrites).toBe(6);
+    expect(retired).toMatchObject({ state: "failed", membershipAdmitted: false, error: "database is locked" });
+    expect(orchestratorSeatFor("membership-retry-exhausted").history.at(-1)?.seat.intent.error).toBe("database is locked");
+  } finally {
+    registry.close();
+    productionLaunchMembershipPorts.commit = originalCommit;
     for (const [key, value] of Object.entries({
       LLV_SPAWN_TRANSPORT: previous.transport,
       LLV_STRUCTURED_HOSTS: previous.hosts,

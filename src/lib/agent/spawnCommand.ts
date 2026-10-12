@@ -1343,6 +1343,14 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         && identityMaterializationFence(registry.readOnlySnapshot()).allowsReceipt(receipt, { structured })) {
         await adoptMaterializedAttempt(receipt, receipt.artifactPath);
       }
+      /* A prior request may have durably installed a queued pinned launch
+         before its response was lost. Once replay has observed that durable
+         queue, hand its foreground lease back so the due-queue reaper can own
+         the launch independently of this still-live Viewer process. */
+      if (queuedUntil && queuedReceipt.admissionOwner) {
+        queuedReceipt = registry.releaseSpawnActuation(queuedReceipt.launchId, queuedReceipt.admissionOwner).receipt;
+        receipt = queuedReceipt;
+      }
       const response = withAccountOverride(spawnResponseForReceipt(receipt, receipt.artifactPath, {
         structured,
         initialMessage: queuedUntil ? "queued" : initialMessage,

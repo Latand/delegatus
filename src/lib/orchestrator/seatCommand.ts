@@ -143,6 +143,9 @@ export interface SeatCommandDependencies {
       from the launch receipt, for reconciling an accepted launch whose
       accepting request died before activation. */
   launchSettlement(input: { launchId: string | null; clientRequestId: string }): LaunchSettlement;
+  /** Retire a reservation whose membership prerequisite never committed after
+   * its bounded SQLite retry budget is spent. */
+  retireUnconsumedLaunch?(clientRequestId: string, reason: string): Promise<void>;
   /** How long a designation queues for the account store; `SEAT_STORE_WAIT_MS`
       when absent. A seam for tests that hold the store past the bound. */
   seatStoreWaitMs?: number;
@@ -362,6 +365,7 @@ export const productionSeatCommandDependencies: SeatCommandDependencies = {
     const registry = agentRegistry();
     const receipt = registry.spawnReceiptForClientAttempt(clientRequestId);
     if (!receipt || (launchId && receipt.launchId !== launchId)) return { kind: "unknown" };
+    if (receipt.membershipAdmitted === false && receipt.state === "starting" && !receipt.key && !receipt.pane) return { kind: "unknown" };
     if (receipt.rejection || receipt.state === "failed" || receipt.state === "conflicted") {
       return { kind: "failed", error: receipt.error ?? receipt.rejection?.guidance ?? `spawn receipt is terminally ${receipt.state}` };
     }
@@ -377,6 +381,9 @@ export const productionSeatCommandDependencies: SeatCommandDependencies = {
       engine: receipt.engine,
       model: receipt.launchProfile.model,
     };
+  },
+  retireUnconsumedLaunch: async (clientRequestId, reason) => {
+    agentRegistry().retireUnconsumedSpawn(clientRequestId, reason);
   },
   resolvedConversation: (conversationId) => {
     if (!conversationId) return null;
@@ -905,7 +912,12 @@ async function guardedSeatTransition(
   rawBody: Record<string, unknown>,
   code: "seat_transition_failed" | "rotation_failed",
   run: (retryingSqliteRequestId?: string) => Promise<SeatCommandResult>,
-  busy: { replay: boolean; waitMs?: number; launchAccepted?: (clientRequestId: string) => boolean } = { replay: false },
+  busy: {
+    replay: boolean;
+    waitMs?: number;
+    launchAccepted?: (clientRequestId: string) => boolean;
+    retireUnconsumedLaunch?: (clientRequestId: string, reason: string) => Promise<void>;
+  } = { replay: false },
 ): Promise<SeatCommandResult> {
   const deadline = performance.now() + (busy.waitMs ?? SEAT_STORE_WAIT_MS);
   let retryingSqliteRequestId: string | undefined;
@@ -927,8 +939,12 @@ async function guardedSeatTransition(
       const admissionChanged = thrown instanceof AccountAdmissionChangedError;
       const message = thrown instanceof Error ? thrown.message : String(thrown);
       const reason = storeBusy && !sqliteBusy && !admissionChanged ? SEAT_STORE_BUSY_REASON : message;
-      const named = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
       const clientRequestId = text(rawBody.clientRequestId);
+      if (sqliteBusy && busy.replay && CLIENT_REQUEST_ID.test(clientRequestId)) {
+        try { await busy.retireUnconsumedLaunch?.(clientRequestId, reason); }
+        catch { /* The terminal intent below still retains the original cause. */ }
+      }
+      const named = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
       let terminalized: OrchestratorSeatTerminalization | null = null;
       let launchAccepted = false;
       if (named && CLIENT_REQUEST_ID.test(clientRequestId)) {
@@ -988,6 +1004,7 @@ export function executeOrchestratorSeatRequest(
     replay: true,
     waitMs: dependencies.seatStoreWaitMs,
     launchAccepted: (clientRequestId) => dependencies.launchSettlement({ launchId: null, clientRequestId }).kind === "settled",
+    retireUnconsumedLaunch: dependencies.retireUnconsumedLaunch,
   });
 }
 
@@ -1509,6 +1526,7 @@ export function executeOrchestratorRotation(
     replay: true,
     waitMs: dependencies.seatStoreWaitMs,
     launchAccepted: (clientRequestId) => dependencies.launchSettlement({ launchId: null, clientRequestId }).kind === "settled",
+    retireUnconsumedLaunch: dependencies.retireUnconsumedLaunch,
   });
 }
 
