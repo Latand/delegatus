@@ -29067,3 +29067,179 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
     }
   }, 300_000);
 });
+
+describe("the seat column and the agent window keep 60% of the conversation", () => {
+  /*
+   * The board's half of the operator's decision of 2026-10-11 (the transcript
+   * keeps at least 60% of its column, whatever sits under it): the real
+   * orchestrator seat above the board, which grows with its composer up to
+   * its grip's stop, and the agent window a card's conversation opens in,
+   * with its own composer (#2612). The conversation driver measures every
+   * state over the bare components; this block measures the two places they
+   * live on the board, over `issue1695Evidence.fixture.tsx?scenario=seat-noise`
+   * with the seat on a structured host mid-turn and `&undelivered=3`.
+   *
+   * Per frame: the feed's scrollport against the conversation's column, no
+   * eye chip, no control strip outside the composer, Stop beside Send while
+   * the turn runs, the undelivered chip and «⋯» in the composer's bottom row,
+   * no control of the composer lying over another, and no sideways overflow.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "keep 60% of the conversation"
+   *
+   * Readings go to `evidence/transcript-floor/board.json`; frames to
+   * `.artifacts/transcript-floor-board/`.
+   */
+  const OUT = path.resolve(".artifacts/transcript-floor-board");
+  const EVIDENCE = path.resolve("evidence/transcript-floor");
+  const FRAMES = [{ width: 1440, height: 900 }, { width: 1000, height: 700 }] as const;
+  const FLOOR = 0.6;
+  const SEAT = "[data-kanban-seat] [data-orchestrator-conversation]";
+  const WINDOW = "[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]";
+  const DRAFT = "one\ntwo\nthree\nfour\nfive\nsix";
+  const HIDE_TOAST = "[data-attention-toast] { display: none !important; }";
+
+  const readColumn = (page: Page, selector: string) => page.evaluate((selector) => {
+    const scope = document.querySelector<HTMLElement>(selector);
+    if (!scope) return null;
+    const column = scope.matches("[data-orchestrator-conversation]") ? scope : scope.querySelector<HTMLElement>("[data-conversation-body]")!;
+    const scroller = column.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+    const form = column.querySelector<HTMLElement>("form")!;
+    const shown = (element: Element | null): element is HTMLElement => Boolean(element && element.getBoundingClientRect().height > 0 && !element.closest("[hidden]"));
+    const stop = column.querySelector("[data-composer-interrupt]");
+    const send = form.querySelector("button[type=submit]");
+    const beside = shown(stop) && send ? (() => {
+      const a = stop.getBoundingClientRect();
+      const b = send.getBoundingClientRect();
+      return b.left - a.right >= 0 && b.left - a.right <= 12 && Math.abs((a.top + a.height / 2) - (b.top + b.height / 2)) <= 2;
+    })() : null;
+    const inRow = (element: Element | null) => Boolean(element?.closest("[data-composer-row-controls]"));
+    const columnHeight = column.getBoundingClientRect().height;
+    /* Every control of the composer's unit keeps its own box: inside the
+       form, on top at its centre, clear of every other control. */
+    const formBox = form.getBoundingClientRect();
+    const controls = [...form.querySelectorAll<HTMLElement>('[data-testid="composer-input-unit"] button')].filter(shown);
+    const named = (element: HTMLElement) => element.getAttribute("aria-label") ?? (element.innerText.trim() || element.tagName.toLowerCase());
+    const collisions: string[] = [];
+    controls.forEach((control, index) => {
+      const a = control.getBoundingClientRect();
+      if (a.left < formBox.left - 0.5 || a.right > formBox.right + 0.5) collisions.push(`${named(control)} leaves the form`);
+      const hit = document.elementFromPoint(a.left + a.width / 2, a.top + a.height / 2);
+      if (!hit || !(hit === control || control.contains(hit))) collisions.push(`${named(control)} is covered at its centre`);
+      for (const other of controls.slice(index + 1)) {
+        if (other.contains(control) || control.contains(other)) continue;
+        const b = other.getBoundingClientRect();
+        if (Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5) collisions.push(`${named(control)} overlaps ${named(other)}`);
+      }
+    });
+    return {
+      column: Math.round(columnHeight),
+      feed: Math.round(scroller.getBoundingClientRect().height),
+      share: Math.round((scroller.getBoundingClientRect().height / columnHeight) * 1000) / 1000,
+      form: Math.round(form.getBoundingClientRect().height),
+      seat: Math.round(document.querySelector<HTMLElement>("[data-kanban-seat]")?.getBoundingClientRect().height ?? 0),
+      stop: shown(stop) ? { beside } : null,
+      chip: shown(column.querySelector("[data-receipts-chip]")) ? { inRow: inRow(column.querySelector("[data-receipts-chip]")), text: column.querySelector<HTMLElement>("[data-receipts-chip]")!.innerText.trim() } : null,
+      list: shown(column.querySelector("[data-runtime-receipt-stack]")),
+      /* The first settled failure with its Retry, whole inside the list's visible part: the frame's own edge,
+         the region that ends above the field. */
+      firstFailed: (() => {
+        const list = column.querySelector("[data-runtime-receipt-stack]");
+        if (!shown(list)) return null;
+        const field = (column.querySelector('[data-testid="composer-input-unit"]') as HTMLElement).getBoundingClientRect().top;
+        const frame = list.getBoundingClientRect();
+        const bottom = Math.min(frame.bottom, field);
+        const headerBottom = list.querySelector("summary")!.getBoundingClientRect().bottom;
+        const row = [...list.querySelectorAll<HTMLElement>("[data-runtime-receipt-details] > div")].find((candidate) => candidate.querySelector('[data-receipt-status="failed"]'));
+        if (!row) return { found: false, whole: false, header: "" };
+        const rect = row.getBoundingClientRect();
+        const retry = [...row.querySelectorAll("button")].find((button) => /^(Повторити|Retry)$/.test(button.textContent?.trim() ?? ""));
+        const retryRect = retry?.getBoundingClientRect();
+        const header = [...list.querySelector("summary")!.children].filter((child) => !child.matches(".sr-only, [hidden]") && child.getBoundingClientRect().width > 0)
+          .map((child) => (child as HTMLElement).innerText ?? "").join(" ").replace(/\s+/g, " ").trim();
+        return {
+          found: true,
+          whole: rect.top >= headerBottom - 0.5 && rect.bottom <= bottom + 0.5 && Boolean(retryRect) && retryRect!.top >= headerBottom - 0.5 && retryRect!.bottom <= bottom + 0.5,
+          header,
+        };
+      })(),
+      more: inRow(column.querySelector("[data-composer-more-actions]")),
+      eyeChip: Boolean(column.querySelector("[data-selected-context]")),
+      strayStrip: [...column.querySelectorAll("[data-agent-control-strip]")].some((element) => element.getAttribute("data-strip-layout") !== "composer" && shown(element)),
+      collisions,
+      overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+    };
+  }, selector);
+
+  browserTest("the seat and the agent window hold the floor at rest, with three undelivered, the list open and a six-line draft", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/transcript-floor-board-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const frames: Record<string, unknown> = {};
+    try {
+      for (const lang of ["uk", "en"] as const) for (const viewport of FRAMES) {
+        const where = `${viewport.width}-${lang}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-noise&case=v&undelivered=3`, viewport, "dark", lang);
+        const record = async (place: "seat" | "window", moment: string) => {
+          await page.waitForTimeout(500);
+          const reading = await readColumn(page, place === "seat" ? SEAT : WINDOW);
+          const label = `${place}-${moment}-${where}`;
+          frames[label] = reading;
+          await page.screenshot({ path: path.join(OUT, `${label}.png`) });
+          if (!reading) { failures.push(`${label}: not on screen`); return null; }
+          if (reading.share < FLOOR - 0.002) failures.push(`${label}: the transcript keeps ${Math.round(reading.share * 1000) / 10}% of its column`);
+          if (reading.eyeChip) failures.push(`${label}: the eye chip is drawn`);
+          if (reading.strayStrip) failures.push(`${label}: the agent's controls are a strip outside the composer`);
+          if (!reading.more) failures.push(`${label}: «⋯ More actions» is not in the composer's bottom row`);
+          if (reading.chip && !reading.chip.inRow) failures.push(`${label}: the undelivered chip is not in the bottom row`);
+          for (const collision of reading.collisions) failures.push(`${label}: ${collision}`);
+          if (reading.overflowX > 1) failures.push(`${label}: the page scrolls sideways by ${reading.overflowX}`);
+          return reading;
+        };
+        try {
+          await page.addStyleTag({ content: HIDE_TOAST });
+          await page.waitForSelector(`${SEAT} [data-feed-state]`, { state: "attached", timeout: 20_000 });
+          /* The narrower board opens with the seat folded to its header. */
+          if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.click("[data-kanban-seat] [data-seat-collapse]");
+          await page.waitForSelector(`${SEAT} [data-receipts-chip]`, { timeout: 20_000 });
+          const rest = await record("seat", "rest");
+          if (rest && !rest.chip?.text?.includes("3")) failures.push(`seat-rest-${where}: the chip reads ${JSON.stringify(rest.chip?.text)}`);
+          if (rest?.list) failures.push(`seat-rest-${where}: the undelivered list is drawn before it is asked for`);
+          if (rest && rest.stop?.beside !== true) failures.push(`seat-rest-${where}: Stop is not beside Send while the seat's turn runs`);
+
+          await page.locator(`${SEAT} [data-receipts-chip]`).click();
+          const open = await record("seat", "list-open");
+          if (open && !open.list) failures.push(`seat-list-open-${where}: the list did not open`);
+          if (open?.firstFailed && !open.firstFailed.found) failures.push(`seat-list-open-${where}: no failed row with its Retry is in the list`);
+          if (open?.firstFailed?.found && !open.firstFailed.whole) failures.push(`seat-list-open-${where}: the first failed row or its Retry is cut off`);
+          if (open?.firstFailed && !/^(Повторити невдалі|Retry failed)( \(\d+\))?$/.test(open.firstFailed.header)) failures.push(`seat-list-open-${where}: the list's header reads ${JSON.stringify(open.firstFailed.header)}`);
+          await page.locator(`${SEAT} [data-receipts-chip]`).click();
+
+          await page.locator(`${SEAT} textarea`).fill(DRAFT);
+          await record("seat", "six-line-draft");
+          await page.locator(`${SEAT} textarea`).fill("");
+
+          /* A card's conversation in the agent window, with its own composer. */
+          const column = await page.evaluate((selector) => document.querySelector(selector)?.closest<HTMLElement>(".column")?.dataset.status ?? null, `.card[data-id="task:t-export"]`);
+          const tab = page.locator(`.tabs-nav [data-tab="${column}"]`);
+          if (column && await tab.count()) await tab.first().click();
+          await page.locator(`.card[data-id="task:t-export"] .tile >> nth=0`).click();
+          await page.waitForSelector(`${WINDOW} [data-feed-state]`, { timeout: 15_000 });
+          await record("window", "rest");
+          await page.locator(`${WINDOW} textarea`).fill(DRAFT);
+          await record("window", "six-line-draft");
+          if (pageErrors.length) failures.push(`${where}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "board.json"), `${JSON.stringify({ floor: FLOOR, frames, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 900_000);
+});

@@ -248,6 +248,9 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
   const superseded = caps.surface === "superseded";
   const sendCap = caps.controls.send;
   const sendBlockedReason = !deadHost && sendCap.state === "disabled" ? t(sendCap.reason) : null;
+  /* A surface whose Send is hidden exposes no composer at all (it stands
+     down by itself), so the agent's controls stay in their strip there. */
+  const composerShown = !(noComposer || superseded || neverStarted) && sendCap.state !== "hidden";
   /* A failed per-card retry/rollback must be announced, not swallowed (finding
      3): the previous code ignored the POST result entirely. */
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
@@ -505,29 +508,37 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
             first message queue, and see the reply stream in the same place. */}
         {/* The "done" seam of a committed migration names the account this
             conversation continued from, above its transcript. */}
-        <MigrationDivider predecessorLabel={file.predecessorLabel} />
-        <LogFeed
-          file={file}
-          showSvc={false}
-          lineFilter=""
-          onStatus={noop}
-          paused={feedPaused}
-          follow
-          setFollow={noop}
-          compact
-          onLaunchRetry={onSpawnRetry && file.spawn ? () => onSpawnRetry(file) : undefined}
-          stepsMount={stepsMount}
-        />
-        {/* Unified control strip (issue #241): the single action surface, mounted
-            once here so it exists on every surface — including `noComposer`
-            review rounds that still need Stop. Renders nothing on surfaces where
-            no control applies. Dormant far-zoom board nodes suppress it entirely
-            (the dormant-node contract): the strip returns on activation, and
-            active review panes keep it regardless of `noComposer`. */}
-        {dormant || isMobile || neverStarted || readOnly ? null : <AgentControlStrip file={file} />}
-        {dormant || neverStarted ? null : <div ref={setStepsMount} className="contents" />}
-        {composerMount && !superseded && !neverStarted && !readOnly ? <div ref={composerMount} className="contents" /> : null}
-        {noComposer || superseded || neverStarted ? null : <TmuxComposer file={file} pollPaused={feedPaused} deadHost={deadHost} sendBlockedReason={sendBlockedReason} {...(composerPrimary ? { primaryPlace: true } : {})} {...(composerPlaceholder ? { placeholder: composerPlaceholder } : {})} />}
+        {/* The conversation's own column (2026-10-11): the transcript and
+            everything under it share this box, and the transcript keeps 60%
+            of it whatever the composer gains. The header and the banners
+            above are the pane's chrome, outside the share. */}
+        <div data-conversation-body="" className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <MigrationDivider predecessorLabel={file.predecessorLabel} />
+          <div data-composer-yields="" className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <LogFeed
+              file={file}
+              showSvc={false}
+              lineFilter=""
+              onStatus={noop}
+              paused={feedPaused}
+              follow
+              setFollow={noop}
+              compact
+              onLaunchRetry={onSpawnRetry && file.spawn ? () => onSpawnRetry(file) : undefined}
+              stepsMount={stepsMount}
+            />
+          </div>
+          {/* Unified control strip (issue #241), for a pane with no composer —
+              a `noComposer` review round still needs Stop. Where the composer
+              is on screen the same controls sit in its bottom row (2026-10-11).
+              Renders nothing on surfaces where no control applies. Dormant
+              far-zoom board nodes suppress it entirely (the dormant-node
+              contract): the strip returns on activation. */}
+          {dormant || isMobile || neverStarted || readOnly || composerShown ? null : <AgentControlStrip file={file} />}
+          {dormant || neverStarted ? null : <div ref={setStepsMount} className="contents" />}
+          {composerMount && !superseded && !neverStarted && !readOnly ? <div ref={composerMount} className="contents" /> : null}
+          {composerShown ? <TmuxComposer file={file} pollPaused={feedPaused} deadHost={deadHost} sendBlockedReason={sendBlockedReason} {...(composerPrimary ? { primaryPlace: true } : {})} {...(composerPlaceholder ? { placeholder: composerPlaceholder } : {})} /> : null}
+        </div>
       </section>
     </div>
   );

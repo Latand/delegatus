@@ -73,8 +73,10 @@ test("hidden controls never reach the DOM (resume hides stop/compact/kill)", () 
   const html = render(file({ proc: null }), null);
   expect(html).toContain('data-strip-surface="resume"');
   expect(html).not.toContain(translate("en", "composer.interruptAria"));
-  // terminal keeps the resume strip alive; runtime lives in the composer pill
-  expect(html).toContain(`aria-label="${translate("en", "attach.dialogTitle")}"`);
+  // terminal keeps the resume strip alive; runtime lives in the composer pill.
+  // It copies a command rather than attaching anything, and says so (2026-10-11).
+  expect(html).toContain(`aria-label="${translate("en", "attach.copyTerminalCommand")}"`);
+  expect(html).not.toContain("Attach in your terminal");
 });
 
 test("a disabled control keeps aria-disabled and appends the reason to its aria-label", () => {
