@@ -106,6 +106,34 @@ export function isClaudeSdkDeliveredUser(record: Record<string, unknown>): boole
   return !(isClaudeInterruptSentinelText(text) || isCommandCaveatText(text) || isTaskNotificationText(text));
 }
 
+/**
+ * The user record a message delivered mid-turn stands for, or null. Claude
+ * journals input that reaches it while a turn runs as an attachment,
+ * `{type:"attachment", attachment:{type:"queued_command", commandMode:"prompt",
+ * prompt, source_uuid}}`, in place of a `type:"user"` record. `source_uuid` is
+ * the id the engine echoed for that input, so it is the same delivery-ledger
+ * join identity an idle delivery's own `uuid` is. The record-level `rendered`
+ * copy wraps the prompt in Claude's reminder text and is never read. A
+ * background-task notice (`commandMode:"task-notification"`) is not a message.
+ */
+export function claudeQueuedPromptUser(record: Record<string, unknown>): Record<string, unknown> | null {
+  if (record.type !== "attachment") return null;
+  const attachment = rec(record.attachment);
+  if (attachment.type !== "queued_command" || attachment.commandMode !== "prompt") return null;
+  const prompt = attachment.prompt;
+  if (typeof prompt !== "string" && !Array.isArray(prompt)) return null;
+  return {
+    type: "user",
+    timestamp: record.timestamp,
+    ...(str(attachment.source_uuid) ? { uuid: attachment.source_uuid } : {}),
+    /* A structured host is the writer behind an `sdk-*` entrypoint, and the
+       same input delivered at idle carries `promptSource:"sdk"`. */
+    ...(str(record.entrypoint).startsWith("sdk") ? { promptSource: "sdk" } : {}),
+    ...("origin" in attachment ? { origin: attachment.origin } : {}),
+    message: { role: "user", content: prompt },
+  };
+}
+
 /** True when a Claude user record is journaled metadata that must never open
     or steer a work-duration window. Narrower than the feed contract: SDK and
     idle-delivered peer/coordinator prompts render as system rows but DO
