@@ -44,7 +44,10 @@ import type { FileEntry } from "@/lib/types";
 import { BADGE_LABEL, ConversationRow } from "./MobileBoard";
 import { launchedAt, mobileRowState, nowFragment, type MobileBoardConversation } from "./mobileBoardModel";
 import { attentionReason } from "../attention";
-import { mobilePipelineActions, pendingPipelineActs, usePhonePipelineActs, useScrolledAway, type PendingPipelineActs } from "./MobilePipelineScreen";
+import { takeRequestedLane } from "./taskLaneRequest";
+import { TaskChronology } from "@/components/kanban/TaskChronology";
+import { taskChronology } from "@/components/kanban/taskChronologyModel";
+import { LaneAnswerRows, mobilePipelineActions, pendingPipelineActs, usePhonePipelineActs, useScrolledAway, type PendingPipelineActs } from "./MobilePipelineScreen";
 import { showReceipt } from "./MobileReceipt";
 import type { MobileRowActionTarget } from "./MobileRowActions";
 import { MobileSheet, MobileSheetCell, MobileSheetCells, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
@@ -137,6 +140,8 @@ export interface MobileTaskScreenProps extends PhoneBoardInput {
   onAddAgent?: (band: { id: string; task: BoardTask; title: string }) => void;
   /** The conversations the screen draws, for presence. */
   onShown?: (paths: readonly string[]) => void;
+  /** A lane whose sheet the screen opens with: «Answer» on the board's card. */
+  openLane?: string;
   /** Test seams: the held-act store and the pipeline route. */
   acts?: PendingPipelineActs;
   ports?: PipelinePorts;
@@ -726,7 +731,13 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
     if (file) props.onOpenConversation(file);
     else props.onOpenPipeline(pipeline);
   };
-  const [laneFor, setLaneFor] = useState<string | null>(null);
+  /* «Answer» on the board's card can open this screen with a lane's sheet open (§4.3). */
+  const [laneFor, setLaneFor] = useState<string | null>(() => props.openLane ?? takeRequestedLane(taskId));
+  const openedLane = useRef(laneFor);
+  useEffect(() => {
+    if (openedLane.current) nav.openSheet("lane");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, for the lane the screen opened with
+  }, []);
   const [linksFor, setLinksFor] = useState<WorkLinkTarget | null>(null);
   const [menuFace, setMenuFace] = useState<"task" | "colour" | "priority">("task");
   useEffect(() => {
@@ -759,7 +770,6 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
               setLaneFor(entry.id);
               nav.openSheet("lane");
             }}
-            onAnswer={lane.answer}
           />
         </div>
       );
@@ -778,7 +788,6 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
           taskTitle={pendingTitle ? null : title}
           taskId={taskId}
           acting={lane.acting(pipeline)}
-          largeAnswers
           onOpenStage={openStage}
           onOpenStages={props.onOpenPipeline}
           onMenu={(entry) => {
@@ -786,7 +795,6 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
             nav.openSheet("lane");
           }}
           onWorkLinks={(target) => openLinks(target)}
-          onAnswer={lane.answer}
         />
       </div>
     );
@@ -799,6 +807,13 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
     return pr ? [`#${pr.number}`] : [];
   });
 
+  const chronology = useMemo(() => (card ? taskChronology({
+    taskCreatedAt: task?.createdAt ?? null,
+    pipelines: lanes.map((summary) => summary.pipeline),
+    past: card.past,
+    cleared: card.cleared,
+    seatConversationIds: [...(props.seatRefs?.conversationIds ?? []), ...(props.seatRefs?.previous?.conversationIds ?? [])],
+  }) : []), [card, task?.createdAt, lanes, props.seatRefs]);
   const finishWaits = taskFinishWaitCount(lanes.map((summary) => summary.pipeline), taskId);
 
   /* ── Sheets ───────────────────────────────────────────────────────────── */
@@ -922,6 +937,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                 />
               );
             })}
+            <LaneAnswerRows pipeline={pipeline} acting={acting} onAnswer={lane.answer} close={close} />
           </div>
         </MobileSheet>
       );
@@ -1309,7 +1325,25 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                     ) : null}
                   </section>
                 ) : null)}
-                <EarlierAttempts taskId={taskId} lanes={lanes} past={card?.past ?? []} elsewhere={notLoadedRefs} files={files} nowMs={nowMs} onOpen={props.onOpenConversation} />
+                {/* The task's events in order (§6.3); a stop's ⋯ opens its lane's sheet. */}
+                {card ? (
+                  <TaskChronology
+                    phone
+                    entries={chronology}
+                    pipelines={lanes.map((summary) => summary.pipeline)}
+                    nowMs={nowMs}
+                    onOpen={(conversation) => {
+                      const file = files.find((entry) => (conversation.conversationId && entry.conversationId === conversation.conversationId) || (conversation.path && entry.path === conversation.path));
+                      if (file) props.onOpenConversation(file);
+                    }}
+                    onStopMenu={(pipelineId) => {
+                      setLaneFor(pipelineId);
+                      nav.openSheet("lane");
+                    }}
+                  />
+                ) : null}
+                {/* Attempts and rounds are the timeline's; the helpers and the conversations not loaded stay here. */}
+                <EarlierAttempts taskId={taskId} lanes={lanes} past={(card?.past ?? []).filter((row) => row.kind === "helper")} elsewhere={notLoadedRefs} files={files} nowMs={nowMs} onOpen={props.onOpenConversation} />
               </div>
             </div>
           </>

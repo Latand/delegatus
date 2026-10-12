@@ -5,6 +5,11 @@ import type { Root } from "react-dom/client";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 
 import type { PatchBody, PatchResult, TaskMutationPorts } from "./useTaskMutations";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* The card's Details row (#1834), rendered by React against invented tasks and
    scripted task ports: agent-facing context is folded away behind ONE row that

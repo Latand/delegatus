@@ -1,6 +1,6 @@
 "use client";
 
-import { Boxes, CircleX, Eye, Pause, Play } from "lucide-react";
+import { Boxes, Check, CircleX, Eye, GitMerge, Pause, Play, RotateCcw, SkipForward, Undo2 } from "lucide-react";
 
 import { ChevronRight } from "@/components/icons";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
@@ -18,6 +18,8 @@ import type { ReceiptAction as BoardReceiptAction } from "../kanban/KanbanReceip
 import { summarizePipeline, workingStageConversations } from "../kanban/kanbanModel";
 import { pastAttempts } from "../kanban/pipelineGraph";
 import { pastAttemptLabel, pastAttemptState, pastAttemptTone, pipelineTitle } from "../kanban/PipelineSection";
+import { laneState } from "../kanban/cardState";
+import { laneAnswerItems } from "../kanban/laneAnswerMenu";
 import { browserPipelinePorts, type PipelinePorts } from "../kanban/pipelinePorts";
 import { pipelineActionOptions, type PipelineActionKind } from "../kanban/stagesModel";
 import { usePipelineActions, type PipelineActionIntent } from "../kanban/usePipelineActions";
@@ -297,6 +299,57 @@ export function usePhonePipelineActs({ ports, acts, onClosed }: {
   };
 }
 
+const ANSWER_ICON: Record<PipelineAnswer["action"], typeof Check> = {
+  "retry-stage": RotateCcw,
+  "skip-stage": SkipForward,
+  "continue-review": RotateCcw,
+  "accept-head": Check,
+  "retry-merge": GitMerge,
+  dismiss: Undo2,
+  close: CircleX,
+};
+
+/**
+ * A lane's manual answers on the phone's sheets (docs/design/calm-task-cards-build.md
+ * §4.2): the lane sheet of the task screen and the pipeline screen's ⋯. They
+ * left the screens' faces; a caption says they are a manual override where
+ * the orchestrator owns the lane. Nothing when the lane asks nothing.
+ */
+export function LaneAnswerRows({ pipeline, acting, onAnswer, close }: {
+  pipeline: Pipeline;
+  acting: PipelineActionKind | null;
+  onAnswer: (pipeline: Pipeline, answer: PipelineAnswer) => void;
+  close: () => void;
+}) {
+  const { t } = useLocale();
+  const names = stageNames(t, pipeline);
+  const owner = laneState(pipeline).owner;
+  const items = laneAnswerItems(t, pipeline, owner, (stage) => names.get(stage.id) ?? stage.id);
+  if (!items.length) return null;
+  return (
+    <>
+      <MobileSheetDivider />
+      {owner === "seat" ? <p data-phone-lane-answers-caption="" className="px-4 pb-0.5 pt-1.5 text-label text-muted">{t("cardState.manualCaption")}</p> : null}
+      {items.map((item) => {
+        const Icon = ANSWER_ICON[item.action];
+        return (
+          <MobileSheetRow
+            key={item.action}
+            icon={<Icon className="h-[18px] w-[18px]" aria-hidden />}
+            label={item.label}
+            disabled={Boolean(acting)}
+            onSelect={() => {
+              close();
+              onAnswer(pipeline, item);
+            }}
+            attrs={{ "data-phone-lane-answer": item.action }}
+          />
+        );
+      })}
+    </>
+  );
+}
+
 /** The heading has scrolled up out of the body: the bar takes the title. */
 export function useScrolledAway(target: RefObject<HTMLElement | null>, root: RefObject<HTMLElement | null>): boolean {
   const [away, setAway] = useState(false);
@@ -482,6 +535,7 @@ export function MobilePipelineScreen({
                 />
               );
             })}
+            <LaneAnswerRows pipeline={pipeline} acting={acting} onAnswer={lane.answer} close={close} />
             <MobileSheetDivider />
             <MobileSheetRow
               icon={<Boxes className="h-[18px] w-[18px]" aria-hidden />}
@@ -563,7 +617,6 @@ export function MobilePipelineScreen({
             nav.openSheet("stage");
           }}
           onWorkLinks={() => nav.openSheet("links")}
-          onAnswer={lane.answer}
         />
         {linked.length ? (
           <section data-mobile2-section="tasks" className="flex shrink-0 flex-col gap-1.5">

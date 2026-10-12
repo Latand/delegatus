@@ -398,3 +398,19 @@
 .pblock .pb-open.managed { cursor: default; }
 @media (pointer: coarse) { .pblock .pb-open.managed { min-height: 0; } }
 .pblock p.pb-note[data-managed-on] { display: block; margin: 2px 0 0; font-size: var(--text-label); color: var(--color-muted); overflow-wrap: anywhere; }
+
+/* A stop the orchestrator handles (docs/design/calm-task-cards-build.md §5.1):
+   the parked stage keeps its alert mark in the seat's accent, never amber,
+   which belongs to a stop the operator answers. */
+.tone-seat { --stage-tone: var(--color-accent); }
+.pblock[data-seat-stop="1"] .pb-pill.tone-needs { --stage-tone: var(--color-accent); border-color: var(--stage-tone); color: var(--stage-tone); }
+.pblock[data-seat-stop="1"] .pret { color: var(--color-accent); }
+/* A stop that waits on nobody (an automatic retry, a cleared wait) keeps its
+   shape in grey: amber would ask the operator for something nobody needs. */
+.pblock[data-stop-waits="1"] .pb-pill.tone-needs { --stage-tone: var(--color-muted); border-color: var(--border-default); color: var(--color-secondary); }
+.pblock[data-stop-waits="1"] .pret { color: var(--color-muted); }
+.pblock[data-seat-stop="1"] .pstate-word { --pstate-ink: var(--color-accent); }
+.pblock[data-stop-waits="1"] .pstate-word { --pstate-ink: var(--color-muted); }
+/* What the stage said keeps its weight; its ink is the owner's. */
+.pblock[data-seat-stop="1"] :is(.pb-answer .stage-report, .review-heads, .pb-merge[data-merge-state="stopped"], .pb-reason) { color: var(--color-accent); }
+.pblock[data-stop-waits="1"] :is(.pb-answer .stage-report, .review-heads, .pb-merge[data-merge-state="stopped"], .pb-reason) { color: var(--color-secondary); }

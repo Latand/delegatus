@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import type { Root } from "react-dom/client";
 
+import { laneRouteKey } from "@/lib/attention/routeTypes";
 import type { FilesWorkLinks, ResolvedWorkLinks, WorkLink } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
 
@@ -143,13 +144,9 @@ test("every density says what the desktop says: the stage names, the stage state
 test("stage names stay the pipeline's in Ukrainian, and the state words are the desktop's Ukrainian words", () => {
   setLocale("uk");
   const summary = summarizePipeline(parked());
-  const host = mount(<PipelineBlock summary={summary} density="task" nowMs={NOW_MS} onOpenStage={() => {}} onAnswer={() => {}} />);
+  const host = mount(<PipelineBlock summary={summary} density="task" nowMs={NOW_MS} onOpenStage={() => {}} />);
   expect(texts(host, ".pb-pill[data-stage] .pb-name")).toEqual(["Implement", "Review", "Verify", "Merge"]);
   expect(host.querySelector(".pstate-word")?.textContent).toBe(translate("uk", "pipelineState.needs_decision"));
-  expect(texts(host, "[data-answer-action]")).toEqual([
-    translate("uk", "kanban.pipelineAct.label.skip-stage", { stage: "Verify" }),
-    translate("uk", "kanban.pipelineAct.label.retry-stage", { stage: "Verify" }),
-  ]);
 });
 
 test("the card line is passive: no control in it, the PR as text, the reason in warning words, and a finished lane one muted line", () => {
@@ -311,20 +308,29 @@ test("the stage chain is the lane's head where the card's ⋯ holds its actions;
   expect(titled.querySelector(".pb-tail")).toBeNull();
 });
 
-test("the answer in place names the stage and attempt it saw, and waits while an action is on its way", () => {
-  const answers: unknown[] = [];
-  const host = mount(<PipelineBlock summary={summarizePipeline(parked())} density="task" nowMs={NOW_MS} onOpenStage={() => {}} onAnswer={(pipeline, answer) => answers.push([pipeline.id, answer])} />);
+test("the lane row says what it stopped on and offers no answer: the answers are the lane's ⋯ (docs/design/calm-task-cards-build.md §6.2)", () => {
+  const host = mount(<PipelineBlock summary={summarizePipeline(parked())} density="task" nowMs={NOW_MS} onOpenStage={() => {}} />);
   expect(host.querySelector(".pb-answer .stage-findings li")?.textContent).toBe("P1the alias swaps early");
-  click(host.querySelector('[data-answer-action="retry-stage"]'));
-  click(host.querySelector('[data-answer-action="skip-stage"]'));
-  expect(answers).toEqual([
-    ["p-search", { action: "retry-stage", stageId: "verify", stageName: "Verify", expectedAttempt: 2 }],
-    ["p-search", { action: "skip-stage", stageId: "verify", stageName: "Verify", expectedAttempt: 2 }],
-  ]);
+  expect(host.querySelectorAll("[data-answer-action]")).toHaveLength(0);
+  /* The operator's own stop keeps its amber. */
+  expect(host.querySelector<HTMLElement>(".pblock")?.dataset.needs).toBe("1");
 
-  const busy = mount(<PipelineBlock summary={summarizePipeline(parked())} density="task" nowMs={NOW_MS} acting="skip-stage" onAnswer={() => {}} />);
+  const busy = mount(<PipelineBlock summary={summarizePipeline(parked())} density="task" nowMs={NOW_MS} acting="skip-stage" />);
   expect(busy.querySelector("[data-pipeline-acting]")?.textContent).toBe("Skipping…");
-  expect([...busy.querySelectorAll<HTMLButtonElement>("[data-answer-action]")].every((button) => button.disabled)).toBe(true);
+});
+
+test("a stop the orchestrator handles takes no amber, and the closed card's chain leaves its reason to the state line (§5.1, §6.2)", () => {
+  const routed = parked();
+  routed.attentionRoute = { key: laneRouteKey(routed, "lane-decision"), owner: "seat", seat: "conversation_seat" };
+  const row = mount(<PipelineBlock summary={summarizePipeline(routed)} density="task" nowMs={NOW_MS} onOpenStage={() => {}} />);
+  const block = row.querySelector<HTMLElement>(".pblock")!;
+  expect(block.dataset.needs).toBeUndefined();
+  expect(block.dataset.seatStop).toBe("1");
+  /* What the stage said is still on the row. */
+  expect(row.querySelector(".pb-answer .stage-findings li")?.textContent).toBe("P1the alias swaps early");
+  const card = mount(<PipelineBlock summary={summarizePipeline(routed)} density="card" nowMs={NOW_MS} reasonLine={false} />);
+  expect(card.querySelector("[data-pipeline-reason]")).toBeNull();
+  expect(card.querySelector<HTMLElement>(".pblock")?.dataset.seatStop).toBe("1");
 });
 
 test("the graph is the operator's toggle on the task row, and it replaces the chain in place", () => {
@@ -400,9 +406,8 @@ test("the screen density keeps a reworking passed stage out of the passed fold",
   expect(quiet.querySelector('.pb-stage[data-stage="implement"]')).toBeNull();
 });
 
-test("the screen density numbers the stages, folds the passed ones before the current one, and answers inside the parked stage", () => {
-  const answers: string[] = [];
-  const host = mount(<PipelineBlock summary={summarizePipeline(parked())} density="screen" nowMs={NOW_MS} onOpenStage={() => {}} onAnswer={(_pipeline, answer) => answers.push(answer.action)} />);
+test("the screen density numbers the stages, folds the passed ones before the current one, and says what the parked stage stopped on", () => {
+  const host = mount(<PipelineBlock summary={summarizePipeline(parked())} density="screen" nowMs={NOW_MS} onOpenStage={() => {}} />);
   /* The screen's bar says where the lane stands; the body owns the title. */
   const bar = mount(<PipelineStateLine summary={summarizePipeline(parked())} nowMs={NOW_MS} />);
   /* The stage it stands on in the one attempt caption, then where it sits (#1892). */
@@ -423,9 +428,9 @@ test("the screen density numbers the stages, folds the passed ones before the cu
   expect(current.className).toContain("tone-needs");
   expect(current.querySelector(".pb-stage-state")?.textContent).toBe(translate("en", "pipelineState.needs_decision"));
   expect(current.querySelector(".pb-stage-title .mglyph")?.getAttribute("data-glyph-state")).toBe("failed");
-  expect(texts(current, "[data-answer-action]")).toEqual([translate("en", "mobile2.pipeline.skip"), translate("en", "mobile2.pipeline.retry")]);
-  click(current.querySelector('[data-answer-action="retry-stage"]'));
-  expect(answers).toEqual(["retry-stage"]);
+  /* What the stage said stands in the parked stage; the answers are the screen's ⋯ sheet. */
+  expect(current.querySelector(".pb-answer")).toBeTruthy();
+  expect(current.querySelectorAll("[data-answer-action]")).toHaveLength(0);
 });
 
 /* #2187 §6: the lane that finishes its task says so on the lane row, before

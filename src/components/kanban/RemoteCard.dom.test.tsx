@@ -9,6 +9,11 @@ import type { BoardTask } from "@/lib/tasks/types";
 
 import { KanbanBoard } from "./KanbanBoard";
 import type { TaskMutationPorts } from "./useTaskMutations";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* A task another machine runs, drawn by the board against the feed the Viewer
    answers (docs/design/synced-task-card.md §5-§7). The feed is scripted; no

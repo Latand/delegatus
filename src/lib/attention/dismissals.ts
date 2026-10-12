@@ -5,7 +5,7 @@ import { redactMonitorText } from "@/lib/monitor/redact";
 
 import { statePath } from "@/lib/configDir";
 import type { PipelinePatchResult } from "@/lib/pipelines/engine";
-import { laneMovedAt, laneMovedSince } from "@/lib/pipelines/laneMovement";
+import { laneMovedSince } from "@/lib/pipelines/laneMovement";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { LegacyImportHooks, LegacyImportOutcome } from "@/lib/state/legacyImport";
 import { LegacyDocumentStore } from "@/lib/state/legacyDocumentStore";
@@ -23,7 +23,7 @@ import {
   type DismissedBy,
   type SystemClearSnapshot,
 } from "./dismissalTypes";
-import { parseEscalationMark, type AttentionEscalationMark } from "./routeTypes";
+import { laneWaitCleared, parseEscalationMark, type AttentionEscalationMark } from "./routeTypes";
 
 /**
  * Needs-you dismissals (docs/design/needs-attention.md §5): one service behind
@@ -430,16 +430,6 @@ function laneAsks(pipeline: Pipeline): boolean {
   return pipeline.state === "needs_decision" || pipeline.state === "needs_review" || laneMergeBlocked(pipeline);
 }
 
-/** The operator's (or an earlier agent's) dismissal still covers what the
-    lane waits on: it moved nowhere since, and a stopped merge was cleared
-    after it stopped. */
-function laneCleared(pipeline: Pipeline): boolean {
-  if (!pipeline.dismissedAt) return false;
-  const dismissed = Date.parse(pipeline.dismissedAt);
-  if (laneMergeBlocked(pipeline)) return dismissed >= Date.parse(pipeline.merge!.blockedAt ?? pipeline.merge!.updatedAt);
-  return laneMovedAt(pipeline) <= dismissed;
-}
-
 /** The subjects a target names. A task names the subjects its card drew when
     the caller says which, and otherwise everything on it: its assignments and
     the lanes filed under it. */
@@ -579,7 +569,7 @@ export async function dismissAttention(target: DismissalTarget, by: DismissedBy,
       if (target.kind === "pipeline") throw new DismissalError("PIPELINE_NOT_FOUND", `no pipeline ${request.pipelineId}`, 404);
       continue;
     }
-    const nothing = undo ? !pipeline.dismissedAt : !laneAsks(pipeline) || laneCleared(pipeline);
+    const nothing = undo ? !pipeline.dismissedAt : !laneAsks(pipeline) || laneWaitCleared(pipeline);
     if (nothing || pipeline.state === "draft" || pipeline.state === "closed") {
       alreadyClear.push(answer);
       continue;

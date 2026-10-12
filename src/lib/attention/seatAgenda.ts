@@ -3,6 +3,8 @@ import { withoutArchivedPredecessors } from "@/lib/accounts/identity";
 import type { SeatTickWorkerAskInput } from "@/lib/monitor/types";
 import { canonicalOrchestratorProject } from "@/lib/orchestrator/seats";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { MERGE_REASON_PATTERNS, MERGE_REASONS } from "@/lib/forge/mergeReasons";
+import { laneStopKind } from "@/lib/pipelines/laneStop";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
@@ -62,17 +64,39 @@ function laneQuestion(pipeline: Pipeline): string {
   return summary ? `«${clip(summary, QUESTION_MAX)}»` : `stopped: ${clip(pipeline.stateDetail ?? "no reason recorded", QUESTION_MAX)}`;
 }
 
+/** The step a stopped merge takes, by the runner's reason
+    (docs/design/calm-task-cards-build.md §7.2): a retry only helps where the
+    next read can pass, so a PR that is gone is cleared and a conflict is
+    refreshed first. */
+function mergeStep(pipeline: Pipeline): string {
+  const reason = pipeline.merge?.reason ?? null;
+  const target = `{kind:"pipeline", pipelineId:"${pipeline.id}"}`;
+  if (reason === MERGE_REASONS.closed || reason === MERGE_REASONS.noPr || reason === MERGE_REASONS.settingOff) {
+    return `a retry stops again at once: check whether the change reached main another way or the lane had nothing to merge, then clear it with dismiss_attention target ${target} and a one-line reason (the same write as «Leave the PR open»)`;
+  }
+  if (reason === MERGE_REASONS.conflict || reason === MERGE_REASONS.mainMoving || reason === MERGE_REASONS.headChanged) {
+    return "refresh it first: a lane that merges current main into this branch, resolves the conflict and has one review of the resolution, then pipeline_action retry-merge";
+  }
+  if (reason === MERGE_REASONS.checksTimeout || reason === MERGE_REASONS.noChecks || (reason && MERGE_REASON_PATTERNS.check.test(reason))) {
+    return "pipeline_action retry-merge once the PR's checks are green; re-run or fix a red check first";
+  }
+  return "repair it and pipeline_action retry-merge";
+}
+
 function laneLine(pipeline: Pipeline): string {
   const title = clip(pipeline.task || pipeline.id, 90);
   const stage = pipeline.cursor?.stageId ? ` stage ${pipeline.cursor.stageId}` : "";
+  /* The class first, so the seat reads what kind of stop it is before the stage's own words. */
+  const stop = laneStopKind(pipeline);
+  const kind = stop ? `[${stop.kind}] ` : "";
   const escalate = `if only the operator can decide, ask them with publish_prototype_review, then dismiss_attention escalate {reviewId} with target {kind:"pipeline", pipelineId:"${pipeline.id}"}`;
   switch (laneNeedKind(pipeline)) {
     case "lane-merge":
-      return `${title} — completed, its merge stopped: ${clip(pipeline.merge?.reason ?? "no reason recorded", QUESTION_MAX)}; repair it and pipeline_action retry-merge; ${escalate}`;
+      return `${kind}${title} — completed, its merge stopped: ${clip(pipeline.merge?.reason ?? "no reason recorded", QUESTION_MAX)}; ${mergeStep(pipeline)}; ${escalate}`;
     case "lane-review":
-      return `${title} —${stage} review budget spent, the last fix was not re-reviewed; pipeline_action accept-head once it holds; ${escalate}`;
+      return `${kind}${title} —${stage} review budget spent, the last fix was not re-reviewed; pipeline_action accept-head once it holds; ${escalate}`;
     default:
-      return `${title} —${stage} asks ${laneQuestion(pipeline)}; answer with pipeline_action resolve-decision (expectedRevision from get_pipeline), or retry-stage for a mechanical stop; ${escalate}`;
+      return `${kind}${title} —${stage} asks ${laneQuestion(pipeline)}; answer with pipeline_action resolve-decision (expectedRevision from get_pipeline), or retry-stage for a mechanical stop; ${escalate}`;
   }
 }
 

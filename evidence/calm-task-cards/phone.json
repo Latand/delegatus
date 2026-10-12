@@ -1,0 +1,691 @@
+{
+  "readings": {
+    "390-en-light": {
+      "closed": [
+        {
+          "id": "t-calm-commit",
+          "found": true,
+          "owner": "seat",
+          "subject": "lane",
+          "text": "The orchestrator is on it: the build commit failed · 48m ago",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-merge",
+          "found": true,
+          "owner": "seat",
+          "subject": "lane",
+          "text": "The orchestrator is on it: PR #2302 merge stopped: conflict with the base branch · 25m ago",
+          "lines": 2,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-form",
+          "found": true,
+          "owner": "you",
+          "subject": "form",
+          "text": "Needs your answer: Keep the retry banner or drop it? · 22m ago",
+          "lines": 2,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": true,
+          "attention": null,
+          "warningInk": [
+            "card-state-dot",
+            "pb-pill tone-needs st-needs_decision"
+          ],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-ask",
+          "found": true,
+          "owner": "you",
+          "subject": "conversation",
+          "text": "Needs your answer: Banner copy · 9m ago",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": {
+            "kind": "conversation",
+            "height": 44
+          },
+          "answerButtons": 0,
+          "needs": true,
+          "attention": null,
+          "warningInk": [
+            "card-state-dot"
+          ],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-run",
+          "found": true,
+          "owner": "working",
+          "subject": "motion",
+          "text": "Working · 1",
+          "lines": 2,
+          "dotOffset": 0.4375,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-wait",
+          "found": true,
+          "owner": "waiting",
+          "subject": "lane",
+          "text": "Waiting for the account limit · retry at 21:08",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-long",
+          "found": true,
+          "owner": "seat",
+          "subject": "lane",
+          "text": "The orchestrator is on it: no account has capacity for build · 5h ago",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-cleared",
+          "found": true,
+          "owner": "waiting",
+          "subject": "lane",
+          "text": "Stopped · cleared (orchestrator) · 2h ago",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-done",
+          "found": true,
+          "owner": "done",
+          "subject": "lane",
+          "text": "PR #2307 merged · 50m ago",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        }
+      ],
+      "sheet": {
+        "answers": [
+          {
+            "action": "skip-stage",
+            "height": 44
+          },
+          {
+            "action": "retry-stage",
+            "height": 44
+          }
+        ],
+        "caption": "Manual · the orchestrator does this itself",
+        "rows": [
+          44,
+          44,
+          74.5,
+          44,
+          44,
+          44,
+          44
+        ]
+      },
+      "timeline": {
+        "entries": 8,
+        "earlier": true,
+        "stopFirst": true,
+        "menu": {
+          "width": 44,
+          "height": 44
+        }
+      }
+    },
+    "390-en-dark": {
+      "closed": [
+        {
+          "id": "t-calm-commit",
+          "found": true,
+          "owner": "seat",
+          "subject": "lane",
+          "text": "The orchestrator is on it: the build commit failed · 48m ago",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-merge",
+          "found": true,
+          "owner": "seat",
+          "subject": "lane",
+          "text": "The orchestrator is on it: PR #2302 merge stopped: conflict with the base branch · 25m ago",
+          "lines": 2,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-form",
+          "found": true,
+          "owner": "you",
+          "subject": "form",
+          "text": "Needs your answer: Keep the retry banner or drop it? · 22m ago",
+          "lines": 2,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": true,
+          "attention": null,
+          "warningInk": [
+            "card-state-dot",
+            "pb-pill tone-needs st-needs_decision"
+          ],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-ask",
+          "found": true,
+          "owner": "you",
+          "subject": "conversation",
+          "text": "Needs your answer: Banner copy · 9m ago",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": {
+            "kind": "conversation",
+            "height": 44
+          },
+          "answerButtons": 0,
+          "needs": true,
+          "attention": null,
+          "warningInk": [
+            "card-state-dot"
+          ],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-run",
+          "found": true,
+          "owner": "working",
+          "subject": "motion",
+          "text": "Working · 1",
+          "lines": 2,
+          "dotOffset": 0.4375,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-wait",
+          "found": true,
+          "owner": "waiting",
+          "subject": "lane",
+          "text": "Waiting for the account limit · retry at 21:08",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-long",
+          "found": true,
+          "owner": "seat",
+          "subject": "lane",
+          "text": "The orchestrator is on it: no account has capacity for build · 5h ago",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-cleared",
+          "found": true,
+          "owner": "waiting",
+          "subject": "lane",
+          "text": "Stopped · cleared (orchestrator) · 2h ago",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-done",
+          "found": true,
+          "owner": "done",
+          "subject": "lane",
+          "text": "PR #2307 merged · 50m ago",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        }
+      ]
+    },
+    "390-uk-light": {
+      "closed": [
+        {
+          "id": "t-calm-commit",
+          "found": true,
+          "owner": "seat",
+          "subject": "lane",
+          "text": "Оркестратор розбирається: коміт «build» не вдався · 48 хв тому",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-merge",
+          "found": true,
+          "owner": "seat",
+          "subject": "lane",
+          "text": "Оркестратор розбирається: мердж PR #2302 зупинено: конфлікт з базовою гілкою · 25 хв тому",
+          "lines": 2,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-form",
+          "found": true,
+          "owner": "you",
+          "subject": "form",
+          "text": "Потрібна ваша відповідь: Лишити банер повтору чи прибрати? · 22 хв тому",
+          "lines": 2,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": true,
+          "attention": null,
+          "warningInk": [
+            "card-state-dot",
+            "pb-pill tone-needs st-needs_decision"
+          ],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-ask",
+          "found": true,
+          "owner": "you",
+          "subject": "conversation",
+          "text": "Потрібна ваша відповідь: Текст банера · 9 хв тому",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": {
+            "kind": "conversation",
+            "height": 44
+          },
+          "answerButtons": 0,
+          "needs": true,
+          "attention": null,
+          "warningInk": [
+            "card-state-dot"
+          ],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-run",
+          "found": true,
+          "owner": "working",
+          "subject": "motion",
+          "text": "Працюють · 1",
+          "lines": 2,
+          "dotOffset": 0.4375,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-wait",
+          "found": true,
+          "owner": "waiting",
+          "subject": "lane",
+          "text": "Чекає ліміту акаунта · повтор о 21:08",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-long",
+          "found": true,
+          "owner": "seat",
+          "subject": "lane",
+          "text": "Оркестратор розбирається: немає вільного акаунта для «build» · 5 год тому",
+          "lines": 2,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-cleared",
+          "found": true,
+          "owner": "waiting",
+          "subject": "lane",
+          "text": "Зупинилось · знято (оркестратор) · 2 год тому",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-done",
+          "found": true,
+          "owner": "done",
+          "subject": "lane",
+          "text": "PR #2307 змерджено · 50 хв тому",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        }
+      ],
+      "sheet": {
+        "answers": [
+          {
+            "action": "skip-stage",
+            "height": 44
+          },
+          {
+            "action": "retry-stage",
+            "height": 44
+          }
+        ],
+        "caption": "Вручну · оркестратор робить це сам",
+        "rows": [
+          44,
+          44,
+          74.5,
+          44,
+          44,
+          44,
+          44
+        ]
+      },
+      "timeline": {
+        "entries": 8,
+        "earlier": true,
+        "stopFirst": true,
+        "menu": {
+          "width": 44,
+          "height": 44
+        }
+      }
+    },
+    "390-uk-dark": {
+      "closed": [
+        {
+          "id": "t-calm-commit",
+          "found": true,
+          "owner": "seat",
+          "subject": "lane",
+          "text": "Оркестратор розбирається: коміт «build» не вдався · 48 хв тому",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-merge",
+          "found": true,
+          "owner": "seat",
+          "subject": "lane",
+          "text": "Оркестратор розбирається: мердж PR #2302 зупинено: конфлікт з базовою гілкою · 25 хв тому",
+          "lines": 2,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-form",
+          "found": true,
+          "owner": "you",
+          "subject": "form",
+          "text": "Потрібна ваша відповідь: Лишити банер повтору чи прибрати? · 22 хв тому",
+          "lines": 2,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": true,
+          "attention": null,
+          "warningInk": [
+            "card-state-dot",
+            "pb-pill tone-needs st-needs_decision"
+          ],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-ask",
+          "found": true,
+          "owner": "you",
+          "subject": "conversation",
+          "text": "Потрібна ваша відповідь: Текст банера · 9 хв тому",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": {
+            "kind": "conversation",
+            "height": 44
+          },
+          "answerButtons": 0,
+          "needs": true,
+          "attention": null,
+          "warningInk": [
+            "card-state-dot"
+          ],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-run",
+          "found": true,
+          "owner": "working",
+          "subject": "motion",
+          "text": "Працюють · 1",
+          "lines": 2,
+          "dotOffset": 0.4375,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-wait",
+          "found": true,
+          "owner": "waiting",
+          "subject": "lane",
+          "text": "Чекає ліміту акаунта · повтор о 21:08",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-long",
+          "found": true,
+          "owner": "seat",
+          "subject": "lane",
+          "text": "Оркестратор розбирається: немає вільного акаунта для «build» · 5 год тому",
+          "lines": 2,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-cleared",
+          "found": true,
+          "owner": "waiting",
+          "subject": "lane",
+          "text": "Зупинилось · знято (оркестратор) · 2 год тому",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        },
+        {
+          "id": "t-calm-done",
+          "found": true,
+          "owner": "done",
+          "subject": "lane",
+          "text": "PR #2307 змерджено · 50 хв тому",
+          "lines": 1,
+          "dotOffset": 0,
+          "answer": null,
+          "answerButtons": 0,
+          "needs": false,
+          "attention": null,
+          "warningInk": [],
+          "textCut": false,
+          "ampm": false
+        }
+      ]
+    }
+  },
+  "failures": []
+}

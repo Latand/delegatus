@@ -10,6 +10,11 @@ import { stageDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 
 import type { PipelinePorts, PipelineWriteResult } from "./pipelinePorts";
 import type { TaskMutationPorts } from "./useTaskMutations";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* Account choice on the kanban board (#1695 K6), rendered by React: the
    account chip on a waiting stage's header and on a conversation's identity

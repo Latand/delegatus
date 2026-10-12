@@ -3145,24 +3145,28 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
       }, WIDE);
 
       await production("light", "past attempts and helpers", async (page) => {
-        const limits = await page.evaluate((selector) => [...document.querySelectorAll(`${selector} details.history [data-past-kind]`)].map((row) => ({
-          kind: (row as HTMLElement).dataset.pastKind, label: row.querySelector(".lbl")?.textContent, verdict: row.querySelector(".verdict")?.textContent,
+        /* Attempts and review rounds are the expanded card's timeline
+           (docs/design/calm-task-cards-build.md §3); «Past attempts» keeps the helpers. */
+        const limits = await page.evaluate((selector) => [...document.querySelectorAll<HTMLElement>(`${selector} [data-chronology-entry]`)].map((row) => ({
+          kind: row.dataset.chronologyKind, text: row.querySelector(".chronology-what")?.textContent ?? "",
         })), card("t-limits"));
         frames["failed-latest"] = { production: limits };
-        if (!limits.some((row) => row.kind === "attempt" && row.label === "Build" && row.verdict === "failed")) failures.push(`failed latest attempt missing from Past attempts: ${JSON.stringify(limits)}`);
+        if (!limits.some((row) => row.kind === "attempt-failed" && row.text.startsWith("Build"))) failures.push(`failed latest attempt missing from the timeline: ${JSON.stringify(limits)}`);
 
         await page.locator(`${card("t-search")} details.history`).evaluate((element) => { (element as HTMLDetailsElement).open = true; element.scrollIntoView({ block: "center" }); });
         await page.waitForTimeout(300);
-        const past = await page.evaluate((selector) => [...document.querySelectorAll(`${selector} details.history [data-past-kind]`)].map((row) => ({
-          kind: (row as HTMLElement).dataset.pastKind, label: row.querySelector(".lbl")?.textContent, verdict: row.querySelector(".verdict")?.textContent, open: Boolean(row.querySelector(".hopen")),
-        })), card("t-search"));
+        const past = await page.evaluate((selector) => ({
+          entries: [...document.querySelectorAll<HTMLElement>(`${selector} [data-chronology-entry]`)].map((row) => ({ key: row.dataset.chronologyEntry, kind: row.dataset.chronologyKind, open: Boolean(row.querySelector(".chronology-open")) })),
+          helpers: [...document.querySelectorAll(`${selector} details.history [data-past-kind]`)].map((row) => ({ kind: (row as HTMLElement).dataset.pastKind, label: row.querySelector(".lbl")?.textContent, open: Boolean(row.querySelector(".hopen")) })),
+        }), card("t-search"));
         await shot(page, "production", "history-open", "light");
         frames["history-open"] = { production: past };
-        const labels = past.map((row) => row.label).sort();
-        /* One attempt caption: a stage's name, with "· N" once it has more than one attempt of its own. */
-        const expected = ["Implement · 1", "Implement · 2", "Implement · helper conversation 1", "Review", "Review · round 1", "Verify · 1"];
-        if (JSON.stringify(labels) !== JSON.stringify(expected) || !past.every((row) => row.open)) failures.push(`past attempts: ${JSON.stringify(past)}`);
-        if (past.some((row) => row.label === "Verify · 2")) failures.push("past attempts: the running Verify attempt is listed");
+        const keys = past.entries.map((row) => row.key);
+        for (const key of ["p-search:implement:attempt:1", "p-search:implement:attempt:2", "p-search:review:attempt:1", "p-search:review:attempt:1:round:1", "p-search:verify:attempt:1"]) {
+          if (!keys.includes(key)) failures.push(`timeline misses ${key}: ${JSON.stringify(past.entries)}`);
+        }
+        if (keys.includes("p-search:verify:attempt:2")) failures.push("timeline: the running Verify attempt is listed as finished");
+        if (JSON.stringify(past.helpers.map((row) => [row.kind, row.label, row.open])) !== JSON.stringify([["helper", "Implement · helper conversation 1", true]])) failures.push(`past attempts keeps the helper alone: ${JSON.stringify(past.helpers)}`);
         await page.click(`${card("t-search")} details.history [data-past-kind="helper"] .hopen`);
         /* It opens in the agent window. */
         await page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]", { timeout: 10_000 });
@@ -3695,7 +3699,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await page.click(`${card("t-links")} [data-menu]`);
         await openLaneActions(page);
         await page.locator('.menu [role="menuitem"]', { hasText: "Skip Implement" }).first().click();
-        await page.waitForSelector("[data-kanban-receipt].error", { timeout: 5_000 });
+        /* Skip waits out its receipt before it is sent (docs/design/calm-task-cards-build.md §4.1). */
+        await page.waitForSelector("[data-kanban-receipt].error", { timeout: 10_000 });
         const refused = await page.locator("[data-kanban-receipt].error .msg").textContent();
         await page.evaluate(() => (window as unknown as Hook).evidence.moveCursor("p-links", "review"));
         await page.click("[data-kanban-receipt].error .act");
@@ -5158,15 +5163,12 @@ describe("#1865 stage conversations lead with the stage and its attempt", () => 
               await leaveWindow(opened.page);
               await clickAt(opened.page, `${CARD} .pb-pill[data-stage="critique"]`);
               await leaveWindow(opened.page);
-              /* Critique's first attempt opens from the card's Past attempts,
-                 which the card keeps folded. */
-              if (!(await opened.page.locator(`${CARD} details.history`).first().evaluate((element) => (element as HTMLDetailsElement).open))) {
-                await clickAt(opened.page, `${CARD} details.history > summary`);
-              }
-              const pastKey = await opened.page.evaluate((selector) => [...document.querySelectorAll<HTMLElement>(`${selector} details.history [data-past]`)]
-                .find((row) => /^Critique/.test(row.querySelector(".lbl")?.textContent ?? ""))?.dataset.past ?? null, CARD);
-              if (!pastKey) fail("Past attempts lists no earlier critique");
-              else await clickAt(opened.page, `${CARD} details.history [data-past=${JSON.stringify(pastKey)}] .hopen`);
+              /* Critique's first attempt opens from the card's timeline
+                 (docs/design/calm-task-cards-build.md §3). */
+              const pastKey = await opened.page.evaluate((selector) => [...document.querySelectorAll<HTMLElement>(`${selector} [data-chronology-entry]`)]
+                .find((row) => /^Critique/.test(row.querySelector(".chronology-open")?.textContent ?? ""))?.dataset.chronologyEntry ?? null, CARD);
+              if (!pastKey) fail("the timeline lists no earlier critique");
+              else await clickAt(opened.page, `${CARD} [data-chronology-entry=${JSON.stringify(pastKey)}] .chronology-open`);
               await opened.page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]", { timeout: 10_000 });
               const headers = await measureHeaders(opened.page);
               await opened.page.screenshot({ path: path.join(OUT, `window-${label}.png`) });
@@ -8608,9 +8610,10 @@ describe("#2072 one pipeline block, desktop and phone", () => {
   const SCREENS = [
     { id: "p-upload", name: "running", current: "verify-backward-compatibility-and-migrations", answers: [], fold: "3", completed: false, motion: "live" },
     { id: "p-md-accept", name: "paused", current: "accept", answers: [], fold: null, completed: false, motion: "held" },
-    { id: "p-md-decision", name: "decision", current: "implement", answers: ["skip-stage", "retry-stage"], fold: null, completed: false, motion: null },
-    /* A spent review budget answers «Accept as is» or «Review again» (#2187 S2). */
-    { id: "p-review-spent", name: "review", current: "critique", answers: ["accept-head", "continue-review"], fold: null, completed: false, motion: null },
+    /* A decision and a spent review budget say what they stopped on; their
+       answers are the screen's ⋯ sheet (docs/design/calm-task-cards-build.md §4.2). */
+    { id: "p-md-decision", name: "decision", current: "implement", answers: [], fold: null, completed: false, motion: null },
+    { id: "p-review-spent", name: "review", current: "critique", answers: [], fold: null, completed: false, motion: null },
     { id: "p-compact", name: "done", current: null, answers: [], fold: null, completed: true, motion: null },
   ] as const;
 
@@ -9403,9 +9406,13 @@ describe("task priority: the Inbox takes high first and low last, the other colu
                   .map((element) => Math.round(element.querySelector(".head > .title")?.getBoundingClientRect().width ?? 0));
                 return Math.max(...widths) - Math.min(...widths) > 1 ? [`${status} ${JSON.stringify(widths)}`] : [];
               });
-              /* And it leads the foot line, in the foot's own row. */
-              const misplaced = [...document.querySelectorAll("[data-kanban-board] .card .prio-mark")].flatMap((mark) =>
-                mark.parentElement?.classList.contains("foot") && mark.parentElement.firstElementChild === mark ? [] : [(mark.closest(".card")?.getAttribute("data-id") ?? "")]);
+              /* And it ends the card's state line, or leads the foot of a card
+                 that draws none (docs/design/calm-task-cards-build.md §2.2). */
+              const misplaced = [...document.querySelectorAll("[data-kanban-board] .card .prio-mark")].flatMap((mark) => {
+                const parent = mark.parentElement;
+                const placed = parent?.classList.contains("card-state") ? parent.lastElementChild === mark : parent?.classList.contains("foot") && parent.firstElementChild === mark;
+                return placed ? [] : [(mark.closest(".card")?.getAttribute("data-id") ?? "")];
+              });
               return { inbox: column("inbox"), assigned: column("assigned"), marks, squeezed, misplaced };
             });
             readings[label] = read;
@@ -11245,8 +11252,16 @@ describe("#2187 a lane parked on a review says why in one line and answers in pl
                 const [head, tail] = t(lane.reason, { stage: "\u0000" }).split("\u0000");
                 if (!got.reason?.startsWith(head!) || !got.reason.endsWith(tail!)) fail(`reason ${JSON.stringify(got.reason)}`);
               } else if (got.reason !== t(lane.reason, lane.kind === "park" ? { count: 3 } : undefined)) fail(`reason ${JSON.stringify(got.reason)}`);
-              const want = lane.answers.map(([action, key]) => [action, t(key)]);
-              if (JSON.stringify(got.answers) !== JSON.stringify(want)) fail(`answers ${JSON.stringify(got.answers)}, expected ${JSON.stringify(want)}`);
+              /* The answers left the lane row for the card's ⋯ (docs/design/calm-task-cards-build.md §4):
+                 the row draws none, and the ⋯ holds each in its words. */
+              if (got.answers.length) fail(`answers on the lane row: ${JSON.stringify(got.answers)}`);
+              await page.locator(`[data-menu="task:${lane.task}"]`).click();
+              await page.locator('.menu [data-cm-section^="lane:"]').click();
+              const menu = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.menu [data-cm-item^="answer:"]')].map((item) => [item.getAttribute("data-cm-item")!.slice("answer:".length), item.querySelector(".lbl")?.firstChild?.textContent ?? ""]));
+              await page.keyboard.press("Escape");
+              /* One more review round is no longer offered (the fixed budget rule), so it is not looked for. */
+              const want = lane.answers.filter(([action]) => action !== "continue-review").map(([action, key]) => [action, t(key)]);
+              if (JSON.stringify(menu) !== JSON.stringify(want)) fail(`⋯ answers ${JSON.stringify(menu)}, expected ${JSON.stringify(want)}`);
               if (lane.kind === "legacy" && got.findings.some((text) => /round limit reached/.test(text))) fail(`the flow's own detail is still listed as a finding: ${JSON.stringify(got.findings)}`);
               if (!got.findings.length) fail("no finding listed under the reason");
               for (const entry of [...got.clipped, ...got.overlaps]) fail(entry);
@@ -11410,9 +11425,15 @@ describe("#2187 a completed lane's automatic merge, and the project's merge sett
               if (lane.word === "stopped") {
                 const want = t("pipelineBlock.merge.reason", { reason: t("pipelineBlock.mergeReason.check", { name: "privacy-publication" }) });
                 if (got.reason !== want) fail(`reason ${JSON.stringify(got.reason)}, expected ${JSON.stringify(want)}`);
+                /* The answers are the card's ⋯ (docs/design/calm-task-cards-build.md §4). */
+                await page.locator(`[data-menu="task:${lane.task}"]`).click();
+                await page.locator('.menu [data-cm-section^="lane:"]').click();
+                const menu = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.menu [data-cm-item^="answer:"]')].map((item) => [item.getAttribute("data-cm-item")!.slice("answer:".length), item.querySelector(".lbl")?.firstChild?.textContent ?? ""]));
+                await page.keyboard.press("Escape");
                 const answers = [["dismiss", t("pipelineBlock.answer.leaveOpen")], ["retry-merge", t("pipelineBlock.answer.retryMerge")]];
-                if (JSON.stringify(got.answers) !== JSON.stringify(answers)) fail(`answers ${JSON.stringify(got.answers)}`);
-              } else if (got.answers.length) fail(`answers ${JSON.stringify(got.answers)} on a merge that asks nothing`);
+                if (JSON.stringify(menu) !== JSON.stringify(answers)) fail(`⋯ answers ${JSON.stringify(menu)}`);
+              }
+              if (got.answers.length) fail(`answers ${JSON.stringify(got.answers)} on the lane row`);
               for (const entry of [...got.clipped, ...got.overlaps]) fail(entry);
               for (const entry of got.escapes) fail(`paints outside its card: ${entry}`);
             }
@@ -11458,9 +11479,11 @@ describe("#2187 a completed lane's automatic merge, and the project's merge sett
             const writes = await page.evaluate(() => (window as unknown as { evidence?: { settingWrites: unknown[] } }).evidence?.settingWrites ?? null);
             for (const entry of [on, off]) if (entry.labelMeetsSwitch || entry.labelCut || !entry.inside) failures.push(`${label} menu geometry: ${JSON.stringify(entry)}`);
             await page.keyboard.press("Escape");
-            /* Try the merge again sends retry-merge for the stopped lane. */
+            /* Try the merge again, from the card's ⋯, sends retry-merge for the stopped lane. */
             if (scheme === "light") {
-              await page.locator(`${card("t-merge-stop")} [data-answer-action="retry-merge"]`).click();
+              await page.locator('[data-menu="task:t-merge-stop"]').click();
+              await page.locator('.menu [data-cm-section^="lane:"]').click();
+              await page.locator('.menu [data-cm-item="answer:retry-merge"]').click();
               await page.waitForTimeout(1_200);
             }
             const patches = await page.evaluate(() => (window as unknown as { evidence?: { pipelinePatches: Array<{ id: string; body: Record<string, unknown> }> } }).evidence?.pipelinePatches ?? null);
@@ -13850,8 +13873,9 @@ describe("asks you: an agent that asked the operator, on its card, in the report
         const fail = (text: string) => failures.push(`${label}: ${text}`);
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=asks-you`, VIEWPORT, "light", lang);
         try {
-          /* The card: its foot names the reason and the agent's role. */
-          await page.waitForSelector(`${card("t-export")} [data-foot-needs]`, { timeout: 30_000 });
+          /* The card: its state line names the reason and the agent's role
+             (docs/design/calm-task-cards-build.md §5.3). */
+          await page.waitForSelector(`${card("t-export")} [data-card-state="you"]`, { timeout: 30_000 });
           await page.waitForSelector("[data-report-log] [data-report-ask]", { timeout: 30_000 });
           await page.waitForTimeout(600);
           const toast = await page.evaluate(() => document.querySelector("[data-attention-toast]")?.textContent?.trim() ?? null);
@@ -13863,11 +13887,10 @@ describe("asks you: an agent that asked the operator, on its card, in the report
           await exportCard.screenshot({ path: path.join(OUT, `card-${label}.png`) });
           await page.screenshot({ path: path.join(OUT, `board-${label}.png`) });
           const foot = await page.evaluate((selector) => {
-            const needs = document.querySelector(`${selector} [data-foot-needs]`) as HTMLElement | null;
-            const clamp = needs?.querySelector(".clamp") as HTMLElement | null;
-            return { text: needs?.textContent?.trim() ?? "", title: needs?.getAttribute("title") ?? "", cut: clamp ? clamp.scrollWidth > clamp.clientWidth + 1 : false };
+            const words = document.querySelector(`${selector} [data-card-state-text]`) as HTMLElement | null;
+            return { text: words?.textContent?.trim() ?? "", cut: words ? words.scrollHeight > words.clientHeight + 1 : false };
           }, card("t-export"));
-          if (!foot.title.startsWith(`${t("needs.ask")} · `)) fail(`the card's reason reads ${JSON.stringify(foot)}`);
+          if (!foot.text.startsWith(t("cardState.you.conversation", { need: `${t("needs.ask")} · ` }))) fail(`the card's reason reads ${JSON.stringify(foot)}`);
 
           /* The report log: the ask by time among the reports, its agent a link. */
           const seat = page.locator("[data-kanban-seat]");
@@ -14785,8 +14808,9 @@ describe("attention auto resolve", () => {
           }
         }
 
-        /* The answered ask's card says Delegatus cleared it and why, with
-           Undo. Seats handed on draw no tile (#1841); their clears are in the
+        /* The answered ask's card says Delegatus cleared it and why, in its
+           timeline, with Undo in its ⋯ (docs/design/calm-task-cards-build.md
+           §2.2). Seats handed on draw no tile (#1841); their clears are in the
            project read's cleared list. */
         opened = await open("", SIZES[0], "light", lang);
         try {
@@ -14794,14 +14818,17 @@ describe("attention auto resolve", () => {
           const card = page.locator('[data-kanban-board] .card[data-id="task:t-september"]');
           await card.waitFor({ timeout: 10_000 });
           await card.scrollIntoViewIfNeeded();
-          const foot = await card.evaluate((element) => {
-            const cleared = element.querySelector("[data-foot-cleared]");
-            const undo = element.querySelector("[data-undo-dismiss]") as HTMLElement | null;
-            const box = undo?.getBoundingClientRect();
-            return { kind: cleared?.getAttribute("data-foot-cleared") ?? null, text: cleared?.textContent ?? null, undo: Boolean(box && box.width > 0 && box.height > 0) };
+          const cleared = await card.evaluate((element) => element.querySelector('[data-chronology-kind="need-cleared"] .chronology-what')?.textContent ?? null);
+          await card.locator("[data-menu]").click();
+          const undo = await page.evaluate(() => {
+            const row = document.querySelector<HTMLElement>('.menu [data-cm-item="undoFlag"]');
+            const box = row?.getBoundingClientRect();
+            return { shown: Boolean(box && box.width > 0 && box.height > 0), why: row?.querySelector(".why")?.textContent ?? null };
           });
+          await page.keyboard.press("Escape");
+          const foot = { text: cleared, undo: undo.shown, why: undo.why };
           readings[`${lang}/card-cleared`] = foot;
-          check(`${lang}/card-cleared`, foot.kind === "system" && foot.undo && Boolean(foot.text?.includes(translate(lang, "needs.clearedRule.operator-replied"))), `the card's foot reads ${JSON.stringify(foot)}`);
+          check(`${lang}/card-cleared`, foot.undo && Boolean(foot.text?.includes(translate(lang, "needs.clearedRule.operator-replied"))), `the card's clearing reads ${JSON.stringify(foot)}`);
           await shot(page, `${lang}/1440x900-light-cleared-card`);
         } finally { await opened.context.close(); }
       }
@@ -19859,6 +19886,9 @@ describe("a task card folds the conversations outside this board into one line o
                 sectionOpen: section?.open ?? null,
                 head: (section?.querySelector("summary .hl")?.textContent ?? "").trim(),
                 attempts: [...(section?.querySelectorAll("li[data-past]") ?? [])].map((row) => row.getAttribute("data-past")),
+                /* Attempts and rounds are the timeline's (docs/design/calm-task-cards-build.md §3). */
+                timeline: [...element.querySelectorAll<HTMLElement>("[data-chronology-entry]")].filter((row) => /^attempt-|^round$/.test(row.dataset.chronologyKind ?? "")).map((row) => row.dataset.chronologyEntry),
+                hiddenInTimeline: Number(element.querySelector("[data-chronology]")?.getAttribute("data-chronology-hidden") ?? 0),
                 lineVisible: (() => { const line = element.querySelector<HTMLElement>("[data-elsewhere-toggle]"); return line ? line.checkVisibility({ contentVisibilityAuto: true, visibilityProperty: true }) : false; })(),
               };
             });
@@ -19890,13 +19920,15 @@ describe("a task card folds the conversations outside this board into one line o
               hash = await page.evaluate(() => location.hash);
             }
             readings[label] = { closed, sectionOpen, listOpen, hash };
-            const head = translate(lang, "kanban.past.head", { count: ATTEMPTS });
+            const head = translate(lang, "kanban.past.elsewhereHead", { count: WALL });
             if (closed.wall.rows !== 0 || closed.only.rows !== 0 || sectionOpen.rows !== 0 || listOpen.rows !== 0) failures.push(`${label}: rows of «conversation outside this board» stand on the card ${JSON.stringify({ closed, listOpen })}`);
             if (closed.wall.lines !== 1 || closed.only.lines !== 1) failures.push(`${label}: not exactly one line per card ${JSON.stringify(closed)}`);
             if (closed.wall.sectionOpen !== false || closed.wall.lineVisible || closed.only.lineVisible) failures.push(`${label}: the line shows while Past attempts is closed ${JSON.stringify(closed)}`);
             if (closed.wall.listed !== 0) failures.push(`${label}: rows listed before the line is opened`);
             if (closed.wall.head !== head) failures.push(`${label}: the header reads «${closed.wall.head}», not «${head}»`);
-            if (closed.wall.attempts.length !== ATTEMPTS || new Set(closed.wall.attempts).size !== ATTEMPTS) failures.push(`${label}: the header counts ${ATTEMPTS} and the section lists ${JSON.stringify(closed.wall.attempts)}`);
+            if (closed.wall.attempts.length !== 0) failures.push(`${label}: the section still lists attempts ${JSON.stringify(closed.wall.attempts)}`);
+            /* The latest eight entries show; the rest fold behind «Earlier · N». */
+            if (new Set(closed.wall.timeline).size !== closed.wall.timeline.length || closed.wall.timeline.length + closed.wall.hiddenInTimeline < ATTEMPTS) failures.push(`${label}: the timeline lists ${JSON.stringify(closed.wall.timeline)} and hides ${closed.wall.hiddenInTimeline}, fewer than ${ATTEMPTS} attempts`);
             if (closed.wall.lineText !== lineOf(lang, WALL, false)) failures.push(`${label}: the line reads «${closed.wall.lineText}»`);
             if (closed.only.head !== translate(lang, "kanban.past.elsewhereHead", { count: ONLY })) failures.push(`${label}: the conversations-only card's header reads «${closed.only.head}»`);
             if (!sectionOpen.lineVisible) failures.push(`${label}: the line is not visible in the open section`);
@@ -19932,6 +19964,8 @@ describe("a task card folds the conversations outside this board into one line o
                   lines: document.querySelectorAll("[data-phone-task-elsewhere-toggle]").length,
                   lineText: (document.querySelector("[data-phone-task-elsewhere-toggle]")?.textContent ?? "").trim(),
                   attempts: [...document.querySelectorAll("[data-phone-task-past-row]")].map((row) => row.getAttribute("data-phone-task-past-row")),
+                  timeline: [...document.querySelectorAll<HTMLElement>("[data-chronology] [data-chronology-entry]")].filter((row) => /^attempt-|^round$/.test(row.dataset.chronologyKind ?? "")).length,
+                  hiddenInTimeline: Number(document.querySelector("[data-chronology]")?.getAttribute("data-chronology-hidden") ?? 0),
                   pageHeight: Math.round(document.documentElement.scrollHeight),
                 };
               });
@@ -19966,9 +20000,11 @@ describe("a task card folds the conversations outside this board into one line o
               if (opened.lines !== 1 || opened.lineText !== lineOf(lang, expected, false)) failures.push(`${label}: ${id}'s line ${JSON.stringify(opened)}`);
               if (listed.rows !== expected) failures.push(`${label}: ${id}'s list holds ${listed.rows} of ${expected}`);
               if (id === "t-wall") {
-                const head = translate(lang, "kanban.past.head", { count: ATTEMPTS });
+                /* Attempts are the timeline's; the section keeps the conversations elsewhere. */
+                const head = translate(lang, "kanban.past.elsewhereHead", { count: WALL });
                 if (closed.head !== head) failures.push(`${label}: the header reads «${closed.head}», not «${head}»`);
-                if (opened.attempts.length !== ATTEMPTS || new Set(opened.attempts).size !== ATTEMPTS) failures.push(`${label}: the header counts ${ATTEMPTS} and the section lists ${JSON.stringify(opened.attempts)}`);
+                if (opened.attempts.length !== 0) failures.push(`${label}: the section still lists attempts ${JSON.stringify(opened.attempts)}`);
+                if (closed.timeline + closed.hiddenInTimeline < ATTEMPTS) failures.push(`${label}: the timeline holds ${closed.timeline} attempts and hides ${closed.hiddenInTimeline}, fewer than ${ATTEMPTS}`);
                 if (!hash?.includes("wall-5")) failures.push(`${label}: the fifth row opened ${JSON.stringify(hash)}`);
               } else if (opened.head !== translate(lang, "kanban.past.elsewhereHead", { count: ONLY })) failures.push(`${label}: the conversations-only task's header reads «${opened.head}»`);
               await page.goBack().catch(() => {});
@@ -29780,4 +29816,348 @@ describe("the seat column and the agent window keep 60% of the conversation", ()
     fs.writeFileSync(path.join(EVIDENCE, "board.json"), `${JSON.stringify({ floor: FLOOR, frames, failures }, null, 2)}\n`);
     expect(failures).toEqual([]);
   }, 900_000);
+});
+
+describe("calm task cards: closed by default, a timeline when opened, answers in the ⋯", () => {
+  /*
+   * docs/design/calm-task-cards-build.md §10: the nine cards of
+   * `?scenario=calm-cards` at 1440 and 1000 on the desktop board and at 390 on
+   * the phone, en and uk, light and dark. Closed, each card names who has it
+   * in one state line, offers «Answer» only where the operator owes one, and
+   * no card or screen draws an answer button. Opened, C8's timeline shows its
+   * latest eight with its first lane's stop pulled above them. The answers are
+   * in the ⋯: as many as the lane's own answers, marked manual where the
+   * orchestrator owns the lane; on the phone in the lane's sheet. Amber is the
+   * operator's alone.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 CALM_CARDS_PNG_DIR=… \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "calm task cards"
+   *
+   * PNGs go to `CALM_CARDS_PNG_DIR`, or `.artifacts/calm-cards/`, never committed;
+   * the readings to `evidence/calm-task-cards/`.
+   */
+  const OUT = path.resolve(process.env.CALM_CARDS_PNG_DIR ?? ".artifacts/calm-cards");
+  const EVIDENCE = path.resolve("evidence/calm-task-cards");
+  const OWNERS: Record<string, string> = {
+    "t-calm-commit": "seat", "t-calm-merge": "seat", "t-calm-form": "you", "t-calm-ask": "you", "t-calm-run": "working",
+    "t-calm-wait": "waiting", "t-calm-done": "done", "t-calm-long": "seat", "t-calm-cleared": "waiting",
+  };
+  /* The answers each lane's own `pipelineAnswers` gives: two for a decision and for a stopped merge. */
+  const ANSWERS: Record<string, { lane: string; actions: string[] }> = {
+    "t-calm-commit": { lane: "p-calm-commit", actions: ["answer:skip-stage", "answer:retry-stage"] },
+    "t-calm-merge": { lane: "p-calm-merge", actions: ["answer:dismiss", "answer:retry-merge"] },
+    "t-calm-form": { lane: "p-calm-form", actions: ["answer:skip-stage", "answer:retry-stage"] },
+    "t-calm-long": { lane: "p-calm-long-a", actions: ["answer:skip-stage", "answer:retry-stage"] },
+  };
+  /* Every card asked of the closed board: who has it, its line, its dot, its «Answer», and whatever amber it draws. */
+  type CardReading = {
+    id: string; found: boolean; owner: string | null; subject: string | null; text: string; lines: number; dotOffset: number | null;
+    answer: { kind: string | null; height: number } | null; answerButtons: number; needs: boolean; attention: string | null;
+    warningInk: string[]; textCut: boolean; ampm: boolean;
+  };
+  const READ_CARDS = ({ ids, phone }: { ids: string[]; phone: boolean }) => {
+    const probe = document.createElement("span");
+    probe.style.color = "var(--color-warning)";
+    document.body.append(probe);
+    const warning = getComputedStyle(probe).color;
+    probe.remove();
+    return ids.map((id): CardReading => {
+      const element = document.querySelector<HTMLElement>(phone ? `[data-phone-card="task:${id}"]` : `[data-kanban-board] .card[data-id="task:${id}"]`);
+      const frame = phone ? element?.closest<HTMLElement>("[data-phone-card-frame]") ?? element : element;
+      const out: CardReading = { id, found: Boolean(element), owner: null, subject: null, text: "", lines: 0, dotOffset: null, answer: null, answerButtons: 0, needs: false, attention: null, warningInk: [], textCut: false, ampm: false };
+      if (!element || !frame) return out;
+      const state = element.querySelector<HTMLElement>("[data-card-state]");
+      out.owner = state?.getAttribute("data-card-state") ?? null;
+      out.subject = state?.getAttribute("data-card-state-subject") ?? null;
+      const words = state?.querySelector<HTMLElement>("[data-card-state-text]");
+      out.text = (words?.textContent ?? "").replace(/\s+/g, " ").trim();
+      out.ampm = /\b(AM|PM)\b/.test(out.text);
+      if (words) {
+        const range = document.createRange();
+        range.selectNodeContents(words);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0.5 && rect.height > 0.5);
+        const tops = [...new Set(rects.map((rect) => Math.round(rect.top)))];
+        out.lines = tops.length;
+        const box = words.getBoundingClientRect();
+        out.textCut = rects.some((rect) => rect.bottom > box.bottom + 1 || rect.right > box.right + 1 || rect.left < box.left - 1);
+        const dot = state!.querySelector<HTMLElement>(".card-state-dot")!.getBoundingClientRect();
+        const first = rects.filter((rect) => Math.round(rect.top) === Math.min(...tops));
+        if (first.length) out.dotOffset = Math.abs((dot.top + dot.bottom) / 2 - (Math.min(...first.map((r) => r.top)) + Math.max(...first.map((r) => r.bottom))) / 2);
+      }
+      const answer = frame.querySelector<HTMLElement>(phone ? "[data-phone-card-answer]" : "[data-card-answer]");
+      out.answer = answer ? { kind: answer.getAttribute(phone ? "data-phone-card-answer" : "data-card-answer"), height: answer.getBoundingClientRect().height } : null;
+      out.answerButtons = frame.querySelectorAll("[data-answer-action]").length;
+      out.needs = Boolean(frame.querySelector('[data-needs="1"]')) || element.getAttribute("data-needs") === "1";
+      out.attention = element.getAttribute("data-attention");
+      /* The fail edge's own count («↺ 2/3») keeps its ink: it says a loop fired, not that anyone is asked. */
+      for (const ink of frame.querySelectorAll<HTMLElement>(".pb-pill, .card-state-dot, .pstate-word, .pb-answer .stage-report, .pb-merge, .pb-reason")) {
+        const style = getComputedStyle(ink);
+        if (style.color === warning || style.borderColor === warning || style.backgroundColor === warning) out.warningInk.push(ink.className.slice(0, 60));
+      }
+      return out;
+    });
+  };
+  const checkCards = (label: string, readings: CardReading[], phone: boolean, failures: string[]) => {
+    for (const got of readings) {
+      const fail = (text: string) => failures.push(`${label} ${got.id}: ${text}`);
+      if (!got.found) { fail("not drawn"); continue; }
+      if (got.owner !== OWNERS[got.id]) fail(`owner ${got.owner}, expected ${OWNERS[got.id]}`);
+      if (got.answerButtons) fail(`${got.answerButtons} answer buttons on the card`);
+      if (got.lines > 2) fail(`state line takes ${got.lines} lines: ${got.text}`);
+      if (got.textCut) fail(`state line cut: ${got.text}`);
+      if (got.dotOffset !== null && got.dotOffset > 2) fail(`dot ${got.dotOffset.toFixed(1)}px off its first line`);
+      if (got.ampm) fail(`AM/PM in ${got.text}`);
+      /* «Answer» on C3 and C4 only; on the phone C3's own review row is that answer. */
+      const wantsAnswer = got.id === "t-calm-ask" || (got.id === "t-calm-form" && !phone);
+      if (wantsAnswer !== Boolean(got.answer)) fail(`«Answer» ${got.answer ? "drawn" : "missing"}`);
+      if (phone && got.answer && got.answer.height < 44) fail(`«Answer» ${got.answer.height}px tall`);
+      if (!["t-calm-form", "t-calm-ask"].includes(got.id)) {
+        if (got.needs || got.attention === "needs") fail("draws the operator's amber");
+        if (got.warningInk.length) fail(`warning ink on ${got.warningInk.join(", ")}`);
+      }
+    }
+  };
+
+  browserTest("the closed board at 1440 and 1000, en and uk, light and dark: one state line, «Answer» only where asked, no amber on the seat's cards; opened, the timeline and the ⋯ answers", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/calm-cards-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const width of [1440, 1000]) {
+        const label = `${width}-${lang}-${scheme}`;
+        const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=calm-cards`, { width, height: 900 }, scheme, lang, "reduce");
+        try {
+          await page.locator("[data-kanban-board]").waitFor({ timeout: 30_000 });
+          const show = async (status: string) => {
+            const tab = page.locator(`.tabs-nav [data-tab="${status}"]`);
+            if (await tab.isVisible()) await tab.click();
+          };
+          await show("assigned");
+          await page.waitForSelector(`${card("t-calm-commit")} [data-card-state]`, { timeout: 30_000 });
+          /* The fixture's toast goes, and the seat's panel folds, so the frame is the board. */
+          await page.locator("[data-attention-toast-dismiss]").click({ timeout: 5_000 }).catch(() => {});
+          const fold = page.locator("[data-seat-collapse]");
+          if (await fold.count()) await fold.first().click({ timeout: 5_000 }).catch(() => {});
+          await page.mouse.move(2, 2);
+          await page.waitForTimeout(600);
+          await page.screenshot({ path: path.join(OUT, `board-closed-${label}.png`) });
+          await page.locator('[data-kanban-board] .column[data-status="assigned"]').screenshot({ path: path.join(OUT, `column-closed-${label}.png`) });
+          const ids = Object.keys(OWNERS).filter((id) => id !== "t-calm-done");
+          const closed = await page.evaluate(READ_CARDS, { ids, phone: false });
+          await show("done");
+          closed.push(...await page.evaluate(READ_CARDS, { ids: ["t-calm-done"], phone: false }));
+          await show("assigned");
+          checkCards(label, closed, false, failures);
+          if (await page.locator("[data-kanban-board] [data-answer-action]").count()) failures.push(`${label}: an answer button on the board`);
+          /* A closed card that has not started keeps its priority mark. */
+          await show("inbox");
+          const mark = await page.evaluate((selector) => document.querySelector(`${selector} .card-state .prio-mark`)?.getAttribute("data-priority") ?? null, card("t-calm-inbox"));
+          if (mark !== "high") failures.push(`${label}: the closed Inbox card's priority mark reads ${mark}`);
+          await show("assigned");
+          const sideways = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+          if (sideways > 0) failures.push(`${label}: the page scrolls sideways by ${sideways}px`);
+          const reading: Record<string, unknown> = { closed };
+          if (scheme === "light") {
+            /* The dot's popover: the owner and how long, over no word of the line. */
+            const dot = page.locator(`${card("t-calm-commit")} [data-card-state-dot]`);
+            await dot.hover();
+            const pop = page.locator("[data-card-state-pop]");
+            await pop.waitFor({ timeout: 10_000 });
+            const popover = await page.evaluate((selector) => {
+              const bubble = document.querySelector("[data-card-state-pop]")!.closest('[role="tooltip"]')!.getBoundingClientRect();
+              const words = document.querySelector(`${selector} [data-card-state-text]`)!;
+              const range = document.createRange();
+              range.selectNodeContents(words);
+              const covered = [...range.getClientRects()].some((rect) => Math.min(rect.right, bubble.right) - Math.max(rect.left, bubble.left) > 0.5 && Math.min(rect.bottom, bubble.bottom) - Math.max(rect.top, bubble.top) > 0.5);
+              return { text: document.querySelector("[data-card-state-pop]")!.textContent ?? "", covered };
+            }, card("t-calm-commit"));
+            if (popover.covered) failures.push(`${label}: the popover covers the state line`);
+            if (!popover.text.startsWith(t("cardState.popover.seat", { age: "\u0000" }).split("\u0000")[0]!)) failures.push(`${label}: popover ${JSON.stringify(popover.text)}`);
+            await page.screenshot({ path: path.join(OUT, `popover-c1-${label}.png`) });
+            await page.mouse.move(2, 2);
+            reading.popover = popover;
+
+            /* The ⋯ answers: as many as the lane's own, manual where the seat owns it. */
+            const menus: Record<string, unknown> = {};
+            for (const [id, want] of Object.entries(ANSWERS)) {
+              await page.locator(`[data-menu="task:${id}"]`).click();
+              const multi = page.locator('.menu [data-cm-section="pipelines"]');
+              if (await multi.count()) await multi.click();
+              await page.locator(`.menu [data-cm-section="lane:${want.lane}"]`).click();
+              const items = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.menu [data-cm-item^="answer:"]')].map((item) => ({
+                id: item.getAttribute("data-cm-item"), label: item.querySelector(".lbl")?.firstChild?.textContent ?? "", why: item.querySelector(".why")?.textContent ?? null, height: item.getBoundingClientRect().height,
+              })));
+              if (JSON.stringify(items.map((item) => item.id)) !== JSON.stringify(want.actions)) failures.push(`${label} ${id}: ⋯ answers ${JSON.stringify(items.map((item) => item.id))}`);
+              const manual = OWNERS[id] === "seat";
+              for (const item of items) if ((item.why === t("cardState.manualHint")) !== manual) failures.push(`${label} ${id}: ${item.label} hint ${JSON.stringify(item.why)}`);
+              if (id === "t-calm-commit") await page.locator(".menu").first().screenshot({ path: path.join(OUT, `menu-c1-${label}.png`) });
+              menus[id] = items;
+              await page.keyboard.press("Escape");
+            }
+            reading.menus = menus;
+
+            /* C3's «Answer» opens the decision form it names. */
+            await page.locator(`${card("t-calm-form")} [data-card-answer]`).click();
+            await page.locator('[data-prototype-review="t-calm-form"]').first().waitFor({ timeout: 15_000 });
+            await page.waitForTimeout(400);
+            await page.screenshot({ path: path.join(OUT, `answer-c3-form-${label}.png`) });
+            await page.keyboard.press("Escape");
+            await page.waitForTimeout(300);
+
+            /* Opened: C1, C3 and C8 with their timelines. */
+            for (const id of ["t-calm-commit", "t-calm-form", "t-calm-long"]) {
+              await page.locator(`${card(id)} [data-card-state-toggle]`).click();
+              const element = page.locator(card(id));
+              await element.locator("[data-chronology]").waitFor({ timeout: 10_000 });
+              await element.scrollIntoViewIfNeeded();
+              await element.screenshot({ path: path.join(OUT, `open-${id.replace("t-calm-", "")}-${label}.png`) });
+            }
+            const timeline = await page.evaluate((selector) => {
+              const root = document.querySelector(`${selector} [data-chronology]`)!;
+              const entries = [...root.querySelectorAll<HTMLElement>("[data-chronology-entry]")];
+              const stop = root.querySelector<HTMLElement>('[data-chronology-stop="p-calm-long-a"]');
+              const menu = stop?.querySelector<HTMLElement>("[data-chronology-stop-menu]");
+              const box = menu?.getBoundingClientRect();
+              return {
+                entries: entries.length, earlier: root.querySelector("[data-chronology-earlier]")?.textContent ?? null,
+                stopShown: Boolean(stop && box && box.width > 0 && box.height > 0), stopFirst: entries[0] === stop,
+                times: [...root.querySelectorAll(".chronology-time")].map((node) => node.textContent ?? ""), texts: entries.map((entry) => entry.querySelector(".chronology-what")?.textContent ?? ""),
+              };
+            }, card("t-calm-long"));
+            if (timeline.entries !== 8) failures.push(`${label}: C8 shows ${timeline.entries} entries`);
+            if (!timeline.earlier?.startsWith(t("chronology.earlier", { count: "\u0000" }).split("\u0000")[0]!)) failures.push(`${label}: C8 fold row ${JSON.stringify(timeline.earlier)}`);
+            if (!timeline.stopShown || !timeline.stopFirst) failures.push(`${label}: C8's stop is not first after the fold, with its ⋯`);
+            if (timeline.times.some((text) => /\b(AM|PM)\b/i.test(text))) failures.push(`${label}: AM/PM in ${timeline.times.join(", ")}`);
+            reading.timeline = timeline;
+            /* Opened, the seat's cards still draw no amber. */
+            const opened = await page.evaluate(READ_CARDS, { ids: ["t-calm-commit", "t-calm-long"], phone: false });
+            for (const got of opened) if (got.needs || got.warningInk.length) failures.push(`${label} ${got.id} opened: amber on ${got.warningInk.join(", ") || "data-needs"}`);
+            reading.opened = opened;
+
+            /* The stop entry's ⋯ holds the same answers. */
+            await page.locator(`${card("t-calm-commit")} [data-chronology-stop-menu="p-calm-commit"]`).click();
+            const stopMenu = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.menu [data-menu-item^="answer:"]')].map((item) => item.getAttribute("data-menu-item")));
+            if (JSON.stringify(stopMenu) !== JSON.stringify(ANSWERS["t-calm-commit"]!.actions)) failures.push(`${label}: the stop entry's ⋯ holds ${JSON.stringify(stopMenu)}`);
+            await page.locator(".menu").first().screenshot({ path: path.join(OUT, `stop-menu-c1-${label}.png`) });
+            reading.stopMenu = stopMenu;
+            if (lang === "en") {
+              /* A manual retry goes out as the board's guarded retry. */
+              await page.locator('.menu [data-menu-item="answer:retry-stage"]').click();
+              await page.waitForTimeout(800);
+              const patches = await page.evaluate(() => (window as unknown as { evidence?: { pipelinePatches: Array<{ id: string; body: Record<string, unknown> }> } }).evidence?.pipelinePatches ?? []);
+              if (!patches.some((entry) => entry.id === "p-calm-commit" && entry.body.action === "retry-stage" && entry.body.expectedStageId === "build")) failures.push(`${label}: manual retry sent ${JSON.stringify(patches)}`);
+              reading.patches = patches;
+            } else await page.keyboard.press("Escape");
+          }
+          readings[label] = reading;
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "desktop.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 600_000);
+
+  browserTest("the phone at 390, en and uk, light and dark: the card's state line and «Answer», the task screen's timeline, and the lane sheet's answers", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/calm-cards-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `390-${lang}-${scheme}`;
+        const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=calm-cards`, { width: 390, height: 844 }, scheme, lang, "reduce", true);
+        try {
+          await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          await page.waitForSelector('[data-phone-card="task:t-calm-commit"] [data-card-state]', { timeout: 30_000 });
+          await page.waitForTimeout(600);
+          await page.screenshot({ path: path.join(OUT, `board-closed-${label}.png`), fullPage: false });
+          const ids = Object.keys(OWNERS).filter((id) => id !== "t-calm-done");
+          const closed = await page.evaluate(READ_CARDS, { ids, phone: true });
+          await page.locator('[data-phone-kanban-tab="done"]').click();
+          await page.waitForSelector('[data-phone-card="task:t-calm-done"]', { timeout: 10_000 });
+          closed.push(...await page.evaluate(READ_CARDS, { ids: ["t-calm-done"], phone: true }));
+          await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          checkCards(label, closed, true, failures);
+          const sideways = await page.evaluate(() => {
+            const scroller = document.scrollingElement!;
+            scroller.scrollLeft = 200;
+            const moved = scroller.scrollLeft;
+            scroller.scrollLeft = 0;
+            return moved + Math.max(0, document.documentElement.scrollWidth - 390);
+          });
+          if (sideways > 0) failures.push(`${label}: the page scrolls sideways by ${sideways}px`);
+          const reading: Record<string, unknown> = { closed };
+          if (scheme === "light") {
+            /* C1's task screen: its timeline, and its stop's ⋯ opening the lane sheet with the answers. */
+            await page.locator('[data-phone-card="task:t-calm-commit"]').click();
+            const chronology = page.locator("[data-chronology]");
+            await chronology.waitFor({ timeout: 15_000 });
+            await chronology.scrollIntoViewIfNeeded();
+            await page.screenshot({ path: path.join(OUT, `task-c1-${label}.png`) });
+            if (await page.locator("[data-answer-action]").count()) failures.push(`${label}: an answer button on the task screen`);
+            await page.locator('[data-chronology-stop-menu="p-calm-commit"]').click();
+            await page.locator('[data-phone-task-lane-sheet="p-calm-commit"]').waitFor({ timeout: 10_000 });
+            await page.waitForTimeout(300);
+            const sheet = await page.evaluate(() => ({
+              answers: [...document.querySelectorAll<HTMLElement>("[data-phone-lane-answer]")].map((row) => ({ action: row.getAttribute("data-phone-lane-answer"), height: row.getBoundingClientRect().height })),
+              caption: document.querySelector("[data-phone-lane-answers-caption]")?.textContent ?? null,
+              rows: [...document.querySelectorAll<HTMLElement>('[data-phone-task-lane-sheet] [role="menuitem"], [data-phone-task-lane-sheet] button')].map((row) => row.getBoundingClientRect().height),
+            }));
+            if (JSON.stringify(sheet.answers.map((row) => `answer:${row.action}`)) !== JSON.stringify(ANSWERS["t-calm-commit"]!.actions)) failures.push(`${label}: lane sheet answers ${JSON.stringify(sheet.answers)}`);
+            if (sheet.caption !== t("cardState.manualCaption")) failures.push(`${label}: lane sheet caption ${JSON.stringify(sheet.caption)}`);
+            if (sheet.rows.some((height) => height < 44)) failures.push(`${label}: a sheet row under 44px: ${sheet.rows.join(", ")}`);
+            await page.screenshot({ path: path.join(OUT, `lane-sheet-c1-${label}.png`) });
+            reading.sheet = sheet;
+            await page.locator("[data-mobile2-close]").first().click();
+            await page.goBack();
+
+            /* C8's task screen: eight entries, the fold row and the pinned stop. */
+            await page.locator('[data-phone-kanban-tab="assigned"]').click();
+            await page.locator('[data-phone-card="task:t-calm-long"]').click();
+            await chronology.waitFor({ timeout: 15_000 });
+            await chronology.scrollIntoViewIfNeeded();
+            const timeline = await page.evaluate(() => {
+              const root = document.querySelector("[data-chronology]")!;
+              const entries = [...root.querySelectorAll<HTMLElement>("[data-chronology-entry]")];
+              const menu = root.querySelector<HTMLElement>('[data-chronology-stop="p-calm-long-a"] [data-chronology-stop-menu]')?.getBoundingClientRect();
+              return { entries: entries.length, earlier: Boolean(root.querySelector("[data-chronology-earlier]")), stopFirst: entries[0]?.getAttribute("data-chronology-stop") === "p-calm-long-a", menu: menu ? { width: menu.width, height: menu.height } : null };
+            });
+            if (timeline.entries !== 8 || !timeline.earlier || !timeline.stopFirst) failures.push(`${label}: C8 timeline ${JSON.stringify(timeline)}`);
+            if (!timeline.menu || timeline.menu.height < 44 || timeline.menu.width < 44) failures.push(`${label}: C8 stop ⋯ ${JSON.stringify(timeline.menu)}`);
+            await page.screenshot({ path: path.join(OUT, `task-c8-${label}.png`) });
+            reading.timeline = timeline;
+            await page.goBack();
+
+            /* C3's task screen, the operator's decision form waiting. */
+            await page.locator('[data-phone-kanban-tab="assigned"]').click();
+            await page.locator('[data-phone-card="task:t-calm-form"]').click();
+            await chronology.waitFor({ timeout: 15_000 });
+            await page.screenshot({ path: path.join(OUT, `task-c3-${label}.png`) });
+          }
+          readings[label] = reading;
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "phone.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 600_000);
 });

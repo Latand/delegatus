@@ -1227,7 +1227,7 @@
 .kb .card:not([data-id^="draft:"]) [data-draft-pane="composer"] { border-top: 1px solid var(--border-default); padding-top: 8px; }
 /* A task with no agent at work has no status line; the launch gives it one («Working · 1»), above the
    conversations. The opening keeps that line's room. */
-.kb .card:not([data-id^="draft:"]):not(:has(> .motion-line)) [data-draft-pane="opening"] { padding-top: 28px; }
+.kb .card:not([data-id^="draft:"]):not(:has(> .motion-line, > .card-state)) [data-draft-pane="opening"] { padding-top: 28px; }
 /* The card's first conversation brings the conversations block, which stands 2 px lower than a draft does. */
 .kb .card:not([data-id^="draft:"]):not(:has(> .members)) .agent-drafts:has([data-draft-pane="opening"]) { margin-top: 2px; }
 /* `+ Task`'s inline card at the top of Inbox. */
@@ -1908,3 +1908,71 @@
 @media (prefers-reduced-motion: reduce) {
   [data-orchestrator-wires] [data-flow] .oa-flow { display: none; }
 }
+
+/* ── Calm task cards (docs/design/calm-task-cards-build.md §5–§6) ──────────
+   The closed card's one state line: a dot in its owner's tone, then one
+   sentence and its age, at most two lines, the dot level with the first.
+   Amber is the operator's alone; the orchestrator's stop takes the accent.
+   Unscoped: the phone's card draws the same line. */
+.card-state { display: flex; align-items: flex-start; gap: 7px; min-width: 0; font-size: var(--text-label); line-height: 16px; color: var(--color-secondary); }
+.card-state-dot { position: relative; flex: none; width: 8px; height: 8px; margin-top: 4px; border-radius: 50%; background: var(--color-muted); }
+.card-state-dot[data-owner="you"] { background: var(--color-warning); }
+.card-state-dot[data-owner="seat"] { background: var(--color-accent); }
+.card-state-dot[data-owner="working"] { background: var(--color-success); }
+.card-state-dot[data-owner="waiting"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--color-muted); }
+.card-state-dot[data-owner="done"] { background: color-mix(in srgb, var(--color-success) 45%, transparent); }
+/* The dot is small; its target is not. */
+.card-state-dot[role="button"] { cursor: help; }
+.card-state-dot[role="button"]::after { content: ""; position: absolute; inset: -8px; }
+.card-state-dot[role="button"]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.card-state-words { min-width: 0; flex: 1; overflow-wrap: break-word; }
+/* A sentence of its own is at most two lines; the motion line keeps its own rules. */
+.card-state-words:not(.motion) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.card-state-age { color: var(--color-muted); white-space: nowrap; }
+.card-state[data-card-state="you"] .card-state-words { color: var(--color-primary); font-weight: 600; }
+.card-state-toggle { display: flex; flex: 1; min-width: 0; text-align: left; color: inherit; border-radius: 4px; padding: 0 2px; margin: 0 -2px; }
+.card-state-toggle:hover .card-state-words { color: var(--color-primary); }
+.card-state-toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.card-state .prio-mark { flex: none; margin-top: 1px; }
+.kb .card .card-state .motion-line { margin: 0; }
+.card-state-pop {
+  max-width: 260px; white-space: normal; border-radius: 8px; border: 1px solid var(--border-default); background: var(--surface-card);
+  padding: 6px 10px; font-size: var(--text-label); line-height: 16px; color: var(--color-primary); box-shadow: var(--shadow-1);
+}
+.kb .card .card-answer-row { display: flex; }
+.kb .card .card-answer { height: 28px; padding: 0 12px; }
+.kb .card .card-chain { min-width: 0; }
+
+/* The expanded card's timeline: time, a mark in the entry's tone, the words. */
+.chronology { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.chronology-head { margin: 0; font-size: var(--text-label); font-weight: 700; line-height: 16px; color: var(--color-secondary); }
+.chronology ol { list-style: none; margin: 0 0 0 4px; padding: 0 0 0 9px; display: flex; flex-direction: column; gap: 3px; border-left: 2px solid var(--border-default); }
+.chronology-entry { display: grid; grid-template-columns: auto 6px minmax(0, 1fr) auto; column-gap: 6px; align-items: start; font-size: var(--text-label); line-height: 16px; color: var(--color-secondary); }
+.chronology-time { color: var(--color-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.chronology-mark { width: 6px; height: 6px; margin-top: 5px; border-radius: 50%; background: var(--color-muted); }
+.chronology-entry.tone-ok .chronology-mark { background: var(--color-success); }
+.chronology-entry.tone-bad .chronology-mark { background: var(--color-danger); }
+.chronology-entry.tone-warn .chronology-mark { background: transparent; box-shadow: inset 0 0 0 1.5px var(--color-secondary); }
+.chronology-what { min-width: 0; overflow-wrap: anywhere; }
+.chronology-open { text-align: left; color: inherit; border-radius: 3px; }
+.chronology-open:hover { color: var(--color-primary); text-decoration: underline; text-underline-offset: 2px; }
+.chronology-open:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.chronology-detail summary { cursor: pointer; color: var(--color-muted); width: fit-content; }
+.chronology-detail summary:hover { color: var(--color-secondary); }
+.chronology-detail p { margin: 2px 0 0; max-height: 96px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--color-secondary); font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--text-caption); }
+.chronology-earlier button { font-size: var(--text-label); line-height: 16px; color: var(--color-muted); border-radius: 3px; }
+.chronology-earlier button:hover { color: var(--color-secondary); text-decoration: underline; text-underline-offset: 2px; }
+.kb .card .chronology-menu { width: 22px; height: 18px; margin: -1px 0; }
+/* The phone: the time leads the entry's line, and the stop's ⋯ keeps 44 px. */
+.chronology.phone { padding: 8px 12px; border-radius: 12px; background: var(--surface-card); box-shadow: var(--shadow-1); }
+.chronology.phone .chronology-entry { display: flex; align-items: flex-start; gap: 6px; line-height: 18px; font-size: var(--text-ui); }
+.chronology.phone .chronology-mark { display: none; }
+.chronology.phone .chronology-what { flex: 1; }
+.chronology.phone .chronology-menu { flex: none; margin-right: -8px; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; color: var(--color-muted); }
+.chronology.phone .chronology-menu svg { width: 18px; height: 18px; }
+.chronology.phone .chronology-earlier button, .chronology.phone .chronology-detail summary { min-height: 44px; display: inline-flex; align-items: center; }
+/* An entry that opens its conversation is a whole 44 px row on the phone. */
+.chronology.phone .chronology-open { display: flex; align-items: center; width: 100%; min-height: 44px; }
+/* A closed card that has not started: its priority mark alone, at the line's end. */
+.card-state.prio-only { justify-content: flex-end; }
+.card-state.prio-only .motion-line { flex: 1; }

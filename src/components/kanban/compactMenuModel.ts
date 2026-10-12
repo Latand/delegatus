@@ -63,6 +63,9 @@ function cardLayout(items: readonly KanbanMenuItem[], words: MenuWords): Compact
   const priorities = actions.filter((item) => item.id?.startsWith("priority:"));
   const swatches = items.find((item): item is MenuSwatches => item.type === "swatches");
   const [hold, icon, collapse, rename, describe, links, hide] = ["hold", "icon", "collapse", "rename", "describe", "links", "hide"].map(find);
+  /* The card's ✓ and its Undo (docs/design/calm-task-cards-build.md §2.2): a
+     full row that says what it does, while the card asks or holds a clearing. */
+  const flag = find("dismissFlag") ?? find("undoFlag");
   const laneSections = lanes(items);
   const section = (entry: MenuSection, open: "expand" | "drill"): MenuNode[] => (entry.entries.length ? [{ node: "section", section: entry, open }] : []);
   const segments = (id: string, label: string, options: MenuAction[]): MenuNode[] => (options.length ? [{ node: "segments", id, label, options }] : []);
@@ -77,6 +80,7 @@ function cardLayout(items: readonly KanbanMenuItem[], words: MenuWords): Compact
     nodes: [
       ...segments("status", words.move, statuses),
       { node: "quick", actions: present([rename, describe, links, hide]) },
+      ...(flag ? [{ node: "row" as const, action: flag, hint: true }] : []),
       ...segments("priority", words.priority, priorities),
       ...section({ id: "appearance", title: words.appearance, value: swatches ? swatches.names(swatches.value) : null, entries: present<MenuEntry>([swatches, icon]), hints: false }, "expand"),
       ...pipelines,
