@@ -27,6 +27,7 @@ import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { runtimeScope } from "@/lib/runtime/contracts";
 import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
+import { destinationRelay, destinationTarget } from "@/lib/externalRelay/ownerDestination.fixture";
 
 /*
  * The phone's browser evidence driver: the real Viewer at phone width, in
@@ -9683,6 +9684,52 @@ describe("prototype review on the phone", () => {
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
 });
+
+browserTest("external relay: owner review destination and off reasons at phone and desktop widths", async () => {
+  const { base, stop } = await serveFixture(); const browser = await launchChromium();
+  const out = path.resolve(".artifacts/external-relay"); fs.mkdirSync(out, { recursive: true });
+  const readings: Record<string, unknown>[] = [];
+  const cases = [
+    { name: "one", relays: [destinationRelay()], reason: "ready" },
+    { name: "several", relays: [destinationRelay([destinationTarget("ordinary"), destinationTarget("owner-first", true), destinationTarget("owner-second", true)])], reason: "ready" },
+    { name: "unpaired", relays: [], reason: "no_relay" },
+    { name: "no-target", relays: [destinationRelay([])], reason: "no_target" },
+    { name: "not-configured", relays: [destinationRelay([{ ...destinationTarget("first"), engine: null }, destinationTarget("second")])], reason: "not_configured" },
+    { name: "paused", relays: [{ ...destinationRelay(), paused: true }], reason: "paused" },
+  ];
+  try {
+    for (const locale of ["en", "uk"] as const) for (const width of [390, 1440]) for (const entry of cases) {
+      const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: "dark", ...(width === 390 ? { hasTouch: true, isMobile: true } : {}) });
+      await context.addInitScript(lang => localStorage.setItem("llv_lang", lang), locale);
+      const page = await context.newPage(); const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+      try {
+        await page.goto(`${base}/?relay=paired`);
+        await page.evaluate(relays => {
+          const previous = window.fetch;
+          window.fetch = ((input, init) => new URL(String(input), location.origin).pathname === "/api/external-relay"
+            ? Promise.resolve(Response.json({ relays, pending: [], status: relays.map(relay => ({ id: relay.id,
+              state: { state: relay.paused ? "paused" : "polling", lastOutcome: null, lastOutcomeAt: null, lastProgress: null }, running: {} })) }))
+            : previous(input, init)) as typeof window.fetch;
+        }, entry.relays.map(({ credential: _credential, ...relay }) => relay));
+        await page.locator(width === 390 ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").click();
+        await page.locator(width === 390 ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
+        await page.locator(width === 390 ? '[data-mobile2-menu-row="external-relay"]' : "[data-rail-menu-external-relay]").click();
+        const line = page.locator("[data-external-relay-review-destination]"); await line.waitFor();
+        expect(await line.getAttribute("data-external-relay-review-destination")).toBe(entry.reason);
+        const reading = await line.evaluate(element => ({ text: element.textContent, overflow: element.scrollWidth > element.clientWidth,
+          lineWidth: element.getBoundingClientRect().width, lineHeight: element.getBoundingClientRect().height }));
+        expect(reading.overflow).toBe(false);
+        if (entry.name === "several") expect(reading.text).toContain("owner-first");
+        const frame = `owner-review-${entry.name}-${width}-${locale}.png`;
+        await page.screenshot({ path: path.join(out, frame) });
+        readings.push({ locale, width, state: entry.name, reason: entry.reason, ...reading, frame });
+        expect(errors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    fs.mkdirSync("evidence/external-relay", { recursive: true });
+    fs.writeFileSync("evidence/external-relay/owner-review-publishing.json", JSON.stringify({ readings }, null, 2) + "\n");
+  } finally { await browser.close(); stop(); }
+}, 180000);
 
 browserTest("external relay: paired card uses existing pairing at phone and desktop widths", async () => {
   const { base, stop } = await serveFixture(); const browser = await launchChromium();

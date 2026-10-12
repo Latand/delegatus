@@ -62,7 +62,7 @@ export function ownerRelayAuthorized(relayId: string, targetId: string, requestI
     const target = relay?.targets.find(t => t.id === targetId);
     const run = ledger.runs.find(r => r.requestId === requestId && r.relayId === relayId && r.targetId === targetId);
     return store.v === 1 && ledger.v === 1 && !!run?.ownerTurn && !run.ownerTurn.cancel
-      && relay?.paused === false && target?.enabled === true && target.ownerTier === true;
+      && relay?.paused === false && target?.enabled === true && (target.ownerTier === true || run.ownerTurn.prototype === true);
   } catch { return false; }
 }
 

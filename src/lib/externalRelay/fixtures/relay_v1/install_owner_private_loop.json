@@ -1,0 +1,36 @@
+{
+  "claim": {
+    "wait_s": 25,
+    "kinds": [
+      "answer"
+    ],
+    "features": [
+      "requester_context",
+      "relay_tool_calls",
+      "relay_tool_actions"
+    ],
+    "slots": [
+      {
+        "target_id": "target_1",
+        "free": 1
+      }
+    ]
+  },
+  "publish": {
+    "chat_id": 41,
+    "message_id": 17,
+    "sent_at": "2026-10-11T13:20:00.000Z",
+    "text": "🧪 Прототип · Review layout\nReview layout · #proto-e559deba\n\n1 · Choice 1\nKeeps controls together.\n\n2 · Choice 2\nKeeps controls together.\n\n3 · Choice 3\nKeeps controls together.\n\nПитання 1/3 · Where should this live?\na) Existing review ✅\nb) New window\n\nПитання 2/3 · Which surfaces? (можна кілька)\na) Desktop ✅\nb) Phone\n\nПитання 3/3 · When should work start?\na) After answering ✅\nb) Later\n+ Інше — у коментарі\n\nНадішліть клону скопійований рядок відповіді. Повне рев’ю — у Delegatus.\nСкопіювати рекомендовані: Прототип «Review layout» #proto-e559deba · Відповіді рекомендовані\nВаріант 1: Прототип «Review layout» #proto-e559deba · Варіант 1 · Відповіді 1a 2a 3a\nВаріант 2: Прототип «Review layout» #proto-e559deba · Варіант 2 · Відповіді 1a 2a 3a\nВаріант 3: Прототип «Review layout» #proto-e559deba · Варіант 3 · Відповіді 1a 2a 3a"
+  },
+  "copied_answer": "Прототип «Review layout» #proto-e559deba · Варіант 2 · Відповіді 1a 2a 3a",
+  "completion": {
+    "lease_id": "ls_Zq3vN8bY1xKp4LmT0aW9rE",
+    "outcome": "answered",
+    "answer": {
+      "action": "reply",
+      "text": "✅ Записав рішення «Review layout»: варіанти 2; відповіді 1a 2a 3a. Оркестратора зараз немає; рішення збережено в Delegatus.",
+      "reply_to": "m_answer"
+    },
+    "duration_ms": 0
+  }
+}
