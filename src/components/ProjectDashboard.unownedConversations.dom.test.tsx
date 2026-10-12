@@ -233,7 +233,7 @@ for (const [label, file] of TARGETS) {
   });
 }
 
-test("under a standing landing, a card's link to Conversations opens Conversations", async () => {
+test("under a standing landing, a card's link to Conversations opens the project's list over the Board", async () => {
   const { host, rerender } = mount();
   expect(await waitFor(() => boardReady(host))).toBe(true);
   /* A search lands on the implementer, and the landing stands. */
@@ -243,6 +243,10 @@ test("under a standing landing, a card's link to Conversations opens Conversatio
     .find((button) => (button.textContent ?? "").includes("Conversations"));
   expect(link).toBeDefined();
   flushSync(() => link!.click());
-  expect(await waitFor(() => !boardShown(host) && host.textContent!.includes(translate("en", "list.title")))).toBe(true);
+  /* The list is the header's recent agents: it opens under its icon, and the Board and the landing stay. */
+  expect(await waitFor(() => host.querySelector("header.bar [data-bar-recent-list] [data-desktop-conversations-scroll]") !== null)).toBe(true);
+  expect(host.querySelector("header.bar [data-bar-recent-toggle]")?.getAttribute("aria-expanded")).toBe("true");
+  expect(boardShown(host)).toBe(true);
+  expect(host.querySelector(`[data-agent-window] [data-link-path="${implementer.path}"]`)).not.toBeNull();
   expect(presentationWrites).toEqual([]);
 });

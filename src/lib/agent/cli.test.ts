@@ -791,3 +791,25 @@ test("with the HTTP flag, a terminal attach/resume command keeps the stdio Viewe
     }
   }
 });
+
+
+test("terminal seat launches deny native questions while worker launches stay unchanged", async () => {
+  const { resumeSpecForSession } = await import("./cli");
+  const home = path.join(SANDBOX, "seat-terminal-policy");
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, "config.toml"), "[mcp_servers]\n");
+  for (const engine of ["claude", "codex"] as const) for (const seat of [false, true]) for (const readOnly of [false, true]) {
+    const options = { operatorDecisionForms: seat, allowSubagents: true, readOnly, claudeConfigDir: home, codexHome: home };
+    const specs = [freshSpecFor(engine, SANDBOX, options), resumeSpecForSession(engine, randomUUID(), SANDBOX, home, options)!];
+    for (const spec of specs) {
+      if (engine === "claude") {
+        expect(spec.command.includes("AskUserQuestion")).toBe(seat);
+        expect(spec.command.includes("ExitPlanMode")).toBe(seat);
+        if (readOnly) expect(spec.command).toContain("Edit,Write,NotebookEdit");
+      } else {
+        expect(spec.command.includes("tools.experimental_request_user_input.enabled=false")).toBe(seat);
+        expect(spec.command.includes("request_user_input_async")).toBe(seat);
+      }
+    }
+  }
+});

@@ -205,10 +205,11 @@ const composer = (host: HTMLElement) => host.querySelector("textarea");
 const card = (host: HTMLElement) => host.querySelector(`[data-agent-window] [data-reader-path="${FOUND_PATH}"]`);
 const chatShell = (host: HTMLElement) => host.querySelector('[data-testid="mobile-chat-shell"]');
 
-test("desktop: a search landing opens the conversation with its composer even from saved «Список»", async () => {
+test("desktop: a search landing opens the conversation with its composer on the Board, whatever view was saved", async () => {
   const { host, rerender } = mount(null);
-  /* The saved preference is honoured until something asks otherwise. */
-  expect(await waitFor(() => listShown(host))).toBe(true);
+  /* The desktop has one view: a project saved on «Список» opens on its Board, with nothing open yet. */
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  expect(listShown(host)).toBe(false);
   expect(card(host)).toBeNull();
 
   /* The resolver's landing — what Viewer issues after pinning a search result. */
@@ -236,27 +237,9 @@ test("phone: the same landing renders the focused chat, not the catalog list", a
   expect(presentationWrites).toEqual([]);
 });
 
-test("the operator's «Список» tap takes the view back and the saved preference is intact", async () => {
-  const { host, rerender } = mount(null);
-  expect(await waitFor(() => listShown(host))).toBe(true);
-  rerender({ path: FOUND_PATH, nonce: 1, catalog: true });
-  expect(await waitFor(() => card(host) !== null)).toBe(true);
-
-  /* The Board/Conversations tabs are the desktop face of that control. */
-  const listTab = Array.from(host.querySelectorAll("button")).find(
-    (el) => (el.textContent ?? "").trim() === translate("en", "dash.viewList"),
-  ) as unknown as HTMLButtonElement | undefined;
-  expect(listTab).toBeDefined();
-  flushSync(() => listTab!.click());
-
-  expect(await waitFor(() => listShown(host))).toBe(true);
-  expect(card(host)).toBeNull();
-  /* It wrote «list» — the face it was already saved as. Nothing ever wrote
-     «scheme» on the operator's behalf. */
-  expect(presentationWrites).not.toContain("scheme");
-});
-
-test("a plain focus jump does NOT commandeer the view — only a resolver landing does", async () => {
+test("phone: a plain focus jump does NOT commandeer the view — only a resolver landing does", async () => {
+  /* The phone still has two views, so it is where a saved list can be taken over. */
+  mobile = true;
   const { host, rerender } = mount(null);
   expect(await waitFor(() => listShown(host))).toBe(true);
 
@@ -268,5 +251,5 @@ test("a plain focus jump does NOT commandeer the view — only a resolver landin
   await new Promise((r) => setTimeout(r, 120));
 
   expect(listShown(host)).toBe(true);
-  expect(card(host)).toBeNull();
+  expect(chatShell(host)).toBeNull();
 });
