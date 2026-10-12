@@ -8,7 +8,18 @@ import { openedAt, streamWindow } from "@/lib/artifact/localFile";
 import { PrototypeError } from "./input";
 import { prototypeRoot, roundMedia, sniffPrototype, storedMediaPath } from "./store";
 import { prototypeWorld, taskForPrototype, type PrototypeWorld } from "./world";
+import { findSeatRound } from "./seatRounds";
+import { canonicalProject } from "@/lib/projects/aliases";
+import type { PrototypeReviewRound } from "./types";
 
+/** The round a media read names: the task's, or with no task a seat's own
+    pictures, read only from the seat's project. */
+function mediaRound(taskId: string,reviewId: string,kind: "image" | "video",caller: ReturnType<PrototypeWorld["caller"]>): PrototypeReviewRound | undefined {
+  if (taskId) return taskForPrototype(taskId,caller).prototypeReviews?.find(r => r.id === reviewId);
+  const round = kind === "image" ? findSeatRound(reviewId) : undefined;
+  if (round && caller.conversationId && (!caller.project || canonicalProject(round.project) !== canonicalProject(caller.project))) throw new PrototypeError("prototype access is limited to the caller's project",403);
+  return round;
+}
 /** Only descriptor-pinned bytes named by this task's stored manifest. */
 export async function prototypeMediaGET(request: NextRequest,taskId: string,reviewId: string,mediaId: string,
   kind: "image" | "video",world: PrototypeWorld = prototypeWorld): Promise<NextResponse> {
@@ -16,8 +27,7 @@ export async function prototypeMediaGET(request: NextRequest,taskId: string,revi
   const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   let handle;
   try {
-    const task = taskForPrototype(taskId,world.caller(request));
-    const round = task.prototypeReviews?.find(r => r.id === reviewId);
+    const round = mediaRound(taskId,reviewId,kind,world.caller(request));
     const media = round && !round.mediaRemovedAt ? roundMedia(round).find(m => m.id === mediaId && m.mime.startsWith(`${kind}/`)) : null;
     if (!media) throw new PrototypeError("media not found",404);
     const candidate = storedMediaPath(await fs.realpath(prototypeRoot()),reviewId,media);

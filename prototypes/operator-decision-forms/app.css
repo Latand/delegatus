@@ -1,0 +1,13 @@
+/* The app's own token set, with utilities generated from this prototype's
+   sources only. Paths are relative to the export's copy of this directory
+   (render.ts). */
+@import "tailwindcss" source(none);
+@source ".";
+@import "../../src/styles/tokens.css";
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-primary);
+  font-family: var(--font-sans);
+  margin: 0;
+}

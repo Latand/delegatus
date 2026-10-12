@@ -62,8 +62,14 @@ test("native Codex denies async seat questions and preserves worker questions", 
       })]);
       expect(code, stderr).toBe(0);
       expect(requests).toBe(2);
-      if (seat) expect(inputs.join("\n")).toContain("publish_prototype_review");
-      else expect(inputs.join("\n")).toContain('"accepted":true');
+      if (seat) {
+        const denial = inputs.join("\n");
+        expect(denial).toContain("publish_prototype_review");
+        expect(denial).toContain("3–7 questions with a task, 1–7 without a task");
+        expect(denial).toContain("Chat and reports point to the form");
+        expect(denial).not.toContain("then suggest_replies");
+        expect(denial).not.toContain("question bridge report");
+      } else expect(inputs.join("\n")).toContain('"accepted":true');
     } finally {
       clearTimeout(timeout);
       if (child.exitCode === null) child.kill();

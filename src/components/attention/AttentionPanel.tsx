@@ -368,8 +368,8 @@ function PrototypeRow({ entry, onOpen }: { entry: Extract<MobileAttentionEntry, 
       <button
         type="button"
         className="flex w-full min-w-0 flex-col gap-1 rounded-[8px] px-2.5 py-2 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-        data-attention-prototype={entry.notice.taskId}
-        aria-label={t(undelivered ? "proto.notice.undeliveredAria" : entry.notice.asks === "questions" ? "proto.notice.answerAria" : "proto.notice.openAria", { title: entry.notice.title })}
+        data-attention-prototype={entry.notice.taskId ?? entry.notice.reviewId}
+        aria-label={t(undelivered ? "proto.notice.undeliveredAria" : entry.notice.taskId === null ? "decisions.expandAria" : entry.notice.asks === "questions" ? "proto.notice.answerAria" : "proto.notice.openAria", { title: entry.notice.title })}
         onClick={onOpen}
       >
         <span className={`flex w-full min-w-0 items-center gap-1.5 text-[10.5px] font-semibold ${undelivered ? "text-warning" : "text-accent"}`}>
