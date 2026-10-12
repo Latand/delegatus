@@ -329,6 +329,31 @@ test("a refusal of another digest does not cancel this report's approval", async
   expect(h.published).toEqual([{ ...secondReport, repository: REPOSITORY }]);
 });
 
+test.each(["\n", "\r\n"])("newline refusals stop at the publisher boundary while another digest remains independent (%j)", async (lineBreak) => {
+  for (const refusalLanguage of ["uk", "en", "report clause"] as const) {
+    const h = harness();
+    const firstReport = { ...REPORT };
+    const secondReport = { ...REPORT, title: `Delegatus refuses a requested launch ${refusalLanguage}` };
+    const refused = await previewed(h, firstReport);
+    const approved = await previewed(h, secondReport);
+    const refusedReplies = await shown(h, refused);
+    const approvedReplies = await shown(h, approved);
+    const negated = refusalLanguage === "uk"
+      ? `не${lineBreak}${refusedReplies.uk}`
+      : refusalLanguage === "en"
+        ? `don't${lineBreak}${refusedReplies.en}`
+        : `${refusedReplies.uk}; do not publish${lineBreak}report ${refused}`;
+    h.operatorSays(`${negated}; ${approvedReplies.en}`);
+
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest: refused }))
+      .toMatchObject({ ok: false, code: "issue_report_approval_required", details: { reason: "not_an_approval" } });
+    expect(h.published).toEqual([]);
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest: approved }))
+      .toMatchObject({ ok: true, published: true });
+    expect(h.published).toEqual([{ ...secondReport, repository: REPOSITORY }]);
+  }
+});
+
 test.each(["en", "uk"] as const)("a free-form yes is refused with guidance in %s that permits a longer message", async (locale) => {
   const h = harness({ locale });
   const digest = await previewed(h);

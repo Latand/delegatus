@@ -49,7 +49,9 @@ export function approvesIssueReport(message: string, digest: string): boolean {
   const contains = (phrase: string) => said.includes(` ${normalized(phrase)} `);
   const replies = Object.values(issueReportApprovalReplies(digest));
   if (!replies.some(contains)) return false;
-  const refusalClauses = message.split(/[.!?;\n\r]+/).map((clause) => ` ${normalized(clause)} `);
+  /* Newlines are whitespace within a sentence, so keep them available to the
+     refusal matcher just as the affirmative matcher does. */
+  const refusalClauses = message.split(/[.!?;]+/).map((clause) => ` ${normalized(clause)} `);
   /* A negated quotation and a separate refusal both veto this digest, even
      when the same message contains an affirmative reply as well. */
   const negations = ["не", "ні", "no", "not", "don't", "do not", "never"];

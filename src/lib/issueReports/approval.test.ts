@@ -129,6 +129,22 @@ test("a refusal naming another digest does not override this approval", () => {
   expect(approvesIssueReport(text, OTHER)).toBe(false);
 });
 
+test.each(["\n", "\r\n"])("a line break inside a refusal still refuses only its digest (%j)", (lineBreak) => {
+  const uk = issueReportApprovalReplies(DIGEST).uk;
+  const en = issueReportApprovalReplies(DIGEST).en;
+  const otherReply = issueReportApprovalReplies(OTHER).en;
+  for (const text of [
+    `не${lineBreak}${uk}`,
+    `don't${lineBreak}${en}`,
+    `${uk}; do not publish${lineBreak}report ${DIGEST}`,
+  ]) {
+    expect(approvesIssueReport(text, DIGEST)).toBe(false);
+  }
+  const mixed = `${otherReply}; don't${lineBreak}publish report ${DIGEST}`;
+  expect(approvesIssueReport(mixed, DIGEST)).toBe(false);
+  expect(approvesIssueReport(mixed, OTHER)).toBe(true);
+});
+
 test.each(["одобряю", "так, публікуй", "yes", "Yes, publish"])("a free-form yes without the digest remains refused: %s", (text) => {
   expect(issueReportApproval([{ at: 101, text }], DIGEST, 100)).toEqual({ approved: false, reason: "not_an_approval" });
 });
