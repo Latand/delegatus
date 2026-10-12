@@ -143,6 +143,7 @@ import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/o
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
+import { readMemoryProblem } from "@/lib/memory/roleProblems";
 import { RoleMemoryRefusal, storedLessonTexts } from "@/lib/memory/roleStore";
 import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt, latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
@@ -2456,7 +2457,7 @@ function stageLessonRequest(result: { pipelineId?: string; stageId?: string; att
 async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const pipelines = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [];
   try {
-    const result = leaveLessonForConversation(pipelines, attributionOf(dependencies).conversationId, { lesson: args.lesson, rewrite: args.rewrite, none: args.none });
+    const result = leaveLessonForConversation(pipelines, attributionOf(dependencies).conversationId, { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem });
     return { ...result };
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) {
@@ -4493,6 +4494,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
       ...(verbose ? { setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null } : {}),
       ...autoRotationFailureAnswer(project) },
     maintenance: boardMaintenanceAnswer(project, effective, { verbose }),
+    ...(typeof args.problemId === "string" ? { problem: readMemoryProblem(project, args.problemId) } : {}),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
     /* Why the tick is mute, when it is (#1746). A seat that is enabled, on a
        twenty-minute interval and receiving nothing was reading a settings

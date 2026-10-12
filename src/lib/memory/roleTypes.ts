@@ -1,5 +1,7 @@
 import type { StaticFindingClass } from "@/lib/privacy/staticDetectors";
 
+export type RulePrivacyHint = StaticFindingClass | "email_address";
+
 /* Role memory (docs/design/role-memory.md, §3.1 as built): stage agents leave
    abstract lessons when they report, and the next agent of the same role,
    project or machine starts with them. Everything here lives in Delegatus's
@@ -12,6 +14,8 @@ export const CURATION_INTERVAL_MS = 6 * 60 * 60_000;
 export const CURATION_CLAIM_COOLDOWN_MS = 30 * 60_000;
 export const RULE_MAX_CHARS = 300;
 export const WHY_MAX_CHARS = 160;
+export const PROBLEM_MAX_CHARS = 300;
+export const PROBLEM_EVIDENCE_MAX_CHARS = 1000;
 /** A rule shorter than this names nothing a later agent can act on. */
 export const RULE_MIN_CHARS = 20;
 export const MAX_LESSONS_PER_ATTEMPT = 1;
@@ -30,7 +34,7 @@ export function lessonTextLength(value: string): number {
 export type ScopeKind = "role" | "project" | "machine";
 
 export type RuleState = "active" | "merged" | "archived";
-export type CuratorReason = "task-specific" | "stale" | "in-code" | "in-instructions" | "no-reader" | "contradicted" | "duplicate";
+export type CuratorReason = "task-specific" | "stale" | "in-code" | "in-instructions" | "no-reader" | "contradicted" | "duplicate" | "problem";
 export type RuleLeftReason = CuratorReason | "budget" | "deleted" | "rewritten" | "undone";
 
 export interface RuleRevision {
@@ -70,7 +74,7 @@ export interface RoleMemoryRule {
   /** Why a rule left the injected text, including the curator's disposition. */
   reason?: RuleLeftReason;
   mergedInto?: string;
-  hints: StaticFindingClass[];
+  hints: RulePrivacyHint[];
   source: RuleSource;
   createdAt: string;
   changedAt: string;
@@ -85,6 +89,15 @@ export interface RoleMemoryRule {
   mergedFrom?: string[];
   movedFrom?: string;
   splitFrom?: string;
+  /** A curator transfer retained with the reversible archive. */
+  problem?: ProblemInput;
+  problemEpisode?: string;
+  problemDeliveredAt?: string;
+}
+
+export interface ProblemInput {
+  statement: string;
+  evidence: string;
 }
 
 export interface ScopeHistoryEntry {
@@ -127,6 +140,8 @@ export interface RoleMemoryScopeRow {
 export interface LessonRequestRow {
   kind: "request";
   pipelineId: string;
+  /** The board task at request time; older requests count their pipeline. */
+  taskId?: string;
   stageId: string;
   attempt: number;
   project: string;
@@ -137,6 +152,8 @@ export interface LessonRequestRow {
   /** The one line an agent gave when it left no lesson. */
   none: string | null;
   rewrote?: string;
+  problem?: ProblemInput;
+  problemDeliveredAt?: string;
 }
 
 export type RoleMemoryRow = RoleMemoryRule | RoleMemoryScopeRow | LessonRequestRow;
@@ -157,7 +174,9 @@ export interface RuleView {
   state: RuleState;
   reason?: RuleLeftReason;
   mergedInto?: string;
-  hints: StaticFindingClass[];
+  hints: RulePrivacyHint[];
+  /** Distinct tasks behind the current rule's lineage; absent on older APIs. */
+  tasks?: number;
   roleId: string | null;
   fixRound: boolean;
   stageId: string;
@@ -176,7 +195,7 @@ export interface RuleView {
   mergedFrom?: string[];
   movedFrom?: string;
   splitFrom?: string;
-  versions?: { id: string; rule: string; why: string; hints: StaticFindingClass[]; createdAt: string; revisedBy?: RuleRevisionView }[];
+  versions?: { id: string; rule: string; why: string; hints: RulePrivacyHint[]; createdAt: string; revisedBy?: RuleRevisionView }[];
 }
 
 export interface ScopeView {

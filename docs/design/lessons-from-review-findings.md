@@ -1,6 +1,7 @@
 # Lessons from review findings: a fix round leaves the rule its role needed, and recurring classes rise
 
-Status: design, 2026-10-12. Code read at main `a8e005428`. Records read
+Status: implementation specification, updated with the operator's problem-routing
+addition of 2026-10-12 06:00 UTC. Code read at main `a8e005428`. Records read
 read-only from the operator's `state.sqlite` at 2026-10-12 05:57 UTC.
 
 ## Originating requirement
@@ -238,8 +239,9 @@ at the old rate. The design addresses all three causes.
 
 ## 3. Design
 
-Four changes, all inside `src/lib/memory/`, the two MCP tool descriptions,
-and one line of the rules window. No pipeline engine file changes (lanes
+The findings and recurrence changes stay inside `src/lib/memory/`, the MCP
+tools, and one line of the rules window. The later problem-routing addition
+also uses the existing seat-tick signal source and delivery identity. No pipeline engine file changes (lanes
 022c8be9 and 3bceb7d6 hold those): the request is still built from the
 pipeline record that `roleStage.ts` already reads.
 
@@ -250,8 +252,9 @@ attempt carries findings. `handedFindings` (`roleStage.ts:33-40`) returns the
 findings themselves, `{ stageId, findings: { severity, text }[] }`, where it
 returned their severities: `rankedFindings` first, then the unranked
 `findings` strings of an older verdict with severity `unranked`. Any other request (a first
-attempt, a fix round with no findings) keeps today's text unchanged
-(`roleRender.ts:70-86`), "Most stages do neither" included.
+attempt, a fix round with no findings) keeps today's lesson guidance
+(`roleRender.ts:70-86`), "Most stages do neither" included, with the same two
+problem-routing sentences added to every eligible request.
 
 **Each finding is quoted by its opening:** the first line, cut at the end of
 its first sentence or at 140 code points with "…", most severe first, at most
@@ -309,7 +312,51 @@ What each part answers:
 
 ### 3.2 `leave_lesson`
 
-The tool, its three answers, its refusals and the request row are unchanged.
+The operator's later instruction separates general behaviour from concrete
+problems. A rule is an imperative that changes what an agent does on a different
+task. An observed project defect, inconsistency or documentation/specification
+mismatch is answered with `problem: { statement, evidence }`: a short statement
+of at most 300 code points and evidence of at most 1000. It consumes the request
+once and writes no rule. The request explains this distinction in two sentences
+and offers problem alongside rewrite, lesson and none. Agents report the problem;
+the designated project seat decides whether to propose a task or issue and asks
+the operator before creating it.
+
+The existing request row retains the problem and its server-resolved project.
+The seat tick projects it as an actionable signal in its existing agenda,
+including when the board has no other work. A confirmed landing is credited on
+the original problem row before seat succession resets the general agenda
+history, so trimming that history never re-offers an old delivered problem. Its
+delivery ledger credits only complete delivered items, keeps unseen items across
+seat succession and retries delivery failures. There is no separate problem queue,
+no age cutoff and no task creation on this path. Problems remain recorded when a
+project has no designated seat or ticking is disabled. Statement and evidence are
+bounded and redacted for the wake; a summarized item points to
+`seat_tick_settings verbose:true problemId=<report-id>` for the full local
+report. Reads stay available after delivery and match the observed report
+identity: Undo or replacement returns null for the old report.
+
+A proposed lesson or rewrite naming a concrete file path or describing a
+specific broken/mismatched behaviour is refused with `LESSON_IS_PROBLEM` and a
+hint to answer problem with evidence. Machine rules tied to this project's facts
+are refused with `LESSON_WRONG_LEVEL`, directing the agent to a narrower generic
+rule or a problem report. These structural checks leave the request open; they
+do not attempt to judge every possible wording. Privacy checks retain their hints
+and publication protection.
+
+The curator can apply `problem: [{ id, statement, evidence, note }]` to a
+misfiled active rule. The same transaction archives it with reason `problem` and
+retains the report on that rule, routed by its original source project even from
+the machine scope. Each curator transfer has its own episode identity, so a later transfer after
+Undo is offered again even when timestamps match. The curator's existing pass
+history records the disposition.
+Undo restores the earlier rule and removes the transferred report from pending
+agenda projection; delivery already made cannot be recalled. Operator-kept rules
+retain their existing protection. Nothing deletes a rule silently. The brief tells
+the curator to transfer concrete problems before applying the remaining checks.
+
+The tool's existing answers and refusals keep their contracts; problem is a
+fourth mutually exclusive answer.
 A fix round's `none` is accepted and recorded like any other; nothing refuses
 an unconvincing line (detectors are hints, the agent judges, the curator and
 the operator read the record). Two texts change:
@@ -436,8 +483,9 @@ rule with three tasks and render it.
 
 ### 3.7 Privacy
 
-- Lessons keep their hints and are never refused for them; a rewrite carries
-  hints as today. Rule and why stay in the known-values file the publication
+- Lessons keep their privacy hints and a rewrite carries them too. Email-shaped
+  values gain a local hint alongside the existing static detector hints. The
+  separate guard steers concrete paths to problem. Rule and why stay in the known-values file the publication
   gate reads, rewritten texts included (unchanged path).
 - The quoted findings go only to the attempt that received them and reach no
   egress. `RuleView.tasks` is a count; task ids, lane ids and conversation ids
@@ -455,6 +503,11 @@ rule with three tasks and render it.
 | `src/lib/memory/curation/brief.ts` | three sentences (3.5) |
 | `src/lib/mcp/server.ts` | `leave_lesson` description and `none` description (3.2) |
 | `src/components/roleMemory/LearnedRules.tsx`, `src/lib/i18n/en.ts`, `src/lib/i18n/uk.ts` | one provenance item (3.6) |
+| `src/lib/memory/roleProblems.ts` | bounded problem input, structural misfiling guard, projection and durable delivery credit |
+| `src/lib/memory/curation/apply.ts` | transactional problem transfer and existing pass Undo |
+| `src/lib/mcp/bindings.ts`, `src/lib/mcp/server.ts` | problem answers, curator transfer schema and complete report reads |
+| `src/lib/monitor/seatTickSources.ts`, `src/lib/monitor/seatTick.ts`, `src/lib/monitor/types.ts`, `src/lib/monitor/seatTickController.ts` | memory problems as existing actionable signals; shared signal version helper; delivery credit before seat succession |
+| `src/lib/monitor/report.ts` | a summarized problem points to its full local report |
 
 ## 4. Options weighed
 
@@ -485,15 +538,15 @@ as the file already does):
    300 characters is cut at 140 code points with "…"; one with two sentences
    is cut after the first.
 3. A source verdict with unranked findings only quotes them as `unranked`.
-4. A first attempt, and a fix round handed no findings, get today's text
-   ("Most stages do neither") unchanged.
+4. A first attempt, and a fix round handed no findings, retain today's lesson guidance
+   ("Most stages do neither"), with the added problem-routing sentences.
 
 **A justified none** (same file): a fix round answers none with a reason that
 names its gate; the answer is accepted, the request row records the line,
 `stageLessons` shows it under the attempt, and no rule is written. A none that
 gives no non-recurrence reason is also accepted: the server judges no prose.
 
-**Recurrence across two lanes** (`src/lib/memory/roleStore.test.ts`, with two
+**Recurrence across two lanes** (`src/lib/memory/roleReviewLessons.test.ts`, with two
 pipelines linked to two different tasks):
 
 5. Lane A's fix round leaves a role lesson; lane B's fix round rewrites it.
@@ -508,7 +561,7 @@ pipelines linked to two different tasks):
    task outlives a newer single-task rule when the next lesson arrives; a
    curated rule rewritten the same way keeps its place.
 
-**The curator** (`src/lib/memory/curation/curation.test.ts`):
+**The curator** (`src/lib/memory/curation/reviewLessons.test.ts`):
 
 9. After a cross-task rewrite as in 5, a curator call that moves the rule to
    another scope without editing it keeps `tasks: 2`.
@@ -521,8 +574,7 @@ An optional model case for `curator.eval.test.ts` (run only with
 `LLV_CURATOR_EVAL=1`): two builder rules of one class from two tasks, in
 different words, end as one rule ranked first.
 
-**Privacy detectors still hint** (`roleStore.test.ts` beside "privacy hints
-mark a lesson and never refuse it"): a fix-round lesson and a fix-round
+**Privacy detectors still hint** (`roleReviewLessons.test.ts`): a fix-round lesson and a fix-round
 rewrite whose texts carry an email-shaped and a home-path-shaped value,
 generated at run time, are stored with their hints and are not refused; the
 rewritten text appears in the known-values file.
@@ -532,6 +584,18 @@ rewritten text appears in the known-values file.
 absent. The driver cases of 3.6 render the window at 1440, 1000 and 390 px, in
 Ukrainian and English, light and dark, and measure the provenance line: no
 horizontal overflow and no clipped text.
+
+**Problem routing**: through the MCP service, a problem answer consumes its
+request, stores statement and evidence without a rule, and reaches the designated
+seat's wake agenda. Delivery failure keeps it owed; a complete landing credits it
+once, including after seat succession. A path-specific rule is steered to problem,
+and a machine rule tied to the current project is refused without consuming the
+request. Generic conditional practices remain admissible. A curator transfer from
+machine scope reaches the rule author's project, archives with reason `problem`,
+and Undo restores the rule and removes the report from projection. Invalid or
+stale curator calls transfer nothing. A new transfer after Undo remains owed
+even with an equal timestamp; summarized wakes name a full report that can be
+read after delivery and never resolve an old identity to a replacement report.
 
 Before the first commit the build stage runs the pre-commit privacy check
 over each whole test file it touches; a file whose old fixtures fail the

@@ -6307,6 +6307,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "roleMemory.left.budget": "в архіві, щоб тримати 10 000",
   "roleMemory.left.deleted": "прибрали ви",
   "roleMemory.mergedFrom": "злито з {count} правил",
+  "roleMemory.tasks": "з {count} задач",
+  "roleMemory.left.problem": "проблема для оркестратора проєкту",
   "roleMemory.left.task-specific": "про одну задачу",
   "roleMemory.left.stale": "втратило актуальність",
   "roleMemory.left.in-code": "уже в коді",

@@ -32,7 +32,7 @@ import {
 import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, STAGE_FINDING_SEVERITIES } from "@/lib/pipelines/types";
 import { procBackend } from "@/lib/proc";
 import { parseMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
-import { lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS } from "@/lib/memory/roleTypes";
+import { lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, PROBLEM_MAX_CHARS, PROBLEM_EVIDENCE_MAX_CHARS } from "@/lib/memory/roleTypes";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
@@ -3327,11 +3327,12 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Every accepted call is recorded on the pipeline with the calling conversation, the attempt and the time.",
     "When the project keeps learned rules, the first accepted report of a stage that is not a review carries lessonRequest: answer it with leave_lesson before the turn ends.",
   ].join(" "),
-  curate_rules: "Only the machine's live scheduled curator conversation may call. read lists this pass's scopes; scope reads page its active rules, versions, budget archives, recent departures, role scaffold, role attempts and other-project evidence within 24 KB (follow cursor). apply accounts for every active rule of the named scopes at their read revisions, orders survivors best first, and can rewrite, merge, move, split, archive with reasons or restore. Every change needs a note; role moves up to project or machine require why every role there acts on it. Split placeholders: split:<source-id>:1 for the second part and so on; the first keeps its id. Refused calls store nothing; after CURATE_STALE read again. Writes stay in local memory. Operator-kept rules remain whole and active. Earlier texts and pass history are immutable and reversible from the learned-rules window.",
+  curate_rules: "Only the machine's live scheduled curator conversation may call. read lists this pass's scopes; scope reads page its active rules, versions, budget archives, recent departures, role scaffold, role attempts and other-project evidence within 24 KB (follow cursor). apply accounts for every active rule of the named scopes at their read revisions, orders survivors best first, and can rewrite, merge, move, split, archive with reasons or restore. Every change needs a note; role moves up to project or machine require why every role there acts on it. Split placeholders: split:<source-id>:1 for the second part and so on; the first keeps its id. Refused calls store nothing; after CURATE_STALE read again. problem [{id, statement, evidence, note}] transfers a concrete defect or mismatch to its original project seat agenda and archives it reversibly. The seat decides whether to propose a task or issue and asks the operator; create none yourself. Writes stay local. Operator-kept rules remain whole and active. Earlier texts and pass history are immutable and reversible from the learned-rules window.",
   leave_lesson: [
-    "Answer the lesson request after stage_report exactly once with none (the default), rewrite {id, rule, why}, or lesson {scope, role?, rule, why}.",
+    "Answer the lesson request after stage_report exactly once with rewrite {id, rule, why}, lesson {scope, role?, rule, why}, problem {statement, evidence}, or none (usual for a stage handed no findings; on a fix round, say why the class cannot recur).",
     "A new lesson must change what this role does on a different task and use the narrowest true level: own-role work here; every role in this project; or every role in every project on this machine. The curator alone widens role rules across projects.",
     "Rewrite an active rule this stage reads, keeping its id and level and a reversible version. A lesson is active immediately. Task narration belongs only in the stage report: a fixed identifier check refuses it and stores nothing.",
+    "Report a concrete project defect, inconsistency or documentation/specification mismatch with problem and evidence. It goes to the project's designated seat as a wake item; the seat decides whether to propose a task or issue and asks the operator. Agents create none from this answer. Concrete file paths and broken facts are steered to problem; machine rules must hold across projects.",
     "The server resolves the conversation's attempt. Clean roles and review gates leave no lessons. Every accepted answer consumes the request; refusals leave it open. Why stays on the record and out of startup instructions. Privacy detectors give hints; they do not refuse lessons.",
   ].join(" "),
   link_task_to_pipeline: "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. Attach a board task to a conversation owned by a pipeline. A refusal raised before the link was admitted — the task store lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
@@ -3895,7 +3896,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     split: z.array(z.object({ id: z.string(), parts: z.array(z.object({ to: z.string(), rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS), why: lessonTextSchema(1, WHY_MAX_CHARS).optional() }).strict()).min(2).max(16), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
     archive: z.array(z.object({ id: z.string(), reason: z.enum(["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted", "duplicate"]), against: z.string().optional(), where: z.string().max(512).optional(), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
     restore: z.array(z.string()).max(512).optional(),
-  }).strict().refine(args => args.action === "read" ? ![args.scopes, args.rewrite, args.merge, args.move, args.split, args.archive, args.restore].some(value => value !== undefined) : !!args.scopes && args.scope === undefined && args.cursor === undefined, "read takes scope/cursor; apply takes scopes and editorial operations"),
+    problem: z.array(z.object({ id: z.string(), statement: lessonTextSchema(1, PROBLEM_MAX_CHARS), evidence: lessonTextSchema(1, PROBLEM_EVIDENCE_MAX_CHARS), note: z.string().trim().min(1).max(1000) }).strict()).max(512).optional(),
+  }).strict().refine(args => args.action === "read" ? ![args.scopes, args.rewrite, args.merge, args.move, args.split, args.archive, args.restore, args.problem].some(value => value !== undefined) : !!args.scopes && args.scope === undefined && args.cursor === undefined, "read takes scope/cursor; apply takes scopes and editorial operations"),
   leave_lesson: z.object({
     clientRequestId: clientRequestIdSchema,
     lesson: z.object({
@@ -3909,8 +3911,9 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS),
       why: lessonTextSchema(1, WHY_MAX_CHARS),
     }).strict().optional(),
-    none: lessonTextSchema(1, WHY_MAX_CHARS).optional().describe("Default: existing guidance covers the stage; one line saying why."),
-  }).strict().refine(args => [args.none, args.rewrite, args.lesson].filter(value => value !== undefined).length === 1, "give exactly one of none, rewrite or lesson"),
+    problem: z.object({ statement: lessonTextSchema(1, PROBLEM_MAX_CHARS), evidence: lessonTextSchema(1, PROBLEM_EVIDENCE_MAX_CHARS) }).strict().optional().describe("Observed project defect or mismatch with evidence, for the designated seat to decide and ask the operator."),
+    none: lessonTextSchema(1, WHY_MAX_CHARS).optional().describe("One line: on a fix round say why the class cannot recur on another task; otherwise why there is no lesson."),
+  }).strict().refine(args => [args.none, args.rewrite, args.lesson, args.problem].filter(value => value !== undefined).length === 1, "give exactly one of none, rewrite, lesson or problem"),
   link_task_to_pipeline: z.object({
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema,
@@ -4299,6 +4302,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Project whose allowed set to read or change. Defaults to your own on a list; required to add or remove."),
   }).passthrough(),
   seat_tick_settings: z.object({
+    problemId: z.string().trim().min(1).max(128).optional().describe("Read the full local problem report named by a wake, including after delivery. Undo or replacement returns null for the old identity."),
     autoRotate: z.object({ enabled: z.boolean().optional(), thresholdPercent: z.union([z.number(), z.string(), z.null()]).optional(), why: z.string().nullable().optional() }).optional()
       .describe("Automatic context rotation, off by default. thresholdPercent is 50–90 (default 50; null restores it). Every non-gateway change requires why, naming the request."),
     maintenance: z.object({ enabled: z.boolean().optional(), intervalHours: z.union([z.number(), z.string()]).nullable().optional() }).optional()

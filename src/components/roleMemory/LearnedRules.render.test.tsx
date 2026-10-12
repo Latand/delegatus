@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { createRoot } from "react-dom/client";
+import { act } from "react";
+import { Window } from "happy-dom";
+import { installActEnv } from "@/test-helpers/actEnv";
 
 import { setLocale } from "@/lib/i18n";
 import type { RuleView, ScopeView } from "@/lib/memory/roleTypes";
@@ -61,4 +65,35 @@ test("both role levels and earlier text render with a return control", () => {
   expect(pending).toContain("awaiting curator");
   const reviewed = renderToStaticMarkup(<RuleSection kind="role" title="Role" subtitle="Chosen role" scope={{ ...scope(100), kind: "role", roleId: "builder", active: [{ ...rewritten, awaitingCuration: false }] }} focusRule="one" onDelete={() => {}} onRestore={() => {}} />);
   expect(reviewed).not.toContain("awaiting curator");
+});
+
+test("the provenance line shows recurring tasks in both shipped languages", async () => {
+  const base: RuleView = { id: "one", rule: "Measure every supported rendered combination before review.", why: "Review caught an omitted language at phone width.", state: "active", hints: [], roleId: "builder", fixRound: true, stageId: "fix", fresh: false, createdAt: "today", changedAt: "today" };
+  // SSR uses the stable English hydration snapshot. Mount to verify the browser's chosen language.
+  const dom = new Window();
+  dom.HTMLElement.prototype.scrollIntoView = () => {};
+  const globals = { window: dom, document: dom.document, navigator: dom.navigator, HTMLElement: dom.HTMLElement };
+  const prior = new Map(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  Object.assign(globalThis, globals);
+  installActEnv();
+  const host = dom.document.createElement("div");
+  dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  try {
+    for (const locale of ["en", "uk"] as const) {
+      await act(() => setLocale(locale));
+      for (const tasks of [undefined, 1, 2, 3]) {
+        await act(() => root.render(<RuleSection kind="role" title="Role" subtitle="Chosen role" scope={{ ...scope(100), kind: "role", roleId: "builder", active: [{ ...base, tasks }] }} focusRule="one" onDelete={() => {}} onRestore={() => {}} />));
+        const markup = host.textContent ?? "";
+        const phrase = locale === "en" ? `from ${tasks} tasks` : `з ${tasks} задач`;
+        if (tasks && tasks >= 2) expect(markup).toContain(phrase);
+        else expect(markup).not.toMatch(/from \d+ tasks|з \d+ задач/);
+      }
+    }
+  } finally {
+    await act(() => root.unmount());
+    setLocale("en");
+    for (const [key, value] of prior) if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key);
+    await dom.happyDOM.close();
+  }
 });

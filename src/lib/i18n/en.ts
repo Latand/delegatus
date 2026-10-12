@@ -6398,6 +6398,8 @@ export const en = {
   "roleMemory.left.budget": "archived to keep 10 000",
   "roleMemory.left.deleted": "removed by you",
   "roleMemory.mergedFrom": "merged from {count} rules",
+  "roleMemory.tasks": "from {count} tasks",
+  "roleMemory.left.problem": "problem reported to the project seat",
   "roleMemory.left.task-specific": "about one task",
   "roleMemory.left.stale": "no longer current",
   "roleMemory.left.in-code": "already in the code",
