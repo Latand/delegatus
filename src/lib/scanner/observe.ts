@@ -120,7 +120,7 @@ async function runObservation(signal?: AbortSignal): Promise<FileEntry[]> {
       entry.agentActivity.turnStartedAt = entry.lastTurn?.endedAt === null ? entry.lastTurn.startedAt : entry.agentActivity.turnStartedAt;
     }
     if (entry.engine === "claude" && entry.agentActivity && entry.proc === "running") {
-      const ledger = await readBackgroundTaskLedger(entry.path, { maxBytes: 1 << 20 });
+      const ledger = await readBackgroundTaskLedger(entry.path);
       entry.agentActivity.backgroundVerified = ledger !== null;
       if (ledger) entry.agentActivity.background = pendingBackgroundTasks(ledger, Date.now()).filter(task => task.kind !== "wakeup").map(task => ({ id: task.id, description: entry.agentActivity?.background?.find(item => item.id === task.id)?.description ?? null }));
     }

@@ -151,7 +151,7 @@ export async function readLivenessTranscriptEvidence(
   const turn = turnStateFromRecords(read.records, engine);
   const activityFacts = activityFactsFromRecords(read.records);
   if (engine === "claude") {
-    const ledger = await readBackgroundTaskLedger(transcriptPath, { maxBytes: 1 << 20 });
+    const ledger = await readBackgroundTaskLedger(transcriptPath, { maxBytes: 768 * 1024 });
     activityFacts.backgroundVerified = ledger !== null;
     if (ledger) activityFacts.background = pendingBackgroundTasks(ledger, Date.now()).filter(task => task.kind !== "wakeup").map(task => ({ id: task.id, description: activityFacts.background?.find(entry => entry.id === task.id)?.description ?? null }));
     if (identity !== await transcriptFileIdentity(transcriptPath)) return null;

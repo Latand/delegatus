@@ -28840,7 +28840,7 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
 
 
 describe("true agent activity", () => {
-  browserTest("true activity badges fit working, checking and idle conversation tiles", async () => {
+  browserTest("true activity dots open short unclipped popovers without changing the row", async () => {
     const out = path.resolve(".artifacts/true-activity/desktop"); fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
     const browser = await chromium.launch(LAUNCH);
@@ -28853,26 +28853,40 @@ describe("true agent activity", () => {
         if (await inboxTab.isVisible()) await inboxTab.click();
         for (const state of ["working", "checking", "idle"]) {
           const tile = page.locator(`[data-member="/repo/activity-${state}.jsonl"]`);
-          // Existing cards may fold their conversation list; open the list.
           if (!await tile.isVisible()) {
             const card = page.locator(`.card`).filter({ hasText: `Activity ${state}` }).first();
             const expand = card.locator("button.fold");
             if (await expand.count()) await expand.click();
           }
-          const badge = tile.locator("[data-card-status]");
-          await badge.waitFor(); await badge.scrollIntoViewIfNeeded();
-          const geometry = await badge.evaluate(element => {
+          const dot = tile.locator("[data-agent-activity]");
+          await dot.waitFor(); await dot.scrollIntoViewIfNeeded();
+          expect(await dot.textContent()).toBe("");
+          expect(await dot.getAttribute("data-agent-activity")).toBe(state);
+          expect(await dot.getAttribute("aria-label")).toContain(translate(lang, state === "working" ? "cardStatus.running" : state === "checking" ? "cardStatus.checking" : "cardStatus.idle"));
+          const before = await dot.evaluate(element => {
             const box = element.getBoundingClientRect(); const parent = element.closest(".tile")!.getBoundingClientRect();
-            const detail = element.lastElementChild as HTMLElement;
-            const prior = element.previousElementSibling?.getBoundingClientRect();
-            return { left: box.left, right: box.right, parentLeft: parent.left, parentRight: parent.right, clipped: detail.scrollWidth > detail.clientWidth, priorRight: prior?.right ?? 0, text: element.textContent, title: element.getAttribute("title") };
+            return { left: box.left, right: box.right, width: box.width, height: box.height, rowHeight: parent.height, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight, colour: getComputedStyle(element).backgroundColor };
           });
-          expect(geometry.left).toBeGreaterThanOrEqual(geometry.parentLeft);
-          expect(geometry.right).toBeLessThanOrEqual(geometry.parentRight);
-          expect(geometry.priorRight).toBeLessThanOrEqual(geometry.left + 1);
-          if (state === "checking") { expect(geometry.clipped).toBe(true); expect(geometry.title).toContain("privacy-publication-gate"); }
-          expect(geometry.text).toContain(translate(lang, state === "working" ? "cardStatus.running" : state === "checking" ? "cardStatus.checking" : "cardStatus.idle"));
-          readings.push({ width, lang, state, ...geometry });
+          expect(before.width).toBeGreaterThanOrEqual(6); expect(before.width).toBeLessThanOrEqual(8);
+          expect(before.height).toBe(before.width);
+          await dot.hover();
+          const popup = page.getByRole("tooltip"); await popup.waitFor();
+          const after = await popup.evaluate(element => {
+            const box = element.getBoundingClientRect();
+            return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, portalled: element.parentElement === document.body, lines: element.children.length, text: element.textContent, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight };
+          });
+          expect(after.portalled).toBe(true); expect(after.lines).toBeLessThanOrEqual(2);
+          expect(after.text!.length).toBeLessThan(90);
+          expect(after.left).toBeGreaterThanOrEqual(8); expect(after.right).toBeLessThanOrEqual(width - 8);
+          expect(after.top).toBeGreaterThanOrEqual(8); expect(after.bottom).toBeLessThanOrEqual(892);
+          expect(after.scrollWidth).toBe(before.scrollWidth); expect(after.scrollHeight).toBe(before.scrollHeight);
+          expect((await tile.boundingBox())!.height).toBe(before.rowHeight);
+          expect(await tile.textContent()).not.toContain(translate(lang, "cardStatus.checking"));
+          readings.push({ width, lang, state, dot: before, popup: after });
+          await page.screenshot({ path: path.join(out, `dot-${state}-${width}-${lang}.png`), fullPage: true });
+          await page.mouse.move(0, 0); await popup.waitFor({ state: "detached" });
+          await dot.focus(); await popup.waitFor(); await dot.press("Escape"); await popup.waitFor({ state: "detached" });
+          await dot.evaluate(element => (element as HTMLElement).blur());
         }
         expect(pageErrors).toEqual([]);
         await page.screenshot({ path: path.join(out, `variant-1-${width}-${lang}.png`), fullPage: true });

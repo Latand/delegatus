@@ -394,7 +394,7 @@ function LooseLine({ item, now }: { item: PhoneCard; now: number }) {
   const { t } = useLocale();
   const file = item.need?.kind === "conversation" ? item.need.member.file : item.firstAgent;
   const detail = askDetail(item);
-  const quiet = item.need ? null : quietState(t, file, now);
+  const quiet = item.need || (file?.agentActivity && file.proc === "running") ? null : quietState(t, file, now);
   const at = item.card.lastAgentWorkAtMs > 0 ? item.card.lastAgentWorkAtMs : file ? file.mtime * 1000 : 0;
   /* A stalled phrase already says how long it has been quiet. */
   const age = askAge(t, item) ?? (at > 0 && !quiet?.stalled ? ageText(t, at, now * 1000) : null);
@@ -549,9 +549,10 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
             {priority === "high" ? <ArrowUp className="h-[14px] w-[14px]" /> : <ArrowDown className="h-[14px] w-[14px]" />}
           </span>
         ) : null}
+        {loose && item.firstAgent?.agentActivity ? <CardStatusBadge file={item.firstAgent} /> : null}
         <NeedBadge item={item} />
       </span>
-      {loose && item.firstAgent?.agentActivity ? <CardStatusBadge file={item.firstAgent} /> : <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain taskTitle={card.holdTarget?.title} />}
+      {loose && item.firstAgent?.agentActivity ? null : <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain taskTitle={card.holdTarget?.title} />}
       <TaskStepsLine summary={card.stepSummary} />
       {/* The needs-you question has its own slot below motion. */}
       {item.kind === "task" ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} /> : null}

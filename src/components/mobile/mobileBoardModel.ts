@@ -182,9 +182,7 @@ export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000)
  * the work in flight; neither is invented here, and a conversation that
  * published neither gets no fragment rather than a guess.
  */
-export function nowFragment(file: FileEntry, nowMs = Date.now(), locale: Locale = getLocale()): string | null {
-  const activity = fileAgentActivity(file, nowMs);
-  if (activity.state === "checking") return `${translate(locale, "cardStatus.checking")}${activity.check ? ` · ${activity.check}` : ""}`;
+export function nowFragment(file: FileEntry): string | null {
   const current = file.plan?.current?.trim();
   if (current) return current;
   const objective = file.goal?.status === "active" ? file.goal.objective?.trim() : null;
@@ -396,7 +394,7 @@ function boardConversation(file: FileEntry, now: number, crowned: ReadonlySet<st
     path: file.path,
     title: cleanTitle(file.title, 90),
     state,
-    now: state.key === "working" ? nowFragment(file, now * 1000) : null,
+    now: state.key === "working" ? nowFragment(file) : null,
     launchedAt: launchedAt(file),
     crowned: crowned.has(file.path),
   };

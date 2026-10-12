@@ -106,7 +106,7 @@ export function heldStuckDelivery(file: FileEntry, now: number): number | null {
     raises needs-you (docs/design/needs-attention.md §3, reason 7). */
 export function stalledAttention(file: FileEntry, now: number): boolean {
   if (!file.agentActivity) return file.activity === "stalled" && file.proc === "running" && now - file.mtime <= STALLED_ATTENTION_TTL;
-  return file.proc === "running" && turnLeftOpen(file) && fileAgentActivity(file, now * 1000).state === "idle";
+  return !file.rateLimit && file.proc === "running" && turnLeftOpen(file) && fileAgentActivity(file, now * 1000).state === "idle";
 }
 
 /**

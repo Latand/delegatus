@@ -127,3 +127,34 @@ test("incomplete background history cannot assert idle or retire an earlier stal
   expect(result.conversations[0]).toMatchObject({ lifecycle: "running", reason: "evidence_unverified", verified: false, silentForMs: null });
   expect(projectLivenessEvents(result.conversations, new Map([["conversation_one", "stalled"]]))).toEqual([]);
 });
+
+
+test("a dead resumed host also resolves the newest file by stat when both catalog times are stale", async () => {
+  const old = "/fixture/rollout-one.jsonl";
+  const injected = sources({ selectInventory: undefined, listFiles: async () => [{ ...row, path: old }, row], describeTranscript: async p => ({ ...described, path: p, mtimeMs: p === old ? now - 18_000_000 : now - 15_000 }), transcriptEvidence: async (_engine, p) => ({ turn: "busy", lastRecordTs: p === old ? now - 18_000_000 : now - 15_000 }), probe: { now: () => now, pidAlive: () => false, processIdentity: () => null } });
+  const registry = injected.registrySnapshot(); registry.entries.one.artifactPath = old;
+  registry.conversations = { conversation_one: { id: "conversation_one", generations: [{ path: old }, { path: transcript }], continuityPaths: [] } } as unknown as RegistryFile["conversations"];
+  const result = await agentLivenessSnapshot({}, { ...injected, registrySnapshot: () => registry });
+  expect(result.conversations).toHaveLength(1);
+  expect(result.conversations[0]).toMatchObject({ transcriptPath: transcript, silentForMs: 15_000, previousPaths: [old], verified: true });
+});
+
+
+for (const verified of [true, false]) {
+  test(`a current permission request keeps its waiting state with tail verification ${verified}`, async () => {
+    const injected = sources({ selectInventory: undefined, listFiles: async () => [row], transcriptEvidence: async () => verified ? { turn: "busy", lastRecordTs: now - 660_000 } : null });
+    const registry = injected.registrySnapshot();
+    registry.entries.one.structuredHost!.pendingPermissions = [{ id: "permission-one", tool: "Bash", command: "run check", reason: "approve check", reasonType: "safetyCheck", since: new Date(now-660_000).toISOString() }];
+    const result = await agentLivenessSnapshot({}, { ...injected, registrySnapshot: () => registry });
+    expect(result.conversations[0]).toMatchObject({ lifecycle: "waiting", reason: "permission_request", verified });
+    expect(result.conversations[0]).not.toHaveProperty("activity");
+  });
+}
+test("a provider retry has no idle activity even after eleven quiet minutes", async () => {
+  const injected = sources({ selectInventory: undefined, listFiles: async () => [row], transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: now-660_000 }) });
+  const registry = injected.registrySnapshot();
+  registry.entries.one.structuredHost!.providerRetry = { at: new Date(now-700_000).toISOString(), retryAt: new Date(now+60_000).toISOString(), status: 429, error: "rate_limit" };
+  const result = await agentLivenessSnapshot({}, { ...injected, registrySnapshot: () => registry });
+  expect(result.conversations[0]).toMatchObject({ lifecycle: "waiting", reason: "provider_throttled" });
+  expect(result.conversations[0]).not.toHaveProperty("activity");
+});

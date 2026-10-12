@@ -2,55 +2,139 @@
   {
     "lang": "uk",
     "state": "working",
-    "left": 24,
-    "right": 366,
-    "rowLeft": 12,
-    "rowRight": 378,
-    "clipped": false
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgb(79, 195, 111)"
+    },
+    "popup": {
+      "left": 329.125,
+      "right": 382,
+      "top": 432.375,
+      "bottom": 456.125,
+      "portalled": true,
+      "lines": 1,
+      "text": "працює",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
   },
   {
     "lang": "uk",
     "state": "checking",
-    "left": 24,
-    "right": 366,
-    "rowLeft": 12,
-    "rowRight": 378,
-    "clipped": true
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgb(224, 174, 69)"
+    },
+    "popup": {
+      "left": 262.96875,
+      "right": 382,
+      "top": 365.625,
+      "bottom": 389.375,
+      "portalled": true,
+      "lines": 1,
+      "text": "чекає перевірку · 5 хв",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
   },
   {
     "lang": "uk",
     "state": "idle",
-    "left": 24,
-    "right": 366,
-    "rowLeft": 12,
-    "rowRight": 378,
-    "clipped": false
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgb(240, 113, 113)"
+    },
+    "popup": {
+      "left": 283.625,
+      "right": 382,
+      "top": 485.375,
+      "bottom": 522.875,
+      "portalled": true,
+      "lines": 2,
+      "text": "стоїть 14 хвостання дія 11:38",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
   },
   {
     "lang": "en",
     "state": "working",
-    "left": 24,
-    "right": 366,
-    "rowLeft": 12,
-    "rowRight": 378,
-    "clipped": false
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgb(79, 195, 111)"
+    },
+    "popup": {
+      "left": 329.53125,
+      "right": 382,
+      "top": 431.875,
+      "bottom": 455.625,
+      "portalled": true,
+      "lines": 1,
+      "text": "working",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
   },
   {
     "lang": "en",
     "state": "checking",
-    "left": 24,
-    "right": 366,
-    "rowLeft": 12,
-    "rowRight": 378,
-    "clipped": true
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgb(224, 174, 69)"
+    },
+    "popup": {
+      "left": 258.9375,
+      "right": 382,
+      "top": 365.125,
+      "bottom": 388.875,
+      "portalled": true,
+      "lines": 1,
+      "text": "waiting on a check · 5m",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
   },
   {
     "lang": "en",
     "state": "idle",
-    "left": 24,
-    "right": 366,
-    "rowLeft": 12,
-    "rowRight": 378,
-    "clipped": false
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgb(240, 113, 113)"
+    },
+    "popup": {
+      "left": 291.90625,
+      "right": 382,
+      "top": 484.875,
+      "bottom": 522.375,
+      "portalled": true,
+      "lines": 2,
+      "text": "idle 14mlast action 11:38",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
   }
 ]

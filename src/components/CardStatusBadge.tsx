@@ -1,23 +1,15 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
+import { BOARD_CLOCK_MS, useNowSeconds } from "@/hooks/useNowSeconds";
 
 import { cardStatus, type CardStatus } from "./cardStatus";
+import { TooltipBubble } from "./TooltipBubble";
 import { humanizeDuration } from "./turnDuration";
 
-/**
- * The board's one textual status word (issue #961): word plus colour, never
- * colour alone. One badge per card at most; a quiet card renders nothing.
- *
- * Tones reuse the existing semantic tokens: attention keeps the warning tone
- * the waiting cards already wear, held keeps the accent of the account-switch
- * surfaces, running keeps the success of the live treatments, and queued stays
- * muted. The only motion is the restrained attention breath on `needs-you`
- * (`card-status-attention`), disabled under prefers-reduced-motion. Text sits
- * at the 10px caption floor; a scaled host (the far-zoom label) passes its own
- * em-based size instead.
- */
+/** Existing attention and delivery badges; running activity uses a compact dot. */
 const TONE: Record<CardStatus["kind"], string> = {
   "needs-you": "card-status-attention border-warning/50 bg-warning-soft text-warning",
   held: "border-accent/45 bg-accent-soft text-accent",
@@ -40,18 +32,81 @@ export function cardStatusText(t: TFunction, status: CardStatus): { word: string
   return { word: t("cardStatus.queued"), detail: null };
 }
 
+/** Short operator text: no transcript identity or command arguments. */
+export function activityDotText(t: TFunction, file: FileEntry, status: Extract<CardStatus, { kind: "running" }>, nowMs: number): string[] {
+  const state = status.activity?.state ?? "working";
+  const age = file.agentActivity?.lastRecordAt;
+  const minutes = Math.floor((status.activity?.idleForMs ?? Math.max(0, nowMs - (age ?? nowMs))) / 60_000);
+  if (state === "idle") {
+    const last = age == null ? null : new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(age);
+    return [t("cardStatus.idle") + " " + t("cardStatus.idleMinutes", { n: minutes }), ...(last ? [t("cardStatus.lastAction", { time: last })] : [])];
+  }
+  if (state === "checking") {
+    const check = status.activity?.check?.trim();
+    // Background descriptions can contain arbitrary transcript text. Only a
+    // short plain command name belongs in this two-line popover.
+    const name = check && check.length <= 28 && /^[\p{L}\p{N} _.-]+$/u.test(check) && !/\d{5}|[a-f0-9]{8}/i.test(check) ? check : null;
+    return [t("cardStatus.checking") + (nowMs > 0 ? " · " + t("cardStatus.idleMinutes", { n: minutes }) : ""), ...(name ? [name] : [])];
+  }
+  return [t("cardStatus.running")];
+}
+
+function ActivityDot({ file, status, nowMs }: { file: FileEntry; status: Extract<CardStatus, { kind: "running" }>; nowMs: number }) {
+  const { t } = useLocale();
+  const anchorRef = useRef<HTMLSpanElement>(null);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [tapped, setTapped] = useState(false);
+  const open = hovered || focused || tapped;
+  const state = status.activity?.state ?? "working";
+  const lines = activityDotText(t, file, status, nowMs);
+  useEffect(() => {
+    if (!open) return;
+    const dismiss = (event: Event) => {
+      if (!anchorRef.current?.contains(event.target as Node)) { setTapped(false); setFocused(false); setHovered(false); }
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { setTapped(false); setFocused(false); setHovered(false); }
+    };
+    document.addEventListener("pointerdown", dismiss);
+    document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", escape); };
+  }, [open]);
+  return <>
+    <span
+      ref={anchorRef} role="button" tabIndex={0} aria-label={lines.join(" · ")} aria-expanded={open}
+      data-card-status="running" data-agent-activity={state}
+      style={{ width: 8, height: 8 }}
+      className={`inline-block shrink-0 self-center relative pointer-events-auto rounded-full cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${state === "working" ? "bg-success" : state === "checking" ? "bg-warning" : "bg-danger"}`}
+      onPointerEnter={event => { if (event.pointerType === "mouse") setHovered(true); }} onPointerLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+      onPointerDown={event => event.stopPropagation()}
+      onClick={event => { event.stopPropagation(); setTapped(value => !value); setFocused(false); }}
+      onKeyDown={event => {
+        event.stopPropagation();
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setTapped(value => !value); setFocused(false); }
+        if (event.key === "Escape") { setTapped(false); setFocused(false); setHovered(false); }
+      }}
+    />
+    {open ? <TooltipBubble anchorRef={anchorRef} className="max-w-[calc(100vw-16px)] rounded-md border border-border bg-panel px-2 py-1 text-caption text-primary shadow-md">
+      {lines.map((line, i) => <span key={i} className="block max-w-[220px] truncate leading-snug">{line}</span>)}
+    </TooltipBubble> : null}
+  </>;
+}
+
 export function CardStatusBadge({ file, fontClassName = "text-caption" }: {
   file: FileEntry;
   /** Overrides the caption-floor font for hosts that scale in em (far label). */
   fontClassName?: string;
 }) {
   const { t } = useLocale();
-  const status = cardStatus(file);
+  const nowMs = useNowSeconds(BOARD_CLOCK_MS) * 1000;
+  const status = cardStatus(file, nowMs || undefined);
   if (!status) return null;
+  if (status.kind === "running") return <ActivityDot file={file} status={status} nowMs={nowMs} />;
   const { word, detail } = cardStatusText(t, status);
   const label = detail ? `${word} ${detail}` : word;
-  const tone = status.kind === "running" && status.activity?.state === "checking" ? TONE.held
-    : status.kind === "running" && status.activity?.state === "idle" ? "border-danger/45 bg-danger-soft text-danger" : TONE[status.kind];
+  const tone = TONE[status.kind];
   return (
     <span
       data-card-status={status.kind}

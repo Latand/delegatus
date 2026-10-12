@@ -601,6 +601,20 @@ export function evaluateLiveness(input: {
   /** The oldest permission request the live host holds open, if any. */
   pendingPermission?: PendingPermissionRequest | null;
 }): { lifecycle: LifecycleState; reason: AgentLivenessReason; retryAt?: string; permission?: PendingPermissionRequest } {
+  /* An unanswered permission request is the turn's whole explanation: the
+     engine waits for an answer, so the silence is neither a stall nor the
+     provider (#2215). */
+  if (input.host.state === "alive" && input.pendingPermission) {
+    return { lifecycle: "waiting", reason: "permission_request", permission: input.pendingPermission };
+  }
+  const progressSupersedesThrottle = input.providerProgressAt !== null
+    && input.providerProgressAt !== undefined
+    && input.providerThrottleAt !== null
+    && input.providerThrottleAt !== undefined
+    && input.providerProgressAt > input.providerThrottleAt;
+  if (input.host.state === "alive" && input.turnState === "busy" && input.providerRetryAt && !progressSupersedesThrottle) {
+    return { lifecycle: "waiting", reason: "provider_throttled", retryAt: input.providerRetryAt };
+  }
   if (input.turnVerified === false) {
     if (input.host.state === "gone") return { lifecycle: "gone", reason: "host_gone_turn_unverified" };
     if (input.host.state === "alive") return { lifecycle: "running", reason: "evidence_unverified" };
@@ -622,20 +636,6 @@ export function evaluateLiveness(input: {
     return input.turnState === "busy"
       ? { lifecycle: "stalled", reason: "launch_unproven_expired" }
       : { lifecycle: "gone", reason: "launch_unproven_expired" };
-  }
-  /* An unanswered permission request is the turn's whole explanation: the
-     engine waits for an answer, so the silence is neither a stall nor the
-     provider (#2215). */
-  if (input.pendingPermission) {
-    return { lifecycle: "waiting", reason: "permission_request", permission: input.pendingPermission };
-  }
-  const progressSupersedesThrottle = input.providerProgressAt !== null
-    && input.providerProgressAt !== undefined
-    && input.providerThrottleAt !== null
-    && input.providerThrottleAt !== undefined
-    && input.providerProgressAt > input.providerThrottleAt;
-  if (input.turnState === "busy" && input.providerRetryAt && !progressSupersedesThrottle) {
-    return { lifecycle: "waiting", reason: "provider_throttled", retryAt: input.providerRetryAt };
   }
   if (input.turnState === "idle") return { lifecycle: "waiting", reason: "host_alive_turn_idle" };
   if (silent) return { lifecycle: "stalled", reason: "host_alive_transcript_silent" };
@@ -1022,7 +1022,7 @@ async function livenessSnapshotWithin(
   const identityOf = sources.transcriptIdentity ?? transcriptFileIdentity;
   const readEntry = async (entry: LivenessTranscript, readSignal?: AbortSignal | null): Promise<LivenessTranscriptEvidence | null | typeof ANSWER_SPENT> => {
     if (answer.spent()) return ANSWER_SPENT;
-      try {
+    try {
         /* Only a bounded answer leaves reads behind, so only it pays the stat. */
         const identity = answer.bounded ? await answer.within(identityOf(entry.path).catch(() => null)) : null;
         if (identity === ANSWER_SPENT) return ANSWER_SPENT;
@@ -1192,9 +1192,25 @@ async function livenessSnapshotWithin(
   if (signal?.aborted) throw livenessAbortError(signal.reason);
 
   await hostedRead;
+  const unhostedGenerations = new Map<string, Set<string>>();
+  for (const entry of entries) {
+    if (hostedDescriptions.has(entry.path)) continue;
+    const id = conversationIdForPath(registry, entry.path) ?? entry.conversationId;
+    const conversation = id ? canonicalConversation(registry, id) : null;
+    const paths = new Set([entry.path, ...(conversation?.generations.map(g => g.path) ?? []), ...(conversation?.continuityPaths ?? [])]);
+    if (paths.size > 1) unhostedGenerations.set(id ?? entry.path, paths);
+  }
+  await Promise.all([...unhostedGenerations.values()].map(async paths => {
+    const descriptions = await Promise.all([...paths].map(path => describeWithin(path, sources.describeTranscript, answer).catch(() => null)));
+    const newest = descriptions.filter((description): description is LivenessTranscript => description !== null && description !== ANSWER_SPENT).sort(byNewest)[0];
+    if (!newest) return;
+    for (const path of paths) hostedDescriptions.set(path, newest);
+    previousPaths.set(newest.path, [...paths].filter(path => path !== newest.path));
+  }));
   const folded = new Map<string, LivenessTranscript>();
   for (const original of entries) {
-    const entry = hostedDescriptions.get(original.path) ?? original;
+    const described = hostedDescriptions.get(original.path);
+    const entry = described ? { ...described, title: original.title || described.title, conversationId: original.conversationId ?? described.conversationId } : original;
     const id = conversationIdForPath(registry, entry.path) ?? entry.conversationId;
     const key = id ?? entry.path;
     const existing = folded.get(key);
@@ -1279,30 +1295,31 @@ async function livenessSnapshotWithin(
     const verified = evidence !== null && lastRecordMs !== null
       && !(host.state === "alive" && turnState !== "idle" && evidence.activityFacts?.backgroundVerified === false
         && activity?.state !== "checking" && silentForMs !== null && silentForMs >= stallAfterMs);
+    const verdict = evaluateLiveness({
+      host,
+      turnState,
+      silentForMs: activity?.state === "checking" ? null : silentForMs,
+      stallAfterMs,
+      turnVerified: verified,
+      launchAgeMs: now - entry.mtimeMs,
+      // A recorded PID with an unreadable identity is held until proof of
+      // death or replacement; it is not an unbound launch aging through grace.
+      startingGraceMs: reviewerHost?.state === "unknown" ? Infinity : undefined,
+      providerRetryAt: providerThrottle.retryAt,
+      providerThrottleAt: providerThrottle.throttledAt,
+      providerProgressAt: evidence?.providerProgressAt ?? null,
+      pendingPermission,
+    });
     return {
       verified,
-      activity: verified ? activity : undefined,
+      activity: verified && (verdict.lifecycle === "running" || verdict.lifecycle === "stalled") ? activity : undefined,
+      ...verdict,
       entry,
       conversationId,
       turnState,
       lastRecordMs,
       silentForMs: verified ? silentForMs : null,
       host,
-      ...evaluateLiveness({
-        host,
-        turnState,
-        silentForMs: activity?.state === "checking" ? null : silentForMs,
-        stallAfterMs,
-        turnVerified: verified,
-        launchAgeMs: now - entry.mtimeMs,
-        // A recorded PID with an unreadable identity is held until proof of
-        // death or replacement; it is not an unbound launch aging through grace.
-        startingGraceMs: reviewerHost?.state === "unknown" ? Infinity : undefined,
-        providerRetryAt: providerThrottle.retryAt,
-        providerThrottleAt: providerThrottle.throttledAt,
-        providerProgressAt: evidence?.providerProgressAt ?? null,
-        pendingPermission,
-      }),
       pipeline: (conversationId ? pipelines.byConversation.get(conversationId) : undefined)
         ?? pipelines.byPath.get(entry.path)
         ?? null,

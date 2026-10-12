@@ -35,7 +35,7 @@ export function activityFactsFromRecords(records: Record<string, unknown>[], now
     const payload = recordValue(record.payload);
     if (payload?.type === "function_call" || payload?.type === "custom_tool_call") {
       let input: Record<string, unknown> = {};
-      try { input = recordValue(JSON.parse(String(payload.arguments ?? payload.input ?? "{}"))) ?? {}; } catch { /* Freeform custom tool input has no structured wait parameters. */ }
+      try { input = recordValue(JSON.parse(String(payload.arguments ?? payload.input ?? "{}"))) ?? {}; } catch { input = { code: String(payload.arguments ?? payload.input ?? "") }; }
       if (typeof payload.call_id === "string" && typeof payload.name === "string") calls.set(payload.call_id, { call: { name: payload.name, input }, at });
     } else if (payload?.type === "function_call_output" || payload?.type === "custom_tool_call_output") complete(payload.call_id, at);
     for (const part of recordsValue(recordValue(record.message)?.content)) {

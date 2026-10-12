@@ -46,3 +46,11 @@ test("a later completed non-wait call ends the recent sleep-loop reading", () =>
   ];
   expect(classifyAgentActivity(activityFactsFromRecords(records, now), now).state).toBe("working");
 });
+
+
+test("native Codex exec wrappers expose awaited sleep and polling calls", () => {
+  for (const code of ['await tools.clock__sleep({duration_ms:50000});', 'await tools.write_stdin({session_id:42});']) {
+    const records = [{ type: "response_item", timestamp: stamp(660_000), payload: { type: "custom_tool_call", name: "functions.exec", call_id: "wait-one", input: code } }];
+    expect(classifyAgentActivity(activityFactsFromRecords(records, now), now).state).toBe("checking");
+  }
+});

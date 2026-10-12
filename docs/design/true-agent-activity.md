@@ -259,7 +259,8 @@ and an open turn. `FileEntry` gains
 `agentActivity?: { lastRecordAt, check, checking }`. The client calls
 `classifyAgentActivity` with its own clock, so «стоїть» appears when ten
 minutes pass with no new scan. Any new record changes the file and triggers a
-scan.
+scan. The dot subscribes to the existing shared 30-second board clock, so an
+unchanged row reaches idle without a parent rerender or another transcript poll.
 
 `activityVerdict` keeps its 180 s `stalled` value for the catalog (other
 readers use it), but two board readers stop treating it as a stall:
@@ -275,26 +276,28 @@ an `idle` agent is not working.
 
 ## 3. Where it shows
 
-No new panel. Two places already show a working agent's status:
+The operator's prototype decision on 2026-10-12 replaces the proposed
+text badge with a small dot in the existing row. No new panel or status row.
+`CardStatusBadge` renders running activity as an 8 px dot: green for working,
+amber for a check, red for verified idle after 10 minutes. The dot has no
+visible text, border or pill padding. Existing attention and delivery badges
+keep their own behaviour.
 
-1. **The card's status badge** (`CardStatusBadge.tsx`, rendered by the kanban
-   card, the scheme nodes and the branch pane). `CardStatus.running` gains
-   `activity`. The word and tone:
-   - «ПРАЦЮЄ 12 хв» (success tone, unchanged; the duration stays the turn's
-     run time);
-   - «ЧЕКАЄ ПЕРЕВІРКУ privacy-publication-gate» (accent tone; the name
-     truncates in the badge, full in `title`);
-   - «СТОЇТЬ 14 хв» (danger tone, the same tokens the phone's stalled row uses).
-2. **The phone conversation row** (`mobileRowState`, `mobileBoardModel.ts:129`):
-   the `stalled` key fires only for `idle`, with `seconds` from `lastRecordAt`;
-   `checking` shows as `working` with «чекає перевірку · {check}» in its meta
-   line, ahead of the plan step `nowFragment` (`mobileBoardModel.ts:183`)
-   puts there today.
+Desktop hover or keyboard focus, and phone tap, open the existing portalled
+`TooltipBubble`, anchored to the dot. It flips or shifts inside the viewport,
+clears on Escape or an outside press, and changes neither row geometry nor
+scroll dimensions. The phone puts the dot beside the title in its existing
+row. The dot's accessible label carries the same short text as the popover.
 
-New i18n keys in `en.ts` and `uk.ts`: `cardStatus.checking` «чекає перевірку» /
-"waiting on a check", `cardStatus.idle` «стоїть» / "idle". The keys are in
-sentence case; the badge uppercases only its word (`CardStatusBadge.tsx`), and
-the detail (minutes or the check name) keeps its own case.
+The popover has at most two short lines: working; checking with the minutes
+since the last record and an optional short plain check name; or idle minutes
+and the last action's local HH:MM time, using h23. Arbitrary background-task
+text, identifiers and paths do not appear. The check's complete name remains
+in the tool's activity facts. The phone's `stalled` classification still uses
+record age for idle, but the row renders that state through the dot. Activity
+text does not duplicate in the plan/goal meta line.
+
+The en and uk keys cover checking, idle, minutes and the last action.
 
 `agent_activity` compact rows carry the same `activity` object, so the seat
 and the operator read the same words.
@@ -346,23 +349,24 @@ registry.
 | same | **Real idle agent.** Open turn, newest record 11 min ago, no open call, no descendants → `idle`, 11 min. At 9 min → `working`. An MCP server descendant started before the turn does not count as work. | New module. |
 | `src/lib/monitor/seatTick.test.ts` | A lane whose stage row is `idle` 11 min, verified → one `stalled` item on the first check; the next check with the same `lastRecordAt` adds none; `checking` for 60 min → none; `unverified` → none. | No item before 40 min plus a second check. |
 | `src/lib/mcp/` agent_activity test beside the existing one | Compact rows carry `verified` and `activity`; a projected row has no `silentForMs`. | Fields absent. |
-| `src/components/cardStatus.test.ts` | An open turn on a running host, file quiet 5 min with a live check → `running` with `activity.state "checking"`; quiet 12 min with nothing running → `idle`. The badge text in en and uk. | Today: `null` (badge gone) after 180 s. |
-| `src/components/mobile/mobileBoardModel.test.ts` | The phone row is `stalled` only for `idle`; a 5-min check reads `working` with the check in the meta line. | Today: `stalled` after 180 s. |
+| `src/components/cardStatus.test.ts` | An open turn on a running host, file quiet 5 min with a live check → `running` with `activity.state "checking"`; quiet 12 min with nothing running → `idle`. The short dot popover text in en and uk. | Today: `null` (badge gone) after 180 s. |
+| `src/components/mobile/mobileBoardModel.test.ts` | The phone row is `stalled` only for `idle`; a 5-min check reads `working`, and its check detail appears only in the dot popover. | Today: `stalled` after 180 s. |
 
 Rendered evidence goes through the existing drivers, as AGENTS.md requires:
 one `describe` block in `src/components/kanban/kanbanBoard.browser.test.tsx`
 over `issue1695Evidence.fixture.tsx` with three cards (working, checking with a
 long check name, idle 14 min) at 1440 and 1000 px, and one case in
 `src/components/mobile/issue1671Evidence.browser.test.tsx` at 390 px. Measure
-that the badge's check name truncates inside the card with no overlap.
+that the dot is 8 px, its short popover is portalled inside the viewport,
+and opening it changes neither the row height nor page scroll dimensions.
 
 ## 6. Validation against the requirement
 
 - «чтобы ты всегда был в курсе, когда они стоят» — §4: a verified idle agent
   wakes the seat within 10–15 minutes without anyone asking.
 - «Каким-то простым инструментом» — no new tool and no new panel: the
-  existing badge, phone row, `agent_activity` row and seat-tick item carry one
-  word each.
+  existing row carries a small dot; its popover, `agent_activity` row and
+  seat-tick item explain the same measured state.
 - «Чтобы я понимал, когда они стоят, когда не стоят. Реально. По активности.» —
   §2.1–2.3: the word comes from the transcript's newest record and the host's
   running processes, read at the moment of asking. A number that was not
@@ -394,14 +398,16 @@ that the badge's check name truncates inside the card with no overlap.
 
 ## Implementation verification notes
 
-The Claude background ledger is the existing incremental reader, capped at
-1 MiB per activity observation. Each observation advances its complete-line
+The activity tool uses the existing Claude background ledger with a
+768 KiB read cap (plus the bounded transcript tail). The Viewer scan enriches live hosts through that reader
+without the tool deadline, before publishing their facts. Each bounded tool
+observation advances the complete-line
 cursor; an incomplete prefix cannot prove that background work ended. A quiet
 live turn with that evidence unresolved remains unverified and carries no
 silence number. A positive wait or live check still establishes `checking`.
 This keeps large and sparse transcripts within the bounded-read contract.
 
 The current kanban renders conversation state in its member tile, so the
-shared badge replaces that tile's state word. The phone uses its existing
-conversation status slot. The existing browser drivers record the three
+shared activity dot replaces that tile's state word. The phone puts the
+same dot in its existing title row. The existing browser drivers record the three
 states in both languages at 1440, 1000 and 390 px.

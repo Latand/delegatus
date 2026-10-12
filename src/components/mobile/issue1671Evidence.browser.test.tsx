@@ -9781,7 +9781,7 @@ describe("short questionnaire rendered evidence", () => {
 
 
 describe("true agent activity", () => {
-  browserTest("true activity phone rows name checks and idle minutes without overflow", async () => {
+  browserTest("true activity phone dots tap open short popovers without opening the conversation", async () => {
     const out = path.resolve(".artifacts/true-activity/phone"); fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
     const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], executablePath: process.env.CHROME_BIN });
@@ -9793,16 +9793,31 @@ describe("true agent activity", () => {
         for (const state of ["working", "checking", "idle"]) {
           const row = page.locator(`[data-phone-card-agent="/repo/activity-${state}.jsonl"]`);
           await row.waitFor(); await row.scrollIntoViewIfNeeded();
-          const badge = row.locator("[data-card-status]"); await badge.waitFor();
-          expect(await badge.textContent()).toContain(translate(lang, state === "working" ? "cardStatus.running" : state === "checking" ? "cardStatus.checking" : "cardStatus.idle"));
-          const geometry = await badge.evaluate(element => {
-            const box = element.getBoundingClientRect(); const row = element.closest("[data-phone-card-agent]")!.getBoundingClientRect(); const detail = element.lastElementChild as HTMLElement;
-            return { left: box.left, right: box.right, rowLeft: row.left, rowRight: row.right, clipped: detail.scrollWidth > detail.clientWidth };
+          const dot = row.locator("[data-agent-activity]"); await dot.waitFor();
+          expect(await dot.textContent()).toBe("");
+          expect(await dot.getAttribute("data-agent-activity")).toBe(state);
+          expect(await dot.getAttribute("aria-label")).toContain(translate(lang, state === "working" ? "cardStatus.running" : state === "checking" ? "cardStatus.checking" : "cardStatus.idle"));
+          const before = await dot.evaluate(element => {
+            const box = element.getBoundingClientRect(); const row = element.closest("[data-phone-card-agent]")!.getBoundingClientRect();
+            return { width: box.width, height: box.height, rowHeight: row.height, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight, colour: getComputedStyle(element).backgroundColor };
           });
-          expect(geometry.right).toBeLessThanOrEqual(geometry.rowRight);
-          expect(geometry.left).toBeGreaterThanOrEqual(geometry.rowLeft);
-          if (state === "checking") expect(geometry.clipped).toBe(true);
-          readings.push({ lang, state, ...geometry });
+          expect(before.width).toBe(8); expect(before.height).toBe(8);
+          const url = page.url(); await dot.tap();
+          const popup = page.getByRole("tooltip"); await popup.waitFor();
+          const after = await popup.evaluate(element => {
+            const box = element.getBoundingClientRect();
+            return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, portalled: element.parentElement === document.body, lines: element.children.length, text: element.textContent, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight };
+          });
+          expect(page.url()).toBe(url); expect(await row.isVisible()).toBe(true);
+          expect(after.portalled).toBe(true); expect(after.lines).toBeLessThanOrEqual(2); expect(after.text!.length).toBeLessThan(90);
+          expect(after.left).toBeGreaterThanOrEqual(8); expect(after.right).toBeLessThanOrEqual(382);
+          expect(after.top).toBeGreaterThanOrEqual(8); expect(after.bottom).toBeLessThanOrEqual(836);
+          expect(after.scrollWidth).toBe(before.scrollWidth); expect(after.scrollHeight).toBe(before.scrollHeight);
+          expect((await row.boundingBox())!.height).toBe(before.rowHeight);
+          expect(await row.locator('[data-phone-card-state]').count()).toBe(0);
+          readings.push({ lang, state, dot: before, popup: after });
+          await page.screenshot({ path: path.join(out, `dot-${state}-390-${lang}.png`), fullPage: true });
+          await dot.tap(); await popup.waitFor({ state: "detached" });
         }
         expect(pageErrors).toEqual([]);
         await page.screenshot({ path: path.join(out, `variant-1-390-${lang}.png`), fullPage: true }); await context.close();

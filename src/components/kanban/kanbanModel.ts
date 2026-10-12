@@ -349,7 +349,7 @@ function memberOf(key: string, file: FileEntry, stageByPath: ReadonlyMap<string,
     needsYou: NEEDS_STATES.has(row.key),
     need: conversationNeed(file, now)?.need ?? null,
     working: isWorkingAgent(file, now),
-    latest: nowFragment(file, now * 1000),
+    latest: nowFragment(file),
     stage: stageByPath.get(file.path) ?? null,
   };
 }

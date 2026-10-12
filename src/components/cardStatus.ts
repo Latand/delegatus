@@ -8,7 +8,7 @@ import { turnIsRunning } from "./turnDuration";
 import { workingSince } from "./workingSince";
 
 /**
- * The one operator-facing textual status of a board card (issue #961).
+ * The status projection of a board card (issue #961).
  *
  * A pure projection over the authorities the board already trusts — it owns no
  * state and invents no lifecycle; the one thing it remembers, through
@@ -42,6 +42,7 @@ export function cardStatus(file: FileEntry, nowMs: number = Date.now()): CardSta
   const migration = activeCardMigration(file.migration, accountIdFromPath(file.path));
   const held = migration?.heldDeliveries ?? 0;
   if (held > 0) return { kind: "held", count: held };
+  if (file.agentActivity && file.rateLimit) return null;
   if (turnIsRunning(file)) {
     const startedAt = workingSince(file);
     return {

@@ -18,9 +18,14 @@ export interface AgentActivity {
 export const AGENT_IDLE_AFTER_MS = 10 * 60_000;
 export function waitShapedCall(call: NonNullable<AgentActivityFacts["openCall"]>): boolean {
   const name = call.name.split(/__|\./).at(-1) ?? call.name;
-  if (name === "sleep" || name === "Monitor") return true;
+  if (name === "sleep" || name === "wait" || name === "Monitor") return true;
   if (name === "write_stdin") return !call.input.chars;
   if (name === "TaskOutput") return call.input.block !== false;
+  if (name === "exec" && typeof call.input.code === "string") {
+    const code = call.input.code;
+    if (/await\s+tools\.(?:clock__sleep|sleep|wait)\s*\(/.test(code)) return true;
+    if (/await\s+tools\.write_stdin\s*\(/.test(code)) return !/chars\s*:\s*(?!["']{2})\S/.test(code);
+  }
   const command = typeof call.input.command === "string" ? call.input.command : typeof call.input.cmd === "string" ? call.input.cmd : "";
   return /(?:^|[;&|\s])sleep\s+\d|(?:^|[;&|\s])wait(?:$|[;&|\s])|gh\s+(?:pr\s+checks.*--watch|run\s+watch)|tail\s+.*-(?:f|F)/.test(command);
 }

@@ -7,12 +7,8 @@ import type { ConversationMigration, FileEntry } from "@/lib/types";
 
 import { CardStatusBadge } from "./CardStatusBadge";
 
-/**
- * Issue #961: one word plus colour per card, never colour alone. Each kind
- * carries its word as text, its semantic tone token, and a data hook; text
- * sits on the 10px caption floor; the only animated treatment is the
- * needs-you breath (a CSS class the reduced-motion media query stills).
- */
+/** Attention and delivery badges retain their words. The operator's activity
+ * decision replaces running text with an accessible colour dot. */
 
 const NOW_MS = Date.now();
 const NOW_S = NOW_MS / 1000;
@@ -73,12 +69,12 @@ test("held: shows the unsettled registry count next to the word", () => {
   expect(html).not.toContain("card-status-attention");
 });
 
-test("running: success tone with the elapsed run time", () => {
+test("running: accessible green activity dot", () => {
   const html = badge(file({ activity: "live", lastTurn: { startedAt: NOW_MS - 12 * 60_000 - 30_000, endedAt: null } }));
   expect(html).toContain('data-card-status="running"');
   expect(html).toContain("working");
-  expect(html).toContain("12m");
-  expect(html).toContain("text-success");
+  expect(html).toContain('data-agent-activity="working"');
+  expect(html).toContain("bg-success");
 });
 
 test("the needs-you breath beats in the board's own attention cadence", () => {

@@ -482,6 +482,7 @@ export const en = {
   "cardStatus.held": "held",
   "cardStatus.checking": "waiting on a check",
   "cardStatus.idleMinutes": "{n}m",
+  "cardStatus.lastAction": "last action {time}",
   "cardStatus.idle": "idle",
   "cardStatus.running": "working",
   "cardStatus.queued": "queued",
