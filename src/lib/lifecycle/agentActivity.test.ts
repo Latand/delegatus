@@ -54,3 +54,11 @@ test("native Codex exec wrappers expose awaited sleep and polling calls", () => 
     expect(classifyAgentActivity(activityFactsFromRecords(records, now), now).state).toBe("checking");
   }
 });
+
+
+test("long inline code stays checking until its native result, without counting an idle executor", () => {
+  const call = { type: "response_item", timestamp: stamp(45_000), payload: { type: "custom_tool_call", name: "functions.exec", call_id: "code-one", input: "const value = compute(); text(value);" } };
+  expect(classifyAgentActivity(activityFactsFromRecords([call], now), now).state).toBe("checking");
+  const result = { type: "response_item", timestamp: stamp(10_000), payload: { type: "custom_tool_call_output", call_id: "code-one", output: "done" } };
+  expect(classifyAgentActivity(activityFactsFromRecords([call, result], now), now).state).toBe("working");
+});

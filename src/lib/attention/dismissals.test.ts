@@ -15,11 +15,15 @@ import {
   DISMISSAL_CAPACITY,
   DISMISSAL_RETENTION_MS,
   DismissalError,
+  attentionEscalationIndex,
   dismissAttention,
   overlayAttentionDismissals,
   parseDismissalTarget,
   readAttentionDismissals,
+  systemClearAttention,
+  writeAttentionEscalation,
   type DismissalPorts,
+  type SystemAttentionClear,
 } from "./dismissals";
 import type { DismissedBy } from "./dismissalTypes";
 import { needsYouAnswer } from "./needsYouRead";
@@ -419,4 +423,64 @@ test("a task dismissal covers its waiting prototype, keeps its reason, and undo 
   expect(readAttentionDismissals().records).toEqual([]);
   const old = await dismissAttention({ kind: "prototype", taskId: task.id, reviewId: "review-old" }, SEAT, { ports: h.ports });
   expect(old.alreadyClear).toEqual([{ kind: "prototype", taskId: task.id, reviewId: "review-old" }]);
+});
+
+/* docs/design/attention-auto-resolve.md, acceptance 2: Delegatus clears what
+   its own evidence proves settled, through the same record a card writes. */
+test("a system clear is recorded with its rule, is a no-op when repeated, and Undo keeps it restored against the same rule", async () => {
+  const h = harness();
+  const clear: SystemAttentionClear = { conversationId: "conversation_a", path: "/t/a.jsonl", reasonId: "ask-1", reason: "ask", raisedAt: Date.parse("2026-09-24T09:00:00.000Z") / 1000, rule: "operator-replied", title: "Roll out the release", project: "viewer" };
+  const snapshot = { reason: "ask" as const, raisedAt: clear.raisedAt, title: "Roll out the release", project: "viewer" };
+  const at = new Date("2026-09-24T10:00:00.000Z");
+  expect(systemClearAttention([clear], at)).toEqual([clear]);
+  expect(readAttentionDismissals().records).toEqual([
+    { subject: "conversation_a", conversationId: "conversation_a", path: "/t/a.jsonl", at: at.toISOString(), by: { kind: "system", rule: "operator-replied" }, reason: "ask", reasonId: "ask-1", cleared: snapshot },
+  ]);
+  /* The next pass sees the record already covering it. */
+  expect(systemClearAttention([clear], new Date("2026-09-24T10:01:00.000Z"))).toEqual([]);
+  const files = [{ path: "/t/a.jsonl", conversationId: "conversation_a" } as FileEntry];
+  overlayAttentionDismissals(files);
+  expect(files[0]!.attentionDismissal).toEqual({ at: at.toISOString(), by: { kind: "system", rule: "operator-replied" }, reasonId: "ask-1", cleared: snapshot });
+
+  /* The operator brings it back: the record stays, covers nothing, and the
+     same rule on the same reason cannot clear it again. */
+  h.clock.now = new Date("2026-09-24T10:02:00.000Z");
+  await dismissAttention({ kind: "conversation", conversationId: "conversation_a" }, OPERATOR, { ports: h.ports, undo: true });
+  expect(readAttentionDismissals().records[0]).toMatchObject({ by: { kind: "system", rule: "operator-replied" }, reasonId: "ask-1", restoredAt: "2026-09-24T10:02:00.000Z", restoredBy: OPERATOR });
+  overlayAttentionDismissals(files);
+  expect(files[0]!.attentionDismissal).toBeUndefined();
+  expect(systemClearAttention([clear], new Date("2026-09-24T10:03:00.000Z"))).toEqual([]);
+  /* A second Undo has nothing left to bring back. */
+  const again = await dismissAttention({ kind: "conversation", conversationId: "conversation_a" }, OPERATOR, { ports: h.ports, undo: true });
+  expect(again.alreadyClear).toEqual([{ kind: "conversation", conversationId: "conversation_a" }]);
+
+  /* A newer ask, raised after the restore, can be cleared on new evidence. */
+  const newer = { ...clear, reasonId: "ask-2", raisedAt: Date.parse("2026-09-24T10:04:00.000Z") / 1000 };
+  expect(systemClearAttention([newer], new Date("2026-09-24T10:05:00.000Z"))).toEqual([newer]);
+  expect(readAttentionDismissals().records[0]).toMatchObject({ reasonId: "ask-2", by: { kind: "system", rule: "operator-replied" } });
+  expect(readAttentionDismissals().records[0]!.restoredAt).toBeUndefined();
+});
+
+test("a retired seat's clear covers every reason it raised up to then, and leaves an operator's covering record alone", () => {
+  const raisedAt = Date.parse("2026-09-24T09:00:00.000Z") / 1000;
+  const retired: SystemAttentionClear = { conversationId: "conversation_seat", path: "/t/seat.jsonl", reasonId: null, reason: "decision", raisedAt, rule: "retired-seat", title: "Pick a release day", project: "viewer" };
+  expect(systemClearAttention([retired], new Date("2026-09-24T10:00:00.000Z"))).toHaveLength(1);
+  expect(readAttentionDismissals().records[0]).toMatchObject({ reasonId: null, by: { kind: "system", rule: "retired-seat" } });
+  /* An earlier reason of the same conversation is already covered. */
+  expect(systemClearAttention([{ ...retired, raisedAt: raisedAt - 60 }], new Date("2026-09-24T10:01:00.000Z"))).toEqual([]);
+});
+
+test("an escalation is stored by the wait it names, replays by operation, and undo withdraws it", () => {
+  const by: DismissedBy = { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" };
+  const escalation = { key: "reason:ask-1", seat: "conversation_seat", taskId: "task-1", reviewId: "round-1" };
+  const first = writeAttentionEscalation(escalation, by, { operationKey: "op-1", now: new Date("2026-09-24T10:00:00.000Z") });
+  expect(first).toEqual({ changed: true, escalation: { ...escalation, at: "2026-09-24T10:00:00.000Z" } });
+  expect(writeAttentionEscalation(escalation, by, { operationKey: "op-1", now: new Date("2026-09-24T10:05:00.000Z") }).changed).toBe(false);
+  expect([...attentionEscalationIndex().values()]).toEqual([{ ...escalation, at: "2026-09-24T10:00:00.000Z" }]);
+  /* An escalation names a wait, never a conversation's dismissal. */
+  const files = [{ path: "escalation:reason:ask-1" } as FileEntry];
+  overlayAttentionDismissals(files);
+  expect(files[0]!.attentionDismissal).toBeUndefined();
+  expect(writeAttentionEscalation(escalation, by, { undo: true })).toEqual({ changed: true, escalation: null });
+  expect(attentionEscalationIndex().size).toBe(0);
 });

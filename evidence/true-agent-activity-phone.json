@@ -57,13 +57,13 @@
       "colour": "rgb(240, 113, 113)"
     },
     "popup": {
-      "left": 283.625,
+      "left": 282.890625,
       "right": 382,
       "top": 485.375,
       "bottom": 522.875,
       "portalled": true,
       "lines": 2,
-      "text": "стоїть 14 хвостання дія 11:38",
+      "text": "стоїть 14 хвостання дія 12:28",
       "scrollWidth": 390,
       "scrollHeight": 844
     }
@@ -126,13 +126,13 @@
       "colour": "rgb(240, 113, 113)"
     },
     "popup": {
-      "left": 291.90625,
+      "left": 291.171875,
       "right": 382,
       "top": 484.875,
       "bottom": 522.375,
       "portalled": true,
       "lines": 2,
-      "text": "idle 14mlast action 11:38",
+      "text": "idle 14mlast action 12:28",
       "scrollWidth": 390,
       "scrollHeight": 844
     }

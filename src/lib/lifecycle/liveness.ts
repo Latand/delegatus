@@ -1080,6 +1080,7 @@ async function livenessSnapshotWithin(
       for (const path of paths) hostedDescriptions.set(path, entry);
       previousPaths.set(entry.path, [...paths].filter(path => path !== entry.path));
       if (!targeted && [...paths].some(path => hostedPaths.has(path))) hostedPaths.add(entry.path);
+      if (!targeted && request.project && entry.project !== request.project) return;
       hostedEvidence.set(entry.path, await readEntry(entry, readSignal));
     },
     { concurrency: request.evidenceConcurrency ?? DEFAULT_EVIDENCE_CONCURRENCY,
@@ -1217,7 +1218,7 @@ async function livenessSnapshotWithin(
     if (!existing || entry.mtimeMs > existing.mtimeMs) folded.set(key, { ...entry, conversationId: id });
     if (original.path !== entry.path) previousPaths.set(entry.path, [...new Set([...(previousPaths.get(entry.path) ?? []), original.path])]);
   }
-  entries = [...folded.values()];
+  entries = [...folded.values()].filter(entry => targeted || !request.project || entry.project === request.project);
   selection.selected = entries.length;
   const hydratable = entries.filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot");
   const evidenceStartedAt = phaseClock();

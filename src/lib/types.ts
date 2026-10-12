@@ -391,6 +391,10 @@ export interface FileEntry {
       operator (docs/research/attention-classifier.md §7). The reason model
       decides whether it is still open. */
   operatorAsk?: import("@/lib/asks/types").OperatorAskMark;
+  /** Who answers this conversation's reason when it is not the operator
+      (docs/design/attention-auto-resolve.md): its project's seat, stamped by
+      `/api/files` for the one reason it names. */
+  attentionRoute?: import("@/lib/attention/routeTypes").AttentionRouteMark;
   /** Durable launch projection shown before its transcript enters the scan. */
   spawn?: StructuredSpawnCardState;
   /** Transient launch/delivery facts of the launch that CREATED this live

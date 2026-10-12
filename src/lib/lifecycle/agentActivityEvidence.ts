@@ -36,10 +36,10 @@ export function activityFactsFromRecords(records: Record<string, unknown>[], now
     if (payload?.type === "function_call" || payload?.type === "custom_tool_call") {
       let input: Record<string, unknown> = {};
       try { input = recordValue(JSON.parse(String(payload.arguments ?? payload.input ?? "{}"))) ?? {}; } catch { input = { code: String(payload.arguments ?? payload.input ?? "") }; }
-      if (typeof payload.call_id === "string" && typeof payload.name === "string") calls.set(payload.call_id, { call: { name: payload.name, input }, at });
+      if (typeof payload.call_id === "string" && typeof payload.name === "string") calls.set(payload.call_id, { call: { name: payload.name, input, startedAt: at }, at });
     } else if (payload?.type === "function_call_output" || payload?.type === "custom_tool_call_output") complete(payload.call_id, at);
     for (const part of recordsValue(recordValue(record.message)?.content)) {
-      if (part.type === "tool_use" && typeof part.id === "string" && typeof part.name === "string") calls.set(part.id, { call: { name: part.name, input: recordValue(part.input) ?? {} }, at });
+      if (part.type === "tool_use" && typeof part.id === "string" && typeof part.name === "string") calls.set(part.id, { call: { name: part.name, input: recordValue(part.input) ?? {}, startedAt: at }, at });
       if (part.type === "tool_result") {
         const taskId = recordValue(record.toolUseResult)?.backgroundTaskId;
         const call = typeof part.tool_use_id === "string" ? calls.get(part.tool_use_id)?.call : null;

@@ -106,6 +106,7 @@ import {
   type SeatTickSourceGap,
   type SeatTickTaskInput,
   type SeatTickTranscriptGap,
+  type SeatTickWorkerAskInput,
 } from "./types";
 
 /**
@@ -468,6 +469,10 @@ export async function withdrawRuntimeWake(
 
 export interface SeatTickSources {
   recordRuleReports?: (project: string, at: string) => void;
+  /** The waits «Waiting for you» routes to this project's seat
+      (docs/design/attention-auto-resolve.md), read from the board projection
+      the panel itself reads. Absent: none. */
+  workerAsks?: (project: string) => Promise<readonly SeatTickWorkerAskInput[]>;
   seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
   seatContextUsage?: (conversationId: string) => SeatContextUsage | null;
   diskPressure?: () => Promise<DiskPressure>;
@@ -709,6 +714,13 @@ export function defaultSeatTickSources(): SeatTickSources {
     },
     retirementJournal: (sinceMs) => readRetirementJournalWindow(statePath("host-retirement-journal.ndjson"), sinceMs),
     settings: (project) => readSeatTickSettings(project),
+    workerAsks: async (project) => {
+      const [{ operatorBoardRepresentation }, { seatAgendaAsks }] = await Promise.all([
+        import("@/app/api/files/operatorProjection"),
+        import("@/lib/attention/seatAgenda"),
+      ]);
+      return seatAgendaAsks(await operatorBoardRepresentation(), Date.now() / 1000, project);
+    },
     openPullRequests: (options) => openPullRequestsForRepo(options),
     /* One rule for both halves: ask, and act on, the layer that is actually
        holding the payload. A send the runtime host queued belongs to the runtime
@@ -2425,6 +2437,13 @@ export async function gatherSeatTickInput(
   }
   const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, hotLanes, sources);
   const { children, unavailable: childrenUnavailable } = await childWork(canonical, seat, state, policy, sources);
+  /* An unreadable board costs this check its routed asks, never the check:
+     the waits stay routed and the next check reads them again. */
+  let workerAsks: readonly SeatTickWorkerAskInput[] = [];
+  if (seat && settings.enabled && sources.workerAsks) {
+    try { workerAsks = await sources.workerAsks(canonical); }
+    catch (error) { console.error("[seat tick] routed asks unavailable", error instanceof Error ? error.name : "unknown"); }
+  }
   /* The children source's run of failures (#1465), kept exactly as the
      pull-request source's: advanced by a check that could not account for
      every child, cleared by one that could, and reported once by the decision
@@ -2456,6 +2475,7 @@ export async function gatherSeatTickInput(
     ...(seat ? {} : { seatEverHeld: sources.seatEverHeld?.(canonical) ?? true }),
     pipelines,
     tasks,
+    ...(workerAsks.length ? { workerAsks } : {}),
     events,
     pullRequests,
     pullRequestsUnavailable,

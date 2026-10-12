@@ -66,13 +66,13 @@
       "colour": "rgb(240, 113, 113)"
     },
     "popup": {
-      "left": 330.5625,
-      "right": 428.9375,
+      "left": 330.1875,
+      "right": 429.296875,
       "top": 656.34375,
       "bottom": 693.84375,
       "portalled": true,
       "lines": 2,
-      "text": "стоїть 14 хвостання дія 11:43",
+      "text": "стоїть 14 хвостання дія 12:28",
       "scrollWidth": 1440,
       "scrollHeight": 900
     }
@@ -144,13 +144,13 @@
       "colour": "rgb(240, 113, 113)"
     },
     "popup": {
-      "left": 334.703125,
-      "right": 424.796875,
+      "left": 334.328125,
+      "right": 425.15625,
       "top": 656.28125,
       "bottom": 693.78125,
       "portalled": true,
       "lines": 2,
-      "text": "idle 14mlast action 11:43",
+      "text": "idle 14mlast action 12:28",
       "scrollWidth": 1440,
       "scrollHeight": 900
     }
@@ -222,13 +222,13 @@
       "colour": "rgb(240, 113, 113)"
     },
     "popup": {
-      "left": 326.5625,
-      "right": 424.9375,
+      "left": 326.1875,
+      "right": 425.296875,
       "top": 688.59375,
       "bottom": 726.09375,
       "portalled": true,
       "lines": 2,
-      "text": "стоїть 14 хвостання дія 11:43",
+      "text": "стоїть 14 хвостання дія 12:28",
       "scrollWidth": 1000,
       "scrollHeight": 900
     }
@@ -250,8 +250,8 @@
     "popup": {
       "left": 372.734375,
       "right": 425.203125,
-      "top": 861.90625,
-      "bottom": 885.65625,
+      "top": 559.90625,
+      "bottom": 583.65625,
       "portalled": true,
       "lines": 1,
       "text": "working",
@@ -276,8 +276,8 @@
     "popup": {
       "left": 342.953125,
       "right": 466.015625,
-      "top": 689.53125,
-      "bottom": 713.28125,
+      "top": 387.53125,
+      "bottom": 411.28125,
       "portalled": true,
       "lines": 1,
       "text": "waiting on a check · 5m",
@@ -300,13 +300,13 @@
       "colour": "rgb(240, 113, 113)"
     },
     "popup": {
-      "left": 330.703125,
-      "right": 420.796875,
-      "top": 701.59375,
-      "bottom": 739.09375,
+      "left": 330.328125,
+      "right": 421.15625,
+      "top": 688.59375,
+      "bottom": 726.09375,
       "portalled": true,
       "lines": 2,
-      "text": "idle 14mlast action 11:43",
+      "text": "idle 14mlast action 12:28",
       "scrollWidth": 1000,
       "scrollHeight": 900
     }

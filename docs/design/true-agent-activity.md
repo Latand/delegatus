@@ -201,6 +201,11 @@ listed in the full answer as `previousPaths`. A targeted call by
 rollout and a resumed Claude session the same way, and removes the old-file
 `launch_unproven_expired` rows of §1.5.
 
+Hosted prefetch reads only the requested project's tails. After choosing a
+conversation's newest file, scoped rows are filtered against that file's
+current project, so stale catalog membership cannot read a moved conversation
+under its previous project.
+
 ### 2.4 One classifier for the three states
 
 A new pure module, `src/lib/lifecycle/agentActivity.ts`, exports
@@ -213,6 +218,13 @@ A new pure module, `src/lib/lifecycle/agentActivity.ts`, exports
 | `recentWait` | the newest completed tool call, if it was wait-shaped and finished less than 3 min ago (the gap between two iterations of a sleep loop) |
 | `background` | Claude background tasks still pending, from the existing ledger (`foldBackgroundTaskRecords` and `pendingBackgroundTasks`, `src/lib/pipelines/backgroundTasks.ts:250`, `267`) |
 | `workProcesses` | live descendants of the host process whose start time is after the open turn's first record, from `procBackend.ppidMap()` and `descendantPids` (`src/lib/proc/memory.ts:104`). Both engines start their MCP servers as direct children before the first turn (observed: the Claude seat's server started with its engine; a Codex app-server's `bin/mcp-server.mjs` is its direct child), so the start-time rule leaves them out without reading any engine configuration. |
+
+The persistent Codex code executor can start after the first turn and stays
+alive between calls. Its lifetime is excluded from process evidence; its
+work descendants still count. An outstanding native inline `functions.exec`
+call running for at least 30 seconds establishes checking from its own start
+record, and its result ends that evidence. A live work process with a verified
+start but an unreadable command still counts; its check name remains unknown.
 
 A call is **wait-shaped** when it is the Codex `sleep` tool, a Codex
 `write_stdin` with no input (polling a running exec session), a Claude

@@ -158,3 +158,26 @@ test("a provider retry has no idle activity even after eleven quiet minutes", as
   expect(result.conversations[0]).toMatchObject({ lifecycle: "waiting", reason: "provider_throttled" });
   expect(result.conversations[0]).not.toHaveProperty("activity");
 });
+
+
+test("parallel hosted reads respect the requested project", async () => {
+  const own = "/fixture/scoped-one.jsonl";
+  const other = "/fixture/scoped-other.jsonl";
+  const reads: string[] = [];
+  const injected = sources({
+    selectInventory: async () => ({ entries: [{ ...row, path: own, conversationId: "conversation_scope" }], scanned: 1, matched: 1, hostedSeen: new Set([own]), generation: 1, cacheStatus: "stale", freshScan: false, selectionMs: 0 }),
+    describeTranscript: async path => ({ ...described, path, project: path === own ? "fixture" : "elsewhere", conversationId: path === own ? "conversation_scope" : "conversation_elsewhere" }),
+    transcriptEvidence: async (_engine, path) => { reads.push(path); return { turn: "busy", lastRecordTs: now - 10_000 }; },
+  });
+  const registry = injected.registrySnapshot();
+  registry.entries.one.artifactPath = own;
+  registry.entries.two = { ...registry.entries.one, key: { ...registry.entries.one.key, sessionId: "two" }, artifactPath: other, structuredHost: { ...registry.entries.one.structuredHost!, process: { pid: 43, startIdentity: "host-start" } } };
+  const result = await agentLivenessSnapshot({ project: "fixture", liveOnly: true, answerBudgetMs: 800 }, { ...injected, registrySnapshot: () => registry });
+  expect(reads).toEqual([own]);
+  expect(result.conversations).toHaveLength(1);
+  expect(result.conversations[0]).toMatchObject({ transcriptPath: own, verified: true });
+  reads.length = 0;
+  const moved = await agentLivenessSnapshot({ project: "fixture", liveOnly: true, answerBudgetMs: 800 }, { ...injected, registrySnapshot: () => registry, describeTranscript: async path => ({ ...described, path, project: "elsewhere" }) });
+  expect(reads).toEqual([]);
+  expect(moved.conversations).toHaveLength(0);
+});

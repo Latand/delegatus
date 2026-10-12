@@ -186,10 +186,17 @@ async function checkPromptExpansion(lang: Locale, viewport: (typeof VIEWPORTS)[n
 
 /* A compositor touch gesture, aimed at the same visible surface a visitor touches.
    "before" records the published or unchanged build; "after" also asserts that
-   the outer page moves in the finger's expected direction. */
+   the page scrolls exactly as it does over plain text, that no demo frame took
+   any of the gesture, and who may touch a frame. */
 async function checkSwipe() {
   if (swipeCheck !== "before" && swipeCheck !== "after") throw new Error("use --check-swipe=before or --check-swipe=after");
-  const rows: { lang: Locale; surface: string; direction: string; before: number; after: number; delta: number; available: number }[] = [];
+  type Row = {
+    lang: Locale; viewport: string; surface: string; gesture: string; before: number; after: number; delta: number; available: number;
+    reversal: number; frameMoved: boolean;
+  };
+  const rows: Row[] = [];
+  const pointerRows: { viewport: string; frame: string; pointerEvents: string }[] = [];
+  const failures: string[] = [];
   const surfaces = [
     ["install-prompt", '.hero [data-install="hero"] .prompt pre'],
     ["hero-board", ".hero .demo"],
@@ -199,170 +206,178 @@ async function checkSwipe() {
     ["phone-demo", ".live-phone iframe"],
     ["plain-text", ".sec-run .sec-head h2"],
   ] as const;
-  for (const lang of ["en", "uk"] as Locale[]) {
-    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
-    const page = await context.newPage();
-    const cdp = await context.newCDPSession(page);
-    await page.goto(`${base}?lang=${lang}`);
-    for (const [surface, selector] of surfaces) {
-      if (surface.endsWith("demo") || surface === "open-composer") {
-        await page.locator(selector.replace(" iframe", "")).scrollIntoViewIfNeeded();
-        await frameOf(page, selector.replace(" iframe", ""));
+  /* Finger travel as [dx, dy] over twelve moves: "down" is a finger moving down. */
+  const gestures = { "finger-up": [0, -300], "finger-down": [0, 300], diagonal: [-120, -160] } as const;
+  const frameSelector = (selector: string) => selector.replace(" iframe", "");
+  /* Every scroll position inside a frame; the demo must take none of a swipe. */
+  const nestedScroll = (frame: Frame) => frame.evaluate(() => [...document.querySelectorAll<HTMLElement>("*")]
+    .filter((node) => node.scrollTop !== 0 || node.scrollLeft !== 0)
+    .map((node) => `${node.tagName}.${node.className}:${node.scrollTop},${node.scrollLeft}`).join("|"));
+  const pointerOf = (page: Page) => page.evaluate(() => Object.fromEntries(
+    [...document.querySelectorAll<HTMLIFrameElement>(".live iframe")].map((frame) => [frame.closest<HTMLElement>(".live")!.dataset.live!, getComputedStyle(frame).pointerEvents])));
+  for (const viewport of [{ name: "390x844", width: 390, height: 844 }, { name: "375x667", width: 375, height: 667 }]) {
+    for (const lang of ["en", "uk"] as Locale[]) {
+      /* One recording and the frames around each swipe per viewport, for a before/after comparison. */
+      const videoDir = path.join(out, `swipe-${swipeCheck}-video-${viewport.name}`);
+      const context = await browser.newContext({
+        viewport: { width: viewport.width, height: viewport.height }, isMobile: true, hasTouch: true, deviceScaleFactor: 3,
+        ...(lang === "en" ? { recordVideo: { dir: videoDir, size: { width: viewport.width, height: viewport.height } } } : {}),
+      });
+      const page = await context.newPage();
+      const cdp = await context.newCDPSession(page);
+      await page.goto(`${base}?lang=${lang}`);
+      const frameShot = (surface: string, name: string) => surface.endsWith("-demo") && lang === "en"
+        ? page.screenshot({ path: path.join(out, `swipe-${swipeCheck}-${viewport.name}-live-${surface.replace("-demo", "")}-${name}.png`) })
+        : undefined;
+      for (const [surface, selector] of surfaces) {
+        const framed = selector.endsWith("iframe");
+        if (framed) {
+          await page.locator(frameSelector(selector)).scrollIntoViewIfNeeded();
+          await frameOf(page, frameSelector(selector));
+        }
+        for (const [gesture, [dx, dy]] of Object.entries(gestures)) {
+          const element = page.locator(selector).first();
+          await element.scrollIntoViewIfNeeded();
+          let point = await page.evaluate((selector) => {
+            const rect = document.querySelector(selector)!.getBoundingClientRect();
+            const max = document.documentElement.scrollHeight - innerHeight;
+            const center = rect.top + Math.min(rect.height, 520) / 2;
+            const aim = innerHeight / 2;
+            scrollTo(0, Math.max(0, Math.min(max, scrollY + center - aim)));
+            const positioned = document.querySelector(selector)!.getBoundingClientRect();
+            return { x: Math.round(positioned.left + positioned.width / 2), y: Math.round(Math.max(positioned.top + 12, Math.min(positioned.bottom - 12, aim))) };
+          }, selector);
+          if (surface === "open-composer") {
+            const field = (await frameOf(page, ".live-open")).locator("textarea").first();
+            await field.waitFor({ state: "visible" });
+            let rect = await field.boundingBox();
+            if (!rect) throw new Error("conversation composer has no box");
+            await page.evaluate((dy) => scrollBy(0, dy), rect.y + rect.height / 2 - viewport.height / 2);
+            rect = await field.boundingBox();
+            if (!rect) throw new Error("conversation composer moved out of view");
+            point = { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
+          }
+          await settle(page, 250);
+          const frame = framed ? await frameOf(page, frameSelector(selector)) : null;
+          if (gesture === "finger-up") await frameShot(surface, "0-start");
+          const nestedBefore = frame ? await nestedScroll(frame) : "";
+          const { before, available } = await page.evaluate((dy) => ({
+            before: scrollY,
+            available: dy < 0 ? document.documentElement.scrollHeight - innerHeight - scrollY : scrollY,
+          }), dy);
+          await page.evaluate(() => {
+            const trace: number[] = [];
+            (window as unknown as { swipeTrace: number[] | null }).swipeTrace = trace;
+            const tick = () => {
+              if ((window as unknown as { swipeTrace: number[] | null }).swipeTrace !== trace) return;
+              trace.push(scrollY);
+              requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+          });
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: point.x, y: point.y, id: 1 }] });
+          for (let step = 1; step <= 12; step += 1) {
+            await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: point.x + Math.round(dx * step / 12), y: point.y + Math.round(dy * step / 12), id: 1 }] });
+            await settle(page, 16);
+          }
+          /* Rest before lifting: a drag, so a fling's speed (which varies with the load on the machine) adds nothing. */
+          await settle(page, 150);
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+          await settle(page, 450);
+          const trace = await page.evaluate(() => {
+            const all = (window as unknown as { swipeTrace: number[] | null }).swipeTrace ?? [];
+            (window as unknown as { swipeTrace: number[] | null }).swipeTrace = null;
+            return { all, after: scrollY };
+          });
+          /* The page may only move one way during a swipe: the largest step against the finger's direction. */
+          const toward = dy < 0 ? 1 : -1;
+          let reversal = 0;
+          for (let index = 1; index < trace.all.length; index += 1) reversal = Math.max(reversal, -(trace.all[index] - trace.all[index - 1]) * toward);
+          if (gesture === "finger-up") await frameShot(surface, "1-after-swipe-up");
+          if (gesture === "finger-down") await frameShot(surface, "2-after-swipe-down");
+          const frameMoved = frame ? await nestedScroll(frame) !== nestedBefore : false;
+          rows.push({ lang, viewport: viewport.name, surface, gesture, before, after: trace.after, delta: trace.after - before, available, reversal, frameMoved });
+        }
       }
-      for (const direction of ["down", "up"] as const) {
-        if (swipeCheck === "after" && (surface.endsWith("demo") || surface === "open-composer")) {
-          const frame = await frameOf(page, selector.replace(" iframe", ""));
-          await frame.evaluate((direction) => {
-            for (const node of document.querySelectorAll<HTMLElement>("*")) {
-              if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1) {
-                node.scrollTop = direction === "down" ? node.scrollHeight : 0;
-              }
-            }
-          }, direction);
+      pointerRows.push(...Object.entries(await pointerOf(page)).map(([frame, pointerEvents]) => ({ viewport: `${viewport.name} ${lang}`, frame, pointerEvents })));
+      if (swipeCheck === "after") {
+        /* A landing tab under a frame still changes the frame's screen by a tap. */
+        for (const [frameName, tab] of [["run", '.sec-run [data-view="decision"]'], ["open", '.sec-open [data-view="search"]'], ["phone", '.sec-reach [data-view="decision"]']] as const) {
+          const key = `${lang} ${viewport.name} ${frameName} tab`;
+          await page.locator(`.live-${frameName}`).scrollIntoViewIfNeeded();
+          await frameOf(page, `.live-${frameName}`);
+          await page.locator(tab).scrollIntoViewIfNeeded();
+          await page.locator(tab).tap();
+          await page.waitForFunction((name) => document.querySelector(`.live-${name}[data-busy]`) !== null || document.querySelector(`.live-${name}[data-loaded]`) !== null, frameName, { timeout: 10_000 });
+          await frameOf(page, `.live-${frameName}`);
+          const selected = await page.locator(tab).getAttribute("aria-selected");
+          if (selected !== "true") failures.push(`${key}: tap did not select the tab`);
+          if (frameName === "phone" && lang === "en") await page.screenshot({ path: path.join(out, `swipe-after-${viewport.name}-phone-tab-decision.png`) });
+          console.log(`${key}: aria-selected=${selected}`);
         }
-        const element = page.locator(selector).first();
-        await element.scrollIntoViewIfNeeded();
-        let point = await page.evaluate((selector) => {
-          const rect = document.querySelector(selector)!.getBoundingClientRect();
-          const max = document.documentElement.scrollHeight - innerHeight;
-          const center = rect.top + Math.min(rect.height, 520) / 2;
-          scrollTo(0, Math.max(0, Math.min(max, scrollY + center - 420)));
-          const positioned = document.querySelector(selector)!.getBoundingClientRect();
-          return { x: Math.round(positioned.left + positioned.width / 2), y: Math.round(Math.max(positioned.top + 12, Math.min(positioned.bottom - 12, 420))) };
-        }, selector);
-        if (surface === "open-composer") {
-          const field = (await frameOf(page, ".live-open")).locator("textarea").first();
-          await field.waitFor({ state: "visible" });
-          let rect = await field.boundingBox();
-          if (!rect) throw new Error("conversation composer has no box");
-          await page.evaluate((dy) => scrollBy(0, dy), rect.y + rect.height / 2 - 420);
-          rect = await field.boundingBox();
-          if (!rect) throw new Error("conversation composer moved out of view");
-          point = { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
-        }
-        await settle(page, 250);
-        const { before, available } = await page.evaluate((direction) => ({ before: scrollY, available: direction === "down" ? document.documentElement.scrollHeight - innerHeight - scrollY : scrollY }), direction);
-        const travel = direction === "down" ? -300 : 300;
-        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: point.x, y: point.y, id: 1 }] });
-        for (let step = 1; step <= 12; step += 1) {
-          await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: point.x, y: point.y + Math.round(travel * step / 12), id: 1 }] });
-          await settle(page, 16);
-        }
-        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-        await settle(page, 450);
-        const after = await page.evaluate(() => scrollY);
-        rows.push({ lang, surface, direction, before, after, delta: after - before, available });
+        /* Full screen is where a visitor uses the demo itself: the frame takes touch there only. */
+        const run = page.locator(".live-run");
+        await run.scrollIntoViewIfNeeded();
+        await page.locator(".stage-wrap > .fs-btn").tap();
+        await page.waitForFunction(() => getComputedStyle(document.querySelector(".live-run iframe")!).pointerEvents === "auto", null, { timeout: 5_000 }).catch(() => undefined);
+        const inside = (await pointerOf(page)).run;
+        if (inside !== "auto") failures.push(`${lang} ${viewport.name}: run frame is ${inside} in full screen`);
+        await page.locator(".stage-wrap > .fs-btn").tap();
+        await page.waitForFunction(() => getComputedStyle(document.querySelector(".live-run iframe")!).pointerEvents === "none", null, { timeout: 5_000 }).catch(() => undefined);
+        const outside = (await pointerOf(page)).run;
+        if (outside !== "none") failures.push(`${lang} ${viewport.name}: run frame is ${outside} after leaving full screen`);
+        console.log(`${lang} ${viewport.name} run frame pointer-events: full screen ${inside}, after leaving ${outside}`);
+      }
+      const video = page.video();
+      await context.close();
+      if (video) {
+        await video.saveAs(path.join(out, `swipe-${swipeCheck}-${viewport.name}.webm`));
+        fs.rmSync(videoDir, { recursive: true, force: true });
       }
     }
-    if (swipeCheck === "after") {
-      await page.locator(".live-open").scrollIntoViewIfNeeded();
-      const open = await frameOf(page, ".live-open");
-      const composer = open.locator("textarea").first();
-      await composer.fill("A visitor can still type in this field");
-      if (await composer.inputValue() !== "A visitor can still type in this field") throw new Error(`${lang}: composer did not accept typing`);
-
-      // A short flick must keep moving after release, unlike an immediate scrollBy.
-      await page.locator(".live-run").scrollIntoViewIfNeeded();
-      const run = await frameOf(page, ".live-run");
-      await run.evaluate(() => {
-        for (const node of document.querySelectorAll<HTMLElement>("*")) {
-          if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1) node.scrollTop = node.scrollHeight;
-        }
-      });
-      const runBox = await page.locator(".live-run iframe").boundingBox();
-      if (!runBox) throw new Error("run frame has no box");
-      const flickX = Math.round(runBox.x + runBox.width / 2);
-      const flickY = Math.round(runBox.y + Math.min(runBox.height / 2, 400));
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: flickX, y: flickY, id: 2 }] });
-      for (let step = 1; step <= 4; step += 1) {
-        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: flickX, y: flickY - step * 40, id: 2 }] });
-        await settle(page, 10);
-      }
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-      await settle(page, 25);
-      const atRelease = await page.evaluate(() => scrollY);
-      await settle(page, 300);
-      const afterCoast = await page.evaluate(() => scrollY);
-      console.log(`${lang} run-frame flick coast: ${atRelease} -> ${afterCoast} (${afterCoast - atRelease})`);
-      if (afterCoast - atRelease < 40) throw new Error(`${lang}: run-frame flick stopped without momentum`);
-
-      // A new gesture on the landing must take over from a forwarded iframe flick.
-      for (const interruption of ["touch", "wheel"] as const) {
-        await page.locator(".live-run").scrollIntoViewIfNeeded();
-        const box = await page.locator(".live-run iframe").boundingBox();
-        if (!box) throw new Error("run frame has no box");
-        const x = Math.round(box.x + box.width / 2);
-        const y = Math.round(box.y + Math.min(box.height / 2, 400));
-        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y, id: 4 }] });
-        for (let step = 1; step <= 4; step += 1) {
-          await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y - step * 40, id: 4 }] });
-          await settle(page, 10);
-        }
-        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-        const releasePosition = await page.evaluate(() => scrollY);
-        await settle(page, 25);
-        const coastPosition = await page.evaluate(() => scrollY);
-        if (coastPosition - releasePosition < 2) throw new Error(`${lang}: ${interruption} probe had no active flick to interrupt`);
-        if (interruption === "touch") {
-          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 8, y: 8, id: 5 }] });
-          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-        } else {
-          await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: 8, y: 8, deltaX: 0, deltaY: 0 });
-        }
-        await settle(page, 25);
-        const interruptedAt = await page.evaluate(() => scrollY);
-        await settle(page, 250);
-        const afterInterruption = await page.evaluate(() => scrollY);
-        console.log(`${lang} ${interruption} stopped flick: ${interruptedAt} -> ${afterInterruption}`);
-        if (Math.abs(afterInterruption - interruptedAt) > 5) throw new Error(`${lang}: ${interruption} did not stop iframe flick`);
-      }
-
-      // A long draft still scrolls inside its textarea until it reaches an edge.
-      await composer.fill(Array.from({ length: 30 }, (_, index) => `Draft line ${index + 1}`).join("\n"));
-      const draftSize = await composer.evaluate((element) => ({ height: element.clientHeight, scrollHeight: element.scrollHeight }));
-      if (draftSize.scrollHeight <= draftSize.height + 40) throw new Error(`${lang}: long composer draft did not overflow`);
-      await composer.evaluate((element) => { element.scrollTop = 0; });
-      await composer.scrollIntoViewIfNeeded();
-      const composerBox = await composer.boundingBox();
-      if (!composerBox) throw new Error("composer has no box");
-      const draftX = Math.round(composerBox.x + composerBox.width / 2);
-      const draftY = Math.round(composerBox.y + composerBox.height / 2);
-      const pageBeforeDraft = await page.evaluate(() => scrollY);
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: draftX, y: draftY, id: 3 }] });
-      for (let step = 1; step <= 4; step += 1) {
-        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: draftX, y: draftY - step * 25, id: 3 }] });
-        await settle(page, 20);
-      }
-      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-      await settle(page, 200);
-      const draftScroll = await composer.evaluate((element) => element.scrollTop);
-      const pageAfterDraft = await page.evaluate(() => scrollY);
-      console.log(`${lang} long draft scroll: inner ${draftScroll}, page ${pageAfterDraft - pageBeforeDraft}`);
-      if (draftScroll < 40 || Math.abs(pageAfterDraft - pageBeforeDraft) > 20) throw new Error(`${lang}: long composer draft did not retain inner scrolling`);
-
-      const phone = await frameOf(page, ".live-phone");
-      const columns = phone.locator(".snap-x").first();
-      await columns.scrollIntoViewIfNeeded();
-      await phone.locator("[data-phone-kanban-tab]").nth(1).click();
-      await settle(page, 300);
-      const horizontal = await columns.evaluate((element) => element.scrollLeft);
-      console.log(`${lang} phone tab navigation: scrollLeft ${horizontal}`);
-      if (horizontal < 300) throw new Error(`${lang}: phone tab navigation did not move`);
+  }
+  /* Who may touch a frame, by device: a phone turned sideways is still a touch phone; a mouse keeps its frames. */
+  const devices = [
+    { name: "844x390 touch", width: 844, height: 390, touch: true, expect: { run: "none", open: "none", phone: "none" } },
+    { name: "1440x900 mouse", width: 1440, height: 900, touch: false, expect: { run: "auto", open: "auto", phone: "auto" } },
+    { name: "600x900 mouse", width: 600, height: 900, touch: false, expect: { run: "auto", open: "auto", phone: "auto" } },
+    { name: "1024x1366 touch tablet", width: 1024, height: 1366, touch: true, expect: { run: "auto", open: "auto", phone: "none" } },
+  ];
+  for (const device of devices) {
+    const context = await browser.newContext({ viewport: { width: device.width, height: device.height }, ...(device.touch ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}) });
+    const page = await context.newPage();
+    await page.goto(`${base}?lang=en`);
+    for (const name of ["run", "open", "phone"]) {
+      await page.locator(`.live-${name}`).scrollIntoViewIfNeeded();
+      await frameOf(page, `.live-${name}`);
+    }
+    const pointers = await pointerOf(page);
+    for (const [frame, pointerEvents] of Object.entries(pointers)) {
+      pointerRows.push({ viewport: device.name, frame, pointerEvents });
+      const expected = device.expect[frame as "run" | "open" | "phone"];
+      if (swipeCheck === "after" && pointerEvents !== expected) failures.push(`${device.name}: ${frame} frame is ${pointerEvents}, expected ${expected}`);
     }
     await context.close();
   }
-  fs.writeFileSync(path.join(out, `swipe-${swipeCheck}.json`), `${JSON.stringify({ url: base, viewport: "390x844 touch DPR3", rows }, null, 2)}\n`);
-  for (const row of rows) console.log(`${row.lang} ${row.surface} ${row.direction}: ${row.before} -> ${row.after} (${row.delta})`);
+  fs.writeFileSync(path.join(out, `swipe-${swipeCheck}.json`), `${JSON.stringify({ url: base, viewports: "390x844 and 375x667 touch DPR3", rows, pointerRows }, null, 2)}\n`);
+  for (const row of rows) console.log(`${row.lang} ${row.viewport} ${row.surface} ${row.gesture}: ${row.before} -> ${row.after} (${row.delta}) reversal ${row.reversal.toFixed(1)} frame moved ${row.frameMoved}`);
+  for (const row of pointerRows) console.log(`pointer-events ${row.viewport} ${row.frame}: ${row.pointerEvents}`);
   if (swipeCheck === "after") {
-    const failed = rows.filter((row) => {
-      const control = rows.find((candidate) => candidate.lang === row.lang && candidate.surface === "plain-text" && candidate.direction === row.direction)!;
-      const required = Math.min(300, Math.abs(control.delta), row.available) * 0.8;
-      return Math.abs(row.delta) < required || Math.sign(row.delta) !== Math.sign(control.delta);
-    });
-    if (failed.length) throw new Error(`outer page moved less than 80% of the plain-text control for ${failed.map((row) => `${row.lang}/${row.surface}/${row.direction}`).join(", ")}`);
+    for (const row of rows) {
+      const control = rows.find((candidate) => candidate.lang === row.lang && candidate.viewport === row.viewport && candidate.gesture === row.gesture && candidate.surface === "plain-text")!;
+      const expected = Math.sign(control.delta) * Math.min(Math.abs(control.delta), row.available);
+      const key = `${row.lang}/${row.viewport}/${row.surface}/${row.gesture}`;
+      if (Math.abs(row.delta - expected) > 4) failures.push(`${key}: page moved ${row.delta}, plain text moves ${expected}`);
+      if (row.reversal > 1) failures.push(`${key}: page stepped back ${row.reversal.toFixed(1)} px`);
+      if (row.frameMoved) failures.push(`${key}: a scroll area inside the frame took the gesture`);
+    }
+    for (const row of pointerRows.filter((candidate) => /^(390x844|375x667) /.test(candidate.viewport))) {
+      if (row.pointerEvents !== "none") failures.push(`${row.viewport}: ${row.frame} frame is ${row.pointerEvents}, expected none`);
+    }
+    if (failures.length) throw new Error(`swipe check failed:\n${failures.join("\n")}`);
+    console.log("swipe check: every demo frame scrolls the page as plain text does");
   }
 }
-
 
 /* Each frame full screen: the size the product runs at, the control's place,
    the way out, and the page where the visitor left it. */
@@ -698,93 +713,6 @@ if (fullscreenCheck) {
   let ok = false;
   try { ok = await checkFullscreen(); } finally { await browser.close(); server.stop(true); }
   process.exit(ok ? 0 : 1);
-}
-
-/* A finger that moves steadily and then rests over a phone demo. The landing
-   follows it 1:1 and stays put while it rests. Run on a build that measures the
-   finger in a frame that moves with the page, the page alternates instead: each
-   forwarded scroll moves the frame under the finger, and the next reading
-   undoes it. "content-space" replays the coordinate semantics seen in the
-   iPhone recording (Touch.screenY carries the parent's scroll); "stable" is the
-   Chromium default. Both have to pass. */
-async function checkSwipeFeedback() {
-  const rows: Record<string, unknown>[] = [];
-  const failures: string[] = [];
-  for (const semantics of ["stable", "content-space"] as const) {
-    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
-    if (semantics === "content-space") {
-      await context.addInitScript(() => {
-        if (window.parent === window) return;
-        const screenY = Object.getOwnPropertyDescriptor(Touch.prototype, "screenY")!.get!;
-        Object.defineProperty(Touch.prototype, "screenY", { get() { return screenY.call(this) + window.parent.scrollY; } });
-      });
-    }
-    const page = await context.newPage();
-    const cdp = await context.newCDPSession(page);
-    await page.goto(`${base}?lang=en`);
-    for (const surface of ["run", "phone"]) {
-      const host = `.live-${surface}`;
-      await page.locator(host).scrollIntoViewIfNeeded();
-      const frame = await frameOf(page, host);
-      await frame.evaluate(() => {
-        for (const node of document.querySelectorAll<HTMLElement>("*")) {
-          if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1) node.scrollTop = node.scrollHeight;
-        }
-      });
-      const point = await page.evaluate((selector) => {
-        const box = document.querySelector(`${selector} iframe`)!.getBoundingClientRect();
-        scrollTo(0, Math.max(0, scrollY + box.top + Math.min(box.height, 520) / 2 - 420));
-        const placed = document.querySelector(`${selector} iframe`)!.getBoundingClientRect();
-        return { x: Math.round(placed.left + placed.width / 2), y: Math.round(Math.max(placed.top + 12, Math.min(placed.bottom - 12, 420))) };
-      }, host);
-      await settle(page, 250);
-      const trace: number[] = [];
-      const read = async () => { trace.push(await page.evaluate(() => scrollY)); };
-      const touch = (type: string, y: number) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x: point.x, y, id: 1 }] } as never);
-      await read();
-      await touch("touchStart", point.y);
-      const steps = 10, stride = 12;
-      for (let step = 1; step <= steps; step += 1) {
-        await touch("touchMove", point.y - step * stride);
-        await settle(page, 16);
-        await read();
-      }
-      const moved = trace[trace.length - 1]! - trace[0]!;
-      // The finger rests, with the small tremor every finger has.
-      for (let tick = 0; tick < 24; tick += 1) {
-        await touch("touchMove", point.y - steps * stride - (tick % 2));
-        await settle(page, 16);
-        await read();
-      }
-      await touch("touchEnd", 0);
-      const held = trace.slice(steps + 1);
-      const rest = Math.max(...held) - Math.min(...held);
-      let reversals = 0;
-      for (let index = 1; index < trace.length; index += 1) if (trace[index]! < trace[index - 1]! - 1) reversals += 1;
-      await settle(page, 700);
-      const settled = await page.evaluate(() => scrollY);
-      const finger = steps * stride;
-      const row = { semantics, surface, finger, moved, ratio: Number((moved / finger).toFixed(2)), rest, reversals, coast: settled - trace[trace.length - 1]!, trace: trace.join(",") };
-      rows.push(row);
-      const problems = [
-        Math.abs(moved - finger) > finger * 0.15 && `page moved ${moved}px for ${finger}px of finger`,
-        rest > 4 && `page moved ${rest}px while the finger rested`,
-        reversals > 0 && `page reversed ${reversals} times`,
-        settled < trace[trace.length - 1]! - 2 && "page snapped back after release",
-      ].filter(Boolean);
-      for (const problem of problems) failures.push(`${semantics}/${surface}: ${problem}`);
-    }
-    await context.close();
-  }
-  for (const row of rows) console.log(JSON.stringify(row));
-  fs.writeFileSync(path.join(out, "swipe-feedback.json"), `${JSON.stringify({ url: base, viewport: "390x844 touch DPR3", rows }, null, 2)}\n`);
-  if (failures.length) throw new Error(`swipe feedback: ${failures.join("; ")}`);
-  console.log("swipe feedback: the page follows the finger 1:1 and holds still while it rests");
-}
-
-if (process.argv.includes("--check-swipe-feedback")) {
-  try { await checkSwipeFeedback(); } catch (error) { console.error(String(error instanceof Error ? error.message : error)); process.exitCode = 1; } finally { await browser.close(); server.stop(true); }
-  process.exit(process.exitCode ?? 0);
 }
 
 if (swipeCheck) {

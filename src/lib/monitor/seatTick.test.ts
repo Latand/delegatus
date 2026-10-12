@@ -3,6 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { seatTickWakeMessage } from "./report";
+import type { AttentionEscalationMark } from "@/lib/attention/routeTypes";
+import { stampAttentionRoutes, type AttentionRoutingInputs } from "@/lib/attention/routing";
+import { seatAgendaAsks } from "@/lib/attention/seatAgenda";
+import type { FileEntry } from "@/lib/types";
 
 import { evaluateLiveness } from "@/lib/lifecycle/liveness";
 import { observeDiskPressureReport } from "@/lib/state/diskPressure";
@@ -1699,7 +1703,7 @@ test("a needs_review lane's wake line says the last review failed and the head i
   expect(verdict.items[0]).toMatchObject({
     kind: "pipeline",
     id: "pipeline_a1",
-    label: `ship the exporter — lane you launched: last review failed, head unreviewed: review said fail with 2 findings on ${"1".repeat(12)}; current head ${"2".repeat(12)} was never reviewed. pipeline_action continue-review with addRounds resumes it`,
+    label: `ship the exporter — lane you launched: last review failed, head unreviewed: review said fail with 2 findings on ${"1".repeat(12)}; current head ${"2".repeat(12)} was never reviewed. The review budget is fixed: accept the head with pipeline_action accept-head when the findings are fixed, or ask the operator with publish_prototype_review and dismiss_attention escalate {reviewId}`,
     laneAnnouncement: "pipeline_a1:needs_review",
   });
   expect(verdict.items[0]!.label).not.toContain("completed");
@@ -2033,4 +2037,75 @@ test("a restarted disk reader joins the shared episode and does not wake the sea
     expect(restarted.episode).toBe(opened.episode);
     expect(seatTickDecision(next).verdict.kind).not.toBe("wake");
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+/* docs/design/attention-auto-resolve.md, acceptance 3: a worker's or a stage's
+   wait is routed to the seat first and is off the operator's list, so the seat
+   is woken with the ask on the next check, once per wait and seat. */
+describe("waits routed to the seat", () => {
+  const ask = { key: "reason:ask-1", id: "conversation_deployer", label: "deploy the release — deployer asks: «Roll out now?»; reply with send_message to conversation_deployer" };
+  const lastWakeAt = new Date(NOW - 5 * MINUTE).toISOString();
+
+  test("an ask wakes the seat on the next check, without waiting for the interval, and names the question and the way to answer", () => {
+    const decision = seatTickDecision(input({ workerAsks: [ask], state: stateWith({ lastWakeAt }) }));
+    expect(reasonsOf(decision.verdict)).toEqual(["worker-ask"]);
+    if (decision.verdict.kind !== "wake") throw new Error("expected a wake");
+    const items = decision.verdict.items.filter((item) => item.kind === "ask");
+    expect(items).toEqual([expect.objectContaining({ kind: "ask", id: "conversation_deployer", askKey: "reason:ask-1", label: ask.label })]);
+    expect(decision.verdict.reasons[0]!.detail).toContain("dismiss_attention escalate");
+  });
+
+  test("a delivered ask is not shown again to the same seat, a newer ask is, and a successor seat is shown what its predecessor was", () => {
+    const first = seatTickDecision(input({ workerAsks: [ask], state: stateWith({ lastWakeAt }) }));
+    const landed = seatTickWakeCommit(first.state, plan(first.verdict, "fp-1", 0), NOW);
+    const repeat = seatTickDecision(input({ now: NOW + 5 * MINUTE, workerAsks: [ask], state: landed }));
+    expect(reasonsOf(repeat.verdict)).toEqual([]);
+    const newer = seatTickDecision(input({ now: NOW + 5 * MINUTE, workerAsks: [{ ...ask, key: "reason:ask-2" }], state: landed }));
+    expect(reasonsOf(newer.verdict)).toEqual(["worker-ask"]);
+    const successor = seatTickDecision(input({ now: NOW + 5 * MINUTE, seat: seat({ conversationId: "conversation_successor", seatEpoch: 8 }), workerAsks: [ask], state: landed }));
+    expect(reasonsOf(successor.verdict)).toEqual(["worker-ask"]);
+  });
+
+  test("a wait its form hands back wakes the seat once more, after dismissal and after replacement, and unchanged polls stay quiet", () => {
+    const at = new Date(NOW - 10 * MINUTE).toISOString();
+    const worker = {
+      root: "claude-projects", name: "deployer", path: "/t/deployer.jsonl", project: PROJECT, title: "deploy the release", kind: "session", engine: "claude", fmt: "claude",
+      parent: null, mtime: NOW / 1000 - 600, size: 1, activity: "idle", proc: null, pid: null, model: null, pendingQuestion: null, waitingInput: null,
+      conversationId: "conversation_deployer",
+      durableLineage: { kind: "spawn", role: "deployer", depth: 1, parentConversationId: "conversation_seat", reviewsConversationId: null, memberships: [] },
+      operatorAsk: { id: "ask-1", messageAt: NOW - 10 * MINUTE, gist: "Roll out now?", state: "open" },
+    } as unknown as FileEntry;
+    const routes = (escalation: AttentionEscalationMark | null, waiting: string[]): AttentionRoutingInputs => ({
+      seatFor: () => "conversation_seat", canonicalProject: (project) => project, isSeatConversation: (id) => id === "conversation_seat",
+      escalation: (key) => (escalation?.key === key ? escalation : null), formWaiting: (reviewId) => waiting.includes(reviewId),
+    });
+    const agenda = (escalation: AttentionEscalationMark | null, waiting: string[]) => {
+      stampAttentionRoutes([worker], [], NOW / 1000, routes(escalation, waiting));
+      return seatAgendaAsks({ files: [worker], pipelines: [] }, NOW / 1000, PROJECT);
+    };
+    const deliver = (state: ReturnType<typeof stateWith>, asks: ReturnType<typeof agenda>, now: number, fingerprint: string) => {
+      const decision = seatTickDecision(input({ now, workerAsks: asks, state }));
+      expect(reasonsOf(decision.verdict)).toEqual(["worker-ask"]);
+      return seatTickWakeCommit(decision.state, plan(decision.verdict, fingerprint, 0), now);
+    };
+    const quiet = (state: ReturnType<typeof stateWith>, asks: ReturnType<typeof agenda>, now: number) => expect(reasonsOf(seatTickDecision(input({ now, workerAsks: asks, state })).verdict)).toEqual([]);
+
+    /* Delivered once; then escalated to round-a, so it leaves the agenda. */
+    let state = deliver(stateWith({ lastWakeAt }), agenda(null, []), NOW, "fp-1");
+    const roundA: AttentionEscalationMark = { key: "reason:ask-1", at, seat: "conversation_seat", taskId: "task-form", reviewId: "round-a" };
+    expect(agenda(roundA, ["round-a"])).toEqual([]);
+    /* The operator dismissed round-a: the same unresolved wait returns, and the seat is told once. */
+    state = deliver(state, agenda(roundA, []), NOW + 5 * MINUTE, "fp-2");
+    quiet(state, agenda(roundA, []), NOW + 10 * MINUTE);
+    /* The seat asked again in round-b, which a newer round then replaced: once more, once. */
+    const roundB = { ...roundA, reviewId: "round-b" };
+    expect(agenda(roundB, ["round-b"])).toEqual([]);
+    state = deliver(state, agenda(roundB, ["round-c"]), NOW + 15 * MINUTE, "fp-3");
+    quiet(state, agenda(roundB, ["round-c"]), NOW + 20 * MINUTE);
+  });
+
+  test("a tick switched off wakes nobody, and routing hands the ask back to the operator for it", () => {
+    const off = effectiveSeatTickSettings({ ...defaultSeatTickSettings(PROJECT), enabled: false, updatedAt: new Date(NOW - MINUTE).toISOString() }, NOW, SEAT_TICK_WAKE_INTERVAL_MS);
+    expect(seatTickDecision(input({ workerAsks: [ask], settings: off })).verdict.kind).toBe("quiet");
+  });
 });

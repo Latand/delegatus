@@ -322,6 +322,9 @@
   // A touch screen this short is a phone turned sideways; a tablet keeps the
   // desktop frames.
   const phoneQuery = matchMedia("(max-width: 639px), (hover: none) and (pointer: coarse) and (max-height: 639px)");
+  // A touch screen scrolls the page over a phone frame; the frame takes taps
+  // only in full screen.
+  const touchQuery = matchMedia("(hover: none) and (pointer: coarse)");
   const lives = [...document.querySelectorAll("[data-live]")].map((el) => ({
     el,
     id: el.dataset.live,
@@ -332,37 +335,6 @@
     step: null,
     view: null,
   }));
-  let panAnimation = 0;
-  function stopPanMomentum() {
-    cancelAnimationFrame(panAnimation);
-    panAnimation = 0;
-  }
-  // A forwarded pan follows the finger in viewport coordinates. The frame moves
-  // under the finger whenever the page scrolls, so the frame's own reading of
-  // the touch is turned into viewport terms here, where the frame's position
-  // is known, and the page is never scrolled by a difference between readings
-  // taken in a frame that has moved in between.
-  let pan = null;
-  function fingerInViewport(live, y) {
-    const box = live.iframe.getBoundingClientRect();
-    return box.top + y * (box.height / (live.iframe.offsetHeight || 1));
-  }
-  window.addEventListener("touchstart", stopPanMomentum, { passive: true });
-  window.addEventListener("wheel", stopPanMomentum, { passive: true });
-  function coastPan(velocity) {
-    if (!Number.isFinite(velocity) || Math.abs(velocity) < 0.35) return;
-    stopPanMomentum();
-    let last = performance.now();
-    function tick(now) {
-      const elapsed = Math.min(32, now - last);
-      last = now;
-      window.scrollBy(0, velocity * elapsed);
-      velocity *= Math.exp(-elapsed / 180);
-      if (Math.abs(velocity) >= 0.05) panAnimation = requestAnimationFrame(tick);
-      else panAnimation = 0;
-    }
-    panAnimation = requestAnimationFrame(tick);
-  }
   // The frame that is showing full screen, and how: the browser's Fullscreen
   // API where it exists, or the same layout as a fixed overlay where it does not.
   let fsLive = null;
@@ -402,6 +374,7 @@
     live.el.style.height = full ? "" : `${Math.ceil(lh * scale) + (phone ? 24 : 0)}px`;
     live.el.dataset.mode = phone ? "phone" : "desktop";
     if (live.iframe) {
+      live.iframe.style.pointerEvents = phone && touchQuery.matches && !full ? "none" : "";
       live.iframe.style.width = `${lw}px`;
       live.iframe.style.height = `${lh}px`;
       live.iframe.style.left = phone ? "50%" : "0";
@@ -516,35 +489,6 @@
     const live = lives.find((entry) => entry.iframe && entry.iframe.contentWindow === event.source);
     const data = event.data;
     if (!live || !data || typeof data.type !== "string") return;
-    // A frame that fills the screen has no page to pan.
-    const pans = live.phone && fsLive !== live;
-    if (data.type === "dlg:vertical-start") {
-      if (pans) stopPanMomentum();
-      pan = null;
-      return;
-    }
-    if (data.type === "dlg:vertical-pan") {
-      if (!pans || !live.iframe || !Number.isFinite(data.y)) return;
-      const now = fingerInViewport(live, data.y);
-      if (!pan) pan = { last: Number.isFinite(data.fromY) ? fingerInViewport(live, data.fromY) : now, samples: [] };
-      const at = performance.now();
-      pan.samples.push({ y: now, at });
-      pan.samples = pan.samples.filter((sample) => at - sample.at <= 90);
-      window.scrollBy(0, Math.max(-100, Math.min(100, pan.last - now)));
-      pan.last = now;
-      return;
-    }
-    if (data.type === "dlg:vertical-end") {
-      const samples = pan ? pan.samples : [];
-      pan = null;
-      if (!pans || samples.length < 2) return;
-      const first = samples[0];
-      const last = samples[samples.length - 1];
-      if (last.at > first.at && performance.now() - last.at < 80) {
-        coastPan(Math.max(-1.8, Math.min(1.8, (first.y - last.y) / (last.at - first.at))));
-      }
-      return;
-    }
     if (data.type === "dlg:view-error") {
       if (live.view && data.view !== live.view) {
         send(live, { type: "dlg:view", view: live.view });
@@ -698,6 +642,7 @@
   const relayout = () => lives.forEach(layout);
   new ResizeObserver(relayout).observe(document.body);
   phoneQuery.addEventListener("change", relayout);
+  touchQuery.addEventListener("change", relayout);
   window.visualViewport?.addEventListener("resize", relayout);
 
   onLanguage = () => {

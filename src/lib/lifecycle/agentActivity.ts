@@ -2,7 +2,7 @@
 export interface AgentActivityFacts {
   lastRecordAt: number | null;
   turnStartedAt?: number | null;
-  openCall?: { name: string; input: Record<string, unknown> } | null;
+  openCall?: { name: string; input: Record<string, unknown>; startedAt?: number } | null;
   recentWait?: { finishedAt: number; command: string | null } | null;
   backgroundVerified?: boolean;
   background?: { id?: string; description: string | null }[];
@@ -46,7 +46,10 @@ export function classifyAgentActivity(facts: AgentActivityFacts, nowMs: number, 
   const process = facts.workProcesses?.filter(p => facts.turnStartedAt != null && p.startedAt >= facts.turnStartedAt && nowMs - p.startedAt >= 30_000).sort((a,b) => a.startedAt - b.startedAt)[0];
   const waiting = facts.openCall && waitShapedCall(facts.openCall);
   const recent = facts.recentWait && nowMs - facts.recentWait.finishedAt < 180_000;
-  if (facts.checking || process || waiting || recent || facts.background?.length) {
+  const executing = facts.openCall?.name.split(/__|\./).at(-1) === "exec"
+    && typeof facts.openCall.input.code === "string" && facts.openCall.startedAt != null
+    && nowMs - facts.openCall.startedAt >= 30_000;
+  if (facts.checking || process || waiting || recent || executing || facts.background?.length) {
     const command = facts.openCall?.input.command ?? facts.openCall?.input.cmd;
     const check = process ? checkCommand(process.command) : facts.background?.[0]?.description ?? facts.check ?? (waiting && typeof command === "string" ? checkCommand(command) : null) ?? (recent ? facts.recentWait?.command : null) ?? null;
     return { state: "checking", check, idleForMs: null };

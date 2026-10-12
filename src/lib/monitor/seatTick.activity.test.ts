@@ -53,7 +53,7 @@ for (const child of [false, true]) {
   test(`verified idle ${child ? "child" : "stage"} notifies a busy seat once`, () => {
     const check = input();
     check.seat!.turn = "busy";
-    check.seat!.activity = { lifecycle: "running", reason: "host_alive_transcript_active", turnState: "busy", hostState: "alive", silentForMs: 1_000, stalledForMs: null };
+    check.seat!.activity = { verified: true, lifecycle: "running", reason: "host_alive_transcript_active", turnState: "busy" };
     if (child) {
       const activity = check.pipelines[0].stageActivity!;
       check.pipelines = [];

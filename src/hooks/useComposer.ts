@@ -98,9 +98,14 @@ export interface UseComposerOptions {
       then, which is also what an unbounded box gets, because the form's own
       percentage budget does not resolve there either. */
   boxHeight?: number;
-  /** What the form may take where its box grows with it (the orchestrator
-      seat, #1734); null in a card, whose budget is a share of `boxHeight`. */
+  /** What the form may take so the transcript keeps its floor, measured from
+      the box's own rows (`useComposerBox`); null where the box holds no
+      transcript, whose budget is then a share of `boxHeight`. */
   boxBudget?: number | null;
+  /** Rows drawn inside the composer's box besides the field and the
+      accessory region — the phone's undelivered chip and own-message
+      navigator (2026-10-11) — whose height comes off the field's ceiling. */
+  innerRows?: number;
 }
 
 /**
@@ -111,7 +116,7 @@ export interface UseComposerOptions {
  * own delivery (`submit`) and its own surrounding chrome; everything below the
  * text lives in `ComposerBar`.
  */
-export function useComposer({ initialText, persistText, submit, disabled = false, imageCapability = null, acceptFiles = false, holdInputWhileBusy = true, viewActive = true, accessorySurfaces = 0, boxHeight = 0, boxBudget = null }: UseComposerOptions) {
+export function useComposer({ initialText, persistText, submit, disabled = false, imageCapability = null, acceptFiles = false, holdInputWhileBusy = true, viewActive = true, accessorySurfaces = 0, boxHeight = 0, boxBudget = null, innerRows = 0 }: UseComposerOptions) {
   /* A remount mid-typing (column reshuffles, draft handovers) restores the
      draft from storage; the ref always holds the latest text so async
      dictation callbacks append to what the user typed meanwhile instead of
@@ -203,13 +208,14 @@ export function useComposer({ initialText, persistText, submit, disabled = false
      in — the conversation is a card of whatever height the board gave it, not
      the screen — and both take the accessory region's reserve off the top, so
      a grown draft cannot squeeze a surface the operator still has to reach
-     (#1629). One rule, two boxes. */
+     (#1629). One rule, two boxes. And on both the box itself takes no more
+     than the transcript's floor leaves it (2026-10-11). */
   const isMobile = useIsMobile(viewActive);
   const viewportH = useViewportHeight(viewActive);
   const layoutH = useLayoutViewportHeight(viewActive);
   const maxPx = isMobile
-    ? mobileComposerCeiling(viewportH, layoutH, accessorySurfaces)
-    : cardComposerCeiling(boxHeight, accessorySurfaces, boxBudget);
+    ? mobileComposerCeiling(viewportH, layoutH, accessorySurfaces, boxBudget, innerRows)
+    : cardComposerCeiling(boxHeight, accessorySurfaces, boxBudget === null ? null : boxBudget - innerRows);
 
   const attachments = useImageAttachments({
     onError: (message) => setStatus({ kind: "err", text: message }),

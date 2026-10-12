@@ -10,9 +10,15 @@ export function activityProcessReader(now: number = Date.now()): (pid: number) =
     parents ??= procBackend.ppidMap();
     return descendantPids(pid, parents).flatMap(child => {
       if (child === pid || !procBackend.pidAlive(child) || procBackend.processExited(child)) return [];
+      const argv = procBackend.readArgv(child);
+      const binary = (argv[0] ?? "").split(/[\\/]/).at(-1)?.replace(/\.exe$/i, "").toLowerCase();
+      // This executor persists between calls and is launched lazily after the
+      // first turn starts. Its outstanding call, rather than its lifetime,
+      // supplies inline-code activity; descendants still qualify below.
+      if (binary === "codex-code-mode-host") return [];
       const startedAt = processLaunchedAt(procBackend.processIdentity(child), { now: () => now });
-      const command = procBackend.readArgv(child).join(" ");
-      return startedAt === null || !command ? [] : [{ startedAt, command }];
+      const command = argv.join(" ");
+      return startedAt === null ? [] : [{ startedAt, command }];
     });
   };
 }

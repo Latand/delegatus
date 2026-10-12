@@ -2,13 +2,14 @@ import { fileAgentActivity } from "@/lib/lifecycle/agentActivity";
 import { getLocale, translate, type Locale } from "@/lib/i18n";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { activeCardMigration } from "@/lib/accounts/migration";
+import { laneRouteNow } from "@/lib/attention/routeTypes";
 import { laneMovedAt } from "@/lib/pipelines/laneMovement";
 import { pipelineReviewSummary, type PipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
-import { attentionReason, buildAttentionQueue, stalledAttention, type ConversationReason } from "../attention";
+import { attentionReason, buildAttentionQueue, reasonAsksOperator, stalledAttention, type ConversationReason } from "../attention";
 import { pipelineNeedsYou } from "../pipelines/pipelineBlockModel";
 import { isAuxTask, isChildConversation, isConversation, isSubagent, projectKey } from "../projectModel";
 import { turnIsRunning, turnLeftOpen } from "../turnDuration";
@@ -150,9 +151,10 @@ export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000)
   if (file.proc === "killed" && turnLeftOpen(file)) return bits({ key: "killed", dot: "danger", seconds: Math.max(0, now - file.mtime) });
   /* Right after the kill: a question outranks a quiet turn, because a turn
      that asked something and went quiet is waiting on the answer. A reason
-     someone dismissed falls through to what the conversation is doing. */
+     someone dismissed, or one its project's seat answers first, falls
+     through to what the conversation is doing. */
   const reason = attentionReason(file, now);
-  if (reason && !reason.dismissal) {
+  if (reason && reasonAsksOperator(reason)) {
     return bits({ key: "waiting", dot: "warning", edge: "warning", badge: waitingBadge(reason), seconds: Math.max(0, now - reason.since) });
   }
   if (stalledAttention(file, now)) return bits({ key: "stalled", dot: "danger", seconds: (fileAgentActivity(file, now * 1000).idleForMs ?? 0) / 1000 });
@@ -339,13 +341,15 @@ export function needsDecisionPipelineRows(
 const NO_IDS: readonly string[] = [];
 
 /**
- * Whether a lane asks the operator for anything now: parked on them, and not
- * dismissed for the decision it waits on. The desktop card, the phone's
+ * Whether a lane asks the operator for anything now: parked on them, not
+ * dismissed for the decision it waits on, and not answered first by its
+ * project's seat or by an automatic retry
+ * (docs/design/attention-auto-resolve.md). The desktop card, the phone's
  * columns and the ⚠ sheet all read this, so a lane cleared on one surface is
  * cleared on every one (docs/design/needs-attention.md §4).
  */
 export function pipelineAsks(pipeline: Pipeline): boolean {
-  return pipelineNeedsYou(pipeline) && !pipelineHiddenFromBoard(pipeline);
+  return pipelineNeedsYou(pipeline) && !pipelineHiddenFromBoard(pipeline) && !laneRouteNow(pipeline);
 }
 
 /**
