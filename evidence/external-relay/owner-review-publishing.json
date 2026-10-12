@@ -1,0 +1,268 @@
+{
+  "readings": [
+    {
+      "locale": "en",
+      "width": 390,
+      "state": "one",
+      "reason": "ready",
+      "text": "Prototype reviews go to your private chat with first.",
+      "overflow": false,
+      "lineWidth": 358,
+      "lineHeight": 16,
+      "frame": "owner-review-one-390-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 390,
+      "state": "several",
+      "reason": "ready",
+      "text": "Prototype reviews go to your private chat with owner-first.",
+      "overflow": false,
+      "lineWidth": 358,
+      "lineHeight": 16,
+      "frame": "owner-review-several-390-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 390,
+      "state": "unpaired",
+      "reason": "no_relay",
+      "text": "Telegram reviews are off: connect Celestia first.",
+      "overflow": false,
+      "lineWidth": 358,
+      "lineHeight": 16,
+      "frame": "owner-review-unpaired-390-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 390,
+      "state": "no-target",
+      "reason": "no_target",
+      "text": "Telegram reviews are off: no enabled target answers here.",
+      "overflow": false,
+      "lineWidth": 358,
+      "lineHeight": 16,
+      "frame": "owner-review-no-target-390-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 390,
+      "state": "not-configured",
+      "reason": "not_configured",
+      "text": "Telegram reviews are off: choose an engine and model for the first enabled target.",
+      "overflow": false,
+      "lineWidth": 358,
+      "lineHeight": 32,
+      "frame": "owner-review-not-configured-390-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 390,
+      "state": "paused",
+      "reason": "paused",
+      "text": "Telegram reviews are off: the Celestia relay is paused.",
+      "overflow": false,
+      "lineWidth": 358,
+      "lineHeight": 16,
+      "frame": "owner-review-paused-390-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 1440,
+      "state": "one",
+      "reason": "ready",
+      "text": "Prototype reviews go to your private chat with first.",
+      "overflow": false,
+      "lineWidth": 590,
+      "lineHeight": 16,
+      "frame": "owner-review-one-1440-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 1440,
+      "state": "several",
+      "reason": "ready",
+      "text": "Prototype reviews go to your private chat with owner-first.",
+      "overflow": false,
+      "lineWidth": 590,
+      "lineHeight": 16,
+      "frame": "owner-review-several-1440-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 1440,
+      "state": "unpaired",
+      "reason": "no_relay",
+      "text": "Telegram reviews are off: connect Celestia first.",
+      "overflow": false,
+      "lineWidth": 590,
+      "lineHeight": 16,
+      "frame": "owner-review-unpaired-1440-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 1440,
+      "state": "no-target",
+      "reason": "no_target",
+      "text": "Telegram reviews are off: no enabled target answers here.",
+      "overflow": false,
+      "lineWidth": 590,
+      "lineHeight": 16,
+      "frame": "owner-review-no-target-1440-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 1440,
+      "state": "not-configured",
+      "reason": "not_configured",
+      "text": "Telegram reviews are off: choose an engine and model for the first enabled target.",
+      "overflow": false,
+      "lineWidth": 590,
+      "lineHeight": 16,
+      "frame": "owner-review-not-configured-1440-en.png"
+    },
+    {
+      "locale": "en",
+      "width": 1440,
+      "state": "paused",
+      "reason": "paused",
+      "text": "Telegram reviews are off: the Celestia relay is paused.",
+      "overflow": false,
+      "lineWidth": 590,
+      "lineHeight": 16,
+      "frame": "owner-review-paused-1440-en.png"
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "state": "one",
+      "reason": "ready",
+      "text": "Рев’ю прототипів надходять у ваш приватний чат із first.",
+      "overflow": false,
+      "lineWidth": 358,
+      "lineHeight": 16,
+      "frame": "owner-review-one-390-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "state": "several",
+      "reason": "ready",
+      "text": "Рев’ю прототипів надходять у ваш приватний чат із owner-first.",
+      "overflow": false,
+      "lineWidth": 358,
+      "lineHeight": 16,
+      "frame": "owner-review-several-390-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "state": "unpaired",
+      "reason": "no_relay",
+      "text": "Рев’ю в Telegram вимкнено: спершу під’єднайте Celestia.",
+      "overflow": false,
+      "lineWidth": 358,
+      "lineHeight": 16,
+      "frame": "owner-review-unpaired-390-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "state": "no-target",
+      "reason": "no_target",
+      "text": "Рев’ю в Telegram вимкнено: немає ввімкненої цілі, яка відповідає тут.",
+      "overflow": false,
+      "lineWidth": 358,
+      "lineHeight": 16,
+      "frame": "owner-review-no-target-390-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "state": "not-configured",
+      "reason": "not_configured",
+      "text": "Рев’ю в Telegram вимкнено: виберіть рушій і модель для першої ввімкненої цілі.",
+      "overflow": false,
+      "lineWidth": 358,
+      "lineHeight": 32,
+      "frame": "owner-review-not-configured-390-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "state": "paused",
+      "reason": "paused",
+      "text": "Рев’ю в Telegram вимкнено: ретранслятор Celestia на паузі.",
+      "overflow": false,
+      "lineWidth": 358,
+      "lineHeight": 16,
+      "frame": "owner-review-paused-390-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "state": "one",
+      "reason": "ready",
+      "text": "Рев’ю прототипів надходять у ваш приватний чат із first.",
+      "overflow": false,
+      "lineWidth": 590,
+      "lineHeight": 16,
+      "frame": "owner-review-one-1440-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "state": "several",
+      "reason": "ready",
+      "text": "Рев’ю прототипів надходять у ваш приватний чат із owner-first.",
+      "overflow": false,
+      "lineWidth": 590,
+      "lineHeight": 16,
+      "frame": "owner-review-several-1440-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "state": "unpaired",
+      "reason": "no_relay",
+      "text": "Рев’ю в Telegram вимкнено: спершу під’єднайте Celestia.",
+      "overflow": false,
+      "lineWidth": 590,
+      "lineHeight": 16,
+      "frame": "owner-review-unpaired-1440-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "state": "no-target",
+      "reason": "no_target",
+      "text": "Рев’ю в Telegram вимкнено: немає ввімкненої цілі, яка відповідає тут.",
+      "overflow": false,
+      "lineWidth": 590,
+      "lineHeight": 16,
+      "frame": "owner-review-no-target-1440-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "state": "not-configured",
+      "reason": "not_configured",
+      "text": "Рев’ю в Telegram вимкнено: виберіть рушій і модель для першої ввімкненої цілі.",
+      "overflow": false,
+      "lineWidth": 590,
+      "lineHeight": 16,
+      "frame": "owner-review-not-configured-1440-uk.png"
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "state": "paused",
+      "reason": "paused",
+      "text": "Рев’ю в Telegram вимкнено: ретранслятор Celestia на паузі.",
+      "overflow": false,
+      "lineWidth": 590,
+      "lineHeight": 16,
+      "frame": "owner-review-paused-1440-uk.png"
+    }
+  ]
+}

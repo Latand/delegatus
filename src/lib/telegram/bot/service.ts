@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
+import { decodeHTML } from "entities";
+import type { TelegramPublishReceipt } from "@/lib/externalRelay/publish";
+import { ownerReviewDestination, publishConfirmedTelegramMessage } from "@/lib/externalRelay/telegramPublication";
 
 import { agentRegistry } from "@/lib/agent/registry";
 import { stateDir } from "@/lib/configDir";
@@ -73,6 +76,13 @@ export class TelegramBotError extends Error {
   }
 }
 
+/** Internal, already-admitted prototype copies; never an agent-supplied file path. */
+export interface TelegramRichMessage {
+  markdown: string;
+  plainText?: string;
+  images: Array<{ id: string; blob: Blob }>;
+}
+
 export interface TelegramBotDependencies {
   transportFor(token: string): BotTransport;
   openStore(): TelegramBotStore;
@@ -89,6 +99,8 @@ export interface TelegramBotDependencies {
   /** The team module's `/start <code>` hook: the reply to send, or null. */
   signInHook?(input: { from: TgUser | undefined; chatType: string; text: string | undefined }): string | null;
   reportReplies?: ReportReplyPorts;
+  /** Called after each confirmed send, independently of its local journal. */
+  publishMessage?(receipt: TelegramPublishReceipt): void | Promise<unknown>;
 }
 
 export type PollStep = { next: "continue"; delayMs: number } | { next: "stop" };
@@ -139,7 +151,7 @@ const NETWORK_BACKOFF_MIN_MS = 5_000;
 const NETWORK_BACKOFF_MAX_MS = 60_000;
 
 type TgMe = { id: number; is_bot: boolean; first_name: string; last_name?: string; username?: string; can_join_groups?: boolean; can_read_all_group_messages?: boolean };
-type TgSent = { message_id: number; date: number };
+type TgSent = { message_id: number; date: number; chat?: { id: number }; text?: string; caption?: string };
 
 function clampInt(value: unknown, bounds: { min: number; max: number; fallback: number }): number {
   const number = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : Number.NaN;
@@ -289,6 +301,17 @@ export class TelegramBotService {
   private backoffMs = NETWORK_BACKOFF_MIN_MS;
 
   constructor(private readonly deps: TelegramBotDependencies) {}
+
+  private publishConfirmed(botId: string | null, message: TgSent, chatId: string, topicId: number | null, text: string): void {
+    try {
+      if (!botId || !text.trim() || !this.deps.publishMessage) return;
+      const receipt = { botId, chatId: message.chat ? String(message.chat.id) : chatId,
+        messageId: message.message_id, date: message.date, topicId, text };
+      void Promise.resolve(this.deps.publishMessage(receipt)).catch(() => {
+        console.warn("Telegram relay publication unconfirmed");
+      });
+    } catch { console.warn("Telegram relay publication unavailable"); }
+  }
 
   /* ---- plumbing --------------------------------------------------------- */
 
@@ -559,13 +582,17 @@ export class TelegramBotService {
     if (refusal) throw new TelegramBotError(refusal.code, refusal.reason);
     const transport = this.transport();
     if (!transport) throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected; the operator connects one in the Telegram panel");
-    const params = { chat_id: Number(chat.chatId), text, disable_notification: true };
+    const botId = this.storedBotId();
+    let chatId = chat.chatId;
+    const params = { chat_id: Number(chatId), text, disable_notification: true };
     let result = await transport.call<TgSent>("sendMessage", params);
     if (!result.ok && result.migrateToChatId) {
       store.migrateChat(chat.chatId, result.migrateToChatId);
-      result = await transport.call<TgSent>("sendMessage", { ...params, chat_id: Number(result.migrateToChatId) });
+      chatId = result.migrateToChatId;
+      result = await transport.call<TgSent>("sendMessage", { ...params, chat_id: Number(chatId) });
     }
     if (!result.ok) throw sendFailure(result, chat);
+    if (result.result) this.publishConfirmed(botId, result.result, chatId, null, result.result.text ?? text);
     return { status: this.status(), sentAt: this.deps.now().toISOString() };
   }
 
@@ -643,6 +670,7 @@ export class TelegramBotService {
   async pollOnce(signal: AbortSignal): Promise<PollStep> {
     const transport = this.transport();
     if (!transport) return { next: "stop" };
+    const publishBotId = this.storedBotId();
     const store = this.store();
     const timeout = store.pendingReportReplies().length ? REPLY_RETRY_TIMEOUT_S : GET_UPDATES_TIMEOUT_S;
     const result = await transport.call<TgUpdate[]>("getUpdates", {
@@ -659,7 +687,7 @@ export class TelegramBotService {
       if (this.deps.reportReplies) admitReportReplies(store, this.storedBotId()!, updates, this.deps.reportReplies);
       if (applied.maxUpdateId !== null) this.offset = applied.maxUpdateId + 1;
       if (this.deps.reportReplies) await drainReportReplies(store, this.storedBotId()!, this.deps.reportReplies);
-      await this.answerSignIns(transport, updates, signal);
+      await this.answerSignIns(transport, updates, signal, publishBotId);
       const botId = Number(this.storedBotId());
       for (const chatId of applied.needsMembership) {
         const member = await transport.call<{ status?: string }>("getChatMember", { chat_id: Number(chatId), user_id: botId }, { signal });
@@ -698,14 +726,15 @@ export class TelegramBotService {
    * and the bot answers in that chat with what happened. The message itself
    * was stored above like any other; a failed reply is only a reply.
    */
-  private async answerSignIns(transport: BotTransport, updates: readonly TgUpdate[], signal: AbortSignal): Promise<void> {
+  private async answerSignIns(transport: BotTransport, updates: readonly TgUpdate[], signal: AbortSignal, botId: string | null): Promise<void> {
     for (const update of updates) {
       const message = update.message;
       if (!message || message.chat.type !== "private" || !message.text?.startsWith("/start")) continue;
       const reply = this.deps.signInHook?.({ from: message.from, chatType: message.chat.type, text: message.text }) ?? null;
       if (!reply || signal.aborted) continue;
       try {
-        await transport.call("sendMessage", { chat_id: message.chat.id, text: reply }, { signal });
+        const sent = await transport.call<TgSent>("sendMessage", { chat_id: message.chat.id, text: reply }, { signal });
+        if (sent.ok && sent.result) this.publishConfirmed(botId, sent.result, String(message.chat.id), null, sent.result.text ?? reply);
       } catch {
         /* the sign-in page still shows the outcome */
       }
@@ -860,6 +889,7 @@ export class TelegramBotService {
     if (!transport) throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected; the operator connects one in the Telegram panel");
     let chatId = chat.chatId;
     let migrated = false;
+    const botId = this.storedBotId();
     const sent: Array<{ messageId: number; date: number; text: string; replyToMessageId: number | null; topicId: number | null }> = [];
     for (let index = 0; index < parts.length; index += 1) {
       const text = parts[index]!;
@@ -895,6 +925,7 @@ export class TelegramBotService {
         store.failSend(sendCallerKey, clientRequestId, error.code, []);
         throw error;
       }
+      this.publishConfirmed(botId, result.result, chatId, topicId, result.result.text ?? (format === "html" ? decodeHTML(text.replace(/<[^>]*>/g, "")) : text));
       sent.push({ messageId: result.result.message_id, date: result.result.date, text, replyToMessageId: partReply, topicId });
     }
     const now = this.deps.now();
@@ -909,6 +940,113 @@ export class TelegramBotService {
       parts: sent.length,
       alreadySent: false,
     };
+  }
+
+  /** The pairing's confirmed Telegram owner is the only automatic review
+   * recipient. This grants no general agent posting permission to that chat. */
+  async sendOwnerReview(input: {
+    clientRequestId: string; message: TelegramRichMessage;
+    fallbackMarkdown?: string; fallbackPlainText?: string;
+  }): Promise<TelegramBotSendAnswer | null> {
+    const selected = ownerReviewDestination();
+    if (selected.reason) return null;
+    const store = this.connectedStore();
+    const transport = this.transport();
+    const botId = this.storedBotId();
+    if (!transport) throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected");
+    const found = await transport.call<TgChat>("getChat", { chat_id: Number(selected.chatId) });
+    if (!found.ok) throw lookupFailure(found);
+    if (!found.result || found.result.type !== "private" || String(found.result.id) !== selected.chatId)
+      throw new TelegramBotError("chat_not_allowed", "the paired owner's private chat could not be confirmed");
+    const authorize = () => {
+      const current = ownerReviewDestination();
+      if (this.storedBotId() !== botId || current.reason || current.relay.id !== selected.relay.id || current.targetId !== selected.targetId
+        || current.chatId !== selected.chatId || current.relay.credential !== selected.relay.credential)
+        throw new TelegramBotError("chat_not_allowed", "review delivery is paused or its destination changed");
+    };
+    authorize();
+    store.recordLookedUpChat(found.result, null, this.deps.now());
+    return this.sendRich({ ...input, chat: selected.chatId }, { authorize, chat: store.chat(selected.chatId)! });
+  }
+
+  /** One prototype message under a durable claim; ambiguous sends retain it. */
+  async sendRichMessage(input: {
+    clientRequestId: string; chat: string; topicId?: number;
+    message: TelegramRichMessage; fallbackMarkdown?: string; fallbackPlainText?: string;
+  }): Promise<TelegramBotSendAnswer> {
+    return this.sendRich(input);
+  }
+
+  private async sendRich(input: {
+    clientRequestId: string; chat: string; topicId?: number;
+    message: TelegramRichMessage; fallbackMarkdown?: string; fallbackPlainText?: string;
+  }, owner?: { authorize: () => void; chat: ChatRow }): Promise<TelegramBotSendAnswer> {
+    const store = this.connectedStore();
+    owner?.authorize();
+    const chat = owner?.chat ?? this.resolveChat(store, input.chat);
+    const refusal = owner ? null : postRefusal(chat);
+    if (refusal) throw new TelegramBotError(refusal.code, refusal.reason);
+    if (!input.clientRequestId.trim() || !input.message.markdown
+      || input.message.images.length > 50 || input.message.images.some(i => !/^[A-Za-z0-9_-]{1,64}$/.test(i.id)
+        || !(i.blob instanceof Blob) || i.blob.size > 10 * 1024 * 1024)
+      || new Set(input.message.images.map(i => i.id)).size !== input.message.images.length
+      || (input.fallbackMarkdown !== undefined && !input.fallbackMarkdown)) {
+      throw new TelegramBotError("bad_request", "invalid rich message");
+    }
+    const transport = this.transport();
+    if (!transport) throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected");
+    const botId = this.storedBotId();
+    const callerKey = "prototype-review";
+    const key = input.clientRequestId.trim();
+    const attributedTo: TelegramBotAttribution = { unidentified: true };
+    const claim = store.claimSend(callerKey, key, chat.chatId, this.deps.now());
+    if (!claim.claimed) {
+      if (claim.row.state !== "sent") throw new TelegramBotError("send_uncertain", "an earlier rich send may already be posted");
+      return { chat: store.chat(claim.row.chatId)?.alias ?? claim.row.chatId, chatId: claim.row.chatId,
+        messageIds: claim.row.messageIds, sentAt: claim.row.sentAt!, attributedTo, parts: claim.row.parts, alreadySent: true };
+    }
+    const topicId = Number.isSafeInteger(input.topicId) && input.topicId! > 0 ? input.topicId! : null;
+    let chatId = chat.chatId;
+    let markdown = input.message.markdown;
+    let plainText = input.message.plainText;
+    const params: Record<string, unknown> = { chat_id: Number(chatId),
+      ...(topicId === null ? {} : { message_thread_id: topicId }),
+      rich_message: { markdown, ...(input.message.images.length ? { media: input.message.images.map(i => ({ id: i.id, media: { type: "photo", media: `attach://${i.id}` } })) } : {}) },
+      ...Object.fromEntries(input.message.images.map(i => [i.id, i.blob])),
+    };
+    const call = async (body: Record<string, unknown>) => {
+      owner?.authorize();
+      let result = await transport.call<TgSent>("sendRichMessage", { ...body, chat_id: Number(chatId) });
+      if (!owner && !result.ok && result.migrateToChatId) {
+        store.migrateChat(chatId, result.migrateToChatId);
+        chatId = result.migrateToChatId;
+        result = await transport.call<TgSent>("sendRichMessage", { ...body, chat_id: Number(chatId) });
+      }
+      return result;
+    };
+    let result = await call(params);
+    // Only a definitive media refusal permits the text-only retry under this claim.
+    if (!result.ok && result.kind === "http" && result.status === 400 && input.message.images.length && input.fallbackMarkdown
+      && /photo|image|media|file|upload|dimension/i.test(result.description ?? "")) {
+      markdown = input.fallbackMarkdown;
+      plainText = input.fallbackPlainText ?? plainText;
+      result = await call({ chat_id: Number(chatId), ...(topicId === null ? {} : { message_thread_id: topicId }), rich_message: { markdown } });
+    }
+    if (!result.ok) {
+      if (result.kind === "timed_out" || result.kind === "network_failed") throw new TelegramBotError("send_uncertain", "Telegram did not confirm the rich send");
+      const error = sendFailure(result, chat);
+      store.failSend(callerKey, key, error.code, []);
+      throw error;
+    }
+    const sent = result.result;
+    if (!sent || !Number.isSafeInteger(sent.message_id) || sent.message_id <= 0 || !Number.isSafeInteger(sent.date)) {
+      throw new TelegramBotError("send_uncertain", "Telegram returned an incomplete rich receipt");
+    }
+    const now = this.deps.now();
+    this.publishConfirmed(botId, sent, chatId, topicId, plainText ?? sent.text ?? markdown);
+    store.completeSend({ callerKey, clientRequestId: key, chatId, conversationId: null, now,
+      sent: [{ messageId: sent.message_id, date: sent.date, text: markdown, replyToMessageId: null, topicId, kind: "text" }] });
+    return { chat: store.chat(chatId)?.alias ?? chatId, chatId, messageIds: [sent.message_id], sentAt: now.toISOString(), attributedTo, parts: 1, alreadySent: false };
   }
 
   /** One photo or one atomic Telegram album, using the text send's claim and
@@ -966,6 +1104,7 @@ export class TelegramBotService {
 
     const transport = this.transport();
     if (!transport) throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected; the operator connects one in the Telegram panel");
+    const botId = this.storedBotId();
     const replyTo = typeof input.replyToMessageId === "number" && Number.isSafeInteger(input.replyToMessageId) && input.replyToMessageId > 0 ? input.replyToMessageId : null;
     const topicId = typeof input.topicId === "number" && Number.isSafeInteger(input.topicId) && input.topicId > 0 ? input.topicId : null;
     const format = input.format === "html" ? "html" : "plain";
@@ -1002,6 +1141,8 @@ export class TelegramBotService {
       throw new TelegramBotError("send_uncertain", "Telegram returned an incomplete media receipt, so the send may already be posted");
     }
     const sent = (received as TgSent[]).map((message, index) => ({ messageId: message.message_id, date: message.date, text: images[index]!.caption, replyToMessageId: replyTo, topicId, kind: "photo" as const }));
+    for (const [index, message] of (received as TgSent[]).entries()) this.publishConfirmed(botId, message, chatId, topicId,
+      message.caption ?? (format === "html" ? decodeHTML(images[index]!.caption.replace(/<[^>]*>/g, "")) : images[index]!.caption));
     const now = this.deps.now();
     store.completeSend({ callerKey: sendCallerKey, clientRequestId: sendRequestId, chatId, conversationId: input.conversationId, sent, now });
     const current = store.chat(chatId);
@@ -1057,6 +1198,7 @@ export class TelegramBotService {
     if (!transport) throw new TelegramBotError("bot_not_connected", "no Telegram bot is connected; the operator connects one in the Telegram panel");
     const replyTo = typeof input.replyToMessageId === "number" && Number.isSafeInteger(input.replyToMessageId) && input.replyToMessageId > 0 ? input.replyToMessageId : null;
     const topicId = typeof input.topicId === "number" && Number.isSafeInteger(input.topicId) && input.topicId > 0 ? input.topicId : null;
+    const botId = this.storedBotId();
     const params: Record<string, unknown> = {
       chat_id: Number(chat.chatId),
       document: document.file,
@@ -1083,6 +1225,7 @@ export class TelegramBotService {
       throw new TelegramBotError("send_uncertain", "Telegram returned an incomplete document receipt, so the send may already be posted");
     }
     const sent = [{ messageId: message.message_id, date: message.date, text: document.caption, replyToMessageId: replyTo, topicId, kind: "document" as const, filename: document.filename }];
+    this.publishConfirmed(botId, message, chatId, topicId, message.caption ?? document.caption ?? "");
     const now = this.deps.now();
     store.completeSend({ callerKey, clientRequestId, chatId, conversationId: input.conversationId, sent, now });
     const current = store.chat(chatId);
@@ -1098,6 +1241,7 @@ const STORE_FILE = "bot.sqlite";
     the sleep, and keep the rest. */
 export function productionTelegramBotDependencies(): TelegramBotDependencies {
   return {
+    publishMessage: publishConfirmedTelegramMessage,
     transportFor: (token) => createBotApiTransport(token),
     openStore: () => {
       const directory = ensureTelegramStateDir(true)!;
