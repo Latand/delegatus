@@ -2685,7 +2685,7 @@ export function createMcpToolService(
             requestId,
             error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
             error instanceof Error ? error.message : String(error),
-            false,
+            error instanceof McpUnadmittedRefusal && error.details.retryable === true,
             false,
             error instanceof McpToolRefusal ? error.details : undefined,
           );
@@ -2905,7 +2905,8 @@ export function createMcpToolService(
             } catch (error) {
               return failure(typedTool, requestId,
                 error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
-                error instanceof Error ? error.message : String(error), false, false,
+                error instanceof Error ? error.message : String(error),
+                error instanceof McpUnadmittedRefusal && error.details.retryable === true, false,
                 error instanceof McpToolRefusal ? error.details : undefined);
             }
           }
@@ -2925,7 +2926,8 @@ export function createMcpToolService(
             outcome = "failure";
             return failure(typedTool, requestId,
               error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
-              error instanceof Error ? error.message : String(error), false, false,
+              error instanceof Error ? error.message : String(error),
+              error instanceof McpUnadmittedRefusal && error.details.retryable === true, false,
               error instanceof McpToolRefusal ? error.details : undefined);
           }
           /* Nothing has claimed this key HERE — an observation, never a
@@ -3111,7 +3113,8 @@ export function createMcpToolService(
             } catch (error) {
               return failure(typedTool, requestId,
                 error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
-                error instanceof Error ? error.message : String(error), false, false,
+                error instanceof Error ? error.message : String(error),
+                error instanceof McpUnadmittedRefusal && error.details.retryable === true, false,
                 error instanceof McpToolRefusal ? error.details : undefined);
             }
           }

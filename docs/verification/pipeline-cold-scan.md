@@ -34,4 +34,40 @@ One selected transcript ended in an unfinished JSONL row; this exercises the rea
 
 Repairing only that synthetic row made all four subsequent ticks answer **202** (the existing success status), taking **1,666 / 28 / 19 / 15 ms**. The repaired phase lasted 2,729 ms; the full run lasted 17,121 ms. This is a causal reproduction of the incomplete-generation caller policy. The production entry that made the scan incomplete remains unidentified.
 
-The next commit will add failing-first regressions and the fix. The required success status will become 200, and MCP incomplete-scan refusals will be retryable before receipt admission.
+This observation was committed and published in the draft PR before the regression tests or product fix were written.
+
+## Fix and regression evidence
+
+`completedFileScan({ wait: false })` starts or joins the shared generation and keeps it alive independently of the caller. It immediately serves an existing completed snapshot while revalidation runs. Without one it returns a typed incomplete-inventory error; failed, incomplete snapshots remain unpersisted. Unexpected scan errors are retained and propagated on the next read. The default waiting contract and the archive/history implementations are unchanged.
+
+The controller defers the scan-dependent flow phase, records that deferral in its journal, and continues pipeline settlement and the independent sweeps. Successful ticks answer 200. The MCP completed-scan adapter returns `scan_incomplete`, `retryable: true`, `retryAfterSeconds: 5`, with “still scanning, retry in 5 s”. Admission and fresh binding preserve that pre-dispatch refusal without claiming a receipt; the same request key can be retried. Targeted reads keep their existing signalled catalog budget and fallback.
+
+Failing-first checks on the unchanged implementation:
+
+- `src/lib/pipelines/coldScan.test.ts`: the held generation prevented a response within the 250 ms observation window; an incomplete generation threw `filesystem scan incomplete`.
+- `src/lib/mcp/coldScan.test.ts`: the production binding and recovery service returned `tool_failed`, `retryable: false`, for an orchestrator send.
+
+After the fix, the tests prove 200 while the generation is held, useful pipeline work, deferred flow work, resumption after completion, preservation of unrelated scanner failures, retryable send and ordinary admission, no claimed receipt or control write, and normal same-key validation after completion.
+
+## Production build cold-start verification
+
+The rebuilt Viewer ran under the owned gate runner with a fresh private HOME/XDG/TMPDIR/state and a port assigned by `next start -p 0`. The same dataset contained 30,036 rows, 27,836 archived and 320 transcripts. Dataset seed: **4,114 ms**. Server readiness after seed: **255 ms**.
+
+| Phase | Requests | HTTP status | Durations, ms |
+| --- | ---: | --- | --- |
+| Unfinished synthetic JSONL row | 4 | all 200 | 2,266 / 12 / 10 / 7 |
+| Repaired row, scan still running | 4 | all 200 | 9 / 11 / 10 / 10 |
+| Complete snapshot available | 4 | all 200 | 427 / 20 / 13 / 12 |
+
+The initial request includes route loading. A complete **320-file** snapshot was persisted **1,041 ms after repair**. The full run took **13,183 ms**, including four deliberately spaced incomplete-phase requests. **Zero tick 500s; zero incomplete-scan phase/watchdog failure lines.** The private journal instead records the scan-dependent phase being skipped. The run stopped only its recorded child PID. No deployment was performed.
+
+## Checks
+
+All test files ran by explicit path, each with private state, HOME, XDG and temporary roots, through `scripts/gate-slot.sh`:
+
+- Controller cold-scan regressions: 3 pass; MCP cold-scan regression: 1 pass (send and ordinary admission); tick route: 1 pass; controller: 9 pass.
+- MCP server: 89 pass; orchestrator send recovery: 6 pass; files route: 131 pass.
+- Real scanner cache: 17 pass, 2 failures also present on base `81589bce79f96127a7db188d4f378f24e382f9e2`. The project's baseline comparator reports **0 new failures**. The two pre-existing failures concern persisted Codex tail rereads and multi-megabyte warm starts.
+- Production build and MCP bundle: pass. Full TypeScript and touched-file ESLint are checked by the publication gate.
+
+Registry archive/index/projection code from #2762 is unchanged. The same large-history fixture completes through the real scanner and production routes; the existing files and receipt checks preserve their behavior. Voice reads, voice memory, and gate/CI implementation were left untouched.

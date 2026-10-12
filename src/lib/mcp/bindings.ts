@@ -170,6 +170,7 @@ import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { describe, projectForCwd, reprojectFileDescription } from "@/lib/scanner/describe";
 import { pathAllowed, scanRootEntries } from "@/lib/scanner/roots";
 import { completedFileScan } from "@/lib/scanner/scanCache";
+import { completedScanForMcp } from "./completedScan";
 import { readCachedResourceSessions, readResources, readResourcesWithDiagnostic } from "@/lib/resources";
 import { adoptLiveRootSession, conversationRole, liveRootSession, type RootSessionSource } from "@/lib/root/adopt";
 import { appendRoleMappingAudit, changedMappingRows, type RoleMappingAuditRow, roleLaunchChoices, roleMappingViolations, roleRegistryAnswer } from "@/lib/roles/mcpMapping";
@@ -1267,7 +1268,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
     ...productionSelectedContextDependencies,
     voiceUtteranceContext: productionVoiceUtteranceContext,
   },
-  completedFileScan,
+  completedFileScan: completedScanForMcp,
   registrySnapshot: () => agentRegistry().readOnlySnapshot(),
   readSpawnAdmissionFence,
   validateSpawnAdmission: (body, context) => productionViewerControlDependencies().post(

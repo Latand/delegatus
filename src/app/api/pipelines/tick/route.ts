@@ -12,7 +12,7 @@ async function post(request: NextRequest, tick: PipelineTick): Promise<NextRespo
   const rejection = rejectCrossOrigin(request);
   if (rejection) return rejection;
   await tick();
-  return NextResponse.json({ ok: true }, { status: 202 });
+  return NextResponse.json({ ok: true }, { status: 200 });
 }
 
 export const POST = Object.assign(
