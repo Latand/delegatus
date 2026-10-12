@@ -52,7 +52,8 @@ export interface RewriteInput {
   why: string;
 }
 
-export interface RuleSource {
+export interface StageRuleSource {
+  origin?: "stage";
   project: string;
   pipelineId: string;
   stageId: string;
@@ -63,6 +64,16 @@ export interface RuleSource {
   fixRound: boolean;
   conversationId: string;
 }
+
+export interface SeatRuleSource {
+  origin: "seat";
+  project: string;
+  roleId: "orchestrator";
+  fixRound: false;
+  conversationId: string;
+}
+
+export type RuleSource = StageRuleSource | SeatRuleSource;
 
 export interface RoleMemoryRule {
   kind: "rule";

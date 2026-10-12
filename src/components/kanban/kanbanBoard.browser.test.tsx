@@ -33,6 +33,12 @@ import type { MaintenanceRun } from "@/lib/boardMaintenance/types";
 import { seatTickSettingsCardText } from "@/lib/monitor/cards";
 import { autoRotationCardNotice, type AutoRotationAttempt } from "@/lib/monitor/seatAutoRotation";
 import { measureStageChain, stageChainFailures, type StageChainLane as Lane } from "@/components/pipelines/stageChainMeasure";
+import { sampleAnswer, sampleMemory } from "@/lib/memory/profile.fixture";
+import { createProfileService } from "@/lib/memory/profileService";
+import type { MemoryProfileView, ProfileRow } from "@/lib/memory/profileTypes";
+import type { RoleMemoryProjectView } from "@/lib/memory/roleTypes";
+import { directProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profileModel";
+import { readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
 
 /*
  * The one rendered-evidence driver for the kanban board. Every case here runs
@@ -60,6 +66,248 @@ const VIEWPORT = { width: 1440, height: 900 } as const;
 type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
+
+describe("memory profile", () => {
+  browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1" && !!process.env.MEMORY_PROFILE_BENCHMARK)("direct-call timings reach the visible page", async () => {
+    // Explicit private input is supplied only for an opt-in local timing run. No source text is captured.
+    const input = JSON.parse(fs.readFileSync(process.env.MEMORY_PROFILE_BENCHMARK!, "utf8")) as { rules: RoleMemoryProjectView; credentialHome: string };
+    const credentials = readClaudeCredentials(input.credentialHome);
+    const token = credentials.state === "present" ? credentials.document.claudeAiOauth?.accessToken : null;
+    if (typeof token !== "string") throw Error("benchmark credential unavailable");
+    const out = path.resolve(".artifacts/memory-profile"); fs.mkdirSync(out, { recursive: true });
+    const rows = new Map<string, ProfileRow>();
+    const service = createProfileService({ rules: () => input.rules, read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: MEMORY_PROFILE_MODEL, prepare: async () => directProfileCaller(token, MEMORY_PROFILE_MODEL) });
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": () => Response.json(input.rules),
+      "/api/role-memory/profile": async (request: Request) => {
+        if (request.method === "GET") return Response.json(service.read(input.rules.project, new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en"));
+        const body = await request.json(); const run = service.start(input.rules.project, body.locale);
+        const encoder = new TextEncoder(); let off: (() => void) | undefined; let closed = false;
+        return new Response(new ReadableStream({
+          start(controller) { off = run.subscribe(view => { if (!closed) controller.enqueue(encoder.encode(JSON.stringify(view) + "\n")); }); void run.done.then(() => { if (!closed) { closed = true; off?.(); controller.close(); } }); },
+          cancel() { closed = true; off?.(); },
+        }), { headers: { "Content-Type": "application/x-ndjson" } });
+      },
+    });
+    const browser = await chromium.launch(LAUNCH); const timings: unknown[] = [];
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1`, { width: 1440, height: 900 }, "light", lang, "reduce");
+        try {
+          await page.locator("[data-profile-summarize]").waitFor();
+          for (const mode of ["cold", "cached"] as const) {
+            const started = performance.now();
+            await page.locator("[data-profile-summarize]").click();
+            await page.waitForFunction(() => {
+              const scroller = document.querySelector<HTMLElement>("[data-memory-profile]");
+              if (!scroller) return false;
+              const band = scroller.getBoundingClientRect();
+              return [...scroller.querySelectorAll<HTMLElement>("[data-profile-ready] h3, [data-profile-ready] h4")].some(title => {
+                const rect = title.getBoundingClientRect();
+                return rect.bottom > Math.max(0, band.top) && rect.top < Math.min(innerHeight, band.bottom) && rect.right > band.left && rect.left < band.right;
+              });
+            });
+            const firstMs = Math.round(performance.now() - started);
+            await page.locator('[data-memory-profile][aria-busy="false"]').waitFor();
+            const totalMs = Math.round(performance.now() - started);
+            expect(service.read(input.rules.project, lang).run?.errors).toEqual([]);
+            timings.push({ lang, mode, model: MEMORY_PROFILE_MODEL, ruleCount: input.rules.scopes.reduce((n, scope) => n + scope.active.length, 0), firstMs, totalMs });
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "timings.json"), JSON.stringify(timings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  });
+  browserTest("summary, slices and states render at desktop and phone widths in both locales and schemes", async () => {
+    const out = path.resolve(".artifacts/memory-profile"); fs.mkdirSync(out, { recursive: true });
+    const rules = sampleMemory();
+    const rows = new Map<string, ProfileRow>();
+    let calls = 0;
+    const service = createProfileService({ rules: () => structuredClone(rules), read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: "haiku", prepare: async () => async (_, locale) => {
+      calls++;
+      const answer = sampleAnswer(locale === "uk");
+      const character = locale === "uk" ? "Ж" : "W";
+      const unbroken = (length: number) => character.repeat(length);
+      answer.headline = unbroken(80);
+      answer.text = unbroken(80);
+      for (const topic of answer.topics) {
+        topic.title = unbroken(35);
+        if (topic.text) topic.text = unbroken(100);
+      }
+      return answer;
+    } });
+    let state: "none" | "ready" | "running" | "error" | "stale" | "empty" = "none";
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": () => Response.json(state === "empty" ? { ...rules, scopes: [] } : rules),
+      "/api/role-memory/profile": async (request: Request) => {
+        const locale = new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en";
+        if (request.method === "POST") {
+          const body = await request.json(); const run = service.start("garden", body.locale); await run.done;
+          state = "ready";
+          return new Response(JSON.stringify(run.latest) + "\n", { headers: { "Content-Type": "application/x-ndjson" } });
+        }
+        const view: MemoryProfileView = service.read("garden", locale);
+        if (state === "none") { view.overall = null; view.slices.forEach(slice => { slice.summary = null; }); view.run = null; }
+        if (state === "running" || state === "error") view.run = { state: state === "running" ? "running" : "failed", startedAt: "2026-01-01", errors: state === "error" ? [{ scope: "overall", code: "account" }] : [] };
+        if (state === "stale") { view.stale = true; view.changes = { added: 2, rewritten: 1, removed: 1 }; }
+        return Response.json(view);
+      },
+    });
+    const browser = await chromium.launch(LAUNCH); const readings: unknown[] = [];
+    try {
+      for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        state = "none";
+        const before = calls;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1`, { width, height: width === 390 ? 844 : 900 }, scheme, lang, "reduce", width === 390);
+        try {
+          await page.locator("[data-memory-profile]").waitFor();
+          expect(calls).toBe(before);
+          await page.locator("[data-profile-summarize]").click();
+          const headline = lang === "uk" ? "Ж".repeat(80) : "W".repeat(80);
+          await page.getByText(headline, { exact: true }).first().waitFor();
+          await page.screenshot({ path: path.join(out, `ready-${width}-${scheme}-${lang}.png`) });
+          const geometry = await page.evaluate(() => {
+            const profile = document.querySelector<HTMLElement>("[data-memory-profile]")!;
+            const window = document.querySelector<HTMLElement>("[data-rules-window]")!;
+            const headline = profile.querySelector<HTMLElement>("[data-profile-ready] > h3")!;
+            const summarize = profile.querySelector<HTMLElement>("[data-profile-summarize]")!;
+            const headlineRect = headline.getBoundingClientRect();
+            const card = headline.parentElement!.getBoundingClientRect();
+            const chipHeights = [...profile.querySelectorAll<HTMLElement>("[data-profile-pill]")].map(chip => Math.round(chip.getBoundingClientRect().height));
+            const summarizeRect = summarize.getBoundingClientRect();
+            const pills = [...profile.querySelectorAll<HTMLElement>("[data-profile-pill] > span")];
+            return { overflow: profile.scrollWidth - profile.clientWidth, fullWidthHeadline: Math.abs(headlineRect.left - (card.left + 17)) <= 1 && Math.abs(headlineRect.right - (card.right - 17)) <= 1, maxChipHeight: Math.max(...chipHeights), left: window.getBoundingClientRect().left, right: window.getBoundingClientRect().right,
+              headlineButtonOverlap: headlineRect.left < summarizeRect.right && headlineRect.right > summarizeRect.left && headlineRect.top < summarizeRect.bottom && headlineRect.bottom > summarizeRect.top,
+              truncatedPills: pills.filter(pill => pill.scrollWidth > pill.clientWidth).length, pills: pills.map(pill => ({ width: pill.getBoundingClientRect().width, maxWidth: getComputedStyle(pill).maxWidth })) };
+          });
+          expect(geometry.overflow).toBeLessThanOrEqual(1); expect(geometry.left).toBeGreaterThanOrEqual(0); expect(geometry.right).toBeLessThanOrEqual(width);
+          expect(geometry.headlineButtonOverlap).toBe(false);
+          expect(geometry.fullWidthHeadline).toBe(true);
+          expect(geometry.maxChipHeight).toBeLessThanOrEqual(30);
+          expect(geometry.truncatedPills).toBeGreaterThan(0);
+          readings.push({ width, scheme, lang, geometry });
+          await page.locator("[data-profile-slice] button").last().scrollIntoViewIfNeeded();
+          await page.locator("[data-profile-slice] button").last().click();
+          await page.locator("[data-rules-section]").waitFor();
+          await page.screenshot({ path: path.join(out, `rules-${width}-${scheme}-${lang}.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      for (const next of ["none", "running", "error", "stale", "empty"] as const) {
+        state = next;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1`, { width: 390, height: 844 }, "light", "uk", "reduce", true);
+        try {
+          await page.locator("[data-memory-profile]").waitFor();
+          if (next === "running") await page.getByRole("status").waitFor();
+          if (next === "error") await page.getByRole("alert").waitFor();
+          if (next === "stale") await page.locator("[data-profile-stale]").waitFor();
+          if (next === "empty") {
+            expect(await page.locator("[data-profile-summarize]").count()).toBe(0);
+            await page.getByText(translate("uk", "memoryProfile.emptyTitle"), { exact: true }).waitFor();
+          }
+          await page.screenshot({ path: path.join(out, `${next}-390-light-uk.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "geometry.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  });
+});
+
+describe("memory profile window: one top, whole rows, level order, named topic", () => {
+  browserTest("the window top and header hold across Profile and All rules, no rule row is cut, levels keep the All rules order, a topic drill names its topic", async () => {
+    const out = path.resolve(".artifacts/memory-profile-window"); fs.mkdirSync(out, { recursive: true });
+    const rules = sampleMemory();
+    /* The store lists every-project first; the page must put this project's level ahead of it. */
+    rules.scopes = [rules.scopes[1]!, rules.scopes[0]!, ...rules.scopes.slice(2)];
+    const texts = ["Inspect stored scope guidance before changing its readers, then record which readers the change reaches.", "Run each touched test file by path under isolated state; a broad sweep reaches the operator's live registry.", "Read the current scope revision before proposing a stored rewrite, since a stale write changes the record underneath the reader.", "Keep the pushed branch free of absolute home paths, account handles and tokens in docs, fixtures and messages."];
+    for (const scope of rules.scopes) scope.active.forEach((rule, index) => {
+      rule.rule = texts[(index + scope.scope.length) % texts.length]!;
+      rule.versions = [{ id: `${rule.id}-v1`, rule: texts[(index + 1) % texts.length]!, why: rule.why, hints: [], createdAt: "2026-01-01" }];
+    });
+    const rows = new Map<string, ProfileRow>();
+    const service = createProfileService({ rules: () => structuredClone(rules), read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: "haiku", prepare: async () => async (_, locale) => {
+      const answer = sampleAnswer(locale === "uk");
+      answer.topics[0]!.title = locale === "uk" ? "Ізольовані тести" : "Isolated tests";
+      return answer;
+    } });
+    type State = "none" | "ready" | "stale" | "error";
+    let state: State = "none";
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": () => Response.json(rules),
+      "/api/role-memory/profile": async (request: Request) => {
+        const locale = new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en";
+        if (request.method === "POST") {
+          const body = await request.json(); const run = service.start("garden", body.locale); await run.done; state = "ready";
+          return new Response(JSON.stringify(run.latest) + "\n", { headers: { "Content-Type": "application/x-ndjson" } });
+        }
+        const view: MemoryProfileView = service.read("garden", locale);
+        if (state === "none") { view.overall = null; view.slices.forEach(slice => { slice.summary = null; }); view.run = null; }
+        if (state === "error") view.run = { state: "failed", startedAt: "2026-01-01", errors: [{ scope: "overall", code: "account" }] };
+        if (state === "stale") { view.stale = true; view.changes = { added: 2, rewritten: 1, removed: 1 }; }
+        return Response.json(view);
+      },
+    });
+    const browser = await chromium.launch(LAUNCH); const readings: unknown[] = [];
+    const measureWindow = (page: Page) => page.evaluate(() => {
+      const box = document.querySelector<HTMLElement>("[data-rules-window]")!;
+      const header = box.querySelector<HTMLElement>("header")!;
+      return { top: Math.round(box.getBoundingClientRect().top), header: Math.round(header.getBoundingClientRect().height), bottom: Math.round(box.getBoundingClientRect().bottom), viewport: innerHeight };
+    });
+    try {
+      for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 700], [390, 844]] as const) {
+        const phone = width === 390;
+        const seen: { state: string; top: number; header: number }[] = [];
+        for (const next of ["none", "ready", "stale", "error"] as const) {
+          state = next;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1`, { width, height }, scheme, lang, "reduce", phone);
+          try {
+            await page.locator("[data-memory-profile]").waitFor();
+            if (next === "ready") { await page.locator("[data-profile-summarize]").click(); await page.locator('[data-memory-profile][aria-busy="false"]').waitFor(); }
+            if (next === "stale") await page.locator("[data-profile-stale]").waitFor();
+            if (next === "error") await page.getByRole("alert").waitFor();
+            const profile = await measureWindow(page);
+            seen.push({ state: next, top: profile.top, header: profile.header });
+            await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile-${next}.png`) });
+            if (next === "ready") {
+              const names = await page.locator("[data-profile-slice]").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-profile-slice") + ":" + node.querySelector("p, h4")!.textContent));
+              expect(names[0]).toContain(translate(lang, "memoryProfile.thisProject")); expect(names[1]).toContain(translate(lang, "memoryProfile.everyProject"));
+              expect(names.slice(2).map(name => name.split(":")[0])).toEqual(["project", "machine"]);
+              await page.locator("[data-profile-pill], [data-memory-profile] section > div button").first().scrollIntoViewIfNeeded();
+              await page.getByText(lang === "uk" ? "Ізольовані тести" : "Isolated tests", { exact: false }).first().click();
+              const heading = await page.locator("[data-rules-section] h3").first().innerText();
+              expect(heading).toBe(lang === "uk" ? "Ізольовані тести" : "Isolated tests");
+              await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-topic.png`) });
+              await page.getByRole("button", { name: new RegExp(translate(lang, "memoryProfile.back")) }).click();
+            }
+            await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
+            await page.locator("[data-rules-section]").first().waitFor();
+            const rulesPage = await measureWindow(page);
+            seen.push({ state: `${next}:rules`, top: rulesPage.top, header: rulesPage.header });
+            if (!phone) {
+              expect(rulesPage.top).toBe(profile.top); expect(rulesPage.header).toBe(profile.header);
+              await page.locator("[data-learned-rule]").first().locator("button").first().click();
+              await page.locator("[data-rule-versions] summary").first().click();
+              /* With a rule and its earlier text open, each card shows its rows whole from the top: none starts above or ends below the card's edge. */
+              const sliced = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-rules-section] > div")].flatMap(scroller => {
+                scroller.scrollTop = 0;
+                const band = scroller.getBoundingClientRect();
+                return [...scroller.querySelectorAll<HTMLElement>("[data-learned-rule]")].filter(row => { const r = row.getBoundingClientRect(); return r.top < band.top - 1 || (r.top < band.bottom && r.bottom > band.bottom + 1 && scroller.scrollHeight <= scroller.clientHeight + 1); }).map(row => row.getAttribute("data-learned-rule"));
+              }));
+              expect(sliced).toEqual([]);
+            }
+            await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-allrules-${next}.png`) });
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+        if (!phone) { expect(new Set(seen.map(item => item.top)).size).toBe(1); expect(new Set(seen.map(item => item.header)).size).toBe(1); }
+        readings.push({ width, scheme, lang, seen });
+      }
+      fs.writeFileSync(path.join(out, "geometry.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  });
+});
 
 describe("finding recurrence (#2648)", () => {
   browserTest("quiet and held state lines keep the full recurrence visible at 1440, 1000 and 390 in en and uk", async () => {
@@ -1253,7 +1501,8 @@ describe("#1695 K1+K2 kanban board", () => {
         menuHeight: menu ? Math.round(menu.getBoundingClientRect().height) : 0,
         tileWidth: tile ? Math.round(tile.getBoundingClientRect().width) : null,
       } : null,
-      hiddenCount: board.querySelector("[data-hidden-pill] .count")?.textContent ?? null,
+      /* The Overview's pill, or the count a project's bar carries for its Hidden row of ⋯. */
+      hiddenCount: board.querySelector("[data-hidden-pill] .count")?.textContent ?? board.querySelector("header.bar[data-hidden-count]")?.getAttribute("data-hidden-count") ?? null,
       cards: board.querySelectorAll(".card[data-id]").length,
       pipelineSections: board.querySelectorAll(".pblock").length,
     };
@@ -1501,9 +1750,9 @@ describe("#1695 K1+K2 kanban board", () => {
         await links.context.close();
       }
 
-      /* The views (#1695): a board stored on the scheme face opens on the Board, the desktop offers only Board and
-         Conversations, Conversations lists the project's conversations and writes the list view, and Board comes
-         back with the kanban face. Nothing stored is rewritten just by opening. */
+      /* The views (#1695, and the one-row header): a board stored on the scheme face opens on the Board, the
+         desktop offers no other view, and the project's conversations open as a list under the header's
+         recent-agents icon with the Board still mounted. Nothing stored is rewritten by opening either. */
       const faces = await openFixture(browser, `${base}?face=scheme`, VIEWPORTS[1], "light");
       try {
         await faces.page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
@@ -1513,23 +1762,21 @@ describe("#1695 K1+K2 kanban board", () => {
         /* Opening reads the stored view: no presentation is written. Membership convergence (`reconcile-roots`) runs
            on every open, whatever the view, and is recorded as it is. */
         const openedWrites = openedMutations.filter((mutation) => mutation.kind === "set-presentation").length;
-        await faces.page.click('[data-kanban-board] [data-view-tab="list"]');
-        await faces.page.waitForSelector("[data-desktop-conversations-row]", { state: "attached", timeout: 10_000 });
-        const listed = await faces.page.$$eval("[data-desktop-conversations-row]", (nodes) => nodes.length);
+        await faces.page.click("[data-kanban-board] header.bar [data-bar-recent-toggle]");
+        await faces.page.waitForSelector("[data-bar-recent-list] [data-desktop-conversations-row]", { state: "attached", timeout: 10_000 });
+        const listed = await faces.page.$$eval("[data-bar-recent-list] [data-desktop-conversations-row]", (nodes) => nodes.length);
         const conversationsTail = await faces.page.$eval("[data-desktop-conversations-tail]", (node) => node.textContent ?? "");
-        const kanbanOnList = Boolean(await faces.page.$("[data-kanban-board]"));
-        const toList = await faces.page.evaluate(() => (window as unknown as { evidence: { boardMutations: unknown[] } }).evidence.boardMutations);
+        const kanbanUnderList = Boolean(await faces.page.$("[data-kanban-board] .card[data-id]"));
+        const afterList = await faces.page.evaluate(() => (window as unknown as { evidence: { boardMutations: Array<{ kind: string }> } }).evidence.boardMutations);
         await faces.page.screenshot({ path: path.join(OUT, "production-conversations-light.png") });
-        await faces.page.click('[data-view-tab="kanban"]');
-        await faces.page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 10_000 });
-        const back = await faces.page.evaluate(() => (window as unknown as { evidence: { boardMutations: unknown[] } }).evidence.boardMutations);
-        if (JSON.stringify(tabs) !== JSON.stringify(["kanban", "list"])) failures.push(`tabs: the desktop offered ${JSON.stringify(tabs)}`);
+        await faces.page.keyboard.press("Escape");
+        await faces.page.waitForSelector("[data-bar-recent-list]", { state: "detached", timeout: 10_000 });
+        if (tabs.length) failures.push(`tabs: the desktop offered ${JSON.stringify(tabs)}`);
         if (schemeShown) failures.push("tabs: the scheme was drawn on the desktop");
         if (openedWrites !== 0) failures.push(`tabs: opening a board stored on the scheme face wrote a presentation: ${JSON.stringify(openedMutations)}`);
-        if (kanbanOnList || listed === 0) failures.push(`tabs: Conversations listed ${listed} rows with the kanban ${kanbanOnList ? "still" : "not"} mounted`);
-        if (!toList.some((mutation) => JSON.stringify(mutation) === JSON.stringify({ kind: "set-presentation", viewMode: "list" }))) failures.push(`tabs: Conversations wrote ${JSON.stringify(toList)}`);
-        if (!back.some((mutation) => JSON.stringify(mutation) === JSON.stringify({ kind: "set-presentation", desktopBoard: "kanban", viewMode: "scheme" }))) failures.push(`tabs: Board wrote ${JSON.stringify(back)}`);
-        flows.tabs = { tabs, schemeShown, openedWrites, openedMutationKinds: openedMutations.map((mutation) => mutation.kind), listed, conversationsTail, toList, back };
+        if (!kanbanUnderList || listed === 0) failures.push(`tabs: the recent agents listed ${listed} rows with the kanban ${kanbanUnderList ? "still" : "not"} mounted`);
+        if (afterList.some((mutation) => mutation.kind === "set-presentation")) failures.push(`tabs: opening the recent agents wrote ${JSON.stringify(afterList)}`);
+        flows.tabs = { tabs, schemeShown, openedWrites, openedMutationKinds: openedMutations.map((mutation) => mutation.kind), listed, conversationsTail, kanbanUnderList };
         await faces.page.screenshot({ path: path.join(OUT, "production-default-board-light.png") });
         if (faces.pageErrors.length) failures.push(`tabs: page errors ${faces.pageErrors.join(" | ")}`);
       } finally {
@@ -1543,12 +1790,10 @@ describe("#1695 K1+K2 kanban board", () => {
       try {
         const { page } = create;
         await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
-        /* Below its wide tier the bar folds + Task and + Agent into one create menu (#1855). */
+        /* The bar creates through one + with a two-row menu (#1855, and the one-row header). */
         const barCreate = async (which: "dash.newTask" | "dash.newConvo") => {
-          if (await page.locator("[data-bar-create]").count()) {
-            await page.click("[data-bar-create]");
-            await page.click(`.menu [role="menuitem"]:has-text("${translate("en", which)}")`);
-          } else await page.click(which === "dash.newTask" ? "[data-new-task]" : "[data-new-agent]");
+          await page.click("[data-bar-create]");
+          await page.click(`.menu [role="menuitem"]:has-text("${translate("en", which)}")`);
         };
         await barCreate("dash.newTask");
         await page.waitForSelector("[data-kanban-new-task] textarea", { timeout: 10_000 });
@@ -2301,7 +2546,13 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
   const columnOf = (page: Page, id: string) => page.evaluate((selector) => document.querySelector(selector)?.closest<HTMLElement>(".column")?.dataset.status ?? null, card(id));
   const receipts = (page: Page) => page.evaluate(() => [...document.querySelectorAll("[data-kanban-receipt] .msg")].map((node) => node.textContent ?? ""));
   const evidenceOf = <T,>(page: Page, read: (evidence: Evidence) => T) => page.evaluate(`(${read.toString()})(window.evidence)`) as Promise<T>;
-  const hiddenCount = (page: Page) => page.evaluate(() => document.querySelector("[data-hidden-pill]")?.getAttribute("data-count") ?? null);
+  const hiddenCount = (page: Page) => page.evaluate(() => document.querySelector("header.bar[data-hidden-count]")?.getAttribute("data-hidden-count") ?? null);
+  /* Hidden is a row of the project's ⋯, and its tray opens under ⋯. */
+  const openHiddenTray = async (page: Page) => {
+    await page.click("[data-kanban-board] header.bar [data-bar-more]");
+    await page.click("[data-bar-more-hidden]");
+    await page.waitForSelector(".hidden-tray");
+  };
 
   async function boardReady(page: Page) {
     await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
@@ -2414,14 +2665,13 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
         }, `prototype card menu ${scheme}`);
 
         await production(scheme, async (page) => {
-          await page.click("[data-hidden-pill]");
-          await page.waitForSelector(".hidden-tray");
+          await openHiddenTray(page);
           await page.waitForTimeout(350);
           const tray = await page.evaluate(() => {
             const root = document.querySelector<HTMLElement>(".hidden-tray")!;
             return {
               width: Math.round(root.getBoundingClientRect().width),
-              count: document.querySelector("[data-hidden-pill]")?.getAttribute("data-count"),
+              count: document.querySelector("header.bar[data-hidden-count]")?.getAttribute("data-hidden-count"),
               sections: [...root.querySelectorAll(".sec-label")].map((node) => node.textContent),
               groups: [...root.querySelectorAll<HTMLElement>("[data-hidden-group]")].map((row) => ({ id: row.dataset.hiddenGroup, meta: row.querySelector(".meta")?.textContent })),
               empty: [...root.querySelectorAll<HTMLElement>("[data-hidden-task]")].map((row) => row.dataset.hiddenTask),
@@ -2732,11 +2982,11 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
       }, "prototype colour flow");
 
       await production("light", async (page) => {
-        await page.click("[data-hidden-pill]");
+        await openHiddenTray(page);
         await page.click('.hidden-tray [data-hidden-group="t-verify-a"] .show');
         await page.waitForSelector(card("t-verify-a"), { state: "attached", timeout: 5_000 });
         const shown = { column: await columnOf(page, "t-verify-a"), count: await hiddenCount(page) };
-        await page.click("[data-hidden-pill]");
+        await openHiddenTray(page);
         await page.click('.hidden-tray [data-closed-conversation="/repo/old-spike.jsonl"] .show');
         await page.waitForTimeout(600);
         const restored = {
@@ -9910,8 +10160,8 @@ describe("the agent window: a click on the board opens the agent in one window, 
       head: head?.querySelector("[data-open-agents-count]")?.textContent ?? null,
       steps: head ? [...head.querySelectorAll<HTMLElement>("[data-agent-window-step]")].map((step) => ({ step: step.dataset.agentWindowStep!, fromRight: Math.round(head.getBoundingClientRect().right - step.getBoundingClientRect().right), fromTop: Math.round(step.getBoundingClientRect().top - head.getBoundingClientRect().top) })) : [],
       pill: pill ? { text: pill.textContent, box: rect(pill), focused: active === pill, ring: pill.matches(":focus-visible"), outline: getComputedStyle(pill).outlineStyle } : null,
-      /* The header's buttons beside the pill: the needs-you chip and the new-agent button. */
-      headerButtons: [rect(document.querySelector("[data-attention-count]"))?.height ?? null, rect(document.querySelector("[data-kanban-board] [data-new-agent], .kb .bar [data-new-agent]"))?.height ?? null],
+      /* The header's buttons beside the pill: the needs-you chip and the create control. */
+      headerButtons: [rect(document.querySelector("[data-attention-count]"))?.height ?? null, rect(document.querySelector(".kb .bar [data-bar-create]"))?.height ?? null],
       composer: form ? { box: rect(form), context: form.querySelector("[data-selected-context]")?.textContent ?? null } : null,
       readerRing: reader ? reader.matches(":focus-visible") : null,
       focus: active?.closest<HTMLElement>("[data-kanban-reader]")?.dataset.kanbanReader ?? active?.getAttribute("data-open-agent-jump") ?? active?.tagName ?? null,
@@ -10021,8 +10271,9 @@ describe("the agent window: a click on the board opens the agent in one window, 
               const board = await readWindow(page);
               steps["01-board"] = board;
               await shot("01-board");
-              /* The header keeps its rows at every width: the search beside the pill's slot, nothing under the toast. */
-              if (board.search?.y !== board.slot?.y) fail(`the search stands at y ${board.search?.y}, out of the pill slot's row at y ${board.slot?.y}`);
+              /* The header keeps its one row at every width: the pill's slot, which takes room only while it holds
+                 the pill, stands in the search's row, and nothing lies under the toast. */
+              if (board.slot && board.slot.height > 0 && board.search?.y !== board.slot.y) fail(`the search stands at y ${board.search?.y}, out of the pill slot's row at y ${board.slot.y}`);
               if (board.underToast.length) fail(`the attention toast lies over the header's ${JSON.stringify(board.underToast)}`);
 
               await phase(page, "open-build");
@@ -10141,10 +10392,12 @@ describe("the agent window: a click on the board opens the agent in one window, 
 
               await cdp.send("Page.stopScreencast");
               const trace = await samples(page);
-              /* Every frame against the bare board: nothing under the window moves, nothing in the header moves. */
+              /* Every frame against the bare board: nothing under the window moves, and the header stays one row:
+                 the search keeps its line and height while the pill's slot comes and goes beside it. */
               const first = trace[0]!;
               const moved = trace.filter((sample) => sample.cards !== first.cards);
-              const header = trace.filter((sample) => sample.search !== first.search || sample.slot !== first.slot);
+              const line = (box: string) => box.split(",").filter((_, index) => index % 2 === 1).join(",");
+              const header = trace.filter((sample) => line(sample.search) !== line(first.search));
               if (moved.length) fail(`${moved.length} frames moved a card (${moved[0]!.phase}: ${moved[0]!.cards} against ${first.cards})`);
               if (header.length) fail(`${header.length} frames moved the header (${header[0]!.phase}: search ${header[0]!.search}, slot ${header[0]!.slot})`);
               const zero = trace.filter((sample) => /^0\b/.test(sample.pill ?? ""));
@@ -10449,7 +10702,7 @@ describe("the agent window: a click on the board opens the agent in one window, 
       name,
       seat: seat ? { left: seat.left, top: seat.top, bottom: seat.bottom } : null,
       bar: rect(document.querySelector(".bar[data-bar=\"project\"]"))!.bottom,
-      above: (rect(document.querySelector(".kb > .reason-filter-row")) ?? rect(document.querySelector(".bar[data-bar=\"project\"]")))!.bottom,
+      above: rect(document.querySelector(".bar[data-bar=\"project\"]"))!.bottom,
       edge: kb ? parseFloat(getComputedStyle(kb).getPropertyValue("--kb-edge")) : Number.NaN,
       column: shown.length ? Math.min(...shown.map((box) => box.left)) : null,
       strip: strip ? { left: strip.left, top: strip.top, bottom: strip.bottom } : null,
@@ -17770,65 +18023,74 @@ describe("task motion and waiting reasons", () => {
             const placeholderClientWidth = input.clientWidth;
             const placeholderScrollWidth = input.scrollWidth;
             input.value = originalValue;
-            const filters = bar.closest('[data-kanban-board]')!.querySelector('[data-reason-filters]') as HTMLElement;
-            const filterRect = filters.getBoundingClientRect();
+            const filter = bar.querySelector<HTMLElement>('[data-bar-filter-toggle]')!.getBoundingClientRect();
             const chip = bar.querySelector<HTMLElement>('[data-attention-count]')!.getBoundingClientRect();
             const taskToggle = bar.querySelector<HTMLElement>('[data-task-panel-toggle]')!.getBoundingClientRect();
             const moreMenu = bar.querySelector<HTMLElement>('[data-bar-group="more"]')!.getBoundingClientRect();
             return {
-              chipLeft: chip.left, taskToggleRight: taskToggle.right, moreRight: moreMenu.right,
+              chipLeft: chip.left, chipRight: chip.right, taskToggleRight: taskToggle.right, moreRight: moreMenu.right,
               top: rect.top, bottom: rect.bottom, height: rect.height, barWidth: rect.width,
-              belowBar: !bar.contains(filters),
+              /* The reasons are a menu of the bar's one filter: no chip in the row and no row under it. */
+              chips: bar.closest('[data-kanban-board]')!.querySelectorAll('.reason-filter, .reason-filter-row').length,
               barRight: rect.right,
+              barOverflow: bar.scrollWidth - bar.clientWidth,
               documentOverflow: document.documentElement.scrollWidth > innerWidth,
               searchTop: search.top, searchBottom: search.bottom,
-              filtersTop: filterRect.top, filtersBottom: filterRect.bottom,
-              filtersRight: filterRect.right,
-              lastFilterRight: filters.lastElementChild!.getBoundingClientRect().right,
-              groupWidth: filters.parentElement!.getBoundingClientRect().width,
+              filterTop: filter.top, filterBottom: filter.bottom,
+              /* The filter is joined to the field's right end. */
+              filterGap: filter.left - search.right,
               searchWidth: search.width,
               placeholderClientWidth, placeholderScrollWidth,
-              filterCount: filters.children.length,
-              filtersClientWidth: filters.clientWidth, filtersScrollWidth: filters.scrollWidth,
             };
           });
           if (topbar) {
             expect(topbar.height).toBe(48);
             expect(topbar.searchTop).toBeGreaterThanOrEqual(Math.max(0, topbar.top));
             expect(topbar.searchBottom).toBeLessThanOrEqual(topbar.bottom);
-            expect(topbar.filtersTop).toBeGreaterThanOrEqual(topbar.top);
-            if (width === 1440) {
-              expect(topbar.searchWidth, JSON.stringify(topbar)).toBeGreaterThanOrEqual(112);
-              expect(topbar.placeholderScrollWidth, JSON.stringify(topbar)).toBeLessThanOrEqual(topbar.placeholderClientWidth);
-              expect(topbar.belowBar, JSON.stringify(topbar)).toBeFalse();
-              expect(topbar.filtersBottom).toBeLessThanOrEqual(topbar.bottom);
-            } else {
-              expect(topbar.belowBar).toBeTrue();
-              expect(topbar.filtersTop).toBeGreaterThanOrEqual(topbar.bottom);
-            }
-            // The attention chip is drawn over the bar's right reserve and must
-            // leave the task-panel toggle whole, so «13» never reads as «1», and ⋯ whole as
-            // well at every width: the chip drops its label when the full one would reach it.
+            expect(topbar.filterTop).toBeGreaterThanOrEqual(topbar.top);
+            expect(topbar.filterBottom).toBeLessThanOrEqual(topbar.bottom);
+            expect(Math.abs(topbar.filterGap), JSON.stringify(topbar)).toBeLessThanOrEqual(0.5);
+            expect(topbar.chips, JSON.stringify(topbar)).toBe(0);
+            /* The placeholder is whole at every one of these widths: the field gives way down to the width that
+               keeps it, and the bar's steps take over from there. */
+            expect(topbar.searchWidth, JSON.stringify(topbar)).toBeGreaterThanOrEqual(112);
+            expect(topbar.placeholderScrollWidth, JSON.stringify(topbar)).toBeLessThanOrEqual(topbar.placeholderClientWidth);
+            // The attention chip is the row's last item, in the flow: it starts after
+            // the task-panel toggle, so «13» never reads as «1», and after ⋯, and ends inside the bar.
             expect(topbar.chipLeft, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.taskToggleRight);
             expect(topbar.chipLeft, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.moreRight);
+            expect(topbar.chipRight, JSON.stringify(topbar)).toBeLessThanOrEqual(topbar.barRight);
+            expect(topbar.barOverflow, JSON.stringify(topbar)).toBeLessThanOrEqual(0);
             expect(topbar.documentOverflow).toBeFalse();
-            expect(topbar.filtersRight).toBeLessThanOrEqual(topbar.barRight);
-            expect(topbar.filterCount).toBe(5);
-            expect(topbar.lastFilterRight, JSON.stringify(topbar)).toBeLessThanOrEqual(topbar.filtersRight);
-            expect(topbar.filtersScrollWidth).toBeLessThanOrEqual(topbar.filtersClientWidth + 1);
             await page.locator('.bar[data-bar="project"]').screenshot({ path: path.join(out, `${width}-${locale}-topbar.png`) });
-            await page.locator("[data-reason-filters]").screenshot({ path: path.join(out, `${width}-${locale}-filters.png`) });
+            /* «Needs you» and the four other reasons the fixture shows, each a row of the menu, inside the window. */
+            await page.locator("[data-bar-filter-toggle]").click();
+            const menu = page.locator("[data-bar-filter-menu]");
+            await menu.waitFor();
+            expect(await menu.locator("[data-bar-filter-needs]").count()).toBe(1);
+            expect(await menu.locator("[data-bar-filter-reason]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-bar-filter-reason")).filter(Boolean).sort())).toEqual(["no-reason", "postponed", "queued", "waiting"]);
+            const menuBox = (await menu.boundingBox())!;
+            expect(menuBox.x).toBeGreaterThanOrEqual(0);
+            expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(width);
+            await menu.screenshot({ path: path.join(out, `${width}-${locale}-filters.png`) });
+            await page.keyboard.press("Escape");
+            await menu.waitFor({ state: "detached" });
           }
+          /* A reason is picked from the filter's menu, and picked again to let it go. */
+          const pickReason = async (reason: string) => {
+            await page.locator("[data-bar-filter-toggle]").click();
+            await page.locator(`[data-bar-filter-menu] [data-bar-filter-reason="${reason}"]`).click();
+            await page.locator("[data-bar-filter-menu]").waitFor({ state: "detached" });
+          };
           if (width === 1280 || width === 1024) {
             // These widths lock down the filter overflow finding. The existing
             // full card/phone contract below remains at its named 1440/390 faces.
             await page.screenshot({ path: path.join(out, `${width}-${locale}-progress.png`) });
             await page.locator(selector("motion-operator")).screenshot({ path: path.join(out, `${width}-${locale}-card-operator.png`) });
-            const queued = page.locator('[data-reason-filter="queued"]');
-            await queued.click();
+            await pickReason("queued");
             expect(await page.locator(selector("motion-checklist")).count()).toBe(1);
             expect(await page.locator(selector("motion-bare")).count()).toBe(0);
-            await queued.click();
+            await pickReason("queued");
             expect(await page.locator(selector("motion-bare")).count()).toBe(1);
             expect(pageErrors).toEqual([]);
             cases.push({ width, height: 844, locale, topbar, filter: "toggled", pageErrors });
@@ -17933,24 +18195,21 @@ describe("task motion and waiting reasons", () => {
             await page.waitForFunction(() => document.activeElement?.getAttribute("data-id") === "task:motion-bare");
           }
           if (!phone) {
-            const queuedFilter = page.locator('[data-reason-filter="queued"]');
-            await queuedFilter.waitFor();
-            expect(await page.locator('[data-reason-filter="no-reason"]').count()).toBe(1);
             const beforeCount = await page.locator('[data-column-no-reason]').getAttribute('data-column-no-reason');
-            await queuedFilter.click();
+            await pickReason("queued");
             const filteredCards = page.locator('[data-id^="task:"]');
             expect(await filteredCards.count()).toBeGreaterThan(0);
             const checklist = page.locator('[data-id="task:motion-checklist"]');
             expect(await checklist.locator('[data-motion="working"]').count()).toBeGreaterThan(0);
             expect(await checklist.locator('[data-task-steps]').textContent()).toContain(locale === "en" ? "1 working · 2 queued" : "1 у роботі · 2 у черзі");
             expect(await page.locator('[data-column-no-reason]').getAttribute('data-column-no-reason')).toBe(beforeCount);
-            await queuedFilter.click();
-            await page.locator('[data-reason-filter="postponed"]').click();
+            await pickReason("queued");
+            await pickReason("postponed");
             expect(await page.locator(selector("motion-due")).count()).toBe(1);
-            await page.locator('[data-reason-filter="no-reason"]').click();
+            await pickReason("no-reason");
             expect(await page.locator(selector("motion-due")).count()).toBe(0);
             expect(await page.locator(selector("motion-bare")).count()).toBe(1);
-            await page.locator('[data-reason-filter="no-reason"]').click();
+            await pickReason("no-reason");
             const stoppedSummary = page.locator('[data-status="assigned"] [data-column-stopped]');
             const bareSummary = page.locator('[data-status="blocked"] [data-column-no-reason]');
             expect(Number(await stoppedSummary.getAttribute('data-column-stopped'))).toBeGreaterThan(0);
@@ -18022,10 +18281,11 @@ describe("task motion and waiting reasons", () => {
               const bar = document.querySelector('.bar[data-bar="project"]')!.getBoundingClientRect();
               const columns = Math.min(...[...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")].map((column) => column.getBoundingClientRect()).filter((box) => box.width > 0).map((box) => box.top));
               const strip = document.querySelector(".scroll-wrap > .tabs-nav > button")?.getBoundingClientRect();
-              return { above: seat.top - (filters ?? bar).bottom, below: (strip?.top ?? columns) - seat.bottom, filtersUnderBar: Boolean(filters) };
+              return { above: seat.top - bar.bottom, below: (strip?.top ?? columns) - seat.bottom, filtersUnderBar: Boolean(filters) };
             });
             if (Math.abs(gap.above - gap.below) > 0.5) gaps.push(`${width}-${locale}: ${gap.above} px above the Orchestrator row, ${gap.below} below it`);
-            if (width < 1440 !== gap.filtersUnderBar) gaps.push(`${width}-${locale}: the reason filters ${gap.filtersUnderBar ? "stand under" : "share"} the bar`);
+            /* The bar is one row at every width: the reasons are a menu of its filter, never a row under it. */
+            if (gap.filtersUnderBar) gaps.push(`${width}-${locale}: a row of reason filters stands under the bar`);
             /* The page scrolled by 40 px: the page's top edge is the row's lower edge, so no pixel of the Orchestrator row is drawn within 8 px of a chip. */
             const scrolled = await page.evaluate(() => {
               const scroller = document.querySelector<HTMLElement>(".kb-page")!;
@@ -18187,7 +18447,7 @@ describe("task motion and waiting reasons", () => {
             const area = document.querySelector<HTMLElement>("[data-kanban-draft] textarea")?.getBoundingClientRect();
             return { areaBottom: area ? Math.round(area.bottom) : null, rowShown: Boolean(document.querySelector(".kb > .reason-filter-row")) };
           });
-          if (width < 1440 !== read.rowShown) failures.push(`${label}: the reason filters ${read.rowShown ? "stand under" : "share"} the bar`);
+          if (read.rowShown) failures.push(`${label}: a row of reason filters stands under the bar`);
           if (share === null || share <= 0.6) failures.push(`${label}: the launched agent is ${share === null ? "not drawn" : `${(share * 100).toFixed(1)}% in the window`}`);
           const limit = width === 1000 ? 898 : 876;
           if (read.areaBottom === null || read.areaBottom > limit) failures.push(`${label}: the next draft ends its prompt at ${read.areaBottom}, limit ${limit}`);
@@ -18295,13 +18555,14 @@ describe("needs-you filter: the board dims every card that does not wait on the 
           const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=needs-filter`, VIEWPORT, scheme, lang);
           try {
             await page.waitForSelector(card("t-nf-ask"), { timeout: 30_000 });
-            await page.waitForSelector("[data-attention-filter]", { timeout: 10_000 });
+            /* On a project the funnel is the «Needs you» row of the bar's one filter; the filter's icon carries its state. */
+            await page.waitForSelector("[data-bar-filter-toggle]", { timeout: 10_000 });
             await clearStage(page);
             await page.mouse.move(0, 0);
             await page.waitForTimeout(600);
             const ids = [...LIT, ...DIM];
             const before = Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await cardReading(page, card(id))] as const)));
-            const funnel = page.locator("[data-attention-filter]");
+            const funnel = page.locator("[data-bar-filter-toggle]");
             const widthOff = (await funnel.boundingBox())!.width;
             const labelOff = await funnel.getAttribute("aria-label");
             await page.screenshot({ path: path.join(SHOTS, `${label}-filter-off.png`) });
@@ -18312,7 +18573,7 @@ describe("needs-you filter: the board dims every card that does not wait on the 
             const after = Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await cardReading(page, card(id))] as const)));
             const widthOn = (await funnel.boundingBox())!.width;
             const labelOn = await funnel.getAttribute("aria-label");
-            const pressed = await funnel.getAttribute("aria-pressed");
+            const pressed = String(await funnel.getAttribute("data-bar-filter-active") !== null);
             const island = await page.evaluate(() => {
               const box = document.querySelector("[data-attention-island]")!.getBoundingClientRect();
               return { right: box.right, left: box.left, viewport: window.innerWidth };
@@ -18322,6 +18583,9 @@ describe("needs-you filter: the board dims every card that does not wait on the 
             await page.screenshot({ path: path.join(SHOTS, `${label}-filter-on.png`) });
 
             await funnel.click();
+            await page.locator("[data-bar-filter-menu] [data-bar-filter-needs]").click();
+            await page.keyboard.press("Escape");
+            await page.locator("[data-bar-filter-menu]").waitFor({ state: "detached" });
             await page.mouse.move(0, 0);
             await page.waitForTimeout(700);
             const off = Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await cardReading(page, card(id))] as const)));
@@ -18368,14 +18632,14 @@ describe("needs-you filter: the board dims every card that does not wait on the 
         expect(entry.after[id]!.filter, `${entry.label} ${id} drains its colour`).toContain("saturate(0.35)");
       }
       expect(entry.onAttr, `${entry.label} F turns the filter on`).toBe(true);
-      expect(entry.offAttr, `${entry.label} the funnel turns it off`).toBe(false);
+      expect(entry.offAttr, `${entry.label} the filter's «Needs you» row turns it off`).toBe(false);
       expect(entry.onAgainAttr, `${entry.label} the filter was on while the card was pointed at`).toBe(true);
       expect(entry.hovered.opacity, `${entry.label} a pointed-at card is restored`).toBe(1);
       expect(entry.dimmedContrast, `${entry.label} a dimmed title stays readable`).toBeGreaterThanOrEqual(4.5);
-      expect(entry.pressed, `${entry.label} the funnel shows its on state`).toBe("true");
-      expect(entry.labelOff, `${entry.label} funnel label offers the filter`).toBe(translate(locale, "attention.filterOn"));
-      expect(entry.labelOn, `${entry.label} funnel label offers the way back`).toBe(translate(locale, "attention.filterOff"));
-      expect(entry.widthOn, `${entry.label} pressed and unpressed funnels are as wide`).toBe(entry.widthOff);
+      expect(entry.pressed, `${entry.label} the filter shows its on state`).toBe("true");
+      expect(entry.labelOff, `${entry.label} the filter names itself`).toBe(translate(locale, "dash.filter"));
+      expect(entry.labelOn, `${entry.label} the filter says it is on`).toBe(translate(locale, "dash.filterOn"));
+      expect(entry.widthOn, `${entry.label} the filter is as wide on as off`).toBe(entry.widthOff);
       expect(entry.island.right, `${entry.label} the island stays inside the window`).toBeLessThanOrEqual(entry.island.viewport);
       expect(entry.island.left, `${entry.label} the island starts inside the window`).toBeGreaterThanOrEqual(0);
     }
@@ -18393,7 +18657,11 @@ describe("needs-you filter: the board dims every card that does not wait on the 
         await page.waitForSelector(card("t-nf-ask"), { timeout: 30_000 });
         await clearStage(page);
         await page.waitForTimeout(600);
-        expect(await page.locator("[data-attention-filter]").count(), "no funnel while nothing waits").toBe(0);
+        expect(await page.locator("[data-attention-filter]").count(), "no funnel beside the chip on a project").toBe(0);
+        await page.locator("[data-bar-filter-toggle]").click();
+        expect(await page.locator("[data-bar-filter-menu] [data-bar-filter-needs]").isDisabled(), "the «Needs you» row is inert while nothing waits").toBe(true);
+        await page.keyboard.press("Escape");
+        await page.locator("[data-bar-filter-menu]").waitFor({ state: "detached" });
         await pressF(page);
         await page.waitForTimeout(500);
         expect(await filterAttr(page), "F arms nothing").toBe(false);
@@ -18582,7 +18850,7 @@ describe("needs-you filter: the board dims every card that does not wait on the 
           const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=needs-filter`, { width, height: 900 }, "light", lang);
           try {
             await page.waitForSelector(card("t-nf-ask"), { timeout: 30_000 });
-            await page.waitForSelector("[data-attention-filter]", { timeout: 10_000 });
+            await page.waitForSelector("[data-bar-filter-toggle]", { timeout: 10_000 });
             await clearStage(page);
             await page.mouse.move(0, 0);
             await page.waitForTimeout(600);
@@ -18596,8 +18864,9 @@ describe("needs-you filter: the board dims every card that does not wait on the 
             const after = await read();
             const overflowOn = await overflow(page);
             const funnel = await page.evaluate(() => {
-              const box = document.querySelector("[data-attention-filter]")!.getBoundingClientRect();
-              return { left: box.left, right: box.right, width: box.width, viewport: window.innerWidth, pressed: document.querySelector("[data-attention-filter]")!.getAttribute("aria-pressed") };
+              const toggle = document.querySelector("[data-bar-filter-toggle]")!;
+              const box = toggle.getBoundingClientRect();
+              return { left: box.left, right: box.right, width: box.width, viewport: window.innerWidth, pressed: String(toggle.hasAttribute("data-bar-filter-active")) };
             });
             const folded = await page.locator(card(FOLDED)).evaluate((element) => ({
               elsewhere: Number(element.querySelector("details.history")?.getAttribute("data-elsewhere-conversations") ?? 0),
@@ -18702,9 +18971,9 @@ describe("needs-you filter: the board dims every card that does not wait on the 
       for (const id of [...LIT, ...DIM, FOLDED]) expect(sameBox(entry.before[id]!.box, entry.after[id]!.box), `${entry.label} ${id} keeps its box`).toBe(true);
       expect(entry.overflowOn, `${entry.label} the filter adds no sideways scroll`).toBe(entry.overflowOff);
       expect(entry.overflowOn, `${entry.label} the page fits its window`).toBeLessThanOrEqual(0);
-      expect(entry.funnel.pressed, `${entry.label} the funnel shows its on state`).toBe("true");
-      expect(entry.funnel.left, `${entry.label} the funnel starts inside the window`).toBeGreaterThanOrEqual(0);
-      expect(entry.funnel.right, `${entry.label} the funnel ends inside the window`).toBeLessThanOrEqual(entry.funnel.viewport);
+      expect(entry.funnel.pressed, `${entry.label} the filter shows its on state`).toBe("true");
+      expect(entry.funnel.left, `${entry.label} the filter starts inside the window`).toBeGreaterThanOrEqual(0);
+      expect(entry.funnel.right, `${entry.label} the filter ends inside the window`).toBeLessThanOrEqual(entry.funnel.viewport);
       /* The folded card holds twelve outside conversations and lists none of them. */
       expect(entry.folded?.elsewhere, `${entry.label} the folded card counts its outside conversations`).toBe(12);
       expect(entry.folded?.rows, `${entry.label} the folded card lists none`).toBe(0);
@@ -24644,10 +24913,8 @@ describe("creating a new agent: the composer alone, and the conversation after S
             } else if (view.touch) {
               await page.locator('[data-mobile2-open="menu"]').click();
               await page.locator('[data-mobile2-menu-row="new-agent"]').click();
-            } else if (await page.locator("[data-new-agent]").isVisible()) {
-              await page.locator("[data-new-agent]").click();
             } else {
-              await page.locator(`[data-bar-control][aria-label="${tr("dash.createMenu")}"]`).click();
+              await page.locator("[data-bar-create]").click();
               await page.getByRole("menuitem", { name: tr("dash.newConvo") }).click();
             }
             const draft = page.locator("[data-draft-pane]:visible").first();
@@ -28967,10 +29234,8 @@ describe("account chips with the weekly limit left: the launch chooser and the r
             if (shot.phone) {
               await page.locator('[data-mobile2-open="menu"]').click();
               await page.locator('[data-mobile2-menu-row="new-agent"]').click();
-            } else if (await page.locator("[data-new-agent]").isVisible()) {
-              await page.locator("[data-new-agent]").click();
             } else {
-              await page.locator(`[data-bar-control][aria-label="${tr("dash.createMenu")}"]`).click();
+              await page.locator("[data-bar-create]").click();
               await page.getByRole("menuitem", { name: tr("dash.newConvo") }).click();
             }
             const draft = page.locator("[data-draft-pane]:visible").first();
@@ -29587,6 +29852,107 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
       server.stop();
     }
   }, 300_000);
+});
+
+
+describe("true agent activity", () => {
+  browserTest("true activity dots open short unclipped popovers without changing the row", async () => {
+    const out = path.resolve(".artifacts/true-activity/desktop"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings = [];
+    try {
+      for (const theme of ["dark", "light"] as const) for (const width of [1440, 1000]) for (const lang of ["uk", "en"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=true-activity`, { width, height: 900 }, theme, lang, "reduce");
+        await page.locator('[data-member="/repo/activity-working.jsonl"]').waitFor({ state: "attached" });
+        const inboxTab = page.locator('[data-tab="inbox"], [data-phone-kanban-tab="inbox"]');
+        if (await inboxTab.isVisible()) await inboxTab.click();
+        for (const state of ["working", "checking", "idle"]) {
+          const tile = page.locator(`[data-member="/repo/activity-${state}.jsonl"]`);
+          if (!await tile.isVisible()) {
+            const card = page.locator(`.card`).filter({ hasText: `Activity ${state}` }).first();
+            const expand = card.locator("button.fold");
+            if (await expand.count()) await expand.click();
+          }
+          const dot = tile.locator("[data-agent-activity]");
+          await dot.waitFor(); await dot.scrollIntoViewIfNeeded();
+          /* A card scrolled into view paints a frame or two later (content-visibility); hit tests read what is painted. */
+          await page.evaluate(() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+          expect(await dot.textContent()).toBe("");
+          expect(await dot.getAttribute("data-agent-activity")).toBe(state);
+          expect(await dot.getAttribute("aria-label")).toContain(translate(lang, state === "working" ? "cardStatus.running" : state === "checking" ? "cardStatus.checking" : "cardStatus.idle"));
+          const before = await dot.evaluate(element => {
+            const box = element.getBoundingClientRect(); const parent = element.closest(".tile")!.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            const probe = (name: string) => { const swatch = document.createElement("i"); swatch.style.color = `var(${name})`; document.body.append(swatch); const colour = getComputedStyle(swatch).color; swatch.remove(); return colour; };
+            /* A hit box counts only if a pointer 11 px off the 8 px dot still lands on it. */
+            const centre = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+            const hit = [[11, 0], [-11, 0], [0, 11], [0, -11]].map(([dx, dy]) => document.elementFromPoint(centre.x + dx!, centre.y + dy!) === element);
+            return { left: box.left, right: box.right, width: box.width, height: box.height, rowHeight: parent.height, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight, colour: style.backgroundColor, ring: style.borderTopWidth === "0px" ? null : style.borderTopColor, success: probe("--color-success"), warning: probe("--color-warning"), hit };
+          });
+          /* The waiting-on-a-check dot is a hollow green ring: never the amber of «needs you». */
+          if (state === "checking") { expect(before.ring).toBe(before.success); expect(before.ring).not.toBe(before.warning); expect(before.colour).toBe("rgba(0, 0, 0, 0)"); }
+          expect(before.hit, `${state} ${theme} ${width} ${lang} hit box`).toEqual([true, true, true, true]);
+          expect(before.width).toBeGreaterThanOrEqual(6); expect(before.width).toBeLessThanOrEqual(8);
+          expect(before.height).toBe(before.width);
+          await dot.hover();
+          const popup = page.getByRole("tooltip"); await popup.waitFor();
+          const after = await popup.evaluate(element => {
+            const box = element.getBoundingClientRect();
+            return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, portalled: element.parentElement === document.body, lines: element.children.length, text: element.textContent, scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight };
+          });
+          /* Opaque, and above every card line: with pointer events on, each line's text centre resolves inside the bubble. */
+          const paint = await popup.evaluate(element => {
+            element.style.pointerEvents = "auto";
+            const covered = [...element.children].map(line => {
+              const range = document.createRange(); range.selectNodeContents(line);
+              const box = range.getBoundingClientRect();
+              const top = document.elementFromPoint(box.left + Math.min(box.width, 24) / 2, box.top + box.height / 2);
+              return top !== null && element.contains(top);
+            });
+            element.style.pointerEvents = "";
+            return { covered, background: getComputedStyle(element).backgroundColor };
+          });
+          expect(paint.background, `${state} ${theme} ${width} ${lang} bubble is opaque`).not.toBe("rgba(0, 0, 0, 0)");
+          expect(paint.covered.every(Boolean), `${state} ${theme} ${width} ${lang} no card text crosses the bubble`).toBe(true);
+          expect(after.portalled).toBe(true); expect(after.lines).toBeLessThanOrEqual(2);
+          expect(after.text!.length).toBeLessThan(90);
+          expect(after.left).toBeGreaterThanOrEqual(8); expect(after.right).toBeLessThanOrEqual(width - 8);
+          expect(after.top).toBeGreaterThanOrEqual(8); expect(after.bottom).toBeLessThanOrEqual(892);
+          expect(after.scrollWidth).toBe(before.scrollWidth); expect(after.scrollHeight).toBe(before.scrollHeight);
+          expect((await tile.boundingBox())!.height).toBe(before.rowHeight);
+          expect(await tile.textContent()).not.toContain(translate(lang, "cardStatus.checking"));
+          readings.push({ theme, width, lang, state, dot: before, popup: after });
+          await page.screenshot({ path: path.join(out, `dot-${state}-${theme}-${width}-${lang}.png`), fullPage: true });
+          await page.mouse.move(0, 0); await popup.waitFor({ state: "detached" });
+          await dot.focus(); await popup.waitFor(); await dot.press("Escape"); await popup.waitFor({ state: "detached" });
+          await dot.evaluate(element => (element as HTMLElement).blur());
+        }
+        /* The same agent opened: header word and bar speak the dot's words, never «working» for an idle agent. */
+        for (const state of ["working", "checking", "idle"] as const) {
+          /* Off the state dot, whose own tap opens the popover and never the conversation. */
+          await page.locator(`[data-member="/repo/activity-${state}.jsonl"]`).click({ position: { x: 190, y: 6 } });
+          const reader = page.locator(`[data-kanban-reader][data-reader-path="/repo/activity-${state}.jsonl"]`);
+          await reader.waitFor();
+          const head = await reader.locator(".ch-state").textContent();
+          const word = translate(lang, state === "working" ? "kanban.memberState.working" : state === "checking" ? "cardStatus.checking" : "cardStatus.idle");
+          expect(head, `${state} ${theme} ${width} ${lang} header`).toStartWith(word);
+          if (state === "idle") expect(head).toContain(translate(lang, "cardStatus.idleMinutes", { n: 14 }));
+          const bars = await reader.locator("[data-turn-status]").evaluateAll(nodes => nodes.map(node => ({ kind: node.getAttribute("data-turn-status"), text: node.textContent })));
+          expect(bars.some(bar => bar.kind === "running"), `${state} ${theme} ${width} ${lang} working bar`).toBe(state === "working");
+          if (state === "idle") expect(bars.map(bar => bar.kind)).toEqual(["idle"]);
+          if (state === "checking") expect(bars.map(bar => bar.text).join(" ")).not.toContain(translate(lang, "cardStatus.running"));
+          await page.screenshot({ path: path.join(out, `reader-${state}-${theme}-${width}-${lang}.png`), fullPage: true });
+          await page.locator("[data-open-rail-close-all]").click();
+          await page.locator("[data-agent-window]").waitFor({ state: "detached" });
+        }
+        expect(pageErrors).toEqual([]);
+        await page.screenshot({ path: path.join(out, `variant-1-${theme}-${width}-${lang}.png`), fullPage: true });
+        await context.close();
+      }
+      fs.writeFileSync(path.resolve("evidence/true-agent-activity-desktop.json"), JSON.stringify(readings, null, 2)+"\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
 });
 
 describe("the seat column and the agent window keep 60% of the conversation", () => {

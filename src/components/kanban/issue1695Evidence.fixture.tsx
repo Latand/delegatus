@@ -16,6 +16,7 @@ import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
+import { RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
@@ -465,6 +466,15 @@ function pipeline(id: string, task: string, taskId: string, state: string, stage
 
 const files: FileEntry[] = [];
 const add = (file: FileEntry) => { files.push(file); return file; };
+if (SCENARIO === "true-activity") {
+  for (const [state, age] of [["working", 20], ["checking", 300], ["idle", 840]] as const) {
+    add(conversation(`activity-${state}`, `Activity ${state}`, working({
+      mtime: now - age, activity: age > 180 ? "stalled" : "live",
+      agentActivity: { lastRecordAt: (now - age) * 1000, checking: state === "checking", check: state === "checking" ? "privacy-publication-gate-with-an-extremely-long-check-name".repeat(3) : null },
+    })));
+  }
+}
+
 
 /* t-search: implement → review (review loop) → verify → merge, with verify's fail edge back to implement. */
 const searchImpl1 = add(conversation("search-impl-1", "Keep the old index serving until the new one answers", { mtime: now - 180 * MIN }));
@@ -4117,7 +4127,7 @@ function voiceCompanionScene() {
 }
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
 const diskDensity = new URLSearchParams(location.search).get("disk-density");
-createRoot(document.getElementById("root")!).render(VOICE ? voiceCompanionScene() : diskDensity ? (
+createRoot(document.getElementById("root")!).render(SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>
