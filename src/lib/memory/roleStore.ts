@@ -146,7 +146,7 @@ export function joinMovedScopes(now = new Date().toISOString()): void {
           joined.push(kept);
           tx.put(kept);
         }
-        tx.put({ ...rule, state: "merged", reason: "duplicate", mergedInto: earlier.id, changedAt: now });
+        tx.put({ ...rule, state: "merged", reason: "duplicate", mergedInto: earlier.id, mergedAt: now, changedAt: now });
         merged.push({ from: rule.id, into: earlier.id });
       }
       const retained = retainRules(joined, now);
@@ -346,6 +346,7 @@ export function restoreRule(ruleId: string, now = new Date().toISOString()): Rol
     const restored: RoleMemoryRule = { ...rule, scope, state: "active", changedAt: now, keptByOperatorAt: now };
     delete restored.reason;
     delete restored.mergedInto;
+    delete restored.mergedAt;
     delete restored.against;
     delete restored.where;
     const next = [...current.active.flatMap((id) => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; }), restored];
@@ -392,10 +393,12 @@ function revisionView(revision: RuleRevision): RuleRevisionView {
 }
 
 /** Request answers retain task provenance even when a curator replaces revisedBy.
-    Follow current merge and split edges, so Undo also restores the task counts. */
+    Split cutoffs bound merge ancestry as well as requests, and Undo restores the edges. */
 function taskCounter(all: readonly RoleMemoryRow[], byId: ReadonlyMap<string, RoleMemoryRule>): (id: string) => number {
   const tasks = new Map<string, { key: string; at: string }[]>();
   const merged = new Map<string, string[]>();
+  const mergeTimes = new Map<string, string>();
+  const edgeKey = (from: string, into: string) => `${from}\0${into}`;
   for (const row of all) {
     if (row.kind === "request") {
       const key = row.taskId ?? `pipeline:${row.pipelineId}`;
@@ -406,8 +409,14 @@ function taskCounter(all: readonly RoleMemoryRow[], byId: ReadonlyMap<string, Ro
     } else if (row.kind === "rule" && !row.versionOf && row.mergedInto) {
       if (!merged.has(row.mergedInto)) merged.set(row.mergedInto, []);
       merged.get(row.mergedInto)!.push(row.id);
+    } else if (row.kind === "scope") {
+      for (const history of row.history) for (const edge of history.merged) {
+        const key = edgeKey(edge.from, edge.into);
+        if (!mergeTimes.has(key) || mergeTimes.get(key)! < history.at) mergeTimes.set(key, history.at);
+      }
     }
   }
+  const mergedAt = (from: string, into: string) => byId.get(from)?.mergedAt ?? mergeTimes.get(edgeKey(from, into)) ?? byId.get(from)?.changedAt ?? "";
   return (id) => {
     const seen = new Set<string>();
     const keys = new Set<string>();
@@ -421,8 +430,11 @@ function taskCounter(all: readonly RoleMemoryRow[], byId: ReadonlyMap<string, Ro
         if (!current.through || task.at <= current.through) keys.add(task.key);
       }
       const row = byId.get(current.id);
-      pending.push(...(merged.get(current.id) ?? []).map(parent => ({ id: parent, through: current.through })),
-        ...(row?.mergedFrom ?? []).map(parent => ({ id: parent, through: current.through })));
+      pending.push(...(merged.get(current.id) ?? [])
+        .filter(parent => !current.through || mergedAt(parent, current.id) <= current.through)
+        .map(parent => ({ id: parent, through: current.through })),
+        ...(row?.mergedFrom ?? []).filter(parent => !current.through || mergedAt(parent, current.id) <= current.through)
+          .map(parent => ({ id: parent, through: current.through })));
       if (row?.versionOf) pending.push({ id: row.versionOf, through: current.through });
       if (row?.splitFrom) pending.push({ id: row.splitFrom, through: !current.through || (row.splitAt && row.splitAt < current.through) ? row.splitAt : current.through });
     }

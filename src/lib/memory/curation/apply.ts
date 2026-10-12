@@ -93,7 +93,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       if (work.has(id)) refuse("CURATE_PARTITION", "restore ids must be distinct archived rules");
       const row = tx.get(`r:${id}`);
       if (row?.kind !== "rule" || row.versionOf || row.state !== "archived" || row.reason === "deleted" || !scopes.has(canonicalScope(row.scope))) refuse("CURATE_RESTORE", "restore must name an archived non-version rule in a named scope, except operator removals");
-      before.set(id, row); work.set(id, { ...row, scope: canonicalScope(row.scope), state: "active", reason: undefined, mergedInto: undefined, against: undefined, where: undefined }); touched.add(id);
+      before.set(id, row); work.set(id, { ...row, scope: canonicalScope(row.scope), state: "active", reason: undefined, mergedInto: undefined, mergedAt: undefined, against: undefined, where: undefined }); touched.add(id);
     }
     for (const item of input.rewrite ?? []) {
       const rule = get(item.id); note(item.note);
@@ -132,7 +132,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
         const from = dispose(id, true);
         if (!reaches(into.scope, from.scope)) refuse("CURATE_NARROWS", "merge must preserve the reach of every source");
         if (scopeKind(from.scope) === "role" && scopeKind(into.scope) !== "role") note(item.note);
-        work.set(id, { ...from, state: "merged", reason: "duplicate", mergedInto: item.into, note: item.note });
+        work.set(id, { ...from, state: "merged", reason: "duplicate", mergedInto: item.into, mergedAt: now, note: item.note });
       }
       work.set(item.into, { ...into, ...text(item.rule, item.why ?? into.why), note: item.note, mergedFrom: [...(into.mergedFrom ?? []), ...item.from] }); touched.add(item.into);
     }

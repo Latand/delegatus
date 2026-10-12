@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { leaveLessons, projectView, recordLessonRequest, roleScope, roleMemoryCollection, learnedRulesBlock, lessonKnownValuesFile } from "./roleStore";
 import { codePoints, ruleLine } from "./roleConsolidate";
-import { ROLE_MEMORY_BOUND } from "./roleTypes";
+import { CURATION_INTERVAL_MS, ROLE_MEMORY_BOUND } from "./roleTypes";
 import type { RuleSource } from "./roleTypes";
-import { applyCuration } from "./curation/apply";
+import { applyCuration, revertCuratorPass } from "./curation/apply";
 import { claimPass, patchPass } from "./curation/store";
 
 const PROJECT = "review-lessons";
@@ -31,8 +31,8 @@ function request(lane: string, taskId?: string, attempt = 1, at = "2026-10-12T06
   recordLessonRequest({ ...source, ...(taskId ? { taskId } : {}), at });
   return source;
 }
-function leave(source: RuleSource, rule = RULE) {
-  return leaveLessons({ request: source, source, lessons: [{ scope: "role", rule, why: WHY }], none: null }).left[0];
+function leave(source: RuleSource, rule = RULE, now?: string) {
+  return leaveLessons({ request: source, source, lessons: [{ scope: "role", rule, why: WHY }], none: null, ...(now ? { now } : {}) }).left[0];
 }
 function rewrite(source: RuleSource, id: string) {
   return leaveLessons({ request: source, source, lessons: [], rewrite: { id, rule: REVISED, why: WHY }, none: null });
@@ -84,6 +84,67 @@ test("a post-split rewrite adds recurrence only to the first part", () => {
   expect(active.find(rule => rule.id === combined.id)?.tasks).toBe(2);
   expect(active.find(rule => rule.id === language)?.tasks).toBe(1);
   expect(active.filter(rule => (rule.tasks ?? 0) >= 2)).toHaveLength(1);
+});
+
+test("a merge after a split credits only its target and Undo restores both task counts", () => {
+  const scope = roleScope(PROJECT, "builder");
+  const combined = leave(request("split-merge-source", "task-a"), "For rendered changes, check every width and language before the first review.");
+  const independent = leave(request("split-merge-independent", "task-c"), "Measure every viewport width before approving a rendered change.");
+  const splitPass = claimPass({ project: PROJECT, repoDir: root, now: Date.parse("2026-10-12T06:01:00.000Z") });
+  if (!splitPass) throw Error("split curation pass was not admitted");
+  const splitAt = "2026-10-12T06:01:00.000Z";
+  const split = applyCuration(splitPass, {
+    scopes: [{ scope, revision: builder().revision, order: [combined.id, `split:${combined.id}:1`, independent.id] }],
+    split: [{ id: combined.id, note: "Width and language checks apply independently.", parts: [
+      { to: scope, rule: "For rendered changes, check each supported width before the first review." },
+      { to: scope, rule: "For rendered changes, check each supported language before the first review." },
+    ] }],
+  }, splitAt);
+  const language = split.placeholders[`split:${combined.id}:1`]!;
+  patchPass(splitPass.id, { state: "succeeded", endedAt: splitAt });
+
+  const mergeAt = new Date(Date.parse(splitAt) + CURATION_INTERVAL_MS).toISOString();
+  const mergePass = claimPass({ project: PROJECT, repoDir: root, now: Date.parse(mergeAt) });
+  if (!mergePass) throw Error("merge curation pass was not admitted");
+  applyCuration(mergePass, {
+    scopes: [{ scope, revision: builder().revision, order: [combined.id, language] }],
+    merge: [{ into: combined.id, from: [independent.id], note: "The width rule covers the same obligation.", rule: "For rendered changes, check each width and measure it before the first review." }],
+  }, mergeAt);
+  patchPass(mergePass.id, { state: "succeeded", endedAt: mergeAt });
+
+  const candidates = builder().active.filter(rule => (rule.tasks ?? 0) >= 2);
+  expect(builder().active.find(rule => rule.id === combined.id)?.tasks).toBe(2);
+  expect(builder().active.find(rule => rule.id === language)?.tasks).toBe(1);
+  expect(candidates.map(rule => rule.id)).toEqual([combined.id]);
+
+  revertCuratorPass(mergePass.id, new Date(Date.parse(mergeAt) + 1).toISOString());
+  expect(builder().active.find(rule => rule.id === combined.id)?.tasks).toBe(1);
+  expect(builder().active.find(rule => rule.id === language)?.tasks).toBe(1);
+  expect(builder().active.filter(rule => (rule.tasks ?? 0) >= 2)).toEqual([]);
+});
+
+test("a merge that predates a split remains inherited by every split part", () => {
+  const scope = roleScope(PROJECT, "builder");
+  const originalRule = "For rendered changes, check every width and language before the first review.";
+  const source = request("pre-split-source", "task-a", 1, "2026-10-12T06:00:00.000Z");
+  const combined = leave(source, originalRule, "2026-10-12T06:00:00.000Z");
+  const repeated = request("pre-split-repeat", "task-b", 1, "2026-10-12T06:00:30.000Z");
+  const merged = leave(repeated, originalRule, "2026-10-12T06:00:30.000Z");
+  expect(merged.mergedInto).toBe(combined.id);
+
+  const splitPass = claimPass({ project: PROJECT, repoDir: root, now: Date.parse("2026-10-12T06:01:00.000Z") });
+  if (!splitPass) throw Error("split curation pass was not admitted");
+  const split = applyCuration(splitPass, {
+    scopes: [{ scope, revision: builder().revision, order: [combined.id, `split:${combined.id}:1`] }],
+    split: [{ id: combined.id, note: "Both parts retain the source evidence.", parts: [
+      { to: scope, rule: "For rendered changes, check every width before the first review." },
+      { to: scope, rule: "For rendered changes, check every language before the first review." },
+    ] }],
+  }, "2026-10-12T06:01:00.000Z");
+  patchPass(splitPass.id, { state: "succeeded", endedAt: "2026-10-12T06:01:00.000Z" });
+  const language = split.placeholders[`split:${combined.id}:1`]!;
+  expect(builder().active.find(rule => rule.id === combined.id)?.tasks).toBe(2);
+  expect(builder().active.find(rule => rule.id === language)?.tasks).toBe(2);
 });
 
 test("legacy request rows count pipelines, including repeated attempts of that pipeline", () => {

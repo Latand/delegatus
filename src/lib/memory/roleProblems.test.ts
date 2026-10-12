@@ -101,6 +101,14 @@ test("leave_lesson accepts generic runtime and framework guidance while concrete
   expect(() => parseLessons({ lesson: { scope: "role", rule: "Read config/locales.js before changing language handling.", why: "A runtime boundary needs a repeatable validation check." } }, "builder")).toThrow(/answer problem/);
 });
 
+test("capitalized component filenames are refused before the lesson request is consumed", () => {
+  const source = { project: PROJECT, pipelineId: "capitalized-file", stageId: "fix", attempt: 1, roleId: "builder", conversationId: "capitalized-file-conversation", fixRound: true };
+  recordLessonRequest({ ...source, taskId: "capitalized-file-task", at: new Date(NOW).toISOString() });
+  expect(() => parseLessons({ lesson: { scope: "role", rule: "Read PaymentForm.tsx before changing its submit handler.", why: "The specific file contains a project implementation detail." } }, "builder")).toThrow(/answer problem/);
+  expect(lessonRequest(source.pipelineId, source.stageId, source.attempt)?.ruleIds).toEqual([]);
+  expect(lessonRequest(source.pipelineId, source.stageId, source.attempt)?.none).toBeNull();
+});
+
 test("a curator problem in machine scope belongs to its author's project and disappears when restored", () => {
   const source = { project: PROJECT, pipelineId: "old-lane", stageId: "build", attempt: 1, roleId: "builder", conversationId: "old-conversation", fixRound: false };
   const id = roleMemoryCollection(true)!.boundedPatch(4, tx => {

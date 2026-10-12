@@ -74,6 +74,8 @@ export interface RoleMemoryRule {
   /** Why a rule left the injected text, including the curator's disposition. */
   reason?: RuleLeftReason;
   mergedInto?: string;
+  /** When this rule was merged; split descendants ignore merges added afterward. */
+  mergedAt?: string;
   hints: RulePrivacyHint[];
   source: RuleSource;
   createdAt: string;

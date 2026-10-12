@@ -11,9 +11,9 @@ import { lessonText, lessonTextLength, PROBLEM_MAX_CHARS, PROBLEM_EVIDENCE_MAX_C
 export function assertGenericRule(rule: string, scope: ScopeKind): void {
   const normalized = rule.normalize("NFKC");
   const file = /(?:^|[\s`"'(])((?:[A-Z]:)?[\\/]*(?:[\w.@~-]+[\\/])*[\w.@~-]+\.(?:[cm]?[jt]sx?|json|ya?ml|toml|mdx?|ftl|py|sh|sql|go|rs|css|html|xml))(?=[:\s`"'),;.!?]|$)/gu;
-  // Bare capitalized names include runtimes and frameworks such as Node.js and Next.js.
+  // Keep known runtime names generic without exempting arbitrary component files.
   const concreteFile = [...normalized.matchAll(file)].some(([, reference]) =>
-    /[\\/]/u.test(reference!) || /^[a-z0-9_.-]/u.test(reference!),
+    /[\\/]/u.test(reference!) || !/^(?:Node|Next)\.js$/u.test(reference!),
   );
   const home = /(?:\/(?:home|Users)\/|[A-Z]:\\Users\\)/iu;
   const conditional = /^(?:when|whenever|if|unless|before|after|коли|якщо|когда|если)(?=\s|$)/iu.test(normalized)
