@@ -1,3 +1,4 @@
+import { codexOperatorQuestionPolicy } from "@/lib/agent/operatorQuestionPolicy";
 import { memoryField, memoryKillText } from "./agentMemoryState";
 import type { AgentMemoryCell } from "./agentMemory";
 import { normalizeNativeQueueObservation } from "./nativeQueueContent";
@@ -202,6 +203,8 @@ export interface CodexAppServerHostOptions {
   model?: string;
   effort?: string;
   allowSubagents?: boolean;
+  /** Seats ask operator decisions through Delegatus forms. Workers keep native tools. */
+  operatorDecisionForms?: boolean;
   /** No automatic memory: no shared-memory hook and Codex's memories feature off. */
   cleanMemory?: boolean;
   developerInstructions?: string;
@@ -1452,9 +1455,14 @@ export class CodexAppServerHost implements EngineHost {
     catch (error) { options.releaseCleanup?.(); throw error; }
     let features: ReturnType<typeof readCodexFeatures>;
     let cleanupArgs: string[];
+    let questionPolicy: ReturnType<typeof codexOperatorQuestionPolicy> | undefined;
     try {
       features = options.allowSubagents === true ? [] : readCodexFeatures(binary, options.env ?? process.env);
       cleanupArgs = codexProcessCleanupArgs(options.codexHome);
+      if (options.operatorDecisionForms) {
+        questionPolicy = codexOperatorQuestionPolicy(options.codexHome);
+        cleanupArgs.push(...questionPolicy.args);
+      }
     }
     catch (error) { options.releaseCleanup?.(); throw error; }
     const subagentFeatures = codexSubagentConfig(features, options.allowSubagents === true);
@@ -1559,7 +1567,8 @@ export class CodexAppServerHost implements EngineHost {
         options.cleanMemory === true,
       );
       config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy, options.env ?? process.env);
-      const cleanup = codexProcessCleanupConfig(options.codexHome);
+      const cleanup = questionPolicy?.config ?? codexProcessCleanupConfig(options.codexHome);
+      if (questionPolicy) config.tools = questionPolicy.tools;
       Object.assign(config.features as Record<string, unknown>, cleanup.features);
       config.hooks = cleanup.hooks;
       if (memoryHook) {

@@ -116,18 +116,18 @@ test.skipIf(process.platform !== "linux")("a missing CPU mechanism is an explici
 });
 test.skipIf(process.platform !== "linux")("CPU pressure holds a gate visibly, then starts it once after the release window", async () => {
   const f = cpuFixture({ manager: true });
-  writeFileSync(join(f.root, "pressure"), "some avg10=55.00 avg60=40.00 avg300=20.00 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n");
+  writeFileSync(join(f.root, "pressure"), "some avg10=30.00 avg60=40.00 avg300=20.00 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n");
   const child = Bun.spawn(["/bin/bash", join(import.meta.dir, "gate-slot.sh"), "/bin/bash", "-c", f.script],
     { env: { ...f.env, DELEGATUS_CPU_PRESSURE: "on", LLV_GATE_PSI_RELEASE_SECONDS: "1", LLV_GATE_PSI_DEFER_SECONDS: "1" }, stdout: "ignore", stderr: "pipe" });
   await Bun.sleep(1_500);
   expect(Bun.file(f.marker).size).toBe(0);
-  writeFileSync(join(f.root, "pressure"), "some avg10=12.00 avg60=40.00 avg300=20.00 total=1\n");
+  writeFileSync(join(f.root, "pressure"), "some avg10=20.00 avg60=40.00 avg300=20.00 total=1\n");
   await Bun.sleep(1_200);
   expect(Bun.file(f.marker).size).toBe(0); // between the thresholds the hold stays
   writeFileSync(join(f.root, "pressure"), "some avg10=2.00 avg60=30.00 avg300=20.00 total=1\n");
   expect(await child.exited).toBe(0);
   const stderr = await new Response(child.stderr).text();
-  expect(stderr).toContain("gate-slot: held for CPU pressure: avg10 55.00% >= 20%; starts once it stays below 10% for 1s");
+  expect(stderr).toContain("gate-slot: held for CPU pressure: avg10 30.00% >= 30%; starts once it stays below 20% for 1s");
   expect(stderr).toContain("gate-slot: deferred by CPU pressure for 1s");
   expect(stderr).toMatch(/gate-slot: admitted after \d+s of CPU pressure/);
   expect(readFileSync(f.marker, "utf8")).toBe("run\n");
@@ -187,7 +187,7 @@ test.skipIf(process.platform !== "linux")("pressure that rises while a gate wait
   writeFileSync(pressure, "some avg10=2.00 avg60=30.00 avg300=20.00 total=1\n");
   expect(await child.exited).toBe(0);
   const stderr = await new Response(child.stderr).text();
-  expect(stderr).toContain("gate-slot: held for CPU pressure: avg10 80.00% >= 20%");
+  expect(stderr).toContain("gate-slot: held for CPU pressure: avg10 80.00% >= 30%");
   expect(stderr).toMatch(/gate-slot: admitted after \d+s of CPU pressure/);
   expect(readFileSync(f.marker, "utf8")).toBe("run\n");
 }, 20_000);

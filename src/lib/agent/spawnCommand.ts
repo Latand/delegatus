@@ -1,3 +1,4 @@
+import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { withSpawnDiagnostics, bindSpawnDiagnostics, spawnDiagnosticError } from "./spawnDiagnostics";
 import fs from "node:fs";
 import os from "node:os";
@@ -970,6 +971,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         claudeConfigDir: engine === "claude" ? launchAccount.home : null,
         claudeProjectsDir: engine === "claude" ? launchAccount.transcriptRoot : null,
         allowSubagents: body.allowSubagents === true,
+        operatorDecisionForms: transport === "tmux" && operatorDecisionFormsRequired(role.value?.role, existingAttempt?.artifactPath),
         mcpServers: grantedServers,
         deferClaudeSpawnPolicy: true,
       });
