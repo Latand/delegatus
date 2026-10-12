@@ -2399,7 +2399,7 @@ test("CPU pressure holds a fresh stage start with a visible reason and releases 
   const held = loadPipelines()[0]!;
   expect(held.cursor?.state).toBe("pending");
   expect(held.runs[0]!.attempts[0]!.spawnCalls ?? 0).toBe(0);
-  expect(held.stateDetail).toBe("stage start held for CPU pressure since 2026-10-06T12:00:00.000Z (avg10 45% ≥ 20%)");
+  expect(held.stateDetail).toBe("stage start held for CPU pressure since 2026-10-06T12:00:00.000Z (avg10 45% ≥ 30%)");
   expect(wakes).toContain(5_000);
   clock += 120_000;
   await tickPipelines([], h.ports);
@@ -14140,7 +14140,7 @@ test.each([
   expect(box.order).toEqual(["commit", "push-rejected", `push:${box.passedSha}`]);
 });
 
-test("a pass whose commit failed still retries stage work before publishing", async () => {
+test("a pass whose commit failed retries settlement without rerunning stage work before publishing", async () => {
   const h = harness();
   const box = publishHarness(h);
   const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
@@ -14155,12 +14155,13 @@ test("a pass whose commit failed still retries stage work before publishing", as
   expect(parked).toMatchObject({ state: "needs_decision", lastPassedCommit: ORIGIN_MAIN_SHA,
     cursor: { stageId: "build", state: "committing" } });
   expect(parked.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+  expect(parked.stateDetail).toContain("retry-stage");
   h.ports.exec = exec;
   expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
   await tickPipelines([], h.ports);
-  expect(h.spawnInputs).toHaveLength(2);
-  expect(box.order).toEqual([]);
-  await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
   expect(loadPipelines()[0]).toMatchObject({ publishedCommit: box.passedSha,
     cursor: { stageId: "review", state: "pending" } });
   expect(box.order).toEqual(["commit", `push:${box.passedSha}`]);

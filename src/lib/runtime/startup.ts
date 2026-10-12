@@ -1,3 +1,4 @@
+import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { learnedRulesForLaunchProfile, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
 import fs from "node:fs";
 
@@ -1728,6 +1729,7 @@ export function claudeStartupHostOptions(
   owner: ClaudeStartupOwner | null,
   capability: string | null,
   startupEnvironment: NodeJS.ProcessEnv,
+  agentRole?: string | null,
 ) {
   const access = materializeStructuredHostAccess(
     structuredHostAccessPolicy(entry.launchProfile),
@@ -1744,6 +1746,7 @@ export function claudeStartupHostOptions(
     providerAccount: Boolean(owner?.claudeProvider),
     spawnPolicyBaseSettingsPath: launchPaths?.spawnPolicyBaseSettingsPath ?? null,
     allowSubagents: entry.launchProfile?.allowSubagents ?? false,
+    operatorDecisionForms: operatorDecisionFormsRequired(agentRole, entry.artifactPath),
     cleanMemory: entry.launchProfile?.cleanMemory === true,
     appendSystemPrompt: learnedRulesForLaunchProfile(entry.launchProfile),
     mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
@@ -2114,6 +2117,7 @@ async function adoptStructuredHostsPass(
           effort: launchProfile?.effort ?? undefined,
           approvalPolicy: launchProfile?.permissionMode ?? undefined,
           allowSubagents: launchProfile?.allowSubagents ?? false,
+          operatorDecisionForms: operatorDecisionFormsRequired(conversation?.agentRole, entry.artifactPath),
           cleanMemory: launchProfile?.cleanMemory === true,
           developerInstructions: learnedRulesForLaunchProfile(launchProfile),
           mcpServers: launchProfile?.mcpServers ?? ["viewer"],
@@ -2162,6 +2166,7 @@ async function adoptStructuredHostsPass(
             resolveClaudeOwner(entry),
             registry.rotateSpawnCapabilityForPath(entry.artifactPath),
             startupEnvironment,
+            registry.conversationForPath(entry.artifactPath)?.agentRole,
           ),
           validateTelegramGrant: startupTelegramGrantCheck(registry, entry),
         };
