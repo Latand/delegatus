@@ -126,10 +126,11 @@ The 5× target is met for repeat local scans with a populated content/policy cac
 Reference comparisons were added and passed against the original implementation
 before enabling its Unicode plaintext replacement. The complete original corpus
 passes 642 tests with the workflow's Bun 1.3.3 and English/Ukrainian OCR.
-The revised corpus passes 642 tests in local-cache mode and CI mode; 537 real
-CLI invocations in each paired corpus run preserve exit codes, complete class
-counts and every file/line notice byte for byte. All 56 benchmark CLI reports
-are byte-identical too.
+The revised corpus passes 642 tests in local-cache mode and CI mode. The earlier
+537-invocation comparison is historical evidence; its per-invocation input
+manifest was not retained. The retained reproduction below compares complete
+baseline and candidate CLI reports for the historical realistic lane in local
+and CI modes, and stores sanitized per-sample aggregation inputs.
 
 The focused files run individually under isolated HOME, XDG, TMPDIR,
 `CLAUDE_CODE_TMPDIR`, `LLV_STATE_DIR` and a closed Viewer control port:
@@ -160,3 +161,65 @@ literal unions and block UTF-8 preparation did not consistently improve both
 paths on this input and were left out. The persistent negative cache gives
 repeat local scans a clear margin while preserving fresh hosted inspection.
 No detection class or publication surface was removed or narrowed.
+
+### Reproduce the CPU table and compare the real CLI
+
+`scripts/privacy-performance-repro.ts` is the retained harness. It creates
+detached worktrees for the pinned scanner revisions and the historical input
+head, then invokes `privacy-publication-gate.ts` as a child process. Its
+pre-commit case passes the input range's added, copied, modified and renamed
+paths through `--paths`. Its pre-push case passes the base and
+`--check-commits`, so files, commit messages and merge-boundary identities use
+the gate's own range logic. Both use `--require-known-values` and the two local
+hook variables. The CI comparison repeats both entry points with `CI=true`,
+which disables the optional local cache.
+
+The harness measures the enclosing gate scope's `cpu.stat` `usage_usec` around
+each real CLI process. Invoke the whole harness through `gate-slot.sh`; this
+places it under CPU admission before the first measurement. Slot admission is
+outside every sample. Each repetition owns separate baseline and candidate
+cache directories. The cold invocation is first; the following warm
+invocation reuses that candidate cache. It compares exit status and the full
+stdout plus stderr byte buffers before saving results. Raw reports, paths,
+private values and configuration contents never enter the retained output.
+The output keeps each sample's CPU and wall time, exit status, byte length and
+SHA-256 of its complete report, so readers can recompute medians and confirm
+which reports matched without publishing report contents.
+
+Create a private JSON file outside the checkout. `knownValuesFile` points to
+the same private plaintext snapshot used by the original measurement;
+`fingerprintFile` points to the committed public fingerprint catalog. Keep the
+private file mode `0600`. Use this schema, substituting the local private file
+and output paths:
+
+```json
+{
+  "repository": "<checkout containing the pinned commits>",
+  "baseline": "0846ab8fbdbcdccb60ee5d08c3989ccb87f83893",
+  "candidate": "<commit containing the optimized scanner>",
+  "inputBase": "2703f64dfca51141de9ed1b195a94c2e99f06f36",
+  "inputHead": "8fb84d9275e97c9051999ed5016678f6508629f7",
+  "knownValuesFile": "<private plaintext snapshot file>",
+  "fingerprintFile": "<checkout>/scripts/privacy-known-value-fingerprints.json",
+  "ocrLanguages": "eng+ukr",
+  "samples": 7,
+  "outputFile": "<checkout>/docs/verification/privacy-scanning-performance.samples.json"
+}
+```
+
+Run from the checkout whose Git object database contains all four pinned
+commits:
+
+```sh
+DELEGATUS_CPU_PRESSURE=off bash scripts/gate-slot.sh \
+  bun scripts/privacy-performance-repro.ts "$HOME/private/privacy-performance.json"
+```
+
+`DELEGATUS_CPU_PRESSURE=off` skips only pressure-based waiting; the shared slot
+and scoped CPU quota remain active. The output JSON is deliberately free of
+private configuration values. Review it before committing: it should contain
+28 local baseline/candidate comparisons (56 full reports total) and two CI
+comparisons, each marked byte-identical. Its seven rows per entry point and
+cache state are the complete inputs to the median and reduction calculations.
+The private snapshot is required to reproduce the exact historical measurement;
+the public catalog and commit inputs remain pinned in the manifest above.

@@ -1,11 +1,61 @@
 import { expect, spyOn, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { fingerprintNegativeCache } from "./privacy-fingerprint-cache";
 
 const cacheTest = process.platform === "linux" ? test : test.skip;
+
+async function boundedReader(source: string, mode: "seal" | "slot"): Promise<{ exitCode: number; timedOut: boolean }> {
+  const cacheDir = process.env.LLV_PRIVACY_FINGERPRINT_CACHE_DIR!;
+  const modulePath = new URL("./privacy-fingerprint-cache.ts", import.meta.url).pathname;
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { fingerprintNegativeCache } = await import(${JSON.stringify(modulePath)});
+    const cache = fingerprintNegativeCache(process.argv[1]);
+    if (!cache) process.exit(2);
+    if (process.argv[2] === "slot") cache.has("${"a".repeat(64)}");
+  `, source, mode], { cwd: import.meta.dir, env: { ...process.env, LLV_PRIVACY_FINGERPRINT_CACHE_DIR: cacheDir }, stdout: "ignore", stderr: "ignore" });
+  const result = await Promise.race([
+    child.exited.then((exitCode) => ({ exitCode, timedOut: false })),
+    new Promise<{ exitCode: number; timedOut: boolean }>((resolve) => setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve({ exitCode: -1, timedOut: true });
+    }, 1500)),
+  ]);
+  if (result.timedOut) await child.exited;
+  return result;
+}
+
+function makeFifo(path: string): void {
+  if (Bun.spawnSync(["mkfifo", "-m", "600", path]).exitCode !== 0) {
+    throw new Error("could not create synthetic cache FIFO");
+  }
+}
+
+async function runGateCli(repository: string, cacheDirectory: string | undefined, ci: boolean) {
+  const env: Record<string, string> = { ...process.env as Record<string, string>,
+    LLV_PRIVACY_KNOWN_VALUES: "",
+    LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: join(import.meta.dir, "privacy-known-value-fingerprints.json"),
+    LLV_PRIVACY_OCR_LANGUAGES: "eng+ukr",
+  };
+  if (cacheDirectory) env.LLV_PRIVACY_FINGERPRINT_CACHE_DIR = cacheDirectory;
+  else delete env.LLV_PRIVACY_FINGERPRINT_CACHE_DIR;
+  if (ci) env.CI = "true"; else delete env.CI;
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, "privacy-publication-gate.ts"),
+    "--repository", repository, "--require-known-values", "--paths", "note.txt"],
+  { cwd: import.meta.dir, env, stdout: "pipe", stderr: "pipe" });
+  const result = await Promise.race([
+    Promise.all([child.exited, new Response(child.stdout).arrayBuffer(), new Response(child.stderr).arrayBuffer()])
+      .then(([exitCode, stdout, stderr]) => ({ exitCode, report: Buffer.concat([Buffer.from(stdout), Buffer.from(stderr)]), timedOut: false })),
+    new Promise<{ exitCode: number; report: Buffer; timedOut: boolean }>((resolve) => setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve({ exitCode: -1, report: Buffer.alloc(0), timedOut: true });
+    }, 2500)),
+  ]);
+  if (result.timedOut) await child.exited;
+  return result;
+}
 
 function fixture(run: (root: string, source: string) => void) {
   const root = mkdtempSync(join(tmpdir(), "privacy-fingerprint-cache-"));
@@ -123,3 +173,76 @@ cacheTest("an existing reader refuses a store whose permissions or seal changed"
   writeFileSync(join(directory, "seal"), Buffer.alloc(32));
   expect(cache.has(key)).toBe(false);
 }));
+
+cacheTest("a FIFO seal falls back promptly and remains untouched", async () => {
+  const root = mkdtempSync(join(tmpdir(), "privacy-fingerprint-cache-fifo-seal-"));
+  const source = join(root, "scanner.ts");
+  const cache = join(root, "cache");
+  const previousDirectory = process.env.LLV_PRIVACY_FINGERPRINT_CACHE_DIR;
+  const previousCi = process.env.CI;
+  writeFileSync(source, "synthetic scanner");
+  delete process.env.CI;
+  process.env.LLV_PRIVACY_FINGERPRINT_CACHE_DIR = cache;
+  try {
+    mkdirSync(cache, { mode: 0o700 });
+    makeFifo(join(cache, "seal"));
+    expect(await boundedReader(source, "seal")).toEqual({ exitCode: 2, timedOut: false });
+    expect(lstatSync(join(cache, "seal")).isFIFO()).toBe(true);
+  } finally {
+    if (previousDirectory === undefined) delete process.env.LLV_PRIVACY_FINGERPRINT_CACHE_DIR;
+    else process.env.LLV_PRIVACY_FINGERPRINT_CACHE_DIR = previousDirectory;
+    if (previousCi === undefined) delete process.env.CI; else process.env.CI = previousCi;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+cacheTest("a FIFO slot misses promptly and remains untouched", async () => {
+  const root = mkdtempSync(join(tmpdir(), "privacy-fingerprint-cache-fifo-slot-"));
+  const source = join(root, "scanner.ts");
+  const cache = join(root, "cache");
+  const previousDirectory = process.env.LLV_PRIVACY_FINGERPRINT_CACHE_DIR;
+  const previousCi = process.env.CI;
+  writeFileSync(source, "synthetic scanner");
+  delete process.env.CI;
+  process.env.LLV_PRIVACY_FINGERPRINT_CACHE_DIR = cache;
+  try {
+    const writer = fingerprintNegativeCache(source)!;
+    const slot = join(cache, `slot-${Number.parseInt("aaaa", 16) % 1024}`);
+    makeFifo(slot);
+    expect(await boundedReader(source, "slot")).toEqual({ exitCode: 0, timedOut: false });
+    expect(lstatSync(slot).isFIFO()).toBe(true);
+    expect(writer.has("a".repeat(64))).toBe(false);
+  } finally {
+    if (previousDirectory === undefined) delete process.env.LLV_PRIVACY_FINGERPRINT_CACHE_DIR;
+    else process.env.LLV_PRIVACY_FINGERPRINT_CACHE_DIR = previousDirectory;
+    if (previousCi === undefined) delete process.env.CI; else process.env.CI = previousCi;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+cacheTest("a FIFO seal preserves the real CLI verdict and full report", async () => {
+  const root = mkdtempSync(join(tmpdir(), "privacy-fingerprint-cli-fifo-"));
+  const cache = join(root, "cache");
+  const repository = join(root, "repository");
+  const previousDirectory = process.env.LLV_PRIVACY_FINGERPRINT_CACHE_DIR;
+  const previousCi = process.env.CI;
+  mkdirSync(repository, { mode: 0o700 });
+  writeFileSync(join(repository, "note.txt"), "Synthetic safe publication note.\n");
+  try {
+    mkdirSync(cache, { mode: 0o700 });
+    makeFifo(join(cache, "seal"));
+    const uncached = await runGateCli(repository, undefined, true);
+    const invalidCache = await runGateCli(repository, cache, false);
+    expect(uncached.timedOut).toBe(false);
+    expect(invalidCache.timedOut).toBe(false);
+    expect(invalidCache.exitCode).toBe(uncached.exitCode);
+    expect(invalidCache.report.equals(uncached.report)).toBe(true);
+    expect(invalidCache.report.toString("utf8")).toBe("PRIVACY GATE: PASS\n");
+    expect(lstatSync(join(cache, "seal")).isFIFO()).toBe(true);
+  } finally {
+    if (previousDirectory === undefined) delete process.env.LLV_PRIVACY_FINGERPRINT_CACHE_DIR;
+    else process.env.LLV_PRIVACY_FINGERPRINT_CACHE_DIR = previousDirectory;
+    if (previousCi === undefined) delete process.env.CI; else process.env.CI = previousCi;
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -21,7 +21,9 @@ function safeAncestors(path: string): boolean {
 }
 
 function privateFile(path: string, limit: number): Buffer {
-  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  // A FIFO must not hold publication while we wait for a writer. Opening it
+  // nonblocking still lets fstat validate the opened inode before reading.
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = fstatSync(descriptor);
     if (!stat.isFile() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0 || stat.size > limit) {
