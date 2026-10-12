@@ -5788,8 +5788,25 @@ export class AgentRegistry {
          corrupted profile are both overridden here, so restart adoption and
          resume successors re-derive their launch flags from a denying profile. */
       if (isSpawnDeniedRole(existingConversation?.agentRole)) profile.allowSubagents = false;
-      /* A clean role reads no automatic memory, whoever launched it. */
-      if (roleIsClean(existingConversation?.agentRole ?? role)) profile.cleanMemory = true;
+      const memoryRole = existingConversation?.agentRole ?? role;
+      const designatedSeatMembership = (file.memberships[existingConversation?.id ?? ""] ?? []).find((row) => row.kind === "orchestrator"
+        && row.role === memoryRole) ?? null;
+      const memoryProject = designatedSeatMembership?.containerId
+        ?? explicitProject ?? existingConversation?.projectOwnership?.project ?? profile.project;
+      if (designatedSeatMembership && memoryProject
+        && (memoryRole === "orchestrator" || memoryRole === "maintainer")) {
+        /* Designation is an explicit role transition. A conversation adopted
+           from a stage must shed that stage's selector and clean-memory flag.
+           The role label alone is insufficient: pipeline stages may use the
+           orchestrator role while retaining their clean-memory fence. */
+        profile.cleanMemory = false;
+        profile.learnedRules = { project: memoryProject, roleId: memoryRole };
+      } else if (roleIsClean(memoryRole)) {
+        profile.cleanMemory = true;
+      } else if ((memoryRole === "orchestrator" || memoryRole === "maintainer")
+        && !profile.cleanMemory && !profile.learnedRules && memoryProject) {
+        profile.learnedRules = { project: memoryProject, roleId: memoryRole };
+      }
       /* A delegated conversation never acquires a plugin grant (#687): a role
          preset or a lineage parent denies it on resume, successor and restart
          adoption alike, whatever a stored or requested profile claims. */

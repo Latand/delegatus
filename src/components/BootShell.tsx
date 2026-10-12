@@ -177,7 +177,7 @@ function DeskShell() {
       {/* A hidden rail leaves its 34 px restore control. */}
       <main className="flex min-w-0 flex-1 flex-col">
         <div data-boot-project-only="" className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-card px-4">
-          <h1 data-boot-title="" className="min-w-12 max-w-[220px] truncate text-[13.5px] font-bold" />
+          <h1 data-boot-title="" className="min-w-12 truncate text-[13.5px] font-bold" />
           <span data-boot-title-bar="" aria-hidden className={`h-3 w-24 ${TITLE_SKELETON_BAR}`} />
         </div>
         <div data-boot-overview-only="" className="flex h-10 shrink-0 items-center gap-2.5 border-b border-border bg-card px-4">

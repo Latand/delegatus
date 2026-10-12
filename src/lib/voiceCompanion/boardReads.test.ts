@@ -28,7 +28,7 @@ test("active credentials are masked before a speech projection can cut their fra
   const pieces = key.match(/.{1,6}/g)!.join(" ");
   const reads = new CompanionBoardReads({ call: async () => ({ total: 1, tasks: [{ id: "task-a", text: `Safe task ${pieces} ready`, status: "inbox" }] }),
     projectFor: async () => "fixture", resolveProject: () => "fixture", recipient: () => null,
-    review: () => { throw new Error("unused"); }, frame: async () => { throw new Error("unused"); } });
+    prototypeTasks: () => [], review: () => { throw new Error("unused"); }, frame: async () => { throw new Error("unused"); } });
   const result = await reads.read("fixture", "list_tasks", reads.normalize("fixture", "list_tasks", { openOnly: true }), [key]);
   expect(result).toMatchObject({ total: 1, shown: 1, rows: [{ title: "Safe task [redacted] ready", state: "inbox" }] });
   expect(result.speech).toBe("1 tasks. Safe task [redacted] ready: inbox");

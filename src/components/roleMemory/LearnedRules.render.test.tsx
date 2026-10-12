@@ -8,7 +8,7 @@ import { installActEnv } from "@/test-helpers/actEnv";
 import { setLocale } from "@/lib/i18n";
 import type { RuleView, ScopeView } from "@/lib/memory/roleTypes";
 
-import { RuleSection } from "./LearnedRules";
+import { RuleSection, RulesWindow } from "./LearnedRules";
 
 /* The operator asked for little text in the rules window, so a scope's size
    against its bound is shown only once the scope nears it. */
@@ -93,6 +93,40 @@ test("the provenance line shows recurring tasks in both shipped languages", asyn
   } finally {
     await act(() => root.unmount());
     setLocale("en");
+    for (const [key, value] of prior) if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key);
+    await dom.happyDOM.close();
+  }
+});
+
+
+test("orchestrator and maintainer rules have named tabs and rows in both languages", async () => {
+  const dom = new Window();
+  dom.HTMLElement.prototype.scrollIntoView = () => {};
+  const globals = { window: dom, document: dom.document, navigator: dom.navigator, HTMLElement: dom.HTMLElement };
+  const prior = new Map(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  Object.assign(globalThis, globals);
+  installActEnv();
+  const oldFetch = globalThis.fetch;
+  const roles = ["orchestrator", "maintainer"];
+  const view = { project: "seat-window", enabled: true, scopes: roles.map(roleId => ({ ...scope(100), scope: `role:seat-window:${roleId}`, kind: "role", roleId, active: [{ id: roleId, rule: `Inspect settled evidence before the ${roleId} reports progress.`, why: "A report missed a completion proof.", state: "active", hints: [], roleId: "orchestrator", fixRound: false, stageId: "seat", fresh: false, createdAt: "today", changedAt: "today" }] })) };
+  globalThis.fetch = (async () => Response.json(view)) as unknown as typeof fetch;
+  const host = dom.document.createElement("div"); dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  try {
+    for (const locale of ["en", "uk"] as const) {
+      await act(() => setLocale(locale));
+      await act(async () => { root.render(<RulesWindow project="seat-window" onClose={() => {}} />); await new Promise(resolve => setTimeout(resolve, 0)); });
+      const names = locale === "en" ? ["Orchestrator", "Maintainer"] : ["Оркестратор", "Доглядач дошки"];
+      for (const [index, role] of roles.entries()) {
+        const tab = dom.document.querySelector(`[data-rules-role="${role}"]`)!;
+        expect(tab.textContent).toContain(names[index]!);
+        await act(() => (tab as unknown as HTMLElement).click());
+        expect(dom.document.querySelector(`[data-learned-rule="${role}"]`)?.textContent).toContain(`the ${role} reports progress`);
+      }
+    }
+  } finally {
+    await act(() => root.unmount());
+    globalThis.fetch = oldFetch; setLocale("en");
     for (const [key, value] of prior) if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key);
     await dom.happyDOM.close();
   }
