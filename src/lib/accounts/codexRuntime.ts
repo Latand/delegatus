@@ -36,6 +36,7 @@ export interface ManagedLoginSnapshot {
 
 export interface ManagedCodexRuntimeOptions {
   startClient?: (home: string) => Promise<CodexAppServerClient>;
+  observeSignedIn?: (accountId: string) => Promise<void>;
   now?: () => number;
   stateFile?: string;
 }
@@ -83,6 +84,7 @@ interface ActiveAttempt extends PersistedAttempt {
   verificationUrl: string | null;
   userCode: string | null;
   startPromise: Promise<ManagedLoginAttempt>;
+  observingSignedIn?: boolean;
 }
 
 function canonicalHome(home: string): string {
@@ -152,10 +154,15 @@ export class ManagedCodexRuntime {
   private recordRetryAttempt = 0;
   private readonly startClient: (home: string) => Promise<CodexAppServerClient>;
   private readonly now: () => number;
+  private readonly observeSignedIn: (accountId: string) => Promise<void>;
   private readonly stateFile: string;
 
   constructor(options: ManagedCodexRuntimeOptions = {}) {
     this.startClient = options.startClient ?? ((home) => CodexAppServerClient.start({ home }));
+    this.observeSignedIn = options.observeSignedIn ?? (async (accountId) => {
+      const { refreshAccountLimits } = await import("@/lib/accounts/liveLimits");
+      await refreshAccountLimits("codex", accountId, { phase: "login-complete" });
+    });
     this.now = options.now ?? (() => Date.now());
     this.stateFile = options.stateFile ?? statePath("codex-login-attempts.json");
     this.records = readStoredAttempts(this.stateFile);
@@ -220,7 +227,11 @@ export class ManagedCodexRuntime {
       });
       client.onNotification((notification) => {
         if (notification.method !== "account/login/completed" || !isCompletion(notification.params, attempt.loginId)) return;
-        this.settle(attempt, notification.params.success ? "completed" : "failed", notification.params.success ? null : "login-unsuccessful", true);
+        if (!notification.params.success) this.settle(attempt, "failed", "login-unsuccessful", true);
+        else if (this.owns(attempt) && !attempt.observingSignedIn) {
+          attempt.observingSignedIn = true;
+          void this.completeSignedIn(attempt);
+        }
       });
       const challenge = await client.startDeviceLogin();
       if (!this.owns(attempt)) {
@@ -235,6 +246,12 @@ export class ManagedCodexRuntime {
       this.settle(attempt, "failed", "start-failed", true);
       throw error;
     }
+  }
+
+  private async completeSignedIn(attempt: ActiveAttempt): Promise<void> {
+    try { await this.observeSignedIn(attempt.accountId); }
+    catch { console.warn("Codex login completed, but its account observation failed"); }
+    if (this.owns(attempt)) this.settle(attempt, "completed", null, true);
   }
 
   async cancelLogin(accountId: string): Promise<boolean> {
@@ -299,6 +316,7 @@ export class ManagedCodexRuntime {
 
   private commitLoginSnapshot(home: string, active: ActiveAttempt | undefined, stored: PersistedAttempt | undefined,
     read: { value: AppServerAccountRead | null; failed: boolean }): ManagedLoginSnapshot {
+    if (active?.observingSignedIn) return { state: "pending", attemptState: "pending", deviceAuth: null };
     try {
       if (read.failed || !read.value) throw new Error("account read failed");
       if (isSupportedChatGptAccount(read.value)) {

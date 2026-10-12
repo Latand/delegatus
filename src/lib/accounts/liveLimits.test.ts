@@ -1,0 +1,72 @@
+import { afterAll, expect, spyOn, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "login-limits-"));
+const previousState = process.env.LLV_STATE_DIR;
+process.env.LLV_STATE_DIR = path.join(root, "state");
+const { createManagedClaudeAccount } = await import("./claude");
+const { agentRegistry } = await import("@/lib/agent/registry");
+const { refreshAccountLimits } = await import("./liveLimits");
+const { readClaudeAccountLimits, cachedLimitsProvenance } = await import("@/lib/limits");
+const { QuotaController, claudeQuotaObservation, durableQuotaObservation } = await import("./migration/quotaController");
+const { realClaudeLoginPorts } = await import("./claudeLogin");
+const { accountProjection } = await import("./accountProjection");
+type QuotaProbePort = import("./migration/quotaController").QuotaProbePort;
+
+afterAll(() => {
+  if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = previousState;
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("login-complete bypasses a cached pre-login failure and the next controller tick keeps live auth", async () => {
+  const account = createManagedClaudeAccount("Account B");
+  const registry = agentRegistry();
+  let now = Date.now();
+  registry.recordQuotaObservation(durableQuotaObservation({ engine: "claude", accountId: account.id,
+    authenticated: false, authCheckedAt: now, observedAt: now, limits: null,
+    provenance: { source: "unavailable", reason: "fixture signed out", staleSince: null },
+  }, "fixture-before"));
+  expect(accountProjection(registry.quotaObservations("claude")[0], true, now).auth.state).toBe("error");
+  // The real shared cache records missing credentials with a future retryAt.
+  expect((await readClaudeAccountLimits(account, { now: () => now })).data).toBeNull();
+  expect(Date.parse(cachedLimitsProvenance("claude", account.id)!.retryAt!)).toBeGreaterThan(now);
+  fs.writeFileSync(path.join(account.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
+    accessToken: ["fixture", "oauth"].join("-"), subscriptionType: "max",
+  } }), { mode: 0o600 });
+  let reads = 0;
+  const fetch = spyOn(globalThis, "fetch").mockImplementation((async () => {
+    reads += 1;
+    return new Response(JSON.stringify({ five_hour: { utilization: 7 }, seven_day: { utilization: 31 } }));
+  }) as typeof globalThis.fetch);
+  const status = spyOn(realClaudeLoginPorts, "status").mockResolvedValue({ loggedIn: true, method: null, email: null, plan: "max" });
+  const probe: QuotaProbePort = {
+    list: () => [account], active: () => account.id, credentialIdentity: () => "fixture-credential",
+    probe: async (_engine, candidate, at, options) => claudeQuotaObservation(candidate as typeof account, at,
+      { ...options, authStatus: async () => ({ loggedIn: true }) }),
+  };
+  try {
+    expect((await readClaudeAccountLimits(account, { now: () => now })).data).toBeNull();
+    expect(reads).toBe(0);
+    await realClaudeLoginPorts.observeSignedIn(account.id);
+    now = Date.now();
+    expect(reads).toBe(1);
+    expect(accountProjection(registry.quotaObservations("claude")[0], true, now)).toMatchObject({
+      auth: { state: "authenticated", plan: "max" }, limits: { state: "fresh", weekly: { usedPercent: 31 } },
+    });
+    now += 1_000;
+    await new QuotaController(registry, probe, "fixture-after", () => now).tick("claude");
+    expect(reads).toBe(1);
+    expect(accountProjection(registry.quotaObservations("claude")[0], true, now).auth.state).toBe("authenticated");
+  } finally { fetch.mockRestore(); status.mockRestore(); }
+});
+
+test("a login-complete probe timeout is bounded and reports its failed read", async () => {
+  const account = createManagedClaudeAccount("Timeout account");
+  const result = await refreshAccountLimits("claude", account.id, { phase: "login-complete", timeoutMs: 5,
+    probe: { list: () => [account], active: () => account.id, probe: () => new Promise(() => {}) },
+  });
+  expect(result).toEqual({ kind: "probe_failed", detail: "quota-probe-timeout" });
+});

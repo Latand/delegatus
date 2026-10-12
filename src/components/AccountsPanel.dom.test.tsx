@@ -862,3 +862,35 @@ test("a hidden Main is shown again from account setup after the summary is close
   expect(view.host.querySelector('[data-account-remove="default"]')).not.toBeNull();
   expect(view.host.querySelector("[data-account-hidden-offer]")).toBeNull();
 });
+
+
+test("a watched retry clears an old login error and shows live limits without a manual refresh", async () => {
+  let phase = "failed";
+  const store = createEngineAccountsStore("claude", { fetcher: async () => new Response(JSON.stringify({ claude: {
+    active: "default", accounts: [{ id: "default", label: "Main", kind: "legacy", authPresent: true,
+      auth: { state: phase === "authenticated" ? "authenticated" : "error", plan: phase === "authenticated" ? "max" : null },
+      loginPending: phase === "verifying", loginState: phase === "authenticated" ? "authenticated" : "pending",
+      login: { operationId: phase === "failed" ? "old-attempt" : "retry-attempt", phase, acceptsCode: false, loginUrl: null, deadlineAt: "2026-10-12T12:00:00Z",
+        result: phase === "failed" ? { status: "failure", code: "verification_failed", message: "fixture failed" } : null },
+      limits: phase === "authenticated" ? { state: "fresh", session: { usedPercent: 7 }, weekly: { usedPercent: 31 } } : null,
+    }],
+  } })) });
+  const unsubscribe = store.subscribe(() => {});
+  try {
+    await store.refresh();
+    phase = "verifying";
+    await store.refresh();
+    const view = await mount(store);
+    mounted.push(view);
+    expect(view.host.textContent).toContain("Auth error");
+    phase = "authenticated";
+    await store.refresh();
+    await view.rerender(store);
+    const row = view.host.querySelector('[data-account-row="default"]')!;
+    expect(row.textContent).toContain("Authenticated");
+    expect(row.querySelectorAll("[data-limit-row]").length).toBe(2);
+    expect(row.querySelector('[role="alert"]')).toBeNull();
+    expect([...row.querySelectorAll("button")].some((button) => button.textContent?.trim() === "Retry")).toBe(false);
+    expect(store.limitsVersion).toBe(1);
+  } finally { unsubscribe(); }
+});
