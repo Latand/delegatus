@@ -32,7 +32,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1791832470495,
+        "callStart": 1791836730758,
         "chromeLine": 725,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -52,6 +52,7 @@
         "headOverSheetTextPx2": 0,
         "headOverSheetControlsPx2": 0,
         "headOverFooterPx2": 0,
+        "sheetBody": null,
         "inViewport": true,
         "wordsCut": false,
         "words": "Ось уся картина релізу. Від ранку злито",
@@ -108,7 +109,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1791832470495,
+        "callStart": 1791836730758,
         "chromeLine": 725,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -123,6 +124,7 @@
         "headOverSheetTextPx2": 0,
         "headOverSheetControlsPx2": 0,
         "headOverFooterPx2": 0,
+        "sheetBody": null,
         "inViewport": true,
         "wordsCut": false,
         "words": null,
@@ -208,7 +210,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": "open",
-        "callStart": 1791832470495,
+        "callStart": 1791836730758,
         "chromeLine": 725,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -228,6 +230,12 @@
         "headOverSheetTextPx2": 0,
         "headOverSheetControlsPx2": 0,
         "headOverFooterPx2": 0,
+        "sheetBody": {
+          "atEnd": true,
+          "bottom": 838,
+          "lastBottom": null,
+          "padding": 4
+        },
         "inViewport": true,
         "wordsCut": false,
         "words": "чотири смуги: банер повтору, адаптер",
@@ -289,7 +297,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": "full",
-        "callStart": 1791832470495,
+        "callStart": 1791836730758,
         "chromeLine": 725,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -304,6 +312,94 @@
         "headOverSheetTextPx2": 412,
         "headOverSheetControlsPx2": 0,
         "headOverFooterPx2": 0,
+        "sheetBody": {
+          "atEnd": false,
+          "bottom": 784,
+          "lastBottom": 807.5,
+          "padding": 60
+        },
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": 0,
+        "feedAtEnd": true,
+        "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 725,
+          "padding": 12,
+          "lastBottom": 664
+        },
+        "stored": null,
+        "record": {
+          "starts": [
+            "atlas"
+          ],
+          "projects": [
+            "atlas"
+          ],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "call",
+      "combo": "390x844-uk-light",
+      "scene": "full-sheet-end",
+      "reading": {
+        "head": {
+          "x": 330,
+          "y": 724,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": {
+          "x": 0,
+          "y": 0,
+          "width": 390,
+          "height": 844
+        },
+        "footer": {
+          "x": 0,
+          "y": 784,
+          "width": 390,
+          "height": 54
+        },
+        "phase": "speaking",
+        "side": "right",
+        "sheetState": "full",
+        "callStart": 1791836730758,
+        "chromeLine": 725,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 1560,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 2704,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "sheetBody": {
+          "atEnd": true,
+          "bottom": 784,
+          "lastBottom": 713.5,
+          "padding": 60
+        },
         "inViewport": true,
         "wordsCut": false,
         "words": null,
@@ -365,6 +461,7 @@
         "headOverSheetTextPx2": 0,
         "headOverSheetControlsPx2": 0,
         "headOverFooterPx2": 0,
+        "sheetBody": null,
         "inViewport": true,
         "wordsCut": false,
         "words": null,
@@ -418,7 +515,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1791832509946,
+        "callStart": 1791836748861,
         "chromeLine": 548,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -438,6 +535,7 @@
         "headOverSheetTextPx2": 0,
         "headOverSheetControlsPx2": 0,
         "headOverFooterPx2": 0,
+        "sheetBody": null,
         "inViewport": true,
         "wordsCut": false,
         "words": "Here's the whole picture of the release. Four",
@@ -494,7 +592,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": null,
-        "callStart": 1791832509946,
+        "callStart": 1791836748861,
         "chromeLine": 548,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -509,6 +607,7 @@
         "headOverSheetTextPx2": 0,
         "headOverSheetControlsPx2": 0,
         "headOverFooterPx2": 0,
+        "sheetBody": null,
         "inViewport": true,
         "wordsCut": false,
         "words": null,
@@ -594,7 +693,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": "open",
-        "callStart": 1791832509946,
+        "callStart": 1791836748861,
         "chromeLine": 548,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -614,6 +713,12 @@
         "headOverSheetTextPx2": 0,
         "headOverSheetControlsPx2": 0,
         "headOverFooterPx2": 0,
+        "sheetBody": {
+          "atEnd": true,
+          "bottom": 661,
+          "lastBottom": null,
+          "padding": 4
+        },
         "inViewport": true,
         "wordsCut": false,
         "words": "lanes merged since this morning: the retry",
@@ -675,7 +780,7 @@
         "phase": "speaking",
         "side": "right",
         "sheetState": "full",
-        "callStart": 1791832509946,
+        "callStart": 1791836748861,
         "chromeLine": 548,
         "textUnderHeadPx2": 0,
         "textUnderWordsPx2": 0,
@@ -690,6 +795,94 @@
         "headOverSheetTextPx2": 534,
         "headOverSheetControlsPx2": 0,
         "headOverFooterPx2": 0,
+        "sheetBody": {
+          "atEnd": false,
+          "bottom": 607,
+          "lastBottom": 807.5,
+          "padding": 60
+        },
+        "inViewport": true,
+        "wordsCut": false,
+        "words": null,
+        "dot": 13,
+        "headLook": {
+          "border": "solid",
+          "character": "1"
+        },
+        "popRows": [],
+        "status": null,
+        "sideways": 0,
+        "feedBand": 0,
+        "feedAtEnd": true,
+        "paneAtEnd": true,
+        "listTail": {
+          "paneBottom": 548,
+          "padding": 12,
+          "lastBottom": 469
+        },
+        "stored": null,
+        "record": {
+          "starts": [
+            "atlas"
+          ],
+          "projects": [
+            "atlas"
+          ],
+          "closes": 0,
+          "sessionRequests": 0
+        }
+      }
+    },
+    {
+      "group": "call",
+      "combo": "375x667-en-dark",
+      "scene": "full-sheet-end",
+      "reading": {
+        "head": {
+          "x": 315,
+          "y": 547,
+          "width": 52,
+          "height": 52
+        },
+        "bubble": null,
+        "plate": null,
+        "pop": null,
+        "sheet": {
+          "x": 0,
+          "y": 0,
+          "width": 375,
+          "height": 667
+        },
+        "footer": {
+          "x": 0,
+          "y": 607,
+          "width": 375,
+          "height": 54
+        },
+        "phase": "speaking",
+        "side": "right",
+        "sheetState": "full",
+        "callStart": 1791836748861,
+        "chromeLine": 548,
+        "textUnderHeadPx2": 0,
+        "textUnderWordsPx2": 0,
+        "controlsUnderHeadPx2": 1560,
+        "controlsUnderWordsPx2": 0,
+        "rowsCutByWords": 0,
+        "marksCutByWords": 0,
+        "blocksSplitByWords": 0,
+        "plateLook": null,
+        "headOverSheetPx2": 2704,
+        "wordsOverSheetPx2": 0,
+        "headOverSheetTextPx2": 0,
+        "headOverSheetControlsPx2": 0,
+        "headOverFooterPx2": 0,
+        "sheetBody": {
+          "atEnd": true,
+          "bottom": 607,
+          "lastBottom": 536.5,
+          "padding": 60
+        },
         "inViewport": true,
         "wordsCut": false,
         "words": null,
@@ -751,6 +944,7 @@
         "headOverSheetTextPx2": 0,
         "headOverSheetControlsPx2": 0,
         "headOverFooterPx2": 0,
+        "sheetBody": null,
         "inViewport": true,
         "wordsCut": false,
         "words": null,

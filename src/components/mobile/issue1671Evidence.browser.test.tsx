@@ -10516,7 +10516,7 @@ describe("phone voice head", () => {
     { size: { width: 375, height: 667 }, lang: "en", scheme: "dark" },
   ] as const;
   const GROUPS = {
-    call: ["talk", "menu", "sheet", "full-sheet", "hidden"],
+    call: ["talk", "menu", "sheet", "full-sheet", "full-sheet-end", "hidden"],
     product: ["menu-hidden", "restored", "drag"],
     navigation: ["navigation"],
     "navigation-product": ["navigation-product"],
@@ -10527,6 +10527,7 @@ describe("phone voice head", () => {
     menu: { uk: "меню голови під час розмови", en: "the head's menu, in a call" },
     sheet: { uk: "над шторкою ⋯", en: "over the ⋯ sheet" },
     "full-sheet": { uk: "над шторкою на весь екран", en: "over a full-height sheet" },
+    "full-sheet-end": { uk: "шторка на весь екран, кінець", en: "full-height sheet, at its end" },
     hidden: { uk: "«Сховати» завершило розмову", en: "«Hide» ended the call" },
     "menu-hidden": { uk: "сховано, «Показати голос» у меню ⋯", en: "hidden, «Show voice» in the ⋯ menu" },
     restored: { uk: "повернуто з меню", en: "back from the menu" },
@@ -10632,6 +10633,16 @@ describe("phone voice head", () => {
       headOverSheetTextPx2: Math.round(sheetTexts.reduce((sum, item) => sum + area(head, item), 0)),
       headOverSheetControlsPx2: Math.round(sheetControls.reduce((sum, item) => sum + area(head, item), 0)),
       headOverFooterPx2: Math.round(area(head, rect(footerNode))),
+      /* A sheet's body read to its end: whether it stands there, and the last paragraph's lines against the body's visible box. */
+      sheetBody: (() => {
+        const body = sheetNode?.querySelector<HTMLElement>("[data-mobile2-sheet-body]") ?? null;
+        if (!body) return null;
+        const frame = body.getBoundingClientRect();
+        const last = [...body.querySelectorAll("p")].at(-1) ?? null;
+        const lines = last ? (() => { const r = document.createRange(); r.selectNodeContents(last); return [...r.getClientRects()]; })() : [];
+        const lastBottom = lines.length ? Math.max(...lines.map((line) => line.bottom)) : null;
+        return { atEnd: body.scrollHeight - body.scrollTop - body.clientHeight < 2, bottom: frame.bottom, lastBottom, padding: parseFloat(getComputedStyle(body).paddingBottom) };
+      })(),
       inViewport: inside(head) && inside(bubble) && inside(pop),
       wordsCut: !!bubbleNode && (() => { const text = bubbleNode.querySelector<HTMLElement>(".vc-text")!; return text.scrollHeight > text.clientHeight + 1; })(),
       words: bubbleNode?.textContent ?? null,
@@ -10843,6 +10854,14 @@ describe("phone voice head", () => {
               if (full.headOverFooterPx2 > 0 || full.headOverSheetControlsPx2 > 0) fail("full-sheet", `the head lies on ${full.headOverFooterPx2}px² of the footer and ${full.headOverSheetControlsPx2}px² of the sheet's controls`);
               if (full.head && full.footer && Math.abs(full.footer.y - (full.head.y + full.head.height) - 8) > 0.6) fail("full-sheet", `the head stands ${full.footer.y - (full.head.y + full.head.height)}px above the footer, not 8`);
               if (full.phase === "offline") fail("full-sheet", "the call ended under a full-height sheet");
+              /* Read to its end, the sheet's last line stands whole above the head: the body keeps the head's room there. */
+              await page.evaluate(() => { const body = [...document.querySelectorAll<HTMLElement>("[data-mobile2-sheet-body]")].at(-1); if (body) body.scrollTop = body.scrollHeight; });
+              await pause(page, 500);
+              const fullEnd = await shot("full-sheet-end");
+              if (!fullEnd.sheetBody?.atEnd) fail("full-sheet-end", "the sheet's body is not read to its end");
+              if (fullEnd.headOverSheetTextPx2 > 0 || fullEnd.headOverSheetControlsPx2 > 0 || fullEnd.headOverFooterPx2 > 0) fail("full-sheet-end", `at the sheet's end the head lies on ${fullEnd.headOverSheetTextPx2}px² of its text, ${fullEnd.headOverSheetControlsPx2}px² of its controls and ${fullEnd.headOverFooterPx2}px² of its footer`);
+              if (fullEnd.sheetBody?.lastBottom == null || fullEnd.head == null || fullEnd.sheetBody.lastBottom > fullEnd.head.y + 0.5) fail("full-sheet-end", `the sheet's last line ends at ${fullEnd.sheetBody?.lastBottom}, not above the head's top at ${fullEnd.head?.y}`);
+              if (fullEnd.sheetBody && fullEnd.sheetBody.lastBottom !== null && fullEnd.sheetBody.lastBottom > fullEnd.sheetBody.bottom + 0.5) fail("full-sheet-end", "the sheet's last line is cut by the body's edge");
               await page.keyboard.press("Escape");
               await page.waitForSelector("[data-mobile2-sheet]", { state: "detached", timeout: 10_000 });
               await pause(page, 400);

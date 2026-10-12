@@ -473,6 +473,9 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
         {/* The conversation's feed ends above the band: its tail is aligned on the blank space under its last row, which
             a padding would add to. The board's column keeps the band as room at its end. */}
         {band !== null ? <style>{`html [data-log-feed-scroller] { margin-bottom: ${band}px; } html [data-phone-kanban-column] { padding-bottom: ${band}px; }`}</style> : null}
+        {/* A sheet as tall as the screen has the head standing over the end of its body: the body keeps the head's room (and
+            the 8 px under it) at its end, so the last line scrolls clear of the head. */}
+        {shell.footer !== null ? <style>{`html [data-mobile2-sheet] [data-mobile2-sheet-body] { padding-bottom: ${HEAD + EDGE}px; }`}</style> : null}
         <span ref={probe} className="pvc-probe" aria-hidden />
         {drag ? (["left", "right"] as const).map((slot) => {
           const place = restingPlace(shell, slot);
