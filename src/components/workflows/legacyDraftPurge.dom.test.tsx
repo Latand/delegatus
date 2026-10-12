@@ -152,7 +152,17 @@ const agentA = "agent_3f2504e0_4f89_41d3";
    closed trigger instead of an input's value — same assertion, new surface. */
 /* The desktop's agent control (#1695 K9a): «+ Agent» in the Board's bar, or the
    empty project's offer while the project has nothing to draw a Board for. */
-const agentControl = () => (dom.document.querySelector("[data-new-agent]") ?? dom.document.querySelector('[data-testid="project-empty-agent"]')) as unknown as HTMLButtonElement | null;
+/* What creates an agent draft: the empty project's own button, or on the Board the agent row of
+   the bar's one + menu, opened here so the row can be read and pressed. */
+const agentControl = (): { disabled: boolean; dispatchEvent: (event: Event) => boolean } | null => {
+  const empty = dom.document.querySelector('[data-testid="project-empty-agent"]') as unknown as HTMLButtonElement | null;
+  if (empty) return empty;
+  const plus = dom.document.querySelector("[data-bar-create]") as unknown as HTMLElement | null;
+  if (!plus) return null;
+  if (!dom.document.querySelector('.menu[role="menu"]')) flushSync(() => plus.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event));
+  const row = (Array.from(dom.document.querySelectorAll('.menu[role="menu"] [role="menuitem"]')) as unknown as HTMLElement[])[1] ?? null;
+  return row ? { disabled: row.getAttribute("aria-disabled") === "true", dispatchEvent: (event) => row.dispatchEvent(event) } : null;
+};
 /* A conversation's handoff on the Board: open its reader from its tile, then
    «Hand off to a new agent» in the reader's actions menu. */
 const readerAction = async (path: string, label: string): Promise<boolean> => {
@@ -198,11 +208,8 @@ const serveBoardWrites = () => {
     return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
   }) as unknown as typeof fetch;
 };
-const openBoardTab = async (): Promise<boolean> => {
-  if (!(await waitFor(() => dom.document.querySelector('[data-view-tab="kanban"]') !== null))) return false;
-  (dom.document.querySelector('[data-view-tab="kanban"]') as unknown as HTMLElement).dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
-  return waitFor(() => dom.document.querySelector("[data-kanban-board]") !== null);
-};
+/* The desktop opens on its Board, its one view. */
+const openBoardTab = (): Promise<boolean> => waitFor(() => dom.document.querySelector("[data-kanban-board]") !== null);
 
 const directoryTrigger = () => dom.document.querySelector("[data-directory-trigger]") as unknown as HTMLButtonElement | null;
 const directoryValue = () => directoryTrigger()?.getAttribute("data-directory-value") ?? null;
