@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { BACKEND_INSTRUCTIONS, backendRequest, COMPANION_TOOLS, LIVE_API_VERSION, LIVE_BACKEND_MODEL, LIVE_MODEL, liveSessionConfiguration } from "./sessionConfig";
 import { z } from "zod";
+import { VOICE_ASK_MAX_CHARS } from "./liveGate";
+import { codexVoiceThread } from "./codexProvider";
 
 // Official DataChannelConfigParam / ServerEventSelectorParam, verified on
 // 2026-10-06. Response wrappers require the nested selector; other events forbid it.
@@ -30,7 +32,7 @@ test("the Live configuration exposes the explicit read allowlist and the delegat
   expect(LIVE_MODEL).toBe("gpt-live-1");
   expect(COMPANION_TOOLS.map(tool => tool.name)).toEqual([
     "list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages", "orchestrator_messages", "search_transcripts", "read_prototype_review", "view_prototype_frame",
-    "request_orchestrator_delegation", "resolve_orchestrator_confirmation", "end_conversation",
+    "orchestrator_reports", "reread_orchestrator_report", "request_orchestrator_delegation", "resolve_orchestrator_confirmation", "end_conversation",
   ]);
   for (const locale of ["en", "uk"] as const) {
     const config = liveSessionConfiguration(locale);
@@ -48,4 +50,38 @@ test("the Live configuration exposes the explicit read allowlist and the delegat
     expect(config.client.data_channel.allowed_client_events).toEqual([]);
     expect(backendRequest([]).tools.every(tool => tool.parameters.additionalProperties === false)).toBe(true);
   }
+});
+
+test("the backend answers from reads, sends one short ask in the operator's words, names a waiting request instead of sending it again, and keeps report facts with their subjects", () => {
+  expect(BACKEND_INSTRUCTIONS).toContain("Answer from the reads whatever the board, the orchestrator's messages and its reports already hold");
+  expect(BACKEND_INSTRUCTIONS).toContain("send only work, or a question the reads cannot answer");
+  expect(BACKEND_INSTRUCTIONS).toContain("A question about what the voice can do is answered from the registry and never sent");
+  expect(BACKEND_INSTRUCTIONS).toContain(`Compose one short ask, at most ${VOICE_ASK_MAX_CHARS} characters, in the operator's words and language, from their latest turn alone`);
+  expect(BACKEND_INSTRUCTIONS).toContain("never translate it, expand it or bundle earlier questions into it");
+  expect(BACKEND_INSTRUCTIONS).toContain("passes its handle as pending_request and nothing is sent");
+  expect(BACKEND_INSTRUCTIONS).toContain("a request still waiting for its report is not sent again");
+  expect(BACKEND_INSTRUCTIONS).toContain("set asked_again, and it is sent again even while its report is pending");
+  expect(BACKEND_INSTRUCTIONS).toContain("pass the repeat with its handle and send only the new part as its own ask");
+  expect(BACKEND_INSTRUCTIONS).toContain("Pass project only when the operator named another project; never invent one");
+  expect(BACKEND_INSTRUCTIONS).toContain("keep each fact with its own subject and in the report's words");
+  expect(BACKEND_INSTRUCTIONS).toContain("call reread_orchestrator_report: the report is read from its own text, so never retell it");
+  for (const locale of ["en", "uk"] as const) {
+    const instructions = liveSessionConfiguration(locale).instructions;
+    expect(instructions).toContain("answer from this list in plain words; that needs no delegation");
+    expect(instructions).toContain("the backend says whether its answer is still on the way, and sends it again only when they explicitly ask to send it once more");
+    expect(instructions).toContain("read its lines as written, in order, in every part");
+    expect(instructions).toContain("never merge, reorder, swap or add facts");
+  }
+  // The last response of a delegation turns tools off, so what was read is answered.
+  expect(backendRequest([]).tool_choice).toBe("auto");
+  expect(backendRequest([], { final: true }).tool_choice).toBe("none");
+});
+
+test("the Codex thread carries the same backend rules and the call's reports read", () => {
+  const thread = codexVoiceThread("/fixture");
+  expect(thread.developerInstructions).toContain("whose answer is in this thread");
+  expect(thread.developerInstructions).not.toContain("whose answer is under Reads earlier in this call");
+  expect(thread.developerInstructions).toContain("passes its handle as pending_request and nothing is sent");
+  expect(thread.developerInstructions).toContain(`at most ${VOICE_ASK_MAX_CHARS} characters`);
+  expect(thread.dynamicTools.map(tool => tool.name)).toContain("orchestrator_reports");
 });

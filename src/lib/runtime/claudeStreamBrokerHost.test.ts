@@ -938,6 +938,7 @@ describe("ClaudeStreamBrokerHost", () => {
     expect(deniedSettingsIndex).toBeGreaterThanOrEqual(0);
     expect(deniedCapture.args).toContain("Task,Agent,Workflow,TeamCreate,TeamDelete,SendMessage");
     expect(deniedSettings.hooks.PreToolUse.some((group) => group.matcher === "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage")).toBe(true);
+    expect(deniedSettings.hooks.PreToolUse.some((group) => group.matcher === "Bash")).toBe(true);
     expect((await denied.health()).activeFlags).toContain(NATIVE_MULTI_AGENT_DENY_FLAG);
     await denied.release();
 
@@ -961,6 +962,7 @@ describe("ClaudeStreamBrokerHost", () => {
     expect(allowedSettingsIndex).toBeGreaterThanOrEqual(0);
     expect(allowedCapture.args).not.toContain("--disallowedTools");
     expect(allowedSettings.hooks.PreToolUse.some((group) => group.matcher === "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage")).toBe(false);
+    expect(allowedSettings.hooks.PreToolUse.some((group) => group.matcher === "Bash")).toBe(true);
     expect((await allowed.health()).activeFlags).not.toContain(NATIVE_MULTI_AGENT_DENY_FLAG);
     await allowed.release();
   });
@@ -1021,7 +1023,7 @@ describe("ClaudeStreamBrokerHost", () => {
     const adoptedMcp = JSON.parse(fs.readFileSync(adoptedMcpPath, "utf8"));
     expect(freshSettings.theme).toBe("shared-dark");
     expect(freshSettings.env).toEqual({ SHARED_SETTING: "kept", ...agentPublicationIdentityEnv({}) });
-    expect(freshSettings.hooks.PreToolUse.map((group) => group.matcher)).toEqual(["Read", "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage"]);
+    expect(freshSettings.hooks.PreToolUse.map((group) => group.matcher)).toEqual(["Read", "Bash", "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage"]);
     // Each hosted generation has its own FIFO hook receipt queue. Native
     // settings and policy remain identical across fresh/adopted launches.
     const omitMemoryHook = (settings: typeof adoptedSettings) => ({ ...settings,
@@ -1061,6 +1063,7 @@ describe("ClaudeStreamBrokerHost", () => {
       hooks: { PreToolUse: Array<{ matcher: string }> };
     };
     expect(legacyProfile.hooks.PreToolUse.some((group) => group.matcher === "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage")).toBe(true);
+    expect(legacyProfile.hooks.PreToolUse.some((group) => group.matcher === "Bash")).toBe(true);
     expect(fs.readFileSync(legacySettingsPath, "utf8")).toBe(legacySettings);
     await legacy.release();
   });

@@ -19,7 +19,19 @@ export interface BlockingTurn { conversationId: string; engine: string; project:
   unresolved?: true;
   /** Why the first owner of this entry holds (R11). */
   reason?: OwnerReason }
-export interface BlockingStage { pipelineId: string; stageId: string; cursor: string; task: string; conversationId: string | null }
+export interface BlockingStage { pipelineId: string; stageId: string; cursor: string; task: string; conversationId: string | null;
+  /** What a person reads for the stage, all from the pipeline record:
+      its project key, the stage's role and the board card it works for. Null
+      for a review flow no pipeline owns; absent on a reading made before. */
+  project?: string | null; roleId?: string | null; taskId?: string | null }
+/** The names `BlockingStage` carries, read from a record the probe already holds. */
+function stageNames(pipeline: Pipeline, stageId: string): Pick<BlockingStage, "project" | "roleId" | "taskId"> {
+  return {
+    project: pipeline.project || null,
+    roleId: pipeline.stages?.find((stage) => stage.id === stageId)?.role?.roleId ?? null,
+    taskId: pipeline.taskIds?.[0] ?? null,
+  };
+}
 export interface QuietBlockers {
   busyReason?: BusyReason | null;
   turnList?: BlockingTurn[];
@@ -384,7 +396,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
         }
         if (released) continue;
       }
-      stages.push({ pipelineId: pipeline.id, stageId: cursor.stageId, cursor: cursor.state, task: (pipeline.task ?? "").split("\n")[0]!.slice(0, 80), conversationId });
+      stages.push({ pipelineId: pipeline.id, stageId: cursor.stageId, cursor: cursor.state, task: (pipeline.task ?? "").split("\n")[0]!.slice(0, 80), conversationId, ...stageNames(pipeline, cursor.stageId) });
     }
     for (const flow of flows) {
       if (checkedFlows.has(flow.id)) continue;
@@ -405,7 +417,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       const stageId = run?.stageId ?? "review";
       if (!stages.some((stage) => stage.pipelineId === pipelineId && stage.stageId === stageId)) {
         stages.push({ pipelineId, stageId, cursor: flow.state, task: (parent?.task ?? flow.stateDetail ?? "").split("\n")[0]!.slice(0, 80),
-          conversationId: owners[0]?.conversationId ?? null });
+          conversationId: owners[0]?.conversationId ?? null, ...(parent ? stageNames(parent, stageId) : { project: null, roleId: null, taskId: null }) });
       }
     }
     blockers.stages = stages.length;

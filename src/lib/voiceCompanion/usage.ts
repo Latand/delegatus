@@ -10,7 +10,7 @@ export const BACKEND_MAX_OUTPUT_TOKENS = 512;
 /** The dearest one backend response can be: the model's whole context window
  * at the large-input rate for a cache write, plus every allowed output token. */
 export const BACKEND_RESPONSE_RESERVE_USD = 1_050_000 * 0.25 / 1_000_000 + BACKEND_MAX_OUTPUT_TOKENS * 0.75 / 1_000_000;
-/** Backend responses one delegation may take: reads, then the spoken answer. */
+/** Tool rounds one delegation may take; one answer with tools off follows them. */
 export const BACKEND_ROUNDS = 4;
 export const VOICE_SESSION_RESERVE_USD = 0.27; // five minutes plus close drain
 /** Client delegation: this server starts every backend response itself and

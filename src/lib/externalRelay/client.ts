@@ -9,6 +9,7 @@ import {
   type ExternalRelayTarget,
 } from "./protocol";
 import type { PairedRelay } from "./store";
+import { recordPublishedRelayReference } from "./publishedReferences";
 
 export class ExternalRelayError extends Error {
   constructor(
@@ -154,6 +155,8 @@ export async function relayCall<T = unknown>(
             );
             return;
           }
+          try { recordPublishedRelayReference(apiBase, route, method, outgoing, status, parsed); }
+          catch { reject(new ExternalRelayError("publication_context_unavailable")); return; }
           resolve({ status, body: parsed as T });
         });
       },

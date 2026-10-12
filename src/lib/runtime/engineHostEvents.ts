@@ -1,4 +1,5 @@
 import { isNonblockingCodexQuestion } from "./codexAttention";
+import { codexServerRequestKind } from "./codexServerRequests";
 import { RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES, runtimeHostKindForEngine, type RuntimeAttentionKind, type RuntimeAttentionRequest, type RuntimeEngine, type RuntimeEventInput } from "./contracts";
 import type { RuntimeEvent } from "./engineHost";
 import { boundedToolArgs } from "./liveTurn";
@@ -226,7 +227,10 @@ function attentionProjection(engine: RuntimeEngine, event: Extract<RuntimeEvent,
     : Array.isArray(input.questions) ? input.questions : [];
   const tool = text(source.tool, source.tool_name, source.toolName);
   const method = event.method;
-  const kind: RuntimeAttentionKind = method.includes("requestApproval")
+  const codexKind = engine === "codex" ? codexServerRequestKind(method) : null;
+  const kind: RuntimeAttentionKind = codexKind !== null
+    ? codexKind === "command" || codexKind === "patch" ? "approval" : codexKind === "question" ? "question" : "permission"
+    : method.includes("requestApproval")
     ? "approval"
     : method.includes("requestUserInput") || tool === "AskUserQuestion" || questions.length > 0
       ? "question"

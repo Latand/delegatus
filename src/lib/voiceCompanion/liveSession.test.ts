@@ -15,6 +15,7 @@ const { CompanionAdmission } = await import("./admission");
 const { CompanionLiveSessions } = await import("./liveSession");
 const { SESSION_START_ROOM_USD, VOICE_SESSION_RESERVE_USD, BACKEND_RESPONSE_RESERVE_USD } = await import("./usage");
 const { shutdownTranscriptSearchWorker } = await import("@/lib/search/transcriptSearchWorker");
+// The real search cases start the leased query worker; it must not outlive the file.
 afterAll(async () => {
   await shutdownTranscriptSearchWorker();
   fs.rmSync(root, { recursive: true, force: true });
@@ -26,13 +27,14 @@ function fixture(key = "synthetic-credential") {
   const storage = new CompanionStorage();
   storage.updateSettings({ enabled: true });
   let sends = 0;
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
   const admission = new CompanionAdmission(storage, { recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" }),
-    send: async () => { sends++; return { status: "queued", operationId: "operation_fixture" }; }, reports: () => [] });
+    send: async () => { sends++; return { status: "queued", operationId: "operation_fixture" }; }, reports: () => reports });
   const reads = fixtureBoardReads({ tasks: () => [{ id: "task_fixture", project: "fixture", text: "Review the plan", status: "inbox" }],
     pipelines: () => [], activity: async () => [], messages: async () => [] });
   const provider = new FakeLiveProvider();
   const service = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => key, closeTimeoutMs: 20, timers: false });
-  return { storage, admission, provider, reads, service, sends: () => sends };
+  return { storage, admission, provider, reads, service, reports, sends: () => sends };
 }
 /** Answers a first round with the given calls and every later round with speech. */
 const calling = (...calls: Array<ReturnType<typeof functionCall>>) => (request: BackendRequest, index: number) =>
@@ -942,7 +944,7 @@ test("one completed request reaches the orchestrator once whatever Live delegati
       send: async () => { throw new Error("unexpected delivery"); }, reports: () => [] });
     expect(await again.delegate(s.sessionId, "call-after-restart", "delegation-after-restart", "Review the plan", { sourceTurn: rows[0].sourceTurn })).toEqual({ state: "sent", status: "queued" });
     expect(Object.values(f.admission.session(s.sessionId).proposals).map(row => row.delivery?.clientMessageId)).toEqual([key]);
-    // The operator saying it again in a completed turn of their own is a new request; the model alone repeating one is not.
+    // The operator saying it again in a completed turn of their own is a new request, also while the first waits for its report; the model alone repeating one is not.
     askedAgain = "Asks to send the review request again.";
     f.provider.replay(s.providerId, said("Ask the orchestrator to review the plan.", 3_000), delegationCreated("new-turn", 3_500));
     await f.service.drain(s.sessionId);
@@ -969,7 +971,8 @@ test("a request already acted on never authorizes a later turn through the lookb
     const thanksTurn = f.admission.session(s.sessionId).inputs.at(-1)!.turn;
     const again = new CompanionAdmission(f.storage, { recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" }),
       send: async () => { throw new Error("unexpected delivery"); }, reports: () => [] });
-    expect((await again.delegate(s.sessionId, "call-restart", "delegation-restart", "Review the plan", { sourceTurn: thanksTurn })).state).toBe("refused");
+    // The first request still waits for its report, so the same words are answered as waiting.
+    expect((await again.delegate(s.sessionId, "call-restart", "delegation-restart", "Review the plan", { sourceTurn: thanksTurn })).state).toBe("awaiting_report");
     // Admission does not judge the meaning of a different model instruction.
     // A different model instruction is its own request.
     f.provider.responder = calling(functionCall("merge-call", "request_orchestrator_delegation", { instruction: "Merge the branch" }));
@@ -1013,7 +1016,7 @@ test("the model's judgment renews a request: natural wordings in three languages
       expect([c.locale, cancelled, quiet, f.sends()]).toEqual([c.locale, cancelled, quiet, baseline]);
       at += 5_000;
     }
-    // The model judges that the operator asked again: each wording sends once more.
+    // The model judges that the operator asked again, also while the first still waits for its report: each wording sends once more.
     let expected = baseline;
     for (const again of c.again) {
       askedAgain = `Asks again: ${again}`;
@@ -1507,4 +1510,290 @@ test("an older read refreshes after the reuse window and missing usage for a kno
   expect(receipts).toHaveLength(1);expect(receipts[0]).toMatchObject({complete:true,tokens:{input:100,cached:0,cacheWrite:0,output:20}});
   await service.close(s.sessionId);actual.mockRestore();
   expect(storage.settings().incomplete).toBe(false);
+});
+
+test("the backend turn sees the operator's latest turn and what waits for a report; rewordings it names send nothing, a new question goes through", async () => {
+  for (const locale of ["uk", "en"] as const) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture();
+    const first = locale === "uk" ? "Спитай оркестратора, що з ревʼю голосу." : "Ask the orchestrator how the voice review is going.";
+    const again = locale === "uk" ? ["Ну то що з ревʼю?", "А ревʼю як?", "Перевір ревʼю голосу.", "Ревʼю вже готове?"]
+      : ["So what about the review?", "And the review?", "Check the voice review.", "Is the review done yet?"];
+    const fresh = locale === "uk" ? "Спитай, яку модель обрати для голосу." : "Ask which model the voice should use.";
+    let next: Record<string, unknown> = { instruction: first, pending_request: null };
+    f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Done.")])
+      : backendResponse(`resp_${index}`, [functionCall(`call-${index}`, "request_orchestrator_delegation", next)]);
+    const s = await f.service.start({ project: "fixture", locale, sdp: "v=0" });
+    f.provider.replay(s.providerId, said(first, 0), delegationCreated("first", 600));
+    await f.service.drain(s.sessionId);
+    expect(f.sends()).toBe(1);
+    let at = 1_000;
+    for (const words of again) {
+      next = { instruction: words, pending_request: "r1" };
+      f.provider.replay(s.providerId, said("Done.", at, "output"), said(words, at + 2_000), delegationCreated(`again-${at}`, at + 2_600));
+      await f.service.drain(s.sessionId);
+      const context = String(f.provider.requests.findLast(request => !request.input.some(item => item.type === "function_call_output"))!.input[0].content);
+      expect(context).toContain(`- r1, project "fixture", sent 0 min ago, 0 progress report(s): ${JSON.stringify(first)}`);
+      expect(context).toContain(`The operator's latest turn, which this delegation answers: ${JSON.stringify(words)}`);
+      expect(JSON.parse(String(f.provider.requests.at(-1)!.input.find(item => item.type === "function_call_output")!.output))).toMatchObject({ status: "awaiting_report", request: "r1" });
+      at += 5_000;
+    }
+    expect([locale, f.sends()]).toEqual([locale, 1]);
+    next = { instruction: fresh, pending_request: null };
+    f.provider.replay(s.providerId, said("Done.", at, "output"), said(fresh, at + 2_000), delegationCreated("fresh", at + 2_600));
+    await f.service.drain(s.sessionId);
+    expect([locale, f.sends()]).toEqual([locale, 2]);
+    await f.service.close(s.sessionId);
+  }
+});
+
+test("a report reaches the voice whole: every item in order over appends within 500 bytes, none of it left out", async () => {
+  const f = fixture();
+  const s = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=0" });
+  const items = Array.from({ length: 8 }, (_, index) => `пункт ${index + 1}: ${index % 2 ? "ревʼю пройшло обидва раунди" : "деплой чекає на рішення оператора"}, ${"деталі перевірки ".repeat(index === 3 ? 20 : 3).trim()}`);
+  f.reports.push({ id: "whole-1", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "short display copy",
+    complete: { summary: "Два факти, кожен зі своїм субʼєктом.", sections: [{ heading: "В роботі", items }] },
+    origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+  await f.service.events(s.sessionId, 0);
+  await f.service.events(s.sessionId, 0);
+  const parts = spoken(f).map(row => String(row.content));
+  expect(parts.length).toBeGreaterThan(1);
+  for (const part of parts) expect(Buffer.byteLength(part)).toBeLessThanOrEqual(500);
+  expect(parts[0]).toContain('project "fixture"');
+  expect(parts.join("\n")).not.toContain("left out");
+  const body = parts.map(part => part.split("\n").slice(1).join("\n")).join("\n").replace(/\s+/gu, "");
+  expect(body).toBe(["Два факти, кожен зі своїм субʼєктом.", "В роботі:", ...items.map(item => `- ${item}`)].join("").replace(/\s+/gu, ""));
+  const record = f.service.transcriptRecord(s.sessionId).entries;
+  expect(record.filter(entry => entry.kind === "handoff").map(entry => entry.data.text)).toEqual(parts);
+  expect(record.find(entry => entry.kind === "report")!.data.text).toContain(items[3]);
+  await f.service.close(s.sessionId);
+});
+
+test("after four tool rounds the backend answers once more with tools off, so what it read is spoken rather than lost", async () => {
+  const f = fixture();
+  f.provider.responder = (request, index) => request.tool_choice === "none" ? backendResponse(`resp_${index}`, [message("One open task: review the plan. Its stage is unknown.")])
+    : backendResponse(`resp_${index}`, [functionCall(`read-${index}`, "list_tasks", { openOnly: true, query: `round ${index}` })]);
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(s.providerId, said("What is open on the board?", 0), delegationCreated("reads", 600));
+  await f.service.drain(s.sessionId);
+  expect(f.provider.requests.map(request => request.tool_choice)).toEqual(["auto", "auto", "auto", "auto", "none"]);
+  expect(f.provider.requests.at(-1)!.input.filter(item => item.type === "function_call_output")).toHaveLength(4);
+  expect(spoken(f)).toMatchObject([{ delegation_id: "reads", content: "One open task: review the plan. Its stage is unknown." }]);
+  await f.service.close(s.sessionId);
+});
+
+test("a report hand-off that fails part-way resumes at the failed part on the next poll: every fact once, in order, and a later report waits behind it", async () => {
+  for (const locale of ["uk", "en"] as const) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture();
+    const attach = f.provider.attach.bind(f.provider);
+    let appends = 0;
+    // The transport refuses the second report append once, then takes every send.
+    f.provider.attach = async (...args: Parameters<typeof attach>) => {
+      const connection = await attach(...args);
+      return { ...connection, send: command => {
+        if (command.type === "session.commentary.append" && ++appends === 2) throw new Error("PROVIDER_ERROR");
+        connection.send(command);
+      } };
+    };
+    const s = await f.service.start({ project: "fixture", locale, sdp: "v=0" });
+    const items = Array.from({ length: 6 }, (_, index) => `${locale === "uk" ? "пункт" : "item"} ${index + 1}: ${(locale === "uk" ? "перевірка звіту пройшла, деталі " : "the report check passed, details ").repeat(index === 2 ? 12 : 3).trim()}`);
+    const manager = { kind: "manager" as const, conversationId: "conversation_fixture", role: "orchestrator" };
+    f.reports.push({ id: "whole-1", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "short display copy",
+      complete: { summary: "FIRST_REPORT", sections: [{ heading: "Done", items }] }, origin: manager });
+    await f.service.events(s.sessionId, 0);
+    const first = spoken(f).map(row => String(row.content));
+    expect([locale, first.length]).toEqual([locale, 1]);
+    // The failed part and everything after it are still owed; a second report is filed meanwhile.
+    expect(f.admission.reportSpeech(s.sessionId)).toMatchObject([{ reportId: "whole-1", handed: 1 }]);
+    f.reports.push({ id: "whole-2", seq: 2, project: "fixture", at: "2026-10-11T12:01:00Z", class: "completed", body: "SECOND_REPORT", origin: manager });
+    await f.service.events(s.sessionId, 0);
+    await f.service.events(s.sessionId, 0);
+    const parts = spoken(f).map(row => String(row.content));
+    expect(parts.length).toBeGreaterThan(2);
+    expect(new Set(parts).size).toBe(parts.length);
+    const text = parts.join("\n");
+    expect(text.indexOf("FIRST_REPORT")).toBeLessThan(text.indexOf("SECOND_REPORT"));
+    const body = parts.slice(0, -1).map(part => part.split("\n").slice(1).join("\n")).join("\n").replace(/\s+/gu, "");
+    expect(body).toBe(["FIRST_REPORT", "Done:", ...items.map(item => `- ${item}`)].join("").replace(/\s+/gu, ""));
+    expect(parts.at(-1)).toContain("SECOND_REPORT");
+    expect(f.admission.reportSpeech(s.sessionId)).toEqual([]);
+    expect(f.service.transcriptRecord(s.sessionId).entries.filter(entry => entry.kind === "handoff").map(entry => entry.data.text)).toEqual(parts);
+    await f.service.close(s.sessionId);
+  }
+});
+
+test("a restart keeps a report owed until it is handed: the next service hands every part once, and a closed call owes nothing", async () => {
+  const f = fixture();
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.reports.push({ id: "owed-1", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "OWED_FACT",
+    origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+  // The scan finds the report in the same commit that records it as owed; nothing has been handed yet.
+  f.admission.pollReports(s.sessionId);
+  expect(f.admission.reportSpeech(s.sessionId)).toMatchObject([{ reportId: "owed-1", handed: 0 }]);
+  expect(new CompanionAdmission(f.storage, { recipient: () => null, send: async () => ({ status: "failed", operationId: null }), reports: () => [] })
+    .reportSpeech(s.sessionId)).toMatchObject([{ reportId: "owed-1", handed: 0 }]);
+  await f.service.events(s.sessionId, 0);
+  await f.service.events(s.sessionId, 0);
+  expect(spoken(f).filter(row => String(row.content).includes("OWED_FACT"))).toHaveLength(1);
+  f.reports.push({ id: "owed-2", seq: 2, project: "fixture", at: "2026-10-11T12:01:00Z", class: "completed", body: "UNSAID_FACT",
+    origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+  f.admission.pollReports(s.sessionId);
+  await f.service.close(s.sessionId);
+  expect(f.admission.reportSpeech(s.sessionId)).toEqual([]);
+  expect(f.service.transcriptRecord(s.sessionId).entries.find(entry => entry.kind === "report" && String(entry.data.text).includes("UNSAID_FACT"))).toBeDefined();
+});
+
+/* A report over one append, asked for again: the words are written for this test. */
+const REREAD = {
+  en: { ask: "Read the whole last report again", fact: (n: number) => `fact ${n}: the check passed on every platform`, intro: "Here is the last report again." },
+  uk: { ask: "Прочитай ще раз увесь останній звіт", fact: (n: number) => `факт ${n}: перевірку пройдено`, intro: "Ось останній звіт ще раз." },
+};
+for (const [locale, words] of Object.entries(REREAD) as Array<["en" | "uk", typeof REREAD.en]>) test(`${locale}: a report asked for again is read whole from its own text, every fact in order to its last, with nothing sent`, async () => {
+  const f = fixture();
+  let reread: Record<string, unknown> = { report: null };
+  f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message(words.intro)])
+    : backendResponse(`resp_${index}`, [functionCall(`call-${index}`, "reread_orchestrator_report", reread)]);
+  const s = await f.service.start({ project: "fixture", locale, sdp: "v=0" });
+  const lines = [...Array.from({ length: 14 }, (_, index) => `- ${words.fact(index + 1)}`), "- TAIL_FACT"];
+  f.reports.push({ id: "long-1", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: lines.join("\n"),
+    origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+  await f.service.events(s.sessionId, 0);
+  const first = spoken(f).length;
+  expect(Buffer.byteLength(lines.join("\n"))).toBeGreaterThan(500);
+  f.provider.replay(s.providerId, said(words.ask, 1_000), delegationCreated("reread", 1_600));
+  await f.service.drain(s.sessionId);
+  const again = spoken(f).slice(first);
+  // The backend's own short introduction first, tied to its delegation, then the report from its text.
+  expect(again[0]).toMatchObject({ delegation_id: "reread", content: words.intro });
+  const parts = again.slice(1).map(row => String(row.content));
+  expect(parts.length).toBeGreaterThan(1);
+  expect(again.slice(1).every(row => row.delegation_id === null)).toBe(true);
+  for (const part of parts) expect(Buffer.byteLength(part)).toBeLessThanOrEqual(500);
+  expect(parts[0]).toContain("read again as the operator asked");
+  expect(parts.join("\n")).not.toContain("left out");
+  expect(parts.map(part => part.split("\n").slice(1).join("\n")).join("\n").split("\n")).toEqual(lines);
+  // The same delegation answered once; a handle the call does not hold reads nothing.
+  reread = { report: "k9" };
+  f.provider.replay(s.providerId, said(words.ask, 3_000), delegationCreated("missing", 3_600));
+  await f.service.drain(s.sessionId);
+  expect(JSON.parse(String(f.provider.requests.at(-1)!.input.find(item => item.type === "function_call_output")!.output))).toMatchObject({ status: "not_found" });
+  expect(spoken(f).slice(first + again.length).map(row => row.content)).toEqual([words.intro]);
+  expect(f.sends()).toBe(0);
+  await f.service.close(s.sessionId);
+});
+
+test("an answered question asked again is answered from its report read whole, and nothing is sent", async () => {
+  const f = fixture();
+  let keys = 0;
+  f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Short intro.")])
+    : backendResponse(`resp_${index}`, [functionCall(`call-${index}`, "request_orchestrator_delegation", keys++ ? { instruction: "And the review?", pending_request: "r1" } : { instruction: "Check the review" })]);
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(s.providerId, said("Ask the orchestrator to check the review.", 0), delegationCreated("first", 600));
+  await f.service.drain(s.sessionId);
+  const key = Object.values(f.admission.session(s.sessionId).proposals)[0]!.delivery!.clientMessageId;
+  const lines = [...Array.from({ length: 14 }, (_, index) => `- review fact ${index + 1}: both rounds passed`), "- TAIL_FACT"];
+  f.reports.push({ id: "answer-1", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: lines.join("\n"), correlatesDirective: key,
+    origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+  await f.service.events(s.sessionId, 0);
+  const before = spoken(f).length;
+  f.provider.replay(s.providerId, said("And the review?", 2_000), delegationCreated("again", 2_600));
+  await f.service.drain(s.sessionId);
+  const again = spoken(f).slice(before);
+  expect(again[0]).toMatchObject({ delegation_id: "again", content: "Short intro." });
+  expect(again.slice(1).map(row => String(row.content).split("\n").slice(1).join("\n")).join("\n").split("\n")).toEqual(lines);
+  expect(f.sends()).toBe(1);
+  await f.service.close(s.sessionId);
+});
+
+test("more reports than the speech queue holds, filed while the hand-off is blocked, all reach the voice once and in order, across a restart", async () => {
+  const f = fixture();
+  const attach = f.provider.attach.bind(f.provider);
+  let blocked = true;
+  f.provider.attach = async (...args: Parameters<typeof attach>) => {
+    const connection = await attach(...args);
+    return { ...connection, send: command => { if (command.type === "session.commentary.append" && blocked) throw new Error("PROVIDER_ERROR"); connection.send(command); } };
+  };
+  const s = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=0" });
+  const manager = { kind: "manager" as const, conversationId: "conversation_fixture", role: "orchestrator" };
+  for (let seq = 1; seq <= 70; seq += 1) f.reports.push({ id: `queued-${seq}`, seq, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: `REPORT_${seq}_FACT`, origin: manager });
+  for (let poll = 0; poll < 3; poll += 1) await f.service.events(s.sessionId, 0);
+  expect(spoken(f)).toHaveLength(0);
+  expect(f.admission.reportSpeech(s.sessionId)[0]).toMatchObject({ reportId: "queued-1", handed: 0 });
+  expect(f.admission.reportSpeech(s.sessionId)).toHaveLength(64);
+  // A restart keeps the debt and the scan position; the transport recovers.
+  const restarted = new CompanionAdmission(f.storage, { recipient: () => null, send: async () => ({ status: "failed", operationId: null }), reports: () => f.reports });
+  expect(restarted.reportSpeech(s.sessionId).map(row => row.reportId)).toEqual(Array.from({ length: 64 }, (_, index) => `queued-${index + 1}`));
+  blocked = false;
+  for (let poll = 0; poll < 3; poll += 1) await f.service.events(s.sessionId, 0);
+  const voiced = spoken(f).map(row => String(row.content).match(/REPORT_(\d+)_FACT/)?.[1]);
+  expect(voiced).toEqual(Array.from({ length: 70 }, (_, index) => String(index + 1)));
+  expect(f.admission.reportSpeech(s.sessionId)).toEqual([]);
+  await f.service.close(s.sessionId);
+});
+
+test("explicit asks to send again in handoffs with no transcript send once each after the voice answered; a replayed call adds none", async () => {
+  for (const locale of ["en", "uk"] as const) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture();
+    const ask = locale === "uk" ? "Переглянь план" : "Review the plan";
+    let next: Record<string, unknown> = { instruction: ask, pending_request: null, asked_again: null };
+    let replayed = false;
+    f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Sent.")])
+      : backendResponse(`resp_${index}`, [functionCall(`call-${index}`, "request_orchestrator_delegation", next), ...(replayed ? [functionCall(`call-${index}-again`, "request_orchestrator_delegation", { ...next, instruction: `${ask}!` })] : [])]);
+    const s = await f.service.start({ project: "fixture", locale, sdp: "v=0" });
+    f.provider.replay(s.providerId, said(ask, 0), delegationCreated("first", 600));
+    await f.service.drain(s.sessionId);
+    next = { instruction: ask, pending_request: "r1", asked_again: "Asks to send it again." };
+    let at = 1_000;
+    // The operator's turn is the one the first send came from; the voice has answered it, so each later handoff is its own attempt.
+    for (const [index, handoff] of ["again-1", "again-2"].entries()) {
+      replayed = index === 1;
+      f.provider.replay(s.providerId, said("Sent.", at, "output"), delegationCreated(handoff, at + 2_000));
+      await f.service.drain(s.sessionId);
+      expect([locale, handoff, f.sends()]).toEqual([locale, handoff, index + 2]);
+      next = { ...next, pending_request: `r${index + 2}` };
+      at += 5_000;
+    }
+    expect(Object.values(f.admission.session(s.sessionId).proposals).map(row => row.sourceTurn)).toEqual([1, undefined, undefined]);
+    await f.service.close(s.sessionId);
+  }
+});
+
+test("targets that differ only in their opening capital each send once; a handle-named rephrasing and a duplicate handoff of an ask again send nothing", async () => {
+  const WORDS = {
+    en: { opening: "Release: what changed?", openingLower: "release: what changed?", openingReworded: "And release, what changed there?", again: "Send that once more" },
+    uk: { opening: "Release: що змінилося?", openingLower: "release: що змінилося?", openingReworded: "А release, що там змінилося?", again: "Надішли це ще раз" },
+  };
+  for (const [locale, words] of Object.entries(WORDS) as Array<["en" | "uk", typeof WORDS.en]>) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture();
+    let next: Record<string, unknown> = { instruction: words.opening, pending_request: null, asked_again: null };
+    f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Sent.")])
+      : backendResponse(`resp_${index}`, [functionCall(`call-${index}`, "request_orchestrator_delegation", next)]);
+    const s = await f.service.start({ project: "fixture", locale, sdp: "v=0" });
+    const step = async (handoff: string, at: number, operator?: string) => {
+      f.provider.replay(s.providerId, ...(operator ? [said(operator, at)] : []), delegationCreated(handoff, at + 600));
+      await f.service.drain(s.sessionId);
+    };
+    await step("opening", 0, words.opening);
+    f.provider.replay(s.providerId, said("Sent.", 1_000, "output"));
+    next = { instruction: words.openingLower, pending_request: null, asked_again: null };
+    await step("lower", 2_000, words.openingLower);
+    expect([locale, f.sends()]).toEqual([locale, 2]);
+    next = { instruction: words.openingReworded, pending_request: "r2", asked_again: null };
+    await step("reworded", 4_000, words.openingReworded);
+    expect([locale, f.sends()]).toEqual([locale, 2]);
+    // An explicit ask again with no transcript, then a duplicate handoff of it before the voice answers: one attempt, one send.
+    f.provider.replay(s.providerId, said("Sent.", 5_000, "output"));
+    next = { instruction: words.openingLower, pending_request: "r2", asked_again: words.again };
+    await step("again", 6_000);
+    expect([locale, f.sends()]).toEqual([locale, 3]);
+    next = { ...next, pending_request: "r3" };
+    await step("again-duplicate", 6_100);
+    expect([locale, f.sends()]).toEqual([locale, 3]);
+    expect(Object.values(f.admission.session(s.sessionId).proposals).map(row => [row.proposal.instruction, row.sourceTurn]))
+      .toEqual([[words.opening, 1], [words.openingLower, 2], [words.openingLower, undefined]]);
+    await f.service.close(s.sessionId);
+  }
 });

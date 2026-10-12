@@ -2,6 +2,11 @@ import fs from "node:fs";
 import readline from "node:readline";
 import { spawn } from "node:child_process";
 
+if (process.argv.includes("--version")) {
+  console.log("codex-cli 0.162.1");
+  process.exit(0);
+}
+
 const root = process.env.VOICE_STUB_ROOT;
 const mode = process.env.VOICE_STUB_MODE;
 fs.writeFileSync(`${root}/pid`, String(process.pid));

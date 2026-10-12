@@ -8,6 +8,7 @@ import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { messageOriginProject, sameMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { lookupOriginalSend, type SendReceipt } from "@/lib/runtime/sendSettlement";
 import { admittedVoiceBinding } from "@/lib/voiceCompanion/admission";
+import { ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 
 import { authorizedManagerSeats, type AuthorizedManagerSeat } from "./authority";
 import { deputyAskerOf } from "./deputyAsker";
@@ -33,7 +34,7 @@ export function orchestratorRelayPayload(text: string, seat: AuthorizedManagerSe
   };
 }
 
-/** A relay grants no designation or operator authority. Resolve its author
+/** A seat relay grants no designation or operator authority. Resolve its author
  * from the request capability and durable seats, never a caller-supplied role.
  * The shared conversation-host handlers apply this on both HTTP paths. */
 export function admitOrchestratorRelay(
@@ -53,26 +54,33 @@ export function admitOrchestratorRelay(
     ? authorizedManagerSeats(productionManagerAuthoritySources()).find((candidate) => candidate.conversationId === conversationId)
     : null;
   const gateway = conversationId && !seat ? deputyAskerOf(request) : null;
-  if ((!seat && !gateway?.ok && !operatorBrowserRequest(request)) || (seat && !seat.project)) {
-    return refused("orchestrator_relay_refused", "only a designated orchestrator seat, the voice gateway or the operator may send to an orchestrator");
+  const owner = conversationId && !seat && !gateway?.ok ? ownerRelayPayload(text, conversationId) : null;
+  if ((!seat && !gateway?.ok && !owner && !operatorBrowserRequest(request)) || (seat && !seat.project)) {
+    return refused("orchestrator_relay_refused", "only a designated orchestrator seat, the voice gateway, a verified owner relay or the operator may send to an orchestrator");
   }
   // A seat relays words, not delivery metadata or a gateway's correlation claim.
   // Refuse rather than silently changing the instruction being forwarded.
   if (seat && /<!--\s*llv:|\[bridge\b/i.test(text)) {
     return refused("relay_reserved_metadata", "relay the message text without Delegatus authority markers or bridge trailers", 400);
   }
-  let payload: { text: string; origin: MessageOrigin } = seat ? orchestratorRelayPayload(text, seat) : { text, origin: gateway?.ok
+  let payload: { text: string; origin: MessageOrigin } = seat ? orchestratorRelayPayload(text, seat) : owner ?? { text, origin: gateway?.ok
     ? { kind: "agent" as const, role: "gateway", conversationId: conversationId! }
     : { kind: "operator" as const } };
   let voiceBinding: ReturnType<typeof admittedVoiceBinding> = null;
   if (voice) {
-    if (seat || gateway?.ok || !operatorBrowserRequest(request)) return refused("voice_admission_refused", "voice delegation requires the operator's confirmed proposal");
+    if (seat || gateway?.ok || owner || !operatorBrowserRequest(request)) return refused("voice_admission_refused", "voice delegation requires the operator's confirmed proposal");
     try { voiceBinding = admittedVoiceBinding({ ...voice, project: canonicalOrchestratorProject(project), recipient, key: clientMessageId?.slice(0, 128).trim(), text }); }
     catch { return refused("voice_evidence_unavailable", "the confirmed proposal could not be read", 503); }
     if (!voiceBinding) return refused("voice_admission_refused", "the voice send does not match a confirmed proposal", 409);
     payload = { text, origin: { kind: "operator", channel: "voice-delegatus" } };
   }
-  return resolveOrchestratorRelay(project, recipient, payload, text, clientMessageId, seat ?? undefined, voiceBinding);
+  const resolved = resolveOrchestratorRelay(project, recipient, payload, text, clientMessageId, seat ?? undefined, voiceBinding);
+  // Recover the frozen recipient before comparing report custody. A retry may
+  // settle the original source seat's receipt after its designation rotates.
+  if (owner && !ownerRelayTargetMatches(conversationId!, project, resolved.ok ? resolved.recipient : recipient)) {
+    return refused("owner_report_seat_unavailable", "the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", 409);
+  }
+  return resolved;
 }
 
 /** Recipient and durable recovery shared by local and authenticated link relays.
@@ -123,7 +131,8 @@ export function resolveOrchestratorRelay(
         // name and prelude while verifying the same authenticated sender.
         const origin = originalRows[0].command.origin;
         if (!origin || (seat && !origin.project)) return refused("idempotency_conflict", "the original relay has no source project", 409);
-        payload = { text: origin.kind === "agent" && origin.role === "orchestrator" && origin.project ? relayMessageText(text, origin.project) : text, origin };
+        payload = { text: origin.kind === "agent" && origin.role === "orchestrator" && origin.project ? relayMessageText(text, origin.project)
+          : origin.kind === "agent" && origin.role === "owner-relay" ? payload.text : text, origin };
         const original = lookupOriginalSend(snapshot, { conversationId: originalRecipient, clientMessageId: key, ...payload });
         if (original.kind !== "found") return refused("idempotency_conflict", "the relay key does not match its original send", 409);
         operationId = original.operationId;
