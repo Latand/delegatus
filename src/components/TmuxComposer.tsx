@@ -2776,7 +2776,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       || (entry?.operationId && !entry.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX) && entry.operationId !== operationId)) {
       return { outcome: "unknown" } as const;
     }
-    if (row && !receipt) {
+    // A live outbox row already persists this identity for its operation
+    // reader. The separate binding is for a retained-only copy from another
+    // tab, where sessionStorage has no row to carry the admitted operation.
+    if (row && !entry && !receipt) {
       const bound = await composerSubmissionPayloads.bindOperation(row.ref, operationId);
       if (!current() || !bound) return { outcome: "unknown" } as const;
     }
