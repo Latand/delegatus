@@ -71,7 +71,9 @@ test("all operator attachments survive conversion, including a matching filename
   const text = "ї".repeat(30_000);
   const response = await handleRuntimeCommand(request(text, "long-with-files", files), "send", dependencies);
   expect(response.status).toBe(202);
-  const paths = delivered.at(-1)!.split("\n").slice(1);
+  const lines = delivered.at(-1)!.split("\n");
+  expect(lines[1]).toBe(`The message begins: ${"ї".repeat(160)}…`);
+  const paths = lines.slice(2);
   expect(paths).toHaveLength(4);
   for (let index = 0; index < 3; index++) expect(fs.readFileSync(paths[index]!, "utf8")).toBe(files[index]!.name);
   expect(fs.readFileSync(paths[3]!, "utf8")).toBe(text);

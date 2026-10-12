@@ -1,6 +1,7 @@
 import path from "node:path";
 import { MAX_INBOX_FILE_BYTES, MAX_INBOX_FILES_TOTAL_BYTES } from "./filePolicy";
 import { inboxFilePaths, inboxFileText, type InboxFileUpload } from "./inboxFiles";
+import { messageTextExcerpt } from "./messageTextAttachment";
 import { assertStructuredTextEnvelope, MAX_STRUCTURED_TEXT_BYTES } from "./runtime/structuredContent";
 
 /** Plans the whole envelope before any bytes are written. The generated file
@@ -19,7 +20,11 @@ export function prepareMessageFiles(text: string, files: readonly InboxFileUploa
   const paths = inboxFilePaths(expanded, batch);
   const filePath = paths.at(-1)!;
   const name = path.basename(filePath);
-  const converted = inboxFileText(`The full message is attached as ${name}. Read the file in full before responding.`, paths);
+  const excerpt = messageTextExcerpt(text);
+  const converted = inboxFileText(
+    [`The full message is attached as ${name}. Read the file in full before responding.`, excerpt].filter(Boolean).join("\n"),
+    paths,
+  );
   assertStructuredTextEnvelope(converted);
   return { files: expanded, payload: converted, textAttachment: { name, path: filePath, text: converted } };
 }

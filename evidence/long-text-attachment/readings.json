@@ -1,50 +1,558 @@
 {
-  "1280-send": {
-    "label": "📎 message.txt",
+  "1440-light-uk-plain-send": {
+    "chip": "message.txt",
     "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
-    "left": 1040.921875,
-    "right": 1130,
-    "top": 152.5,
-    "bottom": 175.5,
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(248, 245, 240)",
+    "chipBorder": "rgb(229, 223, 213)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(237, 231, 222)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… message.txt",
+    "chip_rect": {
+      "left": 636.90625,
+      "right": 728.71875,
+      "top": 200.5,
+      "bottom": 225.5
+    },
+    "bubble_rect": {
+      "left": 620.90625,
+      "right": 1226
+    },
     "overflow": 0,
+    "inViewport": true,
     "failed": false,
     "implementationVisible": false,
-    "longTextVisible": false
+    "longTextVisible": false,
+    "chips": 1
   },
-  "1280-retry": {
-    "label": "📎 message.txt",
+  "1440-light-uk-files-send": {
+    "chip": "message.txt",
     "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
-    "left": 1040.921875,
-    "right": 1130,
-    "top": 152.5,
-    "bottom": 175.5,
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(248, 245, 240)",
+    "chipBorder": "rgb(229, 223, 213)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(237, 231, 222)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "3 вкладення",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… 3 вкладення message.txt",
+    "chip_rect": {
+      "left": 706.265625,
+      "right": 798.078125,
+      "top": 200.5,
+      "bottom": 225.5
+    },
+    "bubble_rect": {
+      "left": 620.90625,
+      "right": 1226
+    },
     "overflow": 0,
+    "inViewport": true,
     "failed": false,
     "implementationVisible": false,
-    "longTextVisible": false
+    "longTextVisible": false,
+    "chips": 1
   },
-  "390-send": {
-    "label": "📎 message.txt",
+  "1440-light-en-plain-send": {
+    "chip": "message.txt",
     "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
-    "left": 264.921875,
-    "right": 354,
-    "top": 185,
-    "bottom": 207.5,
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(248, 245, 240)",
+    "chipBorder": "rgb(229, 223, 213)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(237, 231, 222)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… message.txt",
+    "chip_rect": {
+      "left": 636.90625,
+      "right": 728.71875,
+      "top": 200.5,
+      "bottom": 225.5
+    },
+    "bubble_rect": {
+      "left": 620.90625,
+      "right": 1226
+    },
     "overflow": 0,
+    "inViewport": true,
     "failed": false,
     "implementationVisible": false,
-    "longTextVisible": false
+    "longTextVisible": false,
+    "chips": 1
   },
-  "390-retry": {
-    "label": "📎 message.txt",
+  "1440-light-en-files-send": {
+    "chip": "message.txt",
     "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
-    "left": 264.921875,
-    "right": 354,
-    "top": 185,
-    "bottom": 207.5,
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(248, 245, 240)",
+    "chipBorder": "rgb(229, 223, 213)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(237, 231, 222)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "3 attachments",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… 3 attachments message.txt",
+    "chip_rect": {
+      "left": 712.15625,
+      "right": 803.96875,
+      "top": 200.5,
+      "bottom": 225.5
+    },
+    "bubble_rect": {
+      "left": 620.90625,
+      "right": 1226
+    },
     "overflow": 0,
+    "inViewport": true,
     "failed": false,
     "implementationVisible": false,
-    "longTextVisible": false
+    "longTextVisible": false,
+    "chips": 1
+  },
+  "1440-dark-uk-plain-send": {
+    "chip": "message.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(20, 21, 27)",
+    "chipBorder": "rgb(41, 44, 54)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(38, 42, 54)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… message.txt",
+    "chip_rect": {
+      "left": 636.90625,
+      "right": 728.71875,
+      "top": 200.5,
+      "bottom": 225.5
+    },
+    "bubble_rect": {
+      "left": 620.90625,
+      "right": 1226
+    },
+    "overflow": 0,
+    "inViewport": true,
+    "failed": false,
+    "implementationVisible": false,
+    "longTextVisible": false,
+    "chips": 1
+  },
+  "1440-dark-uk-plain-send-hover": {
+    "border": "oklab(0.294384 0.000689834 -0.0186703)",
+    "color": "rgb(139, 139, 152)"
+  },
+  "1440-dark-uk-files-send": {
+    "chip": "message.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(20, 21, 27)",
+    "chipBorder": "rgb(41, 44, 54)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(38, 42, 54)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "3 вкладення",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… 3 вкладення message.txt",
+    "chip_rect": {
+      "left": 706.265625,
+      "right": 798.078125,
+      "top": 200.5,
+      "bottom": 225.5
+    },
+    "bubble_rect": {
+      "left": 620.90625,
+      "right": 1226
+    },
+    "overflow": 0,
+    "inViewport": true,
+    "failed": false,
+    "implementationVisible": false,
+    "longTextVisible": false,
+    "chips": 1
+  },
+  "1440-dark-uk-files-send-hover": {
+    "border": "oklab(0.294384 0.000689834 -0.0186703)",
+    "color": "rgb(139, 139, 152)"
+  },
+  "1440-dark-en-plain-send": {
+    "chip": "message.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(20, 21, 27)",
+    "chipBorder": "rgb(41, 44, 54)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(38, 42, 54)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… message.txt",
+    "chip_rect": {
+      "left": 636.90625,
+      "right": 728.71875,
+      "top": 200.5,
+      "bottom": 225.5
+    },
+    "bubble_rect": {
+      "left": 620.90625,
+      "right": 1226
+    },
+    "overflow": 0,
+    "inViewport": true,
+    "failed": false,
+    "implementationVisible": false,
+    "longTextVisible": false,
+    "chips": 1
+  },
+  "1440-dark-en-plain-send-hover": {
+    "border": "oklab(0.294384 0.000689834 -0.0186703)",
+    "color": "rgb(139, 139, 152)"
+  },
+  "1440-dark-en-files-send": {
+    "chip": "message.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(20, 21, 27)",
+    "chipBorder": "rgb(41, 44, 54)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(38, 42, 54)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "3 attachments",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… 3 attachments message.txt",
+    "chip_rect": {
+      "left": 712.15625,
+      "right": 803.96875,
+      "top": 200.5,
+      "bottom": 225.5
+    },
+    "bubble_rect": {
+      "left": 620.90625,
+      "right": 1226
+    },
+    "overflow": 0,
+    "inViewport": true,
+    "failed": false,
+    "implementationVisible": false,
+    "longTextVisible": false,
+    "chips": 1
+  },
+  "1440-dark-en-files-send-hover": {
+    "border": "oklab(0.294384 0.000689834 -0.0186703)",
+    "color": "rgb(139, 139, 152)"
+  },
+  "390-light-uk-plain-send": {
+    "chip": "message.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(248, 245, 240)",
+    "chipBorder": "rgb(229, 223, 213)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(237, 231, 222)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… message.txt",
+    "chip_rect": {
+      "left": 83.890625,
+      "right": 175.703125,
+      "top": 228.5,
+      "bottom": 253
+    },
+    "bubble_rect": {
+      "left": 71.890625,
+      "right": 366
+    },
+    "overflow": 0,
+    "inViewport": true,
+    "failed": false,
+    "implementationVisible": false,
+    "longTextVisible": false,
+    "chips": 1
+  },
+  "390-light-uk-files-send": {
+    "chip": "message.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(248, 245, 240)",
+    "chipBorder": "rgb(229, 223, 213)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(237, 231, 222)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "3 вкладення",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… 3 вкладення message.txt",
+    "chip_rect": {
+      "left": 153.25,
+      "right": 245.0625,
+      "top": 228.5,
+      "bottom": 253
+    },
+    "bubble_rect": {
+      "left": 71.890625,
+      "right": 366
+    },
+    "overflow": 0,
+    "inViewport": true,
+    "failed": false,
+    "implementationVisible": false,
+    "longTextVisible": false,
+    "chips": 1
+  },
+  "390-light-en-plain-send": {
+    "chip": "message.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(248, 245, 240)",
+    "chipBorder": "rgb(229, 223, 213)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(237, 231, 222)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… message.txt",
+    "chip_rect": {
+      "left": 83.890625,
+      "right": 175.703125,
+      "top": 228.5,
+      "bottom": 253
+    },
+    "bubble_rect": {
+      "left": 71.890625,
+      "right": 366
+    },
+    "overflow": 0,
+    "inViewport": true,
+    "failed": false,
+    "implementationVisible": false,
+    "longTextVisible": false,
+    "chips": 1
+  },
+  "390-light-en-files-send": {
+    "chip": "message.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(248, 245, 240)",
+    "chipBorder": "rgb(229, 223, 213)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(237, 231, 222)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "3 attachments",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… 3 attachments message.txt",
+    "chip_rect": {
+      "left": 159.140625,
+      "right": 250.953125,
+      "top": 228.5,
+      "bottom": 253
+    },
+    "bubble_rect": {
+      "left": 71.890625,
+      "right": 366
+    },
+    "overflow": 0,
+    "inViewport": true,
+    "failed": false,
+    "implementationVisible": false,
+    "longTextVisible": false,
+    "chips": 1
+  },
+  "390-dark-uk-plain-send": {
+    "chip": "message.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(20, 21, 27)",
+    "chipBorder": "rgb(41, 44, 54)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(38, 42, 54)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… message.txt",
+    "chip_rect": {
+      "left": 83.890625,
+      "right": 175.703125,
+      "top": 228.5,
+      "bottom": 253
+    },
+    "bubble_rect": {
+      "left": 71.890625,
+      "right": 366
+    },
+    "overflow": 0,
+    "inViewport": true,
+    "failed": false,
+    "implementationVisible": false,
+    "longTextVisible": false,
+    "chips": 1
+  },
+  "390-dark-uk-files-send": {
+    "chip": "message.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(20, 21, 27)",
+    "chipBorder": "rgb(41, 44, 54)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(38, 42, 54)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "3 вкладення",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… 3 вкладення message.txt",
+    "chip_rect": {
+      "left": 153.25,
+      "right": 245.0625,
+      "top": 228.5,
+      "bottom": 253
+    },
+    "bubble_rect": {
+      "left": 71.890625,
+      "right": 366
+    },
+    "overflow": 0,
+    "inViewport": true,
+    "failed": false,
+    "implementationVisible": false,
+    "longTextVisible": false,
+    "chips": 1
+  },
+  "390-dark-en-plain-send": {
+    "chip": "message.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(20, 21, 27)",
+    "chipBorder": "rgb(41, 44, 54)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(38, 42, 54)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… message.txt",
+    "chip_rect": {
+      "left": 83.890625,
+      "right": 175.703125,
+      "top": 228.5,
+      "bottom": 253
+    },
+    "bubble_rect": {
+      "left": 71.890625,
+      "right": 366
+    },
+    "overflow": 0,
+    "inViewport": true,
+    "failed": false,
+    "implementationVisible": false,
+    "longTextVisible": false,
+    "chips": 1
+  },
+  "390-dark-en-files-send": {
+    "chip": "message.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(20, 21, 27)",
+    "chipBorder": "rgb(41, 44, 54)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(38, 42, 54)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "3 attachments",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… 3 attachments message.txt",
+    "chip_rect": {
+      "left": 159.140625,
+      "right": 250.953125,
+      "top": 228.5,
+      "bottom": 253
+    },
+    "bubble_rect": {
+      "left": 71.890625,
+      "right": 366
+    },
+    "overflow": 0,
+    "inViewport": true,
+    "failed": false,
+    "implementationVisible": false,
+    "longTextVisible": false,
+    "chips": 1
+  },
+  "1440-dark-uk-plain-retry": {
+    "chip": "message.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(20, 21, 27)",
+    "chipBorder": "rgb(41, 44, 54)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(38, 42, 54)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… message.txt",
+    "chip_rect": {
+      "left": 636.90625,
+      "right": 728.71875,
+      "top": 200.5,
+      "bottom": 225.5
+    },
+    "bubble_rect": {
+      "left": 620.90625,
+      "right": 1226
+    },
+    "overflow": 0,
+    "inViewport": true,
+    "failed": false,
+    "implementationVisible": false,
+    "longTextVisible": false,
+    "chips": 1
+  },
+  "390-dark-uk-plain-retry": {
+    "chip": "message.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "icon": true,
+    "emoji": false,
+    "chipBackground": "rgb(20, 21, 27)",
+    "chipBorder": "rgb(41, 44, 54)",
+    "chipBorderWidth": "1px",
+    "bubbleBackground": "rgb(38, 42, 54)",
+    "excerpt": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя…",
+    "excerptLines": 2,
+    "caption": "",
+    "bubbleText": "Привіт, це експорт Telegram. яяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяяя… message.txt",
+    "chip_rect": {
+      "left": 83.890625,
+      "right": 175.703125,
+      "top": 228.5,
+      "bottom": 253
+    },
+    "bubble_rect": {
+      "left": 71.890625,
+      "right": 366
+    },
+    "overflow": 0,
+    "inViewport": true,
+    "failed": false,
+    "implementationVisible": false,
+    "longTextVisible": false,
+    "chips": 1
   }
 }

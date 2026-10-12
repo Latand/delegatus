@@ -35,11 +35,16 @@ and the same local inbox. Server callers and the composer therefore have the
 same delivery behavior. Retry keeps the original client key and rewrites no
 accepted file. Unknown delivery outcomes keep their attachments.
 
-The outbox preserves the original text for retry and Copy. The sent bubble
-shows the text-file chip. The delivered marker lets the shared message row
-show that chip after transcript adoption and on another device.
+The outbox preserves the original text for retry and Copy. The delivered
+marker's second line carries the operator's opening words (one line, 160
+characters at most, never splitting a character). The sent bubble shows those
+words clamped to two lines, and under them one caption row: the count of the
+operator's own attachments, when there are any, beside a bordered
+`message.txt` chip with the same file icon as the composer tiles and a hover
+state. The generated file is never counted, so a message with three files
+reads "3 attachments" beside the chip. The marker also lets the shared message
+row draw the same bubble after transcript adoption and on another device.
 The chip recognizes POSIX, Windows drive and UNC inbox paths.
-The bubble counts the generated file once alongside the operator's attachments.
 
 ## Verification
 
@@ -51,8 +56,13 @@ file limits. A production-queue test first gets the old 413, then admits the
 converted message under that original key with a durable held reservation.
 
 The existing conversation-window browser driver runs the real composer and
-message rows over its synthetic host. Its long-text case sends and retries at
-1280 and 390 pixels, then adopts the transcript and requires one file chip.
+message rows over its synthetic host. Its long-text case sends a 30,000
+character message, with and without three operator files, at 1440 and 390
+pixels in light and dark, in both languages, then retries at both widths. It
+requires the opening words in the bubble (never a bare counter), at most two
+lines of them, the operator's count without the generated file, a chip with a
+non-transparent fill, a border, the line icon and a changed hover colour, no
+overflow, and the same words, count and single chip after transcript adoption.
 The host responses in the browser fixture are synthetic; server tests check
 the real inbox bytes and production queue admission separately. This check
 launches no provider agent.
@@ -68,7 +78,7 @@ LLV_CONVERSATION_BROWSER_TEST=1 CHROME_BIN=<chromium> \
 
 Use isolated HOME, XDG_CONFIG_HOME, TMPDIR, CLAUDE_CODE_TMPDIR and LLV_STATE_DIR
 for every run. [readings.json](../../evidence/long-text-attachment/readings.json)
-records zero horizontal overflow and the whole chip inside both viewports.
+records the measured chip, caption and excerpt readings for each frame.
 Frames are written to `.artifacts/long-text-attachment/`.
 
 Rendered frames retained in review history: [desktop send](https://raw.githubusercontent.com/Latand/delegatus/c5cd826d2a8932ebc9cfdfacbeefb9fa15041704/.artifacts/long-text-attachment/1280-send.png),

@@ -64,6 +64,8 @@ import {
   type OutboxOwner,
 } from "./outbox";
 
+import { messageTextExcerpt } from "@/lib/messageTextAttachment";
+
 const params = new URLSearchParams(window.location.search);
 let longTextAttempts = 0;
 
@@ -743,13 +745,20 @@ function installFakeTransport(): void {
       return Response.json({ outcome: "unknown" });
     }
     if (url === "/api/runtime/send") {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { idempotencyKey: string; selectedContext?: unknown };
+      const body = JSON.parse(String(init?.body ?? "{}")) as { idempotencyKey: string; selectedContext?: unknown; text?: string; files?: { name: string }[] };
       if (params.has("long-text")) {
         longTextAttempts += 1;
         if (params.has("retry-long-text") && longTextAttempts === 1) {
           return Response.json({ error: "structured message text exceeds the 32000-byte envelope bound" }, { status: 413 });
         }
-        const text = "The full message is attached as message.txt. Read the file in full before responding.\n/inbox/files/evidence/message.txt";
+        /* The server's own marker: the first line, the opening words, then the
+           operator's files and the generated one. */
+        const text = [
+          "The full message is attached as message.txt. Read the file in full before responding.",
+          messageTextExcerpt(body.text ?? ""),
+          ...(body.files ?? []).map(file => `/inbox/files/evidence/${file.name}`),
+          "/inbox/files/evidence/message.txt",
+        ].filter(Boolean).join("\n");
         const receipt = lifecycleReceipt(body.idempotencyKey, "delivered", { text });
         fakeHost.receipts = [receipt];
         queueMicrotask(announceHost);
@@ -954,7 +963,8 @@ function lifecycleControls(): LifecycleControls {
         ...((entry?.images ?? 0) > 0 ? [LIFE_INBOX_IMAGE] : []),
         ...((entry?.files ?? 0) > 0 ? [LIFE_INBOX_FILE] : []),
       ];
-      const delivered = [entry?.textAttachment?.text ?? entry?.text ?? LIFE_TEXT, ...carried].filter(Boolean).join("\n");
+      const delivered = entry?.textAttachment ? entry.textAttachment.text
+        : [entry?.text ?? LIFE_TEXT, ...carried].filter(Boolean).join("\n");
       fakeHost.lines = [lifeOpening(), JSON.stringify({
         type: "event_msg",
         timestamp,

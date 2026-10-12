@@ -357,11 +357,10 @@ export function ConversationMessageRow({
     <UserMessageRow
       text={text}
       copyText={entry?.textAttachment ? entry.text : undefined}
-      attachmentCount={entry?.textAttachment ? attachments + 1 : undefined}
       sender={sender}
       tone={entry?.intent === "context" ? "context" : undefined}
       selectedContext={selectedContext}
-      bubbleFooter={attachments && !textFile ? (
+      bubbleFooter={attachments ? (
         /* What the submission actually carried, in ONE presentation from the
            moment it was staged to long after its record arrived. A file-only
            bubble used to render blank here, because the count came from the
@@ -371,7 +370,7 @@ export function ConversationMessageRow({
            moves (round-4 P2). It is a caption about the submission, not a
            second copy of the attachment: the transcript still carries the
            image itself as its own row below. */
-        <span className="mt-1 block text-caption font-semibold text-muted">
+        <span className={`${textFile ? "" : "mt-1 block "}text-caption font-semibold text-muted`}>
           {t(entry!.files ? "composer.attachmentsCount" : "composer.imagesCount", { count: attachments })}
         </span>
       ) : null}
