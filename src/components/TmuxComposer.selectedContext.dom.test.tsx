@@ -1,14 +1,12 @@
 /**
- * The composer half of #844, driven through the REAL composer and read off the
- * bytes that go on the wire.
+ * The composer half of #844, after the operator's decision of 2026-10-11:
+ * the «eye» chip and the reference it attached are gone, driven through the
+ * REAL composer and read off the bytes that go on the wire.
  *
- * Two claims that only an end-to-end run can make:
- *
- * 1. The reference is captured ATOMICALLY with the text. Moving the selection
- *    immediately after submitting must leave the admitted request alone, and the
- *    only way to know that is to move it while the send is in flight.
- * 2. The badge in the composer names the same card the request names, so what
- *    the operator sees before sending is what they sent.
+ * The card the operator has open or selected on the board no longer rides
+ * with a message, in any composer: no badge before Send, no reference on the
+ * request. A task is named through the card's own button (#2420), and those
+ * chips still travel — on the record the seat already reads.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { act } from "react";
@@ -172,67 +170,43 @@ async function sendThrough(host: HTMLElement, text: string): Promise<void> {
   });
 }
 
-test("the submitted request names the selected card by its conversation id", async () => {
+test("the card the operator has selected is not attached to the turn", async () => {
   const host = await mountComposer();
   await sendThrough(host, "look at that one");
 
   expect(sent).toHaveLength(1);
   expect(sent[0]!.text).toBe("look at that one");
-  expect(sent[0]!.selectedContext).toMatchObject({
-    version: 1,
-    state: "selected",
-    conversationId: SELECTED_A,
-    project: "atlas",
-    label: "Worker A",
-    viewSessionId: "vs-synthetic-1",
-    deviceId: "dev-synthetic-1",
-  });
+  /* No reference at all: the wire names no card, and carries no empty one either. */
+  expect(sent[0]!.selectedContext).toBeUndefined();
 });
 
-test("moving the selection while the send is in flight does not rewrite the admitted turn", async () => {
+test("moving the selection while the send is in flight changes nothing the turn carries", async () => {
   const host = await mountComposer();
   duringSend = () => selectCard(PATH_B);
   await sendThrough(host, "look at that one");
-
-  expect(sent).toHaveLength(1);
-  expect(sent[0]!.selectedContext).toMatchObject({ state: "selected", conversationId: SELECTED_A });
-  /* The move DID land — the next turn sees it, which is what proves the first
-     one was frozen rather than simply never updated. */
   await sendThrough(host, "and now that one");
-  expect(sent[1]!.selectedContext).toMatchObject({ state: "selected", conversationId: SELECTED_B });
+
+  expect(sent).toHaveLength(2);
+  expect(sent.map((request) => request.selectedContext)).toEqual([undefined, undefined]);
 });
 
-test("an empty selection submits the explicit none variant, not a missing field", async () => {
+test("an empty selection submits no reference either", async () => {
   viewBus.reportSlice({ mode: "list", focusedPath: null, selectedPaths: [], visiblePaths: [], camera: null });
   const host = await mountComposer();
   await sendThrough(host, "anything running?");
 
-  expect(sent[0]!.selectedContext).toMatchObject({ version: 1, state: "none", project: "atlas" });
-  expect(sent[0]!.selectedContext).not.toHaveProperty("conversationId");
+  expect(sent[0]!.selectedContext).toBeUndefined();
 });
 
-test("the composer shows a badge naming the card the next turn will carry", async () => {
+test("the composer shows no eye chip, with a card selected or not", async () => {
   const host = await mountComposer();
-  const badge = host.querySelector("[data-selected-context]");
-  expect(badge?.getAttribute("data-selected-context")).toBe("selected");
-  expect(badge?.textContent).toContain("Worker A");
-  expect(badge?.getAttribute("aria-label")).toContain("Worker A");
-});
+  expect(host.querySelector("[data-selected-context]")).toBeNull();
+  expect(host.textContent).not.toContain("Worker A");
 
-test("the badge follows the selection before submission and disappears with it", async () => {
-  const host = await mountComposer();
   await act(async () => {
     selectCard(PATH_B);
     await new Promise((r) => setTimeout(r, 0));
   });
-  expect(host.querySelector("[data-selected-context]")?.textContent).toContain("Worker B");
-
-  await act(async () => {
-    viewBus.reportSlice({ mode: "list", focusedPath: null, selectedPaths: [], visiblePaths: [], camera: null });
-    await new Promise((r) => setTimeout(r, 0));
-  });
-  /* Nothing selected is an ANSWER on the persisted row, but a permanent
-     "nothing selected" chip over every composer in the app is noise. The
-     composer shows the badge only when there is a card to name. */
   expect(host.querySelector("[data-selected-context]")).toBeNull();
+  expect(host.textContent).not.toContain("Worker B");
 });
