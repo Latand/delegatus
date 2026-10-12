@@ -14,6 +14,19 @@ function referenceMatch(text: string, length: number, hashes: ReadonlySet<string
   return false;
 }
 
+test("fingerprint matching compares the entire digest and exact catalog spelling", () => {
+  const text = "synthetic full digest control";
+  const hash = referenceDigest(text);
+  const samePrefix = hash.slice(0, -1) + (hash.endsWith("0") ? "1" : "0");
+  for (const candidate of [samePrefix, hash.toUpperCase(), " " + hash, hash + ".", hash.slice(0, -1)]) {
+    const hashes = new Set([candidate]);
+    expect(matchesFingerprintWindows(text, text.length, hashes)).toBe(referenceMatch(text, text.length, hashes));
+    expect(matchesFingerprintWindows(text, text.length, hashes)).toBe(false);
+    hashes.add(hash);
+    expect(matchesFingerprintWindows(text, text.length, hashes)).toBe(true);
+  }
+});
+
 test("fingerprint digests match node crypto on Unicode and every sliding window", () => {
   const cases = ["", "ascii", "é", "e\u0301", "💡", "\ud800", "\udc00", "a\0b", "＿Ｆ", "\ufffd"];
   const source = "abcdefé💡e\u0301\ud800\0＿".repeat(6250);
