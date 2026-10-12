@@ -101,8 +101,9 @@ test("fleet reads do not materialize archived registry history on initial or rep
   try {
     expect(store.archiveInactive(1000)).toBeGreaterThanOrEqual(200);
     store.readOnlySnapshot(); // Warm the lazy registry projection before measuring tool work.
-    f.sources.registrySnapshot = () => store.readOnlySnapshot().file;
-    f.dependencies.registrySnapshot = f.sources.registrySnapshot;
+    const registrySnapshot = () => store.readOnlySnapshot().file;
+    f.sources.registrySnapshot = registrySnapshot;
+    f.dependencies.registrySnapshot = registrySnapshot;
     payloadReads.clear();
 
     const boundedReads = () => (payloadReads.get("entries") ?? 0) + (payloadReads.get("receipts") ?? 0);
