@@ -40,7 +40,8 @@ test("a rewrite keeps its id and level, versions its old text, and can be revert
   store.revertRule(version);
   const reverted = store.projectView("curation-trial").scopes.find(s => s.scope === first.scope)!.active[0]!;
   expect(reverted.rule).toBe(oldText);
-  expect(reverted.versions).toHaveLength(2);
+  // The text now in force is not offered as an earlier text; only the rewrite it replaced is.
+  expect(reverted.versions).toEqual([expect.objectContaining({ rule: newText })]);
   expect(store.storedLessonTexts()).toContain(newText);
 });
 
