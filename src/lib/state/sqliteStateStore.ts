@@ -218,7 +218,12 @@ export interface CompanionPatch<C> {
 export interface StateBoundedTransaction<T> {
   get(key: string): T | null;
   pipelineLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null;
-  hasUnfinishedPipeline(query: { repository: string; branch: string; prNumber?: number }): boolean;
+  hasUnfinishedPipeline(query: {
+    repository: string;
+    branch: string;
+    prNumber?: number;
+    pullRequestOf?: (pipeline: T) => { repository: string; number: number } | null;
+  }): boolean;
   put(record: T): void;
   delete(key: string): void;
 }
@@ -1028,19 +1033,27 @@ export class SqliteStateCollection<T> {
             hasUnfinishedPipeline: (query) => {
               consume();
               if (this.options.collection !== "pipelines") throw new Error("unfinished pipeline lookup requires the pipeline collection");
-              return !!db.query<{ found: number }, [string, string, number | null, string, number | null]>(`
-                SELECT 1 AS found FROM state_rows
+              const scanLimit = remaining;
+              const rows = db.query<{ value_json: string }, [number]>(`
+                SELECT value_json FROM state_rows
                 WHERE collection = 'pipelines' AND json_valid(value_json)
                   AND json_extract(value_json, '$.state') NOT IN ('completed', 'closed')
-                  AND (
-                    (json_extract(value_json, '$.delivery.target.repository') = ?
-                      AND json_extract(value_json, '$.delivery.target.branch') = ?)
-                    OR (? IS NOT NULL
-                      AND json_extract(value_json, '$.delivery.target.repository') = ?
-                      AND json_extract(value_json, '$.delivery.target.pr') = ?)
-                  )
-                LIMIT 1
-              `).get(query.repository, query.branch, query.prNumber ?? null, query.repository, query.prNumber ?? null);
+                ORDER BY row_key LIMIT ?
+              `).all(scanLimit + 1);
+              for (const row of rows) {
+                consume();
+                const pipeline = this.decodeRow(row.value_json);
+                if (!pipeline) throw new Error("invalid bounded state row");
+                if ((pipeline as { hiddenAt?: string | null }).hiddenAt) continue;
+                const value = pipeline as { delivery?: { target?: { repository?: string; branch?: string; pr?: number } } };
+                if (value.delivery?.target?.repository === query.repository && value.delivery.target.branch === query.branch) return true;
+                if (query.prNumber && value.delivery?.target?.repository === query.repository && value.delivery.target.pr === query.prNumber) return true;
+                if (query.prNumber && query.pullRequestOf) {
+                  const pr = query.pullRequestOf(pipeline);
+                  if (pr?.repository === query.repository && pr.number === query.prNumber) return true;
+                }
+              }
+              return false;
             },
             get: (key) => {
               consume();

@@ -59,6 +59,18 @@ export function pipelineWorkLinks(
   return resolvePipelineLinks(pipeline, pipelineRepository(pipeline, recorded), cache);
 }
 
+/** The single PR identity used by refresh admission and durable creation. */
+export function lanePullRequest(pipeline: Pipeline): { repository: string; number: number } | null {
+  if (pipeline.delivery?.disposition === "comparison") return null;
+  const deliveryPr = pipeline.delivery?.target.pr;
+  if (deliveryPr) {
+    const repository = githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? pipelineRepository(pipeline);
+    return repository ? { repository, number: deliveryPr } : null;
+  }
+  const prs = pipelineWorkLinks(pipeline).links.filter((link) => link.kind === "pr");
+  return prs.length === 1 ? { repository: prs[0]!.repository, number: prs[0]!.number } : null;
+}
+
 export function taskWorkLinks(task: BoardTask, pipelines: readonly Pipeline[], cache: ForgeCacheView = forgeCacheView()): ResolvedWorkLinks {
   const linked = pipelines.filter((pipeline) => pipeline.taskIds?.includes(task.id));
   const carried = linked.map((pipeline) => pipelineWorkLinks(pipeline, cache));

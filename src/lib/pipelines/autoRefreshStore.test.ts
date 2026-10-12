@@ -51,6 +51,18 @@ test("refresh admission refuses unfinished work linked to the same PR on another
   expect(loadPipelines().some((lane) => lane.id === "refresh")).toBe(false);
 });
 
+test("refresh admission refuses a manually linked PR resolved without delivery metadata", async () => {
+  const otherBranch = { ...target, branch: "refs/heads/other", pr: undefined };
+  const linked = await createPipelineWithDelivery(fixture("manual-link"), otherBranch);
+  linked.state = "running";
+  linked.workLinks = [{ repository: target.repository, number: 11, kind: "pr", addedAt: "2026-10-12T00:00:00.000Z", addedBy: "operator" }];
+  savePipelines([linked]);
+
+  await expect(createPipelineWithDelivery(fixture("refresh"), target, false, { requireOwner: true }))
+    .rejects.toThrow("unfinished PR work");
+  expect(loadPipelines().some((lane) => lane.id === "refresh")).toBe(false);
+});
+
 test("concurrent and restarted creation replays one owner even while its claim is active", async () => {
   const make = (id: string) => {
     const value = fixture(id);
@@ -75,8 +87,9 @@ test("an idempotent refresh replay attaches before checking newly appeared unfin
     return value;
   };
   const created = await createPipelineWithDelivery(make("refresh"), target, false, { requireOwner: true });
-  const rival = await createPipelineWithDelivery(fixture("comparison-after-create"), target, true);
+  const rival = await createPipelineWithDelivery(fixture("comparison-after-create"), { ...target, branch: "refs/heads/other", pr: undefined }, true);
   rival.state = "running";
+  rival.workLinks = [{ repository: target.repository, number: 11, kind: "pr", addedAt: "2026-10-12T00:00:00.000Z", addedBy: "operator" }];
   savePipelines([created, rival]);
 
   const replay = await createPipelineWithDelivery(make("retry"), target, false, { requireOwner: true });

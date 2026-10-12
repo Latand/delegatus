@@ -14,8 +14,8 @@ import { mutateTasks } from "@/lib/tasks/store";
 
 import { forgeCacheView } from "./cache";
 import { checkFailedReason, MERGE_REASONS } from "./mergeReasons";
-import { pipelineRepository, pipelineWorkLinks } from "./resolve";
-import { githubRepositoryOfRemote, type PullRequestState } from "./workLinks";
+import { lanePullRequest, pipelineRepository, pipelineWorkLinks } from "./resolve";
+import { type PullRequestState } from "./workLinks";
 
 /*
  * "Merge when the review passes" (#2187 §4, docs/design/merge-policy-and-task-finishing.md).
@@ -122,18 +122,7 @@ export function mergeEligible(pipeline: Pipeline): boolean {
   return reviewed > 0;
 }
 
-/** The lane's pull request (§4.2 rule 1): its delivery's, or the one the
-    forge cache joins to it. No PR, several, or a comparison delivery: none. */
-export function lanePullRequest(pipeline: Pipeline): { repository: string; number: number } | null {
-  if (pipeline.delivery?.disposition === "comparison") return null;
-  const deliveryPr = pipeline.delivery?.target.pr;
-  if (deliveryPr) {
-    const repository = githubRepositoryOfRemote(pipeline.delivery?.target.remote) ?? pipelineRepository(pipeline);
-    return repository ? { repository, number: deliveryPr } : null;
-  }
-  const prs = pipelineWorkLinks(pipeline).links.filter((link) => link.kind === "pr");
-  return prs.length === 1 ? { repository: prs[0]!.repository, number: prs[0]!.number } : null;
-}
+export { lanePullRequest };
 
 /* ── Reading GitHub ─────────────────────────────────────────────────────── */
 

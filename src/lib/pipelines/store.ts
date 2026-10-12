@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { isDismissedBy } from "@/lib/attention/dismissalTypes";
+import { lanePullRequest } from "@/lib/forge/resolve";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { effortScale } from "@/lib/agent/efforts";
@@ -1500,8 +1501,8 @@ export function withDeliveryMutation<R>(operation: (tx: StateBoundedTransaction<
   return pipelineStore().boundedPatch(16, operation);
 }
 
-export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R): Promise<R> {
-  return refuseBusyBeforeAdmission((admitted) => pipelineStore().boundedPatchAsync(16, (tx) => {
+export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R, limit = 16): Promise<R> {
+  return refuseBusyBeforeAdmission((admitted) => pipelineStore().boundedPatchAsync(limit, (tx) => {
     admitted();
     return operation(tx);
   }, pipelineLockWaitMs()));
@@ -1533,13 +1534,13 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
       }
     }
     if (options.requireOwner && (comparison || tx.pipelineLookup({ ...target, active: true })
-      || tx.hasUnfinishedPipeline({ repository: target.repository, branch: target.branch, prNumber: target.pr }))) {
+      || tx.hasUnfinishedPipeline({ repository: target.repository, branch: target.branch, prNumber: target.pr, pullRequestOf: lanePullRequest }))) {
       throw new Error("target already owned or has unfinished PR work; Delegatus could not claim the refresh delivery branch");
     }
     assignPipelineDelivery(pipeline, target, comparison, tx.pipelineLookup);
     tx.put(pipeline);
     return pipeline;
-  });
+  }, options.requireOwner ? 4096 : 16);
 }
 
 export function deliveryOwnerError(pipeline: Pipeline, owner: Pipeline | null): string | null {
