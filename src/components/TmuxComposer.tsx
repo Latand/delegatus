@@ -2776,6 +2776,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       || (entry?.operationId && !entry.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX) && entry.operationId !== operationId)) {
       return { outcome: "unknown" } as const;
     }
+    if (row && !receipt) {
+      const bound = await composerSubmissionPayloads.bindOperation(row.ref, operationId);
+      if (!current() || !bound) return { outcome: "unknown" } as const;
+    }
     // Terminal evidence may arrive through the stream while this read waits.
     if (entry?.state === "delivered" || row?.receipt?.status === "delivered") return answer;
     if (receipt && row) {

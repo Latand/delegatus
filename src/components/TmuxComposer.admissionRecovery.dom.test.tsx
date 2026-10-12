@@ -358,6 +358,46 @@ test("saved delivery proof wins over a later admitted lookup without its receipt
   });
 });
 
+test("a payload restored in a new tab binds bare admission for operation recovery", async () => {
+  await scenario("attachment", async fixture => {
+    sessionStorage.clear();
+    resetOutboxForTests();
+    sessionStorage.setItem(`llvDraft:${fixture.conversationId}`, "Draft from the new tab");
+    fixture.state.receipt = { ...fixture.state.receipt!, operationId: "operation-retained-tab" };
+    let admissionReads = 0;
+    fixture.state.lookup = async () => {
+      admissionReads += 1;
+      return admissionReads === 1
+        ? { outcome: "admitted", operationId: fixture.state.receipt!.operationId }
+        : { outcome: "unknown" };
+    };
+    let operationReads = 0;
+    globalThis.fetch = (async input => {
+      if (String(input) === "/api/tmux/targets") return Response.json({ targets: {} });
+      if (String(input) === "/api/runtime/operations/operation-retained-tab") {
+        operationReads += 1;
+        return Response.json({ receipt: fixture.state.receipt });
+      }
+      return Response.json({}, { status: 404 });
+    }) as typeof fetch;
+    fixture.remount();
+
+    await until(() => operationReads > 0);
+    let restored: Awaited<ReturnType<typeof composerSubmissionPayloads.restore>> | undefined;
+    for (let attempt = 0; attempt < 250; attempt += 1) {
+      restored = await composerSubmissionPayloads.restore({ conversationId: fixture.conversationId, key: fixture.key });
+      if (restored === null) break;
+      await sleep(4);
+    }
+    expect(restored).toBeNull();
+    expect(admissionReads).toBeGreaterThan(0);
+    expect(operationReads).toBeGreaterThan(0);
+    expect(fixture.state.sends).toBe(1);
+    expect((fixture.host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Draft from the new tab");
+    expect(fixture.host.textContent).not.toContain(translate("uk", "composer.deliveryUnconfirmed"));
+  });
+});
+
 test("non-execution saved while hiding retires uncertainty on return", async () => {
   await scenario("attachment", async fixture => {
     const refuse = composerSubmissionPayloads.refuse.bind(composerSubmissionPayloads);
