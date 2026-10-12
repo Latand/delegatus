@@ -51,8 +51,8 @@ export function useAgentWindowGeometry(rootRef: RefObject<HTMLElement | null>): 
     if (!root) return;
     const apply = () => {
       const rect = root.getBoundingClientRect();
-      /* The header row, and the reason filters when they wrap under it. */
-      const rows = root.querySelectorAll<HTMLElement>(":scope > .bar, :scope > .reason-filter-row");
+      /* The header row. */
+      const rows = root.querySelectorAll<HTMLElement>(":scope > .bar");
       let top = rect.top;
       for (const row of rows) top = Math.max(top, row.getBoundingClientRect().bottom);
       const box = agentWindowBox(

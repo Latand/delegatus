@@ -1253,7 +1253,8 @@ describe("#1695 K1+K2 kanban board", () => {
         menuHeight: menu ? Math.round(menu.getBoundingClientRect().height) : 0,
         tileWidth: tile ? Math.round(tile.getBoundingClientRect().width) : null,
       } : null,
-      hiddenCount: board.querySelector("[data-hidden-pill] .count")?.textContent ?? null,
+      /* The Overview's pill, or the count a project's bar carries for its Hidden row of ⋯. */
+      hiddenCount: board.querySelector("[data-hidden-pill] .count")?.textContent ?? board.querySelector("header.bar[data-hidden-count]")?.getAttribute("data-hidden-count") ?? null,
       cards: board.querySelectorAll(".card[data-id]").length,
       pipelineSections: board.querySelectorAll(".pblock").length,
     };
@@ -1501,9 +1502,9 @@ describe("#1695 K1+K2 kanban board", () => {
         await links.context.close();
       }
 
-      /* The views (#1695): a board stored on the scheme face opens on the Board, the desktop offers only Board and
-         Conversations, Conversations lists the project's conversations and writes the list view, and Board comes
-         back with the kanban face. Nothing stored is rewritten just by opening. */
+      /* The views (#1695, and the one-row header): a board stored on the scheme face opens on the Board, the
+         desktop offers no other view, and the project's conversations open as a list under the header's
+         recent-agents icon with the Board still mounted. Nothing stored is rewritten by opening either. */
       const faces = await openFixture(browser, `${base}?face=scheme`, VIEWPORTS[1], "light");
       try {
         await faces.page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
@@ -1513,23 +1514,21 @@ describe("#1695 K1+K2 kanban board", () => {
         /* Opening reads the stored view: no presentation is written. Membership convergence (`reconcile-roots`) runs
            on every open, whatever the view, and is recorded as it is. */
         const openedWrites = openedMutations.filter((mutation) => mutation.kind === "set-presentation").length;
-        await faces.page.click('[data-kanban-board] [data-view-tab="list"]');
-        await faces.page.waitForSelector("[data-desktop-conversations-row]", { state: "attached", timeout: 10_000 });
-        const listed = await faces.page.$$eval("[data-desktop-conversations-row]", (nodes) => nodes.length);
+        await faces.page.click("[data-kanban-board] header.bar [data-bar-recent-toggle]");
+        await faces.page.waitForSelector("[data-bar-recent-list] [data-desktop-conversations-row]", { state: "attached", timeout: 10_000 });
+        const listed = await faces.page.$$eval("[data-bar-recent-list] [data-desktop-conversations-row]", (nodes) => nodes.length);
         const conversationsTail = await faces.page.$eval("[data-desktop-conversations-tail]", (node) => node.textContent ?? "");
-        const kanbanOnList = Boolean(await faces.page.$("[data-kanban-board]"));
-        const toList = await faces.page.evaluate(() => (window as unknown as { evidence: { boardMutations: unknown[] } }).evidence.boardMutations);
+        const kanbanUnderList = Boolean(await faces.page.$("[data-kanban-board] .card[data-id]"));
+        const afterList = await faces.page.evaluate(() => (window as unknown as { evidence: { boardMutations: Array<{ kind: string }> } }).evidence.boardMutations);
         await faces.page.screenshot({ path: path.join(OUT, "production-conversations-light.png") });
-        await faces.page.click('[data-view-tab="kanban"]');
-        await faces.page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 10_000 });
-        const back = await faces.page.evaluate(() => (window as unknown as { evidence: { boardMutations: unknown[] } }).evidence.boardMutations);
-        if (JSON.stringify(tabs) !== JSON.stringify(["kanban", "list"])) failures.push(`tabs: the desktop offered ${JSON.stringify(tabs)}`);
+        await faces.page.keyboard.press("Escape");
+        await faces.page.waitForSelector("[data-bar-recent-list]", { state: "detached", timeout: 10_000 });
+        if (tabs.length) failures.push(`tabs: the desktop offered ${JSON.stringify(tabs)}`);
         if (schemeShown) failures.push("tabs: the scheme was drawn on the desktop");
         if (openedWrites !== 0) failures.push(`tabs: opening a board stored on the scheme face wrote a presentation: ${JSON.stringify(openedMutations)}`);
-        if (kanbanOnList || listed === 0) failures.push(`tabs: Conversations listed ${listed} rows with the kanban ${kanbanOnList ? "still" : "not"} mounted`);
-        if (!toList.some((mutation) => JSON.stringify(mutation) === JSON.stringify({ kind: "set-presentation", viewMode: "list" }))) failures.push(`tabs: Conversations wrote ${JSON.stringify(toList)}`);
-        if (!back.some((mutation) => JSON.stringify(mutation) === JSON.stringify({ kind: "set-presentation", desktopBoard: "kanban", viewMode: "scheme" }))) failures.push(`tabs: Board wrote ${JSON.stringify(back)}`);
-        flows.tabs = { tabs, schemeShown, openedWrites, openedMutationKinds: openedMutations.map((mutation) => mutation.kind), listed, conversationsTail, toList, back };
+        if (!kanbanUnderList || listed === 0) failures.push(`tabs: the recent agents listed ${listed} rows with the kanban ${kanbanUnderList ? "still" : "not"} mounted`);
+        if (afterList.some((mutation) => mutation.kind === "set-presentation")) failures.push(`tabs: opening the recent agents wrote ${JSON.stringify(afterList)}`);
+        flows.tabs = { tabs, schemeShown, openedWrites, openedMutationKinds: openedMutations.map((mutation) => mutation.kind), listed, conversationsTail, kanbanUnderList };
         await faces.page.screenshot({ path: path.join(OUT, "production-default-board-light.png") });
         if (faces.pageErrors.length) failures.push(`tabs: page errors ${faces.pageErrors.join(" | ")}`);
       } finally {
@@ -1543,12 +1542,10 @@ describe("#1695 K1+K2 kanban board", () => {
       try {
         const { page } = create;
         await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
-        /* Below its wide tier the bar folds + Task and + Agent into one create menu (#1855). */
+        /* The bar creates through one + with a two-row menu (#1855, and the one-row header). */
         const barCreate = async (which: "dash.newTask" | "dash.newConvo") => {
-          if (await page.locator("[data-bar-create]").count()) {
-            await page.click("[data-bar-create]");
-            await page.click(`.menu [role="menuitem"]:has-text("${translate("en", which)}")`);
-          } else await page.click(which === "dash.newTask" ? "[data-new-task]" : "[data-new-agent]");
+          await page.click("[data-bar-create]");
+          await page.click(`.menu [role="menuitem"]:has-text("${translate("en", which)}")`);
         };
         await barCreate("dash.newTask");
         await page.waitForSelector("[data-kanban-new-task] textarea", { timeout: 10_000 });
@@ -2301,7 +2298,13 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
   const columnOf = (page: Page, id: string) => page.evaluate((selector) => document.querySelector(selector)?.closest<HTMLElement>(".column")?.dataset.status ?? null, card(id));
   const receipts = (page: Page) => page.evaluate(() => [...document.querySelectorAll("[data-kanban-receipt] .msg")].map((node) => node.textContent ?? ""));
   const evidenceOf = <T,>(page: Page, read: (evidence: Evidence) => T) => page.evaluate(`(${read.toString()})(window.evidence)`) as Promise<T>;
-  const hiddenCount = (page: Page) => page.evaluate(() => document.querySelector("[data-hidden-pill]")?.getAttribute("data-count") ?? null);
+  const hiddenCount = (page: Page) => page.evaluate(() => document.querySelector("header.bar[data-hidden-count]")?.getAttribute("data-hidden-count") ?? null);
+  /* Hidden is a row of the project's ⋯, and its tray opens under ⋯. */
+  const openHiddenTray = async (page: Page) => {
+    await page.click("[data-kanban-board] header.bar [data-bar-more]");
+    await page.click("[data-bar-more-hidden]");
+    await page.waitForSelector(".hidden-tray");
+  };
 
   async function boardReady(page: Page) {
     await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
@@ -2414,14 +2417,13 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
         }, `prototype card menu ${scheme}`);
 
         await production(scheme, async (page) => {
-          await page.click("[data-hidden-pill]");
-          await page.waitForSelector(".hidden-tray");
+          await openHiddenTray(page);
           await page.waitForTimeout(350);
           const tray = await page.evaluate(() => {
             const root = document.querySelector<HTMLElement>(".hidden-tray")!;
             return {
               width: Math.round(root.getBoundingClientRect().width),
-              count: document.querySelector("[data-hidden-pill]")?.getAttribute("data-count"),
+              count: document.querySelector("header.bar[data-hidden-count]")?.getAttribute("data-hidden-count"),
               sections: [...root.querySelectorAll(".sec-label")].map((node) => node.textContent),
               groups: [...root.querySelectorAll<HTMLElement>("[data-hidden-group]")].map((row) => ({ id: row.dataset.hiddenGroup, meta: row.querySelector(".meta")?.textContent })),
               empty: [...root.querySelectorAll<HTMLElement>("[data-hidden-task]")].map((row) => row.dataset.hiddenTask),
@@ -2732,11 +2734,11 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
       }, "prototype colour flow");
 
       await production("light", async (page) => {
-        await page.click("[data-hidden-pill]");
+        await openHiddenTray(page);
         await page.click('.hidden-tray [data-hidden-group="t-verify-a"] .show');
         await page.waitForSelector(card("t-verify-a"), { state: "attached", timeout: 5_000 });
         const shown = { column: await columnOf(page, "t-verify-a"), count: await hiddenCount(page) };
-        await page.click("[data-hidden-pill]");
+        await openHiddenTray(page);
         await page.click('.hidden-tray [data-closed-conversation="/repo/old-spike.jsonl"] .show');
         await page.waitForTimeout(600);
         const restored = {
@@ -7633,7 +7635,7 @@ describe("the orchestrator seat's header keeps every element readable and clicka
     const all = [...root.querySelectorAll("*")].filter(rendered);
     const atoms = all.filter(el =>
       interactive(el)
-      || el.matches(".role-mark, .av")
+      || el.matches(".role-mark, .av, [data-role-avatar]")
       || (ownText(el) && !el.parentElement.closest("button, a[href]")));
     const runsOf = el => {
       const out = [];
@@ -9910,8 +9912,8 @@ describe("the agent window: a click on the board opens the agent in one window, 
       head: head?.querySelector("[data-open-agents-count]")?.textContent ?? null,
       steps: head ? [...head.querySelectorAll<HTMLElement>("[data-agent-window-step]")].map((step) => ({ step: step.dataset.agentWindowStep!, fromRight: Math.round(head.getBoundingClientRect().right - step.getBoundingClientRect().right), fromTop: Math.round(step.getBoundingClientRect().top - head.getBoundingClientRect().top) })) : [],
       pill: pill ? { text: pill.textContent, box: rect(pill), focused: active === pill, ring: pill.matches(":focus-visible"), outline: getComputedStyle(pill).outlineStyle } : null,
-      /* The header's buttons beside the pill: the needs-you chip and the new-agent button. */
-      headerButtons: [rect(document.querySelector("[data-attention-count]"))?.height ?? null, rect(document.querySelector("[data-kanban-board] [data-new-agent], .kb .bar [data-new-agent]"))?.height ?? null],
+      /* The header's buttons beside the pill: the needs-you chip and the create control. */
+      headerButtons: [rect(document.querySelector("[data-attention-count]"))?.height ?? null, rect(document.querySelector(".kb .bar [data-bar-create]"))?.height ?? null],
       composer: form ? { box: rect(form), context: form.querySelector("[data-selected-context]")?.textContent ?? null } : null,
       readerRing: reader ? reader.matches(":focus-visible") : null,
       focus: active?.closest<HTMLElement>("[data-kanban-reader]")?.dataset.kanbanReader ?? active?.getAttribute("data-open-agent-jump") ?? active?.tagName ?? null,
@@ -10021,8 +10023,9 @@ describe("the agent window: a click on the board opens the agent in one window, 
               const board = await readWindow(page);
               steps["01-board"] = board;
               await shot("01-board");
-              /* The header keeps its rows at every width: the search beside the pill's slot, nothing under the toast. */
-              if (board.search?.y !== board.slot?.y) fail(`the search stands at y ${board.search?.y}, out of the pill slot's row at y ${board.slot?.y}`);
+              /* The header keeps its one row at every width: the pill's slot, which takes room only while it holds
+                 the pill, stands in the search's row, and nothing lies under the toast. */
+              if (board.slot && board.slot.height > 0 && board.search?.y !== board.slot.y) fail(`the search stands at y ${board.search?.y}, out of the pill slot's row at y ${board.slot.y}`);
               if (board.underToast.length) fail(`the attention toast lies over the header's ${JSON.stringify(board.underToast)}`);
 
               await phase(page, "open-build");
@@ -10141,10 +10144,12 @@ describe("the agent window: a click on the board opens the agent in one window, 
 
               await cdp.send("Page.stopScreencast");
               const trace = await samples(page);
-              /* Every frame against the bare board: nothing under the window moves, nothing in the header moves. */
+              /* Every frame against the bare board: nothing under the window moves, and the header stays one row:
+                 the search keeps its line and height while the pill's slot comes and goes beside it. */
               const first = trace[0]!;
               const moved = trace.filter((sample) => sample.cards !== first.cards);
-              const header = trace.filter((sample) => sample.search !== first.search || sample.slot !== first.slot);
+              const line = (box: string) => box.split(",").filter((_, index) => index % 2 === 1).join(",");
+              const header = trace.filter((sample) => line(sample.search) !== line(first.search));
               if (moved.length) fail(`${moved.length} frames moved a card (${moved[0]!.phase}: ${moved[0]!.cards} against ${first.cards})`);
               if (header.length) fail(`${header.length} frames moved the header (${header[0]!.phase}: search ${header[0]!.search}, slot ${header[0]!.slot})`);
               const zero = trace.filter((sample) => /^0\b/.test(sample.pill ?? ""));
@@ -10449,7 +10454,7 @@ describe("the agent window: a click on the board opens the agent in one window, 
       name,
       seat: seat ? { left: seat.left, top: seat.top, bottom: seat.bottom } : null,
       bar: rect(document.querySelector(".bar[data-bar=\"project\"]"))!.bottom,
-      above: (rect(document.querySelector(".kb > .reason-filter-row")) ?? rect(document.querySelector(".bar[data-bar=\"project\"]")))!.bottom,
+      above: rect(document.querySelector(".bar[data-bar=\"project\"]"))!.bottom,
       edge: kb ? parseFloat(getComputedStyle(kb).getPropertyValue("--kb-edge")) : Number.NaN,
       column: shown.length ? Math.min(...shown.map((box) => box.left)) : null,
       strip: strip ? { left: strip.left, top: strip.top, bottom: strip.bottom } : null,
@@ -10830,7 +10835,7 @@ describe("#2179 #2185 agent replies wider than the operator's bubble, a seat dra
     const strong = w.__ink(title?.querySelector("strong") ?? null);
     const proj = w.__ink(title?.querySelector(".proj") ?? null);
     const state = w.__box(title?.querySelector(".state i") ?? null) ?? w.__ink(title?.querySelector(".state") ?? null);
-    const av = w.__box(root.querySelector(".seat-head .av"));
+    const av = w.__box(root.querySelector(".seat-head [data-role-avatar]"));
     const fold = w.__box(root.querySelector("[data-seat-collapse]"));
     const strip = root.querySelector("[data-agent-control-strip]");
     const field = root.querySelector("[data-orchestrator-conversation] form textarea")?.parentElement ?? null;
@@ -11729,7 +11734,7 @@ describe("#2166 the desktop leads with the orchestrator", () => {
     const footer = form.lastElementChild as HTMLElement;
     const bodyBox = body.getBoundingClientRect();
     const footerBox = footer.getBoundingClientRect();
-    const avatar = seat.querySelector(".seat-head .av")?.getBoundingClientRect() ?? null;
+    const avatar = seat.querySelector(".seat-head [data-role-avatar]")?.getBoundingClientRect() ?? null;
     const fold = seat.querySelector(".seat-fold")?.getBoundingClientRect() ?? null;
     const heading = ink(form.querySelector("h2"));
     const intro = ink(form.querySelector("[data-orchestrator-intro]"));
@@ -17770,65 +17775,74 @@ describe("task motion and waiting reasons", () => {
             const placeholderClientWidth = input.clientWidth;
             const placeholderScrollWidth = input.scrollWidth;
             input.value = originalValue;
-            const filters = bar.closest('[data-kanban-board]')!.querySelector('[data-reason-filters]') as HTMLElement;
-            const filterRect = filters.getBoundingClientRect();
+            const filter = bar.querySelector<HTMLElement>('[data-bar-filter-toggle]')!.getBoundingClientRect();
             const chip = bar.querySelector<HTMLElement>('[data-attention-count]')!.getBoundingClientRect();
             const taskToggle = bar.querySelector<HTMLElement>('[data-task-panel-toggle]')!.getBoundingClientRect();
             const moreMenu = bar.querySelector<HTMLElement>('[data-bar-group="more"]')!.getBoundingClientRect();
             return {
-              chipLeft: chip.left, taskToggleRight: taskToggle.right, moreRight: moreMenu.right,
+              chipLeft: chip.left, chipRight: chip.right, taskToggleRight: taskToggle.right, moreRight: moreMenu.right,
               top: rect.top, bottom: rect.bottom, height: rect.height, barWidth: rect.width,
-              belowBar: !bar.contains(filters),
+              /* The reasons are a menu of the bar's one filter: no chip in the row and no row under it. */
+              chips: bar.closest('[data-kanban-board]')!.querySelectorAll('.reason-filter, .reason-filter-row').length,
               barRight: rect.right,
+              barOverflow: bar.scrollWidth - bar.clientWidth,
               documentOverflow: document.documentElement.scrollWidth > innerWidth,
               searchTop: search.top, searchBottom: search.bottom,
-              filtersTop: filterRect.top, filtersBottom: filterRect.bottom,
-              filtersRight: filterRect.right,
-              lastFilterRight: filters.lastElementChild!.getBoundingClientRect().right,
-              groupWidth: filters.parentElement!.getBoundingClientRect().width,
+              filterTop: filter.top, filterBottom: filter.bottom,
+              /* The filter is joined to the field's right end. */
+              filterGap: filter.left - search.right,
               searchWidth: search.width,
               placeholderClientWidth, placeholderScrollWidth,
-              filterCount: filters.children.length,
-              filtersClientWidth: filters.clientWidth, filtersScrollWidth: filters.scrollWidth,
             };
           });
           if (topbar) {
             expect(topbar.height).toBe(48);
             expect(topbar.searchTop).toBeGreaterThanOrEqual(Math.max(0, topbar.top));
             expect(topbar.searchBottom).toBeLessThanOrEqual(topbar.bottom);
-            expect(topbar.filtersTop).toBeGreaterThanOrEqual(topbar.top);
-            if (width === 1440) {
-              expect(topbar.searchWidth, JSON.stringify(topbar)).toBeGreaterThanOrEqual(112);
-              expect(topbar.placeholderScrollWidth, JSON.stringify(topbar)).toBeLessThanOrEqual(topbar.placeholderClientWidth);
-              expect(topbar.belowBar, JSON.stringify(topbar)).toBeFalse();
-              expect(topbar.filtersBottom).toBeLessThanOrEqual(topbar.bottom);
-            } else {
-              expect(topbar.belowBar).toBeTrue();
-              expect(topbar.filtersTop).toBeGreaterThanOrEqual(topbar.bottom);
-            }
-            // The attention chip is drawn over the bar's right reserve and must
-            // leave the task-panel toggle whole, so «13» never reads as «1», and ⋯ whole as
-            // well at every width: the chip drops its label when the full one would reach it.
+            expect(topbar.filterTop).toBeGreaterThanOrEqual(topbar.top);
+            expect(topbar.filterBottom).toBeLessThanOrEqual(topbar.bottom);
+            expect(Math.abs(topbar.filterGap), JSON.stringify(topbar)).toBeLessThanOrEqual(0.5);
+            expect(topbar.chips, JSON.stringify(topbar)).toBe(0);
+            /* The placeholder is whole at every one of these widths: the field gives way down to the width that
+               keeps it, and the bar's steps take over from there. */
+            expect(topbar.searchWidth, JSON.stringify(topbar)).toBeGreaterThanOrEqual(112);
+            expect(topbar.placeholderScrollWidth, JSON.stringify(topbar)).toBeLessThanOrEqual(topbar.placeholderClientWidth);
+            // The attention chip is the row's last item, in the flow: it starts after
+            // the task-panel toggle, so «13» never reads as «1», and after ⋯, and ends inside the bar.
             expect(topbar.chipLeft, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.taskToggleRight);
             expect(topbar.chipLeft, JSON.stringify(topbar)).toBeGreaterThanOrEqual(topbar.moreRight);
+            expect(topbar.chipRight, JSON.stringify(topbar)).toBeLessThanOrEqual(topbar.barRight);
+            expect(topbar.barOverflow, JSON.stringify(topbar)).toBeLessThanOrEqual(0);
             expect(topbar.documentOverflow).toBeFalse();
-            expect(topbar.filtersRight).toBeLessThanOrEqual(topbar.barRight);
-            expect(topbar.filterCount).toBe(5);
-            expect(topbar.lastFilterRight, JSON.stringify(topbar)).toBeLessThanOrEqual(topbar.filtersRight);
-            expect(topbar.filtersScrollWidth).toBeLessThanOrEqual(topbar.filtersClientWidth + 1);
             await page.locator('.bar[data-bar="project"]').screenshot({ path: path.join(out, `${width}-${locale}-topbar.png`) });
-            await page.locator("[data-reason-filters]").screenshot({ path: path.join(out, `${width}-${locale}-filters.png`) });
+            /* «Needs you» and the four other reasons the fixture shows, each a row of the menu, inside the window. */
+            await page.locator("[data-bar-filter-toggle]").click();
+            const menu = page.locator("[data-bar-filter-menu]");
+            await menu.waitFor();
+            expect(await menu.locator("[data-bar-filter-needs]").count()).toBe(1);
+            expect(await menu.locator("[data-bar-filter-reason]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-bar-filter-reason")).filter(Boolean).sort())).toEqual(["no-reason", "postponed", "queued", "waiting"]);
+            const menuBox = (await menu.boundingBox())!;
+            expect(menuBox.x).toBeGreaterThanOrEqual(0);
+            expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(width);
+            await menu.screenshot({ path: path.join(out, `${width}-${locale}-filters.png`) });
+            await page.keyboard.press("Escape");
+            await menu.waitFor({ state: "detached" });
           }
+          /* A reason is picked from the filter's menu, and picked again to let it go. */
+          const pickReason = async (reason: string) => {
+            await page.locator("[data-bar-filter-toggle]").click();
+            await page.locator(`[data-bar-filter-menu] [data-bar-filter-reason="${reason}"]`).click();
+            await page.locator("[data-bar-filter-menu]").waitFor({ state: "detached" });
+          };
           if (width === 1280 || width === 1024) {
             // These widths lock down the filter overflow finding. The existing
             // full card/phone contract below remains at its named 1440/390 faces.
             await page.screenshot({ path: path.join(out, `${width}-${locale}-progress.png`) });
             await page.locator(selector("motion-operator")).screenshot({ path: path.join(out, `${width}-${locale}-card-operator.png`) });
-            const queued = page.locator('[data-reason-filter="queued"]');
-            await queued.click();
+            await pickReason("queued");
             expect(await page.locator(selector("motion-checklist")).count()).toBe(1);
             expect(await page.locator(selector("motion-bare")).count()).toBe(0);
-            await queued.click();
+            await pickReason("queued");
             expect(await page.locator(selector("motion-bare")).count()).toBe(1);
             expect(pageErrors).toEqual([]);
             cases.push({ width, height: 844, locale, topbar, filter: "toggled", pageErrors });
@@ -17933,24 +17947,21 @@ describe("task motion and waiting reasons", () => {
             await page.waitForFunction(() => document.activeElement?.getAttribute("data-id") === "task:motion-bare");
           }
           if (!phone) {
-            const queuedFilter = page.locator('[data-reason-filter="queued"]');
-            await queuedFilter.waitFor();
-            expect(await page.locator('[data-reason-filter="no-reason"]').count()).toBe(1);
             const beforeCount = await page.locator('[data-column-no-reason]').getAttribute('data-column-no-reason');
-            await queuedFilter.click();
+            await pickReason("queued");
             const filteredCards = page.locator('[data-id^="task:"]');
             expect(await filteredCards.count()).toBeGreaterThan(0);
             const checklist = page.locator('[data-id="task:motion-checklist"]');
             expect(await checklist.locator('[data-motion="working"]').count()).toBeGreaterThan(0);
             expect(await checklist.locator('[data-task-steps]').textContent()).toContain(locale === "en" ? "1 working · 2 queued" : "1 у роботі · 2 у черзі");
             expect(await page.locator('[data-column-no-reason]').getAttribute('data-column-no-reason')).toBe(beforeCount);
-            await queuedFilter.click();
-            await page.locator('[data-reason-filter="postponed"]').click();
+            await pickReason("queued");
+            await pickReason("postponed");
             expect(await page.locator(selector("motion-due")).count()).toBe(1);
-            await page.locator('[data-reason-filter="no-reason"]').click();
+            await pickReason("no-reason");
             expect(await page.locator(selector("motion-due")).count()).toBe(0);
             expect(await page.locator(selector("motion-bare")).count()).toBe(1);
-            await page.locator('[data-reason-filter="no-reason"]').click();
+            await pickReason("no-reason");
             const stoppedSummary = page.locator('[data-status="assigned"] [data-column-stopped]');
             const bareSummary = page.locator('[data-status="blocked"] [data-column-no-reason]');
             expect(Number(await stoppedSummary.getAttribute('data-column-stopped'))).toBeGreaterThan(0);
@@ -18022,10 +18033,11 @@ describe("task motion and waiting reasons", () => {
               const bar = document.querySelector('.bar[data-bar="project"]')!.getBoundingClientRect();
               const columns = Math.min(...[...document.querySelectorAll<HTMLElement>("[data-kanban-board] .column[data-status]")].map((column) => column.getBoundingClientRect()).filter((box) => box.width > 0).map((box) => box.top));
               const strip = document.querySelector(".scroll-wrap > .tabs-nav > button")?.getBoundingClientRect();
-              return { above: seat.top - (filters ?? bar).bottom, below: (strip?.top ?? columns) - seat.bottom, filtersUnderBar: Boolean(filters) };
+              return { above: seat.top - bar.bottom, below: (strip?.top ?? columns) - seat.bottom, filtersUnderBar: Boolean(filters) };
             });
             if (Math.abs(gap.above - gap.below) > 0.5) gaps.push(`${width}-${locale}: ${gap.above} px above the Orchestrator row, ${gap.below} below it`);
-            if (width < 1440 !== gap.filtersUnderBar) gaps.push(`${width}-${locale}: the reason filters ${gap.filtersUnderBar ? "stand under" : "share"} the bar`);
+            /* The bar is one row at every width: the reasons are a menu of its filter, never a row under it. */
+            if (gap.filtersUnderBar) gaps.push(`${width}-${locale}: a row of reason filters stands under the bar`);
             /* The page scrolled by 40 px: the page's top edge is the row's lower edge, so no pixel of the Orchestrator row is drawn within 8 px of a chip. */
             const scrolled = await page.evaluate(() => {
               const scroller = document.querySelector<HTMLElement>(".kb-page")!;
@@ -18187,7 +18199,7 @@ describe("task motion and waiting reasons", () => {
             const area = document.querySelector<HTMLElement>("[data-kanban-draft] textarea")?.getBoundingClientRect();
             return { areaBottom: area ? Math.round(area.bottom) : null, rowShown: Boolean(document.querySelector(".kb > .reason-filter-row")) };
           });
-          if (width < 1440 !== read.rowShown) failures.push(`${label}: the reason filters ${read.rowShown ? "stand under" : "share"} the bar`);
+          if (read.rowShown) failures.push(`${label}: a row of reason filters stands under the bar`);
           if (share === null || share <= 0.6) failures.push(`${label}: the launched agent is ${share === null ? "not drawn" : `${(share * 100).toFixed(1)}% in the window`}`);
           const limit = width === 1000 ? 898 : 876;
           if (read.areaBottom === null || read.areaBottom > limit) failures.push(`${label}: the next draft ends its prompt at ${read.areaBottom}, limit ${limit}`);
@@ -18295,13 +18307,14 @@ describe("needs-you filter: the board dims every card that does not wait on the 
           const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=needs-filter`, VIEWPORT, scheme, lang);
           try {
             await page.waitForSelector(card("t-nf-ask"), { timeout: 30_000 });
-            await page.waitForSelector("[data-attention-filter]", { timeout: 10_000 });
+            /* On a project the funnel is the «Needs you» row of the bar's one filter; the filter's icon carries its state. */
+            await page.waitForSelector("[data-bar-filter-toggle]", { timeout: 10_000 });
             await clearStage(page);
             await page.mouse.move(0, 0);
             await page.waitForTimeout(600);
             const ids = [...LIT, ...DIM];
             const before = Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await cardReading(page, card(id))] as const)));
-            const funnel = page.locator("[data-attention-filter]");
+            const funnel = page.locator("[data-bar-filter-toggle]");
             const widthOff = (await funnel.boundingBox())!.width;
             const labelOff = await funnel.getAttribute("aria-label");
             await page.screenshot({ path: path.join(SHOTS, `${label}-filter-off.png`) });
@@ -18312,7 +18325,7 @@ describe("needs-you filter: the board dims every card that does not wait on the 
             const after = Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await cardReading(page, card(id))] as const)));
             const widthOn = (await funnel.boundingBox())!.width;
             const labelOn = await funnel.getAttribute("aria-label");
-            const pressed = await funnel.getAttribute("aria-pressed");
+            const pressed = String(await funnel.getAttribute("data-bar-filter-active") !== null);
             const island = await page.evaluate(() => {
               const box = document.querySelector("[data-attention-island]")!.getBoundingClientRect();
               return { right: box.right, left: box.left, viewport: window.innerWidth };
@@ -18322,6 +18335,9 @@ describe("needs-you filter: the board dims every card that does not wait on the 
             await page.screenshot({ path: path.join(SHOTS, `${label}-filter-on.png`) });
 
             await funnel.click();
+            await page.locator("[data-bar-filter-menu] [data-bar-filter-needs]").click();
+            await page.keyboard.press("Escape");
+            await page.locator("[data-bar-filter-menu]").waitFor({ state: "detached" });
             await page.mouse.move(0, 0);
             await page.waitForTimeout(700);
             const off = Object.fromEntries(await Promise.all(ids.map(async (id) => [id, await cardReading(page, card(id))] as const)));
@@ -18368,14 +18384,14 @@ describe("needs-you filter: the board dims every card that does not wait on the 
         expect(entry.after[id]!.filter, `${entry.label} ${id} drains its colour`).toContain("saturate(0.35)");
       }
       expect(entry.onAttr, `${entry.label} F turns the filter on`).toBe(true);
-      expect(entry.offAttr, `${entry.label} the funnel turns it off`).toBe(false);
+      expect(entry.offAttr, `${entry.label} the filter's «Needs you» row turns it off`).toBe(false);
       expect(entry.onAgainAttr, `${entry.label} the filter was on while the card was pointed at`).toBe(true);
       expect(entry.hovered.opacity, `${entry.label} a pointed-at card is restored`).toBe(1);
       expect(entry.dimmedContrast, `${entry.label} a dimmed title stays readable`).toBeGreaterThanOrEqual(4.5);
-      expect(entry.pressed, `${entry.label} the funnel shows its on state`).toBe("true");
-      expect(entry.labelOff, `${entry.label} funnel label offers the filter`).toBe(translate(locale, "attention.filterOn"));
-      expect(entry.labelOn, `${entry.label} funnel label offers the way back`).toBe(translate(locale, "attention.filterOff"));
-      expect(entry.widthOn, `${entry.label} pressed and unpressed funnels are as wide`).toBe(entry.widthOff);
+      expect(entry.pressed, `${entry.label} the filter shows its on state`).toBe("true");
+      expect(entry.labelOff, `${entry.label} the filter names itself`).toBe(translate(locale, "dash.filter"));
+      expect(entry.labelOn, `${entry.label} the filter says it is on`).toBe(translate(locale, "dash.filterOn"));
+      expect(entry.widthOn, `${entry.label} the filter is as wide on as off`).toBe(entry.widthOff);
       expect(entry.island.right, `${entry.label} the island stays inside the window`).toBeLessThanOrEqual(entry.island.viewport);
       expect(entry.island.left, `${entry.label} the island starts inside the window`).toBeGreaterThanOrEqual(0);
     }
@@ -18393,7 +18409,11 @@ describe("needs-you filter: the board dims every card that does not wait on the 
         await page.waitForSelector(card("t-nf-ask"), { timeout: 30_000 });
         await clearStage(page);
         await page.waitForTimeout(600);
-        expect(await page.locator("[data-attention-filter]").count(), "no funnel while nothing waits").toBe(0);
+        expect(await page.locator("[data-attention-filter]").count(), "no funnel beside the chip on a project").toBe(0);
+        await page.locator("[data-bar-filter-toggle]").click();
+        expect(await page.locator("[data-bar-filter-menu] [data-bar-filter-needs]").isDisabled(), "the «Needs you» row is inert while nothing waits").toBe(true);
+        await page.keyboard.press("Escape");
+        await page.locator("[data-bar-filter-menu]").waitFor({ state: "detached" });
         await pressF(page);
         await page.waitForTimeout(500);
         expect(await filterAttr(page), "F arms nothing").toBe(false);
@@ -18582,7 +18602,7 @@ describe("needs-you filter: the board dims every card that does not wait on the 
           const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=needs-filter`, { width, height: 900 }, "light", lang);
           try {
             await page.waitForSelector(card("t-nf-ask"), { timeout: 30_000 });
-            await page.waitForSelector("[data-attention-filter]", { timeout: 10_000 });
+            await page.waitForSelector("[data-bar-filter-toggle]", { timeout: 10_000 });
             await clearStage(page);
             await page.mouse.move(0, 0);
             await page.waitForTimeout(600);
@@ -18596,8 +18616,9 @@ describe("needs-you filter: the board dims every card that does not wait on the 
             const after = await read();
             const overflowOn = await overflow(page);
             const funnel = await page.evaluate(() => {
-              const box = document.querySelector("[data-attention-filter]")!.getBoundingClientRect();
-              return { left: box.left, right: box.right, width: box.width, viewport: window.innerWidth, pressed: document.querySelector("[data-attention-filter]")!.getAttribute("aria-pressed") };
+              const toggle = document.querySelector("[data-bar-filter-toggle]")!;
+              const box = toggle.getBoundingClientRect();
+              return { left: box.left, right: box.right, width: box.width, viewport: window.innerWidth, pressed: String(toggle.hasAttribute("data-bar-filter-active")) };
             });
             const folded = await page.locator(card(FOLDED)).evaluate((element) => ({
               elsewhere: Number(element.querySelector("details.history")?.getAttribute("data-elsewhere-conversations") ?? 0),
@@ -18702,9 +18723,9 @@ describe("needs-you filter: the board dims every card that does not wait on the 
       for (const id of [...LIT, ...DIM, FOLDED]) expect(sameBox(entry.before[id]!.box, entry.after[id]!.box), `${entry.label} ${id} keeps its box`).toBe(true);
       expect(entry.overflowOn, `${entry.label} the filter adds no sideways scroll`).toBe(entry.overflowOff);
       expect(entry.overflowOn, `${entry.label} the page fits its window`).toBeLessThanOrEqual(0);
-      expect(entry.funnel.pressed, `${entry.label} the funnel shows its on state`).toBe("true");
-      expect(entry.funnel.left, `${entry.label} the funnel starts inside the window`).toBeGreaterThanOrEqual(0);
-      expect(entry.funnel.right, `${entry.label} the funnel ends inside the window`).toBeLessThanOrEqual(entry.funnel.viewport);
+      expect(entry.funnel.pressed, `${entry.label} the filter shows its on state`).toBe("true");
+      expect(entry.funnel.left, `${entry.label} the filter starts inside the window`).toBeGreaterThanOrEqual(0);
+      expect(entry.funnel.right, `${entry.label} the filter ends inside the window`).toBeLessThanOrEqual(entry.funnel.viewport);
       /* The folded card holds twelve outside conversations and lists none of them. */
       expect(entry.folded?.elsewhere, `${entry.label} the folded card counts its outside conversations`).toBe(12);
       expect(entry.folded?.rows, `${entry.label} the folded card lists none`).toBe(0);
@@ -18770,6 +18791,236 @@ describe("agent memory isolation", () => {
       fs.writeFileSync("evidence/agent-memory/desktop.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 90000);
+});
+
+/*
+ * «Готово» in «Чекають на вас» (docs/design/done-section.md §4.3, §5): the
+ * finished work pinned above the decisions at 1440 in Ukrainian, newest first,
+ * over the needs-you fixture with `&done=1`, read against variant 2's frames:
+ * the morning panel with its thumbnail, the frame's before and after in the
+ * existing viewer, a visible change accepted and four technical fixes accepted
+ * one by one, then «Бачив усе» with only the decisions left in the count.
+ * Then the same list pinned above the orchestrator's report log (`&seat=beside`)
+ * in uk and en: folded to its head, and a row accepted there leaving the
+ * header's count too.
+ */
+describe("«Готово» in «Чекають на вас»", () => {
+  browserTest("the desktop panel ends in «Готово»: thumbnail, groups, acceptance and the counter at 1440 in uk", async () => {
+    const out = path.resolve(".artifacts/done-section/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const scheme of ["dark", "light"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?lang=uk&open=1&done=1`, VIEWPORT, scheme, "uk", "reduce");
+        try {
+          const panel = page.locator("[data-needs-you-panel]");
+          const section = panel.locator("[data-done-section]");
+          await section.waitFor({ timeout: 15_000 });
+          /* The decisions arrive with the files poll; all three boards' sections. */
+          await page.waitForFunction(() => document.querySelectorAll("[data-needs-you-panel] [data-needs-you-section]").length === 3, undefined, { timeout: 15_000 });
+          const doneCount = await page.evaluate(() => (window as unknown as { __doneFixture: { count: number } }).__doneFixture.count);
+          const island = async () => Number((await page.locator("[data-attention-count]").innerText()).match(/\d+/g)!.at(-1));
+          const decisions = (await panel.locator("[data-needs-you-section-count]").allInnerTexts()).reduce((sum, text) => sum + Number(text), 0);
+          expect(decisions).toBeGreaterThan(0);
+          expect(await island()).toBe(decisions + doneCount);
+          expect(await panel.locator("[data-needs-you-title]").innerText()).toBe(`Чекають на вас · ${decisions + doneCount}`);
+          expect(await page.title()).toBe(`(${decisions + doneCount}) Delegatus`);
+          expect(await section.locator("[data-done-accept-all]").innerText()).toBe("Бачив усе");
+          expect(await panel.locator("[data-needs-you-dismiss-all]").innerText()).toBe(`Зняти всі ${decisions}`);
+          const order = await section.locator("[data-done-row], [data-done-group]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-done-row") ?? `group:${row.getAttribute("data-done-group")}`));
+          /* Newest first: a row at its own time, a group at its newest member's. */
+          expect(order).toEqual(["group:closed", "deploy:fixture-deploy", "group:technical", "report:fixture-publication", "limit:codex:acct-b:session:1", "pr:example/delegatus#2691", "report:fixture-incident"]);
+          const layout = await panel.evaluate((element) => {
+            const body = element.querySelector("[data-needs-you-body]")!;
+            const done = element.querySelector("[data-done-section]")!;
+            const box = element.getBoundingClientRect();
+            const wide = [...done.querySelectorAll<HTMLElement>("*")].filter((node) => node.getBoundingClientRect().right > box.right + 0.5 || node.getBoundingClientRect().left < box.left - 0.5).length;
+            /* Pinned: right under the head, outside the decisions' scroller. */
+            return { pinned: done.nextElementSibling === body && !body.contains(done), top: Math.round(done.getBoundingClientRect().top - box.top), wide, overflow: document.documentElement.scrollWidth > innerWidth, panelWidth: box.width };
+          });
+          expect(layout).toMatchObject({ pinned: true, wide: 0, overflow: false });
+          /* Scrolling the decisions leaves the list where it is. */
+          const pinnedTop = await section.evaluate((element) => element.getBoundingClientRect().top);
+          await panel.locator("[data-needs-you-body]").evaluate((element) => { element.scrollTop = element.scrollHeight; });
+          expect(await section.evaluate((element) => element.getBoundingClientRect().top)).toBe(pinnedTop);
+          await panel.locator("[data-needs-you-body]").evaluate((element) => { element.scrollTop = 0; });
+          const read = () => section.evaluate((element) => {
+            const text = (node: Element | null) => (node as HTMLElement | null)?.innerText.trim() ?? "";
+            const rows = [...element.querySelectorAll<HTMLElement>("[data-done-row]")].map((row) => {
+              const check = row.querySelector<HTMLElement>("[data-done-accept]")!.getBoundingClientRect();
+              const sentence = row.querySelector<HTMLElement>("[data-done-sentence]")!.getBoundingClientRect();
+              const meta = row.querySelector<HTMLElement>("[data-done-meta]")!.getBoundingClientRect();
+              return { key: row.getAttribute("data-done-row"), checkRight: Math.round(element.getBoundingClientRect().right - check.right), ownLine: check.top >= Math.max(sentence.bottom, meta.bottom) - 1 };
+            });
+            const lines = [...element.querySelectorAll<HTMLElement>("[data-done-group-line]")].map((node) => ({ text: text(node), count: Number(node.closest("[data-done-group]")!.getAttribute("data-done-group-count")) }));
+            const receipts = [...element.querySelectorAll<HTMLElement>("[data-done-receipt-text]")].map((node) => {
+              const mark = node.lastElementChild!.getBoundingClientRect();
+              return { text: node.textContent!.replace(/\u00a0/g, " ").trim(), markClipped: mark.right > node.getBoundingClientRect().right + 0.5 || mark.width < 1 };
+            });
+            const heads = [...element.querySelectorAll<HTMLElement>("[data-done-group-title]")].map((node) => {
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              const tops = [...new Set([...range.getClientRects()].map((rect) => Math.round(rect.top)))];
+              return { text: text(node), lines: tops.length };
+            });
+            return { rows, lines, receipts, heads, hash: /\b[0-9a-f]{7,40}\b/.test(text(element)) };
+          });
+          const morning = await read();
+          expect(morning.rows.every((row) => !row.ownLine), "no row keeps a line for its check").toBe(true);
+          expect(morning.hash, "no commit hash in «Готово»").toBe(false);
+          for (const { text, count } of morning.lines) {
+            /* Short topics, no cut word, lower case after the first, and «і ще N» for the rest. */
+            expect(text).not.toContain("…");
+            const [listed, rest] = text.split(" і ще ");
+            const topics = listed!.split(", ");
+            expect(topics.slice(1).every((topic) => !/^[А-ЯІЇЄҐ]/.test(topic)), text).toBe(true);
+            expect(Number(rest ?? 0), text).toBe(count - topics.length);
+          }
+          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-1-morning.png`) });
+
+          /* The thumbnail opens the existing viewer with the frame's pair. */
+          await section.locator('[data-done-thumb="pr:example/delegatus#2691"]').click();
+          const viewer = page.locator('[role="dialog"][aria-modal="true"]');
+          await viewer.waitFor();
+          expect(await viewer.locator("[data-lightbox-compare-side]").count()).toBe(2);
+          await page.screenshot({ path: path.join(out, `${scheme}-2-frame-after.png`) });
+          await viewer.locator('[data-lightbox-compare-side="before"]').click();
+          await page.screenshot({ path: path.join(out, `${scheme}-2-frame-before.png`) });
+          await page.keyboard.press("Escape");
+          await viewer.waitFor({ state: "detached" });
+          expect(await panel.isVisible()).toBe(true);
+
+          /* A visible change accepted, then four technical fixes one by one. */
+          await section.locator('[data-done-accept="pr:example/delegatus#2691"]').click();
+          await section.locator('[data-done-receipt="pr:example/delegatus#2691"]').waitFor();
+          expect(await island()).toBe(decisions + doneCount - 1);
+          await section.locator('[data-done-group-toggle="technical"]').click();
+          /* Open with nothing accepted: the head repeats no member. */
+          expect(await section.locator('[data-done-group="technical"] [data-done-group-line]').count()).toBe(0);
+          await section.locator('[data-done-group="technical"]').evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-3-expanded.png`) });
+          const checks = section.locator('[data-done-group="technical"] [data-done-member-check]');
+          for (let index = 0; index < 4; index += 1) await checks.nth(index).click();
+          await page.waitForFunction(() => document.querySelector('[data-done-group="technical"] [data-done-group-title]')?.textContent?.includes("6 з 10"));
+          expect(await section.locator('[data-done-group="technical"] [data-done-group-line]').innerText()).toBe("4 прийнято");
+          expect(await island()).toBe(decisions + doneCount - 5);
+          let after = await read();
+          for (const receipt of after.receipts) {
+            expect(receipt.text).toMatch(/прийнято$/);
+            expect(receipt.markClipped, receipt.text).toBe(false);
+          }
+          expect(after.heads.every((head) => head.lines === 1), JSON.stringify(after.heads)).toBe(true);
+          expect(after.receipts.map((receipt) => receipt.text)).toContain("Лендінг #2691 · прийнято");
+          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-4-partial.png`) });
+
+          /* The rest of the group through its own button; «Без PR» opened. */
+          await section.locator('[data-done-accept-group="technical"]').click();
+          await section.locator('[data-done-group-receipt="technical"]').waitFor();
+          expect(await island()).toBe(decisions + doneCount - 11);
+          await section.locator('[data-done-group-toggle="closed"]').click();
+          after = await read();
+          for (const receipt of after.receipts) {
+            expect(receipt.text).toMatch(/прийнято$/);
+            expect(receipt.markClipped, receipt.text).toBe(false);
+          }
+          expect(after.receipts.map((receipt) => receipt.text)).toContain("Технічні виправлення: 10 прийнято");
+          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-5-group-accepted.png`) });
+
+          /* Everything accepted: the count is the decisions again. */
+          await section.locator("[data-done-accept-all]").click();
+          await section.locator("[data-done-all-accepted]").waitFor();
+          expect(await island()).toBe(decisions);
+          expect(await page.title()).toBe(`(${decisions}) Delegatus`);
+          await section.evaluate((element) => element.scrollIntoView({ block: "end" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-6-all-accepted.png`) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ scheme, decisions, done: doneCount, order, ...layout, rows: morning.rows, groupLines: morning.lines, receipts: after.receipts.map((receipt) => receipt.text), afterAll: decisions });
+        } finally { await context.close(); }
+      }
+
+      /* The same list pinned above the orchestrator's report log, this board's
+         slice and no board's, in uk and en. */
+      const reports: Record<string, unknown>[] = [];
+      for (const lang of ["uk", "en"] as const) {
+        for (const scheme of ["dark", "light"] as const) {
+          const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params);
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?lang=${lang}&done=1&seat=beside`, VIEWPORT, scheme, lang, "reduce");
+          try {
+            const toggle = page.locator("[data-report-log-toggle]").first();
+            await toggle.waitFor({ timeout: 15_000 });
+            if (await toggle.getAttribute("data-report-log-toggle") === "closed") await toggle.click();
+            const log = page.locator("[data-report-log]");
+            await log.locator("[data-report-entry]").first().waitFor({ timeout: 15_000 });
+            const section = log.locator('[data-done-section][data-done-place="reports"]');
+            await section.waitFor({ timeout: 15_000 });
+            await page.waitForFunction(() => document.querySelectorAll("[data-needs-you-section]").length > 0 || Number(document.querySelector("[data-attention-count]")?.textContent?.match(/\d+/)?.[0] ?? 0) > 0, undefined, { timeout: 15_000 });
+            await page.locator("[data-attention-toast-dismiss]").click({ timeout: 1_000 }).catch(() => {});
+            await page.mouse.move(0, 0);
+            const doneCount = await page.evaluate(() => (window as unknown as { __doneFixture: { count: number } }).__doneFixture.count);
+            const island = async () => Number((await page.locator("[data-attention-count]").innerText()).match(/\d+/g)!.at(-1));
+            const before = await island();
+            /* The shop-web task is another board's; the log shows the rest. */
+            expect(Number(await section.locator("[data-done-count]").innerText())).toBe(doneCount - 1);
+            expect(await section.locator("[data-done-accept-all]").innerText()).toBe(t("done.acceptAll"));
+            const order = await section.locator("[data-done-row], [data-done-group]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-done-row") ?? `group:${row.getAttribute("data-done-group")}`));
+            expect(order).toEqual(["group:closed", "deploy:fixture-deploy", "group:technical", "report:fixture-publication", "limit:codex:acct-b:session:1", "pr:example/delegatus#2691", "report:fixture-incident"]);
+            const layout = await log.evaluate((element) => {
+              const done = element.querySelector("[data-done-section]")!;
+              const scroller = element.querySelector("[data-report-log-entries]")!.parentElement!;
+              const box = element.getBoundingClientRect();
+              const band = done.querySelector("[data-done-list]")!.getBoundingClientRect();
+              const wide = [...done.querySelectorAll<HTMLElement>("*")].filter((node) => node.getBoundingClientRect().right > box.right + 0.5 || node.getBoundingClientRect().left < box.left - 0.5).length;
+              return {
+                pinned: !scroller.contains(done) && Boolean(done.compareDocumentPosition(scroller) & Node.DOCUMENT_POSITION_FOLLOWING),
+                headingAbove: element.querySelector("h2")!.getBoundingClientRect().bottom <= done.getBoundingClientRect().top + 0.5,
+                bandHeight: Math.round(band.height), logHeight: Math.round(box.height), logWidth: Math.round(box.width),
+                /* At most 45% of the log, so the entries keep their room. */
+                bounded: done.getBoundingClientRect().height <= box.height * 0.45 + 1,
+                entriesVisible: scroller.getBoundingClientRect().height > 80, wide,
+              };
+            });
+            expect(layout).toMatchObject({ pinned: true, headingAbove: true, bounded: true, entriesVisible: true, wide: 0 });
+            /* Scrolling the log leaves the list where it is. */
+            const top = await section.evaluate((element) => element.getBoundingClientRect().top);
+            await log.locator("[data-report-log-entries]").evaluate((element) => { element.parentElement!.scrollTop = element.parentElement!.scrollHeight; });
+            expect(await section.evaluate((element) => element.getBoundingClientRect().top)).toBe(top);
+            const key = `${lang}-${scheme}`;
+            await page.screenshot({ path: path.join(out, `reports-${key}-1-pinned.png`) });
+            await page.locator("[data-kanban-seat]").screenshot({ path: path.join(out, `reports-${key}-1-seat.png`) });
+
+            /* Accepted here, gone from the header's count too: one store. */
+            await section.locator('[data-done-accept="deploy:fixture-deploy"]').click();
+            await section.locator('[data-done-receipt="deploy:fixture-deploy"]').waitFor();
+            expect(await island()).toBe(before - 1);
+
+            /* Folded to its head with the count; the log takes the room. */
+            await section.locator("[data-done-fold]").click();
+            expect(await section.locator("[data-done-list]").count()).toBe(0);
+            expect(Number(await section.locator("[data-done-count]").innerText())).toBe(doneCount - 2);
+            const foldedHeight = Math.round((await section.boundingBox())!.height);
+            expect(foldedHeight).toBeLessThanOrEqual(40);
+            await page.locator("[data-kanban-seat]").screenshot({ path: path.join(out, `reports-${key}-2-folded.png`) });
+
+            /* The panel opens on the same list, the accepted row already gone. */
+            await page.locator("[data-attention-count]").click();
+            const panelSection = page.locator("[data-needs-you-panel] [data-done-section]");
+            await panelSection.waitFor({ timeout: 10_000 });
+            expect(await panelSection.locator('[data-done-row="deploy:fixture-deploy"]').count()).toBe(0);
+            await page.screenshot({ path: path.join(out, `reports-${key}-3-panel.png`) });
+            expect(pageErrors).toEqual([]);
+            reports.push({ lang, scheme, order, ...layout, foldedHeight, islandBefore: before, islandAfter: before - 1 });
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/done-section", { recursive: true });
+      fs.writeFileSync("evidence/done-section/desktop.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", viewport: VIEWPORT, lang: "uk", readings, reports }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 420_000);
 });
 
 // The focused common-path case shares its assertions with the phone driver.
@@ -24414,10 +24665,8 @@ describe("creating a new agent: the composer alone, and the conversation after S
             } else if (view.touch) {
               await page.locator('[data-mobile2-open="menu"]').click();
               await page.locator('[data-mobile2-menu-row="new-agent"]').click();
-            } else if (await page.locator("[data-new-agent]").isVisible()) {
-              await page.locator("[data-new-agent]").click();
             } else {
-              await page.locator(`[data-bar-control][aria-label="${tr("dash.createMenu")}"]`).click();
+              await page.locator("[data-bar-create]").click();
               await page.getByRole("menuitem", { name: tr("dash.newConvo") }).click();
             }
             const draft = page.locator("[data-draft-pane]:visible").first();
@@ -28055,7 +28304,7 @@ describe("orchestrator wire routing across the board's layouts", () => {
     }).filter(shown);
     const seatNode = document.querySelector<HTMLElement>("[data-kanban-seat], [data-mobile2-seat-card]");
     /* Folded on top with no frame, the seat the operator sees is its avatar and title; the strip's other controls are text. */
-    const avatar = seatNode?.querySelector(".seat-head .av")?.parentElement ?? null;
+    const avatar = seatNode?.querySelector(".seat-head [data-role-avatar]")?.parentElement ?? null;
     const title = seatNode?.querySelector(".seat-head .seat-title") ?? null;
     const quiet = !!seatNode && seatNode.dataset.collapsed === "1" && seatNode.dataset.placement !== "side" && !!avatar && !!title
       && getComputedStyle(seatNode.querySelector("[data-orchestrator-panel]") ?? seatNode).borderTopColor === "rgba(0, 0, 0, 0)";
@@ -28737,10 +28986,8 @@ describe("account chips with the weekly limit left: the launch chooser and the r
             if (shot.phone) {
               await page.locator('[data-mobile2-open="menu"]').click();
               await page.locator('[data-mobile2-menu-row="new-agent"]').click();
-            } else if (await page.locator("[data-new-agent]").isVisible()) {
-              await page.locator("[data-new-agent]").click();
             } else {
-              await page.locator(`[data-bar-control][aria-label="${tr("dash.createMenu")}"]`).click();
+              await page.locator("[data-bar-create]").click();
               await page.getByRole("menuitem", { name: tr("dash.newConvo") }).click();
             }
             const draft = page.locator("[data-draft-pane]:visible").first();
@@ -28920,6 +29167,147 @@ describe("account chips with the weekly limit left: the launch chooser and the r
       server.stop();
     }
   }, 300_000);
+});
+
+describe("role avatars: Delegatus in each role's costume on answers, internal cards and the conversation header", () => {
+  /*
+   * Rendered evidence for docs/design/role-avatars.md (§10, the build): the real
+   * Viewer over `issue1695Evidence.fixture.tsx?scenario=role-avatars`, in
+   * Chromium, at 1440 and 1000 and on a 390 px phone, light and dark, English
+   * and Ukrainian:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "role avatars"
+   *
+   * The seat's feed holds the orchestrator's answers and one internal message
+   * from each of the other eleven roles and from an agent that names no role
+   * (the tuxedo); a builder's stage conversation and one started by hand, with
+   * no role, open in the agent window (on the phone, in the conversation screen). Per frame: every
+   * avatar is the expected costume at its size (26 px answers and cards, 20 px
+   * in the phone's answer header), the role and the engine stay two separate
+   * things (the engine's glyph and name beside the time, the model chip in the
+   * header), each card names the role alone and none is cut, every card header
+   * has one height, the phone's card clock has no seconds, nothing scrolls
+   * sideways.
+   *
+   * Readings go to `evidence/role-avatars/rendered.json`; frames to
+   * `.artifacts/role-avatars/`, which is not committed.
+   */
+  const OUT = path.resolve(".artifacts/role-avatars");
+  const EVIDENCE = path.resolve("evidence/role-avatars");
+  const SENDERS = ["architect", "builder", "reviewer", "visual-critic", "verifier", "cleaner", "merger", "deployer", "prod-auditor", "maintainer", "issue-reporter", "neutral"];
+  const SHAPES = [
+    { name: "1440", viewport: { width: 1440, height: 900 }, phone: false },
+    { name: "1000", viewport: { width: 1000, height: 800 }, phone: false },
+    { name: "390", viewport: { width: 390, height: 844 }, phone: true },
+  ] as const;
+
+  /** Everything the frame shows inside `scope`: avatars by role and size, the answers' engine labels, the cards. */
+  const read = (page: Page, scope: string) => page.evaluate((scope) => {
+    const root = document.querySelector(scope);
+    const size = (element: Element) => { const box = element.getBoundingClientRect(); return `${Math.round(box.width)}x${Math.round(box.height)}`; };
+    const answers = [...(root?.querySelectorAll("[data-tts-message]") ?? [])].map((answer) => {
+      const row = answer.closest(".group\\/msg") ?? answer;
+      const avatar = row.querySelector("[data-role-avatar]");
+      const header = row.querySelector("[data-mobile-message-header]") ?? answer.firstElementChild;
+      const engine = row.querySelector("[data-message-engine], [data-mobile-message-speaker]");
+      const headerBox = header?.getBoundingClientRect() ?? null;
+      const avatarBox = avatar?.getBoundingClientRect() ?? null;
+      return {
+        avatar: avatar ? `${avatar.getAttribute("data-role-avatar")}:${size(avatar)}` : null,
+        engine: engine?.textContent?.trim() ?? null,
+        engineInsideAvatar: Boolean(avatar && engine && avatar.contains(engine)),
+        /* On the phone the avatar sits inside its 20 px header row. */
+        overflow: avatarBox && headerBox && row.querySelector("[data-mobile-message-header]")
+          ? Math.max(0, headerBox.top - avatarBox.top, avatarBox.bottom - headerBox.bottom) : 0,
+      };
+    });
+    const cards = [...(root?.querySelectorAll("[data-agent-author]") ?? [])].map((label) => {
+      const head = label.parentElement!;
+      const avatar = head.querySelector("[data-role-avatar]");
+      const range = document.createRange(); range.selectNodeContents(label);
+      return {
+        avatar: avatar ? `${avatar.getAttribute("data-role-avatar")}:${size(avatar)}` : null,
+        label: label.textContent?.trim() ?? "",
+        cut: Math.round((range.getBoundingClientRect().width - label.getBoundingClientRect().width) * 10) / 10,
+        head: Math.round(head.getBoundingClientRect().height),
+        clock: head.querySelector("[data-card-clock]")?.textContent?.trim() ?? null,
+      };
+    });
+    return {
+      answers, cards,
+      header: [...document.querySelectorAll(".conv-head [data-role-avatar], .seat-head [data-role-avatar], [data-mobile2-bar] [data-role-avatar]")].map((avatar) => `${avatar.getAttribute("data-role-avatar")}:${size(avatar)}`),
+      models: [...document.querySelectorAll(".conv-head .ch-model, .seat-head [data-orchestrator-model]")].map((chip) => chip.textContent?.trim() ?? ""),
+      /* The phone bar: its role pictures (the costume stands where the frame's emblem ribbon stood) and its state line, which carries the model. */
+      phoneBar: (() => {
+        const bar = document.querySelector("[data-mobile2-bar]");
+        const line = bar?.querySelector("[data-mobile2-chat-state]")?.parentElement ?? null;
+        return bar ? { marks: bar.querySelectorAll(".role-mark").length, avatars: bar.querySelectorAll("[data-role-avatar]").length, line: line?.textContent ?? null, lineOver: line ? line.scrollWidth - line.clientWidth : null } : null;
+      })(),
+      sideways: document.documentElement.scrollWidth - innerWidth,
+      broken: [...document.images].filter((image) => image.hasAttribute("data-role-avatar") && !(image.complete && image.naturalWidth > 0)).length,
+    };
+  }, scope);
+
+  browserTest("every costume at its size beside the engine, light and dark, en and uk, desktop and phone", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/role-avatars-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const frames: Record<string, unknown> = {};
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const shape of SHAPES) {
+        const name = (role: string) => role === "neutral" ? translate(lang, "roleFrame.neutral") : translate(lang, `roleCopy.${role}.name` as Parameters<typeof translate>[1]);
+        const answerSize = shape.phone ? "20x20" : "26x26";
+        for (const [view, conversation, role] of [["seat", "conversation_orchestrator", "orchestrator"], ["builder", "conversation_search-impl-2", "builder"], ["agent", "conversation_ra-agent", "neutral"]] as const) {
+          /* On the desktop the seat sits above the board; every other conversation opens in the agent window. */
+          if (view === "seat" && !shape.phone && shape.name === "1000") continue;
+          const label = `${view}-${shape.name}-${scheme}-${lang}`;
+          const hash = view === "seat" && !shape.phone ? "" : `#c=${conversation}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=role-avatars${hash}`, shape.viewport, scheme, lang, "reduce", shape.phone, shape.phone ? 2 : 1);
+          try {
+            await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+            /* The frame variant production draws by default (the layout's boot script, which the fixture does not run). */
+            await page.evaluate((frame) => document.documentElement.setAttribute("data-role-frame", frame), DEFAULT_ROLE_FRAME);
+            const scope = shape.phone ? "[data-testid='mobile-focused-pane']" : view === "seat" ? "[data-kanban-seat]" : "[data-agent-window] .reader-slot:not([data-incoming])";
+            await page.waitForSelector(`${scope} [data-tts-message] [data-tts-body]`, { timeout: 30_000 }).catch(() => undefined);
+            if (view === "seat") await page.waitForFunction((scope) => document.querySelectorAll(`${scope} [data-agent-author]`).length >= 12, scope, { timeout: 20_000 }).catch(() => undefined);
+            await page.waitForFunction(() => [...document.images].every((image) => image.complete), undefined, { timeout: 10_000 }).catch(() => undefined);
+            await page.waitForTimeout(400);
+            const reading = await read(page, scope);
+            frames[label] = { ...reading, pageErrors };
+            await page.screenshot({ path: path.join(OUT, `${label}.png`), fullPage: !shape.phone });
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join("; ")}`);
+            if (reading.sideways > 0) failures.push(`${label}: scrolls ${reading.sideways}px sideways`);
+            if (reading.broken) failures.push(`${label}: ${reading.broken} avatars did not load`);
+            if (!reading.answers.length) failures.push(`${label}: no answer rendered`);
+            for (const answer of reading.answers) {
+              if (answer.avatar !== `${role}:${answerSize}`) failures.push(`${label}: an answer draws ${answer.avatar}, not ${role}:${answerSize}`);
+              if (answer.engine !== "Claude" || answer.engineInsideAvatar) failures.push(`${label}: an answer's engine reads ${JSON.stringify(answer.engine)} apart from the avatar: ${!answer.engineInsideAvatar}`);
+              if (answer.overflow > 0.5) failures.push(`${label}: an answer avatar leaves its header row by ${answer.overflow}px`);
+            }
+            if (!reading.header.some((avatar) => avatar.startsWith(`${role}:`))) failures.push(`${label}: the conversation header draws ${JSON.stringify(reading.header)}, not ${role}`);
+            if (!shape.phone && view !== "seat" && !reading.models.some((model) => model.length > 0)) failures.push(`${label}: the header lost its model chip`);
+            if (shape.phone && (reading.phoneBar?.avatars !== 1 || reading.phoneBar.marks !== 0 || !reading.phoneBar.line?.includes("Opus"))) failures.push(`${label}: the phone bar ${JSON.stringify(reading.phoneBar)}`);
+            if (view === "seat") {
+              const expected = SENDERS.map((sender) => `${sender}:26x26`);
+              if (JSON.stringify(reading.cards.map((card) => card.avatar)) !== JSON.stringify(expected)) failures.push(`${label}: cards draw ${JSON.stringify(reading.cards.map((card) => card.avatar))}`);
+              const labels = reading.cards.map((card) => card.label);
+              if (JSON.stringify(labels) !== JSON.stringify(SENDERS.map(name))) failures.push(`${label}: card labels ${JSON.stringify(labels)}`);
+              const cut = reading.cards.filter((card) => card.cut > 0.5);
+              if (cut.length) failures.push(`${label}: cut labels ${JSON.stringify(cut)}`);
+              if (new Set(reading.cards.map((card) => card.head)).size !== 1) failures.push(`${label}: card headers of heights ${JSON.stringify(reading.cards.map((card) => card.head))}`);
+              const clocks = reading.cards.map((card) => card.clock ?? "");
+              if (!clocks.every((clock) => (shape.phone ? /^\d{2}:\d{2}$/ : /^\d{1,2}:\d{2}:\d{2}$/).test(clock))) failures.push(`${label}: card clocks ${JSON.stringify(clocks)}`);
+            }
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(EVIDENCE, "rendered.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "?scenario=role-avatars", frames, failures }, null, 2)}\n`);
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+  }, 900_000);
 });
 
 /*
@@ -29181,7 +29569,7 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
           } finally { await context.close(); }
         }
 
-        /* The phone: its account lines are the accounts screen behind the menu; each corner names the week. */
+        /* The phone: its account lines are the accounts screen behind the menu; each collapsed card's corner names the week, and the active card, which lists its windows, repeats none. */
         {
           const name = `accounts-390-${lang}`;
           const { context, page, pageErrors } = await openFixture(browser, `${server.base}?accountpicker=1&sidebarweekly=1`, { width: 390, height: 844 }, "dark", lang, "reduce", true);
@@ -29189,7 +29577,7 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
             await page.waitForSelector('[data-mobile2-screen="board"]', { timeout: 40_000 });
             await page.click('[data-mobile2-open="menu"]');
             await page.click('[data-mobile2-go="accounts"]');
-            await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account-corner]').nth(4).waitFor({ timeout: 15_000 });
+            await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account-corner]').nth(2).waitFor({ timeout: 15_000 });
             await page.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
             const cards = await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account]').evaluateAll((elements) => elements.map((card) => {
               const corner = card.querySelector<HTMLElement>("[data-mobile2-account-corner]");
@@ -29200,7 +29588,7 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
               };
             }));
             const week = (percent: number) => `${tr("mobile2.meter.left", { left: percent })} ${tr("limits.week")}`;
-            expect(cards.map((card) => card.corner), `${name} corners`).toEqual([week(77), week(41), tr("limits.noWeekly"), week(78), week(23)]);
+            expect(cards.map((card) => card.corner), `${name} corners`).toEqual([null, week(41), tr("limits.noWeekly"), null, week(23)]);
             expect(cards.every((card) => card.inside !== false), `${name} corners inside the screen`).toBe(true);
             expect(await page.evaluate(() => Math.max(0, document.documentElement.scrollWidth - innerWidth)), `${name} no sideways scroll`).toBe(0);
             await page.screenshot({ path: path.join(out, `${name}.png`) });

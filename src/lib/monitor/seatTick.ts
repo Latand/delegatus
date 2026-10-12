@@ -33,6 +33,7 @@ import {
   type SeatTickProjectState,
   type SeatTickPullRequestGap,
   type SeatTickSeatInput,
+  type SeatTickSignalInput,
   type SeatTickSourceGap,
   type SeatTickTaskInput,
   type SeatTickTranscriptGap,
@@ -292,6 +293,7 @@ function isUnstarted(task: SeatTickTaskInput, now: number, backlogAfterMs: numbe
  */
 function hasOpenWork(input: SeatTickCheckInput): boolean {
   return input.pipelines.some(isOpenLane)
+    || input.signals.some(signal => signal.actionable)
     || input.tasks.some((task) => task.status === "inbox" || task.status === "assigned")
     || input.pullRequests.length > 0
     || ownSettledLanes(input).length > 0
@@ -2214,6 +2216,11 @@ function childrenShown(before: readonly string[], shown: readonly string[]): str
  * Existing child/outcome/event ledgers retain their own delivery semantics.
  * Permission requests keep their reminder behavior: equal labels do not prove
  * equal requests, and this projection has no durable request identity. */
+export function seatTickSignalVersion(signal: SeatTickSignalInput): string {
+  const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  return `${hash(["signal", signal.id])}@${hash([signal.episode ?? signal.label, null])}`;
+}
+
 function agendaVersion(item: SeatTickItem, input: SeatTickCheckInput): string | undefined {
   if (item.mergeEventSeq !== undefined) return mergeEventVersion(item.mergeEventSeq);
   /* A routed wait is shown once per wait and per seat: a successor seat was
@@ -2228,7 +2235,8 @@ function agendaVersion(item: SeatTickItem, input: SeatTickCheckInput): string | 
   const pipeline = kind === "pipeline" ? input.pipelines.find(row => row.id === item.id) : undefined;
   const ownLane = kind === "pipeline" ? input.ownLanes.find(row => row.id === item.id) : undefined;
   const signal = kind === "signal" ? input.signals.find(row => row.id === item.id) : undefined;
-  const source = signal?.episode ?? (kind === "task" ? input.tasks.find(row => row.id === item.id)
+  if (signal) return seatTickSignalVersion(signal);
+  const source = (kind === "task" ? input.tasks.find(row => row.id === item.id)
     : kind === "pull-request" ? input.pullRequests.find(row => `#${row.number}` === item.id)
     : pipeline ? { title: pipeline.title, state: pipeline.state, stageId: pipeline.stageId, updatedAt: pipeline.updatedAt, pausedBy: pipeline.pausedBy, stall: pipeline.pausedBy !== "seat" && input.state.stalledSeen.includes(pipeline.id) && stalledLanes(input).some(entry => entry.pipeline.id === pipeline.id) ? laneStallToken(pipeline) : null, activity: pipeline.stageActivity?.lifecycle, reason: pipeline.stageActivity?.reason }
     : ownLane ?? item.label);

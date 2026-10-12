@@ -78,8 +78,8 @@ run() {
 # hold at avg10 >= hold, release after release_after seconds below release. A
 # failed sample admits; the scope quotas still bound the work.
 psi_file=${LLV_GATE_PSI_FILE:-/proc/pressure/cpu}
-hold=${DELEGATUS_CPU_PRESSURE_HOLD:-${LLV_CPU_PRESSURE_HOLD:-20}}
-release=${DELEGATUS_CPU_PRESSURE_RELEASE:-${LLV_CPU_PRESSURE_RELEASE:-10}}
+hold=${DELEGATUS_CPU_PRESSURE_HOLD:-${LLV_CPU_PRESSURE_HOLD:-30}}
+release=${DELEGATUS_CPU_PRESSURE_RELEASE:-${LLV_CPU_PRESSURE_RELEASE:-20}}
 release_after=${LLV_GATE_PSI_RELEASE_SECONDS:-10}
 defer_after=${LLV_GATE_PSI_DEFER_SECONDS:-120}
 held=0 held_since=0 below_since=-1 deferred=0

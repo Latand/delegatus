@@ -32,6 +32,7 @@ import { PrototypeReviewHost } from "./prototypeReview/PrototypeReviewHost";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 import { useDismissalOverlay, usePrototypeDismissalOverlay } from "./attention/dismissalOverlay";
+import { useDoneItems } from "./attention/doneItems";
 import { clearNotice, markNoticesSeen, usePhoneNotices } from "./attention/phoneNotices";
 import { BootShell } from "./BootShell";
 import { AttentionIsland } from "./attention/AttentionIsland";
@@ -73,7 +74,7 @@ import { dropPendingSeatConfirmOutside, onOrchestratorDraftRequest } from "./orc
 import { onOrchestratorFocusRequest } from "./orchestrator/taskChips";
 import { OrchestratorDock, dockOpenFor, rememberDockOpen } from "./orchestrator/OrchestratorDock";
 import { OverviewBoard } from "./OverviewBoard";
-import { BarIslandProvider, BoardPaneProvider } from "./ProjectBar";
+import { BarIslandProvider, BarNeedsFilterProvider, BoardPaneProvider, type BarNeedsFilter } from "./ProjectBar";
 import { GlobalSearch, transcriptFocusHash } from "./search/GlobalSearch";
 import { ProjectDashboard, queueColumnOpen } from "./ProjectDashboard";
 import { buildProjectSummaries, isChildConversation, OVERVIEW, projectKey, railProjectOrder } from "./projectModel";
@@ -1012,6 +1013,12 @@ function ViewerApp() {
     publishBlockerNames({ projects: projectDisplayNames, conversations, tasks: taskTitles, cards });
   }, [updateBlockers, updateDecision, wantedNames, allFiles, tasks, projectDisplayNames]);
   const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision, tasks), [files, pipelines, clock, closingPipelines, updateDecision, tasks]);
+  /* «Готово» (docs/design/done-section.md §5): finished work still waiting to
+     be accepted counts with the decisions on the header, the panel, the tab
+     title and the phone's badge, until it is accepted. The rail's ⏸, «Dismiss
+     all», the agents' read and the board report stay decisions only. */
+  const doneItems = useDoneItems();
+  const waitingCount = needsYou.length + doneItems.length;
   /* The rail's ⏸, the Overview's rows and the phone's project sheet count
      this same grouping, one number per project with the panel's sections. */
   const needsYouByProject = useMemo(() => needsYouCounts(needsYou), [needsYou]);
@@ -1063,8 +1070,8 @@ function ViewerApp() {
   );
 
   useEffect(() => {
-    document.title = needsYou.length ? `(${needsYou.length}) ${PRODUCT_NAME}` : PRODUCT_NAME;
-  }, [needsYou.length]);
+    document.title = waitingCount ? `(${waitingCount}) ${PRODUCT_NAME}` : PRODUCT_NAME;
+  }, [waitingCount]);
 
   /* The width the board's columns have, for whether the panel can dock
      beside them: the kanban's own pane, which it hands in when it mounts (a
@@ -1091,6 +1098,8 @@ function ViewerApp() {
   useEffect(() => {
     if (!panelFloating) return;
     const onDown = (event: PointerEvent) => {
+      /* A picture opened from the panel is a modal over it, not outside it. */
+      if ((event.target as Element | null)?.closest?.('[aria-modal="true"]')) return;
       if (!queueRef.current?.contains(event.target as Node)) setPanelOpen(false);
     };
     const onKey = (event: KeyboardEvent) => {
@@ -1335,6 +1344,8 @@ function ViewerApp() {
      phone and the desktop cannot disagree either (#2129). */
   const shellEntries = project === OVERVIEW ? needsYou : projectEntries;
   const shellQueueCount = shellEntries.length;
+  /* The phone's «Готово» is the same slice, plus what belongs to no board. */
+  const shellDone = useMemo(() => (project === OVERVIEW ? doneItems : doneItems.filter((item) => item.project === null || item.project === project)), [doneItems, project]);
   /* The filter is offered while anything on the board on screen waits, a
      parked lane (#2129) included: that card is what stays lit. Scoped to the
      board, so it never offers to dim a board where nothing would stay lit.
@@ -1564,25 +1575,33 @@ function ViewerApp() {
       onOpen={jumpToEntry}
       focus={panelFocus}
       pinned={favoritesPinned}
+      done={doneItems}
     />
   );
 
-  /* Desktop keeps the island in the fixed top-right anchor, over the bar's
-     right reserve; with the panel docked the anchor moves left by the panel's
-     width, so the control sits at the end of the bar it belongs to. The
+  /* On a project the island is the last item of the board's one header row;
+     on the Overview it keeps the fixed top-right anchor over that bar's right
+     reserve, moved left by the panel's width while the panel is docked. The
      island renders in the zero state too — muted and inert — so the corner
-     always answers "what needs me?" (issue #963). */
-  const attentionBadge = (
+     always answers "what needs me?" (issue #963). In the row the funnel is
+     the first row of the bar's one filter menu (`barNeedsFilter`), so the
+     island there is the chip alone. */
+  const attentionBadge = (inRow: boolean) => (
     <div ref={queueRef} className="pointer-events-auto relative">
       <AttentionIsland
-        count={needsYou.length}
+        count={waitingCount}
         panelOpen={panelOpen}
         filterActive={needsOnly && needsOnlyAvailable}
         onTogglePanel={() => setPanelOpen((value) => !value)}
-        onToggleFilter={needsOnlyAvailable ? () => setNeedsOnly((value) => !value) : undefined}
+        onToggleFilter={!inRow && needsOnlyAvailable ? () => setNeedsOnly((value) => !value) : undefined}
       />
       {panelFloating ? panel("overlay") : null}
     </div>
+  );
+  const needsOnlyActive = needsOnly && needsOnlyAvailable;
+  const barNeedsFilter = useMemo<BarNeedsFilter>(
+    () => ({ available: needsOnlyAvailable, active: needsOnlyActive, toggle: () => setNeedsOnly((value) => !value) }),
+    [needsOnlyAvailable, needsOnlyActive],
   );
 
   /* The phone shell's host (mobile v2 lane 1): the queue count for the bar's
@@ -1613,7 +1632,7 @@ function ViewerApp() {
       }
     };
     return {
-      attentionCount: shellQueueCount,
+      attentionCount: shellQueueCount + shellDone.length,
       noticeDot: phoneNotices.unseen,
       filterActive: needsOnly && needsOnlyAvailable,
       arrival: toastFile ? (
@@ -1692,13 +1711,14 @@ function ViewerApp() {
               onNoticesSeen={markNoticesSeen}
               filterActive={needsOnly}
               onToggleFilter={needsOnlyAvailable ? () => setNeedsOnly((value) => !value) : undefined}
+              done={shellDone}
             />
           );
         }
         return null;
       },
     };
-  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, railCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, openPrototypeEntry, phoneNotices.unseen, noticeRows, railOrder, needsOnly, needsOnlyAvailable]);
+  }, [isMobile, shellEntries, shellDone, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, railCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, openPrototypeEntry, phoneNotices.unseen, noticeRows, railOrder, needsOnly, needsOnlyAvailable]);
 
   const shell = (
     <div className="flex h-full">
@@ -1756,37 +1776,59 @@ function ViewerApp() {
             phone the badge lives in the board header and the toast docks in flow
             below (see the mobile banner), so this fixed anchor is desktop-only. */}
         <BoardPaneProvider onPane={setBoardPane}>
-        <BarIslandProvider island={isMobile ? null : (
-          /* On a project, top-2 centres the 32px bar controls of the island in
-             the board's one 48px header bar (#1801), whose right 236px are
-             reserved for it. The
-             Overview keeps its 40px title row above its board bar, so there
-             top-12 parks it in that bar's reserve instead, clear of the row.
-             On a project the 16px gap drops the toast to y 54, clear of the
-             bar's bottom border at 48. On a project the island is portaled into
-             the bar's last slot, after ⋯, so Tab reaches it where it is drawn;
-             the text size and leading are the page's, which the board's own
-             font would otherwise replace there. */
-          <div
-            className={`pointer-events-none fixed ${project === OVERVIEW ? "top-12 gap-2" : "top-2 gap-4"} z-50 flex flex-col items-end text-[15px] leading-normal`}
-            style={{ right: panelDocked ? PANEL_WIDTH + 16 : 16 }}
-          >
-            {attentionBadge}
-            {/* A floating panel hangs where the toast would, and already
-                lists what the toast announces. */}
-            {toastFile && !panelFloating ? (
-              <AttentionToast
-                file={toastFile}
-                mobile={false}
-                onOpen={() => {
-                  openFile(toastFile);
-                  setToastPath(null);
-                }}
-                onDismiss={() => setToastPath(null)}
-              />
-            ) : null}
-          </div>
-        )}>
+        <BarNeedsFilterProvider value={isMobile ? null : barNeedsFilter}>
+        <BarIslandProvider island={isMobile ? null : (inRow) => {
+          /* A floating panel hangs where the toast would, and already lists
+             what the toast announces. */
+          const toast = toastFile && !panelFloating ? (
+            <AttentionToast
+              file={toastFile}
+              mobile={false}
+              onOpen={() => {
+                openFile(toastFile);
+                setToastPath(null);
+              }}
+              onDismiss={() => setToastPath(null)}
+            />
+          ) : null;
+          /* In a project's bar the island is the row's last item, after ⋯,
+             in the flow: nothing is drawn over the row, and Tab reaches it
+             where it is drawn. With the needs-you panel docked the chip
+             leaves the row, since the panel beside the board already says
+             what it would. The toast hangs 8 px under the 48 px row, at the
+             window's right edge or the docked panel's. The text size and
+             leading are the page's, which the board's own font would
+             otherwise replace there. */
+          if (inRow) {
+            return (
+              <>
+                {panelDocked ? null : (
+                  <div className="pointer-events-none relative flex shrink-0 items-center text-[15px] leading-normal" data-bar-island-flow="">
+                    {attentionBadge(true)}
+                  </div>
+                )}
+                {toast ? (
+                  <div className="pointer-events-none fixed top-14 z-50 flex flex-col items-end text-[15px] leading-normal" style={{ right: panelDocked ? PANEL_WIDTH + 16 : 16 }}>
+                    {toast}
+                  </div>
+                ) : null}
+              </>
+            );
+          }
+          /* With no bar slot the island is fixed to the corner. The Overview
+             keeps its 40px title row above its board bar, so top-12 parks it
+             in that bar's reserve, clear of the row; a leaf with no bar at
+             all (the relay's chats) keeps it at the top. */
+          return (
+            <div
+              className={`pointer-events-none fixed ${project === OVERVIEW ? "top-12 gap-2" : "top-2 gap-4"} z-50 flex flex-col items-end text-[15px] leading-normal`}
+              style={{ right: panelDocked ? PANEL_WIDTH + 16 : 16 }}
+            >
+              {attentionBadge(false)}
+              {toast}
+            </div>
+          );
+        }}>
         {relayIdOfChatsProject(project) && !liftedProject ? (
           <RelayChatsView relayId={relayIdOfChatsProject(project)!} payload={relayChats} mobileShell={mobileShell} />
         ) : project === OVERVIEW && !liftedProject ? (
@@ -1850,6 +1892,7 @@ function ViewerApp() {
           />
         )}
         </BarIslandProvider>
+        </BarNeedsFilterProvider>
         </BoardPaneProvider>
         <StateWritesAlert storage={systemHealth.storage} />
       </main>

@@ -2,14 +2,14 @@
   {
     "label": "board-desktop-1440-light-en",
     "token": 0.6,
-    "labelOff": "Show only those waiting on you (F)",
-    "labelOn": "Show all cards (F)",
+    "labelOff": "Filter",
+    "labelOn": "Filter (on)",
     "pressed": "true",
     "widthOff": 32,
     "widthOn": 32,
     "island": {
       "right": 1424,
-      "left": 1289.421875,
+      "left": 1311.625,
       "viewport": 1440
     },
     "dimmedContrast": 4.58,
@@ -22,9 +22,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 680.59375,
+          "top": 537.65625,
           "width": 454,
-          "height": 171.4375
+          "height": 201.375
         }
       },
       "t-nf-lane": {
@@ -34,7 +34,7 @@
           "left": 337,
           "top": 207,
           "width": 454,
-          "height": 288.71875
+          "height": 318.65625
         }
       },
       "t-nf-cleared": {
@@ -42,9 +42,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 864.03125,
+          "top": 982.78125,
           "width": 454,
-          "height": 264.71875
+          "height": 294.65625
         }
       },
       "t-nf-run": {
@@ -52,9 +52,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 507.71875,
+          "top": 751.03125,
           "width": 454,
-          "height": 160.875
+          "height": 190.8125
         }
       },
       "t-nf-idle": {
@@ -62,9 +62,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 1140.75,
+          "top": 1289.4375,
           "width": 454,
-          "height": 159.4375
+          "height": 189.375
         }
       }
     },
@@ -74,9 +74,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 680.59375,
+          "top": 537.65625,
           "width": 454,
-          "height": 171.4375
+          "height": 201.375
         }
       },
       "t-nf-lane": {
@@ -86,7 +86,7 @@
           "left": 337,
           "top": 207,
           "width": 454,
-          "height": 288.71875
+          "height": 318.65625
         }
       },
       "t-nf-cleared": {
@@ -94,9 +94,9 @@
         "filter": "saturate(0.35)",
         "box": {
           "left": 337,
-          "top": 864.03125,
+          "top": 982.78125,
           "width": 454,
-          "height": 264.71875
+          "height": 294.65625
         }
       },
       "t-nf-run": {
@@ -104,9 +104,9 @@
         "filter": "saturate(0.35)",
         "box": {
           "left": 337,
-          "top": 507.71875,
+          "top": 751.03125,
           "width": 454,
-          "height": 160.875
+          "height": 190.8125
         }
       },
       "t-nf-idle": {
@@ -114,9 +114,9 @@
         "filter": "saturate(0.35)",
         "box": {
           "left": 337,
-          "top": 1140.75,
+          "top": 1289.4375,
           "width": 454,
-          "height": 159.4375
+          "height": 189.375
         }
       }
     },
@@ -125,9 +125,9 @@
       "filter": "none",
       "box": {
         "left": 337,
-        "top": 507.71875,
+        "top": 709.03125,
         "width": 454,
-        "height": 160.875
+        "height": 190.8125
       }
     },
     "off": {
@@ -136,9 +136,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 680.59375,
+          "top": 537.65625,
           "width": 454,
-          "height": 171.4375
+          "height": 201.375
         }
       },
       "t-nf-lane": {
@@ -148,7 +148,7 @@
           "left": 337,
           "top": 207,
           "width": 454,
-          "height": 288.71875
+          "height": 318.65625
         }
       },
       "t-nf-cleared": {
@@ -156,9 +156,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 864.03125,
+          "top": 982.78125,
           "width": 454,
-          "height": 264.71875
+          "height": 294.65625
         }
       },
       "t-nf-run": {
@@ -166,9 +166,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 507.71875,
+          "top": 751.03125,
           "width": 454,
-          "height": 160.875
+          "height": 190.8125
         }
       },
       "t-nf-idle": {
@@ -176,9 +176,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 1140.75,
+          "top": 1289.4375,
           "width": 454,
-          "height": 159.4375
+          "height": 189.375
         }
       }
     },
@@ -187,14 +187,14 @@
   {
     "label": "board-desktop-1440-dark-en",
     "token": 0.55,
-    "labelOff": "Show only those waiting on you (F)",
-    "labelOn": "Show all cards (F)",
+    "labelOff": "Filter",
+    "labelOn": "Filter (on)",
     "pressed": "true",
     "widthOff": 32,
     "widthOn": 32,
     "island": {
       "right": 1424,
-      "left": 1289.421875,
+      "left": 1311.625,
       "viewport": 1440
     },
     "dimmedContrast": 5.04,
@@ -207,9 +207,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 680.59375,
+          "top": 537.65625,
           "width": 454,
-          "height": 171.4375
+          "height": 201.375
         }
       },
       "t-nf-lane": {
@@ -219,7 +219,7 @@
           "left": 337,
           "top": 207,
           "width": 454,
-          "height": 288.71875
+          "height": 318.65625
         }
       },
       "t-nf-cleared": {
@@ -227,9 +227,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 864.03125,
+          "top": 982.78125,
           "width": 454,
-          "height": 264.71875
+          "height": 294.65625
         }
       },
       "t-nf-run": {
@@ -237,9 +237,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 507.71875,
+          "top": 751.03125,
           "width": 454,
-          "height": 160.875
+          "height": 190.8125
         }
       },
       "t-nf-idle": {
@@ -247,9 +247,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 1140.75,
+          "top": 1289.4375,
           "width": 454,
-          "height": 159.4375
+          "height": 189.375
         }
       }
     },
@@ -259,9 +259,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 680.59375,
+          "top": 537.65625,
           "width": 454,
-          "height": 171.4375
+          "height": 201.375
         }
       },
       "t-nf-lane": {
@@ -271,7 +271,7 @@
           "left": 337,
           "top": 207,
           "width": 454,
-          "height": 288.71875
+          "height": 318.65625
         }
       },
       "t-nf-cleared": {
@@ -279,9 +279,9 @@
         "filter": "saturate(0.35)",
         "box": {
           "left": 337,
-          "top": 864.03125,
+          "top": 982.78125,
           "width": 454,
-          "height": 264.71875
+          "height": 294.65625
         }
       },
       "t-nf-run": {
@@ -289,9 +289,9 @@
         "filter": "saturate(0.35)",
         "box": {
           "left": 337,
-          "top": 507.71875,
+          "top": 751.03125,
           "width": 454,
-          "height": 160.875
+          "height": 190.8125
         }
       },
       "t-nf-idle": {
@@ -299,9 +299,9 @@
         "filter": "saturate(0.35)",
         "box": {
           "left": 337,
-          "top": 1140.75,
+          "top": 1289.4375,
           "width": 454,
-          "height": 159.4375
+          "height": 189.375
         }
       }
     },
@@ -310,9 +310,9 @@
       "filter": "none",
       "box": {
         "left": 337,
-        "top": 507.71875,
+        "top": 709.03125,
         "width": 454,
-        "height": 160.875
+        "height": 190.8125
       }
     },
     "off": {
@@ -321,9 +321,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 680.59375,
+          "top": 537.65625,
           "width": 454,
-          "height": 171.4375
+          "height": 201.375
         }
       },
       "t-nf-lane": {
@@ -333,7 +333,7 @@
           "left": 337,
           "top": 207,
           "width": 454,
-          "height": 288.71875
+          "height": 318.65625
         }
       },
       "t-nf-cleared": {
@@ -341,9 +341,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 864.03125,
+          "top": 982.78125,
           "width": 454,
-          "height": 264.71875
+          "height": 294.65625
         }
       },
       "t-nf-run": {
@@ -351,9 +351,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 507.71875,
+          "top": 751.03125,
           "width": 454,
-          "height": 160.875
+          "height": 190.8125
         }
       },
       "t-nf-idle": {
@@ -361,9 +361,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 1140.75,
+          "top": 1289.4375,
           "width": 454,
-          "height": 159.4375
+          "height": 189.375
         }
       }
     },
@@ -372,14 +372,14 @@
   {
     "label": "board-desktop-1440-light-uk",
     "token": 0.6,
-    "labelOff": "Показати лише тих, хто чекає на тебе (F)",
-    "labelOn": "Показати всі картки (F)",
+    "labelOff": "Фільтр",
+    "labelOn": "Фільтр (увімкнено)",
     "pressed": "true",
     "widthOff": 32,
     "widthOn": 32,
     "island": {
       "right": 1424,
-      "left": 1281.3125,
+      "left": 1304.03125,
       "viewport": 1440
     },
     "dimmedContrast": 4.58,
@@ -392,9 +392,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 708.59375,
+          "top": 565.65625,
           "width": 454,
-          "height": 171.4375
+          "height": 201.375
         }
       },
       "t-nf-lane": {
@@ -404,7 +404,7 @@
           "left": 337,
           "top": 207,
           "width": 454,
-          "height": 316.71875
+          "height": 346.65625
         }
       },
       "t-nf-cleared": {
@@ -412,9 +412,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 892.03125,
+          "top": 1010.78125,
           "width": 454,
-          "height": 316.71875
+          "height": 346.65625
         }
       },
       "t-nf-run": {
@@ -422,9 +422,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 535.71875,
+          "top": 779.03125,
           "width": 454,
-          "height": 160.875
+          "height": 190.8125
         }
       },
       "t-nf-idle": {
@@ -432,9 +432,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 1220.75,
+          "top": 1369.4375,
           "width": 454,
-          "height": 159.4375
+          "height": 189.375
         }
       }
     },
@@ -444,9 +444,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 708.59375,
+          "top": 565.65625,
           "width": 454,
-          "height": 171.4375
+          "height": 201.375
         }
       },
       "t-nf-lane": {
@@ -456,7 +456,7 @@
           "left": 337,
           "top": 207,
           "width": 454,
-          "height": 316.71875
+          "height": 346.65625
         }
       },
       "t-nf-cleared": {
@@ -464,9 +464,9 @@
         "filter": "saturate(0.35)",
         "box": {
           "left": 337,
-          "top": 892.03125,
+          "top": 1010.78125,
           "width": 454,
-          "height": 316.71875
+          "height": 346.65625
         }
       },
       "t-nf-run": {
@@ -474,9 +474,9 @@
         "filter": "saturate(0.35)",
         "box": {
           "left": 337,
-          "top": 535.71875,
+          "top": 779.03125,
           "width": 454,
-          "height": 160.875
+          "height": 190.8125
         }
       },
       "t-nf-idle": {
@@ -484,9 +484,9 @@
         "filter": "saturate(0.35)",
         "box": {
           "left": 337,
-          "top": 1220.75,
+          "top": 1369.4375,
           "width": 454,
-          "height": 159.4375
+          "height": 189.375
         }
       }
     },
@@ -495,9 +495,9 @@
       "filter": "none",
       "box": {
         "left": 337,
-        "top": 535.71875,
+        "top": 709.03125,
         "width": 454,
-        "height": 160.875
+        "height": 190.8125
       }
     },
     "off": {
@@ -506,9 +506,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 708.59375,
+          "top": 565.65625,
           "width": 454,
-          "height": 171.4375
+          "height": 201.375
         }
       },
       "t-nf-lane": {
@@ -518,7 +518,7 @@
           "left": 337,
           "top": 207,
           "width": 454,
-          "height": 316.71875
+          "height": 346.65625
         }
       },
       "t-nf-cleared": {
@@ -526,9 +526,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 892.03125,
+          "top": 1010.78125,
           "width": 454,
-          "height": 316.71875
+          "height": 346.65625
         }
       },
       "t-nf-run": {
@@ -536,9 +536,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 535.71875,
+          "top": 779.03125,
           "width": 454,
-          "height": 160.875
+          "height": 190.8125
         }
       },
       "t-nf-idle": {
@@ -546,9 +546,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 1220.75,
+          "top": 1369.4375,
           "width": 454,
-          "height": 159.4375
+          "height": 189.375
         }
       }
     },
@@ -557,14 +557,14 @@
   {
     "label": "board-desktop-1440-dark-uk",
     "token": 0.55,
-    "labelOff": "Показати лише тих, хто чекає на тебе (F)",
-    "labelOn": "Показати всі картки (F)",
+    "labelOff": "Фільтр",
+    "labelOn": "Фільтр (увімкнено)",
     "pressed": "true",
     "widthOff": 32,
     "widthOn": 32,
     "island": {
       "right": 1424,
-      "left": 1281.3125,
+      "left": 1304.03125,
       "viewport": 1440
     },
     "dimmedContrast": 5.04,
@@ -577,9 +577,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 708.59375,
+          "top": 565.65625,
           "width": 454,
-          "height": 171.4375
+          "height": 201.375
         }
       },
       "t-nf-lane": {
@@ -589,7 +589,7 @@
           "left": 337,
           "top": 207,
           "width": 454,
-          "height": 316.71875
+          "height": 346.65625
         }
       },
       "t-nf-cleared": {
@@ -597,9 +597,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 892.03125,
+          "top": 1010.78125,
           "width": 454,
-          "height": 316.71875
+          "height": 346.65625
         }
       },
       "t-nf-run": {
@@ -607,9 +607,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 535.71875,
+          "top": 779.03125,
           "width": 454,
-          "height": 160.875
+          "height": 190.8125
         }
       },
       "t-nf-idle": {
@@ -617,9 +617,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 1220.75,
+          "top": 1369.4375,
           "width": 454,
-          "height": 159.4375
+          "height": 189.375
         }
       }
     },
@@ -629,9 +629,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 708.59375,
+          "top": 565.65625,
           "width": 454,
-          "height": 171.4375
+          "height": 201.375
         }
       },
       "t-nf-lane": {
@@ -641,7 +641,7 @@
           "left": 337,
           "top": 207,
           "width": 454,
-          "height": 316.71875
+          "height": 346.65625
         }
       },
       "t-nf-cleared": {
@@ -649,9 +649,9 @@
         "filter": "saturate(0.35)",
         "box": {
           "left": 337,
-          "top": 892.03125,
+          "top": 1010.78125,
           "width": 454,
-          "height": 316.71875
+          "height": 346.65625
         }
       },
       "t-nf-run": {
@@ -659,9 +659,9 @@
         "filter": "saturate(0.35)",
         "box": {
           "left": 337,
-          "top": 535.71875,
+          "top": 779.03125,
           "width": 454,
-          "height": 160.875
+          "height": 190.8125
         }
       },
       "t-nf-idle": {
@@ -669,9 +669,9 @@
         "filter": "saturate(0.35)",
         "box": {
           "left": 337,
-          "top": 1220.75,
+          "top": 1369.4375,
           "width": 454,
-          "height": 159.4375
+          "height": 189.375
         }
       }
     },
@@ -680,9 +680,9 @@
       "filter": "none",
       "box": {
         "left": 337,
-        "top": 535.71875,
+        "top": 709.03125,
         "width": 454,
-        "height": 160.875
+        "height": 190.8125
       }
     },
     "off": {
@@ -691,9 +691,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 708.59375,
+          "top": 565.65625,
           "width": 454,
-          "height": 171.4375
+          "height": 201.375
         }
       },
       "t-nf-lane": {
@@ -703,7 +703,7 @@
           "left": 337,
           "top": 207,
           "width": 454,
-          "height": 316.71875
+          "height": 346.65625
         }
       },
       "t-nf-cleared": {
@@ -711,9 +711,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 892.03125,
+          "top": 1010.78125,
           "width": 454,
-          "height": 316.71875
+          "height": 346.65625
         }
       },
       "t-nf-run": {
@@ -721,9 +721,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 535.71875,
+          "top": 779.03125,
           "width": 454,
-          "height": 160.875
+          "height": 190.8125
         }
       },
       "t-nf-idle": {
@@ -731,9 +731,9 @@
         "filter": "none",
         "box": {
           "left": 337,
-          "top": 1220.75,
+          "top": 1369.4375,
           "width": 454,
-          "height": 159.4375
+          "height": 189.375
         }
       }
     },

@@ -11,6 +11,10 @@
  *   &placement=overlay    the panel floating over the board
  *   &seat=beside          the orchestrator seat open beside the board
  *   &overview=1           the Overview instead of the delegatus board
+ *   &done=1               «Готово» pinned above the decisions and the report log (docs/design/done-section.md):
+ *                         a visible change with its before/after, a deploy, a
+ *                         publication, ten technical fixes, three without a PR,
+ *                         an incident and an account limit
  *   &scenario=auto-resolve  docs/design/attention-auto-resolve.md: three asks
  *                         from seats since handed on, a deployer's question its
  *                         seat answers, a worker's question the seat escalated,
@@ -26,6 +30,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { Viewer } from "@/components/Viewer";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { DismissalSubjectRequest } from "@/lib/attention/dismissalTypes";
+import type { DoneItemV1 } from "@/lib/done/types";
 import { attentionSystemClears } from "@/lib/attention/reconcile";
 import { conversationRouteKey, type AttentionEscalationMark } from "@/lib/attention/routeTypes";
 import { stampAttentionRoutes, waitingRoundIds } from "@/lib/attention/routing";
@@ -383,6 +388,49 @@ function dismiss(subjects: DismissalSubjectRequest[], undo: boolean): unknown[] 
   return done;
 }
 
+/* «Готово»: finished work the operator accepts, answered and recorded the
+   way `/api/attention/done` does. Invented sentences, numbers and pictures. */
+const DONE = params.has("done");
+const doneFrame = (bleed: boolean) => {
+  const card = (y: number, title: string, line: string) => `<g opacity="${bleed ? 0.72 : 1}"><rect x="40" y="${y}" width="640" height="150" rx="18" fill="#1b1f29" stroke="#2c3240"/>`
+    + `<text x="72" y="${y + 56}" font-family="sans-serif" font-size="30" font-weight="700" fill="#e8eaf0">${title}</text>`
+    + `<text x="72" y="${y + 104}" font-family="sans-serif" font-size="22" fill="#9aa3b5">${line}</text></g>`;
+  const body = card(28, "Ключі ідемпотентності", "для повернень коштів") + card(156, "Backoff для повторів вебхуків", "Експоненційна затримка з jitter") + card(284, "Ліміт на /refunds", "20 на хвилину для продавця, далі 429");
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="720" height="460" viewBox="0 0 720 460"><rect width="720" height="460" fill="#0f1218"/>${body}</svg>`)}`;
+};
+const doneAt = (secondsAgo: number) => iso(secondsAgo);
+const donePr = (number: number) => ({ repository: "example/delegatus", number, url: `https://github.com/example/delegatus/pull/${number}` });
+const done = (key: string, over: Partial<DoneItemV1>): DoneItemV1 => ({
+  key, kind: "pr", look: "technical", project: D, at: doneAt(6 * 3_600), createdAt: doneAt(6 * 3_600), title: "", icon: null, refs: {},
+  frame: null, frameCheckedAt: doneAt(6 * 3_600), acknowledgedAt: null, acknowledgedBy: null, ...over,
+});
+const TECHNICAL: Array<[number, string, string]> = [
+  [2698, "Видалення акаунта спершу звіряє файл на диску; старі домівки йдуть в архів.", "user-x"],
+  [2699, "Повідомлення агенту доходять і під час прибирання; прогрес відправки чесний.", "send"],
+  [2708, "Друга відмова хука зберігається після падіння процесу.", "shield"],
+  [2709, "Агент не стартує, коли вільної пам’яті менше за нижню межу.", "memory-stick"],
+  [2710, "Тести бекенду працюють в ізольованому стані й не чіпають живий.", "flask-conical"],
+  [2717, "Налаштування акаунтів читаються для того проєкту, якому належать.", "settings"],
+  [2694, "Повідомлення до Claude під час його ходу стають у чергу.", "messages-square"],
+  [2704, "HTTP MCP зберігає ідентичність після міграції; скасування клієнта не зачіпає інших.", "plug"],
+  [2705, "Мерджер приймає тестові контракти, які погодило рев’ю.", "git-merge"],
+  [2723, "Автомердж чекає лише обов’язкових перевірок main.", "circle-check"],
+];
+const doneItems: DoneItemV1[] = DONE ? [
+  done("pr:example/delegatus#2691", { look: "visible", at: doneAt(8 * 3_600), title: "Лендінг: картки в демо більше не просвічують одна крізь одну", icon: "layers", refs: { pr: donePr(2691), pipelineId: "lane-landing" },
+    frame: { src: doneFrame(false), before: doneFrame(true), caption: "Демо на лендінгу" } }),
+  done("deploy:fixture-deploy", { kind: "deploy", look: "deploy", project: null, at: doneAt(5 * 3_600), refs: { deploymentId: "fixture-deploy", sha: "1c41d361".padEnd(40, "0"), phase: "succeeded" } }),
+  done("report:fixture-publication", { kind: "report", look: "publication", at: doneAt(5.5 * 3_600), title: "Лендінг опубліковано з новим демо", refs: { reportId: "fixture-publication" } }),
+  ...TECHNICAL.map(([number, title, icon], index) => done(`pr:example/delegatus#${number}`, { at: doneAt(7 * 3_600 - index * 600), title, icon, refs: { pr: donePr(number) } })),
+  done("pipeline:lane-voice-models:done", { kind: "pipeline", look: "closed", at: doneAt(4 * 3_600), title: "Аналіз моделей для голосового режиму", icon: "audio-lines", refs: { pipelineId: "lane-voice-models" } }),
+  done("pipeline:lane-merge-order:done", { kind: "pipeline", look: "closed", at: doneAt(4.5 * 3_600), title: "Порядок об’єднання механізмів злиття", icon: "git-pull-request", refs: { pipelineId: "lane-merge-order" } }),
+  done("task:t-shop-tray", { kind: "task", look: "closed", project: S, at: doneAt(3 * 3_600), title: "Прибрано порожній лоток прихованих", icon: "archive", refs: { taskIds: ["t-shop-tray"] } }),
+  done("report:fixture-incident", { kind: "report", look: "incident", at: doneAt(9 * 3_600), title: "Сім ліній зависли після перемикання швидкості; етапи перезапущено.", refs: { reportId: "fixture-incident" } }),
+  done("limit:codex:acct-b:session:1", { kind: "limit", look: "limit", project: null, at: doneAt(6.2 * 3_600),
+    refs: { account: { engine: "codex", accountId: "acct-b", window: "session", label: "B" }, limit: { from: doneAt(6.2 * 3_600), to: doneAt(4 * 3_600), lanes: 16 } } }),
+] : [];
+(window as unknown as { __doneFixture?: { count: number } }).__doneFixture = { count: doneItems.length };
+
 let board = {
   schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {},
   prefs: { manual: [], hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [], viewMode: "scheme", desktopBoard: "kanban", taskPanelOpen: false },
@@ -416,6 +464,16 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const subjects = body.target.kind === "subjects" ? body.target.subjects : [body.target];
     const dismissed = dismiss(subjects, body.undo === true);
     return json({ ok: true, dismissed, alreadyClear: [], changed: [], at: new Date().toISOString(), by: { kind: "operator" }, undo: body.undo === true });
+  }
+  if (DONE && url.pathname === "/api/attention/done") {
+    if (method === "GET") return json({ ok: true, items: doneItems.filter((item) => !item.acknowledgedAt), revision: 1 });
+    const body = JSON.parse(String(init?.body)) as { keys: string[]; undo?: boolean; surface?: "desktop" | "phone" };
+    const changed = doneItems.filter((item) => body.keys.includes(item.key) && Boolean(item.acknowledgedAt) === (body.undo === true));
+    for (const item of changed) {
+      item.acknowledgedAt = body.undo ? null : new Date().toISOString();
+      item.acknowledgedBy = body.undo ? null : { kind: "operator", surface: body.surface === "phone" ? "phone" : "desktop" };
+    }
+    return json({ ok: true, changed });
   }
   if (url.pathname === "/api/projects/settings") {
     return json({ ok: true, project: url.searchParams.get("project") ?? D, mergeOnReview: { enabled: true, changedAt: iso(86_400), changedBy: "operator" }, bridgeReports: { enabled: true, changedAt: iso(86_400), changedBy: "operator" }, github: "example/delegatus" });

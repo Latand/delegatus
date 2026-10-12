@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
-import { staticSensitiveClasses, type StaticFindingClass } from "@/lib/privacy/staticDetectors";
+import { staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 
@@ -16,7 +16,7 @@ import {
   MAX_LESSONS_PER_ATTEMPT, ROLE_MEMORY_BOUND,
   type LessonInput, type LessonRequestRow, type RoleMemoryProjectView, type RoleMemoryRow,
   type RoleMemoryRule, type RoleMemoryScopeRow, type RuleSource, type RuleView, type ScopeView, type StageLessonView,
-  type RewriteInput, type RuleRevision, type RuleRevisionView, type ScopeHistoryEntry,
+  type RewriteInput, type RuleRevision, type RuleRevisionView, type ScopeHistoryEntry, type RulePrivacyHint, type ProblemInput,
 } from "./roleTypes";
 
 /* One collection in state.sqlite, so role memory inherits the state store's
@@ -146,7 +146,7 @@ export function joinMovedScopes(now = new Date().toISOString()): void {
           joined.push(kept);
           tx.put(kept);
         }
-        tx.put({ ...rule, state: "merged", reason: "duplicate", mergedInto: earlier.id, changedAt: now });
+        tx.put({ ...rule, state: "merged", reason: "duplicate", mergedInto: earlier.id, mergedAt: now, changedAt: now });
         merged.push({ from: rule.id, into: earlier.id });
       }
       const retained = retainRules(joined, now);
@@ -205,8 +205,12 @@ export function recordLessonRequest(input: Omit<LessonRequestRow, "kind" | "rule
   });
 }
 
-function hintsOf(text: string): StaticFindingClass[] {
-  return [...staticSensitiveClasses(text.normalize("NFKC"))].sort();
+export function rulePrivacyHints(text: string): RulePrivacyHint[] {
+  const normalized = text.normalize("NFKC");
+  const hints: RulePrivacyHint[] = [...staticSensitiveClasses(normalized)];
+  const email = new RegExp([String.raw`\b[A-Z0-9._%+-]+`, String.raw`[A-Z0-9.-]+\.[A-Z]{2,}\b`].join("@"), "i");
+  if (email.test(normalized)) hints.push("email_address");
+  return hints.sort();
 }
 
 export interface LeftLesson {
@@ -217,7 +221,7 @@ export interface LeftLesson {
   mergedInto?: string;
   scopeChars: number;
   archived: string[];
-  hints: StaticFindingClass[];
+  hints: RulePrivacyHint[];
   version?: string;
 }
 
@@ -241,17 +245,22 @@ export function leaveLessons(input: {
   lessons: readonly LessonInput[];
   none: string | null;
   rewrite?: RewriteInput;
+  problem?: ProblemInput;
   now?: string;
-}): { left: LeftLesson[]; none: string | null } {
+}): { left: LeftLesson[]; none: string | null; problem?: ProblemInput } {
   const now = input.now ?? new Date().toISOString();
   const project = canonicalProject(input.source.project);
-  if (project === "*" || Number(input.lessons.length > 0) + Number(input.rewrite !== undefined) + Number(input.none !== null) !== 1
-    || input.lessons.length > MAX_LESSONS_PER_ATTEMPT) throw new RoleMemoryRefusal("LESSON_INVALID", "give exactly one of none, rewrite or one lesson for a concrete project");
+  if (project === "*" || Number(input.lessons.length > 0) + Number(input.rewrite !== undefined) + Number(input.none !== null) + Number(input.problem !== undefined) !== 1
+    || input.lessons.length > MAX_LESSONS_PER_ATTEMPT) throw new RoleMemoryRefusal("LESSON_INVALID", "give exactly one of none, rewrite, lesson or problem for a concrete project");
   joinMovedScopes(now);
   const result = roleMemoryCollection(true)!.boundedPatch(4096, (tx) => {
     const request = tx.get(requestKey(input.request.pipelineId, input.request.stageId, input.request.attempt));
     if (request?.kind !== "request") throw new RoleMemoryRefusal("LESSON_NOT_REQUESTED", "this stage attempt was not asked for a lesson");
-    if (request.none !== null || request.rewrote || request.ruleIds.length) throw new RoleMemoryRefusal("LESSON_LIMIT", "this stage attempt already answered its lesson request");
+    if (request.none !== null || request.rewrote || request.ruleIds.length || request.problem) throw new RoleMemoryRefusal("LESSON_LIMIT", "this stage attempt already answered its lesson request");
+    if (input.problem) {
+      tx.put({ ...request, problem: input.problem });
+      return { left: [], none: null, problem: input.problem };
+    }
     const left: LeftLesson[] = [];
     if (input.rewrite) {
       const target = tx.get(`r:${input.rewrite.id}`);
@@ -262,8 +271,9 @@ export function leaveLessons(input: {
         throw new RoleMemoryRefusal("RULE_NOT_READABLE", "rewrite must name an active readable rule of this stage");
       }
       if (sameRule(target.rule, input.rewrite.rule)) throw new RoleMemoryRefusal("LESSON_INVALID", "rewrite must change the rule text");
-      const { updated, version } = versionedRule(tx, target, { rule: input.rewrite.rule, why: input.rewrite.why, hints: hintsOf(`${input.rewrite.rule}\n${input.rewrite.why}`) }, { by: "agent", at: now, source: { ...input.source, project } });
-      const active = held.active.flatMap(id => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; });
+      const { updated, version } = versionedRule(tx, target, { rule: input.rewrite.rule, why: input.rewrite.why, hints: rulePrivacyHints(`${input.rewrite.rule}\n${input.rewrite.why}`) }, { by: "agent", at: now, source: { ...input.source, project } });
+      const order = !target.curatedAt && !target.keptByOperatorAt ? [...held.active.filter(id => id !== target.id), target.id] : held.active;
+      const active = order.flatMap(id => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; });
       const retained = retainRules(active, now, new Set([target.id]));
       for (const changed of retained.changed) tx.put(changed);
       const revision = held.revision + 1;
@@ -278,7 +288,7 @@ export function leaveLessons(input: {
       const held = tx.get(`s:${scope}`);
       const current: RoleMemoryScopeRow = held?.kind === "scope" ? held : { kind: "scope", scope, revision: 0, active: [], history: [] };
       const active = current.active.flatMap((id) => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; });
-      const hints = hintsOf(`${lesson.rule}\n${lesson.why}`);
+      const hints = rulePrivacyHints(`${lesson.rule}\n${lesson.why}`);
       const incoming: RoleMemoryRule = {
         kind: "rule", id: newRuleId(tx), scope, rule: lesson.rule, why: lesson.why,
         state: "active", hints, source: { ...input.source, project }, createdAt: now, changedAt: now,
@@ -336,6 +346,7 @@ export function restoreRule(ruleId: string, now = new Date().toISOString()): Rol
     const restored: RoleMemoryRule = { ...rule, scope, state: "active", changedAt: now, keptByOperatorAt: now };
     delete restored.reason;
     delete restored.mergedInto;
+    delete restored.mergedAt;
     delete restored.against;
     delete restored.where;
     const next = [...current.active.flatMap((id) => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; }), restored];
@@ -381,7 +392,57 @@ function revisionView(revision: RuleRevision): RuleRevisionView {
     ...(revision.source ? { roleId: revision.source.roleId, fixRound: revision.source.fixRound } : {}) };
 }
 
-function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMemoryRule>, history: RoleMemoryScopeRow["history"]): RuleView {
+/** Request answers retain task provenance even when a curator replaces revisedBy.
+    Split cutoffs bound merge ancestry as well as requests, and Undo restores the edges. */
+function taskCounter(all: readonly RoleMemoryRow[], byId: ReadonlyMap<string, RoleMemoryRule>): (id: string) => number {
+  const tasks = new Map<string, { key: string; at: string }[]>();
+  const merged = new Map<string, string[]>();
+  const mergeTimes = new Map<string, string>();
+  const edgeKey = (from: string, into: string) => `${from}\0${into}`;
+  for (const row of all) {
+    if (row.kind === "request") {
+      const key = row.taskId ?? `pipeline:${row.pipelineId}`;
+      for (const id of [...row.ruleIds, ...(row.rewrote ? [row.rewrote] : [])]) {
+        if (!tasks.has(id)) tasks.set(id, []);
+        tasks.get(id)!.push({ key, at: row.at });
+      }
+    } else if (row.kind === "rule" && !row.versionOf && row.mergedInto) {
+      if (!merged.has(row.mergedInto)) merged.set(row.mergedInto, []);
+      merged.get(row.mergedInto)!.push(row.id);
+    } else if (row.kind === "scope") {
+      for (const history of row.history) for (const edge of history.merged) {
+        const key = edgeKey(edge.from, edge.into);
+        if (!mergeTimes.has(key) || mergeTimes.get(key)! < history.at) mergeTimes.set(key, history.at);
+      }
+    }
+  }
+  const mergedAt = (from: string, into: string) => byId.get(from)?.mergedAt ?? mergeTimes.get(edgeKey(from, into)) ?? byId.get(from)?.changedAt ?? "";
+  return (id) => {
+    const seen = new Set<string>();
+    const keys = new Set<string>();
+    const pending: { id: string; through?: string }[] = [{ id }];
+    while (pending.length) {
+      const current = pending.pop()!;
+      const visitKey = `${current.id}\0${current.through ?? ""}`;
+      if (seen.has(visitKey)) continue;
+      seen.add(visitKey);
+      for (const task of tasks.get(current.id) ?? []) {
+        if (!current.through || task.at <= current.through) keys.add(task.key);
+      }
+      const row = byId.get(current.id);
+      pending.push(...(merged.get(current.id) ?? [])
+        .filter(parent => !current.through || mergedAt(parent, current.id) <= current.through)
+        .map(parent => ({ id: parent, through: current.through })),
+        ...(row?.mergedFrom ?? []).filter(parent => !current.through || mergedAt(parent, current.id) <= current.through)
+          .map(parent => ({ id: parent, through: current.through })));
+      if (row?.versionOf) pending.push({ id: row.versionOf, through: current.through });
+      if (row?.splitFrom) pending.push({ id: row.splitFrom, through: !current.through || (row.splitAt && row.splitAt < current.through) ? row.splitAt : current.through });
+    }
+    return keys.size;
+  };
+}
+
+function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMemoryRule>, history: RoleMemoryScopeRow["history"], tasks: number): RuleView {
   const agentRevision = history.filter(change => change.by === "agent" && (change.added.includes(row.id) || change.merged.some(item => item.into === row.id) || change.rewritten?.some(item => item.id === row.id)))
     .reduce((latest, change) => Math.max(latest, change.revision), 0);
   const curatorRevision = history.filter(change => change.by === "curator" && !change.revertedAt)
@@ -395,7 +456,7 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
       ? [{ id: prior.id, rule: prior.rule, why: prior.why, hints: prior.hints, createdAt: prior.createdAt, ...(prior.revisedBy ? { revisedBy: revisionView(prior.revisedBy) } : {}) }] : [];
   });
   return {
-    id: row.id, rule: row.rule, why: row.why, state: row.state, hints: row.hints,
+    id: row.id, rule: row.rule, why: row.why, state: row.state, hints: row.hints, tasks,
     ...(row.reason ? { reason: row.reason } : {}), ...(row.mergedInto ? { mergedInto: row.mergedInto } : {}),
     roleId: row.source.roleId, fixRound: row.source.fixRound, stageId: row.source.stageId,
     fresh: now - Date.parse(row.createdAt) < DAY_MS, createdAt: row.createdAt, changedAt: row.changedAt,
@@ -416,6 +477,7 @@ export function projectView(project: string, now = Date.now()): RoleMemoryProjec
   const resolve = scopeResolver();
   const all = rows();
   const rulesById = new Map(all.flatMap((row) => row.kind === "rule" ? [[row.id, row] as const] : []));
+  const ruleTasks = taskCounter(all, rulesById);
   const wanted = [...all.flatMap((row) => row.kind === "scope" && (scopeProject(row.scope) === canonical || isCrossProjectRoleScope(row.scope)) && scopeKind(row.scope) === "role" ? [row.scope] : []).sort(),
     projectScope(canonical), MACHINE_SCOPE];
   const scopes: ScopeView[] = wanted.map((scope) => {
@@ -427,7 +489,7 @@ export function projectView(project: string, now = Date.now()): RoleMemoryProjec
       scope, kind: scopeKind(scope), roleId: scopeRole(scope), revision: held?.revision ?? 0,
       chars: scopeChars(active), bound: ROLE_MEMORY_BOUND,
       addedToday: active.filter((row) => now - Date.parse(row.createdAt) < DAY_MS).length,
-      active: active.map((row) => view(row, now, rulesById, held?.history ?? [])), left: left.map((row) => view(row, now, rulesById, held?.history ?? [])),
+      active: active.map((row) => view(row, now, rulesById, held?.history ?? [], ruleTasks(row.id))), left: left.map((row) => view(row, now, rulesById, held?.history ?? [], ruleTasks(row.id))),
     };
   });
   return { project: canonical, enabled: roleMemoryEnabled(), scopes, curation: curationView(canonical, now) };

@@ -20,6 +20,10 @@ const { clearAccountFixture, persistedCodexLoginAttempts, seedAccountRegistry } 
 const { accountsCollectionRevision, CODEX_ACCOUNTS_SOURCE } = await import("./accountsStore");
 const { SqliteStateCollection } = await import("@/lib/state/sqliteStateStore");
 
+function fixtureRuntime(options: ConstructorParameters<typeof ManagedCodexRuntime>[0] = {}) {
+  return new ManagedCodexRuntime({ observeSignedIn: async () => {}, ...options });
+}
+
 /** The persisted attempt state for one login store, since #1870 rows in the
     `accounts` collection of the state.sqlite beside `stateFile`. */
 function persistedAttemptStates(stateFile: string): string[] {
@@ -81,12 +85,13 @@ test("ManagedCodexRuntime.record commits a completion behind a short foreign hol
   const dir = path.join(RUNTIME_SANDBOX, "foreign-completion");
   const stateFile = path.join(dir, "attempts.json");
   const child = new FakeChild();
-  const runtime = new ManagedCodexRuntime({ stateFile, startClient: async home => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }) });
+  const runtime = fixtureRuntime({ stateFile, startClient: async home => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }) });
   const login = await runtime.startLogin(account("short-holder", path.join(dir, "account")));
   const holder = await foreignAccountHolder();
   try {
     holder.releaseAfter(8);
     child.completed(login.loginId);
+    await Promise.resolve(); await Promise.resolve();
     expect(persistedAttemptStates(stateFile)).toContain("completed");
     expect(child.kills).toBe(1);
   } finally { await holder.close(); }
@@ -94,7 +99,7 @@ test("ManagedCodexRuntime.record commits a completion behind a short foreign hol
 
 test("Codex provider probes wait behind account deletion mutations", async () => {
   const children: FakeChild[] = [];
-  const runtime = new ManagedCodexRuntime({
+  const runtime = fixtureRuntime({
     startClient: async (home) => {
       const child = new FakeChild();
       child.authenticated = true;
@@ -126,7 +131,7 @@ test("provider probes re-resolve a waiting account after deletion wins the fence
   const retiredRegistry = { version: 1, active: "default", accounts: [], retired: [{ id: "stale", label: "Stale", retiredAt: 2 }] };
   seedAccountRegistry("codex", activeRegistry);
   let starts = 0;
-  const runtime = new ManagedCodexRuntime({ startClient: async () => { starts += 1; throw new Error("must stay fenced"); } });
+  const runtime = fixtureRuntime({ startClient: async () => { starts += 1; throw new Error("must stay fenced"); } });
   const stale = account("stale", home);
   let release!: () => void;
   let entered!: () => void;
@@ -153,7 +158,7 @@ test("provider probes re-resolve a waiting account after deletion wins the fence
 
 test("managed login keeps one per-home child until completion and returns only challenge metadata", async () => {
   const children: FakeChild[] = [];
-  const runtime = new ManagedCodexRuntime({
+  const runtime = fixtureRuntime({
     startClient: async (home) => {
       const child = new FakeChild();
       children.push(child);
@@ -177,7 +182,7 @@ test("lock contention defers Codex completion persistence and still closes the c
   const stateFile = path.join(dir, "attempts.json");
   const child = new FakeChild();
   try {
-    const runtime = new ManagedCodexRuntime({
+    const runtime = fixtureRuntime({
       stateFile,
       startClient: async (home) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }),
       now: () => 123,
@@ -194,6 +199,7 @@ test("lock contention defers Codex completion persistence and still closes the c
     await ready;
 
     child.completed(login.loginId);
+    await Promise.resolve(); await Promise.resolve();
     const killsAfterCompletion = child.kills;
     release();
     await holder;
@@ -217,7 +223,7 @@ test("Codex completion write failures log with backoff and eventually persist", 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-retry-"));
   const stateFile = path.join(dir, "attempts.json");
   const child = new FakeChild();
-  const runtime = new ManagedCodexRuntime({
+  const runtime = fixtureRuntime({
     stateFile,
     startClient: async (home) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }),
     now: () => 123,
@@ -230,6 +236,7 @@ test("Codex completion write failures log with backoff and eventually persist", 
   console.error = (message?: unknown) => { messages.push(String(message)); };
   try {
     child.completed(login.loginId);
+    await Promise.resolve(); await Promise.resolve();
     await Bun.sleep(25);
   } finally {
     restoreWrites();
@@ -245,7 +252,7 @@ test("Codex completion write failures log with backoff and eventually persist", 
 test("#2166: Main, the legacy home, signs in with the same device login and can cancel it", async () => {
   const homes: string[] = [];
   const children: FakeChild[] = [];
-  const runtime = new ManagedCodexRuntime({
+  const runtime = fixtureRuntime({
     startClient: async (home) => {
       homes.push(home);
       const child = new FakeChild();
@@ -279,7 +286,7 @@ test("#2166: Main, the legacy home, signs in with the same device login and can 
 test("cancellation and independent homes never share a managed app-server child", async () => {
   const homes: string[] = [];
   const children: FakeChild[] = [];
-  const runtime = new ManagedCodexRuntime({
+  const runtime = fixtureRuntime({
     startClient: async (home) => {
       homes.push(home);
       const child = new FakeChild();
@@ -302,7 +309,7 @@ test("cancellation waits for an in-flight client startup to be reaped", async ()
   let release!: (client: CodexAppServerClientType) => void;
   const starting = new Promise<CodexAppServerClientType>((resolve) => { release = resolve; });
   const child = new FakeChild();
-  const runtime = new ManagedCodexRuntime({ startClient: () => starting });
+  const runtime = fixtureRuntime({ startClient: () => starting });
   const work = account("starting", "/accounts/starting");
   const launch = runtime.startLogin(work).catch(() => null);
   let cancelled = false;
@@ -321,7 +328,7 @@ test("child death, false completion, and account-read failure become recoverable
   const stateFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-state-")), "attempts.json");
   const children: FakeChild[] = [];
   let nextReadFails = false;
-  const runtime = new ManagedCodexRuntime({
+  const runtime = fixtureRuntime({
     stateFile,
     startClient: async (home) => {
       const child = new FakeChild();
@@ -342,6 +349,7 @@ test("child death, false completion, and account-read failure become recoverable
 
   await runtime.retryLogin(work);
   children[4]!.completed("login-3");
+  await Promise.resolve(); await Promise.resolve();
   // The completion closes its child. The replacement account/read failure must
   // remain explicitly recoverable instead of claiming file-based auth.
   nextReadFails = true;
@@ -350,7 +358,7 @@ test("child death, false completion, and account-read failure become recoverable
 
 test("observing a finished, authenticated login again writes nothing and leaves the accounts revision alone", async () => {
   const children: FakeChild[] = [];
-  const runtime = new ManagedCodexRuntime({
+  const runtime = fixtureRuntime({
     startClient: async (home) => {
       const child = new FakeChild();
       child.authenticated = true;
@@ -376,7 +384,7 @@ test("observing a finished, authenticated login again writes nothing and leaves 
 
 test("a login whose account read keeps failing is recorded stale once", async () => {
   let readFails = false;
-  const runtime = new ManagedCodexRuntime({
+  const runtime = fixtureRuntime({
     startClient: async (home) => {
       const child = new FakeChild();
       child.readFailure = readFails;
@@ -402,13 +410,13 @@ test("restart reconstruction marks a pending child stale and retry owns a fresh 
   const stateFile = path.join(dir, "attempts.json");
   const firstChildren: FakeChild[] = [];
   const work = account("work", path.join(dir, "home"));
-  const first = new ManagedCodexRuntime({ stateFile, startClient: async (home) => {
+  const first = fixtureRuntime({ stateFile, startClient: async (home) => {
     const child = new FakeChild(); firstChildren.push(child);
     return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } });
   await first.startLogin(work);
   const secondChildren: FakeChild[] = [];
-  const second = new ManagedCodexRuntime({ stateFile, startClient: async (home) => {
+  const second = fixtureRuntime({ stateFile, startClient: async (home) => {
     const child = new FakeChild(); secondChildren.push(child);
     return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } });
@@ -421,7 +429,7 @@ test("concurrent starts reserve one canonical-home supervisor before awaiting st
   let resolveStart: ((client: CodexAppServerClientType) => void) | null = null;
   let starts = 0;
   const child = new FakeChild();
-  const runtime = new ManagedCodexRuntime({
+  const runtime = fixtureRuntime({
     startClient: async () => {
       starts += 1;
       return new Promise<CodexAppServerClientType>((resolve) => { resolveStart = resolve; });
@@ -441,12 +449,12 @@ test("account/read owns authentication independently from auth.json diagnostics"
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-auth-"));
   const work = account("work", dir);
   fs.writeFileSync(path.join(dir, "auth.json"), "invalid credentials");
-  const unavailable = new ManagedCodexRuntime({ startClient: async (home) => {
+  const unavailable = fixtureRuntime({ startClient: async (home) => {
     const child = new FakeChild();
     return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } });
   await expect(unavailable.loginSnapshot(work)).resolves.toEqual({ state: "idle", attemptState: null, deviceAuth: null });
-  const valid = new ManagedCodexRuntime({ startClient: async (home) => {
+  const valid = fixtureRuntime({ startClient: async (home) => {
     const child = new FakeChild(); child.authenticated = true;
     return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } });
@@ -457,7 +465,7 @@ test("account/read owns authentication independently from auth.json diagnostics"
 test("batched Codex login projection reads durable state once", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-batch-"));
   const stateFile = path.join(dir, "attempts.json");
-  const runtime = new ManagedCodexRuntime({ stateFile });
+  const runtime = fixtureRuntime({ stateFile });
   /* Since #1870 the durable read is a collection snapshot rather than a file
      read, so the projection is measured the way it matters: the number of
      durable reads does not grow with the batch. */
@@ -486,7 +494,7 @@ test("batched Codex login projection reads durable state once", () => {
 
 test("legacy Main and managed homes use the read-only account-plus-limits probe", async () => {
   const children: FakeChild[] = [];
-  const runtime = new ManagedCodexRuntime({ startClient: async (home) => {
+  const runtime = fixtureRuntime({ startClient: async (home) => {
     const child = new FakeChild();
     child.authenticated = true;
     child.requiresOpenaiAuth = true;
@@ -536,7 +544,7 @@ class RedeemChild extends FakeChild {
 test("a quota probe carries the reset-credit summary beside the limits (#1373)", async () => {
   const child = new RedeemChild();
   child.authenticated = true;
-  const runtime = new ManagedCodexRuntime({ startClient: async (home) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }) });
+  const runtime = fixtureRuntime({ startClient: async (home) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }) });
   const probe = await runtime.probeQuota(account("credited", "/accounts/credited"));
   expect(probe.resetCredits).toEqual({ availableCount: 1, credits: null });
   expect(probe.rateLimits.primary).toMatchObject({ usedPercent: 100 });
@@ -545,7 +553,7 @@ test("a quota probe carries the reset-credit summary beside the limits (#1373)",
 
 test("redeeming a reset credit reads, consumes once with the caller's key, and re-reads on one client (#1373)", async () => {
   const children: RedeemChild[] = [];
-  const runtime = new ManagedCodexRuntime({ startClient: async (home) => {
+  const runtime = fixtureRuntime({ startClient: async (home) => {
     const child = new RedeemChild();
     child.authenticated = true;
     children.push(child);
@@ -570,7 +578,7 @@ test("a pre-read that shows no credit refuses locally and sends no consume (#137
   const child = new RedeemChild();
   child.authenticated = true;
   child.available = 0;
-  const runtime = new ManagedCodexRuntime({ startClient: async (home) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }) });
+  const runtime = fixtureRuntime({ startClient: async (home) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }) });
   const redemption = await runtime.redeemResetCredit(account("spent", "/accounts/spent"), "attempt-two");
   expect(redemption).toMatchObject({ outcome: "noCredit", refusedLocally: true });
   expect(redemption.after).toBe(redemption.before);
@@ -582,7 +590,7 @@ test("an unknown credit count is not a refusal: the backend answers, and its ans
   child.authenticated = true;
   child.available = null;
   child.consumeOutcome = "noCredit";
-  const runtime = new ManagedCodexRuntime({ startClient: async (home) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }) });
+  const runtime = fixtureRuntime({ startClient: async (home) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }) });
   const redemption = await runtime.redeemResetCredit(account("unknown-count", "/accounts/unknown-count"), "attempt-three");
   expect(redemption).toMatchObject({ outcome: "noCredit", refusedLocally: false });
   expect(child.methods.filter((method) => method === "account/rateLimitResetCredit/consume")).toHaveLength(1);
@@ -594,7 +602,7 @@ test("a login observation cannot settle credentials replaced during the read", a
   fs.mkdirSync(home, { recursive: true });
   fs.writeFileSync(path.join(home, "auth.json"), "before");
   const child = new FakeChild(); child.authenticated = true;
-  const runtime = new ManagedCodexRuntime({ stateFile: path.join(home, "attempts.json"), startClient: async () => {
+  const runtime = fixtureRuntime({ stateFile: path.join(home, "attempts.json"), startClient: async () => {
     fs.writeFileSync(path.join(home, "auth.json"), "after-reauthentication");
     return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
   } });
@@ -615,11 +623,62 @@ for (const phase of ["before-consume", "after-consume"] as const) {
       }
       onWrite(message);
     };
-    const runtime = new ManagedCodexRuntime({ startClient: async () => {
+    const runtime = fixtureRuntime({ startClient: async () => {
       if (phase === "before-consume") fs.writeFileSync(path.join(home, "auth.json"), "after-reauthentication");
       return CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never });
     } });
     await expect(runtime.redeemResetCredit(account("credit-race", home), "preserved-attempt-key")).rejects.toThrow("account changed during credit redemption");
     expect(child.methods.filter((method) => method === "account/rateLimitResetCredit/consume")).toHaveLength(phase === "before-consume" ? 0 : 1);
+  });
+}
+
+
+test("Codex completion keeps login pending until its fresh observation lands", async () => {
+  const dir = path.join(RUNTIME_SANDBOX, "completion-observation");
+  const child = new FakeChild();
+  let release!: () => void;
+  const observed: string[] = [];
+  const runtime = new ManagedCodexRuntime({
+    stateFile: path.join(dir, "attempts.json"),
+    startClient: async (home) => CodexAppServerClient.start({ home, readProtocolVersion: () => "0.162.1", spawn: () => child as never }),
+    observeSignedIn: async (id: string) => { observed.push(id); await new Promise<void>((resolve) => { release = resolve; }); },
+  });
+  const candidate = account("one", path.join(dir, "account"));
+  const login = await runtime.startLogin(candidate);
+  child.authenticated = true;
+  child.completed(login.loginId);
+  try {
+    expect(observed).toEqual(["one"]);
+    expect(persistedAttemptStates(path.join(dir, "attempts.json"))).toEqual(["pending"]);
+    expect((await runtime.loginSnapshot(candidate)).state).toBe("pending");
+    expect(child.kills).toBe(0);
+  } finally { release?.(); }
+  await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  expect(persistedAttemptStates(path.join(dir, "attempts.json"))).toEqual(["completed"]);
+  expect(child.kills).toBe(1);
+});
+
+
+for (const outcome of ["failed", "cancelled", "replaced", "probe-refused"] as const) {
+  test(`Codex completion observation respects ${outcome}`, async () => {
+    const dir = path.join(RUNTIME_SANDBOX, `observation-${outcome}`);
+    const children: FakeChild[] = [];
+    let release!: () => void;
+    let calls = 0;
+    const stateFile = path.join(dir, "attempts.json");
+    const runtime = new ManagedCodexRuntime({ stateFile,
+      startClient: async (home) => { const child = new FakeChild(); children.push(child); return CodexAppServerClient.start({ home, readProtocolVersion: () => "0.162.1", spawn: () => child as never }); },
+      observeSignedIn: async () => { calls += 1; if (outcome === "probe-refused") throw new Error("fixture refusal"); await new Promise<void>((resolve) => { release = resolve; }); },
+    });
+    const candidate = account("one", path.join(dir, "account"));
+    const login = await runtime.startLogin(candidate);
+    children[0]!.completed(login.loginId, outcome !== "failed");
+    if (outcome === "cancelled") await runtime.cancelLogin("one");
+    if (outcome === "replaced") await runtime.retryLogin(candidate);
+    release?.();
+    for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
+    expect(calls).toBe(outcome === "failed" ? 0 : 1);
+    expect(persistedAttemptStates(stateFile)).toEqual([outcome === "replaced" ? "pending" : outcome === "probe-refused" ? "completed" : outcome]);
+    if (outcome === "replaced") await runtime.cancelLogin("one");
   });
 }

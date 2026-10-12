@@ -4,6 +4,7 @@ import { contextReading, readOrchestratorTranscriptFacts } from "@/lib/orchestra
 import type { SeatContextUsage } from "./seatAutoRotation";
 import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
+import { memoryProblemSignals } from "@/lib/memory/roleProblems";
 import { ruleReports } from "./ruleReports";
 import { readAttentionDismissals } from "@/lib/attention/dismissals";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
@@ -468,6 +469,7 @@ export async function withdrawRuntimeWake(
 }
 
 export interface SeatTickSources {
+  memoryProblems?: (project: string, shown: readonly string[]) => SeatTickSignalInput[];
   recordRuleReports?: (project: string, at: string) => void;
   /** The waits «Waiting for you» routes to this project's seat
       (docs/design/attention-auto-resolve.md), read from the board projection
@@ -652,6 +654,7 @@ export async function settleRecordFromJournal(
 
 export function defaultSeatTickSources(): SeatTickSources {
   return {
+    memoryProblems: memoryProblemSignals,
     recordRuleReports(project, at) {
       const seat = orchestratorSeatForCurrentProject(project).active;
       if (!seat?.conversationId) return;
@@ -2315,6 +2318,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
   const openIds = new Set(hotLanes.filter(isOpen).map((lane) => lane.id));
   return {
     ...input, now, pipelines, tasks, ownLanes,
+    ...(sources.memoryProblems ? { signals: [...input.signals.filter(signal => !signal.id.startsWith("memory-problem:")), ...sources.memoryProblems(input.project, input.state.itemsShown ?? [])] } : {}),
     events: input.events.map((event) => ({ ...event, pipelineTerminal: event.pipelineId !== null && !openIds.has(event.pipelineId) })),
     settings: effectiveSeatTickSettings(sources.settings(input.project), now, SEAT_TICK_WAKE_INTERVAL_MS),
     changeFingerprint: changeFingerprint(pipelines, tasks, input.children, input.pullRequests, input.pullRequestsUnavailable, ownLanes, input.settledDeploys, input.settledMaintenance),
@@ -2476,7 +2480,7 @@ export async function gatherSeatTickInput(
     pullRequests,
     pullRequestsUnavailable,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
-    signals: [...signals(canonical, seat, sources), ...await diskPressureSignals(sources)],
+    signals: [...signals(canonical, seat, sources), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? []) ?? []), ...await diskPressureSignals(sources)],
     ownLanes,
     settledDeploys,
     settledMaintenance,
