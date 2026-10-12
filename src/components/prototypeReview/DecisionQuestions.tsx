@@ -68,8 +68,12 @@ export function DecisionQuestions({ questions, answers, open, onSelect, boxed = 
         {...(question.multiple ? {} : { tabIndex: checked || (!answer?.other && !answer?.options.length && index === 0) ? 0 : -1, onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => open && stepAnswer(event, question, index === "other" ? question.options.length : index) })}
         onClick={() => onSelect(question.id, index)}>
         <span aria-hidden data-prototype-mark="" className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center ${question.multiple ? "rounded-sm" : "rounded-full"} border ${checked ? "border-accent bg-accent text-white" : "border-border bg-sunken"}`}>{checked ? <Check className="h-3.5 w-3.5" /> : null}</span>
-        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{label}</span>
-        {recommended ? <span data-prototype-recommended="" className="shrink-0 self-start whitespace-nowrap rounded-full bg-sunken px-1.5 py-0.5 text-caption font-semibold text-secondary">{t("proto.q.recommended")}</span> : null}
+        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+          {label}
+          {/* The card is narrow: the mark follows the text, so the text keeps the row's whole width. */}
+          {recommended && !boxed ? <>{" "}<span data-prototype-recommended="" className="inline-block whitespace-nowrap rounded-full bg-sunken px-1.5 py-0.5 align-middle text-caption font-semibold text-secondary">{t("proto.q.recommended")}</span></> : null}
+        </span>
+        {recommended && boxed ? <span data-prototype-recommended="" className="shrink-0 self-start whitespace-nowrap rounded-full bg-sunken px-1.5 py-0.5 text-caption font-semibold text-secondary">{t("proto.q.recommended")}</span> : null}
       </button>;
     };
     return <fieldset key={question.id} data-prototype-question={question.id} className={`m-0 min-w-0 ${boxed ? "rounded-control border border-border bg-card p-3" : "border-0 p-0"}`}>

@@ -35,7 +35,7 @@ function OpenDecisionSheet({ request }: { request: DecisionRequest }) {
   const focus = request.reviewId ? { reviewId: request.reviewId, nonce: 1 } : null;
   if (phone) {
     return (
-      <MobileSheet name="decisions" title={t("decisions.listAria")} onClose={closeDecisionSheet}>
+      <MobileSheet name="decisions" title={t("decisions.listAria")} titleHidden onClose={closeDecisionSheet}>
         <div data-decision-sheet={request.project} className="flex min-h-0 flex-col">
           <DecisionTabs tab={tab} onTab={setTab} count={count} touch />
           {tab === "decisions"

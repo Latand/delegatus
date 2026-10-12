@@ -6,7 +6,7 @@
         "x": 1016,
         "y": 183,
         "w": 335,
-        "h": 472
+        "h": 473
       },
       "review": "pr_cccccccccccccccccccccccccccccccc",
       "rows": 2,
@@ -15,13 +15,13 @@
       "thumbs": [
         {
           "x": 1029,
-          "y": 254,
+          "y": 255,
           "w": 150,
           "h": 90
         },
         {
           "x": 1187,
-          "y": 254,
+          "y": 255,
           "w": 150,
           "h": 90
         }
@@ -36,7 +36,7 @@
         "x": 1016,
         "y": 235,
         "w": 335,
-        "h": 406
+        "h": 407
       },
       "review": "pr_dddddddddddddddddddddddddddddddd",
       "rows": 2,
@@ -71,14 +71,14 @@
       }
     ],
     "1440-uk-light-answered": {
-      "text": "Відповідь · 20:01\n· «Готово»: місце і деплой\nдоставлено\n1\nДе закріпити список «Готово»? Зверху «Чекають на вас»\n2\nКоли деплоїти після мержу? Увечері, одним деплоєм",
+      "text": "Відповідь · 03:46\n· «Готово»: місце і деплой\nдоставлено\n1\nДе закріпити список «Готово»? Зверху «Чекають на вас»\n2\nКоли деплоїти після мержу? Увечері, одним деплоєм",
       "delivery": "sent",
       "left": {
         "card": {
           "x": 1016,
           "y": 183,
           "w": 335,
-          "h": 472
+          "h": 473
         },
         "review": "pr_cccccccccccccccccccccccccccccccc",
         "rows": 1,
@@ -87,13 +87,13 @@
         "thumbs": [
           {
             "x": 1029,
-            "y": 254,
+            "y": 255,
             "w": 150,
             "h": 90
           },
           {
             "x": 1187,
-            "y": 254,
+            "y": 255,
             "w": 150,
             "h": 90
           }
@@ -110,7 +110,7 @@
         "x": 273,
         "y": 258,
         "w": 702,
-        "h": 350
+        "h": 351
       },
       "review": "pr_cccccccccccccccccccccccccccccccc",
       "rows": 2,
@@ -119,13 +119,13 @@
       "thumbs": [
         {
           "x": 286,
-          "y": 305,
+          "y": 306,
           "w": 176,
           "h": 106
         },
         {
           "x": 470,
-          "y": 305,
+          "y": 306,
           "w": 176,
           "h": 106
         }
@@ -177,7 +177,7 @@
         "x": 1016,
         "y": 183,
         "w": 335,
-        "h": 472
+        "h": 473
       },
       "review": "pr_cccccccccccccccccccccccccccccccc",
       "rows": 2,
@@ -186,13 +186,13 @@
       "thumbs": [
         {
           "x": 1029,
-          "y": 254,
+          "y": 255,
           "w": 150,
           "h": 90
         },
         {
           "x": 1187,
-          "y": 254,
+          "y": 255,
           "w": 150,
           "h": 90
         }
@@ -207,7 +207,7 @@
         "x": 1016,
         "y": 235,
         "w": 335,
-        "h": 406
+        "h": 407
       },
       "review": "pr_dddddddddddddddddddddddddddddddd",
       "rows": 2,
@@ -242,14 +242,14 @@
       }
     ],
     "1440-uk-dark-answered": {
-      "text": "Відповідь · 20:01\n· «Готово»: місце і деплой\nдоставлено\n1\nДе закріпити список «Готово»? Зверху «Чекають на вас»\n2\nКоли деплоїти після мержу? Увечері, одним деплоєм",
+      "text": "Відповідь · 03:46\n· «Готово»: місце і деплой\nдоставлено\n1\nДе закріпити список «Готово»? Зверху «Чекають на вас»\n2\nКоли деплоїти після мержу? Увечері, одним деплоєм",
       "delivery": "sent",
       "left": {
         "card": {
           "x": 1016,
           "y": 183,
           "w": 335,
-          "h": 472
+          "h": 473
         },
         "review": "pr_cccccccccccccccccccccccccccccccc",
         "rows": 1,
@@ -258,13 +258,13 @@
         "thumbs": [
           {
             "x": 1029,
-            "y": 254,
+            "y": 255,
             "w": 150,
             "h": 90
           },
           {
             "x": 1187,
-            "y": 254,
+            "y": 255,
             "w": 150,
             "h": 90
           }
@@ -281,7 +281,7 @@
         "x": 273,
         "y": 258,
         "w": 702,
-        "h": 350
+        "h": 351
       },
       "review": "pr_cccccccccccccccccccccccccccccccc",
       "rows": 2,
@@ -290,13 +290,13 @@
       "thumbs": [
         {
           "x": 286,
-          "y": 305,
+          "y": 306,
           "w": 176,
           "h": 106
         },
         {
           "x": 470,
-          "y": 305,
+          "y": 306,
           "w": 176,
           "h": 106
         }
@@ -348,7 +348,7 @@
         "x": 1016,
         "y": 183,
         "w": 335,
-        "h": 487
+        "h": 488
       },
       "review": "pr_cccccccccccccccccccccccccccccccc",
       "rows": 2,
@@ -357,13 +357,13 @@
       "thumbs": [
         {
           "x": 1029,
-          "y": 254,
+          "y": 255,
           "w": 150,
           "h": 90
         },
         {
           "x": 1187,
-          "y": 254,
+          "y": 255,
           "w": 150,
           "h": 90
         }
@@ -378,7 +378,7 @@
         "x": 1016,
         "y": 235,
         "w": 335,
-        "h": 419
+        "h": 421
       },
       "review": "pr_dddddddddddddddddddddddddddddddd",
       "rows": 2,
@@ -413,14 +413,14 @@
       }
     ],
     "1440-en-light-answered": {
-      "text": "Answered · 20:02\n· «Done»: placement and deploy\ndelivered\n1\nWhere should the «Done» list be pinned? Above «Waiting for you»\n2\nWhen to deploy after the merge? In the evening, in one deploy",
+      "text": "Answered · 03:46\n· «Done»: placement and deploy\ndelivered\n1\nWhere should the «Done» list be pinned? Above «Waiting for you»\n2\nWhen to deploy after the merge? In the evening, in one deploy",
       "delivery": "sent",
       "left": {
         "card": {
           "x": 1016,
           "y": 183,
           "w": 335,
-          "h": 487
+          "h": 488
         },
         "review": "pr_cccccccccccccccccccccccccccccccc",
         "rows": 1,
@@ -429,13 +429,13 @@
         "thumbs": [
           {
             "x": 1029,
-            "y": 254,
+            "y": 255,
             "w": 150,
             "h": 90
           },
           {
             "x": 1187,
-            "y": 254,
+            "y": 255,
             "w": 150,
             "h": 90
           }
@@ -452,7 +452,7 @@
         "x": 273,
         "y": 258,
         "w": 702,
-        "h": 350
+        "h": 351
       },
       "review": "pr_cccccccccccccccccccccccccccccccc",
       "rows": 2,
@@ -461,13 +461,13 @@
       "thumbs": [
         {
           "x": 286,
-          "y": 305,
+          "y": 306,
           "w": 176,
           "h": 106
         },
         {
           "x": 470,
-          "y": 305,
+          "y": 306,
           "w": 176,
           "h": 106
         }
@@ -519,7 +519,7 @@
         "x": 1016,
         "y": 183,
         "w": 335,
-        "h": 487
+        "h": 488
       },
       "review": "pr_cccccccccccccccccccccccccccccccc",
       "rows": 2,
@@ -528,13 +528,13 @@
       "thumbs": [
         {
           "x": 1029,
-          "y": 254,
+          "y": 255,
           "w": 150,
           "h": 90
         },
         {
           "x": 1187,
-          "y": 254,
+          "y": 255,
           "w": 150,
           "h": 90
         }
@@ -549,7 +549,7 @@
         "x": 1016,
         "y": 235,
         "w": 335,
-        "h": 419
+        "h": 421
       },
       "review": "pr_dddddddddddddddddddddddddddddddd",
       "rows": 2,
@@ -584,14 +584,14 @@
       }
     ],
     "1440-en-dark-answered": {
-      "text": "Answered · 20:02\n· «Done»: placement and deploy\ndelivered\n1\nWhere should the «Done» list be pinned? Above «Waiting for you»\n2\nWhen to deploy after the merge? In the evening, in one deploy",
+      "text": "Answered · 03:46\n· «Done»: placement and deploy\ndelivered\n1\nWhere should the «Done» list be pinned? Above «Waiting for you»\n2\nWhen to deploy after the merge? In the evening, in one deploy",
       "delivery": "sent",
       "left": {
         "card": {
           "x": 1016,
           "y": 183,
           "w": 335,
-          "h": 487
+          "h": 488
         },
         "review": "pr_cccccccccccccccccccccccccccccccc",
         "rows": 1,
@@ -600,13 +600,13 @@
         "thumbs": [
           {
             "x": 1029,
-            "y": 254,
+            "y": 255,
             "w": 150,
             "h": 90
           },
           {
             "x": 1187,
-            "y": 254,
+            "y": 255,
             "w": 150,
             "h": 90
           }
@@ -623,7 +623,7 @@
         "x": 273,
         "y": 258,
         "w": 702,
-        "h": 350
+        "h": 351
       },
       "review": "pr_cccccccccccccccccccccccccccccccc",
       "rows": 2,
@@ -632,13 +632,13 @@
       "thumbs": [
         {
           "x": 286,
-          "y": 305,
+          "y": 306,
           "w": 176,
           "h": 106
         },
         {
           "x": 470,
-          "y": 305,
+          "y": 306,
           "w": 176,
           "h": 106
         }

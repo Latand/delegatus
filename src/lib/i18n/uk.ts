@@ -1770,7 +1770,6 @@ export const uk: Record<keyof typeof en, Message> = {
   "decisions.loading": "Завантажую рішення…",
   "decisions.fromSeat": "оркестратор",
   "decisions.fromTask": "задача: {title}",
-  "decisions.variants": { one: "{count} варіант", few: "{count} варіанти", many: "{count} варіантів", other: "{count} варіанта" },
   "decisions.openPrototypes": "Відкрити прототипи",
   "decisions.thumbAria": "Варіант {n}, {name}: відкрити прототипи",
   "decisions.expandAria": "Відкрити «{title}»",

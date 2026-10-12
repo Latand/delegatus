@@ -33,8 +33,7 @@ const SECONDARY = "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 
 export const decisionClock = (at: string, locale: string) => new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", { hour: "2-digit", minute: "2-digit" }).format(new Date(at));
 
 function source(t: TFunction, decision: OperatorDecisionView): string {
-  const where = decision.taskId === null ? t("decisions.fromSeat") : t("decisions.fromTask", { title: decision.taskTitle ?? decision.taskId });
-  return decision.variants.length ? `${where} · ${t("decisions.variants", { count: decision.variants.length })}` : where;
+  return decision.taskId === null ? t("decisions.fromSeat") : t("decisions.fromTask", { title: decision.taskTitle ?? decision.taskId });
 }
 
 /** The first frame of each variant, numbered; a press opens the review
@@ -163,14 +162,14 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
       aria-label={decision.title}
       className="flex min-w-0 shrink-0 flex-col overflow-hidden rounded-surface border border-accent/40 bg-card shadow-1"
     >
-      <header className="flex min-w-0 items-center gap-1.5 border-b border-border bg-accent-soft/60 px-3 py-2">
-        <Mark className="h-4 w-4 shrink-0 text-accent" aria-hidden />
-        <span data-decision-title="" className="min-w-0 truncate text-ui font-semibold text-primary" title={decision.title}>{decision.title}</span>
-        {narrow ? null : <span data-decision-source="" className="min-w-0 shrink truncate text-label text-muted">· {source(t, decision)}</span>}
+      <header className="flex min-w-0 items-start gap-1.5 border-b border-border bg-accent-soft/60 px-3 py-2">
+        <Mark className="mt-0.5 h-4 w-4 shrink-0 text-accent" aria-hidden />
+        <span data-decision-title="" className="min-w-0 [overflow-wrap:anywhere] text-ui font-semibold text-primary" title={decision.title}>{decision.title}</span>
+        {narrow ? null : <span data-decision-source="" className="mt-px min-w-0 shrink truncate text-label text-muted">· {source(t, decision)}</span>}
         <span className="flex-1" />
-        <time dateTime={decision.createdAt} className="shrink-0 text-caption tabular-nums text-muted">{decisionClock(decision.createdAt, locale)}</time>
+        <time dateTime={decision.createdAt} className="mt-0.5 shrink-0 text-caption tabular-nums text-muted">{decisionClock(decision.createdAt, locale)}</time>
       </header>
-      {narrow && decision.taskId !== null ? <p data-decision-source="" className="m-0 truncate px-3 pt-2 text-label text-muted">{source(t, decision)}</p> : null}
+      {narrow && decision.taskId !== null ? <p data-decision-source="" className="m-0 px-3 pt-2 text-label text-muted [overflow-wrap:anywhere]">{source(t, decision)}</p> : null}
       {decision.variants.length ? <div className="px-3 pt-3"><Thumbs decision={decision} small={narrow} /></div> : null}
       {asks ? (
         <div className="flex flex-col gap-3 px-3 pt-3" data-prototype-questions="">

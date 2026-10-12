@@ -28051,6 +28051,133 @@ describe("operator decision forms: the «Рішення» column beside the seat
   }, 900_000);
 
   /*
+   * What the form keeps whole (docs/design/operator-decision-forms.md §2.4–§2.6):
+   * a lane's source line wraps instead of ending in «…» and no longer counts
+   * the variants; a long title of the open card wraps with the time at the
+   * top; a recommended option keeps the row's width, the mark following its
+   * text; the seat's pointer shows its short title whole and, on the phone,
+   * calls «Відповісти» without naming a column that is not there; the phone's
+   * sheet does not name itself above its tabs. 1440 and 390, uk and en, light
+   * and dark.
+   */
+  browserTest("the open card keeps its source, title, recommended marks, pointer and sheet title whole", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(OUT, "bundle-root-whole"));
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readParts = (page: Page, scope: string) => page.evaluate((root) => {
+      const within = document.querySelector<HTMLElement>(root);
+      const card = within?.querySelector<HTMLElement>('[data-decision-card="open"]') ?? null;
+      const whole = (node: HTMLElement | null) => node ? node.scrollHeight <= node.clientHeight + 0.5 && node.scrollWidth <= node.clientWidth + 0.5 : null;
+      const source = card?.querySelector<HTMLElement>("[data-decision-source]") ?? null;
+      const title = card?.querySelector<HTMLElement>("[data-decision-title]") ?? null;
+      const time = card?.querySelector<HTMLElement>("time") ?? null;
+      return {
+        source: source ? { text: source.textContent ?? "", whole: whole(source) } : null,
+        title: title ? { text: title.textContent ?? "", whole: whole(title), timeAtTop: time && title ? time.getBoundingClientRect().top < title.getBoundingClientRect().top + 20 : null } : null,
+        horizontalOverflow: document.documentElement.scrollWidth > innerWidth,
+      };
+    }, scope);
+    try {
+      for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) for (const phone of [false, true]) {
+        const t = (key: string, vars?: Record<string, string | number>) => translate(lang, key as never, vars);
+        const label = `${phone ? 390 : 1440}-${lang}-${scheme}`;
+        const fail = (text: string) => failures.push(`${label}: ${text}`);
+        const viewport = phone ? { width: 390, height: 844 } : VIEWPORT;
+        const scope = phone ? '[data-mobile2-sheet="decisions"]' : "[data-decision-column]";
+        const openList = async (page: Page) => {
+          if (phone) {
+            await page.click("[data-mobile2-seat-open]", { timeout: 30_000 });
+            await page.waitForSelector("[data-decision-strip]", { timeout: 30_000 });
+            await page.locator("[data-decision-strip]").click();
+          }
+          await page.waitForSelector(`${scope} [data-decision-list="3"]`, { timeout: 30_000 });
+          await page.mouse.move(0, 0);
+          await page.waitForTimeout(500);
+        };
+        /* The ordinary fixture: the lane's round, the pointer and the recommended option. */
+        {
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?decisions=1`, viewport, scheme, lang, "reduce", phone);
+          try {
+            if (!phone) await page.waitForSelector("[data-decision-pointer-open]", { timeout: 30_000 });
+            await openList(page);
+            const lane = await readParts(page, scope);
+            if (!lane.source || !lane.source.whole || /[…]|\.\.\./.test(lane.source.text) || /\d+\s*(variant|варіант)/i.test(lane.source.text) || !lane.source.text.includes("Restore search results") && !lane.source.text.includes("Відновити")) fail(`the lane's source line reads ${JSON.stringify(lane.source)}`);
+            if (lane.horizontalOverflow) fail("the lane's round scrolls sideways");
+            await page.locator(`[data-decision-row="${SEAT_ASK}"]`).click();
+            await page.waitForSelector(`[data-decision-card="open"][data-decision-review="${SEAT_ASK}"]`);
+            const deploy = `[data-decision-review="${SEAT_ASK}"] [data-prototype-option="deploy:0"]`;
+            const optionLines = await page.evaluate((query) => {
+              const text = document.querySelector<HTMLElement>(`${query} .flex-1`)!;
+              const range = document.createRange();
+              range.selectNodeContents(text.firstChild!);
+              return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+            }, deploy);
+            if (optionLines !== 1) fail(`the recommended option's text takes ${optionLines} lines`);
+            await page.screenshot({ path: path.join(OUT, `${label}-whole.png`) });
+            /* The pointer: whole, and the call the surface can keep. */
+            const pointer = await page.evaluate(() => {
+              const node = document.querySelector<HTMLElement>("[data-decision-pointer-open]");
+              const title = node?.querySelector<HTMLElement>("[data-decision-pointer-title]") ?? null;
+              if (node) node.scrollIntoView({ block: "center" });
+              return node && title ? { text: node.innerText, titleText: title.textContent ?? "", whole: title.scrollHeight <= title.clientHeight + 0.5 } : null;
+            });
+            if (!pointer || !pointer.whole || pointer.titleText !== (lang === "uk" ? "«Готово»: місце і деплой" : "«Done»: placement and deploy")) fail(`the pointer reads ${JSON.stringify(pointer)}`);
+            else if (phone && (pointer.text.includes(t("decisions.inColumn")) || !pointer.text.includes(t("proto.notice.answer")))) fail(`the phone's pointer reads «${pointer.text}»`);
+            else if (!phone && !pointer.text.includes(t("decisions.inColumn"))) fail(`the pointer reads «${pointer.text}»`);
+            /* The phone's sheet does not name itself over «Звіти» (nor over «Рішення»). */
+            if (phone) {
+              const named = async () => page.evaluate(() => {
+                const h2 = document.querySelector<HTMLElement>('[data-mobile2-sheet="decisions"] [data-mobile2-sheet-header] h2');
+                const rect = h2?.getBoundingClientRect();
+                return h2 ? { text: h2.textContent, visible: Boolean(rect && rect.width > 1 && rect.height > 1) } : null;
+              });
+              const before = await named();
+              await page.locator('[data-mobile2-sheet="decisions"] [data-decision-tab="reports"]').click();
+              await page.waitForSelector('[data-mobile2-sheet="decisions"] [data-report-log]', { timeout: 10_000 });
+              const after = await named();
+              if (before?.visible || after?.visible) fail(`the sheet names itself ${JSON.stringify({ before, after })}`);
+            }
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          } catch (error) {
+            fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+            await page.screenshot({ path: path.join(OUT, `${label}-whole-failed.png`) }).catch(() => {});
+          } finally { await context.close(); }
+        }
+        /* The long fixture: a ninety-character title and a sentence-long recommended option. */
+        {
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?decisions=long`, viewport, scheme, lang, "reduce", phone);
+          try {
+            await openList(page);
+            await page.locator(`[data-decision-row="${SEAT_ASK}"]`).click();
+            await page.waitForSelector(`[data-decision-card="open"][data-decision-review="${SEAT_ASK}"]`);
+            const seat = await readParts(page, scope);
+            const longTitle = lang === "uk" ? "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту" : "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project";
+            if (!seat.title || !seat.title.whole || seat.title.text !== longTitle || !seat.title.timeAtTop) fail(`the long title reads ${JSON.stringify(seat.title)}`);
+            if (seat.horizontalOverflow) fail("the long title scrolls sideways");
+            const optionLines = await page.evaluate((query) => {
+              const text = document.querySelector<HTMLElement>(`${query} .flex-1`)!;
+              const range = document.createRange();
+              range.selectNodeContents(text.firstChild!);
+              return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+            }, `[data-decision-review="${SEAT_ASK}"] [data-prototype-option="deploy:0"]`);
+            if (optionLines > 3) fail(`the long recommended option takes ${optionLines} lines`);
+            await page.screenshot({ path: path.join(OUT, `${label}-long.png`) });
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          } catch (error) {
+            fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+            await page.screenshot({ path: path.join(OUT, `${label}-long-failed.png`) }).catch(() => {});
+          } finally { await context.close(); }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 900_000);
+
+  /*
    * The same seat questions mirrored in «Чекають на вас»: the desktop panel at
    * 1440 and 1000, the phone's attention sheet at 390, uk and en, light and
    * dark. Each frame reads the seat's two rows (whole, apart, inside the list,

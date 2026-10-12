@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { ArrowRight } from "@/components/icons";
 import { usePrototypeNoticesFor } from "@/components/prototypeReview/prototypeReviewStore";
 import type { ToolEvent } from "@/components/feed/parse";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { useLocale } from "@/lib/i18n";
 import type { OperatorDecisionView, OperatorDecisionsRead } from "@/lib/prototypeReview/types";
 
@@ -46,6 +47,8 @@ export function setDecisionRecordPollForTests(ms: number | null): void {
 
 export function DecisionPointer({ target }: { target: DecisionPointerTarget }) {
   const { t } = useLocale();
+  /* The phone has no column: the call says only what the press does. */
+  const phone = useIsMobile();
   const waiting = usePrototypeNoticesFor(target.project).some((notice) => notice.reviewId === target.reviewId);
   const [record, setRecord] = useState<OperatorDecisionView | null>(null);
   /* Each retry reads the record again and polls it while the message travels. */
@@ -105,11 +108,11 @@ export function DecisionPointer({ target }: { target: DecisionPointerTarget }) {
         type="button"
         data-decision-pointer-open=""
         onClick={() => openOperatorDecisions({ project: target.project, reviewId: target.reviewId })}
-        className="inline-flex min-h-8 max-w-full items-center gap-1.5 rounded-control border border-accent/30 bg-accent-soft px-2 text-label font-semibold text-accent hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:min-h-11"
+        className="inline-flex min-h-8 max-w-full items-center gap-1.5 rounded-control py-1 text-left border border-accent/30 bg-accent-soft px-2 text-label font-semibold text-accent hover:bg-accent/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:min-h-11"
       >
         <MessageCircleQuestionMark className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        <span className="min-w-0 truncate font-medium text-primary">{target.title || record?.title}</span>
-        <span className="shrink-0">· {t("decisions.inColumn")}</span>
+        <span data-decision-pointer-title="" className="line-clamp-2 min-w-0 [overflow-wrap:anywhere] font-medium text-primary">{target.title || record?.title}</span>
+        <span className="shrink-0 whitespace-nowrap">· {t(phone ? "proto.notice.answer" : "decisions.inColumn")}</span>
         <ArrowRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
       </button>
     </div>

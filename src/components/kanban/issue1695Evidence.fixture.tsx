@@ -2838,7 +2838,8 @@ if (PROTO) {
    the way the Viewer does, and `POST` records an answer. `&decisions=answered`
    is the same board after the seat's question in the feed was answered;
    `&decisions=seat-frames` gives the seat's second question two numbered
-   frames, a taskless round with no review window to open them in. */
+   frames, a taskless round with no review window to open them in. `&decisions=long`
+   gives the first seat question a ninety-character title and a long recommended option. */
 const DECISIONS = params.get("decisions");
 const decisionPosts: unknown[] = [];
 const seatRounds: PrototypeRoundView[] = [];
@@ -2869,6 +2870,12 @@ if (DECISIONS) {
     { number: 1, name: L("Account A for every lane", "Акаунт A на всі лейни"), description: "", videos: [], frames: [{ image: frame(265, "account A · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
     { number: 2, name: L("Split by engine", "Розподіл за рушієм"), description: "", videos: [], frames: [{ image: frame(32, "split · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
   ];
+  /* `&decisions=long`: the first seat question has a title of ninety characters and a recommended option of a sentence. */
+  if (DECISIONS === "long") {
+    const held = seatRounds[0]!;
+    held.title = L("Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project", "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту");
+    held.questions![1]!.options[0] = { label: L("Right after the merge, once main is green and the checks on the merged commit have passed", "Одразу після мержу, щойно main зелений і перевірки на змерженому коміті пройшли"), recommended: true };
+  }
   if (DECISIONS === "answered") {
     const held = seatRounds[0]!;
     held.decision = { chosen: [], answers: [{ questionId: "place", options: [0] }, { questionId: "deploy", options: [0] }], comment: "", at: iso(MIN), delivery: { state: "sent", retryable: false } };

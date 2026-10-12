@@ -1817,7 +1817,6 @@ export const en = {
   "decisions.loading": "Loading the decisions…",
   "decisions.fromSeat": "orchestrator",
   "decisions.fromTask": "task: {title}",
-  "decisions.variants": { one: "{count} variant", other: "{count} variants" },
   "decisions.openPrototypes": "Open prototypes",
   "decisions.thumbAria": "Variant {n}, {name}: open the prototypes",
   "decisions.expandAria": "Open «{title}»",
