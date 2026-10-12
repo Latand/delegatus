@@ -477,7 +477,7 @@ test("every control the two bars held is still reachable, wide", async () => {
 
   const inBar = bar(host);
   expect(inBar.getAttribute("data-bar-tier")).toBe("wide");
-  for (const selector of ["[data-kanban-search]", "[data-hidden-pill]", "[data-view-tab=kanban]", "[data-view-tab=list]", "[data-new-task]", "[data-new-agent]", "[data-orchestrator-toggle]", "[data-task-panel-toggle]", "[data-account-switch-engine]"]) {
+  for (const selector of ["[data-kanban-search]", "[data-hidden-pill]", "[data-view-tab=kanban]", "[data-view-tab=list]", "[data-new-task]", "[data-new-agent]", "[data-orchestrator-toggle]", "[data-account-switch-engine]"]) {
     expect({ selector, found: inBar.querySelector(selector) !== null }).toEqual({ selector, found: true });
   }
   expect(text(inBar.querySelector("[data-orchestrator-toggle]"))).toContain(en["orchPanel.title"]);
@@ -627,31 +627,38 @@ test("1602 px of bar (a 1850 px viewport) is the narrow tier: the uk labels did 
   expect(bar(host).getAttribute("data-bar-tier")).toBe("narrow");
 });
 
-test("the Tasks panel opens under the Board's one bar, so the bar spans it and stays one row", async () => {
-  barWidth = 1032;
-  const host = mount();
-  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
-  await settle();
-  click(bar(host).querySelector("[data-task-panel-toggle]"));
-  expect(await waitFor(() => host.querySelector(`aside[aria-label="${en["tasks.panelTitle"]}"]`) !== null)).toBe(true);
-  await settle();
+/* The old Tasks panel left the desktop board (2026-10-12): the kanban is where tasks live. Neither
+   tier of the Board's bar, nor the Conversations bar, draws a control for it, and nothing on the page
+   is that panel. The orchestrator toggle stays, and so does the panels group it sits in. */
+test("no bar draws a Tasks panel control and no task panel is mounted, wide or narrow, Board or Conversations", async () => {
+  for (const width of [2292, 1032]) {
+    barWidth = width;
+    const host = mount();
+    expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+    await settle();
+    const inBar = bar(host);
+    expect(inBar.getAttribute("data-bar-tier")).toBe(width >= 1700 ? "wide" : "narrow");
+    expect(inBar.querySelector("[data-task-panel-toggle]")).toBeNull();
+    expect(inBar.querySelector('[data-bar-group="panels"] [data-orchestrator-toggle]')).not.toBeNull();
+    expect(inBar.querySelectorAll('[data-bar-group="panels"] button')).toHaveLength(1);
+    expect(host.querySelector("[data-task-panel], .kb-aside")).toBeNull();
+    expect(inBar.hasAttribute("data-bar-wrap")).toBe(false);
 
-  const panel = host.querySelector(`aside[aria-label="${en["tasks.panelTitle"]}"]`) as HTMLElement;
-  expect(host.querySelectorAll(`aside[aria-label="${en["tasks.panelTitle"]}"]`)).toHaveLength(1);
-  const board = host.querySelector("[data-kanban-board]") as HTMLElement;
-  /* The panel is inside the board, below the bar: the bar is the board's first row and the panel
-     sits in the row under it, beside the columns. */
-  expect(board.contains(panel)).toBe(true);
-  expect(board.firstElementChild).toBe(bar(host));
-  expect(bar(host).contains(panel)).toBe(false);
-  expect(panel.closest(".kb-body")?.previousElementSibling).toBe(bar(host));
-  expect(bar(host).querySelector("[data-task-panel-toggle]")!.getAttribute("aria-pressed")).toBe("true");
-  /* 1032 px of bar is one row whether the panel is open or not; only a bar under 768 px wraps. */
-  expect(bar(host).hasAttribute("data-bar-wrap")).toBe(false);
-
-  /* The toggle in the bar still closes it. */
-  click(bar(host).querySelector("[data-task-panel-toggle]"));
-  expect(await waitFor(() => host.querySelector(`aside[aria-label="${en["tasks.panelTitle"]}"]`) === null)).toBe(true);
+    click(host.querySelector('button[data-view-tab="list"]'));
+    expect(await waitFor(() => host.querySelector("[data-desktop-conversations-scroll]") !== null)).toBe(true);
+    await settle();
+    const listBar = bar(host);
+    expect(listBar.hasAttribute("data-project-bar")).toBe(true);
+    expect(listBar.querySelector("[data-task-panel-toggle]")).toBeNull();
+    expect(listBar.querySelector('[data-bar-group="panels"] [data-orchestrator-toggle]')).not.toBeNull();
+    expect(host.querySelector("[data-task-panel]")).toBeNull();
+    for (const root of roots) flushSync(() => root.unmount());
+    roots = [];
+    dom.document.body.replaceChildren();
+    PROJECT = `${PROJECT}-narrow`;
+    boards = { [PROJECT]: seededBoard() };
+    resetSelectionSessionsForTest();
+  }
 });
 
 test("a bar under 768 px, and only there, wraps", async () => {
@@ -796,7 +803,7 @@ test("`/` and `u` keep their meaning on the Viewer's controls the bar brought in
     await settle();
 
     const more = bar(host).querySelector("[data-bar-more]") as HTMLElement;
-    const toggle = bar(host).querySelector("[data-task-panel-toggle]") as HTMLElement;
+    const toggle = bar(host).querySelector("[data-orchestrator-toggle]") as HTMLElement;
     const islandButton = host.querySelector("[data-island-first]") as HTMLElement;
     for (const target of [more, toggle, islandButton]) {
       const before = slashesReachingViewer;

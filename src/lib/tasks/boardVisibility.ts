@@ -12,8 +12,8 @@ export type BoardVisibilityContext = Partial<Parameters<typeof groupHideState>[1
  * ever created therefore reached the canvas, including the several hundred that
  * never had an agent on them: the operator's board became a vertical stack of
  * empty full-width bands with the working ones scrolled far off screen. The
- * repair is a per-task flag, not a deletion and not an archive — the task list
- * keeps every row, and «Show on board» puts a band back at any time.
+ * repair is a per-task flag, not a deletion and not an archive — the kanban's
+ * Hidden tray keeps every row, and «Show on board» puts a band back at any time.
  *
  * Done tasks expire after DONE_TASK_BOARD_RETENTION_MS, with the seat and
  * hidden-group resurfacing exceptions. For other tasks the flag is honoured
@@ -39,8 +39,7 @@ export type BoardVisibilityContext = Partial<Parameters<typeof groupHideState>[1
  *
  * The scan-keyed helpers below answer a smaller, honest question for surfaces
  * that have no scene to consult — "does this task still name a conversation the
- * scan carries?" — which the task panel shows as a note beside its preference
- * control. They are never the visibility rule.
+ * scan carries?" They are never the visibility rule.
  *
  * Pure by design — the board's client bundle imports this. The one-time
  * migration that first set the flag lives in `boardVisibilityMigration`, which
@@ -143,17 +142,4 @@ export function countBoardTasks(
     if (taskShowsOnBoard(task, hasMembers(task), context(task))) count += 1;
   }
   return count;
-}
-
-/**
- * The note the task panel shows: does this row still name a conversation the
- * open project's scan carries?
- *
- * A task belonging to another project is answered from its own recorded
- * assignments, because this scan carries no conversation of that board and its
- * silence is not evidence. Informational only — the panel offers its preference
- * control on every row whatever this says.
- */
-export function taskMembershipInScope(task: BoardTask, project: string, keys: BoardConversationKeys): boolean {
-  return task.project === project ? taskHasBoardMembers(task, keys) : task.assignments.length > 0;
 }

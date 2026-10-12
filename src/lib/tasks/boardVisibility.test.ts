@@ -7,7 +7,6 @@ import {
   boardConversationKeys,
   EMPTY_BOARD_VISIBILITY_MIGRATION,
   taskHasBoardMembers,
-  taskMembershipInScope,
   taskShowsOnBoard,
 } from "./boardVisibility";
 import {
@@ -81,16 +80,6 @@ test("membership is what the board carries, not that an assignment row exists (#
   /* Nothing here consults a camera: the key set is the board's conversations,
      however far outside the viewport they are laid out. */
   expect(taskHasBoardMembers(task("none", { assignments: [] }), board)).toBe(false);
-});
-
-test("a task of another project is judged by its own record, never by this board's scan", () => {
-  /* The task panel lists every project. This scan carries no conversation of
-     another board, so absence here is not evidence — and treating it as one
-     would offer to hide a band that project is drawing. */
-  const foreign = task("foreign", { project: "other-repo", assignments: [staleAssignment] });
-  expect(taskMembershipInScope(foreign, "repo-board", board)).toBe(true);
-  expect(taskMembershipInScope({ ...foreign, project: "repo-board" }, "repo-board", board)).toBe(false);
-  expect(taskMembershipInScope(task("empty-foreign", { project: "other-repo" }), "repo-board", board)).toBe(false);
 });
 
 test("the one-time migration hides existing empty tasks, keeps every task, and never runs twice", () => {

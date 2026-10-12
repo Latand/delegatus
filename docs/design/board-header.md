@@ -24,7 +24,7 @@ Prior work: `search_transcripts` ("board header toolbar top bar redesign", "kanb
 | 3 | find | task search field, 240 px, grows to 420 px max; min 160 px | |
 | 4 | view | `Hidden N` (hidden at 0, as today) · board / conversations switch | `Hidden` is icon + count below 1700 px, the shape `Tasks` has |
 | 5 | create | `+ Task`, `+ Agent` | one `+` button with a two-row menu below 1700 px; on Conversations the same group is drawn invisible and inert, so groups 4–7 keep their x when the view changes |
-| 6 | panels | `Orchestrator` toggle · `Tasks N` toggle | icon only (+ count) below 1700 px; the Tasks panel opens under the bar, which spans it |
+| 6 | panels | `Orchestrator` toggle | icon only below 1700 px. The `Tasks N` toggle and its panel left the bar on 2026-10-12 (last section) |
 | 7 | more | `⋯` menu | §4 |
 | 8 | what needs me | attention island, in the 236 px reserve | far right, where it already lives |
 
@@ -132,3 +132,15 @@ The fourth critique read 1280 px with the long project name. On Conversations th
 - The narrow `+` menu's two rows carry icons (new task, new conversation), like the `⋯` rows.
 
 The attention toast, the island's own dismissable card, still floats over the Tasks panel's header while it shows. It lives in the fenced attention code and is left as a follow-up.
+
+## The Tasks control and its panel left the bar (2026-10-12)
+
+The operator rejected every redesign of the old Tasks panel and asked for it to go: the kanban is where tasks live. Group 6 now holds the `Orchestrator` toggle alone; nothing replaces the `Tasks N` toggle, the panel it opened, or the Board's `aside` slot that drew the panel under the bar. What the panel alone reached has a place on the existing surfaces:
+
+- tasks the board does not draw (empty bands taken off the board, done tasks past their retention) are rows of the `Hidden` tray, each with «Show on board»;
+- creating a task is `+ Task` in group 5; search is group 3;
+- tasks of every project are the Overview's board;
+- crowned conversations are pinned atop the needs-you panel, with their crowns;
+- a task link from another project still switches the dashboard and frames the card.
+
+The stored `taskPanelOpen` flag stays in the board schema so stored boards and tabs of an older build keep loading; nothing reads it. The phone never mounted this panel and keeps its own task sheet.

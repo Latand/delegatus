@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ListTodo, MoreHorizontal, Plus } from "lucide-react";
+import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, MoreHorizontal, Plus } from "lucide-react";
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
@@ -54,8 +54,7 @@ const BoardPaneContext = createContext<((pane: HTMLElement | null) => void) | nu
 /**
  * Where the board's columns are, for the Viewer's needs-you panel: it docks
  * beside the board only while the columns keep room, and the columns' own
- * pane is what a seat open beside them and the Tasks panel take their width
- * out of. The kanban board hands its pane in when it mounts.
+ * pane is what a seat open beside them takes its width out of. The kanban board hands its pane in when it mounts.
  */
 export function BoardPaneProvider({ onPane, children }: { onPane: (pane: HTMLElement | null) => void; children: ReactNode }) {
   return <BoardPaneContext.Provider value={onPane}>{children}</BoardPaneContext.Provider>;
@@ -174,55 +173,39 @@ const SEAT_DOT_TONE: Record<string, string> = {
   quiet: "bg-muted",
 };
 
-/** The two panel switches: the orchestrator dock and the task panel. Icon only (with the count) when narrow. */
-export function BarPanelToggles({ wide, orchestrator, tasks }: {
+/** The panel switch: the orchestrator dock. Icon only when narrow. Tasks live on the kanban board itself. */
+export function BarPanelToggles({ wide, orchestrator }: {
   wide: boolean;
   /** `dot`: the collapsed seat's state (#1841), drawn on the icon so it stays
       readable with the seat out of view. */
   orchestrator: { open: boolean; onToggle: () => void; dot?: { tone: string; label: string } | null } | null;
-  tasks: { open: boolean; count: number; onToggle: () => void };
 }) {
   const { t } = useLocale();
+  if (!orchestrator) return null;
   return (
     <div className="flex shrink-0 items-center gap-2" data-bar-group="panels">
-      {orchestrator ? (
-        <button
-          type="button"
-          onClick={orchestrator.onToggle}
-          aria-pressed={orchestrator.open}
-          aria-label={t("orchPanel.toggleAria")}
-          title={t("orchPanel.toggleAria")}
-          data-orchestrator-toggle
-          data-bar-control=""
-          className={`${BAR_CONTROL} ${orchestrator.open ? BAR_PRESSED : BAR_OUTLINED} ${wide ? "" : "px-2"}`}
-        >
-          <span className="relative inline-flex">
-            <Bot className={BAR_ICON} aria-hidden />
-            {orchestrator.dot ? (
-              <i
-                className={`absolute -bottom-px -right-px h-1.5 w-1.5 rounded-full ring-1 ring-card ${SEAT_DOT_TONE[orchestrator.dot.tone] ?? "bg-muted"}`}
-                data-orchestrator-toggle-dot={orchestrator.dot.tone}
-                title={orchestrator.dot.label}
-                aria-hidden
-              />
-            ) : null}
-          </span>
-          {wide ? t("orchPanel.title") : null}
-        </button>
-      ) : null}
       <button
         type="button"
-        onClick={tasks.onToggle}
-        aria-pressed={tasks.open}
-        aria-label={t("tasks.panelToggleAria")}
-        title={t("tasks.panelToggleAria")}
-        data-task-panel-toggle=""
+        onClick={orchestrator.onToggle}
+        aria-pressed={orchestrator.open}
+        aria-label={t("orchPanel.toggleAria")}
+        title={t("orchPanel.toggleAria")}
+        data-orchestrator-toggle
         data-bar-control=""
-        className={`${BAR_CONTROL} ${tasks.open ? BAR_PRESSED : BAR_OUTLINED} ${wide ? "" : "px-2"}`}
+        className={`${BAR_CONTROL} ${orchestrator.open ? BAR_PRESSED : BAR_OUTLINED} ${wide ? "" : "px-2"}`}
       >
-        <ListTodo className={BAR_ICON} aria-hidden />
-        {wide ? t("tasks.panelTitle") : null}
-        {tasks.count ? <span className="font-normal text-muted tabular-nums">{tasks.count}</span> : null}
+        <span className="relative inline-flex">
+          <Bot className={BAR_ICON} aria-hidden />
+          {orchestrator.dot ? (
+            <i
+              className={`absolute -bottom-px -right-px h-1.5 w-1.5 rounded-full ring-1 ring-card ${SEAT_DOT_TONE[orchestrator.dot.tone] ?? "bg-muted"}`}
+              data-orchestrator-toggle-dot={orchestrator.dot.tone}
+              title={orchestrator.dot.label}
+              aria-hidden
+            />
+          ) : null}
+        </span>
+        {wide ? t("orchPanel.title") : null}
       </button>
     </div>
   );

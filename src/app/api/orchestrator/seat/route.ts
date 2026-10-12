@@ -43,8 +43,7 @@ interface SeatStatus {
       the project's task list. */
   currentTask: SeatNotesTask | null;
   /** Every conversation ANY project's seat record names (#1841), from the same
-      read. A surface that spans projects — the Tasks panel in its «all» scope —
-      keeps seat conversations out of its rows wherever they are seated, and a
+      read. A surface that spans projects — the Overview's board — keeps seat conversations out of its rows wherever they are seated, and a
       seat of another project is no more a task than this project's is. Null
       when the record could not be read, which hides nothing. */
   all: SeatConversations | null;

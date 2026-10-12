@@ -19,12 +19,12 @@
  * pressed view segment painted differently, the switch in the same place on
  * both views, hover that never takes the accent, no undo or redo anywhere, and
  * ⋯ rules only between groups that drew a row, the last control 16 px clear of
- * the island, and the same bar spanning the Tasks panel when it is open, with
- * the panel's header clear of the island, a real Tab from ⋯ landing on the
- * island, and the open ⋯ menu and accounts panel painted above the island and
- * its toast — at 2540, 1850 and 1280 px in en and
- * uk, light and dark, under a 21-character project name — and the phone's 52 px
- * bar in the same four.
+ * the island, no Tasks panel control and no Tasks panel anywhere (it left the
+ * board on 2026-10-12), a real Tab from ⋯ landing on the island, and the open ⋯
+ * menu and accounts panel painted above the island and its toast — at 2254,
+ * 1960, 1440 and 1000 px in en and uk, light and dark, under a 21-character
+ * project name — and the phone's 52 px bar in the same four. HEADER_WIDTHS
+ * (comma-separated) runs a part of the width matrix.
  *
  * With BOARD_CAPTURE_CASE=seats, seat-placement or columns-wide it measures
  * the orchestrator seat's own place (#1841) on a home with two projects, a
@@ -2535,6 +2535,8 @@ interface HeaderReading {
   name: Rect | null;
   /** Whether the bar is in its wrapping face (a bar under 768 px). */
   wrap: boolean;
+  /** Tasks panel toggles, panels and aside slots on the page; the panel left the board, so 0. */
+  tasksPanel: number;
 }
 
 /** Runs inside the page: the header bar, its visible controls and the island, in viewport pixels. */
@@ -2556,7 +2558,7 @@ function readHeader(): HeaderReading {
   const pressed = tabs.find((tab) => tab.getAttribute("aria-pressed") === "true");
   const other = tabs.find((tab) => tab.getAttribute("aria-pressed") !== "true");
   const hit: Record<string, boolean> = {};
-  for (const selector of ["[data-new-task]", "[data-new-agent]", "[data-bar-create]", "[data-bar-more]", "[data-kanban-search]", "[data-orchestrator-toggle]", "[data-task-panel-toggle]", "[data-hidden-pill]", "[data-account-switch-engine] > button"]) {
+  for (const selector of ["[data-new-task]", "[data-new-agent]", "[data-bar-create]", "[data-bar-more]", "[data-kanban-search]", "[data-orchestrator-toggle]", "[data-hidden-pill]", "[data-account-switch-engine] > button"]) {
     const element = document.querySelector(selector);
     if (!element || !visible(element)) continue;
     const r = element.getBoundingClientRect();
@@ -2587,21 +2589,9 @@ function readHeader(): HeaderReading {
     hidden: hiddenPill && visible(hiddenPill) ? hiddenPill.textContent?.replace(/\s+/g, " ").trim() ?? "" : null,
     name: bar?.querySelector("h1") ? rect(bar.querySelector("h1")!) : null,
     wrap: bar?.hasAttribute("data-bar-wrap") ?? false,
+    /* The old Tasks panel left the board (2026-10-12): its toggle and the panel are absent. */
+    tasksPanel: document.querySelectorAll("[data-task-panel-toggle], [data-task-panel], .kb-aside").length,
   };
-}
-
-/** Runs inside the page: the open Tasks panel's box and whether its header's controls take a click at their centres. */
-function readTaskPanel() {
-  const panel = document.querySelector("aside[data-task-panel]");
-  if (!panel) return null;
-  const r = panel.getBoundingClientRect();
-  const head = panel.firstElementChild;
-  const hit = [...(head?.querySelectorAll("button") ?? [])].map((button) => {
-    const box = button.getBoundingClientRect();
-    const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
-    return { label: (button.getAttribute("aria-label") || button.textContent || "").trim(), ok: Boolean(top && (top === button || button.contains(top))) };
-  });
-  return { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, hit };
 }
 
 /** The bar's last control ends before the island, with the 16 px between groups to spare. */
@@ -2701,9 +2691,10 @@ async function headerMain(): Promise<void> {
     await Bun.sleep(4_000);
     browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 
-    /* The labelled tier starts at 1700 px of bar (a 1948 px viewport with the rail): 2540 is wide,
-       and 1850 (1602 px of bar), where the uk labels did not fit, and 1280 are narrow. */
-    const cases = [2540, 1850, 1280].flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ width, lang, colorScheme }))));
+    /* The labelled tier starts at 1700 px of bar (a 1948 px viewport with the rail): 2254 and 1960
+       are wide, 1440 and 1000 narrow. */
+    const widths = process.env.HEADER_WIDTHS ? process.env.HEADER_WIDTHS.split(",").map(Number) : [2254, 1960, 1440, 1000];
+    const cases = widths.flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ width, lang, colorScheme }))));
     for (const { width, lang, colorScheme } of cases) {
       const tag = `${width}-${lang}-${colorScheme}`;
       const wide = width >= 1948;
@@ -2757,15 +2748,16 @@ async function headerMain(): Promise<void> {
       const accountsInBar = reading.controls.filter((control) => /Claude|Codex/.test(control.name)).length;
       must(wide ? accountsInBar === 2 : accountsInBar === 0, `${tag}: ${accountsInBar} account switches in the bar`);
       must(!/undo|redo|скасувати|повторити/i.test(reading.texts), `${tag}: the bar still names undo or redo`);
+      must(reading.tasksPanel === 0, `${tag}: ${reading.tasksPanel} Tasks panel controls or panels on the page`);
 
       /* Hover strengthens the border and leaves the label's colour alone. */
-      const tasksToggle = page.locator("[data-task-panel-toggle]");
-      const before = await tasksToggle.evaluate((element) => ({ color: getComputedStyle(element).color, border: getComputedStyle(element).borderTopColor }));
-      await tasksToggle.hover();
+      const outlined = page.locator('[data-kanban-board] header.bar [data-bar-group="create"] [data-bar-control]').first();
+      const before = await outlined.evaluate((element) => ({ color: getComputedStyle(element).color, border: getComputedStyle(element).borderTopColor }));
+      await outlined.hover();
       await page.waitForTimeout(250);
-      const hovered = await tasksToggle.evaluate((element) => ({ color: getComputedStyle(element).color, border: getComputedStyle(element).borderTopColor }));
+      const hovered = await outlined.evaluate((element) => ({ color: getComputedStyle(element).color, border: getComputedStyle(element).borderTopColor }));
       await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-hover.png`), clip: { x: 0, y: 0, width, height: 60 } });
-      must(hovered.color === before.color && hovered.border !== before.border, `${tag}: hover turns Tasks from ${JSON.stringify(before)} to ${JSON.stringify(hovered)}`);
+      must(hovered.color === before.color && hovered.border !== before.border, `${tag}: hover turns the create control from ${JSON.stringify(before)} to ${JSON.stringify(hovered)}`);
       await page.mouse.move(1, 700);
 
       /* The accounts: in the bar when wide, as ⋯ rows when narrow; either opens the panel listing all three Claude accounts. */
@@ -2850,35 +2842,8 @@ async function headerMain(): Promise<void> {
       }
       must(reading.switchRect !== null && list.switchRect !== null && near(reading.switchRect.x, list.switchRect.x, 0.5), `${tag}: the view switch moves from x ${reading.switchRect?.x} to ${list.switchRect?.x}`);
       const listClearance = lastControlClear(`${tag} conversations`, list, must);
-      await page.click('button[data-view-tab="kanban"]');
-
-      /* The Tasks panel open on the Board: the bar spans it and stays one 48 px row, the island
-         lands on the bar, and the panel's own header takes clicks at every control. */
-      await page.waitForSelector("[data-kanban-board] header.bar", { timeout: 60_000 });
-      await page.click("[data-task-panel-toggle]");
-      await page.waitForSelector("aside[data-task-panel]", { timeout: 30_000 });
-      await page.waitForTimeout(1_000);
-      const open = await page.evaluate(readHeader);
-      /* The island's toast is a floating card, 360 px wide, that stays until dismissed; it lies over
-         whatever sits under the island, and a 280 px panel cannot avoid it. The island itself must
-         not cover the panel; with the toast dismissed, the panel's header takes every click. */
-      const underToast = await page.evaluate(readTaskPanel);
-      if (await page.locator("[data-attention-toast-dismiss]").count()) {
-        await page.click("[data-attention-toast-dismiss]");
-        await page.waitForTimeout(300);
-      }
-      const taskPanel = await page.evaluate(readTaskPanel);
-      await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-tasks-open.png`), clip: { x: 0, y: 0, width, height: 160 } });
-      must(open.bars === 1 && open.bar !== null && near(open.bar.h, 48, 0.5) && !open.wrap, `${tag} tasks open: the bar is ${open.bar?.h}px tall${open.wrap ? ", wrapping" : ""}`);
-      must(open.bar !== null && near(open.bar.x + open.bar.w, width, 0.5), `${tag} tasks open: the bar ends at x ${open.bar ? open.bar.x + open.bar.w : null}, short of the panel's edge`);
-      must(open.overflow <= 0.5, `${tag} tasks open: the bar's content runs ${open.overflow}px past its box`);
-      const openClearance = lastControlClear(`${tag} tasks open`, open, must);
-      must(taskPanel !== null && open.bar !== null && taskPanel.rect.y >= open.bar.y + open.bar.h - 0.5, `${tag} tasks open: the panel starts at y ${taskPanel?.rect.y}, beside the bar`);
-      for (const item of taskPanel?.hit ?? []) must(item.ok, `${tag} tasks open: the panel's «${item.label}» is covered at its centre`);
-      must((taskPanel?.hit.length ?? 0) >= 3, `${tag} tasks open: the panel header shows ${taskPanel?.hit.length ?? 0} controls`);
-      for (const [selector, ok] of Object.entries(open.hit)) must(ok, `${tag} tasks open: ${selector} is covered at its centre`);
-      await page.click("[data-task-panel-toggle]");
-      report[tag] = { ...reading, gaps, islandClearance, tabAfterMore, hover: { before, hovered }, menu, accountsPanel: panel ? { rect: panel.rect } : null, conversations: { switchRect: list.switchRect, texts: list.texts, name: list.name, find: listTexts, islandClearance: listClearance }, tasksOpen: { bar: open.bar, wrap: open.wrap, overflow: open.overflow, islandClearance: openClearance, toast: open.toast, panelUnderToast: underToast, panel: taskPanel } };
+      must(list.tasksPanel === 0, `${tag} conversations: ${list.tasksPanel} Tasks panel controls or panels on the page`);
+      report[tag] = { ...reading, gaps, islandClearance, tabAfterMore, hover: { before, hovered }, menu, accountsPanel: panel ? { rect: panel.rect } : null, conversations: { switchRect: list.switchRect, texts: list.texts, name: list.name, find: listTexts, islandClearance: listClearance, tasksPanel: list.tasksPanel } };
       await context.close();
 
       /* The quiet project's ⋯: nothing runs there, so Archive and Delete show beside the rest. */
@@ -2942,7 +2907,7 @@ async function headerMain(): Promise<void> {
     process.exitCode = 1;
     console.error(`board header acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
   } else {
-    console.log("board header acceptance passed at 2540, 1850 and 1280 (en, uk; light, dark; Tasks closed and open; a 21-character project name) and 390 (en, uk; light, dark).");
+    console.log(`board header acceptance passed at ${(process.env.HEADER_WIDTHS ?? "2254,1960,1440,1000").split(",").join(", ")} (en, uk; light, dark; no Tasks panel; a 21-character project name) and 390 (en, uk; light, dark).`);
   }
 }
 
