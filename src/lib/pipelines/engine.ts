@@ -4314,7 +4314,48 @@ function afterCommitRepair(attempt: PipelineStageAttempt, reason: string): strin
   for (const asked of [attempt.commitRepair?.detail, attempt.publicationRepair?.detail]) {
     if (asked && !reason.includes(asked)) reason += `\nThe stage was asked once to repair this earlier refusal:\n${asked}`;
   }
-  return reason;
+  const action = "Fix the reported commit/hook failure, then use retry-stage to commit the existing outputs without rerunning the agent.";
+  return (reason.startsWith("committing the passed stage:") || attempt.commitRepair?.outcome?.status === "rejected")
+    && !reason.includes(action) ? `${reason}\n${action}` : reason;
+}
+
+/** A passed turn parked at its commit boundary still owns its produced work.
+    An operator retry settles that work; it must not reset or launch the stage.
+    Recognize older parks too, before the retry instruction was in the error. */
+async function retryPassedStageCommit(pipeline: Pipeline, ports: PipelinePorts): Promise<PipelinePatchResult | null> {
+  const stage = currentStage(pipeline);
+  const attempt = stage && currentAttempt(pipeline, stage.id);
+  if (pipeline.state !== "needs_decision" || pipeline.cursor?.state !== "committing"
+    || !attempt || attempt.verdict?.status !== "pass"
+    || (attempt.commitRepair?.outcome?.status !== "rejected"
+      && !attempt.error?.startsWith("committing the passed stage:"))) return null;
+  if (attempt.conversationId) {
+    const boundary = attempt.commitRepair?.requestedAt ?? attempt.commitRepair?.sendingAt;
+    const durable = boundary ? await stageRepairEvidence(attempt, ports) : null;
+    const active = await ports.conversationAgentActive(attempt.conversationId);
+    const finished = durable?.turn === "terminal"
+      && (durable.message?.ts ?? 0) > (attempt.commitRepair?.messageTs ?? 0)
+      && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(boundary ?? null);
+    if (ports.conversationDeliveryOutstanding?.(attempt.conversationId) === true || active === true
+      || durable?.turn === "busy" || liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(ports.now())).length > 0
+      || (attempt.commitRepair?.sendUncertain && !finished) || (boundary && active !== false && !finished)) {
+      const pending = attempt.commitRepair ? "commit repair turn" : "stage conversation";
+      return { error: `the ${pending} may still be running or queued; wait for it to finish before retrying settlement`, status: 409 };
+    }
+  }
+  if (attempt.commitRepair) {
+    // Explicit retry renews permission for one commit after a rejected repair.
+    // Keep the original refusal/request; no second repair turn is sent.
+    attempt.commitRepair.outcome = { status: "accepted" };
+    attempt.commitRepair.settledAt = ports.now();
+    delete attempt.commitRepair.recommit;
+  }
+  attempt.state = "committing";
+  attempt.error = null;
+  pipeline.state = "running";
+  pipeline.pausedState = null;
+  pipeline.stateDetail = "passed stage commit retry pending; existing outputs preserved";
+  return { pipeline };
 }
 
 /** A publication repair's park: the refusal's cause and action first, then why
@@ -4335,7 +4376,7 @@ async function stageCommitRepairSettled(
   const worker = publication ? publicationRepairWorker(pipeline, attempt) : { stage, attempt };
   const parkRepair = (why: string) => {
     const detail = publication ? publicationRepairParkDetail(attempt.publicationRepair!, why)
-      : why.includes(repair.detail) ? why : `${repair.detail}\n${why}`;
+      : afterCommitRepair(attempt, why.includes(repair.detail) ? why : `${repair.detail}\n${why}`);
     attempt.error = detail;
     park(pipeline, detail, publication ? undefined : attempt);
   };
@@ -12166,6 +12207,11 @@ export async function patchPipeline(
         persist();
       }
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry", status: 409 };
+      const commitRetry = await retryPassedStageCommit(pipeline, ports);
+      if (commitRetry) {
+        if (!commitRetry.error) { persist(); requestPipelineTick(); }
+        return commitRetry;
+      }
       const retryStageId = explicitReceiptRetry ? req.stageId! : stage?.id ?? null;
       const retryLaunchId = explicitReceiptRetry ? req.launchId! : attempt?.launchId ?? null;
       const receiptRetry = (explicitReceiptRetry || attempt?.paneId === null)

@@ -1,11 +1,12 @@
 /**
- * The desktop view switch is reachable (#1614), and offers only the Board and
- * Conversations (#1695).
+ * The desktop has one view, the Board, which is the kanban (#1695).
  *
- * On the Board, which is the kanban, the switch sits in the board's own bar in
- * flow, so nothing floats over the board's corner; on Conversations it floats
- * as its own chip in that corner, and it is the only thing there. happy-dom lays
- * nothing out and cannot hit-test, so this file asserts those structural facts.
+ * The Board | Conversations switch (#1614) left the header: the operator never
+ * leaves the board, and the list the switch led to opens under the header's
+ * recent-agents icon instead. A view saved for the project before that (the
+ * list, the scheme face) still opens on the Board and is not rewritten, since
+ * the phone reads the same preference. happy-dom lays nothing out and cannot
+ * hit-test, so this file asserts those structural facts.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
@@ -225,50 +226,49 @@ function mount(files: FileEntry[] = [alphaOf(), betaOf()], manual?: string[], ex
   return host as unknown as HTMLElement;
 }
 
-/** The view tab an operator actually clicks. */
-function clickViewTab(host: HTMLElement, view: "kanban" | "list") {
-  const tab = host.querySelector(`button[data-view-tab="${view}"]`) as HTMLButtonElement | null;
-  expect(tab).toBeTruthy();
-  flushSync(() => tab!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
+function click(element: Element | null) {
+  expect(element).toBeTruthy();
+  flushSync(() => element!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
 }
 
 const TOP_LEFT_CORNER = "[class*='absolute'][class*='left-3'][class*='top-3']";
-const tabsIn = (host: HTMLElement) => host.querySelector("[data-project-view-tabs]") as HTMLElement | null;
-const viewTabs = (host: HTMLElement) => Array.from(host.querySelectorAll("button[data-view-tab]")).map((button) => button.getAttribute("data-view-tab"));
 
-test("the desktop offers only the Board and Conversations, and on the Board the switch sits in the board's own bar", async () => {
+test("the desktop shows the Board and no view switch: nothing in its bar leaves it", async () => {
   const host = mount();
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
 
-  expect(viewTabs(host)).toEqual(["kanban", "list"]);
+  expect(host.querySelector("[data-project-view-tabs], button[data-view-tab]")).toBeNull();
+  expect(host.querySelector('[data-bar-group="view"]')).toBeNull();
   expect(host.querySelector("[data-scheme-band], [data-scheme-ui]")).toBeNull();
-  const board = host.querySelector("[data-kanban-board]") as HTMLElement;
-  expect(board.contains(tabsIn(host))).toBe(true);
-  expect(tabsIn(host)!.className).not.toContain("absolute");
   expect(Array.from(host.querySelectorAll(TOP_LEFT_CORNER))).toHaveLength(0);
 });
 
-test("the switch opens Conversations, sits in that view's header bar there, and comes back to the Board", async () => {
+test("the recent agents open under the header's icon, over the Board, and nothing is saved for it", async () => {
   const host = mount();
   expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
+  const before = JSON.stringify(boards[PROJECT]!.prefs);
 
-  clickViewTab(host, "list");
-  expect(await waitFor(() => host.querySelector("[data-desktop-conversations-scroll]") !== null)).toBe(true);
-  await settle();
-  expect(host.querySelector("[data-kanban-board]")).toBeNull();
-  /* One header bar on every leaf (#1801): nothing floats over the list's corner. */
-  expect(Array.from(host.querySelectorAll(TOP_LEFT_CORNER))).toHaveLength(0);
-  expect(host.querySelector("[data-project-bar]")!.contains(tabsIn(host))).toBe(true);
-  expect(viewTabs(host)).toEqual(["kanban", "list"]);
-  expect(boards[PROJECT]!.prefs.viewMode).toBe("list");
-
-  clickViewTab(host, "kanban");
-  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
-  await settle();
+  const toggle = host.querySelector("header.bar [data-bar-recent-toggle]") as HTMLElement;
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(toggle.getAttribute("aria-label")).toBe("Recent agents");
+  expect(toggle.getAttribute("title")).toBe("Recent agents");
   expect(host.querySelector("[data-desktop-conversations-scroll]")).toBeNull();
-  expect(boards[PROJECT]!.prefs).toMatchObject({ viewMode: "scheme", desktopBoard: "kanban" });
+  click(toggle);
+  await settle();
+  /* The list is the project's every conversation, in a dialog under the icon; the Board stays where it was. */
+  const list = host.querySelector("[data-bar-recent-list]") as HTMLElement;
+  expect(list.getAttribute("role")).toBe("dialog");
+  expect(list.querySelector("[data-desktop-conversations-scroll]")).not.toBeNull();
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  expect(host.querySelector("[data-kanban-board]")).not.toBeNull();
+  expect(JSON.stringify(boards[PROJECT]!.prefs)).toBe(before);
+
+  click(toggle);
+  await settle();
+  expect(host.querySelector("[data-bar-recent-list]")).toBeNull();
+  expect(host.querySelector("[data-kanban-board]")).not.toBeNull();
 });
 
 test("a board stored on the scheme face before the kanban became the desktop board opens on the Board", async () => {
@@ -293,10 +293,14 @@ test("a desktop project nobody chose a view for opens on its Board, even with no
   expect(boards[PROJECT]?.prefs.viewMode ?? null).toBeNull();
 });
 
-test("a project whose operator chose Conversations still opens on Conversations", async () => {
+/* The operator's decision (2026-10-12): the board is always the view. A list preference saved
+   while the desktop had two views no longer takes the desktop off its Board, and stays as it
+   was stored, because the phone reads the same preference for its own two views. */
+test("a project saved on Conversations opens on its Board on the desktop, and the saved view is left alone", async () => {
   boards = { [PROJECT]: { ...emptyBoard(), revision: 1, prefs: { ...emptyBoard().prefs, viewMode: "list" } } };
   const host = mount();
-  expect(await waitFor(() => host.querySelector("[data-desktop-conversations-scroll]") !== null)).toBe(true);
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
   await settle();
-  expect(host.querySelector("[data-kanban-board]")).toBeNull();
+  expect(host.querySelector("[data-desktop-conversations-scroll]")).toBeNull();
+  expect(boards[PROJECT]!.prefs.viewMode).toBe("list");
 });

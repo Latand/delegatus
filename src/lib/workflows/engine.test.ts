@@ -843,7 +843,7 @@ test("CPU pressure holds the setup launch with a visible reason, then launches i
 
   await tickWorkflows([], harness.ports);
   expect(starts()).toBe(0);
-  expect(load(wf.id)).toMatchObject({ state: "provisioning", setupPid: null, stateDetail: "setup held for CPU pressure since 1970-01-01T00:00:00.000Z (avg10 80% ≥ 20%)" });
+  expect(load(wf.id)).toMatchObject({ state: "provisioning", setupPid: null, stateDetail: "setup held for CPU pressure since 1970-01-01T00:00:00.000Z (avg10 80% ≥ 30%)" });
   clock = 120_000;
   await tickWorkflows([], harness.ports);
   expect(starts()).toBe(0);
@@ -879,7 +879,7 @@ test("CPU pressure holds every stage-agent start before its launch is stamped, t
 
   for (let i = 0; i < 4; i++) await tickWorkflows([], ports);
   expect(state.spawnCount).toBe(0);
-  expect(load(wf.id)).toMatchObject({ state: "implementing", stateDetail: "stage start held for CPU pressure since 1970-01-01T00:00:00.000Z (avg10 80% ≥ 20%)" });
+  expect(load(wf.id)).toMatchObject({ state: "implementing", stateDetail: "stage start held for CPU pressure since 1970-01-01T00:00:00.000Z (avg10 80% ≥ 30%)" });
   expect(load(wf.id).stageRuns[0]!.startedAt).toBeNull();
   clock = 120_000;
   await tickWorkflows([], ports);

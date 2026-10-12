@@ -132,3 +132,45 @@ The fourth critique read 1280 px with the long project name. On Conversations th
 - The narrow `+` menu's two rows carry icons (new task, new conversation), like the `⋯` rows.
 
 The attention toast, the island's own dismissable card, still floats over the Tasks panel's header while it shows. It lives in the fenced attention code and is left as a follow-up.
+
+## The one-row header (operator's choice, 2026-10-12)
+
+Two prototype rounds ended on «Тихі іконки» with the operator's three answers.
+The row above is replaced by this one; the sections before this one are the
+record of how it got here.
+
+Row: name · accounts · «● N» ‖ [find | filter] · + · [Orchestrator │ Tasks N │ recent agents] · ⋯ · ● Needs you N
+
+| Control | Now |
+|---|---|
+| Project name | stays; it never truncates while the bar has a step left |
+| Account switches | in the row while it has room, then the Accounts section of ⋯ |
+| «N working» | a dot and the number; the sentence is the tooltip and the accessible name |
+| Open-agents pill | unchanged; its slot takes room only while it holds the pill |
+| Find | gives way first, down to the 144 px that keep the placeholder whole |
+| Reason chips, the island's funnel | one filter joined to the search: «Needs you» (the funnel, key F), every task, each other reason with its count |
+| «Hidden N» | a row of ⋯, drawn while something is hidden; it opens the same tray under ⋯ |
+| Board \| Conversations | removed: the Board is the one desktop view, whatever view was saved (the phone keeps its two) |
+| «+ Task», «+ Agent» | one `+` with the two-row menu |
+| Orchestrator, Tasks | one segmented group; words while the row has room, then icons |
+| Recent agents | the group's last segment: an icon, and under it the list Conversations showed |
+| ⋯ | unchanged, plus Hidden |
+| «● Needs you N» | the row's last item, in the flow; filled while something waits; gone while the needs-you panel is docked |
+
+The attention island used to be drawn `fixed` over a 236 px reserve at the
+bar's right end, and at 1960 px in uk it covered ⋯. It is now a flex item of
+the bar, portaled into the bar's last slot, so nothing is drawn over the row.
+Its toast hangs 8 px under the row.
+
+What gives way is one rule. The bar measures itself (`useBarFit` in
+`ProjectBar.tsx`) and takes the fewest steps, in this order, at which the row
+fits and the name is whole: the accounts move into ⋯, Orchestrator and Tasks
+keep their icons, the chip keeps its dot and count, the groups stand 8 px
+apart, and last the search may go under its placeholder. Nothing wraps at any
+width, and no row of chips stands under the bar.
+
+`BOARD_CAPTURE_CASE=header` of `scripts/capture-board-geometry.ts` measures it
+at 2254, 1960, 1440 and 1000 px, en and uk, light and dark, with the needs-you
+panel closed and docked.
+
+Not done here: the Overview's bar keeps its own layout and its fixed island.

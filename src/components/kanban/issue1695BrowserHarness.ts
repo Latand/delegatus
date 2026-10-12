@@ -463,30 +463,9 @@ export async function captureFastTtsHeaders(browser: Browser, mobile: boolean): 
         readings.push({ viewport: width, scheme, idle, sharedStop: true, pageErrors });
       } finally { await context.close(); }
     }
-    if (!mobile) {
-      for (const scheme of ["light", "dark"] as const) {
-        const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: scheme });
-        try {
-          await context.addInitScript(() => { localStorage.setItem("llv_lang", "en"); localStorage.setItem("llvOrchestratorPanelWidth", "360"); });
-          const page = await context.newPage(); await page.goto(`${server.base}?scenario=fast-tts`);
-          await page.locator('[data-view-tab="list"]').click();
-          const toggle = page.locator('[data-orchestrator-toggle]'); if (await toggle.getAttribute("aria-pressed") !== "true") await toggle.click();
-          const dock = page.locator('[data-orchestrator-dock]'); await dock.waitFor();
-          const grip = dock.locator('[data-orchestrator-dock-resize]');
-          const box = await grip.boundingBox();
-          await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2); await page.mouse.down(); await page.mouse.move(248 + 360, box!.y + box!.height / 2); await page.mouse.up();
-          const reports = dock.locator('[data-report-log-toggle="open"]'); if (await reports.count()) await reports.click();
-          const control = dock.locator('[data-tts-header]'); await control.waitFor();
-          await control.click(); await page.waitForFunction(() => document.querySelector('[data-orchestrator-dock] [data-tts-header][data-tts-phase="playing"]'));
-          const bounds = await control.boundingBox(); const dockBounds = await dock.boundingBox();
-          expect(bounds!.x).toBeGreaterThanOrEqual(dockBounds!.x); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(dockBounds!.x + dockBounds!.width);
-          expect(dockBounds!.width).toBe(360);
-          await page.screenshot({ path: path.join(out, `desktop-1440-${scheme}-orchestrator-narrow-dock-playing.png`) });
-          await control.click();
-          readings.push({ scheme, narrowDockWidth: dockBounds!.width, control: bounds });
-        } finally { await context.close(); }
-      }
-    }
+    /* The narrow orchestrator dock stood beside the desktop's Conversations view. The Board is the one desktop
+       view now and its seat is where the orchestrator's header control is, so a project with conversations has
+       no dock to measure; the frames above cover the control on the Board. */
     if (mobile) {
       const { context, page } = await openFixture(browser, `${server.base}?fast-tts=1&seatnoise=ii&runtime=structured#c=conversation_running`, { width: 390, height: 844 }, "dark", "uk", "reduce", true);
       try {
