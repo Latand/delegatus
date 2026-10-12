@@ -6099,3 +6099,25 @@ for (const firstDispatch of [false, true]) test(`owner dispatch cutoff survives 
     expect(server.requests.some(request => request.method === "turn/start" || request.method === "turn/steer")).toBeFalse();
   } finally { await host.release(); }
 });
+
+
+test("seat launches disable native questions while workers keep them on fresh and adopted Codex", async () => {
+  for (const seat of [false, true]) for (const resumed of [false, true]) {
+    const server = new FakeAppServer("seat-question-policy");
+    const captured: { args?: string[] } = {};
+    const options = { cwd: "/repo", operatorDecisionForms: seat, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured) };
+    const host = resumed ? await CodexAppServerHost.adopt("seat-question-policy", options) : await CodexAppServerHost.start(options);
+    try {
+      expect(captured.args!.includes("tools.experimental_request_user_input.enabled=false")).toBe(seat);
+      const request = server.requests.find(r => r.method === (resumed ? "thread/resume" : "thread/start"))!;
+      const config = (request.params as { config: Record<string, unknown> }).config;
+      if (seat) {
+        expect(config).toMatchObject({ tools: { experimental_request_user_input: { enabled: false } } });
+        const hooks = (config.hooks as { PreToolUse: Array<{ matcher: string }> }).PreToolUse;
+        expect(hooks.some(group => group.matcher.includes("request_user_input_async"))).toBe(true);
+        expect(hooks.some(group => group.matcher.includes("exec_command"))).toBe(true);
+      }
+      else expect(config).not.toHaveProperty("tools.experimental_request_user_input.enabled");
+    } finally { await host.release(); }
+  }
+});

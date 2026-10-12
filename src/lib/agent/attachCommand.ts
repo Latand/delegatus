@@ -1,3 +1,4 @@
+import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 /**
  * Pure composition of the "attach in your terminal" command (issue #247 item 2).
  *
@@ -206,6 +207,7 @@ export function resolveLaunchAttachCommand(deps: LaunchAttachDeps): AttachResolu
     fast: receipt.launchProfile.fast,
     serviceTier: receipt.launchProfile.serviceTier,
     allowSubagents: receipt.launchProfile.allowSubagents,
+    operatorDecisionForms: operatorDecisionFormsRequired(receipt.agentRole, receipt.artifactPath),
     /* Re-apply the launch's recorded MCP allowlist (PR #610) so the resumed
        command enforces the same server scope the launch ran under. */
     mcpServers: receipt.launchProfile.mcpServers,
