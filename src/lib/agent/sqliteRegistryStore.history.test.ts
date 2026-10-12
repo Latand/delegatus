@@ -5,9 +5,12 @@ import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { reboundAssembledMcpGrants } from "./mcpAllowlist";
-import { normalizeRegistry, type RegistryFile } from "./registry";
+import { normalizeRegistry, readOnlyConversationLookupFromSnapshot, type RegistryFile } from "./registry";
 import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from "./registryPerformanceDataset";
-import { registryRowProjection, SqliteAgentRegistryStore, type RegistryRowProjector } from "./sqliteRegistryStore";
+import {
+  archivedOwnersEndedSince, hotRegistryRows, registryConversationsForEntryKey, registryConversationsForPath, registryRowProjection,
+  SqliteAgentRegistryStore, type RegistryRowProjector,
+} from "./sqliteRegistryStore";
 
 /* A registry whose history is mostly archived (#2761): grant decisions,
    identity lookups and projections must stay keyed, and must agree with the
@@ -253,4 +256,213 @@ test("projections over archived history match the rows and are computed once per
     id: "history-test.owner", collection: "deliveryOperationOwners", project: (owner) => owner.deliveryId,
   })).toThrow("operation owners");
   void dataset;
+});
+
+/* The reviewer's reproduction: a files projection holds one view while
+   reconciliation on another connection moves a transcript. The path index is
+   the database's current one, so the held view lost the conversation it still
+   showed at the old path; on the base of this change, which enumerated the
+   view, it kept it. */
+test("a held view keeps its own path and generation ownership while another connection moves them", () => {
+  const { dataset, open } = history();
+  const reader = open();
+  const writer = open();
+  const held = reader.readOnlySnapshot().file;
+  /* One conversation of the archived history and one of the newest. */
+  const pathOf = (index: number) => dataset.conversationPaths.at(index)!;
+  const [moved, taker] = [0, -1].map((index) => readOnlyConversationLookupFromSnapshot(held).conversationForPath(pathOf(index))!);
+  const oldPath = pathOf(0);
+  expect(moved!.generations[0]!.path).toBe(oldPath);
+  expect(taker!.id).not.toBe(moved!.id);
+  const oldEntryKey = `${moved!.engine}:${moved!.generations[0]!.id}`;
+  expect(readOnlyConversationLookupFromSnapshot(held).conversationForPath(oldPath)?.id).toBe(moved!.id);
+
+  writer.mutate((file) => {
+    const generation = file.conversations[moved!.id]!.generations[0]!;
+    generation.path = "/sessions/moved.jsonl";
+    generation.id = "moved-generation";
+  }, false);
+  const owners = (file: RegistryFile, pathname: string) => registryConversationsForPath(file, pathname).map((conversation) => conversation.id);
+  /* The held view: its own owner at the old path, nothing at the new one. */
+  const lookup = readOnlyConversationLookupFromSnapshot(held);
+  expect(lookup.conversationForPath(oldPath)?.id).toBe(moved!.id);
+  expect(lookup.conversationForPath("/sessions/moved.jsonl")).toBeNull();
+  expect(owners(held, oldPath)).toEqual([moved!.id]);
+  expect(registryConversationsForEntryKey(held, oldEntryKey).map((conversation) => conversation.id)).toEqual([moved!.id]);
+  expect(registryConversationsForEntryKey(held, `${moved!.engine}:moved-generation`)).toEqual([]);
+
+  /* Reassigned to another owner: the held view still names its own. */
+  writer.mutate((file) => { file.conversations[taker!.id]!.continuityPaths.push(oldPath); }, false);
+  expect(readOnlyConversationLookupFromSnapshot(held).conversationForPath(oldPath)?.id).toBe(moved!.id);
+  expect(owners(held, oldPath)).toEqual([moved!.id]);
+
+  /* A fresh view sees what was committed. */
+  const fresh = reader.readOnlySnapshot().file;
+  const freshLookup = readOnlyConversationLookupFromSnapshot(fresh);
+  expect(freshLookup.conversationForPath(oldPath)?.id).toBe(taker!.id);
+  expect(freshLookup.conversationForPath("/sessions/moved.jsonl")?.id).toBe(moved!.id);
+  expect(registryConversationsForEntryKey(fresh, oldEntryKey)).toEqual([]);
+  /* An untouched path is answered from the index by both. */
+  const untouched = owners(fresh, pathOf(2));
+  expect(untouched).toHaveLength(1);
+  expect(owners(held, pathOf(2))).toEqual(untouched);
+
+  /* A journal that no longer reaches back to the held view: it answers from its own rows. */
+  const db = new Database(dataset.filename);
+  try { db.run("DELETE FROM registry_changes"); } finally { db.close(); }
+  expect(owners(held, oldPath)).toEqual([moved!.id]);
+  expect(owners(held, "/sessions/moved.jsonl")).toEqual([]);
+}, 60_000);
+
+/* #2761: a view refreshed after another connection's commit decided every
+   grant-bearing hot row again whenever a conversation, a receipt or a lineage
+   edge had changed, related or not. It now decides the rows the change can
+   reach, and must still agree with a whole read after every kind of write:
+   a revoked edge, a contradicting owner and an owner that is gone included. */
+test("a view refreshed across mixed entry, receipt, conversation and lineage writes decides grants as a whole read does", () => {
+  const { dataset, open } = history();
+  const reader = open();
+  const writer = open();
+  const judge = open();
+  let decisions = 0;
+  const spied = reader as unknown as { decideStoredRow: (...args: unknown[]) => unknown };
+  const decide = spied.decideStoredRow.bind(reader);
+  spied.decideStoredRow = (...args) => { decisions += 1; return decide(...args); };
+  const claims = claimingRows(dataset.filename);
+  const initial = new Map(claims.map(({ collection, key }) => [`${collection} ${key}`, JSON.stringify(lists(judge.snapshot().file, collection, key))]));
+  reader.readOnlySnapshot();
+  let flipped = 0;
+  const agree = (step: string) => {
+    decisions = 0;
+    const view = reader.readOnlySnapshot().file;
+    const refreshed = decisions;
+    const whole = judge.snapshot().file;
+    /* The refreshed collections hold the rows of a whole read, in its order, and stay frozen. */
+    for (const collection of ["entries", "receipts", "conversations", "lineageEdges"] as const) {
+      expect({ step, collection, keys: Object.keys(view[collection]) }).toEqual({ step, collection, keys: Object.keys(whole[collection]) });
+      expect(Object.isFrozen(view[collection])).toBe(true);
+    }
+    for (const { collection, key } of claims) {
+      const decided = lists(whole, collection, key);
+      expect({ step, collection, key, view: lists(view, collection, key) }).toEqual({ step, collection, key, view: decided });
+      if (JSON.stringify(decided) !== initial.get(`${collection} ${key}`)) flipped += 1;
+    }
+    return refreshed;
+  };
+  const hot = dataset.grantSubjects;
+  const entry = hot.find((subject) => subject.collection === "entries")!;
+  const receipts = hot.filter((subject) => subject.collection === "receipts");
+  expect(receipts.length).toBeGreaterThan(8);
+  const conversationOf = (key: string) => judge.snapshot().file.receipts[key]!.conversationId;
+
+  const before = reader.readOnlySnapshot().file;
+  const stamped = before.entries[entry.key]!.updatedAt;
+  writer.mutate((file) => { file.entries[entry.key]!.updatedAt = "2026-10-12T21:00:00.000Z"; }, false);
+  expect(agree("an entry write")).toBeLessThanOrEqual(2);
+  /* The view held from before the write keeps its own row; the refreshed one has the new. */
+  expect(before.entries[entry.key]!.updatedAt).toBe(stamped);
+  expect(reader.readOnlySnapshot().file.entries[entry.key]!.updatedAt).toBe("2026-10-12T21:00:00.000Z");
+  expect(Object.keys(before.entries)).toEqual(Object.keys(reader.readOnlySnapshot().file.entries));
+  /* An unrelated receipt or conversation write reaches the rows that read it, never every hot row. */
+  writer.mutate((file) => { file.receipts[receipts[0]!.key]!.clientAttemptId = "restamped-attempt"; }, false);
+  expect(agree("a receipt write")).toBeLessThanOrEqual(6);
+  writer.mutate((file) => { file.conversations[conversationOf(receipts[1]!.key)]!.updatedAt = "2026-10-12T21:00:02.000Z"; }, false);
+  expect(agree("a conversation write")).toBeLessThanOrEqual(6);
+
+  for (const [index, subject] of receipts.slice(0, 8).entries()) {
+    const owner = conversationOf(subject.key);
+    /* Revoked: the child's own lineage edge is gone. */
+    writer.mutate((file) => { delete file.lineageEdges[owner]; }, false);
+    agree(`edge ${index} removed`);
+    /* Contradicted: a second owner of the same generation appears, then leaves. */
+    writer.mutate((file) => {
+      const forged = JSON.parse(JSON.stringify(file.conversations[owner]!)) as RegistryFile["conversations"][string];
+      forged.id = `conversation_forged-owner-${index}` as typeof forged.id;
+      forged.delegationDepth = 0;
+      forged.agentRole = "orchestrator";
+      file.conversations[forged.id] = forged;
+    }, false);
+    agree(`owner ${index} forged`);
+    writer.mutate((file) => { delete file.conversations[`conversation_forged-owner-${index}` as typeof owner]; }, false);
+    agree(`forged owner ${index} removed`);
+    /* Absent: the attesting conversation itself is gone. */
+    writer.mutate((file) => { delete file.conversations[owner]; }, false);
+    agree(`owner ${index} removed`);
+  }
+  /* The writes must actually move some decisions, or the agreement proves nothing. */
+  expect(flipped).toBeGreaterThan(0);
+}, 180_000);
+
+/* #2761: the settlement sweep looks for owners that ended since its last
+   checkpoint. Enumerating the collection read and normalized every archived
+   owner on each sweep, 0.3 s of the serving release's thread over retained
+   history; the archive names the candidates from the instant each stores. */
+test("recent endings among archived operation owners are named without reading the archive", () => {
+  const { dataset, open } = history();
+  const db = new Database(dataset.filename);
+  const archived = db.query<{ id: number; row_key: string; settled: string }, []>(`SELECT a.id, c.row_key, json_extract(a.value_json, '$.settledAt') AS settled
+    FROM registry_cold c JOIN registry_archive a ON a.id = c.archive_id WHERE c.collection = 'deliveryOperationOwners' ORDER BY settled`).all();
+  expect(archived.length).toBeGreaterThan(100);
+  /* One owner stored without its instant: it takes its delivery's, as normalization does. */
+  const [legacy, silent] = archived;
+  const deliveredAt = archived.at(-1)!.settled;
+  /* A version is immutable: each row below is archived again as a new one. */
+  const rearchive = (collection: string, key: string, edit: string, ...values: string[]) => {
+    const version = db.query<{ id: number }, string[]>(`INSERT INTO registry_archive(collection, row_key, value_json, row_order)
+      SELECT a.collection, a.row_key, ${edit}, a.row_order FROM registry_cold c JOIN registry_archive a ON a.id = c.archive_id
+      WHERE c.collection = ? AND c.row_key = ? RETURNING id`).get(...values, collection, key)!;
+    db.run("UPDATE registry_cold SET archive_id = ? WHERE collection = ? AND row_key = ?", [version.id, collection, key]);
+  };
+  try {
+    for (const owner of [legacy!, silent!]) rearchive("deliveryOperationOwners", owner.row_key, "json_remove(a.value_json, '$.settledAt')");
+    const delivery = db.query<{ id: string }, [number]>("SELECT json_extract(value_json, '$.deliveryId') AS id FROM registry_archive WHERE id = ?").get(legacy!.id)!;
+    rearchive("heldDeliveries", delivery.id, "json_set(a.value_json, '$.deliveredAt', ?)", deliveredAt);
+  } finally {
+    db.close();
+  }
+  const metrics = { reads: 0 };
+  const view = open(metrics).readOnlySnapshot().file;
+  const whole = open().snapshot().file;
+  const ended = (since: string) => Object.entries(whole.deliveryOperationOwners)
+    .filter(([, owner]) => owner.terminalState !== null && (owner.settledAt ?? "") >= since).map(([key]) => key).sort();
+  const hot = new Set(hotRegistryRows(view, "deliveryOperationOwners").map(([key]) => key));
+  expect(whole.deliveryOperationOwners[legacy!.row_key]!.settledAt).toBe(deliveredAt);
+  expect(whole.deliveryOperationOwners[silent!.row_key]!.settledAt).toBeNull();
+  for (const since of [archived[Math.floor(archived.length / 2)]!.settled, archived.at(-3)!.settled, deliveredAt, "2099-01-01T00:00:00.000Z"]) {
+    metrics.reads = 0;
+    const named = archivedOwnersEndedSince(view, since)!;
+    expect(metrics.reads).toBe(0);
+    expect({ since, named: [...named].sort() }).toEqual({ since, named: ended(since).filter((key) => !hot.has(key)) });
+  }
+  expect(archivedOwnersEndedSince(view, deliveredAt)).toContain(legacy!.row_key);
+  expect(archivedOwnersEndedSince(view, "1970-01-01T00:00:00.000Z")).not.toContain(silent!.row_key);
+  /* A plain file has no archive to ask: its caller reads the rows. */
+  expect(archivedOwnersEndedSince(whole, deliveredAt)).toBeUndefined();
+});
+
+/* #2761: Next standalone gives the instrumentation and each route bundle its
+   own copy of the store's module, over one process-wide store. A file's
+   indexed readers were kept by the copy that built it, so a route asking
+   through another copy enumerated the collection, archived history included,
+   on every lookup. A second copy of the module must find the same readers. */
+test("another bundle's copy of the store module reads a view through its indexes", async () => {
+  const { dataset, open } = history();
+  const metrics = { reads: 0 };
+  const view = open(metrics).readOnlySnapshot().file;
+  const copy = await import(`./sqliteRegistryStore.ts?bundle=${"route"}`) as typeof import("./sqliteRegistryStore");
+  expect(copy.registryConversationsForPath).not.toBe(registryConversationsForPath);
+  const pathname = dataset.conversationPaths[0]!;
+  const owner = registryConversationsForPath(view, pathname)[0]!;
+  const entryKey = `${owner.engine}:${owner.generations[0]!.id}`;
+  metrics.reads = 0;
+  expect(copy.registryHasPathIndex(view)).toBe(true);
+  expect(copy.registryHasEntryKeyIndex(view)).toBe(true);
+  expect(copy.registryConversationsForPath(view, pathname).map((conversation) => conversation.id)).toEqual([owner.id]);
+  expect(copy.registryConversationsForEntryKey(view, entryKey).map((conversation) => conversation.id)).toEqual([owner.id]);
+  expect(copy.registryKeysMatching(view, "heldDeliveries", "conversationId", owner.id))
+    .toEqual(Object.keys(view.heldDeliveries).filter((key) => view.heldDeliveries[key]!.conversationId === owner.id));
+  expect(copy.hotRegistryRows(view, "entries").length).toBeLessThan(Object.keys(view.entries).length);
+  expect(copy.archivedOwnersEndedSince(view, "2099-01-01T00:00:00.000Z")).toEqual([]);
+  const projector: RegistryRowProjector<"receipts", string> = { id: "history-test.bundle-copy", collection: "receipts", project: (receipt) => receipt.state };
+  expect(copy.registryRowProjection(view, projector)).toEqual(registryRowProjection(view, projector));
 });

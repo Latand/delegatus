@@ -6,7 +6,7 @@ import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, normalizeRegistry } from "./registry";
 import { registryConversationsForPath, registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
-import { installRegistryArchive } from "./registryArchive";
+import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
 
 const directories: string[] = [];
 const stores: SqliteAgentRegistryStore[] = [];
@@ -380,6 +380,44 @@ test("an interrupted archive move rolls back and outstanding work stays hot", ()
       expect(db.query("SELECT 1 AS found FROM registry_hot_rows WHERE collection=? AND row_key=?").get(collection!,key!)).toEqual({ found: 1 });
     }
     expect(() => db.run("DELETE FROM registry_archive")).toThrow("no expiry");
+  } finally { db.close(); }
+});
+
+/* #2761: the pass finds its candidates before it takes the write lock, since
+   the search is most of the pass and every writer waits behind the lock. What
+   another writer revives between the search and the lock must stay hot. */
+test("an archive pass confirms under the lock what it selected before it, and a pass with nothing to move takes no lock", () => {
+  const { open,filename } = fixture();
+  const store = open();
+  const db = new Database(filename);
+  try {
+    const selected = archiveCandidates(db,1_000);
+    const entry = { collection: "entries",row_key: `codex:${id(0)}` };
+    const delivery = { collection: "heldDeliveries",row_key: "archive-delivery-0" };
+    expect(selected).toContainEqual(entry);
+    expect(selected).toContainEqual(delivery);
+    /* Revived after the search: a claim on the entry, a delivery held again. */
+    store.mutate(file => {
+      file.entries[entry.row_key]!.claimOwner = "fixture-owner";
+      file.heldDeliveries[delivery.row_key]!.state = "held";
+    },false);
+    db.exec("BEGIN IMMEDIATE");
+    const moved = archiveInactiveRegistryRows(db,1_000,selected);
+    db.exec("COMMIT");
+    expect(moved).toBeGreaterThan(0);
+    expect(moved).toBeLessThanOrEqual(selected.length - 2);
+    for (const row of [entry,delivery]) {
+      expect(db.query("SELECT 1 AS found FROM registry_hot_rows WHERE collection=? AND row_key=?").get(row.collection,row.row_key)).toEqual({ found: 1 });
+    }
+    const cold = db.query<{ collection: string; row_key: string }, []>("SELECT collection,row_key FROM registry_cold").all();
+    expect(cold).toHaveLength(moved);
+    for (const row of cold) expect(selected).toContainEqual(row);
+    /* The same rows the single statement under the lock selects. */
+    archiveAll(store);
+    expect(archiveCandidates(db,1_000)).toEqual([]);
+    /* Nothing left: another connection holding the write lock is not waited for. */
+    db.exec("BEGIN IMMEDIATE");
+    try { expect(store.archiveInactive()).toBe(0); } finally { db.exec("ROLLBACK"); }
   } finally { db.close(); }
 });
 

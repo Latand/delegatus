@@ -143,25 +143,50 @@ const ARCHIVE_CANDIDATE_BRANCHES = [
   `(collection='deliveryOperationOwners' AND json_extract(value_json,'$.terminalState') IN ('delivered','failed'))`,
 ] as const;
 
+export type ArchiveCandidate = { collection: string; row_key: string };
+
+// Unary + removes the outer TEXT affinity without changing its value. SQLite
+// can then use the JSON expression indexes for the correlated identity reads.
+// CROSS JOIN keeps each generation ahead of its primary-key entry lookup.
+/* One indexed pass per collection. A single predicate over every row kept
+   SQLite from using the collection indexes across the disjunction; it parsed
+   every payload, holding the write lock for 0.7 s per reaper
+   cycle whether or not anything moved (#2761). The collections are disjoint,
+   so the union selects exactly what the disjunction did. */
+const ARCHIVE_CANDIDATES = `SELECT collection,row_key FROM (${ARCHIVE_CANDIDATE_BRANCHES.map(branch =>
+  `SELECT collection,row_key,row_order FROM registry_hot_rows r WHERE ${branch}`).join("\n    UNION ALL ")})
+    ORDER BY row_order LIMIT ?`;
+
+/**
+ * The rows the next pass would move, read without the write lock. Finding
+ * them scans the hot rows of every archivable collection, a tenth of a second
+ * over a long-lived registry and several times that on a loaded machine; run
+ * inside the pass it held the write lock that long, and every writer of the
+ * registry waited synchronously behind it (#2761). The pass confirms each
+ * under the lock, by key.
+ */
+export function archiveCandidates(db: Database, limit: number): ArchiveCandidate[] {
+  return db.query<ArchiveCandidate, [number]>(ARCHIVE_CANDIDATES).all(limit);
+}
+
 /** Move only terminal evidence. Unknown or outstanding work stays hot; keyed
  * readers still see every row through registry_records. The pass is bounded
- * and is invoked by the existing hygiene owner, never by opening a reader. */
-export function archiveInactiveRegistryRows(db: Database, limit: number): number {
+ * and is invoked by the existing hygiene owner, never by opening a reader.
+ *
+ * `preselected` are candidates read before the lock was taken: each is moved
+ * only if it is still archivable now, so a row another writer revived in
+ * between stays hot. Without it the pass selects under the lock.
+ */
+export function archiveInactiveRegistryRows(db: Database, limit: number, preselected?: readonly ArchiveCandidate[]): number {
   db.run(`CREATE TEMP TABLE IF NOT EXISTS registry_archive_candidates (
     collection TEXT NOT NULL,row_key TEXT NOT NULL,PRIMARY KEY(collection,row_key))`);
   db.run("DELETE FROM registry_archive_candidates");
-  // Unary + removes the outer TEXT affinity without changing its value. SQLite
-  // can then use the JSON expression indexes for the correlated identity reads.
-  // CROSS JOIN keeps each generation ahead of its primary-key entry lookup.
-  /* One indexed pass per collection. A single predicate over every row kept
-     SQLite from using the collection indexes across the disjunction; it parsed
-     every payload, holding the write lock for 0.7 s per reaper
-     cycle whether or not anything moved (#2761). The collections are disjoint,
-     so the union selects exactly what the disjunction did. */
-  db.run(`INSERT INTO registry_archive_candidates
-    SELECT collection,row_key FROM (${ARCHIVE_CANDIDATE_BRANCHES.map(branch =>
-      `SELECT collection,row_key,row_order FROM registry_hot_rows r WHERE ${branch}`).join("\n    UNION ALL ")})
-    ORDER BY row_order LIMIT ?`, [limit]);
+  if (preselected) {
+    const confirm = db.query(`INSERT OR IGNORE INTO registry_archive_candidates
+      SELECT collection,row_key FROM registry_hot_rows r WHERE r.collection=?1 AND r.row_key=?2
+        AND (${ARCHIVE_CANDIDATE_BRANCHES.join("\n        OR ")})`);
+    for (const row of preselected.slice(0,limit)) confirm.run(row.collection,row.row_key);
+  } else db.run(`INSERT INTO registry_archive_candidates ${ARCHIVE_CANDIDATES}`, [limit]);
   const rows = db.query<{ collection: string; row_key: string }, []>(
     "SELECT collection,row_key FROM registry_archive_candidates").all();
   for (const row of rows) {

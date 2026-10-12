@@ -326,8 +326,13 @@ export function buildRegistryPerformanceDataset(
       command: { ...structuredClone(ownerTemplate.command), operationId: key },
       conversationId: conversationId(index % count),
       deliveryId: `performance-delivery-${index}`,
+      /* A settled owner carries the instant it settled, as settlement writes
+         it: retained history ended long before the run. */
       ...(delivered
-        ? { terminalState: "delivered", terminalDisposition: "delivered", terminalReason: "synthetic retained evidence ".repeat(270) }
+        ? {
+          terminalState: "delivered", terminalDisposition: "delivered", terminalReason: "synthetic retained evidence ".repeat(270),
+          settledAt: new Date(seededAt - 30 * 86_400_000 - (shape.deliveryOperationOwners - index) * 60_000).toISOString(),
+        }
         : {}),
     };
   }
