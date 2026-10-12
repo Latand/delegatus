@@ -1,3 +1,5 @@
+import { fileAgentActivity, type AgentActivity } from "@/lib/lifecycle/agentActivity";
+import { getLocale, translate, type Locale, type TFunction } from "@/lib/i18n";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { activeCardMigration } from "@/lib/accounts/migration";
 import { laneRouteNow } from "@/lib/attention/routeTypes";
@@ -78,6 +80,9 @@ export interface MobileRowState {
   seconds: number | null;
   /** Messages queued behind a held delivery. */
   held: number;
+  /** What a running agent is doing by its transcript, when the scan carries
+      that fact: the board dot, the reader header and the rail all read it. */
+  activity?: AgentActivity["state"] | null;
   /** Epoch seconds the blocked account's window reopens, when the engine says. */
   resetAt: number | null;
   /** The account the wall belongs to, when the read names one; the limit row
@@ -135,6 +140,7 @@ export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000)
     badge: null,
     seconds: null,
     held: 0,
+    activity: null,
     resetAt: null,
     account: null,
     ...over,
@@ -155,7 +161,10 @@ export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000)
   if (reason && reasonAsksOperator(reason)) {
     return bits({ key: "waiting", dot: "warning", edge: "warning", badge: waitingBadge(reason), seconds: Math.max(0, now - reason.since) });
   }
-  if (stalledAttention(file, now)) return bits({ key: "stalled", dot: "danger", seconds: Math.max(0, now - file.mtime) });
+  if (stalledAttention(file, now)) {
+    const idle = file.agentActivity ? fileAgentActivity(file, now * 1000) : null;
+    return bits({ key: "stalled", dot: "danger", activity: idle?.state ?? null, seconds: idle ? (idle.idleForMs ?? 0) / 1000 : Math.max(0, now - file.mtime) });
+  }
   if (file.rateLimit) {
     return bits({
       key: "limit",
@@ -170,10 +179,20 @@ export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000)
   /* A dead host runs nothing, whatever freshness the transcript still carries. */
   if (file.proc !== "killed" && turnIsRunning(file)) {
     const since = workingSince(file);
-    return bits({ key: "working", dot: "success", seconds: since === null ? null : Math.max(0, now - since / 1000) });
+    const activity = file.agentActivity && file.proc === "running" ? fileAgentActivity(file, now * 1000).state : null;
+    return bits({ key: "working", dot: "success", activity, seconds: since === null ? null : Math.max(0, now - since / 1000) });
   }
   if (file.activity === "recent") return bits({ key: "returned", dot: "accent", seconds: Math.max(0, now - file.mtime) });
   return bits({ key: "done", dot: "neutral", seconds: Math.max(0, now - file.mtime) });
+}
+
+/** The word a state is named by on the reader header, the rail and the tile:
+    the dot's own words for an agent whose activity the scan knows («idle»,
+    «waiting on a check»), the row key's word otherwise. */
+export function rowStateWord(t: TFunction, row: { key: string; activity?: MobileRowState["activity"] }): string {
+  if (row.activity === "idle") return t("cardStatus.idle");
+  if (row.activity === "checking") return t("cardStatus.checking");
+  return t(`kanban.memberState.${row.key as MobileRowStateKey}`);
 }
 
 /**

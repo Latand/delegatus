@@ -12,7 +12,6 @@ import {
   emptySeatTickState,
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
   SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT,
-  SEAT_TICK_REPORTED_STALLS_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_RETIRED_WAKE_LIMIT,
   SEAT_TICK_WAKE_REASON_KINDS,
@@ -294,7 +293,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     /* Absent reads as empty: a stall no wake is remembered naming keeps its
        place ahead of the unstarted tasks. */
     ...(conversationIds(raw.reportedStalls).length > 0
-      ? { reportedStalls: conversationIds(raw.reportedStalls).slice(-SEAT_TICK_REPORTED_STALLS_LIMIT) }
+      ? { reportedStalls: conversationIds(raw.reportedStalls) }
       : {}),
   };
 }
