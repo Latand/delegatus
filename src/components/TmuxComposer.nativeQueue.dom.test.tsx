@@ -749,8 +749,9 @@ test("the composer budgets itself against the conversation, so the queue has roo
 
   /* A card, so the desktop form: the phone's is `bounded-mobile-composer`. */
   expect(form.getAttribute("data-testid")).toBeNull();
-  /* A share of the card, and a floor of it left for the transcript. */
-  expect(form.className).toContain("max-h-[min(60%,calc(100%_-_15rem))]");
+  /* The share the transcript's 60% floor leaves the card (2026-10-11); the
+     measured budget refines it once the box is laid out. */
+  expect(form.className).toContain("max-h-[40%]");
   /* And the queue is inside that budget, which is what makes it the part that
      gives room back. */
   expect(form.querySelector('[data-testid="native-queue-panel"]')).not.toBeNull();

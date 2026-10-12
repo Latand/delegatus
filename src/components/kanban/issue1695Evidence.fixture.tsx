@@ -491,10 +491,10 @@ function structuredSnapshot() {
       capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
     }, ...(SEAT_NOISE || FIRST_MESSAGE ? [{
       conversationId: orchestrator.conversationId, sessionKey: { engine: orchestrator.engine, sessionId: `${orchestrator.name}-session` }, hostKind: orchestrator.engine === "codex" ? "codex-app-server" : "claude-broker", host: "hosted",
-      turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
+      turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: seatUndelivered(), accountId: "default",
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: orchestrator.path,
       capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
-    }] : []), ...(STREAMING ? files.filter((file) => file.activity === "live" && file.path !== searchVer2.path).map((file) => ({
+    }] : []), ...(STREAMING || SEAT_UNDELIVERED ? files.filter((file) => file.activity === "live" && file.path !== searchVer2.path && (STREAMING || file === exportImpl)).map((file) => ({
       conversationId: file.conversationId, sessionKey: { engine: file.engine, sessionId: `${file.name}-session` }, hostKind: "claude-broker", host: "hosted",
       turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: file.path,
@@ -544,6 +544,29 @@ const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", 
   plan: { current: "Watching the search fix" },
   ...(SEAT_HEAD ? { model: "claude-opus-4-5-1m", ctx: { usedTokens: 520_825, windowTokens: 1_000_000, pct: 52, confidence: "exact" } } : {}),
 })));
+
+/* `&undelivered=N` (2026-10-11): the seat's composer holds N sends the host refused, the newest one
+   with its arrival unconfirmed, so the undelivered chip and its list can be measured in the seat; and
+   t-export's implementer runs on a structured host mid-turn, so its agent window shows the agent's
+   controls in the composer's bottom row. */
+const SEAT_UNDELIVERED = Math.max(0, Number(new URLSearchParams(location.search).get("undelivered") ?? 0));
+const SEAT_UNDELIVERED_TEXT = [
+  "Check why the search lane has been stuck for two hours.",
+  "One more: the composer prototypes are needed today.",
+  "Something broke again after the deploy, look at the logs.",
+];
+let seatUndeliveredReceipts: Record<string, unknown>[] | null = null;
+function seatUndelivered(): Record<string, unknown>[] {
+  return seatUndeliveredReceipts ??= Array.from({ length: SEAT_UNDELIVERED }, (_, index) => {
+    const unconfirmed = index === SEAT_UNDELIVERED - 1 && SEAT_UNDELIVERED > 1;
+    return {
+      operationId: `seat-undelivered-${index}`, idempotencyKey: `seat-undelivered-key-${index}`, conversationId: orchestrator.conversationId,
+      kind: "send", status: unconfirmed ? "uncertain" : "failed", text: SEAT_UNDELIVERED_TEXT[index % SEAT_UNDELIVERED_TEXT.length],
+      at: iso(300 - index * 60), admittedAt: iso(320 - index * 60), revision: 1,
+      ...(unconfirmed ? { resend: "verify-first", reason: "recipient evidence unavailable" } : { reason: "dead-host" }),
+    };
+  });
+}
 
 /* The seat-panel noise cases (docs/design/seat-panel-noise.md). The launch facts are what the board's
    projection hands the panel: a launch the runtime is still recovering carries no reason, a stopped one

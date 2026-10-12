@@ -11,7 +11,7 @@
  */
 
 import { ChevronDown, ChevronUp } from "@/components/icons";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 
 import { ownMessageRows } from "@/components/feed/scrollMemory";
 import { useLocale } from "@/lib/i18n";
@@ -27,8 +27,13 @@ const RELEASING_INPUTS = ["wheel", "touchstart", "pointerdown", "keydown"] as co
 
 export interface OwnStepsFeed {
   scroller: RefObject<HTMLDivElement | null>;
-  /** The slot the pane keeps for the row. Null: this feed offers no steps. */
+  /** Where the navigator draws: the slot the pane keeps for the row, or the
+      composer's own bottom row when its composer is on screen. Null: this
+      feed offers no steps. */
   mount: HTMLElement | null;
+  /** The pane Alt+arrow belongs to, when the navigator draws somewhere
+      narrower than the pane (the composer's row); the mount's parent else. */
+  keyRoot?: HTMLElement | null;
   /** The conversation being read; what is held for one is never shown for another. */
   identity: string | null;
   phone: boolean;
@@ -329,17 +334,21 @@ export function useOwnMessageSteps(feed: OwnStepsFeed): OwnSteps {
 
   const shown = enabled && offered !== null && offered.identity === feed.identity && offered.offered;
   const mount = feed.mount;
+  const keyRoot = feed.keyRoot ?? null;
   useEffect(() => {
     if (!shown || !mount) return;
-    return registerKeyTarget({ root: () => mount.parentElement, step });
-  }, [shown, mount, step]);
+    return registerKeyTarget({ root: () => keyRoot ?? mount.parentElement, step });
+  }, [shown, mount, keyRoot, step]);
 
   return { shown, step, release, subscribe, read };
 }
 
 const STEP_BUTTON = "inline-flex h-full min-w-11 items-center justify-center gap-1 rounded-[8px] text-label font-semibold text-secondary hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 disabled:opacity-40";
+const COMPACT_STEP = "inline-flex h-full items-center justify-center text-secondary hover:bg-sunken hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 disabled:opacity-40 disabled:hover:bg-transparent";
 
-function StepButton({ direction, state, onStep, phone }: { direction: -1 | 1; state: StepState; onStep: (direction: -1 | 1) => void; phone: boolean }) {
+/** One arrow: the row's labelled button, or the composer row's bare arrow
+    (`compact`), which keeps the same name, keys and focus. */
+function StepButton({ direction, state, onStep, phone, compact = false }: { direction: -1 | 1; state: StepState; onStep: (direction: -1 | 1) => void; phone: boolean; compact?: boolean }) {
   const { t } = useLocale();
   const Icon = direction < 0 ? ChevronUp : ChevronDown;
   const label = t(direction < 0 ? "feed.ownPrevious" : "feed.ownNext");
@@ -364,25 +373,25 @@ function StepButton({ direction, state, onStep, phone }: { direction: -1 | 1; st
       disabled={disabled}
       onFocus={() => { focused.current = true; }}
       onBlur={(event) => { if (!event.currentTarget.disabled || event.relatedTarget) focused.current = false; }}
-      className={`${STEP_BUTTON} ${phone ? "flex-1 px-1" : "shrink-0 whitespace-nowrap px-2"}`}
+      className={compact ? `${COMPACT_STEP} ${phone ? "w-11" : "w-7"}` : `${STEP_BUTTON} ${phone ? "flex-1 px-1" : "shrink-0 whitespace-nowrap px-2"}`}
       onClick={() => onStep(direction)}
     >
       <Icon className="h-3.5 w-3.5" aria-hidden />
-      <span className={phone ? "min-w-0 whitespace-normal break-words leading-3" : undefined}>
-        {t(direction < 0 ? "feed.ownPreviousShort" : "feed.ownNextShort")}
-      </span>
+      {compact ? null : (
+        <span className={phone ? "min-w-0 whitespace-normal break-words leading-3" : undefined}>
+          {t(direction < 0 ? "feed.ownPreviousShort" : "feed.ownNextShort")}
+        </span>
+      )}
     </button>
   );
 }
 
 /**
  * The row itself: 36 px and its top border on the desktop, 44 px and its
- * border on the phone. `wayBack` is the feed's "to latest" control while the
- * phone needs both, so the two share this one row; its cell is
- * kept on the phone at the tail too, and the step buttons never move.
+ * border on the phone — the navigator's place in a pane that has no composer.
  * The row draws itself again on a scroll; the feed around it does not.
  */
-export function OwnMessageStepRow({ steps, phone, wayBack }: { steps: OwnSteps; phone: boolean; wayBack?: ReactNode }) {
+export function OwnMessageStepRow({ steps, phone }: { steps: OwnSteps; phone: boolean }) {
   const { t } = useLocale();
   const state = useSyncExternalStore(steps.subscribe, steps.read, steps.read);
   return (
@@ -391,7 +400,6 @@ export function OwnMessageStepRow({ steps, phone, wayBack }: { steps: OwnSteps; 
       tabIndex={-1}
       className={`box-content flex shrink-0 items-center border-t border-border ${phone ? "h-11 px-1" : "h-9 justify-center px-2"}`}
     >
-      {phone ? <span aria-hidden className="h-11 w-11 shrink-0" /> : null}
       <div className={`flex h-full items-center justify-center ${phone ? "min-w-0 flex-1 gap-0.5" : "gap-1"}`}>
         <StepButton direction={-1} state={state} onStep={steps.step} phone={phone} />
         <span
@@ -404,7 +412,40 @@ export function OwnMessageStepRow({ steps, phone, wayBack }: { steps: OwnSteps; 
         </span>
         <StepButton direction={1} state={state} onStep={steps.step} phone={phone} />
       </div>
-      {phone ? <span className="flex h-11 w-11 shrink-0 items-center justify-center">{wayBack}</span> : null}
+    </div>
+  );
+}
+
+/**
+ * The navigator in the composer's own row (operator, 2026-10-11): «mine 4/4»
+ * between the two arrows, one segmented control the height of the row's other
+ * controls — 28 px on the desktop's bottom row, a 44 px target on the phone.
+ * The arrows keep the row's accessible names and keep the focus in the pane
+ * when a step disables them; the count keeps its own name. The outline is an
+ * inset ring, so the arrows have the control's whole height.
+ */
+export function OwnMessageStepControl({ steps, phone }: { steps: OwnSteps; phone: boolean }) {
+  const { t } = useLocale();
+  const state = useSyncExternalStore(steps.subscribe, steps.read, steps.read);
+  return (
+    <div
+      data-own-steps="composer"
+      tabIndex={-1}
+      className={`inline-flex shrink-0 items-stretch overflow-hidden rounded-control bg-card ring-1 ring-inset ring-border ${phone ? "h-11" : "h-7"}`}
+    >
+      <StepButton direction={-1} state={state} onStep={steps.step} phone={phone} compact />
+      <span className="inline-flex items-center gap-1 border-x border-border px-2 text-label font-semibold text-secondary">
+        <span aria-hidden className="@max-[36rem]:hidden">{t("feed.ownMine")}</span>
+        <span
+          data-own-step-control="count"
+          aria-label={t(state.olderUnloaded ? "feed.ownCountOlder" : "feed.ownCount", { position: state.position, total: state.total })}
+          title="Alt+↑ / Alt+↓"
+          className="whitespace-nowrap tabular-nums"
+        >
+          {stepCountLabel(state)}
+        </span>
+      </span>
+      <StepButton direction={1} state={state} onStep={steps.step} phone={phone} compact />
     </div>
   );
 }

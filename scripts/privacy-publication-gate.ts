@@ -1224,6 +1224,47 @@ function normalizedSensitiveText(text: string): { compact: string; error: boolea
   };
 }
 
+export function fingerprintWindowDigest(window: string): string {
+  return Bun.CryptoHasher.hash("sha256", window, "hex");
+}
+
+/** Read every UTF-16 window, reusing only proven negative windows/blocks. */
+export function matchesFingerprintWindows(text: string, length: number, hashes: ReadonlySet<string>): boolean {
+  const lastStart = text.length - length;
+  if (lastStart < 0) return false;
+  const rejected = new Set<string>();
+  const blocks = new Set<string>();
+  let blockCharacters = 0;
+  const blockCacheCharacters = 16_000_000;
+  const windowCapacity = Math.min(262_144, Math.floor(4_000_000 / length));
+  let separator = text.indexOf("\0");
+  for (let start = 0; start <= lastStart;) {
+    // Restart block alignment after a view separator so repeated canonical
+    // views reuse their interiors. Include length - 1 following characters:
+    // windows crossing a separator or a block boundary are still read exactly.
+    const end = Math.min(start + 16_384, lastStart + 1, separator < 0 ? Infinity : separator + 1);
+    const block = text.slice(start, end + length - 1);
+    if (!blocks.has(block)) {
+      for (let index = 0; index < end - start; index += 1) {
+        const window = block.slice(index, index + length);
+        if (rejected.has(window)) continue;
+        if (hashes.has(fingerprintWindowDigest(window))) return true;
+        if (rejected.size === windowCapacity) rejected.clear();
+        rejected.add(window);
+      }
+      if (blockCharacters + block.length > blockCacheCharacters) {
+        blocks.clear();
+        blockCharacters = 0;
+      }
+      blocks.add(block);
+      blockCharacters += block.length;
+    }
+    if (end === separator + 1) separator = text.indexOf("\0", end);
+    start = end;
+  }
+  return false;
+}
+
 const fingerprintPlans = new Map<boolean, { raw: string[]; hashed: Map<number, Set<string>> }>();
 
 function matchesKnownFingerprint(text: string, exactOnly = false): boolean {
@@ -1257,18 +1298,7 @@ function matchesKnownFingerprint(text: string, exactOnly = false): boolean {
   }
   if (plan.raw.some((raw) => text.includes(raw))) return true;
   for (const [length, hashes] of plan.hashed) {
-    if (length > text.length) continue;
-    // Repeated large fixtures need not hash the same nonmatching window
-    // thousands of times. Bound the cache; every distinct window is still read.
-    const rejected = new Set<string>();
-    for (let index = 0; index <= text.length - length; index += 1) {
-      const window = text.slice(index, index + length);
-      if (rejected.has(window)) continue;
-      const digest = createHash("sha256").update(window).digest("hex");
-      if (hashes.has(digest)) return true;
-      if (rejected.size === 4096) rejected.clear();
-      rejected.add(window);
-    }
+    if (matchesFingerprintWindows(text, length, hashes)) return true;
   }
   return false;
 }
