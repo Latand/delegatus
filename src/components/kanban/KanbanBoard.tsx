@@ -2165,12 +2165,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [menu]);
   /* Skip or Retry pressed as a link on the stop's entry: the menu row's request, with Skip held for its receipt. */
   const answerLane = useCallback((cardId: string, pipeline: Pipeline, answer: LaneAnswerItem) => {
-    const card = cardsById.get(cardId);
+    /* Read through the ref: a handler that follows the card list would re-render every card on each catalog answer. */
+    const card = cardsByIdRef.current.get(cardId);
     startPipelineAction(
       { pipelineId: pipeline.id, title: card ? (card.titlePending ? t("kanban.untitled") : card.title) : pipeline.task, action: answer.action, stageId: answer.stageId, stageName: answer.stageName, expectedAttempt: answer.expectedAttempt },
       { hold: heldAnswer(answer) },
     );
-  }, [cardsById, startPipelineAction, t]);
+  }, [startPipelineAction, t]);
   /* «Answer» on a closed card (§4.3) goes where the answer is given: the
      decision form, the asking conversation, or the lane's menu. */
   const answerCard = useCallback((card: KanbanCardModel, state: CardState, anchor: HTMLElement) => {
