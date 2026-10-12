@@ -295,6 +295,8 @@ export function MobileConversationMenu({
                 label={t("mobile2.chat.menuCompact")}
                 disabled={controls.compact.state === "disabled" || actions.compactBusy}
                 trailing={ctxLeft !== null ? t("mobile2.meter.left", { left: ctxLeft }) : controls.compact.state === "disabled" ? t(controls.compact.reason) : undefined}
+                /* A refusal reason is a whole clause: the label keeps its width and the clause wraps. */
+                trailingShrinks={ctxLeft === null && controls.compact.state === "disabled"}
                 onSelect={() => actions.compact({ immediate: true })}
                 attrs={{ "data-mobile2-menu-row": "compact" }}
               />

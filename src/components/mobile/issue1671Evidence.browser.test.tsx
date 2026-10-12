@@ -9856,6 +9856,8 @@ function readMenuSurface(name: string | null, probeScroll: boolean) {
   const body = sheet?.querySelector<HTMLElement>("[data-mobile2-sheet-body]") ?? null;
   const offenders: string[] = [];
   let phraseOver = 0;
+  let labelCut = 0;
+  let retryOffset = 0;
   if (sheet) {
     const edge = sheet.getBoundingClientRect();
     const held = (node: Element) => {
@@ -9881,6 +9883,18 @@ function readMenuSurface(name: string | null, probeScroll: boolean) {
       range.selectNodeContents(phrase);
       for (const rect of range.getClientRects()) phraseOver = Math.max(phraseOver, rect.right - edge.right);
     }
+    /* A refused row names its action in full: its label is not cut, and the reason beside it wraps. */
+    const compactLabel = sheet.querySelector('[data-mobile2-menu-row="compact"]')?.querySelector<HTMLElement>(":scope > span:not(:first-child)");
+    if (compactLabel) labelCut = Math.max(0, compactLabel.scrollWidth - compactLabel.clientWidth);
+    /* The retry link starts where the share row's text starts. */
+    const shareRow = sheet.querySelector("[data-share-project]");
+    const retry = shareRow?.nextElementSibling;
+    const shareLabel = shareRow?.querySelector("span");
+    if (retry instanceof HTMLButtonElement && shareLabel) {
+      const range = document.createRange();
+      range.selectNodeContents(retry);
+      retryOffset = Math.abs(range.getBoundingClientRect().left - shareLabel.getBoundingClientRect().left);
+    }
   }
   return {
     sheet: sheet !== null,
@@ -9889,6 +9903,8 @@ function readMenuSurface(name: string | null, probeScroll: boolean) {
     inner: window.innerWidth,
     bodyOver: body ? body.scrollWidth - body.clientWidth : 0,
     phraseOver,
+    labelCut,
+    retryOffset,
     offenders: offenders.slice(0, 6),
   };
 }
@@ -10018,6 +10034,8 @@ describe("phone ⋯ menus", () => {
       if (reading.scrollX !== 0) problems.push(`scrollX reads ${reading.scrollX}`);
       if (reading.bodyOver !== 0) problems.push(`the sheet body scrolls ${reading.bodyOver}px sideways`);
       if (reading.phraseOver > 0.5) problems.push(`the state phrase passes the sheet by ${reading.phraseOver}px`);
+      if (reading.labelCut > 0.5) problems.push(`the Compact label is cut by ${reading.labelCut}px`);
+      if (reading.retryOffset > 0.5) problems.push(`the retry link starts ${reading.retryOffset}px from the share row's text`);
       if (reading.offenders.length) problems.push(`past the sheet's edge: ${reading.offenders.join(" | ")}`);
       return problems;
     };

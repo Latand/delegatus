@@ -35,6 +35,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -45,6 +47,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -55,6 +59,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -65,6 +71,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -75,6 +83,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -85,6 +95,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -95,6 +107,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -105,6 +119,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -115,6 +131,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -125,6 +143,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -135,12 +155,14 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
-        "opening": 77,
+        "opening": 71,
         "closing": 79,
         "worstDocument": 0,
         "worstBody": 0
@@ -161,6 +183,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -171,6 +195,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -181,6 +207,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -191,6 +219,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -201,6 +231,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -211,6 +243,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -221,6 +255,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -231,6 +267,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -241,6 +279,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -251,6 +291,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -261,13 +303,15 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
-        "opening": 79,
-        "closing": 79,
+        "opening": 77,
+        "closing": 77,
         "worstDocument": 0,
         "worstBody": 0
       }
@@ -287,6 +331,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -297,6 +343,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -307,6 +355,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -317,6 +367,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -327,6 +379,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -337,6 +391,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -347,6 +403,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -357,6 +415,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -367,6 +427,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -377,6 +439,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -387,12 +451,14 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
-        "opening": 78,
+        "opening": 77,
         "closing": 79,
         "worstDocument": 0,
         "worstBody": 0
@@ -413,6 +479,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -423,6 +491,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -433,6 +503,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -443,6 +515,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -453,6 +527,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -463,6 +539,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -473,6 +551,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -483,6 +563,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -493,6 +575,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -503,6 +587,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -513,12 +599,14 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
-        "opening": 79,
+        "opening": 78,
         "closing": 79,
         "worstDocument": 0,
         "worstBody": 0
@@ -539,6 +627,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -549,6 +639,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -559,6 +651,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -569,6 +663,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -579,6 +675,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -589,6 +687,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -599,6 +699,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -609,6 +711,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -619,6 +723,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -629,6 +735,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -639,12 +747,14 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
-        "opening": 77,
+        "opening": 70,
         "closing": 79,
         "worstDocument": 0,
         "worstBody": 0
@@ -665,6 +775,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -675,6 +787,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -685,6 +799,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -695,6 +811,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -705,6 +823,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -715,6 +835,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -725,6 +847,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -735,6 +859,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -745,6 +871,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -755,6 +883,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -765,12 +895,14 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
-        "opening": 79,
+        "opening": 76,
         "closing": 79,
         "worstDocument": 0,
         "worstBody": 0
@@ -791,6 +923,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -801,6 +935,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -811,6 +947,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -821,6 +959,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -831,6 +971,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -841,6 +983,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -851,6 +995,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -861,6 +1007,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -871,6 +1019,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -881,6 +1031,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -891,12 +1043,14 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
-        "opening": 78,
+        "opening": 74,
         "closing": 79,
         "worstDocument": 0,
         "worstBody": 0
@@ -917,6 +1071,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -927,6 +1083,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -937,6 +1095,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -947,6 +1107,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -957,6 +1119,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -967,6 +1131,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -977,6 +1143,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -987,6 +1155,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -997,6 +1167,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -1007,6 +1179,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -1017,12 +1191,14 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
-        "opening": 78,
+        "opening": 77,
         "closing": 79,
         "worstDocument": 0,
         "worstBody": 0
@@ -4755,6 +4931,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -4765,12 +4943,14 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
-        "opening": 79,
+        "opening": 77,
         "closing": 79,
         "worstDocument": 0,
         "worstBody": 0
@@ -4791,6 +4971,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -4801,13 +4983,15 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
         "opening": 79,
-        "closing": 74,
+        "closing": 77,
         "worstDocument": 0,
         "worstBody": 0
       }
@@ -4827,6 +5011,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -4837,12 +5023,14 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
-        "opening": 79,
+        "opening": 78,
         "closing": 79,
         "worstDocument": 0,
         "worstBody": 0
@@ -4863,6 +5051,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -4873,13 +5063,15 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
-        "opening": 79,
-        "closing": 79,
+        "opening": 76,
+        "closing": 78,
         "worstDocument": 0,
         "worstBody": 0
       }
@@ -4899,6 +5091,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -4909,12 +5103,14 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
-        "opening": 79,
+        "opening": 78,
         "closing": 79,
         "worstDocument": 0,
         "worstBody": 0
@@ -4935,6 +5131,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -4945,12 +5143,14 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
-        "opening": 79,
+        "opening": 74,
         "closing": 79,
         "worstDocument": 0,
         "worstBody": 0
@@ -4971,6 +5171,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -4981,6 +5183,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
@@ -5007,6 +5211,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -5017,6 +5223,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
@@ -5331,6 +5539,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -5341,12 +5551,14 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
-        "opening": 78,
+        "opening": 79,
         "closing": 80,
         "worstDocument": 0,
         "worstBody": 0
@@ -5367,6 +5579,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -5377,6 +5591,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
@@ -5403,6 +5619,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -5413,12 +5631,14 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
-        "opening": 79,
+        "opening": 78,
         "closing": 79,
         "worstDocument": 0,
         "worstBody": 0
@@ -5439,6 +5659,8 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -5449,13 +5671,15 @@
           "inner": 390,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
         "opening": 79,
-        "closing": 80,
+        "closing": 79,
         "worstDocument": 0,
         "worstBody": 0
       }
@@ -5475,6 +5699,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -5485,12 +5711,14 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
-        "opening": 79,
+        "opening": 78,
         "closing": 80,
         "worstDocument": 0,
         "worstBody": 0
@@ -5511,6 +5739,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -5521,12 +5751,14 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
-        "opening": 79,
+        "opening": 77,
         "closing": 80,
         "worstDocument": 0,
         "worstBody": 0
@@ -5547,6 +5779,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -5557,13 +5791,15 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
       "skipped": [],
       "frames": {
         "opening": 79,
-        "closing": 80,
+        "closing": 79,
         "worstDocument": 0,
         "worstBody": 0
       }
@@ -5583,6 +5819,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         },
         {
@@ -5593,6 +5831,8 @@
           "inner": 360,
           "bodyOver": 0,
           "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
           "offenders": []
         }
       ],
