@@ -11,11 +11,16 @@ import {
 import { DEPUTY_CONVERSATION_CLOSED, deputyDeliveryRefusal } from "@/lib/orchestrator/deputies";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { dispatchStructuredControl } from "@/lib/runtime/structuredControls";
+import type { PendingQuestion } from "@/lib/types";
+
+import { nativeAnswerResolution, type NativeAnswerInput } from "./nativeAnswer";
 
 /* `permission` answers a structured host's pending tool permission request
-   (#2215). `dialog-key` stays the terminal-dialog control: a structured host
-   has no terminal to press a key in, so it keeps refusing it. */
-export const CONVERSATION_ACTIONS = ["interrupt", "kill", "resume", "compact", "dialog-key", "permission"] as const;
+   (#2215), and `answer` its pending native question or plan, named by the
+   request id the board shows (docs/design/attention-auto-resolve.md).
+   `dialog-key` stays the terminal-dialog control: a structured host has no
+   terminal to press a key in, so it keeps refusing it. */
+export const CONVERSATION_ACTIONS = ["interrupt", "kill", "resume", "compact", "dialog-key", "permission", "answer"] as const;
 export type ConversationAction = typeof CONVERSATION_ACTIONS[number];
 
 export type ConversationActionRequest = {
@@ -32,8 +37,11 @@ export type ConversationActionRequest = {
   question?: unknown;
   /** `permission` only: allow once or deny. */
   decision?: string;
-  /** `permission` only: the request to answer; the oldest pending one when absent. */
+  /** `permission`: the request to answer; the oldest pending one when absent.
+      `answer`: the pending question or plan's id, required. */
   requestId?: string;
+  /** `answer` only: the chosen options, a free answer, or a plan's approval. */
+  answer?: NativeAnswerInput;
 };
 
 type ConversationActionBody =
@@ -57,6 +65,15 @@ export interface ConversationActionDependencies {
   resumeConversation: typeof resumeConversation;
   compactConversation: typeof compactConversation;
   answerDialogKey: typeof answerDialogKey;
+  /** The conversation's current native question or plan, read from its
+      transcript, or null when none is pending. */
+  pendingQuestion?(transcriptPath: string): Promise<PendingQuestion | null>;
+}
+
+async function currentPendingQuestion(transcriptPath: string): Promise<PendingQuestion | null> {
+  const [{ listFiles }, { pendingQuestionFor }] = await Promise.all([import("@/lib/scanner"), import("@/lib/scanner/questions")]);
+  const entry = (await listFiles()).find((item) => item.path === transcriptPath);
+  return entry ? pendingQuestionFor(entry) : null;
 }
 
 const productionDependencies: ConversationActionDependencies = {
@@ -68,6 +85,7 @@ const productionDependencies: ConversationActionDependencies = {
   resumeConversation,
   compactConversation,
   answerDialogKey,
+  pendingQuestion: currentPendingQuestion,
 };
 
 function failure(error: string, status: number): ConversationActionResult {
@@ -135,6 +153,8 @@ export async function applyConversationAction(
     };
   }
 
+  if (request.action === "answer") return await answerNativeQuestion(request, conversation?.id ?? request.conversationId, transcriptPath, dependencies);
+
   if (dependencies.structuredEnabled()) {
     const structured = await dependencies.dispatchStructuredControl({
       path: transcriptPath,
@@ -171,4 +191,43 @@ export async function applyConversationAction(
     request.label,
     request.question,
   ));
+}
+
+/**
+ * Answers the conversation's pending native question or plan, named by its
+ * id: the seat answers a worker's question this way, on the exact request its
+ * wake showed it (docs/design/attention-auto-resolve.md, acceptance 3). A
+ * question that changed or was answered meanwhile is refused, so an answer
+ * never lands on a request the caller did not read.
+ */
+async function answerNativeQuestion(
+  request: ConversationActionRequest,
+  conversationId: string,
+  transcriptPath: string | undefined,
+  dependencies: ConversationActionDependencies,
+): Promise<ConversationActionResult> {
+  const requestId = request.requestId?.trim();
+  if (!requestId) return failure("answer names the question it answers: pass requestId, the reason id the wake or the read showed", 400);
+  if (!transcriptPath) return failure("conversationId or transcriptPath is required", 400);
+  const pending = await (dependencies.pendingQuestion ?? currentPendingQuestion)(transcriptPath);
+  if (!pending || pending.toolUseId !== requestId) {
+    return failure("that question is not pending on this conversation; it was answered, withdrawn or replaced by a newer one", 409);
+  }
+  const answer = nativeAnswerResolution(pending, request.answer ?? {});
+  if ("error" in answer) return failure(answer.error, 400);
+  const structured = dependencies.structuredEnabled()
+    ? await dependencies.dispatchStructuredControl({
+        path: transcriptPath,
+        conversationId,
+        action: "answer",
+        operationId: request.operationId,
+        requestId,
+        resolution: answer.resolution,
+        ...(request.actor ? { actor: request.actor } : {}),
+      })
+    : null;
+  if (!structured) {
+    return failure("no structured host holds this conversation; a terminal-hosted question is answered with dialog-key", 409);
+  }
+  return structured;
 }

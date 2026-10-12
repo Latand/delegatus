@@ -11,7 +11,7 @@ import type { FileEntry } from "@/lib/types";
 import { buildAttentionQueue } from "../attention";
 import { buildMobileAttentionQueue } from "./attentionQueue";
 import { MobileAttentionSheet } from "./MobileAttentionSheet";
-import { needsYouLaneLine } from "./needsYouPanel";
+import { laneOperatorAsk } from "./operatorAsk";
 
 const t: TFunction = (key, params) => translate("en", key, params);
 
@@ -109,19 +109,20 @@ test("the sheet lists conversations and needs_decision pipelines as one list und
   const rows = qa(host, "[data-attention-row]");
   expect(rows.map((row) => row.getAttribute("data-mobile2-go"))).toEqual([null, "chat", "chat"]);
   expect(rows[1]!.textContent).toContain("Implement the export endpoint");
-  expect(rows[1]!.querySelector("[data-attention-decision]")!.textContent).toBe("a question");
+  /* What it asks and what happens next (docs/design/attention-auto-resolve.md). */
+  expect(rows[1]!.querySelector("[data-attention-decision]")!.textContent).toBe(t("needs.ask.question"));
   expect(rows[1]!.textContent).toContain("9m");
   expect(rows[1]!.textContent).toContain("gpt-5.6");
   expect(rows[1]!.querySelector('[data-mobile2-engine="codex"]')).not.toBeNull();
-  expect(rows[2]!.querySelector("[data-attention-decision]")!.textContent).toBe("plan approval");
+  expect(rows[2]!.querySelector("[data-attention-decision]")!.textContent).toBe(t("needs.ask.plan"));
   /* The lane row reads the desktop panel's words for the same lane
-     (`needsYouLaneLine`); its wait gives way to an ellipsis, its age never does. */
+     (`laneOperatorAsk`), wrapped whole; the age stays on the meta line. */
   expect(rows[0]!.getAttribute("data-mobile2-pipeline-row")).toBe("pipeline_atlas_p2");
   expect(rows[0]!.textContent).toContain("Fast conversation switching");
   const laneLine = rows[0]!.querySelector("[data-attention-decision]")!;
-  expect(laneLine.textContent).toBe(needsYouLaneLine(t, PIPELINES.find((pipeline) => pipeline.id === "pipeline_atlas_p2")!));
-  expect(laneLine.className).toContain("truncate");
-  expect(laneLine.className).not.toContain("shrink-0");
+  expect(laneLine.textContent).toBe(laneOperatorAsk(t, PIPELINES.find((pipeline) => pipeline.id === "pipeline_atlas_p2")!).sentence);
+  expect(laneLine.className).not.toContain("truncate");
+  expect(laneLine.className).toContain("[overflow-wrap:anywhere]");
   const laneAge = rows[0]!.querySelector("[data-attention-age]")!;
   /* The desktop panel's words for the same wait (`fmtAge`), minutes up to 90. */
   expect(laneAge.textContent).toBe("60m ago");
@@ -233,7 +234,7 @@ test("the × closes through the host", () => {
   expect(closed).toBe(1);
 });
 
-test("a permission row puts its long headline on a truncated line of its own and keeps the age on the meta line (#2215)", () => {
+test("a permission row says what it would run and what each answer does, wrapped on its own line, and keeps the age on the meta line (#2215)", () => {
   const command = "rm -rf $R/home $R/*.json";
   const reason = "Dangerous rm operation on possibly-empty variable path: $R/*.json in `rm -rf $R/home $R/*.json` (rewrite it as \"${R:?}\"/*.json or use a literal path)";
   const file = conversation("/p/scratch.jsonl", "Clear the scratch tree", NOW - 180, {
@@ -243,11 +244,10 @@ test("a permission row puts its long headline on a truncated line of its own and
   const host = mount(<MobileAttentionSheet entries={buildMobileAttentionQueue(buildAttentionQueue([file], NOW, PROJECT), [])} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} />);
   const row = q(host, "[data-attention-row]")!;
   const decision = row.querySelector("[data-attention-decision]")!;
-  expect(decision.textContent).toBe(`permission: Bash: ${command} — ${reason}`);
-  /* Its own line, allowed to shrink and ending in an ellipsis, beside no meta. */
-  expect(decision.className).toContain("truncate");
-  expect(decision.className).toContain("min-w-0");
-  expect(decision.className).not.toContain("shrink-0");
+  expect(decision.textContent).toBe(t("needs.ask.permissionNamed", { request: `Bash: ${command} — ${reason}` }));
+  /* Its own line, wrapped rather than cut, beside no meta. */
+  expect(decision.className).not.toContain("truncate");
+  expect(decision.className).toContain("[overflow-wrap:anywhere]");
   const age = row.querySelector("[data-attention-age]")!;
   expect(age.textContent).toBe("3m ago");
   expect(age.parentElement!.contains(decision)).toBe(false);
@@ -275,7 +275,7 @@ test("an agent that asked the operator in prose is a row with its role, its own 
   expect(row.querySelector("[data-role-tag]")!.textContent).toBe("Architect");
   expect(row.textContent).toContain("Export formats");
   const decision = row.querySelector("[data-attention-decision]")!;
-  expect(decision.textContent).toBe(`asks you: ${gist}`);
+  expect(decision.textContent).toBe(t("needs.ask.askNamed", { ask: gist }));
   /* The sentence has its own line; the age stays on the meta line. */
   const age = row.querySelector("[data-attention-age]")!;
   expect(age.textContent).toBe("7m ago");
@@ -296,7 +296,7 @@ test("an ask row never mounts permission buttons, even when its conversation als
   file.pendingPermission = { id: "request-9", tool: "Bash", command: "ls", reason: "", reasonType: "safetyCheck", since: new Date((NOW - 60) * 1000).toISOString() } as FileEntry["pendingPermission"];
   const host = mount(<MobileAttentionSheet entries={queue} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} />);
   const row = q(host, `[data-needs-you-row="${askId}"]`)!;
-  expect(row.querySelector("[data-attention-decision]")!.textContent).toBe("asks you: Fold the presets into one button?");
+  expect(row.querySelector("[data-attention-decision]")!.textContent).toBe(t("needs.ask.askNamed", { ask: "Fold the presets into one button?" }));
   expect(q(host, "[data-permission-actions]")).toBeNull();
   expect(q(host, "[data-permission-allow]")).toBeNull();
 });
