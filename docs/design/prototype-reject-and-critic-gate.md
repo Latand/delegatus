@@ -181,9 +181,11 @@ filled button becomes «↺ Відхилити й переробити» in the 
 
 ### Variant 3 — «Жоден не підходить» у рядку вибору
 
-The «Обрано» line gains a toggle right after its words, «☐ Жоден не
-підходить», drawn as a control (text and border at full contrast). Ticking it
-clears the variant ticks, the line reads «Обрано жоден · далі раунд 2», the
+The «Обрано» line gains a toggle, «☐ Жоден не підходить», drawn as a control
+(text and border at full contrast): after the hint while nothing is ticked,
+after the chips once a variant is. Ticking it clears the variant ticks and the
+line reads «Обрано ☑ Жоден не підходить далі раунд 2» («none» is said once, by
+the ticked toggle; the words after it give only the consequence), the
 variants cannot be ticked until it is unticked, the field becomes the
 corrections field and the one filled button becomes «↺ Відхилити й
 переробити» in the caution tone.
@@ -354,11 +356,13 @@ line a Ukrainian reading in the uk frames. Measured geometry is in
 `docs/design/prototype-reject-prototype/geometry.json`.
 
 Frames: `variant-N-<1440|390>-<uk|en>-<light|dark>-<state>`, states `rest`
-(opened), `armed` (corrections written), `asks` (reject pressed with no
-words), `rejected` (after the rejection). `rest` and `armed` come in
-`-original` (today, unchanged) / `-changed` pairs. Each frame carries a printed
-band naming its variant, viewport, language, theme and state. 3 variants × 2
-widths × 2 languages × 2 themes × 4 states = 96 frames, plus 48 originals.
+(opened), `picked` (variant 1 ticked, the field empty), `pickedtext` (variant 1
+ticked, a comment written), `armed` (corrections written), `asks` (reject
+pressed with no words), `rejected` (after the rejection). `rest` and `armed`
+come in `-original` (today, unchanged) / `-changed` pairs. Each frame carries a
+printed band naming its variant, viewport, language, theme and state. 3
+variants × 2 widths × 2 languages × 2 themes × 6 states = 144 frames, plus 48
+originals.
 `REJECT_ONLY=<pattern>` renders a subset and merges its geometry.
 
 **Measured** (geometry.json, every frame, zero failures): no two footer
@@ -371,7 +375,12 @@ corrections placeholder names dictation and the microphone has the text's
 colour; in variant 1 the unavailable save is never filled; no variant can be
 ticked in the redo mode of variants 2 and 3; variant 3's toggle stands 12 px
 after the words before it, on the «Обрано» row, at both widths and in both
-languages.
+languages. With a variant ticked (`picked`, `pickedtext`) the save is the one
+filled action and can be pressed, variant 1's rejection has another fill than
+the save, the footer lists exactly one ticked variant and its name is not cut.
+In variant 3's redo mode the words beside the ticked toggle hold no «жоден» or
+"none". On the phone the switch's sides and the toggle are as tall as the
+actions under them (44 px).
 
 The footer's height against today's (uk, light):
 
@@ -379,11 +388,13 @@ The footer's height against today's (uk, light):
 |---|---|---|---|
 | today | 111 px | 148 px | 176 px |
 | Variant 1 | 111 px | 152 px (+4) | 176 px |
-| Variant 2 | 121 px (+10) | 170 px (+22) | 198 px (+22) |
-| Variant 3 | 115 px (+4) | 164 px (+16) | 192 px (+16) |
+| Variant 2 | 121 px (+10) | 174 px (+26) | 202 px (+26) |
+| Variant 3 | 115 px (+4) | 168 px (+20) | 196 px (+20) |
 
 On the phone the footer is the space the stage loses. Variant 1 now costs
-none; variants 2 and 3 cost the taller touch row their control needs.
+none; variants 2 and 3 cost the 44 px touch row their control needs. With a
+variant ticked, variant 2 lists it on a row of its own under the switch at 390
+(200 px); variants 1 and 3 keep their opened height (152 and 168 px).
 
 **After the visual critic** (round 1 judged the 144 frames of the first
 render and failed all three variants; every finding is fixed in this render):
@@ -405,6 +416,20 @@ render and failed all three variants; every finding is fixed in this render):
 - Variant 3: the toggle follows the «Обрано» words at the left at both widths
   and in both languages, drawn at full contrast in both themes.
 - The rejected footer names round 2 once.
+
+Round 4 of the critic passed those and asked for three more, fixed in the
+current render:
+
+- Every variant is framed with a variant ticked, with an empty field and with
+  a comment (`picked`, `pickedtext`). Variant 1: «Зберегти вибір» in the accent
+  beside the tinted «Відхилити й переробити» (the state question 2 is about).
+  Variant 2: «Обрано» with the chip beside the switch on the desktop, under it
+  on the phone. Variant 3: «Обрано», the chip and the unticked toggle on one
+  row at 390.
+- Variant 3 says «none» once in the redo mode: the ticked toggle, then «далі
+  раунд 2».
+- On the phone the switch's sides and the toggle are 44 px tall, as the
+  actions are; the actions keep one row.
 
 Notes that remain: in variant 1 the corrections placeholder shows before the
 operator has decided anything, because without a tick the field can only feed

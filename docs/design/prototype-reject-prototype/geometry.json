@@ -87,6 +87,12 @@
       "micColor": "rgb(108, 108, 121)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -180,6 +186,12 @@
       "micColor": "rgb(108, 108, 121)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -287,6 +299,238 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": false,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(255, 244, 221)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-1-1440-uk-light-picked": {
+      "footer": [
+        734,
+        111
+      ],
+      "canvasHeight": 510,
+      "controls": [
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            743.8,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            875.8,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            920.8,
+            801,
+            75.5,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeReject",
+          "label": "Відхилити й переробити",
+          "box": [
+            1004.4,
+            801,
+            192.6,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            1205,
+            801,
+            118,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Огляд прототипів · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 912.8,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 920.8,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": "rgb(255, 244, 221)",
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-1-1440-uk-light-pickedtext": {
+      "footer": [
+        734,
+        111
+      ],
+      "canvasHeight": 510,
+      "controls": [
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            743.8,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            875.8,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            920.8,
+            801,
+            75.5,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeReject",
+          "label": "Відхилити й переробити",
+          "box": [
+            1004.4,
+            801,
+            192.6,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            1205,
+            801,
+            118,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Огляд прототипів · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 912.8,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 920.8,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": "rgb(255, 244, 221)",
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -394,6 +638,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": false,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(138, 95, 0)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -506,6 +756,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": false,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(255, 244, 221)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -532,6 +788,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -653,6 +915,266 @@
       "micColor": "rgb(108, 108, 121)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-2-1440-uk-light-picked": {
+      "footer": [
+        724,
+        121
+      ],
+      "canvasHeight": 500,
+      "controls": [
+        {
+          "what": "mode-choose",
+          "label": "Беру варіант",
+          "box": [
+            120,
+            740,
+            114.4,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "mode-redo",
+          "label": "Переробити все",
+          "box": [
+            234.4,
+            740,
+            131.8,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            944.4,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            1076.4,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            1121.4,
+            801,
+            75.5,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            1205,
+            801,
+            118,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Огляд прототипів · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1113.4,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1121.4,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-2-1440-uk-light-pickedtext": {
+      "footer": [
+        724,
+        121
+      ],
+      "canvasHeight": 500,
+      "controls": [
+        {
+          "what": "mode-choose",
+          "label": "Беру варіант",
+          "box": [
+            120,
+            740,
+            114.4,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "mode-redo",
+          "label": "Переробити все",
+          "box": [
+            234.4,
+            740,
+            131.8,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            944.4,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            1076.4,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            1121.4,
+            801,
+            75.5,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            1205,
+            801,
+            118,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Огляд прототипів · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1113.4,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1121.4,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -774,6 +1296,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(138, 95, 0)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 1,
       "noneGap": null,
@@ -900,6 +1428,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(138, 95, 0)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 1,
       "noneGap": null,
@@ -926,6 +1460,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -1033,6 +1573,238 @@
       "micColor": "rgb(108, 108, 121)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": 12,
+      "noneSameRow": true,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-3-1440-uk-light-picked": {
+      "footer": [
+        730,
+        115
+      ],
+      "canvasHeight": 506,
+      "controls": [
+        {
+          "what": "prototypeRejectNone",
+          "label": "Жоден не підходить",
+          "box": [
+            308.9,
+            743,
+            154,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            944.4,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            1076.4,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            1121.4,
+            801,
+            75.5,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            1205,
+            801,
+            118,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Огляд прототипів · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1113.4,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1121.4,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": 12,
+      "noneSameRow": true,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-3-1440-uk-light-pickedtext": {
+      "footer": [
+        730,
+        115
+      ],
+      "canvasHeight": 506,
+      "controls": [
+        {
+          "what": "prototypeRejectNone",
+          "label": "Жоден не підходить",
+          "box": [
+            308.9,
+            743,
+            154,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            944.4,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            1076.4,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            1121.4,
+            801,
+            75.5,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            1205,
+            801,
+            118,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Огляд прототипів · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1113.4,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1121.4,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": 12,
@@ -1052,7 +1824,7 @@
           "what": "prototypeRejectNone",
           "label": "Жоден не підходить",
           "box": [
-            288.1,
+            170.6,
             743,
             154,
             28
@@ -1140,6 +1912,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(138, 95, 0)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": "далі раунд 2",
       "choosable": 0,
       "actionRows": 1,
       "noneGap": 12,
@@ -1159,7 +1937,7 @@
           "what": "prototypeRejectNone",
           "label": "Жоден не підходить",
           "box": [
-            288.1,
+            170.6,
             722.5,
             154,
             28
@@ -1252,6 +2030,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(138, 95, 0)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": "далі раунд 2",
       "choosable": 0,
       "actionRows": 1,
       "noneGap": 12,
@@ -1278,6 +2062,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -1371,6 +2161,12 @@
       "micColor": "rgb(139, 139, 152)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -1464,6 +2260,12 @@
       "micColor": "rgb(139, 139, 152)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -1571,6 +2373,238 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": false,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(43, 35, 18)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-1-1440-uk-dark-picked": {
+      "footer": [
+        734,
+        111
+      ],
+      "canvasHeight": 510,
+      "controls": [
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            743.8,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            875.8,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            920.8,
+            801,
+            75.5,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeReject",
+          "label": "Відхилити й переробити",
+          "box": [
+            1004.4,
+            801,
+            192.6,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            1205,
+            801,
+            118,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Огляд прототипів · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 912.8,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 920.8,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": "rgb(43, 35, 18)",
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-1-1440-uk-dark-pickedtext": {
+      "footer": [
+        734,
+        111
+      ],
+      "canvasHeight": 510,
+      "controls": [
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            743.8,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            875.8,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            920.8,
+            801,
+            75.5,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeReject",
+          "label": "Відхилити й переробити",
+          "box": [
+            1004.4,
+            801,
+            192.6,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            1205,
+            801,
+            118,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Огляд прототипів · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 912.8,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 920.8,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": "rgb(43, 35, 18)",
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -1678,6 +2712,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": false,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(224, 174, 69)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -1790,6 +2830,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": false,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(43, 35, 18)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -1816,6 +2862,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -1937,6 +2989,266 @@
       "micColor": "rgb(139, 139, 152)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-2-1440-uk-dark-picked": {
+      "footer": [
+        724,
+        121
+      ],
+      "canvasHeight": 500,
+      "controls": [
+        {
+          "what": "mode-choose",
+          "label": "Беру варіант",
+          "box": [
+            120,
+            740,
+            114.4,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "mode-redo",
+          "label": "Переробити все",
+          "box": [
+            234.4,
+            740,
+            131.8,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            944.4,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            1076.4,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            1121.4,
+            801,
+            75.5,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            1205,
+            801,
+            118,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Огляд прототипів · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1113.4,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1121.4,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-2-1440-uk-dark-pickedtext": {
+      "footer": [
+        724,
+        121
+      ],
+      "canvasHeight": 500,
+      "controls": [
+        {
+          "what": "mode-choose",
+          "label": "Беру варіант",
+          "box": [
+            120,
+            740,
+            114.4,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "mode-redo",
+          "label": "Переробити все",
+          "box": [
+            234.4,
+            740,
+            131.8,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            944.4,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            1076.4,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            1121.4,
+            801,
+            75.5,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            1205,
+            801,
+            118,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Огляд прототипів · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1113.4,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1121.4,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -2058,6 +3370,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(224, 174, 69)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 1,
       "noneGap": null,
@@ -2184,6 +3502,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(224, 174, 69)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 1,
       "noneGap": null,
@@ -2210,6 +3534,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -2317,6 +3647,238 @@
       "micColor": "rgb(139, 139, 152)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": 12,
+      "noneSameRow": true,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-3-1440-uk-dark-picked": {
+      "footer": [
+        730,
+        115
+      ],
+      "canvasHeight": 506,
+      "controls": [
+        {
+          "what": "prototypeRejectNone",
+          "label": "Жоден не підходить",
+          "box": [
+            308.9,
+            743,
+            154,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            944.4,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            1076.4,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            1121.4,
+            801,
+            75.5,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            1205,
+            801,
+            118,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Огляд прототипів · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1113.4,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1121.4,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": 12,
+      "noneSameRow": true,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-3-1440-uk-dark-pickedtext": {
+      "footer": [
+        730,
+        115
+      ],
+      "canvasHeight": 506,
+      "controls": [
+        {
+          "what": "prototypeRejectNone",
+          "label": "Жоден не підходить",
+          "box": [
+            308.9,
+            743,
+            154,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            944.4,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            1076.4,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            1121.4,
+            801,
+            75.5,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            1205,
+            801,
+            118,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Огляд прототипів · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1113.4,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1121.4,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": 12,
@@ -2336,7 +3898,7 @@
           "what": "prototypeRejectNone",
           "label": "Жоден не підходить",
           "box": [
-            288.1,
+            170.6,
             743,
             154,
             28
@@ -2424,6 +3986,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(224, 174, 69)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": "далі раунд 2",
       "choosable": 0,
       "actionRows": 1,
       "noneGap": 12,
@@ -2443,7 +4011,7 @@
           "what": "prototypeRejectNone",
           "label": "Жоден не підходить",
           "box": [
-            288.1,
+            170.6,
             722.5,
             154,
             28
@@ -2536,6 +4104,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(224, 174, 69)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": "далі раунд 2",
       "choosable": 0,
       "actionRows": 1,
       "noneGap": 12,
@@ -2562,6 +4136,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -2655,6 +4235,12 @@
       "micColor": "rgb(108, 108, 121)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -2748,6 +4334,12 @@
       "micColor": "rgb(108, 108, 121)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -2855,6 +4447,238 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": false,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(255, 244, 221)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-1-1440-en-light-picked": {
+      "footer": [
+        734,
+        111
+      ],
+      "canvasHeight": 510,
+      "controls": [
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            844.6,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            976.6,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            1021.6,
+            801,
+            52,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeReject",
+          "label": "Reject and redo",
+          "box": [
+            1081.6,
+            801,
+            136,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            1225.6,
+            801,
+            97.4,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Prototype review · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1013.6,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1021.6,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": "rgb(255, 244, 221)",
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-1-1440-en-light-pickedtext": {
+      "footer": [
+        734,
+        111
+      ],
+      "canvasHeight": 510,
+      "controls": [
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            844.6,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            976.6,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            1021.6,
+            801,
+            52,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeReject",
+          "label": "Reject and redo",
+          "box": [
+            1081.6,
+            801,
+            136,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            1225.6,
+            801,
+            97.4,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Prototype review · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1013.6,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1021.6,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": "rgb(255, 244, 221)",
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -2962,6 +4786,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": false,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(138, 95, 0)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -3074,6 +4904,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": false,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(255, 244, 221)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -3100,6 +4936,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -3221,6 +5063,266 @@
       "micColor": "rgb(108, 108, 121)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-2-1440-en-light-picked": {
+      "footer": [
+        724,
+        121
+      ],
+      "canvasHeight": 500,
+      "controls": [
+        {
+          "what": "mode-choose",
+          "label": "Take a variant",
+          "box": [
+            120,
+            740,
+            116.6,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "mode-redo",
+          "label": "Redo all",
+          "box": [
+            236.6,
+            740,
+            86.8,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            988.6,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            1120.6,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            1165.6,
+            801,
+            52,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            1225.6,
+            801,
+            97.4,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Prototype review · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1157.6,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1165.6,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-2-1440-en-light-pickedtext": {
+      "footer": [
+        724,
+        121
+      ],
+      "canvasHeight": 500,
+      "controls": [
+        {
+          "what": "mode-choose",
+          "label": "Take a variant",
+          "box": [
+            120,
+            740,
+            116.6,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "mode-redo",
+          "label": "Redo all",
+          "box": [
+            236.6,
+            740,
+            86.8,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            988.6,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            1120.6,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            1165.6,
+            801,
+            52,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            1225.6,
+            801,
+            97.4,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Prototype review · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1157.6,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1165.6,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -3342,6 +5444,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(138, 95, 0)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 1,
       "noneGap": null,
@@ -3468,6 +5576,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(138, 95, 0)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 1,
       "noneGap": null,
@@ -3494,6 +5608,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -3601,6 +5721,238 @@
       "micColor": "rgb(108, 108, 121)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": 12,
+      "noneSameRow": true,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-3-1440-en-light-picked": {
+      "footer": [
+        730,
+        115
+      ],
+      "canvasHeight": 506,
+      "controls": [
+        {
+          "what": "prototypeRejectNone",
+          "label": "None fits",
+          "box": [
+            267.5,
+            743,
+            91.1,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            988.6,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            1120.6,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            1165.6,
+            801,
+            52,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            1225.6,
+            801,
+            97.4,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Prototype review · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1157.6,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1165.6,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": 12,
+      "noneSameRow": true,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-3-1440-en-light-pickedtext": {
+      "footer": [
+        730,
+        115
+      ],
+      "canvasHeight": 506,
+      "controls": [
+        {
+          "what": "prototypeRejectNone",
+          "label": "None fits",
+          "box": [
+            267.5,
+            743,
+            91.1,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            988.6,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            1120.6,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            1165.6,
+            801,
+            52,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            1225.6,
+            801,
+            97.4,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Prototype review · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1157.6,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1165.6,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": 12,
@@ -3620,7 +5972,7 @@
           "what": "prototypeRejectNone",
           "label": "None fits",
           "box": [
-            315.3,
+            169.3,
             743,
             91.1,
             28
@@ -3708,6 +6060,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(138, 95, 0)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": "round 2 comes next",
       "choosable": 0,
       "actionRows": 1,
       "noneGap": 12,
@@ -3727,7 +6085,7 @@
           "what": "prototypeRejectNone",
           "label": "None fits",
           "box": [
-            315.3,
+            169.3,
             722.5,
             91.1,
             28
@@ -3820,6 +6178,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(138, 95, 0)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": "round 2 comes next",
       "choosable": 0,
       "actionRows": 1,
       "noneGap": 12,
@@ -3846,6 +6210,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -3939,6 +6309,12 @@
       "micColor": "rgb(139, 139, 152)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -4032,6 +6408,12 @@
       "micColor": "rgb(139, 139, 152)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -4139,6 +6521,238 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": false,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(43, 35, 18)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-1-1440-en-dark-picked": {
+      "footer": [
+        734,
+        111
+      ],
+      "canvasHeight": 510,
+      "controls": [
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            844.6,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            976.6,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            1021.6,
+            801,
+            52,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeReject",
+          "label": "Reject and redo",
+          "box": [
+            1081.6,
+            801,
+            136,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            1225.6,
+            801,
+            97.4,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Prototype review · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1013.6,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1021.6,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": "rgb(43, 35, 18)",
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-1-1440-en-dark-pickedtext": {
+      "footer": [
+        734,
+        111
+      ],
+      "canvasHeight": 510,
+      "controls": [
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            844.6,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            976.6,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            1021.6,
+            801,
+            52,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeReject",
+          "label": "Reject and redo",
+          "box": [
+            1081.6,
+            801,
+            136,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            1225.6,
+            801,
+            97.4,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Prototype review · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1013.6,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1021.6,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": "rgb(43, 35, 18)",
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -4246,6 +6860,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": false,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(224, 174, 69)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -4358,6 +6978,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": false,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(43, 35, 18)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -4384,6 +7010,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -4505,6 +7137,266 @@
       "micColor": "rgb(139, 139, 152)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-2-1440-en-dark-picked": {
+      "footer": [
+        724,
+        121
+      ],
+      "canvasHeight": 500,
+      "controls": [
+        {
+          "what": "mode-choose",
+          "label": "Take a variant",
+          "box": [
+            120,
+            740,
+            116.6,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "mode-redo",
+          "label": "Redo all",
+          "box": [
+            236.6,
+            740,
+            86.8,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            988.6,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            1120.6,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            1165.6,
+            801,
+            52,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            1225.6,
+            801,
+            97.4,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Prototype review · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1157.6,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1165.6,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-2-1440-en-dark-pickedtext": {
+      "footer": [
+        724,
+        121
+      ],
+      "canvasHeight": 500,
+      "controls": [
+        {
+          "what": "mode-choose",
+          "label": "Take a variant",
+          "box": [
+            120,
+            740,
+            116.6,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "mode-redo",
+          "label": "Redo all",
+          "box": [
+            236.6,
+            740,
+            86.8,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            988.6,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            1120.6,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            1165.6,
+            801,
+            52,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            1225.6,
+            801,
+            97.4,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Prototype review · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1157.6,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1165.6,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": null,
@@ -4626,6 +7518,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(224, 174, 69)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 1,
       "noneGap": null,
@@ -4752,6 +7650,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(224, 174, 69)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 1,
       "noneGap": null,
@@ -4778,6 +7682,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -4885,6 +7795,238 @@
       "micColor": "rgb(139, 139, 152)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": 12,
+      "noneSameRow": true,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-3-1440-en-dark-picked": {
+      "footer": [
+        730,
+        115
+      ],
+      "canvasHeight": 506,
+      "controls": [
+        {
+          "what": "prototypeRejectNone",
+          "label": "None fits",
+          "box": [
+            267.5,
+            743,
+            91.1,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            988.6,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            1120.6,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            1165.6,
+            801,
+            52,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            1225.6,
+            801,
+            97.4,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Prototype review · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1157.6,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1165.6,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 4,
+      "actionRows": 1,
+      "noneGap": 12,
+      "noneSameRow": true,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-3-1440-en-dark-pickedtext": {
+      "footer": [
+        730,
+        115
+      ],
+      "canvasHeight": 506,
+      "controls": [
+        {
+          "what": "prototypeRejectNone",
+          "label": "None fits",
+          "box": [
+            267.5,
+            743,
+            91.1,
+            28
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            128,
+            784,
+            988.6,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            1120.6,
+            796,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            1165.6,
+            801,
+            52,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            1225.6,
+            801,
+            97.4,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Prototype review · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 117,
+        "top": 779,
+        "right": 1157.6,
+        "bottom": 833
+      },
+      "actions": {
+        "left": 1165.6,
+        "top": 801,
+        "right": 1323,
+        "bottom": 833
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 4,
       "actionRows": 1,
       "noneGap": 12,
@@ -4904,7 +8046,7 @@
           "what": "prototypeRejectNone",
           "label": "None fits",
           "box": [
-            315.3,
+            169.3,
             743,
             91.1,
             28
@@ -4992,6 +8134,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(224, 174, 69)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": "round 2 comes next",
       "choosable": 0,
       "actionRows": 1,
       "noneGap": 12,
@@ -5011,7 +8159,7 @@
           "what": "prototypeRejectNone",
           "label": "None fits",
           "box": [
-            315.3,
+            169.3,
             722.5,
             91.1,
             28
@@ -5104,6 +8252,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(224, 174, 69)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": "round 2 comes next",
       "choosable": 0,
       "actionRows": 1,
       "noneGap": 12,
@@ -5130,6 +8284,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -5223,6 +8383,12 @@
       "micColor": "rgb(108, 108, 121)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -5316,6 +8482,12 @@
       "micColor": "rgb(108, 108, 121)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -5423,6 +8595,238 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": false,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(255, 244, 221)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-1-390-uk-light-picked": {
+      "footer": [
+        690,
+        148
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            737,
+            306,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            56.4,
+            794,
+            65.5,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeReject",
+          "label": "Переробити",
+          "box": [
+            130,
+            794,
+            118,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            256,
+            794,
+            118,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Макет результатів пошуку · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 732,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": "rgb(255, 244, 221)",
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-1-390-uk-light-pickedtext": {
+      "footer": [
+        686,
+        152
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            733,
+            306,
+            48
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            56.4,
+            794,
+            65.5,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeReject",
+          "label": "Переробити",
+          "box": [
+            130,
+            794,
+            118,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            256,
+            794,
+            118,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Макет результатів пошуку · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 728,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": "rgb(255, 244, 221)",
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -5530,6 +8934,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": false,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(138, 95, 0)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -5642,6 +9052,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": false,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(255, 244, 221)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -5668,6 +9084,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -5678,8 +9100,8 @@
     },
     "variant-2-390-uk-light-rest-changed": {
       "footer": [
-        668,
-        170
+        664,
+        174
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -5688,9 +9110,9 @@
           "label": "Беру варіант",
           "box": [
             19,
-            681,
+            677,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -5702,9 +9124,9 @@
           "label": "Переробити все",
           "box": [
             195,
-            681,
+            677,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -5789,6 +9211,12 @@
       "micColor": "rgb(108, 108, 121)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -5797,10 +9225,10 @@
       "offScreen": [],
       "pageErrors": []
     },
-    "variant-2-390-uk-light-armed-changed": {
+    "variant-2-390-uk-light-picked": {
       "footer": [
-        640,
-        198
+        637.5,
+        200.5
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -5809,9 +9237,9 @@
           "label": "Беру варіант",
           "box": [
             19,
-            653,
+            650.5,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -5823,9 +9251,263 @@
           "label": "Переробити все",
           "box": [
             195,
-            653,
+            650.5,
             176,
-            40
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            737,
+            306,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            172.4,
+            794,
+            75.5,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            256,
+            794,
+            118,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Макет результатів пошуку · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 732,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-2-390-uk-light-pickedtext": {
+      "footer": [
+        633.5,
+        204.5
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "mode-choose",
+          "label": "Беру варіант",
+          "box": [
+            19,
+            646.5,
+            176,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "mode-redo",
+          "label": "Переробити все",
+          "box": [
+            195,
+            646.5,
+            176,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            733,
+            306,
+            48
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            172.4,
+            794,
+            75.5,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            256,
+            794,
+            118,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Макет результатів пошуку · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 728,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-2-390-uk-light-armed-changed": {
+      "footer": [
+        636,
+        202
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "mode-choose",
+          "label": "Беру варіант",
+          "box": [
+            19,
+            649,
+            176,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "mode-redo",
+          "label": "Переробити все",
+          "box": [
+            195,
+            649,
+            176,
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -5910,6 +9592,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(138, 95, 0)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 1,
       "noneGap": null,
@@ -5920,8 +9608,8 @@
     },
     "variant-2-390-uk-light-asks": {
       "footer": [
-        639.5,
-        198.5
+        635.5,
+        202.5
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -5930,9 +9618,9 @@
           "label": "Беру варіант",
           "box": [
             19,
-            652.5,
+            648.5,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -5944,9 +9632,9 @@
           "label": "Переробити все",
           "box": [
             195,
-            652.5,
+            648.5,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -6036,6 +9724,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(138, 95, 0)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 1,
       "noneGap": null,
@@ -6062,6 +9756,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -6072,8 +9772,8 @@
     },
     "variant-3-390-uk-light-rest-changed": {
       "footer": [
-        674,
-        164
+        670,
+        168
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -6082,9 +9782,9 @@
           "label": "Жоден не підходить",
           "box": [
             131.9,
-            684,
+            680,
             154,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -6169,6 +9869,238 @@
       "micColor": "rgb(108, 108, 121)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": 12,
+      "noneSameRow": true,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-3-390-uk-light-picked": {
+      "footer": [
+        670,
+        168
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "prototypeRejectNone",
+          "label": "Жоден не підходить",
+          "box": [
+            207.9,
+            680,
+            154,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            737,
+            306,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            172.4,
+            794,
+            75.5,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            256,
+            794,
+            118,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Макет результатів пошуку · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 732,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": 12,
+      "noneSameRow": true,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-3-390-uk-light-pickedtext": {
+      "footer": [
+        666,
+        172
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "prototypeRejectNone",
+          "label": "Жоден не підходить",
+          "box": [
+            207.9,
+            676,
+            154,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            733,
+            306,
+            48
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            172.4,
+            794,
+            75.5,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            256,
+            794,
+            118,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Макет результатів пошуку · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 728,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": 12,
@@ -6179,8 +10111,8 @@
     },
     "variant-3-390-uk-light-armed-changed": {
       "footer": [
-        646,
-        192
+        642,
+        196
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -6188,10 +10120,10 @@
           "what": "prototypeRejectNone",
           "label": "Жоден не підходить",
           "box": [
-            187.1,
-            656,
+            69.6,
+            652,
             154,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -6276,6 +10208,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(138, 95, 0)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": "далі раунд 2",
       "choosable": 0,
       "actionRows": 1,
       "noneGap": 12,
@@ -6286,8 +10224,8 @@
     },
     "variant-3-390-uk-light-asks": {
       "footer": [
-        645.5,
-        192.5
+        641.5,
+        196.5
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -6295,10 +10233,10 @@
           "what": "prototypeRejectNone",
           "label": "Жоден не підходить",
           "box": [
-            187.1,
-            655.5,
+            69.6,
+            651.5,
             154,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -6388,6 +10326,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(138, 95, 0)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": "далі раунд 2",
       "choosable": 0,
       "actionRows": 1,
       "noneGap": 12,
@@ -6414,6 +10358,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -6507,6 +10457,12 @@
       "micColor": "rgb(139, 139, 152)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -6600,6 +10556,12 @@
       "micColor": "rgb(139, 139, 152)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -6707,6 +10669,238 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": false,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(43, 35, 18)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-1-390-uk-dark-picked": {
+      "footer": [
+        690,
+        148
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            737,
+            306,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            56.4,
+            794,
+            65.5,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeReject",
+          "label": "Переробити",
+          "box": [
+            130,
+            794,
+            118,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            256,
+            794,
+            118,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Макет результатів пошуку · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 732,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": "rgb(43, 35, 18)",
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-1-390-uk-dark-pickedtext": {
+      "footer": [
+        686,
+        152
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            733,
+            306,
+            48
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            56.4,
+            794,
+            65.5,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeReject",
+          "label": "Переробити",
+          "box": [
+            130,
+            794,
+            118,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            256,
+            794,
+            118,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Макет результатів пошуку · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 728,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": "rgb(43, 35, 18)",
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -6814,6 +11008,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": false,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(224, 174, 69)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -6926,6 +11126,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": false,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(43, 35, 18)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -6952,6 +11158,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -6962,8 +11174,8 @@
     },
     "variant-2-390-uk-dark-rest-changed": {
       "footer": [
-        668,
-        170
+        664,
+        174
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -6972,9 +11184,9 @@
           "label": "Беру варіант",
           "box": [
             19,
-            681,
+            677,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -6986,9 +11198,9 @@
           "label": "Переробити все",
           "box": [
             195,
-            681,
+            677,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -7073,6 +11285,12 @@
       "micColor": "rgb(139, 139, 152)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -7081,10 +11299,10 @@
       "offScreen": [],
       "pageErrors": []
     },
-    "variant-2-390-uk-dark-armed-changed": {
+    "variant-2-390-uk-dark-picked": {
       "footer": [
-        640,
-        198
+        637.5,
+        200.5
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -7093,9 +11311,9 @@
           "label": "Беру варіант",
           "box": [
             19,
-            653,
+            650.5,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -7107,9 +11325,263 @@
           "label": "Переробити все",
           "box": [
             195,
-            653,
+            650.5,
             176,
-            40
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            737,
+            306,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            172.4,
+            794,
+            75.5,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            256,
+            794,
+            118,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Макет результатів пошуку · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 732,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-2-390-uk-dark-pickedtext": {
+      "footer": [
+        633.5,
+        204.5
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "mode-choose",
+          "label": "Беру варіант",
+          "box": [
+            19,
+            646.5,
+            176,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "mode-redo",
+          "label": "Переробити все",
+          "box": [
+            195,
+            646.5,
+            176,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            733,
+            306,
+            48
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            172.4,
+            794,
+            75.5,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            256,
+            794,
+            118,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Макет результатів пошуку · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 728,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-2-390-uk-dark-armed-changed": {
+      "footer": [
+        636,
+        202
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "mode-choose",
+          "label": "Беру варіант",
+          "box": [
+            19,
+            649,
+            176,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "mode-redo",
+          "label": "Переробити все",
+          "box": [
+            195,
+            649,
+            176,
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -7194,6 +11666,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(224, 174, 69)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 1,
       "noneGap": null,
@@ -7204,8 +11682,8 @@
     },
     "variant-2-390-uk-dark-asks": {
       "footer": [
-        639.5,
-        198.5
+        635.5,
+        202.5
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -7214,9 +11692,9 @@
           "label": "Беру варіант",
           "box": [
             19,
-            652.5,
+            648.5,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -7228,9 +11706,9 @@
           "label": "Переробити все",
           "box": [
             195,
-            652.5,
+            648.5,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -7320,6 +11798,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(224, 174, 69)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 1,
       "noneGap": null,
@@ -7346,6 +11830,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -7356,8 +11846,8 @@
     },
     "variant-3-390-uk-dark-rest-changed": {
       "footer": [
-        674,
-        164
+        670,
+        168
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -7366,9 +11856,9 @@
           "label": "Жоден не підходить",
           "box": [
             131.9,
-            684,
+            680,
             154,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -7453,6 +11943,238 @@
       "micColor": "rgb(139, 139, 152)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": 12,
+      "noneSameRow": true,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-3-390-uk-dark-picked": {
+      "footer": [
+        670,
+        168
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "prototypeRejectNone",
+          "label": "Жоден не підходить",
+          "box": [
+            207.9,
+            680,
+            154,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            737,
+            306,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            172.4,
+            794,
+            75.5,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            256,
+            794,
+            118,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Макет результатів пошуку · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 732,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": 12,
+      "noneSameRow": true,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-3-390-uk-dark-pickedtext": {
+      "footer": [
+        666,
+        172
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "prototypeRejectNone",
+          "label": "Жоден не підходить",
+          "box": [
+            207.9,
+            676,
+            154,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            733,
+            306,
+            48
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Сховати",
+          "box": [
+            172.4,
+            794,
+            75.5,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Зберегти вибір",
+          "box": [
+            256,
+            794,
+            118,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Макет результатів пошуку · Повернути результати пошуку після перебудови індексу",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 728,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "Що змінити або додати…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": 12,
@@ -7463,8 +12185,8 @@
     },
     "variant-3-390-uk-dark-armed-changed": {
       "footer": [
-        646,
-        192
+        642,
+        196
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -7472,10 +12194,10 @@
           "what": "prototypeRejectNone",
           "label": "Жоден не підходить",
           "box": [
-            187.1,
-            656,
+            69.6,
+            652,
             154,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -7560,6 +12282,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(224, 174, 69)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": "далі раунд 2",
       "choosable": 0,
       "actionRows": 1,
       "noneGap": 12,
@@ -7570,8 +12298,8 @@
     },
     "variant-3-390-uk-dark-asks": {
       "footer": [
-        645.5,
-        192.5
+        641.5,
+        196.5
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -7579,10 +12307,10 @@
           "what": "prototypeRejectNone",
           "label": "Жоден не підходить",
           "box": [
-            187.1,
-            655.5,
+            69.6,
+            651.5,
             154,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -7672,6 +12400,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(224, 174, 69)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": "далі раунд 2",
       "choosable": 0,
       "actionRows": 1,
       "noneGap": 12,
@@ -7698,6 +12432,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -7791,6 +12531,12 @@
       "micColor": "rgb(108, 108, 121)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -7884,6 +12630,12 @@
       "micColor": "rgb(108, 108, 121)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -7991,6 +12743,238 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": false,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(255, 244, 221)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-1-390-en-light-picked": {
+      "footer": [
+        690,
+        148
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            737,
+            306,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            142.6,
+            794,
+            42,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeReject",
+          "label": "Redo",
+          "box": [
+            192.6,
+            794,
+            76,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            276.6,
+            794,
+            97.4,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Search results layout · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 732,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": "rgb(255, 244, 221)",
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-1-390-en-light-pickedtext": {
+      "footer": [
+        686,
+        152
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            733,
+            306,
+            48
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            142.6,
+            794,
+            42,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeReject",
+          "label": "Redo",
+          "box": [
+            192.6,
+            794,
+            76,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            276.6,
+            794,
+            97.4,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Search results layout · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 728,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": "rgb(255, 244, 221)",
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -8098,6 +13082,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": false,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(138, 95, 0)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -8210,6 +13200,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": false,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(255, 244, 221)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -8236,6 +13232,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -8246,8 +13248,8 @@
     },
     "variant-2-390-en-light-rest-changed": {
       "footer": [
-        668,
-        170
+        664,
+        174
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -8256,9 +13258,9 @@
           "label": "Take a variant",
           "box": [
             19,
-            681,
+            677,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -8270,9 +13272,9 @@
           "label": "Redo all",
           "box": [
             195,
-            681,
+            677,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -8357,6 +13359,12 @@
       "micColor": "rgb(108, 108, 121)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -8365,10 +13373,10 @@
       "offScreen": [],
       "pageErrors": []
     },
-    "variant-2-390-en-light-armed-changed": {
+    "variant-2-390-en-light-picked": {
       "footer": [
-        640,
-        198
+        637.5,
+        200.5
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -8377,9 +13385,9 @@
           "label": "Take a variant",
           "box": [
             19,
-            653,
+            650.5,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -8391,9 +13399,263 @@
           "label": "Redo all",
           "box": [
             195,
-            653,
+            650.5,
             176,
-            40
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            737,
+            306,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            216.6,
+            794,
+            52,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            276.6,
+            794,
+            97.4,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Search results layout · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 732,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-2-390-en-light-pickedtext": {
+      "footer": [
+        633.5,
+        204.5
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "mode-choose",
+          "label": "Take a variant",
+          "box": [
+            19,
+            646.5,
+            176,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "mode-redo",
+          "label": "Redo all",
+          "box": [
+            195,
+            646.5,
+            176,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            733,
+            306,
+            48
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            216.6,
+            794,
+            52,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            276.6,
+            794,
+            97.4,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Search results layout · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 728,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-2-390-en-light-armed-changed": {
+      "footer": [
+        636,
+        202
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "mode-choose",
+          "label": "Take a variant",
+          "box": [
+            19,
+            649,
+            176,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "mode-redo",
+          "label": "Redo all",
+          "box": [
+            195,
+            649,
+            176,
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -8478,6 +13740,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(138, 95, 0)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 1,
       "noneGap": null,
@@ -8488,8 +13756,8 @@
     },
     "variant-2-390-en-light-asks": {
       "footer": [
-        643.5,
-        194.5
+        639.5,
+        198.5
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -8498,9 +13766,9 @@
           "label": "Take a variant",
           "box": [
             19,
-            656.5,
+            652.5,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -8512,9 +13780,9 @@
           "label": "Redo all",
           "box": [
             195,
-            656.5,
+            652.5,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -8604,6 +13872,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(138, 95, 0)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 1,
       "noneGap": null,
@@ -8630,6 +13904,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -8640,8 +13920,8 @@
     },
     "variant-3-390-en-light-rest-changed": {
       "footer": [
-        674,
-        164
+        670,
+        168
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -8650,9 +13930,9 @@
           "label": "None fits",
           "box": [
             128.2,
-            684,
+            680,
             91.1,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -8737,6 +14017,238 @@
       "micColor": "rgb(108, 108, 121)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": 12,
+      "noneSameRow": true,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-3-390-en-light-picked": {
+      "footer": [
+        670,
+        168
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "prototypeRejectNone",
+          "label": "None fits",
+          "box": [
+            166.5,
+            680,
+            91.1,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            737,
+            306,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            216.6,
+            794,
+            52,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            276.6,
+            794,
+            97.4,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Search results layout · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 732,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": 12,
+      "noneSameRow": true,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-3-390-en-light-pickedtext": {
+      "footer": [
+        666,
+        172
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "prototypeRejectNone",
+          "label": "None fits",
+          "box": [
+            166.5,
+            676,
+            91.1,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            733,
+            306,
+            48
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            216.6,
+            794,
+            52,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            276.6,
+            794,
+            97.4,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Search results layout · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 728,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(108, 108, 121)",
+      "saveFilled": true,
+      "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(90, 81, 224)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": 12,
@@ -8747,8 +14259,8 @@
     },
     "variant-3-390-en-light-armed-changed": {
       "footer": [
-        646,
-        192
+        642,
+        196
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -8756,10 +14268,10 @@
           "what": "prototypeRejectNone",
           "label": "None fits",
           "box": [
-            214.3,
-            656,
+            68.3,
+            652,
             91.1,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -8844,6 +14356,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(138, 95, 0)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": "round 2 comes next",
       "choosable": 0,
       "actionRows": 1,
       "noneGap": 12,
@@ -8854,8 +14372,8 @@
     },
     "variant-3-390-en-light-asks": {
       "footer": [
-        649.5,
-        188.5
+        645.5,
+        192.5
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -8863,10 +14381,10 @@
           "what": "prototypeRejectNone",
           "label": "None fits",
           "box": [
-            214.3,
-            659.5,
+            68.3,
+            655.5,
             91.1,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -8956,6 +14474,12 @@
       "micColor": "rgb(28, 28, 34)",
       "saveFilled": true,
       "textColor": "rgb(28, 28, 34)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(138, 95, 0)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": "round 2 comes next",
       "choosable": 0,
       "actionRows": 1,
       "noneGap": 12,
@@ -8982,6 +14506,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -9075,6 +14605,12 @@
       "micColor": "rgb(139, 139, 152)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -9168,6 +14704,12 @@
       "micColor": "rgb(139, 139, 152)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -9275,6 +14817,238 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": false,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(43, 35, 18)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-1-390-en-dark-picked": {
+      "footer": [
+        690,
+        148
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            737,
+            306,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            142.6,
+            794,
+            42,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeReject",
+          "label": "Redo",
+          "box": [
+            192.6,
+            794,
+            76,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            276.6,
+            794,
+            97.4,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Search results layout · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 732,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": "rgb(43, 35, 18)",
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-1-390-en-dark-pickedtext": {
+      "footer": [
+        686,
+        152
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            733,
+            306,
+            48
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            142.6,
+            794,
+            42,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeReject",
+          "label": "Redo",
+          "box": [
+            192.6,
+            794,
+            76,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            276.6,
+            794,
+            97.4,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Search results layout · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 728,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": "rgb(43, 35, 18)",
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -9382,6 +15156,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": false,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(224, 174, 69)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -9494,6 +15274,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": false,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgba(0, 0, 0, 0)",
+      "rejectBackground": "rgb(43, 35, 18)",
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -9520,6 +15306,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -9530,8 +15322,8 @@
     },
     "variant-2-390-en-dark-rest-changed": {
       "footer": [
-        668,
-        170
+        664,
+        174
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -9540,9 +15332,9 @@
           "label": "Take a variant",
           "box": [
             19,
-            681,
+            677,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -9554,9 +15346,9 @@
           "label": "Redo all",
           "box": [
             195,
-            681,
+            677,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -9641,6 +15433,12 @@
       "micColor": "rgb(139, 139, 152)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": null,
@@ -9649,10 +15447,10 @@
       "offScreen": [],
       "pageErrors": []
     },
-    "variant-2-390-en-dark-armed-changed": {
+    "variant-2-390-en-dark-picked": {
       "footer": [
-        640,
-        198
+        637.5,
+        200.5
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -9661,9 +15459,9 @@
           "label": "Take a variant",
           "box": [
             19,
-            653,
+            650.5,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -9675,9 +15473,263 @@
           "label": "Redo all",
           "box": [
             195,
-            653,
+            650.5,
             176,
-            40
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            737,
+            306,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            216.6,
+            794,
+            52,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            276.6,
+            794,
+            97.4,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Search results layout · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 732,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-2-390-en-dark-pickedtext": {
+      "footer": [
+        633.5,
+        204.5
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "mode-choose",
+          "label": "Take a variant",
+          "box": [
+            19,
+            646.5,
+            176,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "mode-redo",
+          "label": "Redo all",
+          "box": [
+            195,
+            646.5,
+            176,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            733,
+            306,
+            48
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            216.6,
+            794,
+            52,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            276.6,
+            794,
+            97.4,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Search results layout · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 728,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": null,
+      "noneSameRow": null,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-2-390-en-dark-armed-changed": {
+      "footer": [
+        636,
+        202
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "mode-choose",
+          "label": "Take a variant",
+          "box": [
+            19,
+            649,
+            176,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "mode-redo",
+          "label": "Redo all",
+          "box": [
+            195,
+            649,
+            176,
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -9762,6 +15814,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(224, 174, 69)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 1,
       "noneGap": null,
@@ -9772,8 +15830,8 @@
     },
     "variant-2-390-en-dark-asks": {
       "footer": [
-        643.5,
-        194.5
+        639.5,
+        198.5
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -9782,9 +15840,9 @@
           "label": "Take a variant",
           "box": [
             19,
-            656.5,
+            652.5,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -9796,9 +15854,9 @@
           "label": "Redo all",
           "box": [
             195,
-            656.5,
+            652.5,
             176,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -9888,6 +15946,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(224, 174, 69)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 1,
       "noneGap": null,
@@ -9914,6 +15978,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,
@@ -9924,8 +15994,8 @@
     },
     "variant-3-390-en-dark-rest-changed": {
       "footer": [
-        674,
-        164
+        670,
+        168
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -9934,9 +16004,9 @@
           "label": "None fits",
           "box": [
             128.2,
-            684,
+            680,
             91.1,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -10021,6 +16091,238 @@
       "micColor": "rgb(139, 139, 152)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": true,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": 12,
+      "noneSameRow": true,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-3-390-en-dark-picked": {
+      "footer": [
+        670,
+        168
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "prototypeRejectNone",
+          "label": "None fits",
+          "box": [
+            166.5,
+            680,
+            91.1,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            737,
+            306,
+            44
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            216.6,
+            794,
+            52,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            276.6,
+            794,
+            97.4,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Search results layout · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 732,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
+      "choosable": 1,
+      "actionRows": 1,
+      "noneGap": 12,
+      "noneSameRow": true,
+      "cut": [],
+      "offScreen": [],
+      "pageErrors": []
+    },
+    "variant-3-390-en-dark-pickedtext": {
+      "footer": [
+        666,
+        172
+      ],
+      "canvasHeight": 243.8,
+      "controls": [
+        {
+          "what": "prototypeRejectNone",
+          "label": "None fits",
+          "box": [
+            166.5,
+            676,
+            91.1,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeCommentField",
+          "label": null,
+          "box": [
+            27,
+            733,
+            306,
+            48
+          ],
+          "cut": false,
+          "lines": null,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "button",
+          "label": "",
+          "box": [
+            337,
+            749,
+            32,
+            32
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeHide",
+          "label": "Hide",
+          "box": [
+            216.6,
+            794,
+            52,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        },
+        {
+          "what": "prototypeSave",
+          "label": "Save choice",
+          "box": [
+            276.6,
+            794,
+            97.4,
+            44
+          ],
+          "cut": false,
+          "lines": 1,
+          "onScreen": true,
+          "disabled": false
+        }
+      ],
+      "overlaps": [],
+      "sideways": 0,
+      "primaries": 1,
+      "taskLine": "Search results layout · Restore search results after the index rebuild",
+      "needsText": null,
+      "fieldBox": {
+        "left": 16,
+        "top": 728,
+        "right": 374,
+        "bottom": 786
+      },
+      "actions": {
+        "left": 16,
+        "top": 794,
+        "right": 374,
+        "bottom": 838
+      },
+      "placeholder": "What to change or add…",
+      "micColor": "rgb(139, 139, 152)",
+      "saveFilled": true,
+      "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(143, 136, 255)",
+      "rejectBackground": null,
+      "chosenChips": 1,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 1,
       "actionRows": 1,
       "noneGap": 12,
@@ -10031,8 +16333,8 @@
     },
     "variant-3-390-en-dark-armed-changed": {
       "footer": [
-        646,
-        192
+        642,
+        196
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -10040,10 +16342,10 @@
           "what": "prototypeRejectNone",
           "label": "None fits",
           "box": [
-            214.3,
-            656,
+            68.3,
+            652,
             91.1,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -10128,6 +16430,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(224, 174, 69)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": "round 2 comes next",
       "choosable": 0,
       "actionRows": 1,
       "noneGap": 12,
@@ -10138,8 +16446,8 @@
     },
     "variant-3-390-en-dark-asks": {
       "footer": [
-        649.5,
-        188.5
+        645.5,
+        192.5
       ],
       "canvasHeight": 243.8,
       "controls": [
@@ -10147,10 +16455,10 @@
           "what": "prototypeRejectNone",
           "label": "None fits",
           "box": [
-            214.3,
-            659.5,
+            68.3,
+            655.5,
             91.1,
-            40
+            44
           ],
           "cut": false,
           "lines": 1,
@@ -10240,6 +16548,12 @@
       "micColor": "rgb(232, 232, 236)",
       "saveFilled": true,
       "textColor": "rgb(232, 232, 236)",
+      "saveDisabled": false,
+      "saveBackground": "rgb(224, 174, 69)",
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": "round 2 comes next",
       "choosable": 0,
       "actionRows": 1,
       "noneGap": 12,
@@ -10266,6 +16580,12 @@
       "micColor": null,
       "saveFilled": null,
       "textColor": null,
+      "saveDisabled": null,
+      "saveBackground": null,
+      "rejectBackground": null,
+      "chosenChips": 0,
+      "chosenCut": false,
+      "noneLine": null,
       "choosable": 0,
       "actionRows": 0,
       "noneGap": null,

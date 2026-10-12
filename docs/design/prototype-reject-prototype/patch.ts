@@ -49,14 +49,14 @@ const rejectVariant = () => Number((globalThis as { __rejectVariant?: number }).
 const REJECT_WORDS = {
   en: {
     reject: "Reject and redo", rejectShort: "Redo", modeChoose: "Take a variant", modeRedo: "Redo all", mode: "What to do with this round",
-    none: "None fits", noneOn: "none · round {n} comes next", redoField: "Type or dictate what to redo in round {n}…", needsText: "Type or dictate what to redo first",
+    none: "None fits", noneOn: "round {n} comes next", redoField: "Type or dictate what to redo in round {n}…", needsText: "Type or dictate what to redo first",
     rejected: "Rejected", nothingYet: "nothing yet", closest: "closest", sentRejected: "Corrections delivered · the orchestrator is making round {n}",
     savingRejected: "Rejected · delivering the corrections to the orchestrator", redoLine: "No variant is taken. Round {n} will be made from your corrections.",
     roundRejected: "rejected",
   },
   uk: {
     reject: "Відхилити й переробити", rejectShort: "Переробити", modeChoose: "Беру варіант", modeRedo: "Переробити все", mode: "Що зробити з цим раундом",
-    none: "Жоден не підходить", noneOn: "жоден · далі раунд {n}", redoField: "Напишіть або надиктуйте, що переробити в раунді {n}…", needsText: "Спершу напишіть або надиктуйте, що переробити",
+    none: "Жоден не підходить", noneOn: "далі раунд {n}", redoField: "Напишіть або надиктуйте, що переробити в раунді {n}…", needsText: "Спершу напишіть або надиктуйте, що переробити",
     rejected: "Відхилено", nothingYet: "поки нічого", closest: "найближчі", sentRejected: "Поправки доставлено · оркестратор готує раунд {n}",
     savingRejected: "Відхилено · поправки доставляються оркестратору", redoLine: "Жоден варіант не береться. Раунд {n} зроблять за вашими поправками.",
     roundRejected: "відхилено",
@@ -126,7 +126,8 @@ patch(C, [
         </> : <span {...(round.decision.skipped ? { "data-prototype-skipped": "" } : {})} className="text-label font-semibold text-secondary">{t(!hasQuestions ? "proto.chosen" : round.decision.skipped ? "proto.q.skipped" : "proto.q.answered")}</span>}
         {chosenChips(round.decision.chosen)}`],
   ["      {delivery(round.decision.delivery)}\n", "      {delivery(round.decision.delivery, Boolean(round.decision.rejected))}\n"],
-  /* The choice line: today's, variant 2's mode switch, or variant 3's «None fits». */
+  /* The choice line: today's, variant 2's mode switch, or variant 3's «None fits». Ticked, «None fits» is the
+     choice itself, so the words after it say only what comes next. */
   [`      {hasVariants && (!hasQuestions || draft.chosen.length > 0) ? <div className="flex min-h-6 flex-wrap items-center gap-1.5">
         <span className="text-label font-semibold text-secondary">{t("proto.chosen")}</span>
         {draft.chosen.length ? chosenChips(draft.chosen) : <span className="text-label text-muted">{t(phone ? "proto.chooseFirstPhone" : "proto.chooseFirst")}</span>}
@@ -136,7 +137,7 @@ patch(C, [
           {(["choose", "redo"] as const).map((mode) => {
             const on = mode === "redo" ? rejecting : !rejecting;
             return <button key={mode} type="button" role="radio" aria-checked={on} data-prototype-reject-mode={mode} disabled={!canSend}
-              className={\`inline-flex h-7 items-center justify-center gap-1.5 rounded-[5px] px-3 text-label font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:h-10 \${phone ? "flex-1" : ""} \${on ? "bg-card text-primary shadow-1" : "text-secondary hover:text-primary"}\`}
+              className={\`inline-flex h-7 items-center justify-center gap-1.5 rounded-[5px] px-3 text-label font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [@media(pointer:coarse)]:h-11 \${phone ? "flex-1" : ""} \${on ? "bg-card text-primary shadow-1" : "text-secondary hover:text-primary"}\`}
               onClick={() => { setNeedsText(false); setDraft((held) => ({ ...held, reject: mode === "redo", chosen: mode === "redo" ? [] : held.chosen })); }}>
               {mode === "redo" ? <RotateCcw className="h-3.5 w-3.5" aria-hidden /> : <Check className="h-3.5 w-3.5" aria-hidden />}
               {rw(mode === "redo" ? "modeRedo" : "modeChoose")}
@@ -148,14 +149,15 @@ patch(C, [
       </div>
       : hasVariants && (!hasQuestions || draft.chosen.length > 0) ? <div className="flex min-h-6 flex-wrap items-center gap-1.5">
         <span className="text-label font-semibold text-secondary">{t("proto.chosen")}</span>
-        {RV === 3 && rejecting ? <span data-prototype-none-line="" className="text-label font-semibold text-primary">{rw("noneOn")}</span>
+        {RV === 3 && rejecting ? null
           : draft.chosen.length ? chosenChips(draft.chosen) : <span className="text-label text-muted">{RV === 3 && phone ? rw("nothingYet") : t(phone ? "proto.chooseFirstPhone" : "proto.chooseFirst")}</span>}
         {RV === 3 ? <button type="button" role="checkbox" aria-checked={rejecting} data-prototype-reject-none="" disabled={!canSend}
-          className={\`ml-1.5 inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control border px-2.5 text-label font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warning/40 [@media(pointer:coarse)]:h-10 \${rejecting ? "border-warning bg-warning-soft text-warning" : "border-strong bg-card text-primary hover:border-warning hover:text-warning"}\`}
+          className={\`ml-1.5 inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control border px-2.5 text-label font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warning/40 [@media(pointer:coarse)]:h-11 \${rejecting ? "border-warning bg-warning-soft text-warning" : "border-strong bg-card text-primary hover:border-warning hover:text-warning"}\`}
           onClick={() => { setNeedsText(false); setDraft((held) => ({ ...held, reject: !held.reject, chosen: held.reject ? held.chosen : [] })); }}>
           <span aria-hidden className={\`grid h-4 w-4 place-items-center rounded-sm border \${rejecting ? "border-warning bg-warning text-canvas" : "border-strong bg-card"}\`}>{rejecting ? <Check className="h-3 w-3" /> : null}</span>
           {rw("none")}
         </button> : null}
+        {RV === 3 && rejecting ? <span data-prototype-none-line="" className="text-label text-secondary">{rw("noneOn")}</span> : null}
       </div> : null}`],
   /* The field's words follow the reject mode. */
   ["            aria-label={t(\"proto.comment\")}\n            placeholder={t(hasQuestions ? \"proto.q.commentPlaceholder\" : \"proto.commentPlaceholder\")}",

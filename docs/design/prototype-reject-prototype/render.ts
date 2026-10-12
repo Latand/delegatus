@@ -28,15 +28,21 @@ const VARIANTS = [
   { n: 3, name: "«Жоден не підходить» у рядку вибору" },
 ] as const;
 const VIEWPORTS = [{ width: 1440, height: 900, phone: false }, { width: 390, height: 844, phone: true }] as const;
-const STATES = ["rest", "armed", "asks", "rejected"] as const;
+const STATES = ["rest", "picked", "pickedtext", "armed", "asks", "rejected"] as const;
 type State = (typeof STATES)[number];
-const STATE_WORDS: Record<State, string> = { rest: "відкрито", armed: "поправки написано", asks: "відхилення без поправок", rejected: "після відхилення" };
+const STATE_WORDS: Record<State, string> = { rest: "відкрито", picked: "варіант 1 обрано, поле порожнє", pickedtext: "варіант 1 обрано, текст написано", armed: "поправки написано", asks: "відхилення без поправок", rejected: "після відхилення" };
 const PAIRED: readonly State[] = ["rest", "armed"];
+/* The ordinary choose path beside the new control: variant 1 of the round is ticked. */
+const PICKED: readonly State[] = ["picked", "pickedtext"];
 /* REJECT_ONLY=<pattern> renders the frames whose key matches, and merges their geometry into the file. */
 const ONLY = process.env.REJECT_ONLY ? new RegExp(process.env.REJECT_ONLY) : null;
 const CORRECTIONS = {
   uk: "Усі чотири перевантажені. Потрібен один простий список без карток: назва, шлях і дата; відкритий результат праворуч.",
   en: "All four are cluttered. One plain list with no cards: name, path and date, with the opened result on the right.",
+};
+const COMMENT = {
+  uk: "Беру перший, але шлях зробіть сірим і дрібнішим за назву.",
+  en: "Taking the first one, but make the path grey and smaller than the name.",
 };
 
 /* The band printed over each frame: the variant's number and name, the viewport, the language, the theme, the state.
@@ -107,6 +113,13 @@ function measure(page: Page, phone: boolean) {
       /* Whether the save is drawn filled: an unavailable save must not be the brightest control in variant 1. */
       saveFilled: (() => { const save = document.querySelector("[data-prototype-save]"); return save ? !/rgba\(0, 0, 0, 0\)|transparent/.test(getComputedStyle(save).backgroundColor) : null; })(),
       textColor: (() => { const field = document.querySelector("[data-prototype-comment-field]"); return field ? getComputedStyle(field).color : null; })(),
+      /* The save beside the rejection: whether it can be pressed, and the two fills. */
+      saveDisabled: document.querySelector<HTMLButtonElement>("[data-prototype-save]")?.disabled ?? null,
+      saveBackground: (() => { const save = document.querySelector("[data-prototype-save]"); return save ? getComputedStyle(save).backgroundColor : null; })(),
+      rejectBackground: (() => { const reject = document.querySelector("[data-prototype-reject]"); return reject ? getComputedStyle(reject).backgroundColor : null; })(),
+      chosenChips: [...(footer?.querySelectorAll<HTMLElement>("[data-prototype-chosen]") ?? [])].filter((element) => element.getBoundingClientRect().width > 0).length,
+      chosenCut: [...(footer?.querySelectorAll<HTMLElement>("[data-prototype-chosen] > :last-child") ?? [])].some((element) => element.scrollWidth > element.clientWidth),
+      noneLine: document.querySelector("[data-prototype-none-line]")?.textContent ?? null,
       choosable: [...document.querySelectorAll<HTMLButtonElement>("[data-prototype-choose]")].filter((element) => !element.disabled && element.getBoundingClientRect().width > 0).length,
       actionRows: new Set(actionMiddles).size,
       /* Variant 3: how far the toggle stands from the words before it, and whether it shares the «Chosen» row. */
@@ -153,7 +166,13 @@ try {
         }
         await page.waitForSelector("[data-prototype-review] [data-prototype-variant]", { timeout: 15_000 });
         await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
-        if (state !== "rest") {
+        if (PICKED.includes(state)) {
+          await page.locator("[data-prototype-choose]:visible").first().click();
+          if (state === "pickedtext") {
+            await page.locator("[data-prototype-comment-field]").fill(COMMENT[lang]);
+            await page.locator("[data-prototype-comment-field]").blur();
+          }
+        } else if (state !== "rest") {
           if (variant === 2) await page.locator('[data-prototype-reject-mode="redo"]').click();
           if (variant === 3) await page.locator("[data-prototype-reject-none]").click();
           if (state !== "asks") await page.locator("[data-prototype-comment-field]").fill(CORRECTIONS[lang]);
@@ -185,11 +204,26 @@ try {
               if (viewport.phone && needsText.bottom > actions.top) failures.push(`${key}: the «write first» words are under the actions`);
             }
           }
-          const redo = state !== "rejected" && (variant === 1 || state !== "rest");
+          const picked = PICKED.includes(state);
+          const redo = state !== "rejected" && !picked && (variant === 1 || state !== "rest");
           if (redo && state !== "armed" && !/dictate|надиктуйте/.test(reading.placeholder ?? "")) failures.push(`${key}: the field does not name dictation: ${reading.placeholder}`);
           if (redo && reading.micColor !== reading.textColor) failures.push(`${key}: the microphone is ${reading.micColor}, the text ${reading.textColor}`);
-          if (variant === 1 && state !== "rejected" && reading.saveFilled) failures.push(`${key}: the unavailable save is filled beside the rejection`);
+          if (variant === 1 && state !== "rejected" && !picked && reading.saveFilled) failures.push(`${key}: the unavailable save is filled beside the rejection`);
           if (variant !== 1 && (state === "armed" || state === "asks") && reading.choosable > 0) failures.push(`${key}: ${reading.choosable} variants can still be ticked in the redo mode`);
+          /* A ticked variant: the save is the one filled action, it can be pressed, and the rejection is drawn apart from it. */
+          if (picked) {
+            if (!reading.saveFilled || reading.saveDisabled) failures.push(`${key}: the save is not the available filled action (filled ${reading.saveFilled}, disabled ${reading.saveDisabled})`);
+            if (variant === 1 && (!reading.rejectBackground || reading.rejectBackground === reading.saveBackground)) failures.push(`${key}: the rejection is drawn as the save is: ${reading.rejectBackground}`);
+            if (reading.chosenChips !== 1) failures.push(`${key}: ${reading.chosenChips} ticked variants are listed in the footer`);
+            if (reading.chosenCut) failures.push(`${key}: the ticked variant's name is cut`);
+          }
+          /* Variant 3 says «none» once: the ticked chip, with only the consequence after it. */
+          if (variant === 3 && (state === "armed" || state === "asks") && (!reading.noneLine || /none|жоден/i.test(reading.noneLine))) failures.push(`${key}: the words beside «None fits» repeat it: ${reading.noneLine}`);
+          /* On the phone the switch and «None fits» are as tall as the actions under them. */
+          if (viewport.phone && state !== "rejected") {
+            const tall = reading.controls.find((entry) => entry.what === "prototypeSave")?.box[3];
+            for (const entry of reading.controls) if (/^mode-|^prototypeRejectNone$/.test(entry.what) && entry.box[3] !== tall) failures.push(`${key}: ${entry.what} is ${entry.box[3]}px tall beside ${tall}px actions`);
+          }
           if (state !== "rejected" && reading.actionRows !== 1) failures.push(`${key}: the actions take ${reading.actionRows} rows`);
           if (variant === 3 && state !== "rejected" && (reading.noneGap === null || reading.noneGap > 16 || !reading.noneSameRow)) failures.push(`${key}: «None fits» stands ${reading.noneGap}px from the words before it, same row ${reading.noneSameRow}`);
         }
