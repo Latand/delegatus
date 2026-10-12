@@ -23,6 +23,10 @@ import { Z } from "@/components/layers";
  * says which one is open, and the shell renders it last. The receipt slot
  * inside a sheet sits between its body and its footer, the same slot the
  * screen's receipt takes between the body and the dock.
+ *
+ * A `pinned` block stands between the header and the body, outside the body's
+ * scroller, so scrolling the body never carries it away; it bounds and scrolls
+ * its own rows (the needs-you sheet's «Готово», docs/design/done-section.md §4.3).
  */
 
 /** A drag of the handle past this many pixels closes the sheet. */
@@ -50,7 +54,9 @@ export function MobileSheet({
   title,
   extra,
   footer,
+  pinned,
   full = false,
+  titleHidden = false,
   onClose,
   children,
   receiptStore,
@@ -60,8 +66,12 @@ export function MobileSheet({
   /** A header control beside the title (the queue's «Dismiss all», the switcher's «Board ›»). */
   extra?: ReactNode;
   footer?: ReactNode;
+  /** A block pinned above the scrolling body; it caps its own height. */
+  pinned?: ReactNode;
   /** Fullscreen (the prototype review): no handle, no rounded top, the footer at the screen's foot. */
   full?: boolean;
+  /** The title only names the dialog for assistive tech: the body already says what it holds. */
+  titleHidden?: boolean;
   onClose: () => void;
   children: ReactNode;
   /** Tests inject their own receipt store; the app uses the singleton. */
@@ -140,15 +150,17 @@ export function MobileSheet({
           </div>
         )}
         <div className="flex min-h-12 shrink-0 touch-none items-center gap-1 pl-4 pr-1" data-mobile2-sheet-header {...handle}>
-          <h2 className="min-w-0 flex-1 truncate text-title font-semibold text-primary">{title}</h2>
+          <h2 className={titleHidden ? "sr-only" : "min-w-0 flex-1 truncate text-title font-semibold text-primary"}>{title}</h2>
+          {titleHidden ? <span className="flex-1" aria-hidden /> : null}
           {extra}
           <button type="button" className={CLOSE_BUTTON} aria-label={t("mobile2.sheet.close")} data-mobile2-close onClick={onClose}>
             <X className="h-5 w-5" aria-hidden />
           </button>
         </div>
+        {pinned}
         {/* A full sheet's body takes the height the header and the footer leave,
             so the footer stands at the foot of the screen whatever the body holds. */}
-        <div className={`min-h-0 overflow-y-auto pb-1 ${full ? "flex-1" : ""}`} data-mobile2-sheet-body>
+        <div className={`min-h-0 overflow-y-auto overflow-x-hidden pb-1 ${full ? "flex-1" : ""}`} data-mobile2-sheet-body>
           {children}
         </div>
         <MobileReceipt store={receiptStore} placement="sheet" />

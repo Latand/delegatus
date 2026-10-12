@@ -99,7 +99,7 @@ import { identityMaterializationFence } from "./identityMaterialization";
 import type { ResumePaneRecord } from "@/lib/resumePanesFile";
 import type { RuntimeDeliveryMode } from "@/lib/runtime/contracts";
 import { parseMessageOrigin, sameMessageOrigin } from "@/lib/runtime/messageOrigin";
-import { normalizePendingPermissions, type PendingPermissionRequest } from "@/lib/runtime/permissionRequests";
+import { normalizePendingPermissions, normalizePendingToolUses, type PendingPermissionRequest, type PendingToolUse } from "@/lib/runtime/permissionRequests";
 import type { ProviderRetryEvidence } from "@/lib/runtime/engineHost";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { admitReservedLaunch, settleFailedLaunch } from "@/lib/tasks/launchMembership";
@@ -141,6 +141,9 @@ export interface StructuredHostColumns {
   pendingAttention: string[];
   /** The pending attentions that are tool permission requests (#2215). */
   pendingPermissions?: PendingPermissionRequest[];
+  /** The pending attentions that are native questions or plans, with the
+      transcript tool use each answers. */
+  pendingToolUses?: PendingToolUse[];
   /** The provider retry the engine reported for the open turn (#2215). */
   providerRetry?: ProviderRetryEvidence | null;
   activeFlags: string[];
@@ -306,6 +309,9 @@ export interface SpawnReceipt {
       never launched: no conversation, lineage edge, membership, transcript,
       or process exists for it. */
   rejection: SpawnRejection | null;
+  /** False only while a newly reserved receipt is waiting for task membership.
+      Missing on legacy receipts means their historical admission is complete. */
+  membershipAdmitted?: boolean;
   launchProfile: LaunchProfile;
   /** Validated explicit operator project. Becomes durable conversation
       ownership at admission; `launchProfile.project` stays a hint. */
@@ -2145,6 +2151,9 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
     ...(Array.isArray(host.pendingPermissions) && host.pendingPermissions.length > 0
       ? { pendingPermissions: normalizePendingPermissions(host.pendingPermissions) }
       : {}),
+    ...(normalizePendingToolUses(host.pendingToolUses).length > 0
+      ? { pendingToolUses: normalizePendingToolUses(host.pendingToolUses) }
+      : {}),
     ...(normalizeHostMemory(host.memory) ? { memory: normalizeHostMemory(host.memory)! } : {}),
     ...(normalizeProviderRetry(host.providerRetry) ? { providerRetry: normalizeProviderRetry(host.providerRetry) } : {}),
     ...(Number.isSafeInteger(host.releaseHandoffClaimEpoch) && (host.releaseHandoffClaimEpoch ?? -1) >= 0
@@ -3927,6 +3936,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     delegationDepth: normalizeDelegationDepth(value.delegationDepth),
     launcher: normalizeSpawnLauncher(value.launcher),
     rejection: normalizeSpawnRejection(value.rejection),
+    membershipAdmitted: value.membershipAdmitted === false ? false : true,
     launchProfile: receiptLaunchProfile(value, policy),
     explicitProject: validExplicitProject(value.explicitProject),
     launchDisplay: normalizeLaunchDisplay(value.launchDisplay),
@@ -5804,8 +5814,27 @@ export class AgentRegistry {
         if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason);
         else this.failSpawn(result.receipt.launchId, reason);
       });
+      this.mutate((file) => {
+        const receipt = file.receipts[result.receipt.launchId];
+        if (receipt) receipt.membershipAdmitted = true;
+      });
+      result.receipt.membershipAdmitted = true;
     }
     return result;
+  }
+
+  /** Terminalize only a reservation whose task membership never committed and
+      which has no host binding. The state check and owner release are one CAS. */
+  retireUnconsumedSpawn(clientAttemptId: string, reason: string): boolean {
+    return this.mutate((file) => {
+      const receipt = Object.values(file.receipts).find((row) => row.clientAttemptId === clientAttemptId);
+      if (!receipt || receipt.membershipAdmitted !== false || receipt.state !== "starting" || receipt.key || receipt.pane) return false;
+      receipt.state = "failed";
+      receipt.error = reason;
+      receipt.admissionOwner = null;
+      terminalizeFailedSpawnDeliveriesInFile(file, receipt.launchId);
+      return true;
+    });
   }
 
   private beginSpawnRequestInFile(
@@ -5865,8 +5894,25 @@ export class AgentRegistry {
          corrupted profile are both overridden here, so restart adoption and
          resume successors re-derive their launch flags from a denying profile. */
       if (isSpawnDeniedRole(existingConversation?.agentRole)) profile.allowSubagents = false;
-      /* A clean role reads no automatic memory, whoever launched it. */
-      if (roleIsClean(existingConversation?.agentRole ?? role)) profile.cleanMemory = true;
+      const memoryRole = existingConversation?.agentRole ?? role;
+      const designatedSeatMembership = (file.memberships[existingConversation?.id ?? ""] ?? []).find((row) => row.kind === "orchestrator"
+        && row.role === memoryRole) ?? null;
+      const memoryProject = designatedSeatMembership?.containerId
+        ?? explicitProject ?? existingConversation?.projectOwnership?.project ?? profile.project;
+      if (designatedSeatMembership && memoryProject
+        && (memoryRole === "orchestrator" || memoryRole === "maintainer")) {
+        /* Designation is an explicit role transition. A conversation adopted
+           from a stage must shed that stage's selector and clean-memory flag.
+           The role label alone is insufficient: pipeline stages may use the
+           orchestrator role while retaining their clean-memory fence. */
+        profile.cleanMemory = false;
+        profile.learnedRules = { project: memoryProject, roleId: memoryRole };
+      } else if (roleIsClean(memoryRole)) {
+        profile.cleanMemory = true;
+      } else if ((memoryRole === "orchestrator" || memoryRole === "maintainer")
+        && !profile.cleanMemory && !profile.learnedRules && memoryProject) {
+        profile.learnedRules = { project: memoryProject, roleId: memoryRole };
+      }
       /* A delegated conversation never acquires a plugin grant (#687): a role
          preset or a lineage parent denies it on resume, successor and restart
          adoption alike, whatever a stored or requested profile claims. */
@@ -6047,6 +6093,7 @@ export class AgentRegistry {
         agentRole: childRole,
         delegationDepth: childDepth,
         rejection,
+        membershipAdmitted: false,
         launchProfile: profile,
         explicitProject,
         launchDisplay: normalizeLaunchDisplay(input.launchDisplay),

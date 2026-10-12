@@ -5,7 +5,9 @@ import type { PipelineRuntimeSwitch } from "./types";
 import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
-import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
+import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, machineCpuPressurePollMs, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
+import { machineCpuAdmissionQueue } from "@/lib/runtime/cpuAdmission";
+import { stateDir } from "@/lib/configDir";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -280,8 +282,10 @@ export interface PipelinePorts {
       receipt. An unavailable read never proves that a prompt was absent. */
   unpublishedLaunchRetrySafe?(launchId: string): Promise<boolean>;
   drainHold?(): DrainLease | null;
-  /** A held stage start waits for CPU pressure to fall; null admits. */
-  cpuPressureHold?(): CpuPressureHold | null;
+  /** A held stage start waits in the shared bounded CPU queue; null admits. */
+  cpuPressureHold?(key?: string): CpuPressureHold | null;
+  cpuAdmissionReconcile?(admission?: Pick<PipelinePorts, "drainHold" | "structuredDeliveryPublication" | "now">): void;
+  cpuAdmissionSuspend?(key: string): void;
   /** Whether the ticking process can publish a structured host: `ready` now,
       `rebinding` between publications, `unbound` never at all (#1191). */
   structuredDeliveryPublication?(): "ready" | "rebinding" | "unbound";
@@ -1387,7 +1391,27 @@ export function defaultPipelinePorts(
        structured hosting switched off there is no publication to wait for and
        the spawn must fail in the open, as it always did. */
     drainHold: () => activeDrain(),
-    cpuPressureHold: () => machineCpuPressureGate()?.check() ?? null,
+    cpuPressureHold: (key) => {
+      const gate = machineCpuPressureGate();
+      if (!gate) return null;
+      return gate.check(key);
+    },
+    cpuAdmissionReconcile: (admission) => {
+      const waiting = machineCpuPressureGate()
+        ? loadPipelines().filter(p => p.state === "running" && p.cursor?.state === "pending")
+        : [];
+      const drain = admission?.drainHold ? admission.drainHold() : activeDrain();
+      const publication = admission?.structuredDeliveryPublication?.()
+        ?? (structuredHostsEnabled() ? structuredDeliveryPublicationState() : "ready");
+      const active = new Set(waiting.map(cpuStageKey));
+      const now = unixMs(admission?.now?.() ?? new Date().toISOString());
+      const eligible = new Set(waiting.filter(pipeline => !drain && !pipelineSurvivorRefusal(pipeline)
+        && !stageStartRetryHeld(pipeline, now)
+        && !tickStore.__llvCpuIngressReads?.has(cpuStageKey(pipeline))
+        && (currentStage(pipeline)?.kind !== "run" || publication === "ready")).map(cpuStageKey));
+      machineCpuAdmissionQueue().reconcile(cpuStagePrefix(), active, eligible);
+    },
+    cpuAdmissionSuspend: (key) => machineCpuAdmissionQueue().suspend(key),
     structuredDeliveryPublication: () => structuredHostsEnabled()
       ? structuredDeliveryPublicationState()
       : "ready",
@@ -4314,7 +4338,48 @@ function afterCommitRepair(attempt: PipelineStageAttempt, reason: string): strin
   for (const asked of [attempt.commitRepair?.detail, attempt.publicationRepair?.detail]) {
     if (asked && !reason.includes(asked)) reason += `\nThe stage was asked once to repair this earlier refusal:\n${asked}`;
   }
-  return reason;
+  const action = "Fix the reported commit/hook failure, then use retry-stage to commit the existing outputs without rerunning the agent.";
+  return (reason.startsWith("committing the passed stage:") || attempt.commitRepair?.outcome?.status === "rejected")
+    && !reason.includes(action) ? `${reason}\n${action}` : reason;
+}
+
+/** A passed turn parked at its commit boundary still owns its produced work.
+    An operator retry settles that work; it must not reset or launch the stage.
+    Recognize older parks too, before the retry instruction was in the error. */
+async function retryPassedStageCommit(pipeline: Pipeline, ports: PipelinePorts): Promise<PipelinePatchResult | null> {
+  const stage = currentStage(pipeline);
+  const attempt = stage && currentAttempt(pipeline, stage.id);
+  if (pipeline.state !== "needs_decision" || pipeline.cursor?.state !== "committing"
+    || !attempt || attempt.verdict?.status !== "pass"
+    || (attempt.commitRepair?.outcome?.status !== "rejected"
+      && !attempt.error?.startsWith("committing the passed stage:"))) return null;
+  if (attempt.conversationId) {
+    const boundary = attempt.commitRepair?.requestedAt ?? attempt.commitRepair?.sendingAt;
+    const durable = boundary ? await stageRepairEvidence(attempt, ports) : null;
+    const active = await ports.conversationAgentActive(attempt.conversationId);
+    const finished = durable?.turn === "terminal"
+      && (durable.message?.ts ?? 0) > (attempt.commitRepair?.messageTs ?? 0)
+      && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(boundary ?? null);
+    if (ports.conversationDeliveryOutstanding?.(attempt.conversationId) === true || active === true
+      || durable?.turn === "busy" || liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(ports.now())).length > 0
+      || (attempt.commitRepair?.sendUncertain && !finished) || (boundary && active !== false && !finished)) {
+      const pending = attempt.commitRepair ? "commit repair turn" : "stage conversation";
+      return { error: `the ${pending} may still be running or queued; wait for it to finish before retrying settlement`, status: 409 };
+    }
+  }
+  if (attempt.commitRepair) {
+    // Explicit retry renews permission for one commit after a rejected repair.
+    // Keep the original refusal/request; no second repair turn is sent.
+    attempt.commitRepair.outcome = { status: "accepted" };
+    attempt.commitRepair.settledAt = ports.now();
+    delete attempt.commitRepair.recommit;
+  }
+  attempt.state = "committing";
+  attempt.error = null;
+  pipeline.state = "running";
+  pipeline.pausedState = null;
+  pipeline.stateDetail = "passed stage commit retry pending; existing outputs preserved";
+  return { pipeline };
 }
 
 /** A publication repair's park: the refusal's cause and action first, then why
@@ -4335,7 +4400,7 @@ async function stageCommitRepairSettled(
   const worker = publication ? publicationRepairWorker(pipeline, attempt) : { stage, attempt };
   const parkRepair = (why: string) => {
     const detail = publication ? publicationRepairParkDetail(attempt.publicationRepair!, why)
-      : why.includes(repair.detail) ? why : `${repair.detail}\n${why}`;
+      : afterCommitRepair(attempt, why.includes(repair.detail) ? why : `${repair.detail}\n${why}`);
     attempt.error = detail;
     park(pipeline, detail, publication ? undefined : attempt);
   };
@@ -6065,17 +6130,35 @@ async function spawnRunStage(
   }
 }
 
-function holdStageLaunch(pipeline: Pipeline, ports: PipelinePorts, persist: () => void): boolean {
+function holdStageLaunchForUpdate(pipeline: Pipeline, ports: PipelinePorts, persist: () => void): boolean {
   const hold = ports.drainHold?.();
   if (hold) {
+    ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
     const detail = `held for the automatic update to ${hold.target.slice(0, 7)} since ${hold.since}`;
     if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; persist(); }
     return true;
   }
   if (pipeline.stateDetail?.startsWith("held for the automatic update to ")) { pipeline.stateDetail = null; persist(); }
+  return false;
+}
+
+function stageStartRetryHeld(pipeline: Pipeline, now: number): boolean {
+  const attempt = pipeline.cursor && currentAttempt(pipeline, pipeline.cursor.stageId);
+  return !!attempt && attempt.state === "pending" && (Boolean(openRuntimeSwitch(attempt))
+    || unixMs(attempt.memoryWait?.retryAfter ?? "") > now
+    || unixMs(attempt.controllerWait?.retryAfter ?? "") > now
+    || unixMs(attempt.providerWait?.resumeAt ?? "") > now);
+}
+
+function holdStageLaunch(pipeline: Pipeline, ports: PipelinePorts, persist: () => void): boolean {
+  if (holdStageLaunchForUpdate(pipeline, ports, persist)) return true;
+  if (currentStage(pipeline)?.kind === "run" && (ports.structuredDeliveryPublication?.() ?? "ready") !== "ready") {
+    ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
+    return false;
+  }
   // Heavy work yields to production under CPU pressure. Only a fresh stage
   // start asks; recovery and reconciliation of launched work never do.
-  const pressure = ports.cpuPressureHold?.();
+  const pressure = ports.cpuPressureHold?.(cpuStageKey(pipeline));
   if (pressure) {
     const detail = cpuPressureHoldDetail(pressure);
     if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; persist(); }
@@ -6084,6 +6167,13 @@ function holdStageLaunch(pipeline: Pipeline, ports: PipelinePorts, persist: () =
   }
   if (heldForCpuPressure(pipeline)) { pipeline.stateDetail = null; persist(); }
   return false;
+}
+
+function cpuStagePrefix(): string {
+  return `stage:${crypto.createHash("sha256").update(stateDir()).digest("hex")}:`;
+}
+function cpuStageKey(pipeline: Pipeline): string {
+  return `${cpuStagePrefix()}${pipeline.id}:${pipeline.cursor?.stageId ?? "start"}:${pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId)?.n ?? 1 : 1}`;
 }
 
 function heldForCpuPressure(pipeline: Pipeline): boolean {
@@ -6322,13 +6412,19 @@ async function tickRunStage(
        pass ends on a pending cursor, which wakes the process that owns the
        controller (requestPipelineTick), and it activates the same attempt. */
     const publication = ports.structuredDeliveryPublication?.() ?? "ready";
-    if (publication === "unbound") return;
-    if (holdStageLaunch(pipeline, ports, persist)) return;
-    if (waitForMemory(pipeline, stage, attempt, ports)) return;
+    if (publication === "unbound") { ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline)); return; }
+    if (holdStageLaunchForUpdate(pipeline, ports, persist)) return;
+    if (waitForMemory(pipeline, stage, attempt, ports)) {
+      ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
+      return;
+    }
     const activationNow = ports.now();
     /* A wait booked by an earlier tick is not due yet. */
-    if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(activationNow)) return;
-    if (unixMs(attempt.providerWait?.resumeAt ?? "") > unixMs(activationNow)) return;
+    if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(activationNow)
+      || unixMs(attempt.providerWait?.resumeAt ?? "") > unixMs(activationNow)) {
+      ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
+      return;
+    }
     /* A failover attempt is still unbound here, so it launches on whatever
        engine the stage names by the time it binds below; an edit accepted
        since it was created is checked against that engine, and only limits
@@ -6387,6 +6483,7 @@ async function tickRunStage(
         const delay = untilReset > 0 ? Math.min(15 * 60_000, untilReset) : 15 * 60_000;
         attempt.providerWait.resumeAt = new Date(unixMs(activationNow) + delay).toISOString();
         pipeline.stateDetail = `waiting for ${condition.label} on account ${accountLabel}${untilReset > 0 ? ` to reset at ${new Date(resetsAt! * 1_000).toISOString()}` : ""}; next try at ${attempt.providerWait.resumeAt}`;
+        ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
         ports.scheduleTick?.(delay);
         return;
       }
@@ -6411,6 +6508,7 @@ async function tickRunStage(
        (structuredSpawn's publishHost), so an attempt issued now burns a real
        engine launch before it can fail. */
     if (publication === "rebinding") {
+      ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
       /* This wait precedes any spawn call of this engine, so it records the
          count here: a fresh attempt starts at zero, and a later activation
          cannot mistake the wait for one an earlier engine left mid-spawn. */
@@ -6427,6 +6525,8 @@ async function tickRunStage(
       );
       return;
     }
+    // Consume CPU admission only once the other launch gates allow a start.
+    if (holdStageLaunch(pipeline, ports, persist)) return;
     bindAttemptDefinition(stage, attempt, ports);
     const bound = attemptStage(stage, attempt);
     attempt.state = "spawning";
@@ -7052,11 +7152,26 @@ async function tickReviewStage(
     if (await approvedReviewHeadHolds(pipeline, attempt, ports)) await commitPassedStage(pipeline, stage, attempt, ports, persist);
     return;
   }
-  if (attempt.state === "pending" && holdStageLaunch(pipeline, ports, persist)) return;
+  if (attempt.state === "pending" && holdStageLaunchForUpdate(pipeline, ports, persist)) return;
   const implementer = latestAcceptedRun(pipeline, stage.id);
   if (!implementer?.agentPath) {
     park(pipeline, "review-loop stage requires an accepted run session", attempt);
     return;
+  }
+  if (attempt.state === "pending") {
+    const expected = attempt.expectedReviewHeadSha ?? pipeline.lastPassedCommit;
+    if (!expected) { park(pipeline, "review-loop stage requires a verified pipeline commit", attempt); return; }
+    if (ports.deferStageGit && !attempt.flowId) {
+      const local = ports.reviewIngressHead?.(pipeline);
+      if (!local) { ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline)); return; }
+      if (!local.ok || local.sha !== expected) {
+        attempt.expectedReviewHeadSha = expected;
+        const refusal = await publishReviewIngressHead(pipeline, attempt, ports);
+        if (!refusal.ok) park(pipeline, refusal.detail, attempt);
+        return;
+      }
+    }
+    if (holdStageLaunch(pipeline, ports, persist)) return;
   }
   if (attempt.state === "pending") bindAttemptDefinition(stage, attempt, ports);
   if (!attempt.startedAt) attempt.startedAt = ports.now();
@@ -7554,7 +7669,7 @@ async function tickPipeline(
   return JSON.stringify(pipeline) !== before;
 }
 
-const tickStore = globalThis as unknown as { __llvPipelineTick?: boolean };
+const tickStore = globalThis as unknown as { __llvPipelineTick?: boolean; __llvCpuIngressReads?: Map<string, number> };
 const RECONCILABLE_REVIEW_FLOW_STATES: ReadonlySet<Flow["state"]> = new Set([
   "waiting_ready",
   "spawn_pending",
@@ -9278,16 +9393,20 @@ function reviewIngressFence(pipeline: Pipeline): string {
     pipeline.delivery?.target, pipeline.delivery?.epoch, pipeline.delivery?.ownerId, pipeline.controlGeneration]);
 }
 
-async function collectReviewIngressHeads(ports: PipelinePorts) {
+function requiresReviewIngress(pipeline: Pipeline): boolean {
+  const stage = currentStage(pipeline);
+  const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
+  const fixer = stage && attempt && attempt.state !== "committing" && fixerHasNextReviewer(pipeline, stage, attempt);
+  const review = stage?.kind === "review-loop"
+    && (!attempt?.flowId || pipeline.cursor?.state === "pending")
+    && (attempt?.state !== "committing" || pipeline.cursor?.state === "pending");
+  return ["running", "needs_decision"].includes(pipeline.state) && Boolean(fixer || review);
+}
+
+async function collectReviewIngressHeads(ports: PipelinePorts, candidates = loadPipelinesForProjection()) {
   const observations = new Map<string, { fence: string; result: import("./git").PipelineGitResult; flowGit: PreparedFlowGit }>();
-  for (const pipeline of loadPipelinesForProjection()) {
-    const stage = currentStage(pipeline);
-    const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
-    const fixer = stage && attempt && attempt.state !== "committing" && fixerHasNextReviewer(pipeline, stage, attempt);
-    const review = stage?.kind === "review-loop"
-      && (!attempt?.flowId || pipeline.cursor?.state === "pending")
-      && (attempt?.state !== "committing" || pipeline.cursor?.state === "pending");
-    if (!["running", "needs_decision"].includes(pipeline.state) || (!fixer && !review)) continue;
+  for (const pipeline of candidates) {
+    if (!requiresReviewIngress(pipeline)) continue;
     const fence = reviewIngressFence(pipeline);
     const abort = new AbortController();
     const revalidate = () => {
@@ -9300,12 +9419,21 @@ async function collectReviewIngressHeads(ports: PipelinePorts) {
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "review ingress superseded" };
       return await ports.exec(command, args, cwd, env, { signal: abort.signal, timeoutMs: 5_000 });
     };
+    const reads = tickStore.__llvCpuIngressReads ??= new Map<string, number>();
+    const key = cpuStageKey(pipeline);
+    reads.set(key, (reads.get(key) ?? 0) + 1);
     try {
+      // A read is another launch fence, not an eligible CPU queue head.
+      ports.cpuAdmissionSuspend?.(key);
       const result = await currentPipelineBranchHead(pipeline, exec);
       const mergeIdentity = result.ok ? await resolveFlowMergeIdentity(pipeline.worktreeDir, exec) : null;
       revalidate();
       if (!abort.signal.aborted) observations.set(pipeline.id, { fence, result, flowGit: { cwd: pipeline.worktreeDir, mergeIdentity } });
-    } finally { clearInterval(watch); }
+    } finally {
+      const remaining = reads.get(key)! - 1;
+      if (remaining) reads.set(key, remaining); else reads.delete(key);
+      clearInterval(watch);
+    }
   }
   return observations;
 }
@@ -9426,12 +9554,84 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
 }
 
 export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean }> {
-  if (tickStore.__llvPipelineTick) return { pipelines: [], changed: false };
+  if (tickStore.__llvPipelineTick) {
+    ports.cpuAdmissionReconcile?.(ports);
+    return { pipelines: [], changed: false };
+  }
   tickStore.__llvPipelineTick = true;
   const previousStageBranchProtections = ports.stageBranchProtections;
   let followUp = false;
+  let admissionWork: Promise<void> | null = null, activationWork: Promise<void> | null = null, admissionChanged = false;
+  const ingressHeads: Awaited<ReturnType<typeof collectReviewIngressHeads>> = new Map();
+  const ingressWork = new Map<string, Promise<void>>();
+  const dispatchStarts = () => {
+    // A reserved launch may itself await slow host setup. Keep subsequent
+    // queue heads polling while the existing activation executor owns it.
+    if (!activationWork) activationWork = drainStageActivations(ports)
+      .catch(error => { console.error("[pipelines] CPU-admitted activation failed", error); })
+      .finally(() => { activationWork = null; });
+  };
+  const serviceStarts = async () => {
+    ports.cpuAdmissionReconcile?.(ports);
+    const waiting = loadPipelines().filter(pipeline => pipeline.state === "running"
+      && pipeline.cursor?.state === "pending");
+    if (!waiting.length) { dispatchStarts(); return; }
+    for (const pipeline of waiting) {
+      if (!requiresReviewIngress(pipeline) || ingressWork.has(pipeline.id)
+        || ingressHeads.get(pipeline.id)?.fence === reviewIngressFence(pipeline)) continue;
+      // Each lane observes independently; a slow Git read cannot hold the
+      // polling pass or another lane's admission behind it.
+      const work = collectReviewIngressHeads(ports, [pipeline]).then(heads => {
+        const observed = heads.get(pipeline.id);
+        if (observed) ingressHeads.set(pipeline.id, observed);
+      }).catch(error => { console.error("[pipelines] CPU review ingress observation failed", error); })
+        .finally(() => { ingressWork.delete(pipeline.id); });
+      ingressWork.set(pipeline.id, work);
+    }
+    const admissionPorts: PipelinePorts = { ...ports, deferStageGit: true,
+      reviewIngressHead: pipeline => {
+        const observed = ingressHeads.get(pipeline.id);
+        return observed?.fence === reviewIngressFence(pipeline) ? observed.result : null;
+      },
+      reviewFlowGit: pipeline => {
+        const observed = ingressHeads.get(pipeline.id);
+        return observed?.fence === reviewIngressFence(pipeline) ? observed.flowGit : null;
+      },
+    };
+    await withPipelineMutation(async (pipelines, persist) => {
+      for (const pipeline of pipelines) {
+        // Re-read under the control lease: pause, close and a replaced cursor
+        // withdraw permission before the ordinary activation path reserves it.
+        if (pipeline.state !== "running" || pipeline.cursor?.state !== "pending"
+          || (publishesRemoteBranch(pipeline) && !pipeline.delivery) || pipelineSurvivorRefusal(pipeline)
+          || pipeline.runs.some(run => run.attempts.some(attempt => attempt.activation))) continue;
+        if (requiresReviewIngress(pipeline) && (tickStore.__llvCpuIngressReads?.has(cpuStageKey(pipeline))
+          || ingressHeads.get(pipeline.id)?.fence !== reviewIngressFence(pipeline))) continue;
+        if (await tickPipeline(pipeline, entries, admissionPorts, () => persist([pipeline]),
+          ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS, new Map())) {
+          persist([pipeline]);
+          admissionChanged = true;
+        }
+      }
+    });
+    dispatchStarts();
+  };
+  // A commit or publication hook can queue behind one of these starts. Its
+  // tick stays in flight, so admission must have its own timer until it ends.
+  const admissionWatch = ports.cpuAdmissionReconcile ? setInterval(() => {
+    if (admissionWork) return;
+    admissionWork = serviceStarts()
+      .catch(error => { console.error("[pipelines] CPU admission polling failed", error); })
+      .finally(() => { admissionWork = null; });
+  }, machineCpuPressurePollMs()) : null;
+  admissionWatch?.unref();
+  const stopAdmissionPolling = async () => {
+    while (admissionWork || activationWork || ingressWork.size) await Promise.all([admissionWork, activationWork, ...ingressWork.values()]);
+    if (admissionWatch) clearInterval(admissionWatch);
+  };
   const recoveryAccountingDeadline = ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS;
   try {
+    ports.cpuAdmissionReconcile?.(ports);
     const requested = loadPipelines().filter((pipeline) => !pipeline.delivery && pipeline.publicationAdmission?.state === "pending");
     const legacy = [...new Map([...requested, ...unclaimedPipelinePublications()].map((pipeline) => [pipeline.id, pipeline])).values()].slice(0, 16);
     for (const pipeline of legacy) await admitExistingPipelineDelivery(pipeline, ports);
@@ -9636,16 +9836,20 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       && pipeline.delivery.active);
     for (const pipeline of pending) await publishPipelineBranch(pipeline, ports.exec, { acceptedSha: pipeline.delivery!.operation!.sha });
     if (pending.length && publicationPass < 3) {
+      await stopAdmissionPolling();
       tickStore.__llvPipelineTick = false;
       const settled = await tickPipelines(entries, ports, publicationPass + 1);
       return { ...settled, changed: true };
     }
+    await stopAdmissionPolling();
+    result.pipelines = loadPipelines();
     const followUpAt = unixMs(ports.now());
     followUp = followUp || result.pipelines.some((pipeline) => pipeline.state === "running"
       && ((pipeline.cursor?.state === "pending" && !ports.drainHold?.() && !heldForCpuPressure(pipeline)) || (settledGitIds.has(pipeline.id)
         && (pipeline.cursor?.state === "committing" || pipeline.stateDetail === "approved review head verification pending")
         && unixMs(currentAttempt(pipeline, pipeline.cursor?.stageId ?? "")?.remoteHeadWait?.retryAfter ?? "") <= followUpAt))
       && !stageActivationIsWaiting(pipeline, followUpAt));
+    result.changed ||= admissionChanged;
     return result;
   } catch (error) {
     /* The store fails closed on malformed state, but this tick runs inside
@@ -9655,11 +9859,12 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     console.error("[pipelines] skipping tick; registry unreadable", error);
     return { pipelines: [], changed: false };
   } finally {
+    await stopAdmissionPolling();
     ports.stageBranchProtections = previousStageBranchProtections;
     tickStore.__llvPipelineTick = false;
     /* Scheduled after the re-entry guard clears so the microtask tick cannot
        be swallowed by it. */
-    if (followUp) requestPipelineTick();
+    if (followUp || admissionChanged) requestPipelineTick();
   }
 }
 
@@ -11168,7 +11373,16 @@ function editPipelineWorkLinks(pipeline: Pipeline, req: PatchPipelineRequest, ac
 /** Decision authority follows a project's designated seat across rotations.
     Read one server-side seat snapshot for both lineage and current authority;
     caller-supplied roles confer no authority. Revocation is project-scoped. */
-function mayAnswerPipelineDecision(pipeline: Pipeline, actor: PauseResumeActor | null): actor is PauseResumeActor {
+/**
+ * Who answers what a parked lane waits on: the operator, the conversation
+ * that created it, and its project's current designated seat. The seat answers
+ * every lane of its project, because «Waiting for you» routes a worker's or an
+ * operator's lane to it first (docs/design/attention-auto-resolve.md), except
+ * the one wait the operator kept for themselves: accepting the unreviewed head
+ * of a lane they created by hand (`review`). Moving a running stage
+ * (`control`) is no wait anyone is routed, and stays with a seat-created lane.
+ */
+function mayAnswerPipelineDecision(pipeline: Pipeline, actor: PauseResumeActor | null, kind: "decision" | "review" | "control"): actor is PauseResumeActor {
   if (!actor) return false;
   if (actor.kind === "operator") return true;
   if (!actor.conversationId) return false;
@@ -11187,16 +11401,17 @@ function mayAnswerPipelineDecision(pipeline: Pipeline, actor: PauseResumeActor |
   const revokedInProject = file.revocations.some((entry) =>
     entry.project === project && entry.conversationId === actor.conversationId && entry.seatEpoch >= actorEpoch);
   if (actor.conversationId === creator) return !creatorIsSeat || !revokedInProject;
-  if (revokedInProject || !creatorIsSeat) return false;
-  return activeSeat?.conversationId === actor.conversationId;
+  if (revokedInProject || activeSeat?.conversationId !== actor.conversationId) return false;
+  if (creatorIsSeat) return true;
+  return kind === "decision" || (kind === "review" && Boolean(creator));
 }
 
 /** Also checked before MCP receipt access; authorization refusals must never spend an answer's key. */
 export function decisionAnswerActorRefusal(
   pipeline: Pipeline, actor: PauseResumeActor | null, clientRequestId: unknown,
 ): PipelinePatchResult | null {
-  if (!mayAnswerPipelineDecision(pipeline, actor)) {
-    return { error: "only the pipeline creator conversation, the current designated seat for a seat-created lane, or a direct user action can answer this decision", status: 403 };
+  if (!mayAnswerPipelineDecision(pipeline, actor, "decision")) {
+    return { error: "only the pipeline creator conversation, the project's current designated seat, or a direct user action can answer this decision", status: 403 };
   }
   const prior = pipeline.decisionAnswers?.find((entry) => entry.clientRequestId === clientRequestId);
   if (prior && (prior.actor.kind !== actor.kind || (prior.actor.kind === "agent" && actor.kind === "agent"
@@ -11273,8 +11488,8 @@ function resolveDecision(
 /** Who may continue a needs_review lane (#1938): the creator, its project's
     current seat, or the operator. Also checked before MCP receipt access. */
 export function continueReviewActorRefusal(pipeline: Pipeline, actor: PauseResumeActor | null): PipelinePatchResult | null {
-  if (!mayAnswerPipelineDecision(pipeline, actor)) {
-    return { error: "only the pipeline creator conversation, the current designated seat for a seat-created lane, or a direct user action can continue this review", status: 403 };
+  if (!mayAnswerPipelineDecision(pipeline, actor, "review")) {
+    return { error: "only the pipeline creator conversation, the project's current designated seat for a lane an agent created, or a direct user action can continue this review", status: 403 };
   }
   return null;
 }
@@ -11317,7 +11532,7 @@ function acceptHead(
   pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
 ): PipelinePatchResult {
   const refusal = continueReviewActorRefusal(pipeline, actor);
-  if (refusal) return { ...refusal, error: "only the pipeline creator conversation, the current designated seat for a seat-created lane, or a direct user action can accept this head" };
+  if (refusal) return { ...refusal, error: "only the pipeline creator conversation, the project's current designated seat for a lane an agent created, or a direct user action can accept this head" };
   if (!actor) return { error: "accept-head needs an actor", status: 403 };
   if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
     || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)) {
@@ -12154,6 +12369,11 @@ export async function patchPipeline(
         persist();
       }
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry", status: 409 };
+      const commitRetry = await retryPassedStageCommit(pipeline, ports);
+      if (commitRetry) {
+        if (!commitRetry.error) { persist(); requestPipelineTick(); }
+        return commitRetry;
+      }
       const retryStageId = explicitReceiptRetry ? req.stageId! : stage?.id ?? null;
       const retryLaunchId = explicitReceiptRetry ? req.launchId! : attempt?.launchId ?? null;
       const receiptRetry = (explicitReceiptRetry || attempt?.paneId === null)
@@ -12309,7 +12529,7 @@ export async function patchPipeline(
       const live = currentAttempt(pipeline, target.id);
       if (req.applyNow !== undefined && typeof req.applyNow !== "boolean") return { error: "applyNow must be boolean", status: 400 };
       if (req.applyNow) {
-        if (!mayAnswerPipelineDecision(pipeline, actor)) return { error: "only the operator or project seat may move a running stage", status: 403 };
+        if (!mayAnswerPipelineDecision(pipeline, actor, "control")) return { error: "only the operator or project seat may move a running stage", status: 403 };
         /* The choice was made on one attempt and one conversation. A retry
            since then runs another agent, which this request must never cut;
            a switch still open keeps answering the conversation it started on. */

@@ -1,3 +1,7 @@
+import { readBackgroundTaskLedger, pendingBackgroundTasks } from "@/lib/pipelines/backgroundTasks";
+import { activityFactsFromRecords } from "@/lib/lifecycle/agentActivityEvidence";
+import { activityProcessReader } from "@/lib/lifecycle/agentActivityProcesses";
+import { tailRecordsResult } from "./activity";
 import type { FileEntry, ProjectCatalogEntry } from "../types";
 import { agentRegistry, RegistryReadError, resolveConversationAlias } from "../agent/registry";
 import { registryRowProjection, type RegistryRowProjector } from "../agent/sqliteRegistryStore";
@@ -31,6 +35,7 @@ import { scanRootEntries } from "./roots";
 import { createTranscriptPathCanonicalizer, type TranscriptPathCanonicalizer } from "./transcriptIdentity";
 import { waitingInputProbe } from "./waitingInput";
 import { observeCodexSubagentTranscripts } from "../runtime/codexSubagentDetection";
+import { machineCpuPressurePollMs } from "../runtime/cpuPressure";
 
 function applyProcessState(entry: FileEntry, holders: Map<string, number>) {
   if (entry.root === "claude-tasks" && entry.path.endsWith(".output")) {
@@ -367,6 +372,14 @@ async function listFilesInternal(
     entry.goal = goalFor(entry);
     entry.ctx = ctxFor(entry);
     entry.lastTurn = lastTurnFor(entry);
+    if (entry.engine === "claude" || entry.engine === "codex") {
+      const tail = tailRecordsResult(entry.path, entry.size, entry.mtime * 1000);
+      if (tail.complete) {
+        const facts = activityFactsFromRecords(tail.records);
+        facts.turnBoundaryVerified = !tail.prefixTruncated || facts.turnBoundaryFound === true;
+        entry.agentActivity = facts;
+      } else entry.agentActivity = { lastRecordAt: null, turnBoundaryVerified: false };
+    }
     entry.lastAssistantMessageAt = lastAssistantMessageAtFor(entry);
     entry.lastAgentWorkAt = lastAgentWorkAtFor(entry);
     entry.pendingWakeup = pendingWakeupFor(entry);
@@ -376,11 +389,21 @@ async function listFilesInternal(
     applyProcessState(entry, holders);
   });
   assignTranscriptPids(entries);
+  const activityProcesses = activityProcessReader();
   // After pid assignment: the claude effort source is the live process argv.
   await forEachEntryBatchYielding(entries, async (entry) => {
+    if (entry.agentActivity && entry.proc === "running" && entry.pid !== null) {
+      entry.agentActivity.workProcesses = activityProcesses(entry.pid);
+      entry.agentActivity.turnStartedAt = entry.lastTurn?.endedAt === null ? entry.lastTurn.startedAt : entry.agentActivity.turnStartedAt;
+    }
     entry.effort = entryEffort(entry);
     entry.serviceTier = entryServiceTier(entry, durableTiers);
     entry.fast = entry.serviceTier === null ? null : entry.serviceTier !== "default";
+    if (entry.engine === "claude" && entry.agentActivity && entry.proc === "running") {
+      const ledger = await readBackgroundTaskLedger(entry.path);
+      entry.agentActivity.backgroundVerified = ledger !== null;
+      if (ledger) entry.agentActivity.background = pendingBackgroundTasks(ledger, Date.now()).filter(task => task.kind !== "wakeup").map(task => ({ id: task.id, description: entry.agentActivity?.background?.find(item => item.id === task.id)?.description ?? null }));
+    }
     const pending = pendingQuestionFor(entry);
     entry.pendingQuestion = pending && entry.pid !== null
       ? { ...pending, paneTarget: await resolveTarget(entry.pid) }
@@ -410,6 +433,21 @@ async function listFilesInternal(
   };
 }
 
+/** Whether someone other than the operator answers an entry's question
+    first, read once per controller pass. Unreadable routing pushes as before. */
+async function questionRouteReader(entries: readonly FileEntry[]): Promise<(entry: FileEntry) => boolean> {
+  if (!entries.some((entry) => entry.pendingQuestion || entry.waitingInput)) return () => false;
+  try {
+    const [{ questionRouteReader: routeReader, productionRoutingSources }, { seatIdentityResolver }] = await Promise.all([
+      import("@/lib/attention/routeOverlay"), import("@/lib/bridge/seatIdentity"),
+    ]);
+    const registry = agentRegistry();
+    return routeReader(productionRoutingSources(seatIdentityResolver((id) => registry.canonicalConversationId(id))), Date.now() / 1000);
+  } catch {
+    return () => false;
+  }
+}
+
 /** Durable controllers run outside request handlers. Flow ordering remains
     stable: workflows observe the flow state from the same controller tick. */
 export async function reconcileFileControllers(entries: FileEntry[]): Promise<void> {
@@ -419,8 +457,12 @@ export async function reconcileFileControllers(entries: FileEntry[]): Promise<vo
   // Custom session titles (issue #33) must reach push bodies too, so overlay
   // them before notifying — a rename shows the human name in notifications.
   overlaySessionTitles(entries);
+  /* A worker's question waits on its project's seat first
+     (docs/design/attention-auto-resolve.md): it reaches the operator's phone
+     only when no seat can be woken for it. */
+  const routedToOthers = await questionRouteReader(entries);
   await forEachCooperatively(entries, (entry) => {
-    if (entry.pendingQuestion || entry.waitingInput) void notifyQuestion(entry);
+    if ((entry.pendingQuestion || entry.waitingInput) && !routedToOthers(entry)) void notifyQuestion(entry);
   });
   await tickFlows(entries);
   await yieldToRuntime();
@@ -437,9 +479,28 @@ export async function reconcileFileControllers(entries: FileEntry[]): Promise<vo
     console.error("[pipelines] skipping embedded review flow reconcile", error);
   }
   await yieldToRuntime();
-  await tickPipelines(entries);
-  await yieldToRuntime();
-  await tickWorkflows(entries);
+  // A controller that finishes its pass may still own the FIFO head an
+  // unfinished peer needs. Keep both ticking for the whole shared pass.
+  const controllers = [tickPipelines, tickWorkflows] as const;
+  const polling: (Promise<void> | null)[] = controllers.map(() => null);
+  const watch = setInterval(() => {
+    for (const [index, tick] of controllers.entries()) {
+      if (polling[index]) continue;
+      polling[index] = tick(entries).then(() => {})
+        .catch(error => { console.error("[scanner] work controller polling failed", error); })
+        .finally(() => { polling[index] = null; });
+    }
+  }, machineCpuPressurePollMs());
+  watch.unref();
+  try {
+    const results = await Promise.allSettled(controllers.map(tick => tick(entries)));
+    for (const result of results) if (result.status === "rejected") throw result.reason;
+  } finally {
+    // A timer may have started another pass; retain admission until it too
+    // settles, then leave no controller work behind this scanner pass.
+    while (polling.some(Boolean)) await Promise.all(polling);
+    clearInterval(watch);
+  }
   await yieldToRuntime();
   /* Canonical task membership (#1586): every root conversation the board draws
      belongs to a task. Placeholders are minted here, on the durable controller

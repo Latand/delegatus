@@ -135,6 +135,45 @@ test("observations and resume successors preserve semantic title punctuation", (
   expect(refreshed.conversations[conversation.id]?.generations.at(-1)?.launchProfile.title).toBe("Own issue #913");
 });
 
+test.each([
+  { stageRole: "builder", cleanMemory: false, learnedRules: { project: "seat-project", roleId: "builder" } },
+  { stageRole: "reviewer", cleanMemory: true, learnedRules: undefined },
+])("adopting a $stageRole conversation as the seat resets its memory profile", ({ stageRole, cleanMemory, learnedRules }) => {
+  const { store } = registryAt(`seat-memory-transition-${stageRole}`);
+  const begun = store.beginSpawnRequest({
+    engine: "codex",
+    cwd: "/repo",
+    origin: { kind: "container", container: "pipeline", containerId: "pipeline_fixture", creatorConversationId: null },
+    role: stageRole,
+    explicitProject: "seat-project",
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", title: `Initial ${stageRole} stage`, cleanMemory, learnedRules, project: "seat-project" }),
+  });
+  if (begun.kind !== "created") throw new Error("expected stage spawn");
+  expect(begun.receipt.launchProfile.cleanMemory).toBe(cleanMemory);
+  expect(begun.receipt.launchProfile.learnedRules).toEqual(learnedRules);
+  const conversationId = settleLaunch(store, begun.receipt.launchId);
+  expect(store.stampOrchestratorSeatIdentity({
+    project: "seat-project",
+    seatEpoch: 1,
+    conversationId,
+    predecessorConversationId: null,
+    designatedAt: "2026-10-12T09:00:00.000Z",
+    activatedAt: "2026-10-12T09:00:01.000Z",
+  })).toBe(true);
+
+  const resumed = store.beginSpawnRequest({
+    engine: "codex",
+    cwd: "/repo",
+    conversationId,
+    purpose: "resume-successor",
+    origin: { kind: "successor" },
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", title: "Resume adopted seat" }),
+  });
+  if (resumed.kind !== "created") throw new Error("expected seat resume");
+  expect(resumed.receipt.launchProfile.cleanMemory).toBe(false);
+  expect(resumed.receipt.launchProfile.learnedRules).toEqual({ project: "seat-project", roleId: "orchestrator" });
+});
+
 test("resume admission preserves a frozen semantic title through replay and settlement", () => {
   const filename = path.join(sandbox, "resume-frozen-title.json");
   const store = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "dual-write" });

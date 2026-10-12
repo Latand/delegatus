@@ -6,6 +6,8 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { runtimeHostClient } from "@/lib/runtime/client";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { teamActor } from "@/lib/team";
+import { runsElsewhere } from "@/lib/links/linked";
+import { prototypeReviewSummary } from "./model";
 import { PrototypeError, PROTOTYPE_LIMITS } from "./input";
 import { decisionLock, findPrototypeRound, mutatePrototypeRound } from "./store";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
@@ -13,12 +15,17 @@ import { normalizePrototypeAnswers, recommendedAnswers } from "./questions";
 import type { DecidePrototypeInput, PrototypeDecision, PrototypeDeliveryState, PrototypeReviewRound } from "./types";
 import { prototypeWorld, type PrototypeWorld } from "./world";
 
+export type PrototypeDeliveryContext = NextRequest | { kind: "operator-in-process"; authorize: () => void };
+const inProcess = (request: PrototypeDeliveryContext): request is Extract<PrototypeDeliveryContext, { kind: string }> => "kind" in request && request.kind === "operator-in-process";
+
 /** The persisted delivery text: retries use these exact bytes. A changed
     decision whose earlier message may already have reached the seat says it
     replaces that one. */
-export function prototypeDecisionText(task: { id: string; text: string }, round: PrototypeReviewRound,
+export function prototypeDecisionText(task: { id: string; text: string } | null, round: PrototypeReviewRound,
   decision: Pick<PrototypeDecision, "chosen" | "comment" | "answers" | "skipped">, amends?: { at: string }): string {
-  const header = `Prototype review decision${amends ? ` (amended)\nThis replaces the decision of ${amends.at} on the same round.` : ""}\nTask: ${task.id} — ${task.text.split("\n")[0]}`;
+  const amendment = amends ? ` (amended)\nThis replaces the decision of ${amends.at} on the same round.` : "";
+  const header = task && round.taskId !== null ? `Prototype review decision${amendment}\nTask: ${task.id} — ${task.text.split("\n")[0]}`
+    : `Operator decision${amendment}\nAsked: ${round.title}, ${round.createdAt.slice(11,16)} UTC`;
   const chosen = round.variants.filter(v => decision.chosen.includes(v.number)).map(v => `${v.number} — ${v.name}`).join(", ");
   const footer = `\n\nComment:\n${decision.comment}\n\nEnd of prototype review decision.`;
   if (!round.questions?.length) return `${header}\nChosen: ${chosen}${footer}`;
@@ -91,8 +98,27 @@ export const prototypeDelivery: PrototypeDelivery = {
   },
 };
 
+/** Refreshes a saved answer from its receipt; a read never sends or retries. */
+export async function refreshPrototypeDelivery(taskId: string | null,reviewId: string,delivery = prototypeDelivery): Promise<void> {
+  const held = findPrototypeRound(taskId,reviewId)?.decision;
+  if (!held?.delivery.conversationId || held.delivery.state === "sent") return;
+  await withFileTransaction(decisionLock(reviewId),"prototype decision is busy",async () => {
+    const decision = findPrototypeRound(taskId,reviewId)?.decision;
+    if (!decision?.delivery.conversationId || decision.delivery.state === "sent") return;
+    if (decision.revision !== undefined && !decision.delivery.dispatchedAt && !decision.delivery.operationId) return;
+    const key = decision.delivery.clientMessageId;
+    const recovered: PrototypeDeliveryResult = await delivery.recover(decision).then(result => result ?? { state: "failed" as const },() => ({ state: "uncertain" as const }));
+    if (recovered.state !== decision.delivery.state || recovered.operationId !== decision.delivery.operationId) {
+      mutatePrototypeRound(taskId,reviewId,round => {
+        if (round.decision?.delivery.clientMessageId === key) Object.assign(round.decision.delivery,recovered);
+      });
+    }
+  });
+}
+
 const messageKey = (reviewId: string, revision: number) => revision === 1 ? `prototype-decision:${reviewId}` : `prototype-decision:${reviewId}:${revision}`;
-function decidedBy(request: NextRequest): NonNullable<PrototypeDecision["decidedBy"]> {
+function decidedBy(request: PrototypeDeliveryContext): NonNullable<PrototypeDecision["decidedBy"]> {
+  if (inProcess(request)) return { kind: "operator" };
   const actor = teamActor(request);
   return actor.kind === "member" ? { kind: "member", memberId: actor.memberId } : { kind: "operator" };
 }
@@ -104,11 +130,18 @@ function decidedBy(request: NextRequest): NonNullable<PrototypeDecision["decided
  * one while that one was never handed to the send path, and otherwise goes as
  * an amendment under a key of its own.
  */
-export function decidePrototype(request: NextRequest,taskId: string,input: DecidePrototypeInput | { reviewId: string; retry: true },
+export function decidePrototype(request: PrototypeDeliveryContext,taskId: string | null,input: DecidePrototypeInput | { reviewId: string; retry: true },
   world: PrototypeWorld = prototypeWorld): boolean {
   const reviewId = input.reviewId;
   if (!/^pr_[a-f0-9]{32}$/.test(reviewId)) throw new PrototypeError("invalid review id");
+  if (inProcess(request)) request.authorize();
   return mutatePrototypeRound(taskId,reviewId,(round,task) => {
+    if (inProcess(request)) {
+      request.authorize();
+      if (!task || runsElsewhere(task) || (!round.decision && prototypeReviewSummary(task.prototypeReviews ?? [])?.waitingReviewId !== round.id)) {
+        throw new PrototypeError("prototype round is no longer waiting", 409);
+      }
+    }
     if ("retry" in input) {
       if (!round.decision) throw new PrototypeError("save a decision before retrying");
       // The operator asked again: the backoff starts over and so does the wait before attention.
@@ -130,11 +163,12 @@ export function decidePrototype(request: NextRequest,taskId: string,input: Decid
     const prior = round.decision;
     if (prior && prior.comment === input.comment && JSON.stringify(prior.chosen) === JSON.stringify(chosen)
       && JSON.stringify(prior.answers) === JSON.stringify(answers) && prior.skipped === skipped) return false;
+    if (prior && inProcess(request)) throw new PrototypeError("prototype round is already decided", 409);
     /* A record written before revisions existed may have been handed over
        without a mark, unless it never had anyone to go to. */
     const handedOver = prior && (prior.revision === undefined ? prior.delivery.state !== "no-orchestrator" : prior.delivery.dispatchedAt !== undefined);
     const revision = prior ? (prior.revision ?? 1) + 1 : 1;
-    const recipient = world.orchestrator(task.project);
+    const recipient = world.orchestrator(task?.project ?? round.project);
     const text = prototypeDecisionText(task, round, { chosen, comment: input.comment, answers, skipped }, handedOver ? { at: prior.at } : undefined);
     if (questionnaire && Buffer.byteLength(text) > MAX_STRUCTURED_TEXT_BYTES) throw new PrototypeError("the answer is too long to send; shorten the comment");
     round.decision = { chosen, ...(answers ? { answers } : {}), ...(skipped ? { skipped } : {}), comment: input.comment, at: new Date().toISOString(),
@@ -157,7 +191,7 @@ export interface PrototypeDeliveryPorts { delivery: PrototypeDelivery; world: Pr
  * sent again through the runtime's own retry under the same key. Answers the
  * decision as it now stands, or null when the round or its decision is gone.
  */
-export async function attemptPrototypeDelivery(taskId: string,reviewId: string,ports: PrototypeDeliveryPorts): Promise<PrototypeDecision | null> {
+export async function attemptPrototypeDelivery(taskId: string | null,reviewId: string,ports: PrototypeDeliveryPorts): Promise<PrototypeDecision | null> {
   const current = () => findPrototypeRound(taskId,reviewId)?.decision ?? null;
   try {
     return await withFileTransaction(decisionLock(reviewId),"prototype decision is busy",async () => {

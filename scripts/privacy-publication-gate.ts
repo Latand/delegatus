@@ -8,6 +8,8 @@ import { domainToASCII } from "node:url";
 import { inflateSync } from "node:zlib";
 
 import { preparedPrivacyText } from "./privacy-text-preparation";
+import { privacyMarkupSpans, stripPrivacyHtml } from "./privacy-markup";
+import { fingerprintNegativeCache } from "./privacy-fingerprint-cache";
 import { canonicalSensitiveText, decodeSensitiveText } from "../src/lib/privacy/canonicalText";
 import { mailboxPattern } from "../src/lib/privacy/mailbox";
 import { staticSensitiveClasses } from "../src/lib/privacy/staticDetectors";
@@ -959,7 +961,13 @@ function readSafeRegularFile(path: string): Buffer {
   return readFileSync(resolve(path));
 }
 
-function loadKnownValues(): { error: boolean; fingerprints: KnownValueFingerprint[]; values: KnownValue[] } {
+type PreparedKnownValue = Readonly<KnownValue & {
+  primary: string;
+  fingerprintNeedle: string;
+  fingerprint?: KnownValueFingerprint;
+}>;
+
+function loadKnownValues(): { error: boolean; fingerprints: KnownValueFingerprint[]; values: PreparedKnownValue[] } {
   let values: KnownValue[];
   try {
     const format = process.env.LLV_PRIVACY_KNOWN_VALUES_FORMAT ?? "plain";
@@ -973,9 +981,15 @@ function loadKnownValues(): { error: boolean; fingerprints: KnownValueFingerprin
     return { error: true, fingerprints: [], values: [] };
   }
   const fingerprints = new Map<string, KnownValueFingerprint>();
+  const preparedValues: PreparedKnownValue[] = [];
   for (const value of values) {
     const fingerprint = knownValueFingerprint(value);
     if (fingerprint) fingerprints.set(fingerprintKey(fingerprint), fingerprint);
+    // Ordinary primary lookup historically lowercases without NFKC. Exact
+    // lookup and fingerprint lookup have their own normalization policies.
+    const primary = (value.exactOnly ? value.value.normalize("NFKC") : value.value).toLocaleLowerCase("en-US");
+    preparedValues.push({ ...value, primary, fingerprint,
+      fingerprintNeedle: value.exactOnly ? primary : compactSensitiveText(value.value) });
   }
   const fingerprintFile = process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE;
   if (fingerprintFile) {
@@ -1010,7 +1024,7 @@ function loadKnownValues(): { error: boolean; fingerprints: KnownValueFingerprin
   return {
     error: false,
     fingerprints: [...fingerprints.values()],
-    values,
+    values: preparedValues,
   };
 }
 
@@ -1203,7 +1217,7 @@ function sensitiveTextViews(text: string, publicMarker?: string): { error: boole
     // Preserve candidate context before HTML stripping can erase a marker.
     const boundary = publicMarker ? approvedPublicBoundaryView(decoded, publicMarker) : { error: false, text: decoded };
     boundaryError ||= boundary.error;
-    const visible = visibleMarkdownText(boundary.text).replaceAll(/<[^>]*>/g, "");
+    const visible = stripPrivacyHtml(visibleMarkdownText(boundary.text));
     const unformatted = visible.replaceAll(/[\[\]*_`~]/g, "");
     // Token prefixes need their delimiter after markup is removed.
     const tokenVisible = visible.replaceAll(/[\[\]*`~]/g, "");
@@ -1224,26 +1238,84 @@ function normalizedSensitiveText(text: string): { compact: string; error: boolea
   };
 }
 
-const fingerprintPlans = new Map<boolean, { raw: string[]; hashed: Map<number, Set<string>> }>();
+export function fingerprintWindowDigest(window: string): string {
+  return Bun.CryptoHasher.hash("sha256", window, "hex");
+}
+
+/** Read every UTF-16 window, reusing only proven negative windows/blocks. */
+export function matchesFingerprintWindows(text: string, length: number, hashes: ReadonlySet<string>): boolean {
+  const lastStart = text.length - length;
+  if (lastStart < 0) return false;
+  const byFirstByte = new Map<number, Buffer[]>();
+  for (const hash of hashes) {
+    // The original lookup compared lowercase hex strings exactly. Keep that
+    // contract even for callers outside the validated fingerprint catalog.
+    if (!/^[a-f0-9]{64}$/.test(hash)) continue;
+    const bytes = Buffer.from(hash, "hex");
+    const group = byFirstByte.get(bytes[0]) ?? [];
+    group.push(bytes);
+    byFirstByte.set(bytes[0], group);
+  }
+  const digest = Buffer.alloc(32);
+  const rejected = new Set<string>();
+  const blocks = new Set<string>();
+  let blockCharacters = 0;
+  const blockCacheCharacters = 16_000_000;
+  const windowCapacity = Math.min(262_144, Math.floor(4_000_000 / length));
+  let separator = text.indexOf("\0");
+  for (let start = 0; start <= lastStart;) {
+    // Restart block alignment after a view separator so repeated canonical
+    // views reuse their interiors. Include length - 1 following characters:
+    // windows crossing a separator or a block boundary are still read exactly.
+    const end = Math.min(start + 16_384, lastStart + 1, separator < 0 ? Infinity : separator + 1);
+    const block = text.slice(start, end + length - 1);
+    if (!blocks.has(block)) {
+      for (let index = 0; index < end - start; index += 1) {
+        const window = block.slice(index, index + length);
+        if (rejected.has(window)) continue;
+        // The first byte only selects candidates; equality reads all 32 bytes.
+        // Reusing this synchronous call's buffer avoids a hex string per window.
+        Bun.CryptoHasher.hash("sha256", window, digest);
+        if (byFirstByte.get(digest[0])?.some((hash) => hash.equals(digest))) return true;
+        if (rejected.size === windowCapacity) rejected.clear();
+        rejected.add(window);
+      }
+      if (blockCharacters + block.length > blockCacheCharacters) {
+        blocks.clear();
+        blockCharacters = 0;
+      }
+      blocks.add(block);
+      blockCharacters += block.length;
+    }
+    if (end === separator + 1) separator = text.indexOf("\0", end);
+    start = end;
+  }
+  return false;
+}
+
+const negativeFingerprintCache = fingerprintNegativeCache(import.meta.path, matchesFingerprintWindows.toString());
+const fingerprintPlans = new Map<boolean, { raw: string[]; hashed: Map<number, Set<string>>; policy: string }>();
 
 function matchesKnownFingerprint(text: string, exactOnly = false): boolean {
   let plan = fingerprintPlans.get(exactOnly);
   if (!plan) {
     const fingerprintsByLength = new Map<number, Set<string>>();
-    const rawAscii = new Map<string, string>();
+    const plaintext = new Map<string, string>();
     const rawValues: string[] = [];
     for (const entry of knownValues.values) {
       if ((entry.exactOnly === true) !== exactOnly) continue;
-      const value = exactOnly ? entry.value.normalize("NFKC").toLocaleLowerCase("en-US") : compactSensitiveText(entry.value);
-      if (!/^[\x00-\x7f]+$/.test(value)) continue;
-      const fingerprint = knownValueFingerprint(entry);
-      if (fingerprint) rawAscii.set(fingerprintKey(fingerprint), value);
+      const value = entry.fingerprintNeedle;
+      // UTF-8 is injective for well-formed UTF-16 without replacement bytes.
+      // A lone surrogate can hash like U+FFFD, so those values retain hashing.
+      if (!value.isWellFormed() || value.includes("\ufffd")) continue;
+      const fingerprint = entry.fingerprint;
+      if (fingerprint) plaintext.set(fingerprintKey(fingerprint), value);
     }
     for (const fingerprint of knownValues.fingerprints) {
       if ((fingerprint.exactOnly === true) !== exactOnly) continue;
-      // When the ASCII plaintext behind a fingerprint is already supplied,
+      // When verified plaintext behind a fingerprint is already supplied,
       // substring search covers precisely its windows without hashing each one.
-      const raw = rawAscii.get(fingerprintKey(fingerprint));
+      const raw = plaintext.get(fingerprintKey(fingerprint));
       if (raw !== undefined) {
         rawValues.push(raw);
         continue;
@@ -1252,24 +1324,19 @@ function matchesKnownFingerprint(text: string, exactOnly = false): boolean {
       hashes.add(fingerprint.sha256);
       fingerprintsByLength.set(fingerprint.length, hashes);
     }
-    plan = { raw: rawValues, hashed: fingerprintsByLength };
+    const policy = JSON.stringify([exactOnly, [...fingerprintsByLength]
+      .sort(([left], [right]) => left - right).map(([length, hashes]) => [length, [...hashes].sort()])]);
+    plan = { raw: rawValues, hashed: fingerprintsByLength, policy };
     fingerprintPlans.set(exactOnly, plan);
   }
   if (plan.raw.some((raw) => text.includes(raw))) return true;
+  if (plan.hashed.size === 0) return false;
+  const cacheKey = negativeFingerprintCache?.key(text, plan.policy);
+  if (cacheKey && negativeFingerprintCache?.has(cacheKey)) return false;
   for (const [length, hashes] of plan.hashed) {
-    if (length > text.length) continue;
-    // Repeated large fixtures need not hash the same nonmatching window
-    // thousands of times. Bound the cache; every distinct window is still read.
-    const rejected = new Set<string>();
-    for (let index = 0; index <= text.length - length; index += 1) {
-      const window = text.slice(index, index + length);
-      if (rejected.has(window)) continue;
-      const digest = createHash("sha256").update(window).digest("hex");
-      if (hashes.has(digest)) return true;
-      if (rejected.size === 4096) rejected.clear();
-      rejected.add(window);
-    }
+    if (matchesFingerprintWindows(text, length, hashes)) return true;
   }
+  if (cacheKey) negativeFingerprintCache?.add(cacheKey);
   return false;
 }
 
@@ -1502,9 +1569,9 @@ function markdownEmailView(decoded: string, raw: { text: string; offsets: number
     for (let index = start; index < end; index += 1) keptOffsets.push(offsets[index]);
   };
   let start = 0;
-  for (const match of visible.matchAll(/<[^>]*>|[\[\]*_`~]/g)) {
-    append(start, match.index);
-    start = match.index + match[0].length;
+  for (const span of privacyMarkupSpans(visible, true)) {
+    append(start, span.start);
+    start = span.end;
   }
   append(start, visible.length);
   return {
@@ -1619,8 +1686,8 @@ export function sensitiveClasses(text: string): Set<FindingClass> {
   if (matchesKnownValue === undefined) {
     const normalizedText = known.searchable.toLocaleLowerCase("en-US");
     matchesKnownValue = knownValues.values.some((entry) => entry.exactOnly
-      ? known.exactSearchable.includes(entry.value.normalize("NFKC").toLocaleLowerCase("en-US"))
-      : normalizedText.includes(entry.value.toLocaleLowerCase("en-US")))
+      ? known.exactSearchable.includes(entry.primary)
+      : normalizedText.includes(entry.primary))
       || matchesKnownFingerprint(known.compact) || matchesKnownFingerprint(known.exactSearchable, true);
     knownValueMatches.set(prepared, matchesKnownValue);
   }

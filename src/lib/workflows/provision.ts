@@ -7,6 +7,7 @@ import { pidAlive } from "@/lib/scanner/process";
 import { CpuContainmentUnavailable, wrapWorkCommand, type CpuPorts } from "@/lib/runtime/cpuPlacement";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
+import { cpuBudgetTimer, cpuWaitBudget } from "@/lib/runtime/cpuAdmissionBudget";
 
 import { setupExitPath, setupStderrPath, setupStdoutPath } from "./store";
 import type { Workflow } from "./types";
@@ -48,10 +49,11 @@ export const realExec: ExecPort = (command, args, cwd, env, options = {}) => new
   let stderr = "";
   let bytes = 0;
   let stopped: string | null = null;
+  const budget = cpuWaitBudget({ ...process.env, GIT_TERMINAL_PROMPT: "0", ...env });
   const child = spawn(command, args, {
     cwd, detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe", ...(options.inheritFd === undefined ? [] : [options.inheritFd])],
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env },
+    env: budget.env,
   });
   const stop = (reason: string) => {
     if (stopped) return;
@@ -65,7 +67,7 @@ export const realExec: ExecPort = (command, args, cwd, env, options = {}) => new
   };
   const abort = () => stop("command cancelled");
   const timeoutMs = options.timeoutMs ?? 60_000;
-  const timer = setTimeout(() => stop(`command timed out after ${timeoutMs}ms`), timeoutMs);
+  const stopTimer = cpuBudgetTimer(timeoutMs, budget.elapsed, () => stop(`command timed out after ${timeoutMs}ms`));
   options.signal?.addEventListener("abort", abort, { once: true });
   if (options.signal?.aborted) abort();
   const append = (chunk: string, stream: "stdout" | "stderr") => {
@@ -78,7 +80,7 @@ export const realExec: ExecPort = (command, args, cwd, env, options = {}) => new
   child.stderr?.setEncoding("utf8").on("data", (chunk: string) => append(chunk, "stderr"));
   child.on("error", (error) => { stopped ??= error.message; });
   child.on("close", (code, signal) => {
-    clearTimeout(timer);
+    stopTimer(); budget.close();
     options.signal?.removeEventListener("abort", abort);
     resolve({ code: stopped ? null : code, stdout, stderr: stopped ? `${stopped}${stderr ? `: ${stderr}` : ""}` : stderr, signal });
   });

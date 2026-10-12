@@ -29,9 +29,11 @@ import type { FileEntry } from "@/lib/types";
 
 import { decisionLine } from "../attention/decision";
 import { FeedSkeleton } from "../skeletons";
+import { RoleAvatar } from "../brand/RoleAvatar";
 import { RoleFrameMark } from "../RoleFrameMark";
 import { ProcessStatusControls } from "../TaskHeader";
 import { seatDraftReadiness, useOrchestratorDraftPrefill, useOrchestratorDraftReveal, usePendingSeatConfirm } from "./draftPrefill";
+import { FailureTime } from "./FailureTime";
 import { IncumbentHeader } from "./IncumbentHeader";
 import { incumbentHostLive, type OrchestratorIncumbent } from "./incumbent";
 import { DeputyTwin, liveSeatDeputy, SeatDeputyChip } from "./SeatDeputyChip";
@@ -64,7 +66,8 @@ import { useOrchestratorIncumbent } from "./useOrchestratorIncumbent";
 import { useOrchestratorSeat, type OrchestratorSeatRead } from "./useOrchestratorSeat";
 import { useSeatConfirm, type SeatConfirmFlow } from "./useSeatConfirm";
 import { useSeatSurface } from "./useSeatSurface";
-import { ReportLog } from "./reportLog/ReportLog";
+import { DecisionColumn, DecisionStripLine, defaultDecisionTab, useOpenDecisionCount, type DecisionTab } from "@/components/decisions/DecisionColumn";
+import { useDecisionSurface } from "@/components/decisions/decisionSurface";
 
 /* The report log beside the chat (#2146). It first opened at a 720 px seat
    as a 300 px column, which left the chat 420 px; the chat now keeps at least
@@ -301,6 +304,22 @@ export function OrchestratorPanel({
     setBeside({ project, open: next });
     rememberReportLogBeside(project, next);
   };
+  /* The same column holds the project's open decisions (variant 3 of
+     docs/design/operator-decision-forms.md): «Рішення» while any wait,
+     «Звіти» otherwise, until the operator picks a tab. */
+  const openDecisionCount = useOpenDecisionCount(project);
+  const [tabChoice, setTabChoice] = useState<{ project: string; tab: DecisionTab } | null>(null);
+  const columnTab = tabChoice?.project === project ? tabChoice.tab : defaultDecisionTab(openDecisionCount);
+  const chooseTab = (tab: DecisionTab) => setTabChoice({ project, tab });
+  const [decisionFocus, setDecisionFocus] = useState<{ reviewId?: string; nonce: number } | null>(null);
+  const openDecisions = (reviewId?: string) => {
+    if (collapsed && variant === "seat") onClose();
+    chooseTab("decisions");
+    setDecisionFocus((held) => ({ reviewId, nonce: (held?.nonce ?? 0) + 1 }));
+    if (!reportsSplit) { setReportsInPlace(true); return; }
+    setBeside({ project, open: true });
+    rememberReportLogBeside(project, true);
+  };
   /* The folded seat's one live signal (issue #1802): a reply that landed while
      the panel was away. Expanded, the transcript IS the reading, so every
      reply the operator can see is marked seen; folded, a newer one than the
@@ -492,6 +511,9 @@ export function OrchestratorPanel({
   };
 
   const reportsAvailable = state.kind === "live" && !rotating && Boolean(file) && !collapsed;
+  /* While this panel can draw the column, a request for the project's
+     decisions («Чекають на вас», a pointer in a feed) opens it here. */
+  useDecisionSurface(project, state.kind === "live" && !rotating && Boolean(file), (request) => openDecisions(request.reviewId));
   /* The conversation the expand button opens: the live seat's, outside a rotation. */
   const windowFile = state.kind === "live" && !rotating ? file : null;
   const reportsToggle = reportsAvailable ? (
@@ -546,11 +568,11 @@ export function OrchestratorPanel({
           <RoleFrameMark role="orchestrator" />
           {/* docs/design/ghost-seat.md §6.5: while the seat's parallel self
               runs, the avatar gains its outline twin and a chip beside the
-              state points at the block in the feed. */}
+              state points at the block in the feed. The avatar is Delegatus
+              in the orchestrator's headset (docs/design/role-avatars.md); the
+              engine and model keep their chips in the incumbent row. */}
           <span className="relative inline-flex shrink-0">
-            <span className={`av ${seatEngine === "codex" ? "codex" : "claude"}`} aria-hidden>
-              <Bot />
-            </span>
+            <RoleAvatar role="orchestrator" size={26} />
             {liveDeputy ? <DeputyTwin engine={seatEngine ?? "claude"} avatarPx={26} /> : null}
           </span>
           <span className="seat-title">
@@ -647,9 +669,7 @@ export function OrchestratorPanel({
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3" data-seat-head="dock">
         <RoleFrameMark role="orchestrator" />
         <span className="relative inline-flex shrink-0">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control bg-accent-soft text-accent" aria-hidden>
-            <Bot className="h-4 w-4" />
-          </span>
+          <RoleAvatar role="orchestrator" size={28} />
           {liveDeputy ? <DeputyTwin engine={seatEngine ?? "claude"} avatarPx={28} /> : null}
         </span>
         <span className="flex min-w-0 flex-1 flex-col">
@@ -745,6 +765,8 @@ export function OrchestratorPanel({
               failed — reaches an operator who is NOT looking at the draft. With
               the rotate draft open it would say the same thing twice, once with
               a retry and once without, so the draft's own block is the one. */}
+          {/* Decisions wait and the column is out of sight: one line says so and opens it. */}
+          {!rotating && file && !(reportsOpen && reportsAvailable) ? <DecisionStripLine count={openDecisionCount} onOpen={() => openDecisions()} /> : null}
           {state.transition && !rotating ? <TransitionBanner transition={state.transition} /> : null}
           {state.rotation ? <RotationBanner rotation={state.rotation} /> : null}
           {telegramLine ? (
@@ -807,7 +829,7 @@ export function OrchestratorPanel({
                 className="flex min-h-0 shrink-0 flex-col border-l border-border"
                 style={{ width: `clamp(${REPORT_LOG_MIN_WIDTH}px, 34%, ${REPORT_LOG_MAX_WIDTH}px)` }}
               >
-                <ReportLog key={project} project={project} variant="column" />
+                <DecisionColumn project={project} tab={columnTab} onTab={chooseTab} focus={decisionFocus} />
               </div>
             </div>
           ) : file ? (
@@ -815,7 +837,7 @@ export function OrchestratorPanel({
               file={file}
               projectName={projectName}
               hostControls={variant !== "seat"}
-              transcriptSlot={reportsOpen && reportsAvailable ? <ReportLog key={project} project={project} variant="column" /> : undefined}
+              transcriptSlot={reportsOpen && reportsAvailable ? <DecisionColumn project={project} tab={columnTab} onTab={chooseTab} focus={decisionFocus} /> : undefined}
             />
           ) : (
             <Centered>
@@ -1080,6 +1102,7 @@ function OrchestratorDraft({
                 ? rotate ? "orchPanel.rotateErrorUnknownTitle" : "orchPanel.errorUnknownTitle"
                 : rotate ? "orchPanel.rotateErrorTitle" : "orchPanel.errorTitle")}
             </p>
+            <FailureTime at={state.failedAt ?? state.designatedAt} />
             <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-sans text-ui leading-4 text-secondary" data-orchestrator-failure-text>
               {failureCopy ? t(failureCopy.text) : state.error}
             </pre>
@@ -1379,6 +1402,7 @@ function TransitionBanner({ transition }: { transition: SeatTransition }) {
         <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />
         {t("orchPanel.transitionFailed")}
       </p>
+      <FailureTime at={transition.failedAt} />
       <p className="mt-0.5 whitespace-pre-wrap break-words text-caption leading-4 text-secondary" data-orchestrator-failure-text>{failureCopy ? t(failureCopy.text) : transition.error}</p>
     </div>
   );

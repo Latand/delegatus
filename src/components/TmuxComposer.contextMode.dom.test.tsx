@@ -318,7 +318,7 @@ async function type(host: HTMLElement, value: string): Promise<void> {
 
 const toggle = (host: HTMLElement) => host.querySelector<HTMLButtonElement>("[data-composer-context-toggle]");
 const modeOf = (host: HTMLElement) =>
-  host.querySelector("[data-testid=composer-input-unit] > div")!.getAttribute("data-composer-mode");
+  host.querySelector("[data-testid=composer-input-unit] > div:not([data-composer-status-line])")!.getAttribute("data-composer-mode");
 const sendButton = (host: HTMLElement) =>
   [...host.querySelectorAll("button")].find((button) => button.getAttribute("aria-label")?.includes("Add to the agent's context") || button.getAttribute("aria-label") === "Send to the agent");
 

@@ -595,6 +595,9 @@ The settings answer gains `lastSession: { usd, seconds, endedAt, incomplete }`.
   The voice's one surface on a phone is its settings dialog, reached from the
   header menu’s Settings → Voice Delegatus row: it keeps the month line (`VoiceCompanionSetting.tsx:119-122`)
   and adds the last call's line beneath it.
+  *Note, 2026-10-12:* the phone now mounts the voice as a floating head with
+  no transcript panel and no spend footer (`docs/design/phone-voice-head-build.md`);
+  the settings dialog stays where the phone reads the month and the last call.
 
 ### Copy
 
@@ -763,7 +766,8 @@ privacy gate. Never a directory sweep against the live state.
 - **Showing token counts in the window.** The operator asked for money; the
   tokens are kept in storage for audit.
 - **The voice on phones.** Never mounted on the phone by #2519's decision;
-  390 px shows the settings dialog.
+  390 px shows the settings dialog. *Note, 2026-10-12:* lifted for the
+  floating head of `docs/design/phone-voice-head-build.md`.
 - **Speaking every orchestrator conversation message.** Too much speech; read
   on request through `orchestrator_messages`.
 - **Write tools for the voice** (answer 2: actions stay with the

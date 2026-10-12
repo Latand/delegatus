@@ -29,11 +29,13 @@ const { VoiceCompanionSetting } = await import("./VoiceCompanionSetting");
 const { COMPANION_SETTINGS_EVENT } = await import("./hostSurfaces");
 const { createCompanionStore } = await import("@/hooks/useVoiceCompanion");
 const { translate } = await import("@/lib/i18n/core");
+const { LAYER } = await import("@/components/layers");
 const { companionErrorMessage } = await import("@/lib/voiceCompanion/errors");
+const { PHONE_VOICE_STORAGE_KEY, readPhoneVoice, resetPhoneVoiceForTests, showPhoneVoice } = await import("./phoneVoiceStore");
 
 const FAKE_KEY = ["fixture", "voice", "value", "42"].join("-");
 const settingsOf = (over: Partial<CompanionSettings> = {}): CompanionSettings => ({
-  enabled: false, monthlyCapUsd: 20, keySource: "missing", keyEnvironment: "OPENAI_API_KEY",
+  enabled: false, backend: "api", monthlyCapUsd: 20, keySource: "missing", keyEnvironment: "OPENAI_API_KEY",
   month: "2026-10", usageUsd: 0, reservedUsd: 0, incomplete: false, uncertainSession: false, ...over,
 });
 
@@ -68,6 +70,8 @@ afterEach(async () => {
     host.remove();
     mounted = null;
   }
+  localStorage.removeItem(PHONE_VOICE_STORAGE_KEY);
+  resetPhoneVoiceForTests();
 });
 async function mount(node: React.ReactNode): Promise<HTMLDivElement> {
   const host = document.createElement("div");
@@ -91,19 +95,32 @@ const click = async (element: Element | null | undefined) => {
   await act(async () => settle());
 };
 
-test("off by default the shell mounts nothing, and on a phone it does not even read the settings", async () => {
+test("off by default the shell mounts nothing on either surface; on the phone, turned on, it mounts the head and no desktop window, and asks for no session", async () => {
   routes(settingsOf());
   await mount(<VoiceCompanionHost project="atlas" mobile={false} />);
   expect(document.querySelector("[data-voice-companion]")).toBeNull();
   expect(harness.calls.map((call) => call.url)).toEqual(["/api/voice-companion/settings"]);
-  await act(async () => mounted!.root.unmount());
-  mounted!.host.remove();
-  mounted = null;
+  await unmountNow();
 
-  routes(settingsOf({ enabled: true }));
+  /* The phone reads the settings as the desktop does, and while off mounts nothing and offers nothing to show. */
+  routes(settingsOf());
   await mount(<VoiceCompanionHost project="atlas" mobile />);
+  expect(document.querySelector("[data-phone-voice], [data-voice-companion]")).toBeNull();
+  expect(harness.calls.map((call) => call.url)).toEqual(["/api/voice-companion/settings"]);
+  expect(readPhoneVoice().available).toBe(false);
+  await unmountNow();
+
+  routes(settingsOf({ enabled: true, keySource: "file" }));
+  await mount(<VoiceCompanionHost project="atlas" mobile />);
+  const head = document.querySelector<HTMLElement>("[data-phone-voice]");
+  expect(head?.dataset.phase).toBe("offline");
+  expect(head?.dataset.mode).toBe("official-realtime");
+  expect(head?.querySelector("[data-phone-voice-head]")?.getAttribute("aria-label")).toBe(`Delegatus · ${translate("en", "voiceCompanion.phase.offline")}`);
   expect(document.querySelector("[data-voice-companion]")).toBeNull();
-  expect(harness.calls).toEqual([]);
+  expect(readPhoneVoice()).toEqual({ hidden: false, side: "right", available: true });
+  expect(sessionCalls()).toEqual([]);
+  await unmountNow();
+  expect(readPhoneVoice().available).toBe(false);
 });
 
 test("turned on, it mounts without starting a call; Talk with no key or a reached cap is refused in words and no session is asked for", async () => {
@@ -125,6 +142,37 @@ test("turned on, it mounts without starting a call; Talk with no key or a reache
     mounted!.host.remove();
     mounted = null;
   }
+});
+
+test("on Codex, Talk with no key and a spent dollar cap asks the session route, and a refusal at the plan limit names its reset", async () => {
+  const live = await liveHarness();
+  const resetsAt = Math.floor(Date.now() / 1000) + 7_200;
+  /* No key anywhere and a spent dollar cap from an earlier build: neither stops a call on the subscription. */
+  const settings = settingsOf({ enabled: true, backend: "codex", keySource: "missing", usageUsd: 25 });
+  harness.setRoute((url) => {
+    const path = new URL(url, "http://127.0.0.1:8898").pathname;
+    if (path === "/api/voice-companion/settings") return jsonResponse(settings);
+    if (path === "/api/orchestrator/seat") return jsonResponse({ seat: null, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: false, previous: [], currentTask: null, all: null });
+    if (path === "/api/voice-companion/session") return jsonResponse({ code: "CODEX_LIMIT_REACHED", resetsAt }, 409);
+    return undefined;
+  });
+  try {
+    await mount(<VoiceCompanionHost project="atlas" mobile={false} />);
+    const companion = document.querySelector<HTMLElement>("[data-voice-companion]");
+    expect(companion?.dataset.mode).toBe("official-realtime");
+    expect(companion?.dataset.phase).toBe("offline");
+    expect(sessionCalls()).toEqual([]);
+    await click(document.querySelector("[data-companion-talk]"));
+    await pause(120);
+    /* The start reaches the route with no key read; the refused request is then released by its own id. */
+    expect(sessionCalls().map((call) => (call.body as { action?: string }).action)).toEqual(["start", "close"]);
+    expect(document.querySelector('[data-companion-notice][data-code="NO_KEY"], [data-companion-notice][data-code="CAP_REACHED"]')).toBeNull();
+    const notice = document.querySelector<HTMLElement>('[data-companion-notice][data-code="CODEX_LIMIT_REACHED"]');
+    expect(notice?.querySelector(".vc-notice-text")?.textContent).toBe(companionErrorMessage("CODEX_LIMIT_REACHED", "en", { resetsAt }));
+    expect(notice?.querySelector(".vc-notice-text")?.textContent).toContain("The first one resets: ");
+    expect(notice?.getAttribute("role")).toBe("alert");
+    expect(live.trackStops()).toBe(1);
+  } finally { await unmountNow(); await live.release(); }
 });
 
 test("the first placement is on screen and a change of project preserves the companion root", async () => {
@@ -160,7 +208,7 @@ test("on a view with no project, Talk says to open one and starts nothing", asyn
   expect(sessionCalls()).toEqual([]);
 });
 
-test("the settings rows: the switch reveals the key and the cap and nothing else, the key is sent once and never shown again, the cap is saved", async () => {
+test("the settings rows: the switch reveals the choice of voice with the API chosen, its key is sent once and never shown again, its cap is saved; Codex shows the last call and its plan window and asks for no key", async () => {
   const stored = routes(settingsOf());
   let announced = 0;
   const heard = () => { announced += 1; };
@@ -195,11 +243,37 @@ test("the settings rows: the switch reveals the key and the cap and nothing else
     expect(stored.monthlyCapUsd).toBe(35.5);
     expect(section.querySelector("[data-voice-companion-usage]")?.textContent).toContain("$35.50");
 
-    /* On is the real voice: no backend to choose, no demo, no word of one. */
-    expect(section.querySelectorAll("[data-voice-companion-backend], [data-backend], [role='radio'], [role='radiogroup']")).toHaveLength(0);
-    expect(section.querySelectorAll("input, button, select")).toHaveLength(4);
+    /* On is a real voice, the API or Codex V3, and never a demo: one two-option choice beside the key and the cap. */
+    const choice = section.querySelector<HTMLElement>("[role='radiogroup'][data-voice-companion-backend]")!;
+    expect([...choice.querySelectorAll<HTMLInputElement>("input[type='radio']")].map((radio) => [radio.value, radio.checked])).toEqual([["api", true], ["codex", false]]);
+    expect([choice.querySelector("[data-voice-backend='api'] label")!.textContent, choice.querySelector("[data-voice-backend='codex'] label")!.textContent]).toEqual(["Through the API (with a key)", "Codex V3 (subscription)"]);
+    expect(section.querySelectorAll("input, button, select")).toHaveLength(6);
     expect(section.textContent).not.toMatch(/demo|демо/iu);
     expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ enabled: true }, { monthlyCapUsd: 35.5 }]);
+
+    /* Codex chosen: the key and the cap close and nothing asks for a key; the last Codex call shows with its plan window. */
+    const now = Math.floor(Date.now() / 1000);
+    stored.lastCodexSession = { seconds: 471, endedAt: Date.UTC(2026, 9, 10, 9), plan: { type: "pro", primary: { usedPercent: 23, resetsAt: now + 7_200, windowMinutes: 300 }, secondary: { usedPercent: 77, resetsAt: now + 4 * 86_400, windowMinutes: 10_080 }, limitReached: false, observedAt: now * 1000 } };
+    await click(choice.querySelector("input[value='codex']"));
+    expect(stored.backend).toBe("codex");
+    expect(section.querySelector("[data-voice-companion-key], [data-voice-companion-cap], [data-voice-companion-usage]")).toBeNull();
+    const codex = section.querySelector<HTMLElement>("[data-voice-backend='codex'] [data-voice-companion-codex]")!;
+    expect(codex.querySelector("[data-voice-companion-last-call]")?.textContent).toBe("Last call: 7:51 · Oct 10.");
+    /* The plan reads as one short line a window, its figure emphasised, between the whole-account note and the muted
+       reading time; times are the board's 24-hour form and a window's number never parts from its unit. */
+    const planBlock = codex.querySelector<HTMLElement>("[data-voice-companion-plan]")!;
+    expect([...planBlock.children].map((node) => node.textContent)).toEqual([
+      "Pro plan, the whole account with its agents",
+      expect.stringMatching(/^5\u00a0h 23%, resets \d\d:\d\d$/u),
+      expect.stringMatching(/^week 77%, resets [A-Z][a-z]{2} \d{1,2}$/u),
+      expect.stringMatching(/^As of \d\d:\d\d\.$/u),
+    ]);
+    expect([...planBlock.querySelectorAll<HTMLElement>("[data-plan-figure]")].map((node) => [node.textContent, node.className.includes("font-semibold")])).toEqual([["23%", true], ["77%", true]]);
+    expect([planBlock.firstElementChild!.className.includes("text-muted"), planBlock.lastElementChild!.className.includes("text-muted"), planBlock.children[1]!.className.includes("text-muted")]).toEqual([true, true, false]);
+    expect(planBlock.textContent).not.toMatch(/AM|PM/u);
+    expect(section.querySelectorAll("input, button, select")).toHaveLength(3);
+    expect(codex.textContent).not.toMatch(/\bkey\b|OpenAI|\$/iu);
+    expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ enabled: true }, { monthlyCapUsd: 35.5 }, { backend: "codex" }]);
     expect(sessionCalls()).toEqual([]);
   } finally { window.removeEventListener(COMPANION_SETTINGS_EVENT, heard); }
 });
@@ -342,6 +416,8 @@ async function liveHarness() {
   Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia: async () => stream }, configurable: true });
   /** fail: "before" loses the request on its way in; "after" loses the reply to a request the Viewer handled. */
   const failing: { command: "before" | "after" | null } = { command: null };
+  /** `start`: held until the test settles it, as a slow mint holds a real start. */
+  const holding: { start: Promise<void> | null } = { start: null };
   const document = settingsOf({ enabled: true, keySource: "file" });
   harness.setRoute(async (url, init) => {
     const target = new URL(url, "http://127.0.0.1:8898");
@@ -352,6 +428,7 @@ async function liveHarness() {
     }
     if (target.pathname !== "/api/voice-companion/session") return jsonResponse({ error: "not routed in this test" }, 404);
     const body = typeof init?.body === "string" ? JSON.parse(init.body) as { action?: string } : null;
+    if (body?.action === "start" && holding.start) await holding.start;
     const lost = body?.action === "command" ? failing.command : null;
     if (lost === "before") { failing.command = null; return jsonResponse({ code: "COMPANION_UNAVAILABLE" }, 502); }
     const request = new NextRequest(`http://127.0.0.1${target.pathname}${target.search}`, { method: init?.method ?? "GET", headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" }, ...(typeof init?.body === "string" ? { body: init.body } : {}) });
@@ -383,7 +460,7 @@ async function liveHarness() {
       const id = `report-${reportList.length + 1}`;
       reportList.push({ id, key: id, seq: reportList.length + 1, at: new Date(Date.now() + 1).toISOString(), class: "completed", body, project, correlatesDirective: sent[sent.length - 1],
         origin: { kind: "manager", conversationId: `conversation_${project}`, role: "orchestrator" } });
-    }, service, trackStops: () => track.stops, tones,
+    }, service, holding, trackStops: () => track.stops, trackEnabled: () => track.enabled, tones,
     starts: () => harness.calls.filter((call) => (call.body as { action?: string } | null)?.action === "start").length,
     async release() {
       for (const row of Object.values(storage.read().sessions)) if (!row.closed) await service.close(row.id);
@@ -447,6 +524,39 @@ test("project switches and null context preserve the same live call, transcript 
     await pause(100);
     expect(closed).toBe(true);
     expect(live.trackStops()).toBeGreaterThan(0);
+  } finally { await unmountNow(); await live.release(); }
+});
+
+for (const backend of ["codex", "api"] as const) test(`a ${backend} call that closes ${backend === "codex" ? "at its plan limit says nothing of a reserved cost" : "without final usage says its reserved cost is retained"}`, async () => {
+  const live = await liveHarness();
+  let seq = 0;
+  const events: CompanionEvent[] = [];
+  const emit = (payload: Payload) => events.push({ ...payload, version: 1, sessionId: "limit-call", generation: 1, seq: ++seq, eventId: `limit-${seq}`, atMs: seq } as CompanionEvent);
+  harness.setRoute((url, init) => {
+    const path = new URL(url, "http://localhost").pathname;
+    if (path === "/api/voice-companion/settings") return jsonResponse(settingsOf({ enabled: true, backend, keySource: backend === "api" ? "file" : "missing" }));
+    if (path === "/api/orchestrator/seat") return jsonResponse({ seat: null, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: false, previous: [], currentTask: null, all: null });
+    if (path !== "/api/voice-companion/session") return undefined;
+    const body = init?.body ? JSON.parse(String(init.body)) : null;
+    if (body?.action === "start") {
+      emit({ type: "session.ready", mode: "official-realtime" });
+      emit({ type: "usage.updated", usage: backend === "codex"
+        ? { backend: "codex", callSeconds: 42, callFinal: true, planStartPercent: 97, plan: { type: "pro", primary: { usedPercent: 100, resetsAt: 2000000100, windowMinutes: 300 }, secondary: null, limitReached: true, observedAt: 1 } }
+        : { backend: "api", callUsd: 0.75, callFinal: false, callIncomplete: true, month: "2026-10", monthUsd: 1, monthCapUsd: 20 } });
+      /* An earlier server marked every Codex close incomplete; the notice must still belong to the API alone. */
+      emit({ type: "session.closed", reason: backend === "codex" ? "limit" : "transport", incomplete: true });
+      return jsonResponse({ sessionId: "limit-call", sdp: "fake-answer" });
+    }
+    return jsonResponse(body ? { ok: true } : { events });
+  });
+  try {
+    await mount(<VoiceCompanionHost project="atlas" mobile={false} />);
+    await click(document.querySelector("[data-companion-talk]"));
+    await pause(300);
+    expect(document.querySelector<HTMLElement>("[data-voice-companion]")?.dataset.phase).toBe("offline");
+    const notice = document.querySelector('[data-companion-notice][data-code="FINALIZATION_INCOMPLETE"]');
+    if (backend === "codex") expect(notice?.textContent ?? null).toBeNull();
+    else expect(notice?.querySelector(".vc-notice-text")?.textContent).toBe(companionErrorMessage("FINALIZATION_INCOMPLETE", "en"));
   } finally { await unmountNow(); await live.release(); }
 });
 
@@ -609,7 +719,7 @@ test("the lost-send line is said in both languages", () => {
 });
 
 test("no settings path reaches a simulator: a demo an earlier server still reports mounts the real voice, and no product module imports the simulator or its scripts", async () => {
-  routes({ ...settingsOf({ enabled: true, keySource: "file" }), backend: "demo" } as CompanionSettings);
+  routes({ ...settingsOf({ enabled: true, keySource: "file" }), backend: "demo" } as unknown as CompanionSettings);
   await mount(<VoiceCompanionHost project="atlas" mobile={false} />);
   expect(document.querySelector<HTMLElement>("[data-voice-companion]")?.dataset.mode).toBe("official-realtime");
   expect(document.querySelector("[data-companion-sim], .vc-sim")).toBeNull();
@@ -860,4 +970,238 @@ test("phone settings retain the month and last call in both languages, including
       await unmountNow();
     }
   } finally { await act(async () => setLocale("en")); }
+});
+
+test("on Codex, before any call the settings say so, and a plan at its limit is said in the danger tone", async () => {
+  routes(settingsOf({ enabled: true, backend: "codex" }));
+  const host = await mount(<VoiceCompanionSetting />);
+  expect(host.querySelector("[data-voice-companion-last-call]")?.textContent).toBe("No call yet.");
+  expect(host.querySelector("[data-voice-companion-plan]")).toBeNull();
+  await unmountNow();
+  const now = Math.floor(Date.now() / 1000);
+  routes(settingsOf({ enabled: true, backend: "codex", lastCodexSession: { seconds: 65, endedAt: Date.UTC(2026, 9, 10, 9), plan: { type: "plus", primary: { usedPercent: 100, resetsAt: now + 3_600, windowMinutes: 300 }, secondary: null, limitReached: true, observedAt: now * 1000 } } }));
+  const limited = await mount(<VoiceCompanionSetting />);
+  const window = limited.querySelector<HTMLElement>("[data-voice-companion-plan]")!;
+  expect(window.dataset.tone).toBe("danger");
+  expect(window.children[1]!.textContent).toMatch(/^5\u00a0h 100%, resets \d\d:\d\d$/u);
+  expect(window.querySelector<HTMLElement>("[data-plan-figure]")!.dataset.tone).toBe("danger");
+});
+
+test("phone settings on Codex keep the last Codex call and its plan window in both languages, with no meter and no key", async () => {
+  const { setLocale } = await import("@/lib/i18n");
+  const now = Math.floor(Date.now() / 1000);
+  const plan = { type: "pro", primary: { usedPercent: 23, resetsAt: now + 7_200, windowMinutes: 300 }, secondary: { usedPercent: 77, resetsAt: now + 4 * 86_400, windowMinutes: 10_080 }, limitReached: false, observedAt: now * 1000 };
+  try {
+    for (const locale of ["en", "uk"] as const) {
+      routes(settingsOf({ enabled: true, backend: "codex", lastCodexSession: { seconds: 471, endedAt: Date.UTC(2026, 9, 10, 9), plan } }));
+      await act(async () => setLocale(locale));
+      await mount(<><VoiceCompanionHost project="atlas" mobile /><VoiceCompanionSetting /></>);
+      expect(document.querySelector("[data-voice-companion]")).toBeNull();
+      expect(document.querySelector("[data-voice-companion-setting]")).toBeTruthy();
+      expect(document.querySelector("[data-companion-spend-meter]")).toBeNull();
+      expect(document.querySelector("[data-voice-companion-key], [data-voice-companion-cap]")).toBeNull();
+      expect(document.querySelector("[data-voice-companion-last-call]")?.textContent).toBe(locale === "en" ? "Last call: 7:51 · Oct 10." : "Остання розмова: 7:51 · 10 жовтня.");
+      const lines = [...document.querySelector<HTMLElement>("[data-voice-companion-plan]")!.children].map((node) => node.textContent);
+      expect(lines.slice(0, 2)).toEqual(locale === "en" ? ["Pro plan, the whole account with its agents", expect.stringMatching(/^5\u00a0h 23%, resets \d\d:\d\d$/u)]
+        : ["План Pro, увесь акаунт разом з агентами", expect.stringMatching(/^5\u00a0год 23%, оновлення \d\d:\d\d$/u)]);
+      /* The weekly reset is a date; in Ukrainian its month is written in full. */
+      expect(lines[2]).toMatch(locale === "en" ? /^week 77%, resets [A-Z][a-z]{2} \d{1,2}$/u : /^тиждень 77%, оновлення \d{1,2} [а-яіїєґ]+$/u);
+      expect(lines[3]).toMatch(locale === "en" ? /^As of \d\d:\d\d\.$/u : /^Станом на \d\d:\d\d\.$/u);
+      await unmountNow();
+    }
+  } finally { await act(async () => setLocale("en")); }
+});
+
+/*
+ * The phone's head (docs/design/phone-voice-head-build.md): shown and hidden from this browser's storage, Hide
+ * ending a call by unmounting, a project change keeping the call, and nothing but Talk starting one.
+ */
+const phoneHead = () => document.querySelector<HTMLElement>("[data-phone-voice]");
+/** Opens the head's popover and taps one of its rows. */
+const phoneRow = async (row: "talk" | "hide" | "end" | "mute") => {
+  if (!document.querySelector("[data-phone-voice-pop]")) await click(document.querySelector("[data-phone-voice-head]"));
+  await click(document.querySelector(`[data-phone-voice-${row}]`));
+};
+
+test("phone: a hidden head stays hidden across a reload, mounts nothing and asks for no session; «Показати голос» brings it back with no call", async () => {
+  routes(settingsOf({ enabled: true, keySource: "file" }));
+  localStorage.setItem(PHONE_VOICE_STORAGE_KEY, JSON.stringify({ hidden: true, side: "left" }));
+  await mount(<VoiceCompanionHost project="atlas" mobile />);
+  expect(phoneHead()).toBeNull();
+  expect(harness.calls.map((call) => call.url)).toEqual(["/api/voice-companion/settings"]);
+  expect(readPhoneVoice()).toEqual({ hidden: true, side: "left", available: true });
+  /* A reload: the page forgets what it held, and the storage says hidden still. */
+  await unmountNow();
+  resetPhoneVoiceForTests();
+  await mount(<VoiceCompanionHost project="atlas" mobile />);
+  expect(phoneHead()).toBeNull();
+  expect(readPhoneVoice().hidden).toBe(true);
+
+  await act(async () => showPhoneVoice());
+  await act(async () => settle());
+  expect(phoneHead()?.dataset.phase).toBe("offline");
+  expect(phoneHead()?.dataset.side).toBe("left");
+  expect(JSON.parse(localStorage.getItem(PHONE_VOICE_STORAGE_KEY)!)).toEqual({ hidden: false, side: "left" });
+  await unmountNow();
+  resetPhoneVoiceForTests();
+  await mount(<VoiceCompanionHost project="atlas" mobile />);
+  expect(phoneHead()).not.toBeNull();
+  expect(sessionCalls()).toEqual([]);
+
+  /* A browser that refuses the write keeps the choice for the page. */
+  const setItem = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(localStorage), "setItem");
+  Object.defineProperty(localStorage, "setItem", { value: () => { throw new Error("QuotaExceededError"); }, configurable: true });
+  try {
+    await phoneRow("hide");
+    expect(phoneHead()).toBeNull();
+    expect(readPhoneVoice().hidden).toBe(true);
+    expect(JSON.parse(localStorage.getItem(PHONE_VOICE_STORAGE_KEY)!)).toEqual({ hidden: false, side: "left" });
+  } finally {
+    Reflect.deleteProperty(localStorage, "setItem");
+    if (setItem && localStorage.setItem !== setItem.value) Object.defineProperty(localStorage, "setItem", { ...setItem, configurable: true });
+  }
+});
+
+test("phone: Hide during a call ends it: the microphone is muted and stopped, the session closed and the head gone; Hide while the start is in flight opens no session", async () => {
+  const live = await liveHarness();
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile />);
+    await phoneRow("talk");
+    await pause(200);
+    expect(live.starts()).toBe(1);
+    expect(phoneHead()?.dataset.phase).not.toBe("offline");
+    expect(live.trackStops()).toBe(0);
+    await phoneRow("hide");
+    await pause(300);
+    expect(phoneHead()).toBeNull();
+    expect(readPhoneVoice().hidden).toBe(true);
+    expect(live.trackEnabled()).toBe(false);
+    expect(live.trackStops()).toBeGreaterThan(0);
+    expect(sessionCalls().map((call) => (call.body as { action?: string } | null)?.action)).toContain("close");
+    expect(Object.values(live.storage.read().sessions).every((row) => row.closed)).toBe(true);
+    expect(live.provider.attached).toBe(0);
+  } finally { await unmountNow(); await live.release(); }
+
+  resetPhoneVoiceForTests();
+  localStorage.removeItem(PHONE_VOICE_STORAGE_KEY);
+  const held = await liveHarness();
+  let release = () => {};
+  held.holding.start = new Promise<void>((resolve) => { release = resolve; });
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile />);
+    await phoneRow("talk");
+    await pause(60);
+    expect(phoneHead()?.hasAttribute("data-starting")).toBe(true);
+    await phoneRow("hide");
+    expect(phoneHead()).toBeNull();
+    release();
+    await pause(300);
+    const actions = sessionCalls().map((call) => call.body as { action?: string; requestId?: string; sessionId?: string } | null);
+    const start = actions.find((body) => body?.action === "start") as { requestId?: string };
+    /* Closed by the start's own request id before the session existed, and the session the start then got is closed too. */
+    expect(actions.some((body) => body?.action === "close" && body.requestId === start.requestId)).toBe(true);
+    expect(Object.values(held.storage.read().sessions).every((row) => row.closed)).toBe(true);
+    expect(held.provider.attached).toBe(0);
+    expect(held.trackStops()).toBeGreaterThan(0);
+    expect(held.starts()).toBe(1);
+  } finally { release(); await unmountNow(); await held.release(); }
+});
+
+test("phone: a project change, and a view with no project, keep the same head and the same live call", async () => {
+  const live = await liveHarness();
+  let closed = false, seq = 0;
+  const events: CompanionEvent[] = [];
+  const emit = (payload: Payload) => events.push({ ...payload, version: 1, sessionId: "phone-call", generation: 1, seq: ++seq, eventId: `phone-${seq}`, atMs: seq } as CompanionEvent);
+  harness.setRoute((url, init) => {
+    const path = new URL(url, "http://localhost").pathname;
+    if (path === "/api/voice-companion/settings") return jsonResponse(settingsOf({ enabled: true, keySource: "file" }));
+    if (path === "/api/orchestrator/seat") return jsonResponse({ seat: { project: "atlas", conversationId: "conversation_atlas", seatEpoch: 1, engine: "claude" }, exists: true });
+    if (path !== "/api/voice-companion/session") return undefined;
+    const body = init?.body ? JSON.parse(String(init.body)) : null;
+    if (body?.action === "start") {
+      emit({ type: "session.ready", mode: "official-realtime" });
+      return jsonResponse({ sessionId: "phone-call", sdp: "fake-answer" });
+    }
+    if (body?.action === "close") { closed = true; emit({ type: "session.closed", reason: "operator" }); }
+    return jsonResponse(body ? { ok: true } : { events });
+  });
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile />);
+    await phoneRow("talk");
+    await pause();
+    const head = phoneHead()!;
+    expect(head.dataset.phase).not.toBe("offline");
+    for (const project of ["project-b", null, "project-a"]) {
+      await act(async () => mounted!.root.render(<VoiceCompanionHost project={project} mobile />));
+      await pause(200);
+      expect(phoneHead() === head).toBe(true);
+      expect(closed).toBe(false);
+      expect(live.trackStops()).toBe(0);
+      expect(live.starts()).toBe(1);
+      expect(head.dataset.phase).not.toBe("offline");
+      const contexts = sessionCalls().filter(call => (call.body as { action?: string } | null)?.action === "context");
+      expect(contexts.at(-1)?.body).toEqual({ action: "context", sessionId: "phone-call", project });
+    }
+  } finally { await unmountNow(); await live.release(); }
+});
+
+test("the switch that turns the voice on names no surface, in both languages", () => {
+  for (const language of ["en", "uk"] as const) expect(translate(language, "voiceCompanion.settings.enable")).not.toMatch(/desktop|десктоп|комп/iu);
+});
+
+test("phone: a live or starting call keeps the head above every layer a phone surface paints (image preview, search, full-screen dialogs); with no call it stays at the dock", async () => {
+  const live = await liveHarness();
+  let release = () => {};
+  live.holding.start = new Promise<void>((resolve) => { release = resolve; });
+  const level = () => Number(phoneHead()?.style.zIndex);
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile />);
+    expect(level()).toBe(LAYER.dock);
+    await phoneRow("talk");
+    await pause(60);
+    expect(phoneHead()?.hasAttribute("data-starting")).toBe(true);
+    /* Starting already holds the microphone: the sign is above the preview (overlay) and below the toasts. */
+    expect(level()).toBeGreaterThan(LAYER.overlay);
+    expect(level()).toBeLessThan(LAYER.toast);
+    release();
+    await pause(200);
+    expect(phoneHead()?.dataset.phase).not.toBe("offline");
+    expect(level()).toBeGreaterThan(LAYER.overlay);
+    await phoneRow("end");
+    await pause(300);
+    expect(phoneHead()?.dataset.phase).toBe("offline");
+    expect(level()).toBe(LAYER.dock);
+  } finally { release(); await unmountNow(); await live.release(); }
+});
+
+test("phone: a tap on the head, a drag, Hide and Show start no call; only Talk does", async () => {
+  routes(settingsOf({ enabled: true, keySource: "file" }));
+  await mount(<VoiceCompanionHost project="atlas" mobile />);
+  /* A tap opens the popover: Talk, then Hide, and nothing else. */
+  await click(document.querySelector("[data-phone-voice-head]"));
+  const rows = [...document.querySelectorAll("[data-phone-voice-pop] [role='menuitem']")].map((row) => row.textContent);
+  expect(rows).toEqual([translate("en", "voiceCompanion.talk"), translate("en", "voiceCompanion.hide")]);
+  await click(document.querySelector("[data-phone-voice-head]"));
+  expect(document.querySelector("[data-phone-voice-pop]")).toBeNull();
+  /* A drag to the other side: the side is kept, and the popover does not open. */
+  const head = document.querySelector<HTMLElement>("[data-phone-voice-head]")!;
+  const pointer = (type: string, x: number) => head.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 7, button: 0, clientX: x, clientY: 600 } as PointerEventInit));
+  await act(async () => { pointer("pointerdown", 1400); pointer("pointermove", 900); pointer("pointermove", 40); });
+  expect(phoneHead()?.hasAttribute("data-dragging")).toBe(true);
+  expect(document.querySelectorAll("[data-phone-voice-slot]").length).toBe(2);
+  await act(async () => { pointer("pointerup", 40); head.click(); });
+  await act(async () => settle());
+  expect(phoneHead()?.dataset.side).toBe("left");
+  expect(document.querySelector("[data-phone-voice-pop]")).toBeNull();
+  await phoneRow("hide");
+  expect(phoneHead()).toBeNull();
+  await act(async () => showPhoneVoice());
+  await act(async () => settle());
+  expect(phoneHead()?.dataset.side).toBe("left");
+  expect(sessionCalls()).toEqual([]);
+  /* With no project in view, Talk says to open one, in the bubble, and still starts nothing. */
+  await act(async () => mounted!.root.render(<VoiceCompanionHost project={null} mobile />));
+  await phoneRow("talk");
+  expect(document.querySelector("[data-phone-voice-bubble]")?.textContent?.replace(/\u00a0/gu, " ")).toBe(companionErrorMessage("NO_PROJECT", "en"));
+  expect(sessionCalls()).toEqual([]);
 });

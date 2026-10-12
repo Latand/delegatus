@@ -48,7 +48,25 @@ export type Delivery = {
 
 export type CompanionMode = "simulated" | "official-realtime";
 
-export interface CompanionUsage {
+/** One window of the paying account's plan, as Codex reports it. */
+export interface PlanWindow {
+  usedPercent: number;
+  /** Unix seconds; null when Codex gave no reset. */
+  resetsAt: number | null;
+  windowMinutes: number | null;
+}
+/** The plan of the Codex account a call runs on. It is that whole account's
+ * use, its workers included, and names nothing but the plan type. */
+export interface CompanionPlan {
+  type: string | null;
+  primary: PlanWindow | null;
+  secondary: PlanWindow | null;
+  limitReached: boolean;
+  observedAt: number;
+}
+/** A call on the API: what it cost against the monthly cap. */
+export interface ApiCompanionUsage {
+  backend?: "api";
   callUsd: number;
   callFinal: boolean;
   callIncomplete: boolean;
@@ -56,12 +74,25 @@ export interface CompanionUsage {
   monthUsd: number;
   monthCapUsd: number;
 }
+/** A call on Codex: its length and the plan window of the account it runs on. */
+export interface CodexCompanionUsage {
+  backend: "codex";
+  /** The call's length on the server clock, from the voice's start to its close. */
+  callSeconds: number;
+  /** The call has ended and its length is final. */
+  callFinal: boolean;
+  plan: CompanionPlan | null;
+  /** The primary window's use at the call's first reading: the meter's rise starts there. */
+  planStartPercent: number | null;
+}
+/** The figures of the backend a call actually ran on. */
+export type CompanionUsage = ApiCompanionUsage | CodexCompanionUsage;
 
 export type Payload =
   | { type: "usage.updated"; usage: CompanionUsage }
   | { type: "context.updated"; project: string | null }
   | { type: "session.ready"; mode: CompanionMode }
-  | { type: "session.closed"; reason: "operator" | "tool" | "cap" | "transport" | "error"; incomplete?: boolean }
+  | { type: "session.closed"; reason: "operator" | "tool" | "cap" | "limit" | "transport" | "error"; incomplete?: boolean }
   | { type: "input.speech.started"; itemId: Id }
   | { type: "input.speech.stopped"; itemId: Id }
   | { type: "transcript.delta"; speaker: "operator" | "companion"; itemId: Id; responseId?: Id; delta: string }
@@ -95,7 +126,8 @@ export type Payload =
   | { type: "delegation.delivery.settled"; delivery: Delivery; status: "delivered" | "failed"; code?: string }
   | { type: "orchestrator.report"; reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string; at: number; project: string }
   | { type: "orchestrator.answer"; delivery: Delivery; reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string }
-  | { type: "error"; code: string; recoverable: boolean };
+  /** `resetsAt` (Unix seconds) names when a refused plan limit resets. */
+  | { type: "error"; code: string; recoverable: boolean; resetsAt?: number };
 
 export type CompanionEvent = Payload & {
   version: 1;

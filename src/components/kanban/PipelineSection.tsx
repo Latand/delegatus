@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 
 import { roleNameById } from "@/components/builderCopy";
 import { useLocale, type TFunction } from "@/lib/i18n";
+import { ordinal, parseCpuQueueDetail } from "@/lib/runtime/cpuQueueText";
 import { edgeRoundsUsed, failEdgeExhaustion, failEdgeMaxRounds } from "@/lib/pipelines/failEdgeBudget";
 import type { Pipeline, PipelineGraphEdit, PipelineStage, PipelineStageReportEntry, StageFinding } from "@/lib/pipelines/types";
 import { attemptStateLabel, latestAttempt, pipelineReviewHeads, pipelineStateLabel, type StageChipState } from "@/components/pipelines/pipelineModel";
@@ -48,6 +49,12 @@ export const ROLE_GLYPH: Record<string, React.ReactNode> = {
 };
 
 const LIVE_CHIP_STATES = new Set<StageChipState>(["running", "reviewing", "committing"]);
+
+/** Keep real agent work visible when only another lane is queued. */
+export function cardWaitsForCpu(pipelines: readonly KanbanPipeline[], working: number): boolean {
+  const active = pipelines.filter(({ pipeline }) => pipeline.state === "running" || pipeline.state === "provisioning");
+  return working === 0 && active.length > 0 && active.every(({ pipeline }) => !!parseCpuQueueDetail(pipeline.stateDetail));
+}
 
 /** How many findings of the card's ranked list it shows before counting. */
 const SHOWN_STAGE_FINDINGS = 3;
@@ -138,6 +145,8 @@ export function GraphEditLine({ edit }: { edit: PipelineGraphEdit }) {
 
 export function pipelineProgress(t: TFunction, summary: KanbanPipeline, nameOf: (stage: PipelineStage) => string): string {
   const { pipeline, chips } = summary;
+  const cpuWait = parseCpuQueueDetail(pipeline.stateDetail);
+  if (cpuWait) return t("kanban.progress.cpuQueue", { position: cpuWait.position, ordinal: ordinal(cpuWait.position), minutes: cpuWait.minutes });
   if (pipeline.state === "provisioning") return t("kanban.progress.provisioning");
   /* #1938: the spent review budget, with its verdict and both heads. */
   const review = pipelineReviewHeads(t, pipeline);

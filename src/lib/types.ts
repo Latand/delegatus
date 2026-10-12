@@ -148,6 +148,7 @@ export interface BridgeAsk {
 
 /** One sidebar entry returned by GET /api/files. */
 export interface FileEntry {
+  agentActivity?: import("./lifecycle/agentActivity").AgentActivityFacts;
   /** Current registry transport for this exact conversation. Presentation only;
       controls resolve and fence ownership again when the operator acts. */
   controlHost?: { conversationId: string; transport: "legacy" | "structured" };
@@ -390,6 +391,10 @@ export interface FileEntry {
       operator (docs/research/attention-classifier.md §7). The reason model
       decides whether it is still open. */
   operatorAsk?: import("@/lib/asks/types").OperatorAskMark;
+  /** Who answers this conversation's reason when it is not the operator
+      (docs/design/attention-auto-resolve.md): its project's seat, stamped by
+      `/api/files` for the one reason it names. */
+  attentionRoute?: import("@/lib/attention/routeTypes").AttentionRouteMark;
   /** Durable launch projection shown before its transcript enters the scan. */
   spawn?: StructuredSpawnCardState;
   /** Transient launch/delivery facts of the launch that CREATED this live
@@ -455,6 +460,8 @@ export interface ProjectCatalogEntry {
 export interface FilesResponse {
   /** One waiting prototype review per task, for the orchestrator notice and needs-you count. */
   prototypeReviewNotices?: import("@/lib/prototypeReview/types").PrototypeReviewNotice[];
+  /** The orchestrators' own open questions, which no task carries. */
+  seatDecisions?: import("@/lib/prototypeReview/types").PrototypeReviewNotice[];
   /** Board-only read: execution bodies remain on targeted full endpoints. */
   readProjection?: "board-summary";
   files: FileEntry[];

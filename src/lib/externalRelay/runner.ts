@@ -1,4 +1,6 @@
 import { ownerRelayAuthorized } from "./ownerAuthority";
+import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
+import { runPrototypeAnswer } from "./prototypeAnswer";
 import { resolveOwnerBridgeContext, ownerNeedsClarification } from "./ownerBridgeContext";
 import { runOwnerAgent, ownerClarificationAnswer, type OwnerRunPorts } from "./ownerRun";
 import { readRelaySwitches } from "./switches";
@@ -33,8 +35,10 @@ import {
 import { callableTools, createToolLoop, toolSleep, type ToolLoopRuntime } from "./toolLoop";
 import { answerPrompt, toolRoundPrompt, conversationTurnPrompt, conversationRoundPrompt } from "./prompt";
 import { progressForEvent } from "./progress";
+import { createRelaySteps } from "./progressSteps";
+import { readRelayStepObservation } from "./stepObservation";
 import { noteRelayProgress } from "./activity";
-import { answerRecorder, countMemberAnswers, type RelayAnswerDelivery } from "./answers";
+import { answerRecorder, countMemberAnswers, readAnswerRecord, type RelayAnswerDelivery } from "./answers";
 import {
   answerProfileFor,
   ownerTierFor,
@@ -279,8 +283,13 @@ export async function runClaimedRequest(
       );
   }
   const profile = answerProfileFor(requester);
-  const owner = ownerTierFor(target, request);
-  if (owner) {
+  const ownerMessage = ownerTierFor({ ownerTier: true }, request);
+  const previousAnswer = ownerMessage ? readAnswerRecord(relay.id, target.id, requestId) : null;
+  const replayReviewId = previousAnswer?.profile?.owner && previousAnswer.requester?.key === requester?.key
+    && previousAnswer.chatKey === (request.chat?.key ?? null) ? previousAnswer.profile.prototype : undefined;
+  const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId) : null;
+  const owner = prototype ? ownerMessage : ownerTierFor(target, request);
+  if (owner && !prototype) {
     try { owner.bridgeReport = resolveOwnerBridgeContext(request, owner, relay.api_base); }
     catch { owner.bridgeReport = null; }
   }
@@ -304,7 +313,10 @@ export async function runClaimedRequest(
     const ownerIdentity = procBackend.processIdentity(process.pid);
     if (!ownerIdentity) throw new Error("viewer process identity unavailable");
     const record = {
-      ...(owner ? { ownerTurn: { clientAttemptId: `relay-owner-${requestId}`, request: { text: owner.text, requestText: owner.requestText }, ...(owner.bridgeReport ? { bridgeReport: owner.bridgeReport } : {}) } } : {}),
+      ...(owner ? { ownerTurn: { clientAttemptId: `relay-owner-${requestId}`,
+        request: { text: owner.text, requestText: owner.requestText },
+        ...(owner.bridgeReport ? { bridgeReport: owner.bridgeReport } : {}),
+        ...(prototype && target.ownerTier !== true ? { prototype: true as const } : {}) } } : {}),
       requestId,
       leaseId,
       relayId: relay.id,
@@ -321,7 +333,7 @@ export async function runClaimedRequest(
     if (admission === "full") return await finish(declined(leaseId, "busy"));
     recorded = true;
     markActive(relay, target);
-    if (owner && ownerNeedsClarification(owner)) return await finish({ lease_id: leaseId, outcome: "answered", answer: ownerClarificationAnswer(request, owner), duration_ms: 0 });
+    if (owner && !prototype && ownerNeedsClarification(owner)) return await finish({ lease_id: leaseId, outcome: "answered", answer: ownerClarificationAnswer(request, owner), duration_ms: 0 });
     const context = conversationContext(request.input.requester);
     if (!owner && readRelaySwitches().chat_conversations && request.chat && context) {
       sweepConversations([relay], readRunLedger().runs.filter((r) => r.requestId !== requestId), Date.now(), undefined, relay.id);
@@ -329,14 +341,14 @@ export async function runClaimedRequest(
       if (!reserved) return await finish(declined(leaseId, "busy", null, "chat busy"));
       conversation = reserved[0]!;
     }
-    const selection = accountManager.resolveHeadlessSpawn(
+    const selection = prototype ? null : accountManager.resolveHeadlessSpawn(
       target.engine,
       conversation?.accountId ?? null,
       [],
       target.project,
       target.model,
     );
-    if (selection.kind !== "available")
+    if (selection && selection.kind !== "available")
       return await finish(
         declined(
           leaseId,
@@ -346,8 +358,11 @@ export async function runClaimedRequest(
             : null,
         ),
       );
-    if (conversation) { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
+    if (conversation && selection?.kind === "available") { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
     let newestProgress: ExternalRelayProgress | null = null;
+    const steps = createRelaySteps(relay.features);
+    let stepLog: string | null = null;
+    let pendingServiceTools = 0;
     let leaseUnavailable = false;
     let beatBusy = false;
     let pendingBeat: Promise<void> | null = null;
@@ -363,16 +378,19 @@ export async function runClaimedRequest(
         callAbort.abort();
       }
     };
-    const beat = async () => {
+    const beat = async (stepChange = false) => {
       if (beatBusy || leaseUnavailable) return;
       beatBusy = true;
       try {
         const sentProgress = newestProgress;
+        const beatSeq = ++seq;
+        const progress = steps ? steps.beat(beatSeq, Date.now(), stepChange) : sentProgress;
+        if (progress?.kind === "step") noteRelayProgress(relay.id, target.id, progress);
         await relayCall(
           relay.api_base,
           `/requests/${encodeURIComponent(requestId)}/heartbeat`,
           "POST",
-          { lease_id: leaseId, seq: ++seq, progress: sentProgress },
+          { lease_id: leaseId, seq: beatSeq, progress },
           relay.credential,
           { timeoutMs: 5000, maxBytes: relay.limits.max_response_bytes },
         );
@@ -409,12 +427,16 @@ export async function runClaimedRequest(
         return acked && !leaseUnavailable;
       },
     }, runtime, (tool, done, failed) => {
-      if (request.answer.progress === "notes") {
+      if (!steps && request.answer.progress === "notes") {
         newestProgress = { kind: done ? "tool_done" : "tool_start", label: tool, tool,
           status: done ? (failed ? "failed" : "completed") : "running", at: new Date().toISOString() };
         noteRelayProgress(relay.id, target.id, newestProgress);
       }
-    });
+    }, steps ? pending => {
+      pendingServiceTools += pending ? 1 : -1;
+      // Service tools never read the Delegatus board; their names stay local.
+      steps.observe({ currentTool: pendingServiceTools > 0 ? "relay_tool" : null });
+    } : undefined);
     let result: Awaited<ReturnType<typeof runEphemeralAgent>["done"]> | null = null;
     let completion: ExternalRelayDecision | null = null;
     for (rounds = 1; rounds <= (loop ? 8 : 1); rounds++) {
@@ -426,22 +448,32 @@ export async function runClaimedRequest(
         const frame = roundPrompt.slice(roundPrompt.lastIndexOf("[Answer with one JSON object"));
         if (conversation && rounds === 1) turn = conversationTurnPrompt(request, conversation, frame);
         const persistentPrompt = conversation ? rounds === 1 ? turn!.prompt : conversationRoundPrompt(loop!.results.filter((r) => r.round === rounds - 1), frame) : roundPrompt;
-        run = owner ? runOwnerAgent({
+        steps?.observe({});
+        stepLog = path.join(loop ? path.join(runDir, `round-${rounds}`) : runDir, "stdout.log");
+        if (prototype && rounds === 1) {
+          pendingBeat = beat();
+          await pendingBeat;
+          if (leaseUnavailable) return null;
+        }
+        run = prototype ? runPrototypeAnswer(prototype, owner!.messageId, () => {
+          if (leaseUnavailable || callAbort.signal.aborted || !allowOwnerReply!()) throw new Error("owner relay authorization revoked");
+        }) : owner ? runOwnerAgent({
           authorize: () => { if (!allowOwnerReply!()) throw new Error("owner relay authorization revoked"); },
           credentials: [relay.credential],
-          request, owner, target, accountId: selection.account.accountId,
+          request, owner, target, accountId: selection!.account.accountId,
           hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
           onConversation: (conversationId) => {
             changeRun(requestId, current => ({ ...current, conversationId }));
             recorder?.bindConversation(conversationId);
           },
+          ...(steps ? { onProgress: steps.observe } : {}),
         }) : runEphemeralAgent({
           ...(conversation ? { session: { mode: conversation.sessionId ? "resume" as const : "start" as const, id: conversation.sessionId ?? (target.engine === "claude" ? crypto.randomUUID() : null), cwd: conversation.cwd, codexHome: conversationCodexHome(conversation) } } : {}),
           key: loop ? `external-relay:${requestId}:${rounds}` : `external-relay:${requestId}`,
           engine: target.engine,
           model: target.model,
           effort: target.effort,
-          account: selection.account,
+          account: selection!.account,
           ["prompt"]: conversation ? persistentPrompt : roundPrompt,
           schema: loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent })) : offersHandoff(request) ? handoffAnswerSchema : answerSchema,
           runDir: loop ? path.join(runDir, `round-${rounds}`) : runDir,
@@ -449,6 +481,7 @@ export async function runClaimedRequest(
           webSearch: profile.webSearch,
           runtime,
           onEvent: (event) => {
+            if (steps) return;
             const progress = progressForEvent(event);
             if (progress && request.answer.progress === "notes") {
               newestProgress = progress;
@@ -456,7 +489,7 @@ export async function runClaimedRequest(
             }
           },
         });
-        void run.done.then(() => { runFinished = true; });
+        void run.done.then(() => { runFinished = true; }, () => { runFinished = true; });
       } catch (error) {
         if (error instanceof EphemeralProfileError)
           return await finish(declined(leaseId, "profile_error"));
@@ -464,9 +497,9 @@ export async function runClaimedRequest(
       }
       const launchedRun = run;
       if (!launchedRun) throw new Error("external relay launch unavailable");
-      // Capacity, drain and profile declines never ran an agent. Count only
-      // a launched child, including one still running or destined to fail.
-      if ((launchedRun.pid || owner) && !recorder?.begun) recorder?.begin(target.engine, target.model, owner ? { ...profile, owner: true } : profile);
+      // Record launched children and authenticated owner controls. The profile
+      // identifies prototype decisions that used no agent or account capacity.
+      if ((launchedRun.pid || owner) && !recorder?.begun) recorder?.begin(target.engine, target.model, owner ? { ...profile, owner: true, ...(prototype ? { prototype: prototype.round.id } : {}) } : profile);
       changeRun(requestId, (current) => ({
         ...current,
         childPid: launchedRun.pid,
@@ -489,8 +522,12 @@ export async function runClaimedRequest(
         pendingBeat = beat();
         await pendingBeat;
         heartbeatTimer = setInterval(() => {
+          if (steps && !owner && !runFinished && stepLog) steps.observe(readRelayStepObservation(stepLog));
           if (!beatBusy) cancelStalledRun();
-          if (!beatBusy && !leaseUnavailable && Date.now() >= nextBeatAt) pendingBeat = beat();
+          if (!beatBusy && !leaseUnavailable) {
+            if (steps?.changeDue(Date.now())) pendingBeat = beat(true);
+            else if (Date.now() >= nextBeatAt) pendingBeat = beat();
+          }
         }, 1000);
         heartbeatTimer.unref();
       }
@@ -508,6 +545,10 @@ export async function runClaimedRequest(
       const decision = result?.status === "done"
         ? loop && !final ? checkedRound(result.answer, request, { handoff: !loop.actionSent, ignore: !loop.sawUnknown }) : checkedAnswer(result.answer, request, { handoff: !loop?.actionSent, ignore: !loop?.sawUnknown })
         : null;
+      if (steps && decision && !("kind" in decision)) {
+        steps.observe({ writingAnswer: true });
+        if (steps.changeDue(Date.now())) { pendingBeat = beat(true); await pendingBeat; }
+      }
       if (!decision || !("kind" in decision)) { completion = decision; break; }
       await loop!.runCalls(decision.calls, rounds);
       if (leaseUnavailable) return null;

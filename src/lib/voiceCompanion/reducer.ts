@@ -110,6 +110,8 @@ export interface CompanionState {
   /** The response whose audio is playing, for an interrupt. */
   playing: { responseId: Id; itemId: Id } | null;
   error: string | null;
+  /** When a refused plan limit resets (Unix seconds), for the error that names it. */
+  errorResetsAt: number | null;
   seen: ReadonlySet<Id>;
   levelSeq: number;
   reports: ReadonlySet<Id>;
@@ -124,7 +126,7 @@ const ID_LIMIT = 200;
 export const INITIAL_COMPANION_STATE: CompanionState = {
   usage: null, orchestratorReports: [], closure: null,
   mode: null, generation: 0, phase: "offline", mouth: 0, playedMs: 0, revision: 0, lines: [], calls: [], delegation: null,
-  playing: null, error: null, seen: new Set(), levelSeq: -1, reports: new Set(), deliveryCards: [],
+  playing: null, error: null, errorResetsAt: null, seen: new Set(), levelSeq: -1, reports: new Set(), deliveryCards: [],
 };
 
 const validId = (value: unknown): value is Id => typeof value === "string" && value.length > 0 && value.length <= ID_LIMIT;
@@ -269,7 +271,7 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
   }
   // Poll snapshots are local observations, outside the persisted event ring and its deduplication set.
   if (event.type === "usage.updated") {
-    if (base.usage && Object.entries(event.usage).every(([key, value]) => base.usage![key as keyof CompanionUsage] === value)) return base;
+    if (base.usage && JSON.stringify(base.usage) === JSON.stringify(event.usage)) return base;
     return { ...base, usage: event.usage, revision: base.revision + 1 };
   }
   if (event.type === "context.updated") return base.error === "CONTEXT_UNCONFIRMED"
@@ -285,14 +287,15 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
 
   switch (event.type) {
     case "session.ready":
-      return next({ mode: event.mode, phase: "idle", error: null, closure: null });
+      return next({ mode: event.mode, phase: "idle", error: null, errorResetsAt: null, closure: null });
     case "session.closed": {
       const lines = base.playing ? cut(base.lines, base.playing.itemId, base.playedMs, revision) : base.lines;
       const delegation = base.delegation && ["proposed", "awaiting-confirmation"].includes(base.delegation.stage)
         ? { ...base.delegation, stage: "cancelled" as const, refusal: "session_closed" } : base.delegation;
       return next({ phase: "offline", playing: null, mouth: 0, lines, closure: { reason: event.reason, incomplete: event.incomplete ?? false },
         delegation,
-        error: ["operator", "tool"].includes(event.reason) ? null : event.reason === "cap" ? "CAP_REACHED" : "PROVIDER_ERROR" });
+        error: ["operator", "tool"].includes(event.reason) ? null : event.reason === "cap" ? "CAP_REACHED" : event.reason === "limit" ? "CODEX_LIMIT_ENDED" : "PROVIDER_ERROR",
+        errorResetsAt: null });
     }
     case "input.speech.started": {
       /* Barge-in: the mouth stops at once. The line keeps the text that was
@@ -443,6 +446,6 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
       });
     }
     case "error":
-      return next({ error: event.code, ...(event.recoverable ? {} : { phase: "offline", playing: null, mouth: 0 }) });
+      return next({ error: event.code, errorResetsAt: typeof event.resetsAt === "number" ? event.resetsAt : null, ...(event.recoverable ? {} : { phase: "offline", playing: null, mouth: 0 }) });
   }
 }

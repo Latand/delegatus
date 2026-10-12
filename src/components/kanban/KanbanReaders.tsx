@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useLayoutEffect, useRef } from "react";
+import { memo, useLayoutEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
@@ -8,7 +8,7 @@ import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { SpeakButton } from "@/components/feed/SpeakButton";
 import { BranchPane } from "@/components/BranchPane";
-import { mobileRowState } from "@/components/mobile/mobileBoardModel";
+import { mobileRowState, rowStateWord } from "@/components/mobile/mobileBoardModel";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 import { EffortScale } from "@/components/EffortPills";
 import { EngineMark } from "@/components/EngineMark";
@@ -16,6 +16,7 @@ import { CtxChip } from "@/components/PlanChip";
 import { captureReader, restoreReader, type ReaderSnapshot } from "@/components/scheme/NativeConversationPane";
 import { useProcessKill } from "@/components/TaskHeader";
 import { RoleFrameMark } from "@/components/RoleFrameMark";
+import { ConversationRoleScope, RoleAvatar } from "@/components/brand/RoleAvatar";
 import { useAgentCapabilities } from "@/components/useAgentCapabilities";
 import { conversationFrameRole, type FrameRole } from "@/lib/roleFrames";
 import { cleanTitle, fileModelLabel, fmtAge } from "@/components/utils";
@@ -246,7 +247,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
   /* PID and Stop host live in the actions menu, so the header keeps its title. */
   const kill = useProcessKill(file);
   const row = mobileRowState(file, now);
-  const stateWord = t(`kanban.memberState.${row.key}`);
+  const stateWord = rowStateWord(t, row);
   const tone = DOT_TONE[row.dot] ?? "tone-neutral";
   const working = row.key === "working";
   const engine = file.engine === "claude" || file.engine === "codex" ? file.engine : null;
@@ -286,6 +287,8 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
   /* The role frame: which agent this is, from the stage it is an
      attempt of and its own durable lineage. */
   const frameRole = readerFrameRole({ file, owner, seat });
+  /* Its answers wear the role's costume (docs/design/role-avatars.md). */
+  const scoped = (pane: ReactNode) => <ConversationRoleScope value={frameRole}>{pane}</ConversationRoleScope>;
   const identity = (
     <>
       {engine ? (
@@ -332,7 +335,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
   /* In a Stages pane the pane's head names the stage, its state and its
      collapse; the conversation keeps its identity row and its own actions. */
   if (inSheet) {
-    return (
+    return scoped(
       <BranchPane
         file={file}
         tasks={[]}
@@ -343,6 +346,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
             <div className="conv-head">
               <div className="ch-meta pane-id">
                 <RoleFrameMark role={frameRole} />
+                <RoleAvatar role={frameRole} size={20} />
                 {identity}
                 <span className="spacer" />
                 <SpeakButton scope={file.path} header />
@@ -367,7 +371,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
             "aria-label": t("kanban.readerAria", { title, state: stateWord }),
           },
         }}
-      />
+      />,
     );
   }
   const header = (
@@ -375,7 +379,8 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
       <div className="conv-head">
         <div className="ch-row">
           <RoleFrameMark role={frameRole} />
-          <span className={`ch-dot ${tone}${working ? " live" : ""}`} aria-hidden="true" />
+          <RoleAvatar role={frameRole} size={26} />
+          <span className={`ch-dot ${tone}${working ? " live" : ""}${row.activity === "checking" ? " hollow" : ""}`} aria-hidden="true" />
           <span className="ch-title" title={titleHint}>
             {labelParts && labelParts.attempt !== null && owner
               ? <>{labelParts.name}<span className="attempt"> · {labelParts.attempt}</span> · {owner.cardTitle}</>
@@ -399,7 +404,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
         <div className="ch-meta">
           <span className={`ch-state ${tone}`}>
             {stateWord}
-            <span className="num"> · {fmtAge(file.mtime)}</span>
+            <span className="num"> · {row.activity === "idle" ? t("cardStatus.idleMinutes", { n: Math.floor((row.seconds ?? 0) / 60) }) : fmtAge(file.mtime)}</span>
           </span>
           {identity}
           {file.worktree ? (
@@ -412,7 +417,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
       </div>
     </>
   );
-  return (
+  return scoped(
     <BranchPane
       file={file}
       tasks={[]}
@@ -434,7 +439,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
           "aria-label": t("kanban.readerAria", { title, state: stateWord }),
         },
       }}
-    />
+    />,
   );
 });
 

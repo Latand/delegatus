@@ -11,7 +11,7 @@ import type { FileEntry } from "@/lib/types";
 import { buildAttentionQueue } from "../attention";
 import { buildMobileAttentionQueue } from "./attentionQueue";
 import { MobileAttentionSheet } from "./MobileAttentionSheet";
-import { needsYouLaneLine } from "./needsYouPanel";
+import { laneOperatorAsk } from "./operatorAsk";
 
 const t: TFunction = (key, params) => translate("en", key, params);
 
@@ -109,19 +109,20 @@ test("the sheet lists conversations and needs_decision pipelines as one list und
   const rows = qa(host, "[data-attention-row]");
   expect(rows.map((row) => row.getAttribute("data-mobile2-go"))).toEqual([null, "chat", "chat"]);
   expect(rows[1]!.textContent).toContain("Implement the export endpoint");
-  expect(rows[1]!.querySelector("[data-attention-decision]")!.textContent).toBe("a question");
+  /* What it asks and what happens next (docs/design/attention-auto-resolve.md). */
+  expect(rows[1]!.querySelector("[data-attention-decision]")!.textContent).toBe(t("needs.ask.question"));
   expect(rows[1]!.textContent).toContain("9m");
   expect(rows[1]!.textContent).toContain("gpt-5.6");
   expect(rows[1]!.querySelector('[data-mobile2-engine="codex"]')).not.toBeNull();
-  expect(rows[2]!.querySelector("[data-attention-decision]")!.textContent).toBe("plan approval");
+  expect(rows[2]!.querySelector("[data-attention-decision]")!.textContent).toBe(t("needs.ask.plan"));
   /* The lane row reads the desktop panel's words for the same lane
-     (`needsYouLaneLine`); its wait gives way to an ellipsis, its age never does. */
+     (`laneOperatorAsk`), wrapped whole; the age stays on the meta line. */
   expect(rows[0]!.getAttribute("data-mobile2-pipeline-row")).toBe("pipeline_atlas_p2");
   expect(rows[0]!.textContent).toContain("Fast conversation switching");
   const laneLine = rows[0]!.querySelector("[data-attention-decision]")!;
-  expect(laneLine.textContent).toBe(needsYouLaneLine(t, PIPELINES.find((pipeline) => pipeline.id === "pipeline_atlas_p2")!));
-  expect(laneLine.className).toContain("truncate");
-  expect(laneLine.className).not.toContain("shrink-0");
+  expect(laneLine.textContent).toBe(laneOperatorAsk(t, PIPELINES.find((pipeline) => pipeline.id === "pipeline_atlas_p2")!).sentence);
+  expect(laneLine.className).not.toContain("truncate");
+  expect(laneLine.className).toContain("[overflow-wrap:anywhere]");
   const laneAge = rows[0]!.querySelector("[data-attention-age]")!;
   /* The desktop panel's words for the same wait (`fmtAge`), minutes up to 90. */
   expect(laneAge.textContent).toBe("60m ago");
@@ -233,7 +234,7 @@ test("the × closes through the host", () => {
   expect(closed).toBe(1);
 });
 
-test("a permission row puts its long headline on a truncated line of its own and keeps the age on the meta line (#2215)", () => {
+test("a permission row says what it would run and what each answer does, wrapped on its own line, and keeps the age on the meta line (#2215)", () => {
   const command = "rm -rf $R/home $R/*.json";
   const reason = "Dangerous rm operation on possibly-empty variable path: $R/*.json in `rm -rf $R/home $R/*.json` (rewrite it as \"${R:?}\"/*.json or use a literal path)";
   const file = conversation("/p/scratch.jsonl", "Clear the scratch tree", NOW - 180, {
@@ -243,11 +244,10 @@ test("a permission row puts its long headline on a truncated line of its own and
   const host = mount(<MobileAttentionSheet entries={buildMobileAttentionQueue(buildAttentionQueue([file], NOW, PROJECT), [])} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} />);
   const row = q(host, "[data-attention-row]")!;
   const decision = row.querySelector("[data-attention-decision]")!;
-  expect(decision.textContent).toBe(`permission: Bash: ${command} — ${reason}`);
-  /* Its own line, allowed to shrink and ending in an ellipsis, beside no meta. */
-  expect(decision.className).toContain("truncate");
-  expect(decision.className).toContain("min-w-0");
-  expect(decision.className).not.toContain("shrink-0");
+  expect(decision.textContent).toBe(t("needs.ask.permissionNamed", { request: `Bash: ${command} — ${reason}` }));
+  /* Its own line, wrapped rather than cut, beside no meta. */
+  expect(decision.className).not.toContain("truncate");
+  expect(decision.className).toContain("[overflow-wrap:anywhere]");
   const age = row.querySelector("[data-attention-age]")!;
   expect(age.textContent).toBe("3m ago");
   expect(age.parentElement!.contains(decision)).toBe(false);
@@ -275,7 +275,7 @@ test("an agent that asked the operator in prose is a row with its role, its own 
   expect(row.querySelector("[data-role-tag]")!.textContent).toBe("Architect");
   expect(row.textContent).toContain("Export formats");
   const decision = row.querySelector("[data-attention-decision]")!;
-  expect(decision.textContent).toBe(`asks you: ${gist}`);
+  expect(decision.textContent).toBe(t("needs.ask.askNamed", { ask: gist }));
   /* The sentence has its own line; the age stays on the meta line. */
   const age = row.querySelector("[data-attention-age]")!;
   expect(age.textContent).toBe("7m ago");
@@ -296,7 +296,7 @@ test("an ask row never mounts permission buttons, even when its conversation als
   file.pendingPermission = { id: "request-9", tool: "Bash", command: "ls", reason: "", reasonType: "safetyCheck", since: new Date((NOW - 60) * 1000).toISOString() } as FileEntry["pendingPermission"];
   const host = mount(<MobileAttentionSheet entries={queue} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} />);
   const row = q(host, `[data-needs-you-row="${askId}"]`)!;
-  expect(row.querySelector("[data-attention-decision]")!.textContent).toBe("asks you: Fold the presets into one button?");
+  expect(row.querySelector("[data-attention-decision]")!.textContent).toBe(t("needs.ask.askNamed", { ask: "Fold the presets into one button?" }));
   expect(q(host, "[data-permission-actions]")).toBeNull();
   expect(q(host, "[data-permission-allow]")).toBeNull();
 });
@@ -358,7 +358,7 @@ test("a waiting prototype review is a row of the sheet's one list: counted, open
     target: { kind: "prototype-review" as const, taskId: "task-layout", reviewId: "pr_1" } };
   const opened: string[] = [];
   const host = mount(<MobileAttentionSheet entries={[...entries(), { kind: "prototype", id: notice.id, notice }]} now={NOW} onOpenConversation={() => {}}
-    onOpenPrototype={(target) => opened.push(target.taskId)} onClose={() => {}} />);
+    onOpenPrototype={(target) => opened.push(target.taskId ?? "")} onClose={() => {}} />);
   expect(q(host, "h2")!.textContent).toBe("Waiting for you · 4");
   const row = q(host, '[data-attention-prototype="task-layout"]')!;
   expect(row.textContent).toContain("Card menu layout");
@@ -375,4 +375,76 @@ test("a questionnaire phone row asks the operator to answer", () => {
   const host = mount(<MobileAttentionSheet entries={[{ kind: "prototype", id: notice.id, notice }]} now={NOW} onOpenConversation={() => {}} onClose={() => {}} onOpenPrototype={() => {}} screen={{ kind: "board" }} />);
   expect(host.textContent).toContain("Questions for you");
   expect(q(host, "[data-attention-prototype]")?.getAttribute("aria-label")).toBe("Answer the questions for «Before work»");
+});
+
+/* «Готово» on the phone (docs/design/done-section.md §4.3, §5): the same
+   list pinned at the top of the sheet above its scroller, the header counting both, the square check the
+   frames draw, and the accepted row left in place with its Undo. */
+type DoneItemV1 = import("@/lib/done/types").DoneItemV1;
+const { useState } = await import("react");
+
+function doneItem(key: string, over: Partial<DoneItemV1> = {}): DoneItemV1 {
+  const at = new Date((NOW - 600) * 1000).toISOString();
+  return { key, kind: "task", look: "closed", project: PROJECT, at, createdAt: at, title: `Closed ${key}`, icon: null, refs: {}, frame: null, frameCheckedAt: at, acknowledgedAt: null, acknowledgedBy: null, ...over };
+}
+
+test("«Готово» opens the sheet above the queue, the header counts both, and a row's square check accepts it in place with Undo", async () => {
+  const calls: Array<{ keys: string[]; undo: boolean; surface: string }> = [];
+  const initial = [
+    doneItem("pr:acme/widgets#2691", { kind: "pr", look: "visible", title: "Landing cards no longer show through", refs: { pr: { repository: "acme/widgets", number: 2691, url: "https://github.com/acme/widgets/pull/2691" } },
+      frame: { src: "/api/image?media=after", before: "/api/image?media=before", caption: "Landing" } }),
+    doneItem("deploy:d1", { kind: "deploy", look: "deploy", project: null, title: "", refs: { sha: "1c41d361".padEnd(40, "0"), phase: "succeeded" } }),
+  ];
+  function Harness() {
+    const [done, setDone] = useState(initial);
+    return <MobileAttentionSheet entries={entries()} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} done={done}
+      acknowledgeDone={async (items, options) => {
+        calls.push({ keys: items.map((item) => item.key), undo: options.undo === true, surface: options.surface });
+        setDone((list) => (options.undo ? [...list, ...items] : list.filter((item) => !items.some((taken) => taken.key === item.key))));
+        return { ok: true };
+      }} />;
+  }
+  const host = mount(<Harness />);
+  expect(q(host, "h2")!.textContent).toBe("Waiting for you · 5");
+  /* «Dismiss all» names the decisions it clears, not the finished work. */
+  expect(q(host, "[data-needs-you-dismiss-all]")!.textContent).toBe("Dismiss all 3");
+  const list = q(host, "[data-mobile2-attention-list]")!;
+  const section = q(host, '[data-done-section="phone"]')!;
+  /* Pinned first: the queue follows it, and only the queue is in the sheet's
+     scroller; «Готово» sits between the header and that body in its own band. */
+  expect(section.compareDocumentPosition(list as unknown as Node) & 4).toBe(4);
+  const body = q(host, "[data-mobile2-sheet-body]")!;
+  expect(body.contains(list)).toBe(true);
+  expect(body.contains(section)).toBe(false);
+  expect(section.parentElement).toBe(body.parentElement);
+  expect(section.compareDocumentPosition(q(host, "[data-mobile2-sheet-header]") as unknown as Node) & 2).toBe(2);
+  expect(section.className).toContain("max-h-[40dvh]");
+  expect(q(section, "[data-done-list]")!.className).toContain("overflow-y-auto");
+  expect(section.getAttribute("data-done-place")).toBe("needs-you");
+  expect(q(section, "[data-done-accept-all]")!.textContent).toBe("Seen all");
+  const check = q(section, '[data-done-accept="pr:acme/widgets#2691"]')!;
+  /* The square check: a whole finger's target and no word. */
+  expect(check.textContent).toBe("");
+  expect(check.className).toContain("min-h-11");
+  expect(check.getAttribute("aria-label")).toBe("Accept: Landing cards no longer show through");
+  flushSync(() => click(check));
+  await new Promise((r) => setTimeout(r, 0));
+  expect(calls).toEqual([{ keys: ["pr:acme/widgets#2691"], undo: false, surface: "phone" }]);
+  expect(q(host, "h2")!.textContent).toBe("Waiting for you · 4");
+  const receipt = q(section, '[data-done-receipt="pr:acme/widgets#2691"]')!;
+  expect(receipt.querySelector("[data-done-receipt-text]")!.textContent).toBe("Landing cards no longer show through #2691\u00a0· accepted");
+  flushSync(() => click(q(receipt, "[data-done-undo]")));
+  await new Promise((r) => setTimeout(r, 0));
+  expect(calls[1]).toEqual({ keys: ["pr:acme/widgets#2691"], undo: true, surface: "phone" });
+  expect(q(host, "h2")!.textContent).toBe("Waiting for you · 5");
+});
+
+test("with no decision and nothing finished the sheet says so; finished work alone keeps the sheet's count", () => {
+  const empty = mount(<MobileAttentionSheet entries={[]} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} done={[]} />);
+  expect(q(empty, "[data-mobile2-attention-empty]")).not.toBeNull();
+  expect(q(empty, "[data-done-section]")).toBeNull();
+  const alone = mount(<MobileAttentionSheet entries={[]} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} done={[doneItem("task:t1")]} />);
+  expect(q(alone, "[data-mobile2-attention-empty]")).toBeNull();
+  expect(qa(alone, "h2").at(-1)!.textContent).toBe("Waiting for you · 1");
+  expect(q(alone, '[data-done-group="closed"]')).not.toBeNull();
 });

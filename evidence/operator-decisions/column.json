@@ -1,0 +1,690 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": {
+    "1440-uk-light-proto": {
+      "card": {
+        "x": 1016,
+        "y": 183,
+        "w": 335,
+        "h": 473
+      },
+      "review": "pr_cccccccccccccccccccccccccccccccc",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [
+        {
+          "x": 1029,
+          "y": 255,
+          "w": 150,
+          "h": 90
+        },
+        {
+          "x": 1187,
+          "y": 255,
+          "w": 150,
+          "h": 90
+        }
+      ],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "1440-uk-light-open": {
+      "card": {
+        "x": 1016,
+        "y": 235,
+        "w": 335,
+        "h": 407
+      },
+      "review": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "1440-uk-light-posted": [
+      {
+        "project": "atlas",
+        "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+        "chosen": [],
+        "comment": "",
+        "answers": [
+          {
+            "questionId": "place",
+            "options": [
+              0
+            ]
+          },
+          {
+            "questionId": "deploy",
+            "options": [
+              1
+            ]
+          }
+        ]
+      }
+    ],
+    "1440-uk-light-answered": {
+      "text": "Відповідь · 03:46\n· «Готово»: місце і деплой\nдоставлено\n1\nДе закріпити список «Готово»? Зверху «Чекають на вас»\n2\nКоли деплоїти після мержу? Увечері, одним деплоєм",
+      "delivery": "sent",
+      "left": {
+        "card": {
+          "x": 1016,
+          "y": 183,
+          "w": 335,
+          "h": 473
+        },
+        "review": "pr_cccccccccccccccccccccccccccccccc",
+        "rows": 1,
+        "sendReachable": true,
+        "minOptionHeight": 36,
+        "thumbs": [
+          {
+            "x": 1029,
+            "y": 255,
+            "w": 150,
+            "h": 90
+          },
+          {
+            "x": 1187,
+            "y": 255,
+            "w": 150,
+            "h": 90
+          }
+        ],
+        "thumbsOverlap": false,
+        "titleCut": false,
+        "tabCount": "2",
+        "horizontalOverflow": false
+      }
+    },
+    "1000-uk-light-strip": "3 чекають рішення",
+    "1000-uk-light-open": {
+      "card": {
+        "x": 273,
+        "y": 258,
+        "w": 702,
+        "h": 351
+      },
+      "review": "pr_cccccccccccccccccccccccccccccccc",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [
+        {
+          "x": 286,
+          "y": 306,
+          "w": 176,
+          "h": 106
+        },
+        {
+          "x": 470,
+          "y": 306,
+          "w": 176,
+          "h": 106
+        }
+      ],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false,
+      "composer": true
+    },
+    "390-uk-light-strip": {
+      "text": "3 чекають рішення",
+      "height": 44,
+      "top": 97
+    },
+    "390-uk-light-sheet": {
+      "card": {
+        "x": 12,
+        "y": 220,
+        "w": 366,
+        "h": 514
+      },
+      "review": "pr_cccccccccccccccccccccccccccccccc",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 44,
+      "thumbs": [
+        {
+          "x": 25,
+          "y": 293,
+          "w": 150,
+          "h": 90
+        },
+        {
+          "x": 183,
+          "y": 293,
+          "w": 150,
+          "h": 90
+        }
+      ],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false,
+      "tabs": 2
+    },
+    "1440-uk-dark-proto": {
+      "card": {
+        "x": 1016,
+        "y": 183,
+        "w": 335,
+        "h": 473
+      },
+      "review": "pr_cccccccccccccccccccccccccccccccc",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [
+        {
+          "x": 1029,
+          "y": 255,
+          "w": 150,
+          "h": 90
+        },
+        {
+          "x": 1187,
+          "y": 255,
+          "w": 150,
+          "h": 90
+        }
+      ],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "1440-uk-dark-open": {
+      "card": {
+        "x": 1016,
+        "y": 235,
+        "w": 335,
+        "h": 407
+      },
+      "review": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "1440-uk-dark-posted": [
+      {
+        "project": "atlas",
+        "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+        "chosen": [],
+        "comment": "",
+        "answers": [
+          {
+            "questionId": "place",
+            "options": [
+              0
+            ]
+          },
+          {
+            "questionId": "deploy",
+            "options": [
+              1
+            ]
+          }
+        ]
+      }
+    ],
+    "1440-uk-dark-answered": {
+      "text": "Відповідь · 03:46\n· «Готово»: місце і деплой\nдоставлено\n1\nДе закріпити список «Готово»? Зверху «Чекають на вас»\n2\nКоли деплоїти після мержу? Увечері, одним деплоєм",
+      "delivery": "sent",
+      "left": {
+        "card": {
+          "x": 1016,
+          "y": 183,
+          "w": 335,
+          "h": 473
+        },
+        "review": "pr_cccccccccccccccccccccccccccccccc",
+        "rows": 1,
+        "sendReachable": true,
+        "minOptionHeight": 36,
+        "thumbs": [
+          {
+            "x": 1029,
+            "y": 255,
+            "w": 150,
+            "h": 90
+          },
+          {
+            "x": 1187,
+            "y": 255,
+            "w": 150,
+            "h": 90
+          }
+        ],
+        "thumbsOverlap": false,
+        "titleCut": false,
+        "tabCount": "2",
+        "horizontalOverflow": false
+      }
+    },
+    "1000-uk-dark-strip": "3 чекають рішення",
+    "1000-uk-dark-open": {
+      "card": {
+        "x": 273,
+        "y": 258,
+        "w": 702,
+        "h": 351
+      },
+      "review": "pr_cccccccccccccccccccccccccccccccc",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [
+        {
+          "x": 286,
+          "y": 306,
+          "w": 176,
+          "h": 106
+        },
+        {
+          "x": 470,
+          "y": 306,
+          "w": 176,
+          "h": 106
+        }
+      ],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false,
+      "composer": true
+    },
+    "390-uk-dark-strip": {
+      "text": "3 чекають рішення",
+      "height": 44,
+      "top": 97
+    },
+    "390-uk-dark-sheet": {
+      "card": {
+        "x": 12,
+        "y": 220,
+        "w": 366,
+        "h": 514
+      },
+      "review": "pr_cccccccccccccccccccccccccccccccc",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 44,
+      "thumbs": [
+        {
+          "x": 25,
+          "y": 293,
+          "w": 150,
+          "h": 90
+        },
+        {
+          "x": 183,
+          "y": 293,
+          "w": 150,
+          "h": 90
+        }
+      ],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false,
+      "tabs": 2
+    },
+    "1440-en-light-proto": {
+      "card": {
+        "x": 1016,
+        "y": 183,
+        "w": 335,
+        "h": 488
+      },
+      "review": "pr_cccccccccccccccccccccccccccccccc",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [
+        {
+          "x": 1029,
+          "y": 255,
+          "w": 150,
+          "h": 90
+        },
+        {
+          "x": 1187,
+          "y": 255,
+          "w": 150,
+          "h": 90
+        }
+      ],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "1440-en-light-open": {
+      "card": {
+        "x": 1016,
+        "y": 235,
+        "w": 335,
+        "h": 421
+      },
+      "review": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "1440-en-light-posted": [
+      {
+        "project": "atlas",
+        "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+        "chosen": [],
+        "comment": "",
+        "answers": [
+          {
+            "questionId": "place",
+            "options": [
+              0
+            ]
+          },
+          {
+            "questionId": "deploy",
+            "options": [
+              1
+            ]
+          }
+        ]
+      }
+    ],
+    "1440-en-light-answered": {
+      "text": "Answered · 03:46\n· «Done»: placement and deploy\ndelivered\n1\nWhere should the «Done» list be pinned? Above «Waiting for you»\n2\nWhen to deploy after the merge? In the evening, in one deploy",
+      "delivery": "sent",
+      "left": {
+        "card": {
+          "x": 1016,
+          "y": 183,
+          "w": 335,
+          "h": 488
+        },
+        "review": "pr_cccccccccccccccccccccccccccccccc",
+        "rows": 1,
+        "sendReachable": true,
+        "minOptionHeight": 36,
+        "thumbs": [
+          {
+            "x": 1029,
+            "y": 255,
+            "w": 150,
+            "h": 90
+          },
+          {
+            "x": 1187,
+            "y": 255,
+            "w": 150,
+            "h": 90
+          }
+        ],
+        "thumbsOverlap": false,
+        "titleCut": false,
+        "tabCount": "2",
+        "horizontalOverflow": false
+      }
+    },
+    "1000-en-light-strip": "3 waiting for a decision",
+    "1000-en-light-open": {
+      "card": {
+        "x": 273,
+        "y": 258,
+        "w": 702,
+        "h": 351
+      },
+      "review": "pr_cccccccccccccccccccccccccccccccc",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [
+        {
+          "x": 286,
+          "y": 306,
+          "w": 176,
+          "h": 106
+        },
+        {
+          "x": 470,
+          "y": 306,
+          "w": 176,
+          "h": 106
+        }
+      ],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false,
+      "composer": true
+    },
+    "390-en-light-strip": {
+      "text": "3 waiting for a decision",
+      "height": 44,
+      "top": 97
+    },
+    "390-en-light-sheet": {
+      "card": {
+        "x": 12,
+        "y": 220,
+        "w": 366,
+        "h": 514
+      },
+      "review": "pr_cccccccccccccccccccccccccccccccc",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 44,
+      "thumbs": [
+        {
+          "x": 25,
+          "y": 293,
+          "w": 150,
+          "h": 90
+        },
+        {
+          "x": 183,
+          "y": 293,
+          "w": 150,
+          "h": 90
+        }
+      ],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false,
+      "tabs": 2
+    },
+    "1440-en-dark-proto": {
+      "card": {
+        "x": 1016,
+        "y": 183,
+        "w": 335,
+        "h": 488
+      },
+      "review": "pr_cccccccccccccccccccccccccccccccc",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [
+        {
+          "x": 1029,
+          "y": 255,
+          "w": 150,
+          "h": 90
+        },
+        {
+          "x": 1187,
+          "y": 255,
+          "w": 150,
+          "h": 90
+        }
+      ],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "1440-en-dark-open": {
+      "card": {
+        "x": 1016,
+        "y": 235,
+        "w": 335,
+        "h": 421
+      },
+      "review": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false
+    },
+    "1440-en-dark-posted": [
+      {
+        "project": "atlas",
+        "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+        "chosen": [],
+        "comment": "",
+        "answers": [
+          {
+            "questionId": "place",
+            "options": [
+              0
+            ]
+          },
+          {
+            "questionId": "deploy",
+            "options": [
+              1
+            ]
+          }
+        ]
+      }
+    ],
+    "1440-en-dark-answered": {
+      "text": "Answered · 03:46\n· «Done»: placement and deploy\ndelivered\n1\nWhere should the «Done» list be pinned? Above «Waiting for you»\n2\nWhen to deploy after the merge? In the evening, in one deploy",
+      "delivery": "sent",
+      "left": {
+        "card": {
+          "x": 1016,
+          "y": 183,
+          "w": 335,
+          "h": 488
+        },
+        "review": "pr_cccccccccccccccccccccccccccccccc",
+        "rows": 1,
+        "sendReachable": true,
+        "minOptionHeight": 36,
+        "thumbs": [
+          {
+            "x": 1029,
+            "y": 255,
+            "w": 150,
+            "h": 90
+          },
+          {
+            "x": 1187,
+            "y": 255,
+            "w": 150,
+            "h": 90
+          }
+        ],
+        "thumbsOverlap": false,
+        "titleCut": false,
+        "tabCount": "2",
+        "horizontalOverflow": false
+      }
+    },
+    "1000-en-dark-strip": "3 waiting for a decision",
+    "1000-en-dark-open": {
+      "card": {
+        "x": 273,
+        "y": 258,
+        "w": 702,
+        "h": 351
+      },
+      "review": "pr_cccccccccccccccccccccccccccccccc",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 36,
+      "thumbs": [
+        {
+          "x": 286,
+          "y": 306,
+          "w": 176,
+          "h": 106
+        },
+        {
+          "x": 470,
+          "y": 306,
+          "w": 176,
+          "h": 106
+        }
+      ],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false,
+      "composer": true
+    },
+    "390-en-dark-strip": {
+      "text": "3 waiting for a decision",
+      "height": 44,
+      "top": 97
+    },
+    "390-en-dark-sheet": {
+      "card": {
+        "x": 12,
+        "y": 220,
+        "w": 366,
+        "h": 514
+      },
+      "review": "pr_cccccccccccccccccccccccccccccccc",
+      "rows": 2,
+      "sendReachable": true,
+      "minOptionHeight": 44,
+      "thumbs": [
+        {
+          "x": 25,
+          "y": 293,
+          "w": 150,
+          "h": 90
+        },
+        {
+          "x": 183,
+          "y": 293,
+          "w": 150,
+          "h": 90
+        }
+      ],
+      "thumbsOverlap": false,
+      "titleCut": false,
+      "tabCount": "3",
+      "horizontalOverflow": false,
+      "tabs": 2
+    }
+  },
+  "failures": []
+}

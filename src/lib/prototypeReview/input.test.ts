@@ -8,8 +8,10 @@ test("questions-only publications validate the short questionnaire contract", ()
   expect(prototypePublishSchema.safeParse(input).success).toBe(true);
   expect(parsePrototypeInput(input)).toEqual(input);
   expect(parsePrototypeInput({ ...input, variants: [] }).variants).toEqual([]);
+  /* One decision is one question (docs/design/operator-decision-forms.md §2.1). */
+  expect(parsePrototypeInput({ ...input, questions: questions.slice(0, 1) }).questions).toHaveLength(1);
   const invalid = [
-    { questions: questions.slice(0, 2) },
+    { questions: [] },
     { questions: Array.from({ length: 8 }, (_, i) => ({ ...questions[0], id: `q${i}` })) },
     { questions: questions.map(q => ({ ...q, options: q.options.slice(0, 1) })) },
     { questions: questions.map(q => ({ ...q, options: Array.from({ length: 7 }, (_, i) => ({ label: `Option ${i}`, recommended: i === 0 })) })) },

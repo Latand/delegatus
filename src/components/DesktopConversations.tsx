@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 
 import { Loader2 } from "@/components/icons";
 import { useConversationCatalog } from "@/hooks/useConversationCatalog";
@@ -13,7 +14,9 @@ import { QuietFileRow } from "./ProjectTrash";
 export const DESKTOP_CONVERSATIONS_PAGE_SIZE = 50;
 
 /**
- * Conversations, the desktop's second view beside the Board (#1695).
+ * The project's recent agents: the list the board's header opens under its
+ * icon. It was Conversations, the desktop's second view beside the Board
+ * (#1695), until the board became the one desktop view.
  *
  * Every conversation stored for the project, the most recent first, from the
  * conversation catalog's own page chain: on a task or not, live or history.
@@ -21,16 +24,21 @@ export const DESKTOP_CONVERSATIONS_PAGE_SIZE = 50;
  * the end, and a row the chain returns twice is listed once. It is the phone's
  * catalog continuation, adapted: the count, loading, a failure or an expired
  * snapshot with its retry, and the end of the list are said in words at the
- * bottom, and search stays in the Viewer's own search.
+ * bottom, and search stays in the Viewer's own search. The popover's head
+ * names the list, so it draws no heading of its own, and its count goes into
+ * that head (`countSlot`).
  */
 export function DesktopConversations({
   project,
   enabled,
   onOpen,
+  countSlot,
 }: {
   project: string;
   enabled: boolean;
   onOpen: (file: FileEntry) => void;
+  /** Where the popover's head shows how many agents the project has. */
+  countSlot?: HTMLElement | null;
 }) {
   const { t } = useLocale();
   /* `scopeKey` keeps the accumulated pages across an update or a trip to the Board, and a return re-reads them. */
@@ -54,15 +62,11 @@ export function DesktopConversations({
 
   const rows = catalog.items.length;
   const firstPage = catalog.loading && !catalog.known;
+  const count = catalog.known ? <span data-desktop-conversations-count className="text-[11px] font-bold tabular-nums text-muted">{catalog.total}</span> : null;
   return (
-    <div data-desktop-conversations-scroll className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4 sm:py-5">
-      <div className="mx-auto w-full max-w-[760px]">
-        {/* Clear of the view switch that floats over this leaf's top-left corner. */}
-        <div className="mt-9 flex items-baseline gap-2">
-          <h2 className="text-[13.5px] font-semibold text-muted">{t("list.title")}</h2>
-          {catalog.known ? <span data-desktop-conversations-count className="text-[11px] font-bold tabular-nums text-muted">{catalog.total}</span> : null}
-        </div>
-        <p className="mb-3 mt-0.5 text-[12px] text-muted">{t("list.hint")}</p>
+    <div data-desktop-conversations-scroll className="min-h-0 flex-1 overflow-y-auto p-1.5">
+      <div className="w-full">
+        {countSlot ? createPortal(count, countSlot) : count ? <div className="px-1 pb-1">{count}</div> : null}
         <div data-desktop-conversations-rows className="space-y-1.5">
           {catalog.items.map((file) => (
             <div key={file.path} data-desktop-conversations-row={file.path}>

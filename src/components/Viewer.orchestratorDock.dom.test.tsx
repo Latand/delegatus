@@ -79,11 +79,13 @@ const OTHER = "borealis";
 const originalFetch = globalThis.fetch;
 
 /* The dock is what a project shows off its Board: the Board seats the
-   orchestrator above its columns instead (#1695 K3). A desktop project nobody
-   chose a view for opens on its Board (#2166 §3.4), so these cases serve a
-   board whose saved view is the conversation list, the way an operator who
-   picked it has one. */
+   orchestrator above its columns instead (#1695 K3). The Board is the one
+   desktop view, whatever view was saved, so the dock is left to a project the
+   catalog has not answered for yet, which has no board to draw: these cases
+   serve a catalog that does not list the projects, and the last ones serve one
+   that does. */
 let savedView: "list" | null = "list";
+let catalogListed = false;
 let boards: Record<string, BoardProjectStateV1> = {};
 const savedBoard = (viewMode: "list" | null): BoardProjectStateV1 => ({
   schemaVersion: 1,
@@ -99,7 +101,7 @@ function stubFetch(): void {
     if (url.startsWith("/api/files")) {
       return new Response(JSON.stringify({
         files: [],
-        projectCatalog: [{ project: PROJECT, conversations: 0 }, { project: OTHER, conversations: 0 }],
+        projectCatalog: catalogListed ? [{ project: PROJECT, conversations: 0 }, { project: OTHER, conversations: 0 }] : [],
       }));
     }
     if (url.startsWith("/api/orchestrator/seat")) {
@@ -129,6 +131,7 @@ beforeEach(() => {
   resetPendingOpensForTest();
   boards = {};
   savedView = "list";
+  catalogListed = false;
   dom.localStorage.clear();
   dom.sessionStorage.clear();
   dom.location.hash = "";
@@ -227,8 +230,9 @@ test("the dock follows the selected project", async () => {
   expect(dock(host)!.querySelector("[data-orchestrator-panel]")?.getAttribute("data-orchestrator-panel")).toBe(OTHER);
 });
 
-test("a project with no saved view opens on its Board: no dock, and the toggle folds the seat", async () => {
-  savedView = null;
+for (const saved of [null, "list"] as const) test(`a project the catalog lists opens on its Board (saved view: ${saved ?? "none"}): no dock, and the toggle folds the seat`, async () => {
+  savedView = saved;
+  catalogListed = true;
   dom.localStorage.setItem(OPEN_KEY, "1");
   /* Selected the way the rail selects: the previous case leaves another
      project behind in the history state, which a bare `llvProject` loses to. */

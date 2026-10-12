@@ -1,3 +1,4 @@
+import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { withSpawnDiagnostics, bindSpawnDiagnostics, spawnDiagnosticError } from "./spawnDiagnostics";
 import fs from "node:fs";
 import os from "node:os";
@@ -102,6 +103,12 @@ export function viewerTitleLocale(chosen: "en" | "uk" | null, acceptLanguage: st
 
 function prefersUkrainian(req: Pick<NextRequest, "headers">): boolean {
   return viewerTitleLocale(operatorLocale(), req.headers.get("accept-language")) === "uk";
+}
+
+function isSqliteBusy(error: unknown): boolean {
+  const code = error && typeof error === "object" && "code" in error ? error.code : null;
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return code === "SQLITE_BUSY" || /\bSQLITE_BUSY\b|database is (?:locked|busy)/i.test(message);
 }
 
 function pinFallbackTitle(req: Pick<NextRequest, "headers">): string {
@@ -589,6 +596,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
      the agent may already have accepted the prompt despite a later failure. */
   let imagePaths: string[] = [];
   let launchId: string | null = null;
+  let queuedPinnedAttempt = false;
   try {
     const deterministicTitleReplay = body.title === undefined || explicitTitle === derivedTitle;
     const identityWaveTitleReplay = existingAttempt?.identityWaveTitleBackfill === true
@@ -941,6 +949,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     const queuedUntil = Number.isFinite(retryDeadline) && retryDeadline > Date.now()
       ? new Date(retryDeadline).toISOString()
       : null;
+    queuedPinnedAttempt = Boolean(queuedUntil && requestedAccountId);
     if (tierResolution.tier && account.serviceTier === null) launchTier = null;
     if (queuedUntil && requestedAccountId) {
       account = dependencies.resolveSpawnAccount(engine, requestedAccountId);
@@ -970,6 +979,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         claudeConfigDir: engine === "claude" ? launchAccount.home : null,
         claudeProjectsDir: engine === "claude" ? launchAccount.transcriptRoot : null,
         allowSubagents: body.allowSubagents === true,
+        operatorDecisionForms: transport === "tmux" && operatorDecisionFormsRequired(role.value?.role, existingAttempt?.artifactPath),
         mcpServers: grantedServers,
         deferClaudeSpawnPolicy: true,
       });
@@ -1335,6 +1345,14 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         && identityMaterializationFence(registry.readOnlySnapshot()).allowsReceipt(receipt, { structured })) {
         await adoptMaterializedAttempt(receipt, receipt.artifactPath);
       }
+      /* A prior request may have durably installed a queued pinned launch
+         before its response was lost. Once replay has observed that durable
+         queue, hand its foreground lease back so the due-queue reaper can own
+         the launch independently of this still-live Viewer process. */
+      if (queuedUntil && queuedReceipt.admissionOwner) {
+        queuedReceipt = registry.releaseSpawnActuation(queuedReceipt.launchId, queuedReceipt.admissionOwner).receipt;
+        receipt = queuedReceipt;
+      }
       const response = withAccountOverride(spawnResponseForReceipt(receipt, receipt.artifactPath, {
         structured,
         initialMessage: queuedUntil ? "queued" : initialMessage,
@@ -1455,6 +1473,18 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     return NextResponse.json(withAccountOverride(spawnResponseForReceipt(settled.receipt, childPath)));
   } catch (error) {
     const receipt = launchId ? registry.readOnlySnapshot().receipts[launchId] : null;
+    /* A queued pinned launch has reserved its durable identity, while no
+       process or host has been admitted. Preserve that receipt across a
+       transient SQLite failure so the caller can replay the same attempt key.
+       Failing it here would make the replay conflict with its own reservation. */
+    if (isSqliteBusy(error) && queuedPinnedAttempt && receipt?.accountPin && receipt.accountId
+      && receipt.state === "starting" && receipt.pane === null && receipt.key === null) {
+      return NextResponse.json({
+        error: error instanceof Error ? error.message : String(error),
+        code: "SQLITE_BUSY",
+        retryable: true,
+      }, { status: 500 });
+    }
     if (!receipt || receipt.pane === null) {
       if (receipt) await registry.failSpawnOffLoop(receipt.launchId, "spawn failed before pane binding");
       deleteInboxImages(imagePaths);

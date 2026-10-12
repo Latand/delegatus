@@ -1,0 +1,225 @@
+# Privacy scanning performance
+
+The subject range gets a complete verdict inside its 839-second push budget.
+The scanner covers every selected file and fingerprint window, and reads every
+commit message and merge-boundary identity. Media policy and hosted workflow
+policy are unchanged.
+
+Measurements on 2026-10-12 used Bun 1.4.0, isolated repository snapshots and
+`scripts/gate-slot.sh`. Timing starts after slot and CPU admission. Both hook
+variables were set: `LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE` pointed to the
+committed catalog and `LLV_PRIVACY_OCR_LANGUAGES` was `eng+ukr`. The full-range
+commands included `--require-known-values --check-commits`.
+
+| Input | Before | After | Verdict |
+| --- | ---: | ---: | --- |
+| Subject, 9 commits / 26 files / 3.54 MB | 900.19 s timeout (original verifier); reproduced at the 900 s owned deadline | 268.05 s | PASS |
+| Control | 28.30 s | 4.01 s | PASS |
+
+The subject was `05d66b736e182b84e22a17888b20d346f6aae8a6..35f99d6603deb0a807e121f468254647e0af6674`.
+The control was `2703f64dfca51141de9ed1b195a94c2e99f06f36..8fb84d9275e97c9051999ed5016678f6508629f7`.
+The verifier's earlier control measurement was 20.72 s; the table uses this
+implementation run's measurements for both control samples.
+
+The first two changes hoist the whole-string offset comparison and use Bun's
+static SHA-256 API for fingerprint windows. With those changes alone, a CPU
+profile of the 2.09 MB browser test took 324.70 s. Hashing remained the largest
+cost. Repeated views and a repeatedly cleared 4,096-window cache caused
+redundant hashes. The matcher now caches negative blocks and more negative
+windows. The window cache holds at most 262,144 windows and four million
+characters; the block cache holds at most sixteen million characters.
+Each block owns up to 16,384 starting positions and includes the following
+`length - 1` characters. This preserves every separator and block-crossing
+window. Only an identical block with a proven negative verdict can be skipped.
+Increasing those bounded capacities reduced the browser scan from 311.51 s to
+159.98 s, with peak RSS of 929,268 KiB. The unprofiled full-range run is the after
+measurement in the table.
+
+`scripts/privacy-large-file.test.ts` builds a synthetic 2,016,010-byte changed
+file and a synthetic fingerprint catalog. An accepted package version forces
+RAW email ownership preparation across the entire encoded Unicode input.
+The final test's Bun 1.3.3 gate run passed in 15.63 s against a 60 s bound.
+The same synthetic fixture with the original scanner exceeded that bound and
+failed at 60.04 s without a verdict.
+That bound leaves 3.8 times the observed runtime for CI variation
+and uses less than 8% of the failed push budget.
+
+Equivalence checks compare canonical text and source offsets with a frozen
+original decoder, compare sliding-window SHA-256 digests with node crypto,
+and compare fingerprint verdicts with exhaustive window hashing. They cover
+mapped and unmapped text, escapes, Unicode, lone surrogates, short inputs,
+final windows, separator crossings, block crossings and both cache evictions.
+All 642 existing gate fixtures pass under the hosted workflow's Bun 1.3.3 with
+English and Ukrainian OCR. The privacy media workflow tests and shared static
+detector tests pass too.
+
+The complete privacy run passed 647 tests across four test files.
+The default-runtime hook comparison reported 150 failures shared with main
+and no new failures; the clean fixture environment under the privacy CI pin
+passed all existing fixtures.
+
+No production deployment was performed.
+
+## Local gate CPU optimization and negative fingerprint cache
+
+Implementation: `e6b79401237828ef1c2fa31350ea33f6fde4889d`, with the preceding
+Unicode/plaintext and markup changes in `d4e6c5e68b7513cea15838059909bc5494deb925`.
+The baseline scanner is the unchanged scanner at
+`0846ab8fbdbcdccb60ee5d08c3989ccb87f83893`. The design and entry-point/family
+profile are in [privacy gate CPU cost](../design/privacy-gate-cost.md).
+
+Known-value needles and fingerprints are prepared once per inspector. Verified
+well-formed Unicode plaintext uses the existing substring path; replacement
+characters, surrogate aliases and opaque fingerprints retain exhaustive
+window hashing. The window matcher compares complete 32-byte SHA-256 digests
+through a reusable buffer. A forward markup walk preserves the original spans
+and source offsets while avoiding repeated searches through an unclosed suffix.
+
+The optional local Linux cache stores authenticated records of negative opaque
+fingerprint scans. Every cache hit binds the exact UTF-16 input, the complete
+opaque hash policy and exact/compact mode, scanner/helper file bytes, loaded
+code and constants, and Bun version/revision/platform/architecture. Plaintext
+matching, generic detectors, file selection, commit messages, merge identities,
+media, provenance and configuration failures retain their existing checks.
+
+The cache uses an owner-only directory and 32-byte seal, HMAC-SHA-256 records,
+atomic writes and 1,024 fixed slots. Each accepted record is at most 1 KiB and
+expires after seven days. Collisions require the complete key and fall back to
+scanning. Readers recheck directory/key ownership, permissions, symlinks and
+seal contents on every access. Invalid or inaccessible storage causes a full
+scan. Unknown files are preserved; cleanup removes only the writer's own
+temporary path. The default directory is under the caller's temporary root;
+`LLV_PRIVACY_FINGERPRINT_CACHE_DIR` can choose an isolated cache explicitly.
+The cache is disabled whenever `CI` is present and on platforms other than
+Linux. Hosted trusted scans always run the complete detectors.
+
+### Measurement method
+
+The input is the same realistic lane used by the design:
+`2703f64dfca51141de9ed1b195a94c2e99f06f36..8fb84d9275e97c9051999ed5016678f6508629f7`,
+9 commits, 11 text files and 125,094 bytes, 14 commits behind the measured base.
+Pre-commit supplies those paths through the hook's explicit-path API; pre-push
+uses the actual changed-path, message and merge-boundary APIs. These numbers
+measure the hooks' privacy steps, excluding lint, whitespace, types and tests.
+
+Seven repetitions per mode run four fresh Bun 1.4.0 processes: original cold,
+original repeated input, new cold, new repeated input. Each repetition has a
+separate cache directory; only its new cold scan primes its new warm scan.
+Both implementations receive the committed fingerprint catalog,
+`LLV_PRIVACY_OCR_LANGUAGES=eng+ukr` and the same frozen inherited plaintext
+snapshot (922 eligible strings, 153,844 characters). Private values are withheld.
+CPU is the admitted owned scope's kernel `usage_usec` delta, including scanner
+threads and Git children. Wall time and CPU exclude gate-slot admission.
+The table reports medians and names cold and warm cache states explicitly.
+
+| Privacy step | Cache state | Before CPU-s | After CPU-s | Reduction | Before wall-s | After wall-s |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Pre-commit | Cold | 3.778 | 0.672 | 5.62× | 3.520 | 0.568 |
+| Pre-commit | Repeated input / warm cache | 3.570 | 0.306 | 11.65× | 3.276 | 0.255 |
+| Pre-push | Cold | 3.687 | 0.874 | 4.22× | 3.381 | 0.759 |
+| Pre-push | Repeated input / warm cache | 3.788 | 0.472 | 8.02× | 3.505 | 0.399 |
+
+The 5× target is met for repeat local scans with a populated content/policy cache. Cold scans still run every detector; pre-push cold measured 4.22×. The warm reduction also exceeds 5× under the conservative ratio of the smallest baseline sample to the largest candidate sample: 8.21× for pre-commit and 5.31× for pre-push.
+
+### Equivalence and checks
+
+Reference comparisons were added and passed against the original implementation
+before enabling its Unicode plaintext replacement. The complete original corpus
+passes 642 tests with the workflow's Bun 1.3.3 and English/Ukrainian OCR.
+The revised corpus passes 642 tests in local-cache mode and CI mode. The earlier
+537-invocation comparison is historical evidence; its per-invocation input
+manifest was not retained. The retained reproduction below compares complete
+baseline and candidate CLI reports for the historical realistic lane in local
+and CI modes, and stores sanitized per-sample aggregation inputs.
+
+The focused files run individually under isolated HOME, XDG, TMPDIR,
+`CLAUDE_CODE_TMPDIR`, `LLV_STATE_DIR` and a closed Viewer control port:
+
+- `scripts/privacy-known-plaintext.test.ts` — Unicode, exact/compact policy,
+  replacement-byte aliases and configuration independence.
+- `scripts/privacy-fingerprint-windows.test.ts` — independent node-crypto
+  digests and exhaustive window oracle, full-digest mismatch, exact catalog
+  spelling, surrogate/block/separator boundaries and eviction.
+- `scripts/privacy-markup.test.ts` — original-regex spans, text and offsets,
+  plus bounded CPU growth on unmatched markup.
+- `scripts/privacy-fingerprint-cache.test.ts` — fresh readers, complete binding,
+  corruption, unsafe storage, CI refusal, bounded collisions, expiry and
+  permissions/seal changes after initialization.
+- `scripts/privacy-canonical-text.test.ts`, `scripts/privacy-large-file.test.ts`,
+  `scripts/privacy-media-workflow.test.ts` and
+  `src/lib/privacy/staticDetectors.test.ts`.
+
+All 682 tests pass across the corpus and these eight files. TypeScript, ESLint,
+staged whitespace and the manual local privacy CLI with both hook variables
+and inherited plaintext pass. The lockfile is unchanged. The existing hosted
+workflow retains trusted/candidate separation and candidate-last ordering;
+its contract tests pass. Hosted checks were not awaited.
+
+The cold allocation changes alone varied around the 5× target in repeated
+measurements. Per-file negative-window reuse, larger local caches, compiled
+literal unions and block UTF-8 preparation did not consistently improve both
+paths on this input and were left out. The persistent negative cache gives
+repeat local scans a clear margin while preserving fresh hosted inspection.
+No detection class or publication surface was removed or narrowed.
+
+### Reproduce the CPU table and compare the real CLI
+
+`scripts/privacy-performance-repro.ts` is the retained harness. It creates
+detached worktrees for the pinned scanner revisions and the historical input
+head, then invokes `privacy-publication-gate.ts` as a child process. Its
+pre-commit case passes the input range's added, copied, modified and renamed
+paths through `--paths`. Its pre-push case passes the base and
+`--check-commits`, so files, commit messages and merge-boundary identities use
+the gate's own range logic. Both use `--require-known-values` and the two local
+hook variables. The CI comparison repeats both entry points with `CI=true`,
+which disables the optional local cache.
+
+The harness measures the enclosing gate scope's `cpu.stat` `usage_usec` around
+each real CLI process. Invoke the whole harness through `gate-slot.sh`; this
+places it under CPU admission before the first measurement. Slot admission is
+outside every sample. Each repetition owns separate baseline and candidate
+cache directories. The cold invocation is first; the following warm
+invocation reuses that candidate cache. It compares exit status and the full
+stdout plus stderr byte buffers before saving results. Raw reports, paths,
+private values and configuration contents never enter the retained output.
+The output keeps each sample's CPU and wall time, exit status, byte length and
+SHA-256 of its complete report, so readers can recompute medians and confirm
+which reports matched without publishing report contents.
+
+Create a private JSON file outside the checkout. `knownValuesFile` points to
+the same private plaintext snapshot used by the original measurement;
+`fingerprintFile` points to the committed public fingerprint catalog. Keep the
+private file mode `0600`. Use this schema, substituting the local private file
+and output paths:
+
+```json
+{
+  "repository": "<checkout containing the pinned commits>",
+  "baseline": "0846ab8fbdbcdccb60ee5d08c3989ccb87f83893",
+  "candidate": "9ec8f28da0525704fbe9205c4c632ded66827274",
+  "inputBase": "2703f64dfca51141de9ed1b195a94c2e99f06f36",
+  "inputHead": "8fb84d9275e97c9051999ed5016678f6508629f7",
+  "knownValuesFile": "<private plaintext snapshot file>",
+  "fingerprintFile": "<checkout>/scripts/privacy-known-value-fingerprints.json",
+  "ocrLanguages": "eng+ukr",
+  "samples": 7,
+  "outputFile": "<checkout>/docs/verification/privacy-scanning-performance.samples.json"
+}
+```
+
+Run from the checkout whose Git object database contains all four pinned
+commits:
+
+```sh
+DELEGATUS_CPU_PRESSURE=off bash scripts/gate-slot.sh \
+  bun scripts/privacy-performance-repro.ts "$HOME/private/privacy-performance.json"
+```
+
+`DELEGATUS_CPU_PRESSURE=off` skips only pressure-based waiting; the shared slot
+and scoped CPU quota remain active. The output JSON is deliberately free of
+private configuration values. Review it before committing: it should contain
+28 local baseline/candidate comparisons (56 full reports total) and two CI
+comparisons, each marked byte-identical. Its seven rows per entry point and
+cache state are the complete inputs to the median and reduction calculations.
+The private snapshot is required to reproduce the exact historical measurement;
+the public catalog and commit inputs remain pinned in the manifest above.

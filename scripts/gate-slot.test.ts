@@ -27,7 +27,7 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function fixture(systemd: boolean) {
   const root = mkdtempSync(join(tmpdir(), "slot-test-")); roots.push(root);
-  for (const name of ["mkdir", "flock", "sleep", "dirname"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
+  for (const name of ["mkdir", "flock", "sleep", "dirname", "mktemp", "touch", "rm"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
   if (systemd) {
     writeFileSync(join(root, "systemctl"), "#!/bin/bash\nexit 0\n"); chmodSync(join(root, "systemctl"), 0o755);
     writeFileSync(join(root, "systemd-run"), '#!/bin/bash\nprintf "%s\\n" "$@" > "$SLOT_LOG"\nwhile [[ "$1" != -- ]]; do shift; done\nshift\nexec "$SLOT_BUN" "$SLOT_SERVICE_STUB" "$4"\n'); chmodSync(join(root, "systemd-run"), 0o755);
@@ -70,7 +70,7 @@ function fakeCgroup(root: string, group: string, controls: { scope?: string; sli
 /** A Linux fixture whose systemd records what the gate asked for. */
 function cpuFixture(options: { manager: boolean; refuseQuota?: boolean; kernel?: { scope?: string; slice?: string } }) {
   const root = mkdtempSync(join(tmpdir(), "slot-cpu-test-")); roots.push(root);
-  for (const name of ["mkdir", "flock", "sleep", "awk", "uname", "cat", "dirname"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
+  for (const name of ["mkdir", "flock", "sleep", "awk", "uname", "cat", "dirname", "mktemp", "touch", "rm"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
   writeFileSync(join(root, "getconf"), "#!/bin/bash\necho 24\n"); chmodSync(join(root, "getconf"), 0o755);
   if (options.manager) {
     writeFileSync(join(root, "systemctl"), `#!/bin/bash\nprintf "%s\\n" "$*" >> "$SYSTEMCTL_LOG"\n${options.refuseQuota ? '[[ "$2" == set-property ]] && exit 1\n' : ""}exit 0\n`);
@@ -116,20 +116,18 @@ test.skipIf(process.platform !== "linux")("a missing CPU mechanism is an explici
 });
 test.skipIf(process.platform !== "linux")("CPU pressure holds a gate visibly, then starts it once after the release window", async () => {
   const f = cpuFixture({ manager: true });
-  writeFileSync(join(f.root, "pressure"), "some avg10=55.00 avg60=40.00 avg300=20.00 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n");
+  writeFileSync(join(f.root, "pressure"), "some avg10=30.00 avg60=40.00 avg300=20.00 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n");
   const child = Bun.spawn(["/bin/bash", join(import.meta.dir, "gate-slot.sh"), "/bin/bash", "-c", f.script],
     { env: { ...f.env, DELEGATUS_CPU_PRESSURE: "on", LLV_GATE_PSI_RELEASE_SECONDS: "1", LLV_GATE_PSI_DEFER_SECONDS: "1" }, stdout: "ignore", stderr: "pipe" });
   await Bun.sleep(1_500);
   expect(Bun.file(f.marker).size).toBe(0);
-  writeFileSync(join(f.root, "pressure"), "some avg10=12.00 avg60=40.00 avg300=20.00 total=1\n");
+  writeFileSync(join(f.root, "pressure"), "some avg10=20.00 avg60=40.00 avg300=20.00 total=1\n");
   await Bun.sleep(1_200);
   expect(Bun.file(f.marker).size).toBe(0); // between the thresholds the hold stays
   writeFileSync(join(f.root, "pressure"), "some avg10=2.00 avg60=30.00 avg300=20.00 total=1\n");
   expect(await child.exited).toBe(0);
   const stderr = await new Response(child.stderr).text();
-  expect(stderr).toContain("gate-slot: held for CPU pressure: avg10 55.00% >= 20%; starts once it stays below 10% for 1s");
-  expect(stderr).toContain("gate-slot: deferred by CPU pressure for 1s");
-  expect(stderr).toMatch(/gate-slot: admitted after \d+s of CPU pressure/);
+  expect(stderr).toContain("gate-slot: Waiting for the CPU queue · 1st · up to 10 min");
   expect(readFileSync(f.marker, "utf8")).toBe("run\n");
 }, 20_000);
 test.skipIf(process.platform !== "linux")("a failed pressure sample admits; the quotas still bound the gate", () => {
@@ -187,8 +185,7 @@ test.skipIf(process.platform !== "linux")("pressure that rises while a gate wait
   writeFileSync(pressure, "some avg10=2.00 avg60=30.00 avg300=20.00 total=1\n");
   expect(await child.exited).toBe(0);
   const stderr = await new Response(child.stderr).text();
-  expect(stderr).toContain("gate-slot: held for CPU pressure: avg10 80.00% >= 20%");
-  expect(stderr).toMatch(/gate-slot: admitted after \d+s of CPU pressure/);
+  expect(stderr).toContain("gate-slot: Waiting for the CPU queue · 1st · up to 10 min");
   expect(readFileSync(f.marker, "utf8")).toBe("run\n");
 }, 20_000);
 // The work slice's ceiling is one machine-wide value: a caller pinned to fewer

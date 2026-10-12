@@ -70,6 +70,7 @@ export async function codexObservationFromProbe(account: CodexAccount, probe: Co
     observedAt: now,
     envelope: probe.envelope,
     resetCredits: quotaResetCreditsFrom(probe.resetCredits),
+    ...(probe.limitReached === undefined ? {} : { limitReached: probe.limitReached }),
   };
 }
 
@@ -85,6 +86,7 @@ export function durableQuotaObservation(observation: QuotaObservation, bootId: s
     observedAt: new Date(observation.observedAt).toISOString(),
     bootId,
     resetCredits: observation.resetCredits ?? null,
+    ...(observation.limitReached === undefined ? {} : { limitReached: observation.limitReached }),
   };
 }
 

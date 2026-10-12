@@ -301,6 +301,14 @@ export type ExternalRelayProgress = {
   tool: string | null;
   status: "running" | "completed" | "failed" | null;
   at: string;
+} | ExternalRelayStepProgress;
+export type ExternalRelayStepId = "accepted" | "thinking" | "reading_board" | "working" | "writing_answer";
+export type ExternalRelayStepProgress = {
+  kind: "step";
+  label: ExternalRelayStepId;
+  tool: null;
+  status: null;
+  at: string;
 };
 export type ExternalRelayCompletion =
   | { lease_id: string; outcome: "compacted"; reason: CompactReason; detail: string | null; duration_ms: number }

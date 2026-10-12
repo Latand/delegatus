@@ -1075,3 +1075,45 @@ test("a hidden Main reads from the accounts answer, and a failed Show again with
   expect(store.notice).toBeNull();
   unsub();
 });
+
+
+for (const engine of ["claude", "codex"] as const) for (const success of [false, true]) {
+  test(`${engine} watched login ${success ? "success refreshes the footer once and clears old auth error" : "failure keeps its error without refreshing the footer"}`, async () => {
+    let finished = false;
+    const { fetcher } = scripted(() => ({ [engine]: { active: "one", accounts: [{
+      id: "one", label: "Account B", authPresent: true,
+      auth: { state: finished && success ? "authenticated" : "error", plan: finished && success ? "max" : null },
+      loginPending: !finished, loginState: finished ? (success ? "completed" : "failed") : "pending",
+      login: engine === "claude" ? { operationId: "observed-login", phase: finished ? (success ? "authenticated" : "failed") : "verifying",
+        acceptsCode: false, loginUrl: null, deadlineAt: "2026-10-12T12:00:00Z",
+        result: finished ? { status: success ? "success" : "failure", code: success ? "authenticated" : "verification_failed", message: "fixture outcome" } : null } : null,
+      limits: finished && success ? { state: "fresh", session: { usedPercent: 7 }, weekly: { usedPercent: 31 } } : null,
+    }] } }));
+    const store = createEngineAccountsStore(engine, { fetcher });
+    const unsubscribe = store.subscribe(() => {});
+    try {
+      await advance();
+      expect(store.accounts[0]?.authHealth).toBe("error");
+      expect(store.limitsVersion).toBe(0);
+      finished = true;
+      await store.refresh();
+      expect(store.limitsVersion).toBe(success ? 1 : 0);
+      expect(store.accounts[0]?.authHealth).toBe(success ? "authenticated" : "error");
+      expect(store.accounts[0]?.limits?.weekly?.usedPercent ?? null).toBe(success ? 31 : null);
+      if (engine === "claude") expect(store.accounts[0]?.login?.result?.status).toBe(success ? "success" : "failure");
+      await store.refresh();
+      expect(store.limitsVersion).toBe(success ? 1 : 0);
+    } finally { unsubscribe(); }
+  });
+}
+
+test("historic successful logins do not refresh the footer or show a result", async () => {
+  const { fetcher } = scripted(() => claudePayload({ accounts: [{ id: "one", label: "Account B", authPresent: true,
+    auth: { state: "authenticated" }, loginPending: false, loginState: "completed",
+    login: { operationId: "historic-login", phase: "authenticated", acceptsCode: false, result: { status: "success", code: "authenticated" } },
+  }] }));
+  const store = createEngineAccountsStore("claude", { fetcher });
+  const unsubscribe = store.subscribe(() => {});
+  try { await advance(); expect(store.limitsVersion).toBe(0); expect(store.accounts[0]?.login).toBeNull(); }
+  finally { unsubscribe(); }
+});

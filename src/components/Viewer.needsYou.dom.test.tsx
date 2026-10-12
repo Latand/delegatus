@@ -284,6 +284,7 @@ async function press(key: string): Promise<void> {
 }
 /** Whether the board's convergence has seeded `path` as a root. */
 const seeded = (path: string) => boardWrites.some((mutation) => mutation.kind === "reconcile-roots" && mutation.roots.includes(path));
+/** The funnel beside the island's chip: the Overview's, since a project's bar holds it in its filter menu. */
 const filterControl = (host: HTMLElement) => host.querySelector("[data-attention-filter]");
 /** The rail's needs-you count for a project, 0 when its row shows none. */
 const railNeeds = (host: HTMLElement, project: string) => Number(
@@ -324,7 +325,9 @@ test("desktop: a lane parked on a decision counts 1 on the island, in the tab ti
   const row = host.querySelector(`[data-attention-lane="${LANE}"]`) as HTMLElement | null;
   expect(row).not.toBeNull();
   expect(row!.textContent).toContain("Reconcile the ledger export");
-  expect(row!.querySelector("[data-attention-decision]")?.textContent).toContain(en("needs.laneDecision"));
+  /* The lane recorded no question, so the line says where to read it and what
+     answering does (docs/design/attention-auto-resolve.md). */
+  expect(row!.querySelector("[data-attention-decision]")?.textContent).toMatch(/asked for a decision without stating it here; open the lane/);
   expect(host.querySelector(`[data-needs-you-row="${LANE}"]`)!.getAttribute("data-needs-you-role")).toBe("builder");
   await click(row);
   await until(() => focused(host, LEDGER_CARD));
@@ -383,31 +386,45 @@ test("desktop: after a jump to the lane the board still seeds a conversation the
 /** The funnel's own state, as the board reads it: one attribute on <main>. */
 const filterOn = (host: HTMLElement) => host.querySelector("main")!.hasAttribute("data-needs-only");
 
-test("desktop: with only a lane waiting the island offers the filter, F presses it, and the lane's card stays lit while the quiet one is not", async () => {
+/** The «Needs you» row of the bar's one filter menu on a project: the funnel, with its key F. */
+async function needsRow(host: HTMLElement): Promise<HTMLButtonElement> {
+  if (!host.querySelector("[data-bar-filter-menu]")) await click(host.querySelector("header.bar [data-bar-filter-toggle]"));
+  return host.querySelector("[data-bar-filter-needs]") as HTMLButtonElement;
+}
+
+test("desktop: with only a lane waiting the bar's filter offers «Needs you», F presses it, and the lane's card stays lit while the quiet one is not", async () => {
   const host = await mountOn(LEDGER);
   expect(islandCount(host)).toBe(1);
-  const funnel = filterControl(host);
-  expect(funnel).not.toBeNull();
-  expect(funnel!.getAttribute("aria-pressed")).toBe("false");
+  /* On a project the chip stands alone in the row: the funnel is the first row of the filter. */
+  expect(filterControl(host)).toBeNull();
+  expect(host.querySelector("header.bar [data-attention-count]")).not.toBeNull();
+  const funnel = await needsRow(host);
+  expect(funnel.disabled).toBe(false);
+  expect(funnel.getAttribute("aria-checked")).toBe("false");
+  expect(funnel.getAttribute("aria-keyshortcuts")).toBe("F");
   expect(filterOn(host)).toBe(false);
 
   await press("f");
-  expect(filterControl(host)?.getAttribute("aria-pressed")).toBe("true");
+  expect((await needsRow(host)).getAttribute("aria-checked")).toBe("true");
   expect(filterOn(host)).toBe(true);
   /* The attribute the stylesheet keys on: the lane's card carries it, the
      quiet card on the same board does not. */
   expect(card(host, LEDGER_CARD)?.getAttribute("data-attention")).toBe("needs");
   expect(card(host, QUIET_CARD)).not.toBeNull();
   expect(card(host, QUIET_CARD)!.hasAttribute("data-attention")).toBe(false);
-  /* The control's words flip with its state. */
-  expect(filterControl(host)?.getAttribute("aria-label")).toBe(en("attention.filterOff"));
+  /* The filter's icon says the board is narrowed, in its mark and in its name. */
+  const toggle = host.querySelector("header.bar [data-bar-filter-toggle]")!;
+  expect(toggle.querySelector("[data-bar-filter-dot]")).not.toBeNull();
+  expect(toggle.getAttribute("aria-label")).toBe(en("dash.filterOn"));
 
   await press("f");
-  expect(filterControl(host)?.getAttribute("aria-pressed")).toBe("false");
+  expect((await needsRow(host)).getAttribute("aria-checked")).toBe("false");
   expect(filterOn(host)).toBe(false);
+  expect(toggle.querySelector("[data-bar-filter-dot]")).toBeNull();
+  expect(toggle.getAttribute("aria-label")).toBe(en("dash.filter"));
 
-  /* The funnel is a button too. */
-  await click(filterControl(host));
+  /* The row is a button too. */
+  await click(await needsRow(host));
   expect(filterOn(host)).toBe(true);
 });
 
@@ -424,16 +441,17 @@ test("desktop: a conversation that starts waiting lights its own card under the 
   await until(() => islandCount(host) === 2);
   /* The state survives the re-render the scan caused. */
   expect(filterOn(host)).toBe(true);
-  expect(filterControl(host)?.getAttribute("aria-pressed")).toBe("true");
+  expect((await needsRow(host)).getAttribute("aria-checked")).toBe("true");
 });
 
-test("desktop: on a board where nothing waits the funnel is not offered and F sets nothing, though another project's lane waits", async () => {
+test("desktop: on a board where nothing waits the «Needs you» row is inert and F sets nothing, though another project's lane waits", async () => {
   const host = await mountOn(ATLAS);
   /* The count is global; the board's queue is not. */
   expect(islandCount(host)).toBe(1);
-  expect(filterControl(host)).toBeNull();
+  expect((await needsRow(host)).disabled).toBe(true);
   await press("f");
-  expect(filterControl(host)).toBeNull();
+  expect((await needsRow(host)).disabled).toBe(true);
+  expect((await needsRow(host)).getAttribute("aria-checked")).toBe("false");
   expect(filterOn(host)).toBe(false);
 });
 
@@ -456,7 +474,7 @@ test("desktop: once the last waiting item is dismissed the filter turns itself o
 
   await click(host.querySelector(`[data-dismiss="${LEDGER_CARD}"]`));
   await until(() => islandCount(host) === 0);
-  expect(filterControl(host)).toBeNull();
+  expect((await needsRow(host)).disabled).toBe(true);
   expect(filterOn(host)).toBe(false);
 });
 

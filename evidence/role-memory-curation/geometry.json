@@ -1,0 +1,881 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "cases": [
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "light",
+      "frame": "variant-1-1440-en-light-history.png",
+      "archiveFrame": "variant-1-1440-en-light-archive.png",
+      "undoneFrame": "variant-1-1440-en-light-undone.png",
+      "geometry": {
+        "width": 1120,
+        "overflow": 0,
+        "sections": [
+          {
+            "kind": "role",
+            "overflow": 0
+          },
+          {
+            "kind": "project",
+            "overflow": 0
+          },
+          {
+            "kind": "machine",
+            "overflow": 0
+          }
+        ]
+      },
+      "provenance": {
+        "overflow": 0,
+        "textRects": [
+          {
+            "left": 254.984375,
+            "right": 265.21875,
+            "top": 391,
+            "bottom": 403
+          },
+          {
+            "left": 265.21875,
+            "right": 419.25,
+            "top": 391,
+            "bottom": 403
+          }
+        ],
+        "body": {
+          "left": 200,
+          "right": 480.65625,
+          "top": 337,
+          "bottom": 405
+        },
+        "removeLeft": 488.65625
+      },
+      "cards": [
+        {
+          "kind": "role",
+          "cardScrolls": 0,
+          "bodyScrolls": 282
+        },
+        {
+          "kind": "project",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "machine",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        }
+      ],
+      "recurringTasks": 3,
+      "revertedVersion": true,
+      "returnedRule": true,
+      "undoSkippedLaterWrites": true
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "dark",
+      "frame": "variant-1-1440-en-dark-history.png",
+      "archiveFrame": "variant-1-1440-en-dark-archive.png",
+      "undoneFrame": "variant-1-1440-en-dark-undone.png",
+      "geometry": {
+        "width": 1120,
+        "overflow": 0,
+        "sections": [
+          {
+            "kind": "role",
+            "overflow": 0
+          },
+          {
+            "kind": "project",
+            "overflow": 0
+          },
+          {
+            "kind": "machine",
+            "overflow": 0
+          }
+        ]
+      },
+      "provenance": {
+        "overflow": 0,
+        "textRects": [
+          {
+            "left": 254.984375,
+            "right": 265.21875,
+            "top": 391,
+            "bottom": 403
+          },
+          {
+            "left": 265.21875,
+            "right": 419.25,
+            "top": 391,
+            "bottom": 403
+          }
+        ],
+        "body": {
+          "left": 200,
+          "right": 480.65625,
+          "top": 337,
+          "bottom": 405
+        },
+        "removeLeft": 488.65625
+      },
+      "cards": [
+        {
+          "kind": "role",
+          "cardScrolls": 0,
+          "bodyScrolls": 282
+        },
+        {
+          "kind": "project",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "machine",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        }
+      ],
+      "recurringTasks": 3,
+      "revertedVersion": true,
+      "returnedRule": true,
+      "undoSkippedLaterWrites": true
+    },
+    {
+      "lang": "en",
+      "width": 1000,
+      "scheme": "light",
+      "frame": "variant-1-1000-en-light-history.png",
+      "archiveFrame": "variant-1-1000-en-light-archive.png",
+      "undoneFrame": "variant-1-1000-en-light-undone.png",
+      "geometry": {
+        "width": 952,
+        "overflow": 0,
+        "sections": [
+          {
+            "kind": "role",
+            "overflow": 0
+          },
+          {
+            "kind": "project",
+            "overflow": 0
+          },
+          {
+            "kind": "machine",
+            "overflow": 0
+          }
+        ]
+      },
+      "provenance": {
+        "overflow": 0,
+        "textRects": [
+          {
+            "left": 180.375,
+            "right": 190.609375,
+            "top": 391,
+            "bottom": 403
+          },
+          {
+            "left": 190.609375,
+            "right": 278.828125,
+            "top": 391,
+            "bottom": 403
+          },
+          {
+            "left": 64,
+            "right": 126.640625,
+            "top": 407,
+            "bottom": 419
+          }
+        ],
+        "body": {
+          "left": 64,
+          "right": 288.65625,
+          "top": 337,
+          "bottom": 421
+        },
+        "removeLeft": 296.65625
+      },
+      "cards": [
+        {
+          "kind": "role",
+          "cardScrolls": 0,
+          "bodyScrolls": 298
+        },
+        {
+          "kind": "project",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "machine",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        }
+      ],
+      "recurringTasks": 3,
+      "revertedVersion": true,
+      "returnedRule": true,
+      "undoSkippedLaterWrites": true
+    },
+    {
+      "lang": "en",
+      "width": 1000,
+      "scheme": "dark",
+      "frame": "variant-1-1000-en-dark-history.png",
+      "archiveFrame": "variant-1-1000-en-dark-archive.png",
+      "undoneFrame": "variant-1-1000-en-dark-undone.png",
+      "geometry": {
+        "width": 952,
+        "overflow": 0,
+        "sections": [
+          {
+            "kind": "role",
+            "overflow": 0
+          },
+          {
+            "kind": "project",
+            "overflow": 0
+          },
+          {
+            "kind": "machine",
+            "overflow": 0
+          }
+        ]
+      },
+      "provenance": {
+        "overflow": 0,
+        "textRects": [
+          {
+            "left": 180.375,
+            "right": 190.609375,
+            "top": 391,
+            "bottom": 403
+          },
+          {
+            "left": 190.609375,
+            "right": 278.828125,
+            "top": 391,
+            "bottom": 403
+          },
+          {
+            "left": 64,
+            "right": 126.640625,
+            "top": 407,
+            "bottom": 419
+          }
+        ],
+        "body": {
+          "left": 64,
+          "right": 288.65625,
+          "top": 337,
+          "bottom": 421
+        },
+        "removeLeft": 296.65625
+      },
+      "cards": [
+        {
+          "kind": "role",
+          "cardScrolls": 0,
+          "bodyScrolls": 298
+        },
+        {
+          "kind": "project",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "machine",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        }
+      ],
+      "recurringTasks": 3,
+      "revertedVersion": true,
+      "returnedRule": true,
+      "undoSkippedLaterWrites": true
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "light",
+      "frame": "variant-1-390-en-light-history.png",
+      "archiveFrame": "variant-1-390-en-light-archive.png",
+      "undoneFrame": "variant-1-390-en-light-undone.png",
+      "geometry": {
+        "width": 390,
+        "overflow": 0,
+        "sections": [
+          {
+            "kind": "role",
+            "overflow": 0
+          },
+          {
+            "kind": "project",
+            "overflow": 0
+          },
+          {
+            "kind": "machine",
+            "overflow": 0
+          }
+        ]
+      },
+      "provenance": {
+        "overflow": 0,
+        "textRects": [
+          {
+            "left": 93.984375,
+            "right": 104.21875,
+            "top": 373,
+            "bottom": 385
+          },
+          {
+            "left": 104.21875,
+            "right": 258.25,
+            "top": 373,
+            "bottom": 385
+          }
+        ],
+        "body": {
+          "left": 39,
+          "right": 321,
+          "top": 319,
+          "bottom": 387
+        },
+        "removeLeft": 329
+      },
+      "cards": [
+        {
+          "kind": "role",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "project",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "machine",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        }
+      ],
+      "recurringTasks": 3,
+      "revertedVersion": true,
+      "returnedRule": true,
+      "undoSkippedLaterWrites": true
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "dark",
+      "frame": "variant-1-390-en-dark-history.png",
+      "archiveFrame": "variant-1-390-en-dark-archive.png",
+      "undoneFrame": "variant-1-390-en-dark-undone.png",
+      "geometry": {
+        "width": 390,
+        "overflow": 0,
+        "sections": [
+          {
+            "kind": "role",
+            "overflow": 0
+          },
+          {
+            "kind": "project",
+            "overflow": 0
+          },
+          {
+            "kind": "machine",
+            "overflow": 0
+          }
+        ]
+      },
+      "provenance": {
+        "overflow": 0,
+        "textRects": [
+          {
+            "left": 93.984375,
+            "right": 104.21875,
+            "top": 373,
+            "bottom": 385
+          },
+          {
+            "left": 104.21875,
+            "right": 258.25,
+            "top": 373,
+            "bottom": 385
+          }
+        ],
+        "body": {
+          "left": 39,
+          "right": 321,
+          "top": 319,
+          "bottom": 387
+        },
+        "removeLeft": 329
+      },
+      "cards": [
+        {
+          "kind": "role",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "project",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "machine",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        }
+      ],
+      "recurringTasks": 3,
+      "revertedVersion": true,
+      "returnedRule": true,
+      "undoSkippedLaterWrites": true
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "light",
+      "frame": "variant-1-1440-uk-light-history.png",
+      "archiveFrame": "variant-1-1440-uk-light-archive.png",
+      "undoneFrame": "variant-1-1440-uk-light-undone.png",
+      "geometry": {
+        "width": 1120,
+        "overflow": 0,
+        "sections": [
+          {
+            "kind": "role",
+            "overflow": 0
+          },
+          {
+            "kind": "project",
+            "overflow": 0
+          },
+          {
+            "kind": "machine",
+            "overflow": 0
+          }
+        ]
+      },
+      "provenance": {
+        "overflow": 0,
+        "textRects": [
+          {
+            "left": 316.375,
+            "right": 326.609375,
+            "top": 391,
+            "bottom": 403
+          },
+          {
+            "left": 326.609375,
+            "right": 467.71875,
+            "top": 391,
+            "bottom": 403
+          }
+        ],
+        "body": {
+          "left": 200,
+          "right": 480.65625,
+          "top": 337,
+          "bottom": 405
+        },
+        "removeLeft": 488.65625
+      },
+      "cards": [
+        {
+          "kind": "role",
+          "cardScrolls": 0,
+          "bodyScrolls": 282
+        },
+        {
+          "kind": "project",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "machine",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        }
+      ],
+      "recurringTasks": 3,
+      "revertedVersion": true,
+      "returnedRule": true,
+      "undoSkippedLaterWrites": true
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "dark",
+      "frame": "variant-1-1440-uk-dark-history.png",
+      "archiveFrame": "variant-1-1440-uk-dark-archive.png",
+      "undoneFrame": "variant-1-1440-uk-dark-undone.png",
+      "geometry": {
+        "width": 1120,
+        "overflow": 0,
+        "sections": [
+          {
+            "kind": "role",
+            "overflow": 0
+          },
+          {
+            "kind": "project",
+            "overflow": 0
+          },
+          {
+            "kind": "machine",
+            "overflow": 0
+          }
+        ]
+      },
+      "provenance": {
+        "overflow": 0,
+        "textRects": [
+          {
+            "left": 316.375,
+            "right": 326.609375,
+            "top": 391,
+            "bottom": 403
+          },
+          {
+            "left": 326.609375,
+            "right": 467.71875,
+            "top": 391,
+            "bottom": 403
+          }
+        ],
+        "body": {
+          "left": 200,
+          "right": 480.65625,
+          "top": 337,
+          "bottom": 405
+        },
+        "removeLeft": 488.65625
+      },
+      "cards": [
+        {
+          "kind": "role",
+          "cardScrolls": 0,
+          "bodyScrolls": 282
+        },
+        {
+          "kind": "project",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "machine",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        }
+      ],
+      "recurringTasks": 3,
+      "revertedVersion": true,
+      "returnedRule": true,
+      "undoSkippedLaterWrites": true
+    },
+    {
+      "lang": "uk",
+      "width": 1000,
+      "scheme": "light",
+      "frame": "variant-1-1000-uk-light-history.png",
+      "archiveFrame": "variant-1-1000-uk-light-archive.png",
+      "undoneFrame": "variant-1-1000-uk-light-undone.png",
+      "geometry": {
+        "width": 952,
+        "overflow": 0,
+        "sections": [
+          {
+            "kind": "role",
+            "overflow": 0
+          },
+          {
+            "kind": "project",
+            "overflow": 0
+          },
+          {
+            "kind": "machine",
+            "overflow": 0
+          }
+        ]
+      },
+      "provenance": {
+        "overflow": 0,
+        "textRects": [
+          {
+            "left": 180.375,
+            "right": 190.609375,
+            "top": 391,
+            "bottom": 403
+          },
+          {
+            "left": 190.609375,
+            "right": 288.421875,
+            "top": 391,
+            "bottom": 403
+          },
+          {
+            "left": 64,
+            "right": 104.109375,
+            "top": 407,
+            "bottom": 419
+          }
+        ],
+        "body": {
+          "left": 64,
+          "right": 288.65625,
+          "top": 337,
+          "bottom": 421
+        },
+        "removeLeft": 296.65625
+      },
+      "cards": [
+        {
+          "kind": "role",
+          "cardScrolls": 0,
+          "bodyScrolls": 298
+        },
+        {
+          "kind": "project",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "machine",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        }
+      ],
+      "recurringTasks": 3,
+      "revertedVersion": true,
+      "returnedRule": true,
+      "undoSkippedLaterWrites": true
+    },
+    {
+      "lang": "uk",
+      "width": 1000,
+      "scheme": "dark",
+      "frame": "variant-1-1000-uk-dark-history.png",
+      "archiveFrame": "variant-1-1000-uk-dark-archive.png",
+      "undoneFrame": "variant-1-1000-uk-dark-undone.png",
+      "geometry": {
+        "width": 952,
+        "overflow": 0,
+        "sections": [
+          {
+            "kind": "role",
+            "overflow": 0
+          },
+          {
+            "kind": "project",
+            "overflow": 0
+          },
+          {
+            "kind": "machine",
+            "overflow": 0
+          }
+        ]
+      },
+      "provenance": {
+        "overflow": 0,
+        "textRects": [
+          {
+            "left": 180.375,
+            "right": 190.609375,
+            "top": 391,
+            "bottom": 403
+          },
+          {
+            "left": 190.609375,
+            "right": 288.421875,
+            "top": 391,
+            "bottom": 403
+          },
+          {
+            "left": 64,
+            "right": 104.109375,
+            "top": 407,
+            "bottom": 419
+          }
+        ],
+        "body": {
+          "left": 64,
+          "right": 288.65625,
+          "top": 337,
+          "bottom": 421
+        },
+        "removeLeft": 296.65625
+      },
+      "cards": [
+        {
+          "kind": "role",
+          "cardScrolls": 0,
+          "bodyScrolls": 298
+        },
+        {
+          "kind": "project",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "machine",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        }
+      ],
+      "recurringTasks": 3,
+      "revertedVersion": true,
+      "returnedRule": true,
+      "undoSkippedLaterWrites": true
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "light",
+      "frame": "variant-1-390-uk-light-history.png",
+      "archiveFrame": "variant-1-390-uk-light-archive.png",
+      "undoneFrame": "variant-1-390-uk-light-undone.png",
+      "geometry": {
+        "width": 390,
+        "overflow": 0,
+        "sections": [
+          {
+            "kind": "role",
+            "overflow": 0
+          },
+          {
+            "kind": "project",
+            "overflow": 0
+          },
+          {
+            "kind": "machine",
+            "overflow": 0
+          }
+        ]
+      },
+      "provenance": {
+        "overflow": 0,
+        "textRects": [
+          {
+            "left": 155.375,
+            "right": 165.609375,
+            "top": 373,
+            "bottom": 385
+          },
+          {
+            "left": 165.609375,
+            "right": 306.71875,
+            "top": 373,
+            "bottom": 385
+          }
+        ],
+        "body": {
+          "left": 39,
+          "right": 321,
+          "top": 319,
+          "bottom": 387
+        },
+        "removeLeft": 329
+      },
+      "cards": [
+        {
+          "kind": "role",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "project",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "machine",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        }
+      ],
+      "recurringTasks": 3,
+      "revertedVersion": true,
+      "returnedRule": true,
+      "undoSkippedLaterWrites": true
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "dark",
+      "frame": "variant-1-390-uk-dark-history.png",
+      "archiveFrame": "variant-1-390-uk-dark-archive.png",
+      "undoneFrame": "variant-1-390-uk-dark-undone.png",
+      "geometry": {
+        "width": 390,
+        "overflow": 0,
+        "sections": [
+          {
+            "kind": "role",
+            "overflow": 0
+          },
+          {
+            "kind": "project",
+            "overflow": 0
+          },
+          {
+            "kind": "machine",
+            "overflow": 0
+          }
+        ]
+      },
+      "provenance": {
+        "overflow": 0,
+        "textRects": [
+          {
+            "left": 155.375,
+            "right": 165.609375,
+            "top": 373,
+            "bottom": 385
+          },
+          {
+            "left": 165.609375,
+            "right": 306.71875,
+            "top": 373,
+            "bottom": 385
+          }
+        ],
+        "body": {
+          "left": 39,
+          "right": 321,
+          "top": 319,
+          "bottom": 387
+        },
+        "removeLeft": 329
+      },
+      "cards": [
+        {
+          "kind": "role",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "project",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        },
+        {
+          "kind": "machine",
+          "cardScrolls": 0,
+          "bodyScrolls": 0
+        }
+      ],
+      "recurringTasks": 3,
+      "revertedVersion": true,
+      "returnedRule": true,
+      "undoSkippedLaterWrites": true
+    }
+  ]
+}

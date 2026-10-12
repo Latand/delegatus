@@ -18,6 +18,7 @@ import {
   ORCHESTRATOR_BOARD_REPORT_HEADING,
   ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE,
   ORCHESTRATOR_PROMPT_VERSION,
+  ORCHESTRATOR_PROTOTYPE_DIRECTIVE,
   ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE,
   ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING,
   ORCHESTRATOR_ROLE_TABLE_HEADING,
@@ -79,8 +80,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 45, and a v44 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(45);
+test("the default mandate is at version 50, and a v49 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(50);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -112,7 +113,11 @@ test("the default mandate is at version 45, and a v44 seat reads as stale", () =
      project's work. v41 points the operator to a task's prototype review
      instead of describing variants in prose. v42 clears waiting rows that ask
      nothing. v43 adds the questionnaire before ambiguous work. v44 combines
-     both with linked-seat coordination. */
+     both with linked-seat coordination. v46 marks a report of a handled
+     incident or an outside publication with `outcome`. v47 makes every decision
+     a form (docs/design/operator-decision-forms.md §2.7). v48 denies native
+     asks; v49 keeps forms without a task and asks 3–7 on a task. v50
+     shortens equivalent draft wording to keep the delivery reserve. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -128,7 +133,13 @@ test("the default mandate is at version 45, and a v44 seat reads as stale", () =
   expect(orchestratorMandateStale(42)).toBe(true);
   expect(orchestratorMandateStale(43)).toBe(true);
   expect(orchestratorMandateStale(44)).toBe(true);
-  expect(orchestratorMandateStale(45)).toBe(false);
+  expect(orchestratorMandateStale(45)).toBe(true);
+  expect(orchestratorMandateStale(46)).toBe(true);
+  expect(orchestratorMandateStale(47)).toBe(true);
+  expect(orchestratorMandateStale(48)).toBe(true);
+  expect(orchestratorMandateStale(49)).toBe(true);
+  expect(orchestratorMandateStale(50)).toBe(false);
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("gives the shape, the outcome rule and what");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -180,6 +191,11 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   43: "4c55ef1e031677516bba9dbd27fcc0e86e3805bc57f5080c1f8317400c726c0f",
   44: "34697f21c8943d0cdeb8ae45260d613de72c91cac67fd8888f06ced89cf79cbc",
   45: "13f8d5ab3ce3a2770245d7c87fd1f534139b76c3cd02c48c518e0f6056adb26c",
+  46: "2f8d1ef97f331cb982a32746575816ea2d1fe5a4869c17a6329f05033b3f15f1",
+  47: "0a204f45fe2e477c20d14888313530363eece18a53e608f8a8f427fb5ef3241c",
+  48: "b5ac29298046ae89343fee1ea5d7149bd9b26d2bc8b4270300e5ca7892dd2ce2",
+  49: "1fb19f7e3d633f95f46e7c2353fefa2cb2d00f74adfe3ace721c0d4c88336c47",
+  50: "e693c187ca781f08d3612007ff7829e3baf4ec5f64c69d7e4966fd091cdb4cb8",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -787,7 +803,8 @@ test("the role table keeps the delivered default inside the structured envelope"
      the issue-reporter row. The visual-critic row and the UI-lane step that
      ends on it take 150 more. The prototype-review pointer adds 47 bytes;
      the delivered default includes the questionnaire, board cleanup and
-     linked-seat coordination alongside the applyNow pointer: 29 367 bytes.
+     linked-seat coordination alongside the applyNow pointer: 29 367 bytes,
+     and the pointer to the rule for a report's `outcome` 18 more.
      The scaffold is 750 bytes, and
      handoffDigest.test.ts still finds a full history section beside it. */
   expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 2_600);
@@ -944,10 +961,19 @@ test("the versioned mandate asks for a current status note in the operator's lan
 });
 
 
-test("the mandate directs prototype review to the task", () => {
+test("the mandate asks every decision as a form", () => {
   for (const mandate of [ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery("Coordinate the project.")]) {
-    expect(mandate).toContain("Prototype review: point to the task's review.");
+    expect(mandate).toContain(ORCHESTRATOR_PROTOTYPE_DIRECTIVE);
     expect(mandate.split("Prototype review:")).toHaveLength(2);
+  }
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Decisions go to the form; drafts are for replies that are not a choice.");
+  /* A plan's yes and a parked stage's question are decisions; the pills and
+     the reports never ask them a second time (decisions 3 and 5). */
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A plan you want a yes to, and a stage's question you cannot settle, are decisions.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("When a stage parks on such a question, ask the operator at once in a form.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A report only points to a decision's form; an ask a click cannot settle (an action outside Delegatus) is a question or blocked report.");
+  for (const contradiction of ["proposes a plan you want a yes to", "with suggested replies", "Every ask to the operator is also a question or blocked report", "the plain yes"]) {
+    expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain(contradiction);
   }
 });
 
@@ -957,9 +983,14 @@ test("the mandate names linked seats and requires coordination before a shared r
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("send_message_to_orchestrator with machine named");
 });
 
-test("questionnaire mandate upgrades the shipped pointer once and preserves bespoke wording", () => {
-  const directive = `Prototype review: point to the task's review. Before work that is non-trivial or reads two ways, or on request, ask 3–7 questions there; the operator may skip. After the answers, write "how I understood" (3–5 lines) into the task text and start.`;
-  for (const input of [ORCHESTRATOR_SYSTEM_PROMPT, "Coordinate the project.", "Coordinate.\nPrototype review: point to the task's review."]) {
+test("the decision-form mandate upgrades every shipped pointer once and preserves bespoke wording", () => {
+  const directive = ORCHESTRATOR_PROTOTYPE_DIRECTIVE;
+  const questionnaire = `Prototype review: point to the task's review. Before work that is non-trivial or reads two ways, or on request, ask 3–7 questions there; the operator may skip. After the answers, write "how I understood" (3–5 lines) into the task text and start.`;
+  const shipped = [
+    "Prototype review: every decision is a form: publish_prototype_review, 1–7 questions, taskId for a task; chat and reports only point to it. Before non-trivial or two-way work, or on request, ask 3–7 there. After answers, write \"how I understood\" (3–5 lines) in the task text and start.",
+    "Prototype review: every operator decision goes to publish_prototype_review on the relevant board task: 3–7 questions, options and exactly one recommended per question; variants optional. Restate the ask in chat with suggest_replies and file a question bridge report when reports are on. Never use engine built-in ask tools. Before non-trivial or two-way work, or on request, use this form; the operator may skip. After answers, write \"how I understood\" (3–5 lines) in task text and start.",
+  ];
+  for (const input of [ORCHESTRATOR_SYSTEM_PROMPT, "Coordinate the project.", "Coordinate.\nPrototype review: point to the task's review.", `Coordinate.\n\n${questionnaire}`, ...shipped]) {
     const delivered = orchestratorMandateForDelivery(input);
     expect(delivered).toContain(directive);
     expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);

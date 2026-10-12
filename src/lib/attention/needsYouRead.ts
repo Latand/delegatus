@@ -1,5 +1,5 @@
 import { buildNeedsYouQueue, type MobileAttentionEntry } from "@/components/attention/attentionQueue";
-import { dismissalCovers } from "@/components/attention";
+import { attentionReason, dismissalCovers } from "@/components/attention";
 import { needsYouEntrySince, needsYouRowText, needsYouSections, needsYouSubject } from "@/components/attention/needsYouPanel";
 import { withoutArchivedPredecessors } from "@/lib/accounts/identity";
 import { bridgeQuestions, openBridgeAsks } from "@/lib/bridge/asks";
@@ -14,13 +14,21 @@ import type { FileEntry } from "@/lib/types";
 import type { AttentionDismissalV1 } from "./dismissals";
 import { DismissalError } from "./dismissals";
 import type { DismissalTarget, DismissedBy } from "./dismissalTypes";
+import { laneRouteNow } from "./routeTypes";
 
 export const NEEDS_YOU_ROW_KINDS = ["decision", "question", "plan", "permission", "delivery", "launch", "memory", "ask", "lane-decision", "lane-review", "prototype", "update"] as const;
 export type NeedsYouRowKind = typeof NEEDS_YOU_ROW_KINDS[number];
-export interface NeedsYouBody { files: readonly FileEntry[]; pipelines: readonly Pipeline[]; tasks: readonly BoardTask[]; workLinks?: import("@/lib/forge/workLinks").FilesWorkLinks }
+export interface NeedsYouBody { files: readonly FileEntry[]; pipelines: readonly Pipeline[]; tasks: readonly BoardTask[]; workLinks?: import("@/lib/forge/workLinks").FilesWorkLinks;
+  /** The orchestrators' own open questions (docs/design/operator-decision-forms.md §2.2). */
+  seatDecisions?: readonly import("@/lib/prototypeReview/types").PrototypeReviewNotice[] }
 export interface NeedsYouEvidence { code: string; stale: boolean; at: string | null; detail: string; source: string }
 export interface NeedsYouRow {
-  id: string; kind: NeedsYouRowKind; title: string; line: string; since: string | null; taskId: string | null;
+  id: string; kind: NeedsYouRowKind; title: string;
+  /** One sentence: what the operator must choose or do, and what happens next. */
+  line: string;
+  /** The question in its author's words and its choices, when the row has them. */
+  question?: string; options?: string[]; recommended?: number;
+  since: string | null; taskId: string | null;
   subject: { conversationId?: string; pipelineId?: string; stageId?: string; reportSeq?: number; reviewId?: string; decisionId?: string };
   target: DismissalTarget | null; stale: boolean; evidence: Array<string | NeedsYouEvidence>; path?: string;
 }
@@ -30,6 +38,9 @@ export interface ClearedRow {
 }
 export interface NeedsYouAnswer {
   project: string; at: string; count: number; staleCount: number; rows: NeedsYouRow[]; cleared: ClearedRow[]; omittedCount: number;
+  /** Waits in this project its seat answers first (docs/design/attention-auto-resolve.md):
+      never in `count`, and on the seat's own agenda. */
+  routedToSeat?: number;
   nextCursor?: string; unavailable?: string[]; sections?: number;
 }
 export interface NeedsYouEvidencePorts {
@@ -44,7 +55,7 @@ export interface NeedsYouReadOptions { kinds?: readonly NeedsYouRowKind[]; full?
 /** One projection shared with both panels; closing is a browser transient. */
 export function needsYouEntries(body: NeedsYouBody, decision: AutoView["decision"], now: number, project: string): MobileAttentionEntry[] {
   const key = canonicalOrchestratorProject(project);
-  return needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks), key)
+  return needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks, body.seatDecisions), key)
     .filter(section => canonicalOrchestratorProject(section.project) === key).flatMap(section => section.entries);
 }
 const iso = (seconds: number | null) => seconds !== null && Number.isFinite(seconds) ? new Date(seconds * 1000).toISOString() : null;
@@ -126,11 +137,15 @@ function rowOf(entry: MobileAttentionEntry, ports: NeedsYouEvidencePorts, option
     : entry.kind === "pipeline" ? { pipelineId: entry.row.pipeline.id, ...(entry.row.pipeline.cursor?.stageId ? { stageId: entry.row.pipeline.cursor.stageId } : {}) }
     : entry.kind === "prototype" ? { reviewId: entry.notice.reviewId } : { decisionId: entry.decision.id };
   const facts = needsYouEvidence(entry, ports);
-  /* A decision whose message keeps failing clears once the message lands, so it offers nothing to dismiss. */
-  const target: DismissalTarget | null = entry.kind === "update" ? null : entry.kind === "prototype" ? entry.notice.undelivered ? null : { kind: "prototype", taskId: entry.notice.taskId, reviewId: entry.notice.reviewId }
+  /* A seat's own question is answered, never hidden: it has no dismissal. */
+  const target: DismissalTarget | null = entry.kind === "update" ? null : entry.kind === "prototype" ? entry.notice.taskId === null || entry.notice.undelivered ? null : { kind: "prototype", taskId: entry.notice.taskId, reviewId: entry.notice.reviewId }
     : needsYouSubject(entry) as DismissalTarget;
   return { id: entry.id, kind: entry.kind === "conversation" ? entry.item.reason.kind : entry.kind === "pipeline" ? entry.row.pipeline.state === "needs_review" ? "lane-review" : "lane-decision" : entry.kind,
-    title: clip(text.title, 90), line: clip(text.line, 160), since: iso(needsYouEntrySince(entry)), taskId: task?.id ?? null, subject, target,
+    title: clip(text.title, 90), line: clip(text.line, 400),
+    ...(text.question ? { question: clip(text.question, 600) } : {}),
+    ...(text.options.length ? { options: text.options.map(option => clip(option, 160)) } : {}),
+    ...(text.recommended !== null ? { recommended: text.recommended } : {}),
+    since: iso(needsYouEntrySince(entry)), taskId: task?.id ?? null, subject, target,
     stale: facts.some(f => f.stale), evidence: facts.slice(0, options.full ? facts.length : 4).map(f => options.full ? f : clip(`${f.code}: ${f.detail}`, 140)),
     ...(options.full && entry.kind === "conversation" ? { path: entry.item.file.path } : {}) };
 }
@@ -142,7 +157,7 @@ function clearedRows(body: NeedsYouBody, decision: AutoView["decision"], now: nu
     pipelines: body.pipelines.map(p => ({ ...p, dismissedAt: null, dismissedBy: undefined })),
     tasks: body.tasks.map(t => ({ ...t, prototypeReview: t.prototypeReview ? { ...t.prototypeReview, waitingDismissal: undefined } : undefined })) };
   const visible = new Set(needsYouEntries(body, decision, now, project).map(e => e.id));
-  return needsYouEntries(raw, decision, now, project).flatMap(entry => {
+  const live = needsYouEntries(raw, decision, now, project).flatMap((entry): ClearedRow[] => {
     if (visible.has(entry.id) || entry.kind === "update") return [];
     const row = rowOf(entry, ports, options);
     let undo = row.target;
@@ -154,7 +169,7 @@ function clearedRows(body: NeedsYouBody, decision: AutoView["decision"], now: nu
     } else if (entry.item.reason.report) {
       mark = ports.reports?.resolvedAsks?.find(r => r.seq === entry.item.reason.report?.seq);
       if (!mark) {
-        const record = ports.dismissals.find(d => d.kind !== "prototype"
+        const record = ports.dismissals.find(d => d.kind !== "prototype" && d.kind !== "escalation" && !d.restoredAt
           && (d.conversationId && d.conversationId === entry.item.file.conversationId || d.path === entry.item.file.path)
           && dismissalCovers(entry.item.reason, d));
         if (record) {
@@ -165,10 +180,51 @@ function clearedRows(body: NeedsYouBody, decision: AutoView["decision"], now: nu
             : record.path ? { kind: "conversation", path: record.path } : null;
         }
       }
-    } else mark = ports.dismissals.find(d => d.kind !== "prototype" && (d.conversationId && d.conversationId === entry.item.file.conversationId || d.path === entry.item.file.path));
+    } else mark = ports.dismissals.find(d => d.kind !== "prototype" && d.kind !== "escalation" && !d.restoredAt && (d.conversationId && d.conversationId === entry.item.file.conversationId || d.path === entry.item.file.path));
     if (!mark || !undo) return [];
     return [{ id: row.id, kind: row.kind, title: row.title, taskId: row.taskId, cleared: { at: mark.at, by: mark.by, note: mark.note ?? null }, undo }];
-  }).sort((a,b) => b.cleared.at.localeCompare(a.cleared.at)).slice(0,20);
+  });
+  return [...live, ...systemClearedRows(body, project, ports, live)].sort((a,b) => b.cleared.at.localeCompare(a.cleared.at)).slice(0,20);
+}
+
+/**
+ * What Delegatus cleared, from its own records rather than from a reason that
+ * still asks (docs/design/attention-auto-resolve.md, acceptance 2). Clearing
+ * usually follows the source going quiet (an answered ask is no longer
+ * raised), so the record carries what it hid: the reason, its title and its
+ * project, and Undo names the conversation's record. One the operator brought
+ * back is no longer cleared.
+ */
+function systemClearedRows(body: NeedsYouBody, project: string, ports: NeedsYouEvidencePorts, live: readonly ClearedRow[]): ClearedRow[] {
+  const key = canonicalOrchestratorProject(project);
+  const canonical = ports.canonicalConversationId ?? ((id: string) => id);
+  const shown = new Set(live.flatMap(row => row.undo.kind === "conversation" ? [row.undo.conversationId ? canonical(row.undo.conversationId) : row.undo.path] : []));
+  const rows: ClearedRow[] = [];
+  for (const record of ports.dismissals) {
+    if (record.by.kind !== "system" || record.restoredAt || !record.cleared || record.kind === "prototype" || record.kind === "escalation") continue;
+    if (canonicalOrchestratorProject(record.cleared.project) !== key) continue;
+    const subject = record.conversationId ? canonical(record.conversationId) : record.path;
+    if (!subject || shown.has(subject)) continue;
+    shown.add(subject);
+    const file = body.files.find(f => record.conversationId && f.conversationId && canonical(f.conversationId) === subject || f.path === record.path);
+    const undo: DismissalTarget = record.conversationId ? { kind: "conversation", conversationId: record.conversationId } : { kind: "conversation", path: record.path! };
+    const task = ports.tasks.find(t => t.assignments.some(a => !!a.conversationId && !!record.conversationId && canonical(a.conversationId) === subject || !!file && a.path === file.path));
+    rows.push({ id: record.reasonId ?? `${record.subject}:cleared:${record.at}`, kind: record.cleared.reason, title: clip(record.cleared.title || (file ? file.title : subject), 90),
+      taskId: task?.id ?? null, cleared: { at: record.at, by: record.by, note: null }, undo });
+  }
+  return rows;
+}
+
+/** How many waits in a project its seat answers first. */
+export function routedToSeat(body: Pick<NeedsYouBody, "files" | "pipelines">, now: number, project: string): number {
+  const inProject = (raw: string) => canonicalOrchestratorProject(raw) === project;
+  const conversations = withoutArchivedPredecessors([...body.files]).filter(file => {
+    if (!inProject(file.project)) return false;
+    const reason = attentionReason(file, now);
+    return Boolean(reason && !reason.dismissal && reason.route?.owner === "seat");
+  }).length;
+  const lanes = body.pipelines.filter(pipeline => inProject(pipeline.project) && laneRouteNow(pipeline)?.owner === "seat").length;
+  return conversations + lanes;
 }
 
 /** Forty rows and 24 KB, including the cleared list and pagination envelope. */
@@ -182,8 +238,10 @@ export function needsYouAnswer(body: NeedsYouBody, decision: AutoView["decision"
   const answer: NeedsYouAnswer = { project: canonicalOrchestratorProject(project), at: new Date(now * 1000).toISOString(), count: all.length, staleCount: all.filter(r => r.stale).length,
     rows: [], cleared: clearedRows(body, decision, now, project, ports, options), omittedCount: filtered.length - start,
     ...(ports.unavailable.length ? { unavailable: [...new Set(ports.unavailable)] } : {}) };
-  const sections = needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks), project).filter(s => canonicalOrchestratorProject(s.project) === answer.project).length;
+  const sections = needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks, body.seatDecisions), project).filter(s => canonicalOrchestratorProject(s.project) === answer.project).length;
   if (sections > 1) answer.sections = sections;
+  const routed = routedToSeat(body, now, answer.project);
+  if (routed) answer.routedToSeat = routed;
   for (const row of filtered.slice(start, start + 40)) {
     const candidate = { ...answer, rows: [...answer.rows, row], omittedCount: filtered.length - start - answer.rows.length - 1, nextCursor: row.id };
     while (Buffer.byteLength(JSON.stringify(candidate)) > 24_000 && candidate.cleared.length) candidate.cleared = candidate.cleared.slice(0,-1);

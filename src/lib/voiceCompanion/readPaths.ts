@@ -19,7 +19,7 @@ import type { BoardReadPaths } from "./boardReads";
  * lifecycle-journal writes. Search reuses its ordinary page handler. */
 export function createCompanionBoardReadPaths(dependencies: { domain?: ViewerMcpDomainDependencies; liveness?: AgentLivenessSources;
   transcript?: Pick<ViewerMcpDomainDependencies, "pinnedTranscript" | "selectedContext"> } = {}): BoardReadPaths {
-  const domain = { ...(dependencies.domain ?? productionDomainDependencies), ...dependencies.transcript,
+  const domain = { ...(dependencies.domain ?? productionDomainDependencies), fleetDetailBudgetBytes: 3_200, ...dependencies.transcript,
     ...(dependencies.liveness ? { livenessSources: () => dependencies.liveness! } : {}),
     refreshLifecycleJournal: () => ({ appended: 0 }) as ReturnType<ViewerMcpDomainDependencies["refreshLifecycleJournal"]>,
   };
@@ -86,6 +86,10 @@ export function createCompanionBoardReadPaths(dependencies: { domain?: ViewerMcp
       return [...matches][0]!;
     },
     review(id) { const row = task(id); if (!row) throw new Error("PROJECT_REFUSED"); return readPrototypeReviews(row); },
+    prototypeTasks(project, taskId) {
+      return (domain.listTaskRecords?.() ?? domain.loadTasks()).filter(row => canonicalProject(row.project) === canonicalProject(project)
+        && (taskId ? row.id === taskId : !!row.prototypeReviews?.length || !!row.prototypeReviewReplica));
+    },
     async frame(id, reviewId, mediaId) {
       const row = task(id); const review = row && readPrototypeReviews(row).rounds.find(round => round.id === reviewId);
       const media = review?.variants.flatMap(variant => variant.frames.flatMap(frame => [frame.image, ...(frame.original ? [frame.original] : [])]))

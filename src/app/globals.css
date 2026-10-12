@@ -827,3 +827,8 @@ body {
   .press-scale:active:not(:disabled) { scale: 0.96; position: relative; }
   .press-scale:active:not(:disabled)::after { content: ""; position: absolute; inset: calc(-2.5% - 2px); }
 }
+
+/* The phone's one row inside its composer box (2026-10-11): the undelivered
+   chip and the own-message navigator. Both are drawn into it from elsewhere
+   (the receipts, the feed), so the row takes no room while it holds neither. */
+[data-composer-status-line]:not(:has([data-receipts-chip], [data-own-steps])) { display: none; }

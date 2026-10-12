@@ -6,6 +6,7 @@ import { recordValue, recordsValue } from "@/lib/scanner/json";
 import { livenessProbe, receiptIsLive, receiptProcessEvidence, type LivenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { agentRegistry, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
+import { registryLivenessRows, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { isAbortError } from "@/lib/deadline";
 import { hostProviderRetryAt } from "@/lib/limitsThrottle";
 import { getPipelines } from "@/lib/pipelines/engine";
@@ -32,6 +33,8 @@ import {
   type LivenessTranscriptEvidence,
 } from "./transcript";
 import { entryOwners, headlessRoundVerdict, ownerProcessAlive, type RecordedOwner } from "./owners";
+import { classifyAgentActivity, type AgentActivity, type AgentActivityFacts } from "./agentActivity";
+import { activityProcessReader } from "./agentActivityProcesses";
 import type { LifecycleState, LifecycleTurnState } from "./vocabulary";
 
 /**
@@ -60,6 +63,8 @@ export type AgentHostState = "alive" | "gone" | "unknown";
 
 export type AgentLivenessReason =
   /** A live host with a turn that is still moving. */
+  | "evidence_unverified"
+  | "host_gone_turn_unverified"
   | "host_alive_turn_active"
   /** A live host with a settled turn — the agent is awaiting input. */
   | "host_alive_turn_idle"
@@ -98,14 +103,16 @@ export interface AgentLivenessPipelineRef {
 }
 
 export interface AgentLivenessRecord {
+  activity?: AgentActivity;
+  verified?: boolean;
+  previousPaths?: string[];
   conversationId: string | null;
   transcriptPath: string;
   project: string;
   engine: Engine;
   title: string;
   /** ISO timestamp of the newest durable transcript RECORD — tool traffic
-      counts, not only assistant prose (falls back to the transcript's own mtime
-      when no record carries a timestamp). */
+      counts, not only assistant prose. Null without a verified record clock. */
   lastRecordAt: string | null;
   turnState: LifecycleTurnState;
   host: { state: AgentHostState; kind: "tmux" | "structured" | "headless" | "none"; pid: number | null };
@@ -117,8 +124,7 @@ export interface AgentLivenessRecord {
   /** The pending request when `reason` is `permission_request`: the tool,
       what it would do, and the engine's reason for asking. */
   permission?: PendingPermissionRequest | null;
-  /** Milliseconds since `lastRecordAt`; always reported so a caller can apply
-      its own threshold without a second read. */
+  /** Measured milliseconds since `lastRecordAt`; null without tail evidence. */
   silentForMs: number | null;
   /** Milliseconds this conversation has been silent while in the `stalled` or
       `gone` lifecycle; null when it is not stalled. */
@@ -203,15 +209,7 @@ export interface AgentLivenessSnapshot {
   /** Conversations whose lifecycle is `stalled`, so a poller can branch on one
       number instead of scanning the list. */
   stalledCount: number;
-  /**
-   * The subset of `stalledCount` whose silence was measured from a transcript
-   * read rather than the generation's file mtime (#860).
-   *
-   * A generation can be a refresh cadence old while the stall threshold is ten
-   * minutes, so a projection-backed row can read as stalled after resuming.
-   * This is the number that carries the same discipline the journal applies —
-   * a headline "N stalled" should prefer it.
-   */
+  /** Compatibility alias of stalledCount: every stall now requires a tail. */
   stalledConfirmedCount: number;
   conversations: AgentLivenessRecord[];
   selection: AgentLivenessSelectionReport;
@@ -331,6 +329,7 @@ export interface AgentLivenessSources {
       Omitted, the file is stat'ed. */
   transcriptIdentity?(transcriptPath: string): Promise<string | null>;
   probe: LivenessProbe;
+  workProcesses?: (pid: number) => NonNullable<AgentActivityFacts["workProcesses"]>;
   readHostTurnRecord?: typeof readHostTurnRecord;
 }
 
@@ -470,8 +469,7 @@ function entryForPath(
   probe: LivenessProbe,
 ): AgentRegistryEntry | null {
   let first: AgentRegistryEntry | null = null;
-  for (const entry of Object.values(snapshot.entries)) {
-    if (entry.artifactPath !== transcriptPath) continue;
+  for (const entry of registryRowsMatching(snapshot as RegistryFile, "entries", "artifactPath", transcriptPath)) {
     if (hostEvidence(entry, probe).state === "alive") return entry;
     first ??= entry;
   }
@@ -594,6 +592,8 @@ export function evaluateLiveness(input: {
   turnState: LifecycleTurnState;
   silentForMs: number | null;
   stallAfterMs: number;
+  turnVerified?: boolean;
+  launchAgeMs?: number | null;
   startingGraceMs?: number;
   providerRetryAt?: string | null;
   providerThrottleAt?: number | null;
@@ -601,6 +601,25 @@ export function evaluateLiveness(input: {
   /** The oldest permission request the live host holds open, if any. */
   pendingPermission?: PendingPermissionRequest | null;
 }): { lifecycle: LifecycleState; reason: AgentLivenessReason; retryAt?: string; permission?: PendingPermissionRequest } {
+  /* An unanswered permission request is the turn's whole explanation: the
+     engine waits for an answer, so the silence is neither a stall nor the
+     provider (#2215). */
+  if (input.host.state === "alive" && input.pendingPermission) {
+    return { lifecycle: "waiting", reason: "permission_request", permission: input.pendingPermission };
+  }
+  const progressSupersedesThrottle = input.providerProgressAt !== null
+    && input.providerProgressAt !== undefined
+    && input.providerThrottleAt !== null
+    && input.providerThrottleAt !== undefined
+    && input.providerProgressAt > input.providerThrottleAt;
+  if (input.host.state === "alive" && input.turnState === "busy" && input.providerRetryAt && !progressSupersedesThrottle) {
+    return { lifecycle: "waiting", reason: "provider_throttled", retryAt: input.providerRetryAt };
+  }
+  if (input.turnVerified === false) {
+    if (input.host.state === "gone") return { lifecycle: "gone", reason: "host_gone_turn_unverified" };
+    if (input.host.state === "alive") return { lifecycle: "running", reason: "evidence_unverified" };
+    return { lifecycle: (input.launchAgeMs ?? 0) < (input.startingGraceMs ?? STARTING_GRACE_MS) ? "starting" : "gone", reason: "launch_unproven" };
+  }
   const silent = input.silentForMs !== null && input.silentForMs >= input.stallAfterMs;
   if (input.host.state === "gone") {
     return input.turnState === "busy"
@@ -617,20 +636,6 @@ export function evaluateLiveness(input: {
     return input.turnState === "busy"
       ? { lifecycle: "stalled", reason: "launch_unproven_expired" }
       : { lifecycle: "gone", reason: "launch_unproven_expired" };
-  }
-  /* An unanswered permission request is the turn's whole explanation: the
-     engine waits for an answer, so the silence is neither a stall nor the
-     provider (#2215). */
-  if (input.pendingPermission) {
-    return { lifecycle: "waiting", reason: "permission_request", permission: input.pendingPermission };
-  }
-  const progressSupersedesThrottle = input.providerProgressAt !== null
-    && input.providerProgressAt !== undefined
-    && input.providerThrottleAt !== null
-    && input.providerThrottleAt !== undefined
-    && input.providerProgressAt > input.providerThrottleAt;
-  if (input.turnState === "busy" && input.providerRetryAt && !progressSupersedesThrottle) {
-    return { lifecycle: "waiting", reason: "provider_throttled", retryAt: input.providerRetryAt };
   }
   if (input.turnState === "idle") return { lifecycle: "waiting", reason: "host_alive_turn_idle" };
   if (silent) return { lifecycle: "stalled", reason: "host_alive_transcript_silent" };
@@ -675,7 +680,10 @@ function receiptHostEvidence(registry: LivenessRegistrySnapshot, conversationId:
   let alive: { state: "alive"; kind: "structured" | "tmux"; pid: number; turnPending: boolean } | null = null;
   let gone = false;
   let unresolved = false;
-  for (const receipt of Object.values(registry.receipts ?? {})) {
+  const candidates = new Map<string, RegistryFile["receipts"][string]>();
+  for (const receipt of registryRowsMatching(registry as RegistryFile, "receipts", "conversationId", ownerId ? [ownerId, conversationId!] : [])) candidates.set(receipt.launchId, receipt);
+  if (artifactPath) for (const receipt of registryRowsMatching(registry as RegistryFile, "receipts", "artifactPath", artifactPath)) candidates.set(receipt.launchId, receipt);
+  for (const receipt of candidates.values()) {
     if ((!ownerId || canonicalConversationId(registry, receipt.conversationId) !== ownerId)
       && (!artifactPath || receipt.artifactPath !== artifactPath)) continue;
     const evidence = receiptProcessEvidence(receipt, probe);
@@ -753,10 +761,13 @@ export function conversationIdForPath(
     a minute ago — the correctness half of not sweeping the corpus (#860). */
 function hostedTranscriptPaths(snapshot: LivenessRegistrySnapshot, probe: LivenessProbe): Set<string> {
   const hosted = new Set<string>();
-  for (const entry of Object.values(snapshot.entries)) {
+  // Select durable owners before hydrating payloads; enumerating the registry
+  // compatibility view makes every archived entry look like a candidate.
+  const { entries, receipts } = registryLivenessRows(snapshot as RegistryFile);
+  for (const entry of entries) {
     if (entry.artifactPath && hostEvidence(entry, probe).state === "alive") hosted.add(entry.artifactPath);
   }
-  for (const receipt of Object.values(snapshot.receipts ?? {})) {
+  for (const receipt of receipts) {
     if (receiptProcessEvidence(receipt, probe)?.state !== "alive") continue;
     const path = receipt.artifactPath ?? canonicalConversation(snapshot, receipt.conversationId)?.generations.at(-1)?.path;
     if (path) hosted.add(path);
@@ -1014,8 +1025,35 @@ async function livenessSnapshotWithin(
   ]);
   const indexProjectionMs = phaseClock() - projectionStartedAt;
 
-  /* A conversation id names its current generation's transcript; that is the
-     only path whose liveness is meaningful. */
+  const identityOf = sources.transcriptIdentity ?? transcriptFileIdentity;
+  const readEntry = async (entry: LivenessTranscript, readSignal?: AbortSignal | null): Promise<LivenessTranscriptEvidence | null | typeof ANSWER_SPENT> => {
+    if (answer.spent()) return ANSWER_SPENT;
+    try {
+        /* Only a bounded answer leaves reads behind, so only it pays the stat. */
+        const identity = answer.bounded ? await answer.within(identityOf(entry.path).catch(() => null)) : null;
+        if (identity === ANSWER_SPENT) return ANSWER_SPENT;
+        const carried = identity === null ? null : takeCarriedEvidence(entry.path, identity);
+        const read = carried
+          ?? sources.transcriptEvidence(entry.engine as "claude" | "codex", entry.path, { signal: readSignal });
+        const evidence = await answer.within(read);
+        if (evidence === ANSWER_SPENT && identity !== null && !carried) carryEvidence(entry.path, identity, read);
+        if (evidence === ANSWER_SPENT || request.reconcileStructuredIdle !== true) return evidence;
+        const reconciled = await answer.within(reconcileWriterIdle(evidence, entry.path, registry, sources));
+        return reconciled === ANSWER_SPENT ? evidence : reconciled;
+      } catch (error) {
+        /* One bad row costs one row. Cancellation is the exception: it is the
+           caller going away, and it must still stop the pass. */
+        if (readSignal?.aborted || isAbortError(error)) throw error;
+        return null;
+      }
+  };
+  // Hosted files are independent of catalog membership. Give their bounded
+  // reads the time spent waiting for the catalog, with the same concurrency.
+  const hostedEvidence = new Map<string, LivenessTranscriptEvidence | null | typeof ANSWER_SPENT>();
+  const hostedDescriptions = new Map<string, LivenessTranscript>();
+
+  /* Stat known generations together: a resumed writer can precede its host
+     registry update, so generation order alone cannot choose it. */
   const requestedPaths = new Set<string>();
   const targeted = Boolean(request.transcriptPath || request.conversationId);
   if (request.transcriptPath) requestedPaths.add(request.transcriptPath);
@@ -1024,9 +1062,48 @@ async function livenessSnapshotWithin(
        conversation had before its canonical owner adopted it, and that id
        names the same transcript (#2515). */
     const conversation = canonicalConversation(registry, request.conversationId);
-    const path = conversation?.generations.at(-1)?.path;
-    if (path) requestedPaths.add(path);
+    for (const path of [...(conversation?.generations.map(g => g.path) ?? []), ...(conversation?.continuityPaths ?? [])]) requestedPaths.add(path);
   }
+
+  const previousPaths = new Map<string, string[]>();
+  const candidatePaths = new Map<string, Set<string>>();
+  const unresolvedCurrentWriters = new Set<string>();
+  for (const path of targeted ? requestedPaths : [...hostedPaths].slice(0, limit)) {
+    const id = conversationIdForPath(registry, path);
+    const candidates = candidatePaths.get(id ?? path) ?? new Set<string>();
+    candidates.add(path);
+    const conversation = id ? canonicalConversation(registry, id) : null;
+    for (const candidate of [...(conversation?.generations.map(g => g.path) ?? []), ...(conversation?.continuityPaths ?? [])]) candidates.add(candidate);
+    candidatePaths.set(id ?? path, candidates);
+  }
+  const hostedRead = hydrateWithBudget(
+    [...candidatePaths.values()].filter(paths => answer.bounded || paths.size > 1).slice(0, limit),
+    () => EVIDENCE_TAIL_BYTES,
+    async (paths, readSignal) => {
+      const descriptions = await Promise.all([...paths].map(path => describeWithin(path, sources.describeTranscript, answer).catch(() => null)));
+      const describedPaths = new Set(descriptions.flatMap((entry, index) => entry && entry !== ANSWER_SPENT ? [[...paths][index]] : []));
+      const currentWriterPaths = new Set(Object.values(registry.entries)
+        .filter(entry => hostEvidence(entry, sources.probe).state === "alive")
+        .map(entry => entry.artifactPath)
+        .filter((path): path is string => Boolean(path && paths.has(path))));
+      for (const path of currentWriterPaths) {
+        if (!describedPaths.has(path)) unresolvedCurrentWriters.add(conversationIdForPath(registry, path) ?? path);
+      }
+      const entries = descriptions.filter((entry): entry is LivenessTranscript => entry !== null && entry !== ANSWER_SPENT).sort(byNewest);
+      if ([...currentWriterPaths].some(path => !describedPaths.has(path))) return;
+      const entry = entries[0];
+      if (!entry) return;
+      for (const path of paths) hostedDescriptions.set(path, entry);
+      previousPaths.set(entry.path, [...paths].filter(path => path !== entry.path));
+      if (!targeted && [...paths].some(path => hostedPaths.has(path))) hostedPaths.add(entry.path);
+      if (!targeted && request.project && entry.project !== request.project) return;
+      hostedEvidence.set(entry.path, await readEntry(entry, readSignal));
+    },
+    { concurrency: request.evidenceConcurrency ?? DEFAULT_EVIDENCE_CONCURRENCY,
+      maxBytes: request.evidenceByteBudget ?? defaultEvidenceByteBudget(limit),
+      deadlineAt: sources.now() + (request.evidenceDeadlineMs ?? DEFAULT_EVIDENCE_DEADLINE_MS), signal, now: sources.now },
+  );
+  void hostedRead.catch(() => undefined);
 
   const selectionStartedAt = phaseClock();
   let entries: LivenessTranscript[];
@@ -1039,8 +1116,9 @@ async function livenessSnapshotWithin(
        catalog would turn a stale alias into an unrelated read. */
     /* The description shares the answer's budget and its cancellation: a stat
        that outlives them is reported as not yet described, never waited out. */
+    await hostedRead;
     const described = await Promise.all([...requestedPaths].slice(0, limit)
-      .map((path) => describeWithin(path, sources.describeTranscript, answer)));
+      .map((path) => hostedDescriptions.get(path) ?? describeWithin(path, sources.describeTranscript, answer).catch(() => null)));
     entries = described.filter((entry): entry is LivenessTranscript => entry !== null && entry !== ANSWER_SPENT);
     selection = {
       scope: "targeted",
@@ -1101,7 +1179,10 @@ async function livenessSnapshotWithin(
     /* Recovery and the completed generation share the same verified-owner
        priority. Order by freshness within each group before the final limit,
        so newer scan-only history cannot displace a recovered owner. */
-    const recovery = await recoverHostedTranscripts(hostedPaths, hostedSeen, request.project, sources.describeTranscript, answer);
+    await hostedRead;
+    const prefetched = [...new Set(hostedDescriptions.values())].filter(entry => hostedPaths.has(entry.path) && !hostedSeen.has(entry.path) && (!request.project || entry.project === request.project));
+    const recovery = await recoverHostedTranscripts(hostedPaths, new Set([...hostedSeen, ...prefetched.map(entry => entry.path)]), request.project, async path => hostedDescriptions.get(path) ?? sources.describeTranscript(path), answer);
+    recovery.entries.push(...prefetched);
     const known = new Set(entries.map((entry) => entry.path));
     const added = recovery.entries.filter((entry) => {
       if (known.has(entry.path)) return false;
@@ -1127,35 +1208,57 @@ async function livenessSnapshotWithin(
   const inventorySelectionMs = phaseClock() - selectionStartedAt;
   if (signal?.aborted) throw livenessAbortError(signal.reason);
 
+  await hostedRead;
+  const unhostedGenerations = new Map<string, Set<string>>();
+  for (const entry of entries) {
+    if (hostedDescriptions.has(entry.path)) continue;
+    const id = conversationIdForPath(registry, entry.path) ?? entry.conversationId;
+    const conversation = id ? canonicalConversation(registry, id) : null;
+    const paths = new Set([entry.path, ...(conversation?.generations.map(g => g.path) ?? []), ...(conversation?.continuityPaths ?? [])]);
+    if (paths.size > 1) unhostedGenerations.set(id ?? entry.path, paths);
+  }
+  await Promise.all([...unhostedGenerations.values()].map(async paths => {
+    const descriptions = await Promise.all([...paths].map(path => describeWithin(path, sources.describeTranscript, answer).catch(() => null)));
+    const describedPaths = new Set(descriptions.flatMap((entry, index) => entry && entry !== ANSWER_SPENT ? [[...paths][index]] : []));
+    const currentWriterPaths = new Set(Object.values(registry.entries)
+      .filter(entry => hostEvidence(entry, sources.probe).state === "alive")
+      .map(entry => entry.artifactPath)
+      .filter((path): path is string => Boolean(path && paths.has(path))));
+    for (const path of currentWriterPaths) {
+      if (!describedPaths.has(path)) unresolvedCurrentWriters.add(conversationIdForPath(registry, path) ?? path);
+    }
+    if ([...currentWriterPaths].some(path => !describedPaths.has(path))) return;
+    const newest = descriptions.filter((description): description is LivenessTranscript => description !== null && description !== ANSWER_SPENT).sort(byNewest)[0];
+    if (!newest) return;
+    for (const path of paths) hostedDescriptions.set(path, newest);
+    previousPaths.set(newest.path, [...paths].filter(path => path !== newest.path));
+  }));
+  const folded = new Map<string, LivenessTranscript>();
+  for (const original of entries) {
+    const described = hostedDescriptions.get(original.path);
+    const entry = described ? { ...described, title: original.title || described.title, conversationId: original.conversationId ?? described.conversationId } : original;
+    const id = conversationIdForPath(registry, entry.path) ?? entry.conversationId;
+    const key = id ?? entry.path;
+    const existing = folded.get(key);
+    if (!existing || entry.mtimeMs > existing.mtimeMs) folded.set(key, { ...entry, conversationId: id });
+    if (original.path !== entry.path) previousPaths.set(entry.path, [...new Set([...(previousPaths.get(entry.path) ?? []), original.path])]);
+  }
+  entries = [...folded.values()].filter(entry => targeted || !request.project || entry.project === request.project);
+  selection.selected = entries.length;
   const hydratable = entries.filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot");
   const evidenceStartedAt = phaseClock();
   const deadlineMs = Number.isFinite(request.evidenceDeadlineMs) && (request.evidenceDeadlineMs as number) > 0
     ? Math.floor(request.evidenceDeadlineMs as number)
     : DEFAULT_EVIDENCE_DEADLINE_MS;
-  const identityOf = sources.transcriptIdentity ?? transcriptFileIdentity;
+
   const hydration = await hydrateWithBudget(
     hydratable,
     (entry) => Math.min(Number.isFinite(entry.sizeBytes) ? entry.sizeBytes as number : EVIDENCE_TAIL_BYTES, EVIDENCE_TAIL_BYTES),
     async (entry, hydrationSignal) => {
-      if (answer.spent()) return ANSWER_SPENT;
-      try {
-        /* Only a bounded answer leaves reads behind, so only it pays the stat. */
-        const identity = answer.bounded ? await answer.within(identityOf(entry.path).catch(() => null)) : null;
-        if (identity === ANSWER_SPENT) return ANSWER_SPENT;
-        const carried = identity === null ? null : takeCarriedEvidence(entry.path, identity);
-        const read = carried
-          ?? sources.transcriptEvidence(entry.engine as "claude" | "codex", entry.path, { signal: hydrationSignal });
-        const evidence = await answer.within(read);
-        if (evidence === ANSWER_SPENT && identity !== null && !carried) carryEvidence(entry.path, identity, read);
-        if (evidence === ANSWER_SPENT || request.reconcileStructuredIdle !== true) return evidence;
-        const reconciled = await answer.within(reconcileWriterIdle(evidence, entry.path, registry, sources));
-        return reconciled === ANSWER_SPENT ? evidence : reconciled;
-      } catch (error) {
-        /* One bad row costs one row. Cancellation is the exception: it is the
-           caller going away, and it must still stop the pass. */
-        if (hydrationSignal?.aborted || isAbortError(error)) throw error;
-        return null;
-      }
+      const conversationId = conversationIdForPath(registry, entry.path) ?? entry.conversationId;
+      if (unresolvedCurrentWriters.has(conversationId ?? entry.path)) return null;
+      if (hostedEvidence.has(entry.path)) return hostedEvidence.get(entry.path)!;
+      return readEntry(entry, hydrationSignal);
     },
     {
       concurrency: Number.isFinite(request.evidenceConcurrency)
@@ -1182,6 +1285,7 @@ async function livenessSnapshotWithin(
   let unreadable = 0;
   /* Rows whose tail answered. A read the answer budget left behind is not one. */
   let answered = 0;
+  const processes = sources.workProcesses ?? activityProcessReader(now);
   const projected = hydratable.map((entry, index) => {
     /* Three outcomes, kept apart: a read that produced evidence, a read that
        produced none, and a row the budget never reached. The counters below are
@@ -1196,10 +1300,11 @@ async function livenessSnapshotWithin(
     /* Freshness is the newest RECORD, tool traffic included. Reading it off the
        last assistant prose message reports a live agent in a long tool stretch
        as stalled — the exact question this surface exists to answer. */
-    const lastRecordMs = evidence?.lastRecordTs ?? (Number.isFinite(entry.mtimeMs) ? entry.mtimeMs : null);
+    const lastRecordMs = evidence?.lastRecordTs ?? null;
     const silentForMs = lastRecordMs !== null ? Math.max(0, now - lastRecordMs) : null;
-    const registryEntry = entryForPath(registry, entry.path, sources.probe);
-    const conversationId = entry.conversationId ?? conversationIdForPath(registry, entry.path);
+    const conversationId = conversationIdForPath(registry, entry.path) ?? entry.conversationId;
+    const registryEntry = entryForPath(registry, entry.path, sources.probe)
+      ?? (conversationId ? Object.values(registry.entries).find(candidate => candidate.artifactPath && conversationIdForPath(registry, candidate.artifactPath) === conversationId && hostEvidence(candidate, sources.probe).state === "alive") ?? null : null);
     const reviewerHost = headlessHostEvidence(flows, entry.path, conversationId, sources.probe, registry);
     const registeredHost = hostEvidence(registryEntry, sources.probe);
     const receiptHost = receiptHostEvidence(registry, conversationId, sources.probe, entry.path);
@@ -1212,26 +1317,40 @@ async function livenessSnapshotWithin(
     const pendingPermission = host.state === "alive" && host.kind === "structured"
       ? registryEntry?.structuredHost?.pendingPermissions?.[0] ?? null
       : null;
+    const activity = evidence !== null && lastRecordMs !== null && host.state === "alive" && turnState !== "idle"
+      ? classifyAgentActivity({ ...evidence.activityFacts, lastRecordAt: lastRecordMs, workProcesses: host.pid === null ? [] : processes(host.pid) }, now, stallAfterMs)
+      : undefined;
+    const unresolvedActivityOwnership = evidence?.activityFacts?.turnBoundaryVerified === false
+      || unresolvedCurrentWriters.has(conversationId ?? entry.path);
+    const verified = evidence !== null && lastRecordMs !== null
+      && !(host.state === "alive" && turnState !== "idle" && evidence.activityFacts?.backgroundVerified === false
+        && activity?.state !== "checking" && silentForMs !== null && silentForMs >= stallAfterMs)
+      && !(unresolvedActivityOwnership && activity?.state !== "checking" && silentForMs !== null && silentForMs >= stallAfterMs);
+    const verdict = evaluateLiveness({
+      host,
+      turnState,
+      silentForMs: activity?.state === "checking" ? null : silentForMs,
+      stallAfterMs,
+      turnVerified: verified,
+      launchAgeMs: now - entry.mtimeMs,
+      // A recorded PID with an unreadable identity is held until proof of
+      // death or replacement; it is not an unbound launch aging through grace.
+      startingGraceMs: reviewerHost?.state === "unknown" ? Infinity : undefined,
+      providerRetryAt: providerThrottle.retryAt,
+      providerThrottleAt: providerThrottle.throttledAt,
+      providerProgressAt: evidence?.providerProgressAt ?? null,
+      pendingPermission,
+    });
     return {
+      verified,
+      activity: verified && (verdict.lifecycle === "running" || verdict.lifecycle === "stalled") ? activity : undefined,
+      ...verdict,
       entry,
       conversationId,
       turnState,
       lastRecordMs,
-      silentForMs,
+      silentForMs: verified ? silentForMs : null,
       host,
-      ...evaluateLiveness({
-        host,
-        turnState,
-        silentForMs,
-        stallAfterMs,
-        // A recorded PID with an unreadable identity is held until proof of
-        // death or replacement; it is not an unbound launch aging through grace.
-        startingGraceMs: reviewerHost?.state === "unknown" ? Infinity : undefined,
-        providerRetryAt: providerThrottle.retryAt,
-        providerThrottleAt: providerThrottle.throttledAt,
-        providerProgressAt: evidence?.providerProgressAt ?? null,
-        pendingPermission,
-      }),
       pipeline: (conversationId ? pipelines.byConversation.get(conversationId) : undefined)
         ?? pipelines.byPath.get(entry.path)
         ?? null,
@@ -1242,8 +1361,11 @@ async function livenessSnapshotWithin(
 
   const serializationStartedAt = phaseClock();
   const conversations: AgentLivenessRecord[] = projected.map((row) => ({
+    ...(row.activity ? { activity: row.activity } : {}),
+    verified: row.verified,
     conversationId: row.conversationId,
     transcriptPath: row.entry.path,
+    previousPaths: previousPaths.get(row.entry.path) ?? [],
     project: row.entry.project,
     engine: row.entry.engine,
     title: row.entry.title,

@@ -148,7 +148,7 @@ test("the seat read reports the Viewer MCP definition resolved for the project c
 
 /* #1841 — the Overview spans every project and names none, so it reads the
    seat conversations alone; the per-project read carries the same set, so a
-   dashboard whose Tasks panel is in its «all» scope needs no second request. */
+   dashboard that spans projects needs no second request. */
 test("the seat read answers the cross-project seat conversations, with a project and without one (#1841)", async () => {
   const seat = (project: string, n: number, path: string, now: string) => {
     const clientRequestId = `req_${project}_0000${n}`;
