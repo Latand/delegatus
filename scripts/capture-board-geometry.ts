@@ -2759,6 +2759,9 @@ async function headerMain(): Promise<void> {
       await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-hover.png`), clip: { x: 0, y: 0, width, height: 60 } });
       must(hovered.color === before.color && hovered.border !== before.border, `${tag}: hover turns the create control from ${JSON.stringify(before)} to ${JSON.stringify(hovered)}`);
       await page.mouse.move(1, 700);
+      /* A click that closes a popover lands on the bar's own status text: a click on the board below can open
+         a card's agent window, whose scrim then covers the bar. */
+      const dismiss = () => page.locator('[data-kanban-board] header.bar [data-bar-group="status"]').click();
 
       /* The accounts: in the bar when wide, as ⋯ rows when narrow; either opens the panel listing all three Claude accounts. */
       let menu: MenuReading;
@@ -2785,7 +2788,7 @@ async function headerMain(): Promise<void> {
       must(accountsOnTop.found && accountsOnTop.covered.length === 0, `${tag}: the accounts panel is painted over at ${accountsOnTop.covered.slice(0, 3).join("; ")}`);
       report[`${tag}:accountsOnTop`] = accountsOnTop;
       await page.keyboard.press("Escape");
-      await page.mouse.click(width / 2, 600);
+      await dismiss();
       await page.waitForTimeout(200);
 
       /* The ⋯ menu on this busy project: Archive and Delete stand down while agents run, and no rule dangles. */
@@ -2808,7 +2811,7 @@ async function headerMain(): Promise<void> {
       must(menu.rows.length >= (wide ? 3 : 5), `${tag}: the ⋯ menu holds ${menu.rows.length} rows`);
       must(wide ? !menu.sections.includes("accounts") : menu.sections.includes("accounts"), `${tag}: the accounts rows are ${wide ? "repeated in" : "missing from"} ⋯`);
       await page.keyboard.press("Escape");
-      await page.mouse.click(width / 2, 600);
+      await dismiss();
 
       if (!wide) {
         await page.click("[data-bar-create]");
@@ -2819,7 +2822,7 @@ async function headerMain(): Promise<void> {
         must(create.length === 2, `${tag}: the + menu offers ${create.length} rows`);
         report[`${tag}:create`] = create;
         await page.keyboard.press("Escape");
-        await page.mouse.click(width / 2, 600);
+        await dismiss();
       }
 
       /* The view switch keeps its place on Conversations, whose bar has the message search in the find slot. */
@@ -2843,6 +2846,9 @@ async function headerMain(): Promise<void> {
       must(reading.switchRect !== null && list.switchRect !== null && near(reading.switchRect.x, list.switchRect.x, 0.5), `${tag}: the view switch moves from x ${reading.switchRect?.x} to ${list.switchRect?.x}`);
       const listClearance = lastControlClear(`${tag} conversations`, list, must);
       must(list.tasksPanel === 0, `${tag} conversations: ${list.tasksPanel} Tasks panel controls or panels on the page`);
+      /* Back to the Board, which the next context opens on: the view is stored with the board. */
+      await page.click('button[data-view-tab="kanban"]');
+      await page.waitForSelector("[data-kanban-board] header.bar", { timeout: 60_000 });
       report[tag] = { ...reading, gaps, islandClearance, tabAfterMore, hover: { before, hovered }, menu, accountsPanel: panel ? { rect: panel.rect } : null, conversations: { switchRect: list.switchRect, texts: list.texts, name: list.name, find: listTexts, islandClearance: listClearance, tasksPanel: list.tasksPanel } };
       await context.close();
 
