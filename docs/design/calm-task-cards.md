@@ -313,7 +313,11 @@ Same closed card. Opened: the task in order, oldest first, from the records
 restart, merges queued, stopped, merged), the last eight entries with
 «Раніше · N» above them, ending on what happens now («зараз · Оркестратор:
 …», the actor named once). The answers ride the stop's own entry as small
-links, on one row. On the phone the time leads each entry's own line (there is
+links, on one row, and never the «зараз» entry. That stop entry never folds:
+when another lane's later work pushes it past the last eight, it stands first
+after «Раніше · N» (the #2749 card: «Review: зупинилось — обірвався зв'язок з
+агентом» with its two links, then the second lane's review and merge), so
+Skip and Retry are always read under their reason. On the phone the time leads each entry's own line (there is
 no time column), which is what leaves the links their row. Restarts that cut
 one stage several times fold into one line.
 
@@ -323,7 +327,10 @@ Closed: icon, title, dot and line; no chain at all. Opened: a short summary
 (Зупинилось / Оркестратор / Далі / Самі), the chain, «Хронологія · N» folded.
 The last row, «Самі», holds the lane's answers as quiet links, visible at
 every width with no gesture and no instruction line; only «Відповісти» is a
-button. The quietest board.
+button. On the card that needs the operator «Відповісти» comes directly under
+«Далі» and the «Самі» row follows it, so the eye meets the asked-for action
+before the two bypasses; a card the orchestrator owns keeps «Самі» as its last
+row. The quietest board.
 
 ### Measured (driver `render.ts`, all 96 renders, `geometry.json`)
 
@@ -349,7 +356,9 @@ button. The quietest board.
   lines (two measured); no amber mark on a chip of a card that asks nothing;
   one button on a closed card that needs the operator and none elsewhere; no
   instruction line or menu standing in for the answers; an entry's links on
-  one row; on the phone «Відповісти» across its full row and no control under
+  one row; in variant 2 every answer of the lane on the stop's own entry, in
+  view; in variants 1 and 3 no answer of the lane above «Відповісти» on the
+  card that needs the operator; on the phone «Відповісти» across its full row and no control under
   44 px; «Подробиці» ending on a whole sentence, naming no file and offering
   the full record; the «зараз» entry naming the orchestrator once.
 

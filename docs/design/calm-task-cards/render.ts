@@ -130,6 +130,17 @@ async function measure(page: Page, scene: Scene) {
           const group = card.querySelector(".cc-acts");
           return group ? { primary: rows([...group.querySelectorAll(".cc-act.primary")]), own: rows([...group.querySelectorAll("[data-cc-action]")]), all: rows([...group.querySelectorAll(".cc-act")]) } : null;
         })(),
+        /* Where the lane's answers stand in a chronology: on the stop's own
+           entry, or on another one. */
+        stopRows: [...card.querySelectorAll('.cc-open > .cc-tl > .cc-tl-row[data-tone="stop"]')].filter(shown).length,
+        actionsOnStop: [...card.querySelectorAll('.cc-open > .cc-tl > .cc-tl-row[data-tone="stop"] [data-cc-action]')].filter(shown).length,
+        /* «Answer» against the lane's own answers, top to top: negative when
+           an answer of the lane stands above it. */
+        answerLead: (() => {
+          const primary = [...card.querySelectorAll(".cc-open [data-cc-answer]")].filter(shown)[0];
+          const own = [...card.querySelectorAll(".cc-open [data-cc-action]")].filter(shown)[0];
+          return primary && own ? Math.round((own.getBoundingClientRect().top - primary.getBoundingClientRect().top) * 10) / 10 : null;
+        })(),
         raw: card.querySelector("[data-cc-raw]")?.textContent ?? null,
         rawFull: card.querySelectorAll("[data-cc-full]").length,
         actorTwice: [...card.querySelectorAll('.cc-tl-row[data-tone="seat"] .cc-tl-text')].filter((row) => (row.textContent?.match(/оркестратор|orchestrator/gi) ?? []).length > 1).length,
@@ -179,6 +190,8 @@ function problems(scene: Scene, measured: Measured): string[] {
     if (card.state === "closed" && card.buttons.length !== (card.owner === "you" ? 1 : 0)) say(`${card.buttons.length} buttons on a closed card`);
     if (card.state === "open" && card.actions !== card.answers) say(`${card.actions} of the lane's ${card.answers} answers are visible`);
     if (card.linkRows.some((count) => count > 1)) say("an entry's links stand on more than one row");
+    if (scene.variant === 2 && card.state === "open" && card.answers && card.actionsOnStop !== card.answers) say(`${card.actionsOnStop} of the lane's ${card.answers} answers stand on its stop's entry (${card.stopRows} stop entries in view)`);
+    if (scene.variant !== 2 && card.state === "open" && card.owner === "you" && card.answerLead !== null && card.answerLead < 0) say(`the lane's answers stand ${-card.answerLead} px above «Answer»`);
     if (phone && card.primaryShare !== null && card.primaryShare < 0.99) say(`«Answer» takes ${card.primaryShare} of its row`);
     if (phone && card.actRows && card.actRows.own > 1 && card.answers <= 2 && scene.variant === 1 && card.owner === "you") say("the lane's two answers stand on two rows");
     if (card.raw !== null) {

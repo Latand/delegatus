@@ -7,10 +7,11 @@
  *   1  Reason on expand: why it stopped, what the orchestrator does, then the
  *      lane's own answers under «If you want to act yourself».
  *   2  Chronology: the task in order, the stop and the orchestrator's step at
- *      its end, the answers on the stop's entry.
+ *      its end, the answers on the stop's entry, which never folds.
  *   3  Decisions only: no chain on the closed card; the opened card is a
- *      short summary whose last row holds the lane's answers as quiet links,
- *      and a folded chronology.
+ *      short summary whose last row holds the lane's answers as quiet links
+ *      («Answer» stands before them when the operator must act), and a folded
+ *      chronology.
  *
  * In every variant a closed card shows a button only when the operator must
  * answer, and that button is «Answer».
@@ -88,12 +89,18 @@ const RECENT = 8;
 function Timeline({ events, w, lane, phone }: { events: readonly TimelineEvent[]; w: Words; lane: CalmLane | null; phone: boolean }) {
   const { t } = useLocale();
   const [all, setAll] = useState(false);
-  const hidden = all ? 0 : Math.max(0, events.length - RECENT);
-  const shown = events.slice(hidden);
+  const fold = all ? 0 : Math.max(0, events.length - RECENT);
+  /* The stop the lane's answers belong to never folds: when later entries
+     (another lane's work) push it under «Earlier», it stands first after
+     the fold, so the answers are read under their reason. */
+  const stop = lane ? events.findLast((event) => event.stop === lane) : undefined;
+  const pinned = stop && events.indexOf(stop) < fold ? stop : null;
+  const hidden = fold - (pinned ? 1 : 0);
+  const shown = pinned ? [pinned, ...events.slice(fold)] : events.slice(fold);
   /* The lane's answers ride the stop's own entry; when the records hold no
-     such entry in view (a stop with no parked attempt, or one folded under
-     «Earlier»), they ride the last entry, so they are never out of sight. */
-  const carrier = lane && laneActions(t, lane).length ? shown.findLast((event) => event.stop === lane) ?? shown.at(-1) : undefined;
+     such entry (a stop with no parked attempt), they ride the last entry, so
+     they are never out of sight. */
+  const carrier = lane && laneActions(t, lane).length ? stop ?? shown.at(-1) : undefined;
   return (
     <ol className="cc-tl" data-cc-timeline={events.length}>
       {hidden ? (
@@ -179,7 +186,18 @@ function OpenSummary({ lane, w, timeline, phone, historyOpen, description }: { l
   const { t } = useLocale();
   const said = laneWords(w, lane);
   const [history, setHistory] = useState(historyOpen);
-  const next = lane.owner === "you" ? w("next.you") : lane.owner === "working" ? w("next.working") : w("next.seat");
+  const you = lane.owner === "you";
+  const next = you ? w("next.you") : lane.owner === "working" ? w("next.working") : w("next.seat");
+  const self = lane.answers ? (
+    <>
+      <dt>{w("summary.self")}</dt>
+      <dd>
+        <span className={`cc-tl-acts${phone ? " phone" : ""}`}>
+          {laneActions(t, lane).map((action) => <button key={action.action} type="button" className="cc-link" data-cc-action={action.action}>{action.label}</button>)}
+        </span>
+      </dd>
+    </>
+  ) : null;
   return (
     <div className="cc-open" data-cc-open="summary">
       <Description text={description} />
@@ -187,18 +205,12 @@ function OpenSummary({ lane, w, timeline, phone, historyOpen, description }: { l
         {said.why ? <><dt>{w("summary.stopped")}</dt><dd>{said.why}</dd></> : null}
         {said.seat ? <><dt>{w("summary.seat")}</dt><dd>{said.seat}</dd></> : null}
         <dt>{w("summary.next")}</dt><dd>{next}</dd>
-        {lane.answers ? (
-          <>
-            <dt>{w("summary.self")}</dt>
-            <dd>
-              <span className={`cc-tl-acts${phone ? " phone" : ""}`}>
-                {laneActions(t, lane).map((action) => <button key={action.action} type="button" className="cc-link" data-cc-action={action.action}>{action.label}</button>)}
-              </span>
-            </dd>
-          </>
-        ) : null}
+        {/* A card that needs the operator asks for the answer first, right
+            under «Next»; the lane's own answers follow it. */}
+        {you ? <div className={`cc-acts cc-sum-act${phone ? " phone" : ""}`}><button type="button" className="cc-act primary" data-cc-answer="">{w("answer")}</button></div> : null}
+        {self}
       </dl>
-      {lane.owner === "you" ? <ActionButtons lane={{ ...lane, answers: null }} w={w} phone={phone} primary /> : null}
+      {you ? <div className={`cc-acts${phone ? " phone" : ""}`}><button type="button" className="cc-act quiet" data-cc-ask=""><Bot aria-hidden size={14} />{w("ask")}</button></div> : null}
       <button type="button" className="cc-disclose" aria-expanded={history} onClick={() => setHistory(!history)}>
         {history ? <ChevronDown aria-hidden size={14} /> : <ChevronRight aria-hidden size={14} />}{w("history.count", { n: timeline.length })}
       </button>
