@@ -214,3 +214,29 @@ test.each(["setup", "stage"] as const)("a mid-tick update suspends %s before lat
   await tickWorkflows([], h.ports);
   expect(h.starts).toEqual([]);
 });
+
+test("polls reconcile held tickets while another workflow's finish operation is in flight", async () => {
+  const h = harness();
+  saveWorkflows([workflow("one", "setup")]);
+  await tickWorkflows([], h.ports);
+  const finishing = workflow("two", "stage");
+  finishing.state = "finishing";
+  saveWorkflows([finishing, ...loadWorkflows()]);
+  let release!: () => void, entered!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const began = new Promise<void>(resolve => { entered = resolve; });
+  h.ports.exec = async () => {
+    entered();
+    await held;
+    return { code: 1, stdout: "", stderr: "finish probe completed" };
+  };
+  const pending = tickWorkflows([], h.ports);
+  try {
+    await began;
+    writeDrain(drainFile(), { id: "update", target: "candidate", since: new Date(now).toISOString(), until: 0, persistent: true });
+    const poll = await tickWorkflows([], h.ports);
+    expect(poll.changed).toBe(false);
+    expect(machineCpuAdmissionQueue().check("command:finish-check", true)).toBeNull();
+  } finally { release(); await pending; }
+  expect(h.starts).toEqual([]);
+});

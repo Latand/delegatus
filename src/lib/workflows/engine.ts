@@ -588,7 +588,10 @@ interface TickResult {
 }
 
 export async function tickWorkflows(entries: FileEntry[], ports: WorkflowPorts = defaultPorts()): Promise<TickResult> {
-  if (store.__llvWorkflowTick) return { workflows: loadWorkflows(), changed: false };
+  if (store.__llvWorkflowTick) {
+    ports.cpuAdmissionReconcile?.();
+    return { workflows: loadWorkflows(), changed: false };
+  }
   store.__llvWorkflowTick = true;
   try {
     ports.cpuAdmissionReconcile?.();
