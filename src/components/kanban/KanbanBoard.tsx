@@ -2556,7 +2556,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   };
   const closeNewTask = useCallback(() => {
     setComposingTask(false);
-    queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>("[data-new-task], [data-bar-create]")?.focus({ preventScroll: true }));
+    queueMicrotask(() => rootRef.current?.querySelector<HTMLElement>("[data-bar-create]")?.focus({ preventScroll: true }));
   }, []);
   const taskCreated = useCallback((task: BoardTask) => {
     setComposingTask(false);
@@ -2888,7 +2888,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
               reasons={representedReasons.filter((reason) => reason !== "needs-you").map((reason) => ({ id: reason, label: t(`kanban.filterReason.${reason}`), count: reasonCount(reason) }))}
               active={reasonFilter}
               onPick={(id) => setReasonFilter(id as TaskReasonFilter | undefined)}
-              needs={{ label: t("kanban.filterReason.needs-you"), count: reasonCount("needs-you") }}
+              needs={{ label: t("kanban.filterReason.needs-you"), count: reasonCount("needs-you"), boardActive: reasonFilter === "needs-you", onBoardToggle: () => setReasonFilter((current) => current === "needs-you" ? undefined : "needs-you") }}
             />
           </div>
           {/* Both creation surfaces write into this project's board: one `+` with a two-row menu. */}

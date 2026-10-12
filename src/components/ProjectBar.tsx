@@ -221,8 +221,13 @@ export function BarFilterMenu({ reasons, active, onPick, needs: needsRow }: {
   reasons: readonly { id: string; label: string; count: number }[];
   active: string | undefined;
   onPick: (id: string | undefined) => void;
-  /** The «Needs you» row: its name and how many cards on the board wait. */
-  needs: { label: string; count: number };
+  /**
+   * The «Needs you» row: its name and how many cards on the board wait. While
+   * the Viewer's funnel has nothing to narrow (a card held on the operator is
+   * in no queue), the row narrows the board by its own «needs-you» reason, so
+   * it works whenever its count is above zero.
+   */
+  needs: { label: string; count: number; boardActive?: boolean; onBoardToggle?: () => void };
 }) {
   const { t } = useLocale();
   const needs = useContext(BarNeedsFilterContext);
@@ -231,7 +236,10 @@ export function BarFilterMenu({ reasons, active, onPick, needs: needsRow }: {
   const trigger = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setOpen(false), []);
   useOutsidePress(open, container, close);
-  const narrowed = Boolean(active) || Boolean(needs?.active);
+  const funnel = Boolean(needs?.available);
+  const needsActive = funnel ? Boolean(needs?.active) : Boolean(needsRow.boardActive);
+  const needsUsable = funnel || (needsRow.count > 0 && Boolean(needsRow.onBoardToggle)) || needsActive;
+  const narrowed = Boolean(active) || Boolean(needs?.active) || Boolean(needsRow.boardActive);
   return (
     <span ref={container} className="bar-slot relative inline-flex shrink-0" data-bar-filter="" onKeyDown={open ? (event) => { handleOverlayEscape(event, () => { close(); trigger.current?.focus(); }); } : undefined}>
       <button
@@ -257,12 +265,12 @@ export function BarFilterMenu({ reasons, active, onPick, needs: needsRow }: {
           data-bar-filter-menu=""
           className={`absolute right-0 top-full ${Z.popover} mt-1 flex w-64 flex-col gap-0.5 rounded-control border border-border bg-card p-1 shadow-2`}
         >
-          <button type="button" role="menuitemcheckbox" aria-checked={Boolean(needs?.active)} aria-keyshortcuts="F" disabled={!needs?.available} className={BAR_MENU_ROW} data-bar-filter-needs="" onClick={() => needs?.toggle()}>
+          <button type="button" role="menuitemcheckbox" aria-checked={needsActive} aria-keyshortcuts="F" disabled={!needsUsable} className={BAR_MENU_ROW} data-bar-filter-needs="" onClick={() => { if (funnel) needs?.toggle(); else needsRow.onBoardToggle?.(); }}>
             <span className="inline-block h-[7px] w-[7px] shrink-0 rounded-full bg-warning" aria-hidden />
             <span className="min-w-0 flex-1">{needsRow.label}</span>
             <span className="font-normal tabular-nums text-muted">{needsRow.count}</span>
             <kbd className="text-[11px] font-normal text-muted">F</kbd>
-            {needs?.active ? <Check className={`${BAR_ICON} text-accent`} aria-hidden /> : null}
+            {needsActive ? <Check className={`${BAR_ICON} text-accent`} aria-hidden /> : null}
           </button>
           <div className="my-0.5 border-t border-border" />
           <div className="px-2 pb-0.5 pt-1 text-[11px] font-semibold text-muted">{t("dash.filterByReason")}</div>
