@@ -689,6 +689,47 @@ async function recoverStageCommit(
   return { ok: true, sha: head };
 }
 
+/** Capture only the exact, live parent link settlement creates. Recheck its
+    identity before releasing it so a replacement install is preserved. */
+function stageToolchainRelease(pipeline: Pipeline): (() => void) | undefined {
+  if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
+  const local = path.join(pipeline.worktreeDir, "node_modules");
+  const target = path.resolve(pipeline.repoDir, "node_modules");
+  try {
+    const owned = fs.lstatSync(local);
+    if (!owned.isSymbolicLink() || fs.readlinkSync(local) !== target || !fs.existsSync(local)) return;
+    return () => {
+      try {
+        const current = fs.lstatSync(local);
+        if (current.isSymbolicLink() && current.dev === owned.dev && current.ino === owned.ino
+          && fs.readlinkSync(local) === target) fs.unlinkSync(local);
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    };
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+}
+
+/** Settlement runs after the agent's turn, including read-only turns which
+    never installed dependencies. Share the parent checkout's installed tools
+    for the commit through an absent, ignored node_modules. Remove our link
+    afterward so a later install cannot write into the parent checkout.
+    Preserve any local install or unrelated link, including dangling links. */
+async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort): Promise<(() => void) | undefined> {
+  if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
+  const local = path.join(pipeline.worktreeDir, "node_modules");
+  try { fs.lstatSync(local); return; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  const parent = path.join(pipeline.repoDir, "node_modules");
+  if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) return;
+  // A repository that tracks dependencies must never gain a staged symlink.
+  const ignored = await exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir);
+  if (ignored.code === 1) return;
+  if (ignored.code !== 0) throw new Error(`checking ignored settlement dependencies: ${(ignored.stderr || ignored.stdout).trim()}`);
+  const target = path.resolve(parent);
+  try { fs.symlinkSync(target, local, "dir"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return; throw error; }
+  return stageToolchainRelease(pipeline);
+}
+
 /** Git owns its short-lived index lock and hook protocol. Verify the actual
     commit against the validated parent and tree before accepting it. A raced
     commit is rolled back by CAS, retaining the index and worktree for repair. */
@@ -752,6 +793,13 @@ export async function commitPipelineStage(
   receiptFile?: string,
   control?: StageCommitControl,
 ): Promise<PipelineGitResult> {
+  // A Viewer exit can bypass the commit's finally. Reap that link before
+  // inspecting paths or recovering an already-landed commit; borrow anew only
+  // after staging, so every successful settlement leaves publication safe.
+  try { stageToolchainRelease(pipeline)?.(); }
+  catch (error) {
+    return { ok: false, error: `committing the passed stage: releasing interrupted repository hook toolchain: ${error instanceof Error ? error.message : "unknown failure"}` };
+  }
   const status = (await exec("git", ["status", "--porcelain", "--", ".", ...CONTROLLER_ARTIFACT_PATHSPECS], pipeline.worktreeDir));
   if (status.code !== 0) return failure("checking the pipeline worktree", status);
   const initialHead = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
@@ -825,9 +873,17 @@ export async function commitPipelineStage(
   if (head.stdout.trim() !== sha || recheckedTree.stdout.trim() !== custodyTree) {
     return { ok: false, deferred: true, error: "stage index custody changed during validation; retrying with fresh evidence" };
   }
-  const commit = await commitStageTree(pipeline, sha, custodyTree, [`pipeline(${pipeline.id}): complete ${stageId}`,
-    ...(receipt ? [`Delegatus-Stage-Commit: ${receipt.id}`] : [])], exec, allowCommit ? undefined : changedOutputPaths,
-    () => control?.beforeCommit(sha));
+  let releaseTools: (() => void) | undefined;
+  try { releaseTools = await prepareStageToolchain(pipeline, exec); }
+  catch (error) {
+    return { ok: false, error: `committing the passed stage: preparing repository hook toolchain: ${error instanceof Error ? error.message : "unknown failure"}` };
+  }
+  let commit: PipelineGitResult;
+  try {
+    commit = await commitStageTree(pipeline, sha, custodyTree, [`pipeline(${pipeline.id}): complete ${stageId}`,
+      ...(receipt ? [`Delegatus-Stage-Commit: ${receipt.id}`] : [])], exec, allowCommit ? undefined : changedOutputPaths,
+      () => control?.beforeCommit(sha));
+  } finally { releaseTools?.(); }
   if (!commit.ok) {
     if (commit.deferred) return commit;
     return { ...commit,
