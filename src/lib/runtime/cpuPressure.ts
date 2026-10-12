@@ -123,7 +123,8 @@ export function machineCpuPressureGate(): CpuStartGate | null {
   return globalGate.__llvCpuPressureGate = {
     check: (key = `command:${process.pid}`) => {
       const held = pressure.check();
-      const queue = machineCpuAdmissionQueue().check(key, !held, key.startsWith("stage:") ? undefined : cpuCommandOwner());
+      const durable = key.startsWith("stage:") || key.startsWith("workflow:");
+      const queue = machineCpuAdmissionQueue().check(key, !held, durable ? undefined : cpuCommandOwner());
       return queue ? { since: queue.since, avg10: held?.avg10 ?? 0, deferred: false, policy, queue } : null;
     },
     cancel: (key) => machineCpuAdmissionQueue().cancel(key),

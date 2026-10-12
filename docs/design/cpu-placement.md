@@ -145,7 +145,12 @@ spacing; a permissive sample does not make that bound jump when pressure rises.
 SQLite writer transactions preserve queue order, original wait timestamps and
 the last admission across Viewer restarts and across processes. Stage tickets
 use the pipeline, stage and attempt; controller ticks remove tickets for stages
-that paused, closed or moved on. Command tickets carry the waiting shell's
+that paused, closed or moved on. Workflow tickets use a separate state-directory
+namespace with one key for setup and one per stage. Paused workflows and
+automatic starts held by an update keep their queue order and wait age while
+their tickets are suspended; eligible callers can pass them. Closing a workflow
+or leaving a phase removes its ticket. Workflow ticks and control changes
+reconcile these durable records, including after restart. Command tickets carry the waiting shell's
 kernel start identity; dead callers lose their tickets. The queue lives under
 the operating-system user's `$HOME/.cache/delegatus-cpu`, shared with the
 Viewer container even when a child sandboxes HOME. `LLV_GATE_LOCK_DIR` puts a

@@ -24,6 +24,8 @@ import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
 import { cpuPressureHoldDetail, isCpuPressureDetail, machineCpuPressureGate, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
+import { machineCpuAdmissionQueue } from "@/lib/runtime/cpuAdmission";
+import { stateDir } from "@/lib/configDir";
 import { realExec, provisionWorktree, runFinish, setupStatus, startSetup, type ExecPort, type SetupStatus } from "./provision";
 import { fixerKickoff, prBody, stageKickoff } from "./prompts";
 import { buildWorkflow, loadTemplates, loadWorkflows, normalizeStages, saveWorkflows, setupExitPath, validateWorkflowLaunchModels } from "./store";
@@ -59,7 +61,8 @@ export interface WorkflowPorts {
   exec: ExecPort;
   startSetup(wf: Workflow): { pid: number | null; error?: string };
   /** A held setup or stage-agent start waits for CPU pressure to fall; null admits. */
-  cpuPressureHold?(): CpuPressureHold | null;
+  cpuPressureHold?(key: string): CpuPressureHold | null;
+  cpuAdmissionReconcile?(): void;
   setupStatus(wf: Workflow): SetupStatus;
   spawnAgent(role: RoleConfig, cwd: string, prompt: string, accountId: string | null | undefined, title: string): Promise<StageSpawn>;
   /** The pane still hosts a non-shell foreground process. */
@@ -82,7 +85,8 @@ export function defaultPorts(): WorkflowPorts {
   return {
     exec: realExec,
     startSetup,
-    cpuPressureHold: () => machineCpuPressureGate()?.check() ?? null,
+    cpuPressureHold: (key) => machineCpuPressureGate()?.check(key) ?? null,
+    cpuAdmissionReconcile: reconcileCpuAdmission,
     setupStatus,
     spawnAgent: async (role, cwd, prompt, accountId, title) => {
       const account = accountManager.resolveSpawn(role.engine, accountId);
@@ -248,6 +252,32 @@ function advanceStage(wf: Workflow): void {
 const SETUP_HOLD_SUBJECT = "setup";
 const STAGE_HOLD_SUBJECT = "stage start";
 
+function cpuWorkflowPrefix(): string {
+  return `workflow:${crypto.createHash("sha256").update(stateDir()).digest("hex")}:`;
+}
+
+function cpuWorkflowKey(wf: Workflow, phase: "setup" | "stage"): string {
+  return `${cpuWorkflowPrefix()}${wf.id}:${phase === "setup" ? "setup" : `stage:${wf.stageIndex}`}`;
+}
+
+/** Parked work and update holds retain their place without blocking callers.
+ * Reconcile from durable records so a restart also removes superseded phases. */
+function reconcileCpuAdmission(): void {
+  const active = new Set<string>(), eligible = new Set<string>();
+  const drain = activeDrain();
+  if (machineCpuPressureGate()) for (const wf of loadWorkflows()) {
+    const phase = phaseOf(wf);
+    const run = currentRun(wf);
+    let key: string;
+    if (phase === "provisioning" && wf.template.setup && wf.setupPid == null) key = cpuWorkflowKey(wf, "setup");
+    else if ((phase === "implementing" || phase === "reviewing") && run && !run.startedAt && !run.doneAt) key = cpuWorkflowKey(wf, "stage");
+    else continue;
+    active.add(key);
+    if (!PARKED_STATES.has(wf.state) && !(wf.mode === "auto" && drain)) eligible.add(key);
+  }
+  machineCpuAdmissionQueue().reconcile(cpuWorkflowPrefix(), active, eligible);
+}
+
 async function ensureStageAgent(
   wf: Workflow,
   run: WorkflowStageRun,
@@ -261,7 +291,7 @@ async function ensureStageAgent(
     if (wf.mode === "auto" && activeDrain()) return "waiting";
     // Only a fresh start asks; a stage whose start is stamped is observed and
     // recovered below whatever the pressure reads.
-    const pressure = ports.cpuPressureHold?.();
+    const pressure = ports.cpuPressureHold?.(cpuWorkflowKey(wf, "stage"));
     if (pressure) { wf.stateDetail = cpuPressureHoldDetail(pressure, STAGE_HOLD_SUBJECT); return "waiting"; }
     if (isCpuPressureDetail(wf.stateDetail, STAGE_HOLD_SUBJECT)) wf.stateDetail = null;
     /* #1279: a workflow stage is a launch of the workflow's project's work, so
@@ -361,7 +391,8 @@ async function tickProvisioning(wf: Workflow, ports: WorkflowPorts, persistCheck
     if (wf.setupPid == null && ports.setupStatus(wf).status !== "done") {
       // Only the first launch asks; a setup that already started is observed
       // below whatever the pressure reads.
-      const pressure = ports.cpuPressureHold?.();
+      if (wf.mode === "auto" && activeDrain()) return;
+      const pressure = ports.cpuPressureHold?.(cpuWorkflowKey(wf, "setup"));
       if (pressure) { wf.stateDetail = cpuPressureHoldDetail(pressure, SETUP_HOLD_SUBJECT); return; }
       const started = ports.startSetup(wf);
       if (started.pid == null) {
@@ -552,6 +583,7 @@ export async function tickWorkflows(entries: FileEntry[], ports: WorkflowPorts =
   if (store.__llvWorkflowTick) return { workflows: loadWorkflows(), changed: false };
   store.__llvWorkflowTick = true;
   try {
+    ports.cpuAdmissionReconcile?.();
     const workflows = loadWorkflows();
     const entriesByPath = new Map(entries.map((entry) => [entry.path, entry]));
     let changed = false;
@@ -564,6 +596,7 @@ export async function tickWorkflows(entries: FileEntry[], ports: WorkflowPorts =
     return { workflows, changed };
   } finally {
     store.__llvWorkflowTick = false;
+    ports.cpuAdmissionReconcile?.();
   }
 }
 
@@ -679,6 +712,7 @@ export async function patchWorkflow(
   }
 
   saveWorkflows(workflows);
+  ports.cpuAdmissionReconcile?.();
   return { workflow: wf };
 }
 
