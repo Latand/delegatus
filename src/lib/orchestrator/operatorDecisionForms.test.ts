@@ -28,10 +28,10 @@ test("fresh seat and worker profiles select the native question policy independe
   for (const role of ["orchestrator", "builder", null]) {
     const input = {
       spec: { cwd: "/repo", engine: "claude" as const, command: "fixture-engine", windowName: "fixture", launchProfile: emptyLaunchProfile({ cwd: "/repo", allowSubagents: true }) },
-      account: { engine: "claude" as const, accountId: "legacy", home: "/account", kind: "legacy" as const, transcriptRoot: "/transcripts", env: {} },
+      account: { engine: "claude" as const, accountId: "legacy", home: "/account", kind: "legacy" as const, transcriptRoot: "/transcripts", env: { NODE_ENV: "test" as const } },
     };
     expect(operatorDecisionFormsRequired(role)).toBe(role === "orchestrator");
-    const options = claudeStructuredHostOptions(input, { env: {}, host: {} }, undefined, undefined, role);
+    const options = claudeStructuredHostOptions(input, { env: { NODE_ENV: "test" }, host: {} }, undefined, undefined, role);
     expect(options.operatorDecisionForms).toBe(role === "orchestrator");
   }
 });
@@ -59,8 +59,8 @@ test("re-hosting a designated conversation applies the seat policy even without 
   const { claudeStructuredHostOptions } = await import("@/lib/runtime/structuredSpawn");
   const resumed = claudeStructuredHostOptions({
     spec: { command: "fixture-engine", engine: "claude", cwd: "/repo", windowName: "fixture", transcript: seatPath, launchProfile: entry.launchProfile },
-    account: { engine: "claude", accountId: "legacy", kind: "legacy", home: "/account", transcriptRoot: "/transcripts", env: {} },
-  }, { env: {}, host: {} });
+    account: { engine: "claude", accountId: "legacy", kind: "legacy", home: "/account", transcriptRoot: "/transcripts", env: { NODE_ENV: "test" as const } },
+  }, { env: { NODE_ENV: "test" }, host: {} });
   expect(resumed.operatorDecisionForms).toBe(true);
 });
 
