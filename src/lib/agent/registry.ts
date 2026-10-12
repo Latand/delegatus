@@ -5790,6 +5790,11 @@ export class AgentRegistry {
       if (isSpawnDeniedRole(existingConversation?.agentRole)) profile.allowSubagents = false;
       /* A clean role reads no automatic memory, whoever launched it. */
       if (roleIsClean(existingConversation?.agentRole ?? role)) profile.cleanMemory = true;
+      const memoryRole = existingConversation?.agentRole ?? role;
+      const memoryProject = explicitProject ?? existingConversation?.projectOwnership?.project ?? profile.project;
+      if ((memoryRole === "orchestrator" || memoryRole === "maintainer") && !profile.cleanMemory && !profile.learnedRules && memoryProject) {
+        profile.learnedRules = { project: memoryProject, roleId: memoryRole };
+      }
       /* A delegated conversation never acquires a plugin grant (#687): a role
          preset or a lineage parent denies it on resume, successor and restart
          adoption alike, whatever a stored or requested profile claims. */

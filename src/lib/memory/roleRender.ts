@@ -10,6 +10,10 @@ export const LEARNED_RULES_HEADING = "Learned rules (Delegatus role memory)";
 const utf8 = new TextEncoder();
 
 const LESSON_POINTER = "When you report with stage_report, its answer asks whether this stage taught anything; most stages answer none. A rule above that proved wrong or too narrow can be rewritten then, by its id.";
+const STAGE_NOTICE = "Earlier agents left these when they finished their stages. They are rules of thumb: the brief, the pinned specification and the project's instruction files win where they disagree. Keep them on this machine: never copy a rule into a commit, pull request, issue, task or report; name it by its id.";
+const SEAT_NOTICE = "Earlier seats and stage agents left these. They are rules of thumb: the operator's word, your mandate and the project's instruction files win where they disagree. Keep them on this machine: act on a rule in your own words and never paste its text into a brief, task, report, message, commit, pull request or issue; name it by its id.";
+const SEAT_POINTER = "If you are this project's designated seat, this is your role's memory: every later seat of this project reads it, on any engine and account, while your engine's own memory reaches one account. When you meet a problem that can come back, settle it in the same turn. A practice (how to brief, what to check before you report, how the operator wants a thing done) becomes a rule: call leave_lesson with lesson, or with rewrite and the id of a rule above that proved wrong or too narrow. A concrete defect goes to the board: find or create its task with create_task, and tell the operator in chat when it is critical (it blocks accepted work, loses data, or will hit every lane). A problem report that a wake delivers says what to do with it. leave_lesson's description gives the levels and limits.";
+const MAINTAINER_POINTER = "You leave no rules in this run. This project's seat keeps the rules for your role and opens the tasks for defects.";
 
 function roleTitle(roleId: string): string {
   const words = roleId.replaceAll("-", " ");
@@ -41,14 +45,15 @@ export function renderLearnedRules(scopes: readonly { scope: string; rules: read
 }
 
 function renderBlock(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[]): string {
+  const reader = scopes.map(entry => scopeRole(entry.scope)).find(role => role !== null);
   const count = (kind: string) => scopes.filter((entry) => scopeKind(entry.scope) === kind).reduce((sum, entry) => sum + entry.rules.length, 0);
   const counts = [...(scopes.some((entry) => scopeKind(entry.scope) === "role") ? [`${count("role")} role`] : []), `${count("project")} project`, `${count("machine")} machine`].join(" · ");
   return [
     `${LEARNED_RULES_HEADING}: ${counts}`,
-    "Earlier agents left these when they finished their stages. They are rules of thumb: the brief, the pinned specification and the project's instruction files win where they disagree. Keep them on this machine: never copy a rule into a commit, pull request, issue, task or report; name it by its id.",
+    reader === "orchestrator" ? SEAT_NOTICE : reader === "maintainer" ? STAGE_NOTICE.replace("Earlier agents", "Earlier agents and this project's seat") : STAGE_NOTICE,
     ...scopes.flatMap((entry) => ["", scopeHeading(entry.scope), ...(entry.rules.length ? entry.rules.map(ruleLine) : ["- none yet"])]),
     "",
-    LESSON_POINTER,
+    reader === "orchestrator" ? SEAT_POINTER : reader === "maintainer" ? MAINTAINER_POINTER : LESSON_POINTER,
   ].join("\n");
 }
 

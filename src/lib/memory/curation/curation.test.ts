@@ -210,7 +210,7 @@ test.each([roleScope(PROJECT, "visual-critic"), "role:*:builder", projectScope(P
 });
 test("moves and split parts refuse clean roles and foreign projects; widening needs a note", () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
-  for (const to of [roleScope(PROJECT, "reviewer"), "role:*:curator", roleScope(PROJECT, "orchestrator"), roleScope(PROJECT, "maintainer"), roleScope("other", "builder")]) {
+  for (const to of [roleScope(PROJECT, "reviewer"), "role:*:curator", roleScope("other", "builder")]) {
     refusal(p, input({ [scope]: [], [to]: [one] }, { move: [{ id: one, to }] }), to.includes("other") ? "CURATE_SCOPE" : "CURATE_NO_READER");
     refusal(p, input({ [scope]: [one], [to]: [`split:${one}:1`] }, { split: [{ id: one, note: "Separate the readers at their levels.", parts: [{ to: scope, rule: text }, { to, rule: text }] }] }), to.includes("other") ? "CURATE_SCOPE" : "CURATE_NO_READER");
   }
