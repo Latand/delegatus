@@ -302,6 +302,29 @@ The fix: the foot shows `lastAgentWorkAtMs` when it is known, and
 "Last worked {age}" for the work time and keeps «Оновлено {age}» for the
 fallback. Same element, same place; one new i18n key.
 
+### 2.4 Visual review round (60 frames, three widths, en and uk, light and dark)
+
+Four findings from the frames, each fixed on the same elements:
+
+- **A finished lane no longer says «Stopped, no reason given».** A stopped
+  task with no declared reason that draws a lane row (desktop) or a pipeline
+  line (phone) shows no state line: the row says how the work ended. The words
+  stay on cards with no lane outcome to show.
+- **One stopped number.** Sorting by work puts a card that stopped minutes ago
+  among the live ones, so the old «trailing run of stopped cards» split counted
+  two of three. The divider now holds the stopped cards nobody worked on for
+  three days (`parkedCard`), and the header counts the same set
+  (`column.stopped`, `column.parked`).
+- **The age once.** The foot age is not drawn where a lane row on the card
+  already dates the work. It stays on cards that have no lane row.
+- **Work and edit do not look alike.** A card nobody worked on words its age as
+  an edit («edited 2m ago» / «змінено 2 хв тому», `kanban.editedAge`), on the
+  desktop foot and on the phone's agents line. A bare age always means work.
+
+Left as they were, outside this change: the age inside «Past attempts» and in
+the state line («Waiting: paused · 3d ago»), which date a different event than
+the lane row.
+
 ## 3. Files to change
 
 Line anchors are at this branch's base. They were rechecked against

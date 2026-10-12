@@ -23,18 +23,31 @@
       ],
       "hiddenCount": 3,
       "foot": {
-        "finished": {
-          "text": "5m ago",
-          "title": "Last worked 5m ago",
+        "finished": null,
+        "old": {
+          "text": "6d ago",
+          "title": "Last worked 6d ago",
           "inside": true,
           "overlaps": false
         },
         "notes": {
-          "text": "just now",
+          "text": "edited just now",
           "title": "Updated just now",
           "inside": true,
           "overlaps": false
         }
+      },
+      "stoppedHeader": 2,
+      "stoppedDivider": "2",
+      "belowDivider": [
+        "t-rf-old",
+        "t-rf-notes"
+      ],
+      "stateLines": {
+        "t-rf-finished": "",
+        "t-rf-decision": "Needs you",
+        "t-rf-paused": "Waiting: paused · 3d ago",
+        "t-rf-old": "Stopped, no reason given"
       }
     },
     "phone-390-en": {
@@ -54,7 +67,11 @@
         "t-rf-normal",
         "t-rf-low"
       ],
-      "overflowX": 0
+      "overflowX": 0,
+      "edits": {
+        "t-rf-notes": "no agents yet·edited 1m",
+        "t-rf-old": "1 agent·6d"
+      }
     },
     "desktop-1440-uk": {
       "assigned": [
@@ -79,18 +96,31 @@
       ],
       "hiddenCount": 3,
       "foot": {
-        "finished": {
-          "text": "5 хв тому",
-          "title": "Остання робота 5 хв тому",
+        "finished": null,
+        "old": {
+          "text": "6 д тому",
+          "title": "Остання робота 6 д тому",
           "inside": true,
           "overlaps": false
         },
         "notes": {
-          "text": "щойно",
+          "text": "змінено щойно",
           "title": "Оновлено щойно",
           "inside": true,
           "overlaps": false
         }
+      },
+      "stoppedHeader": 2,
+      "stoppedDivider": "2",
+      "belowDivider": [
+        "t-rf-old",
+        "t-rf-notes"
+      ],
+      "stateLines": {
+        "t-rf-finished": "",
+        "t-rf-decision": "Потрібні ви",
+        "t-rf-paused": "Очікує: призупинено · 3 д тому",
+        "t-rf-old": "Без руху, причину не вказано"
       }
     },
     "phone-390-uk": {
@@ -110,7 +140,11 @@
         "t-rf-normal",
         "t-rf-low"
       ],
-      "overflowX": 0
+      "overflowX": 0,
+      "edits": {
+        "t-rf-notes": "ще без агентів·змінено 1 хв",
+        "t-rf-old": "1 агент·6 д"
+      }
     }
   },
   "failures": []

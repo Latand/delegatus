@@ -201,7 +201,11 @@ export interface KanbanColumn {
   /** Agents working on the column's cards (`isWorkingAgent`). */
   working: number;
   needsYou: number;
+  /** Stopped cards nobody worked on lately (`parkedCard`): the ones the
+      column draws under its Stopped divider, counted once for the header and the divider. */
   stopped: number;
+  /** The ids of the shown cards among them. */
+  parked: string[];
   noReason: number;
 }
 
@@ -416,6 +420,16 @@ export function compareCards(a: KanbanCard, b: KanbanCard): number {
  */
 function workedRecently(card: KanbanCard, nowMs: number): boolean {
   return card.workingSinceMs !== null || card.lastAgentWorkAtMs >= nowMs - DONE_TASK_BOARD_RETENTION_MS;
+}
+
+/**
+ * A stopped card that nobody worked on recently. The column sorts by recent
+ * work, so a card that stopped minutes ago sits among the live ones; only the
+ * long-quiet stopped cards gather under the Stopped divider, and the header
+ * counts exactly those.
+ */
+export function parkedCard(card: KanbanCard, nowMs: number): boolean {
+  return card.motion.key === "stopped" && !workedRecently(card, nowMs);
 }
 
 /**
@@ -822,7 +836,8 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       shown: inColumn.filter((card) => keeps(card)),
       working: inColumn.reduce((sum, card) => sum + card.working, 0),
       needsYou: inColumn.filter((card) => card.motion.key === "needs-you").length,
-      stopped: inColumn.filter((card) => card.motion.key === "stopped").length,
+      stopped: status === "assigned" ? inColumn.filter((card) => parkedCard(card, now * 1000)).length : 0,
+      parked: status === "assigned" ? inColumn.filter((card) => keeps(card) && parkedCard(card, now * 1000)).map((card) => card.id) : [],
       noReason: inColumn.filter(cardHasUnknownReason).length,
     } satisfies KanbanColumn];
   })) as Record<TaskStatus, KanbanColumn>;

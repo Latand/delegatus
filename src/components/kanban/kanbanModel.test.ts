@@ -351,6 +351,19 @@ test("a recently worked waiting card sorts above a stale one in the same column,
   expect(cards[0]!.lastAgentWorkAtMs).toBe((NOW - 300) * 1000);
 });
 
+test("the Stopped divider and the header count the same cards: stopped work nobody touched for three days", () => {
+  const quiet = file(521, { activity: "idle", lastAgentWorkAt: (NOW - 5 * DAY) * 1000, mtime: NOW - 5 * DAY });
+  const lately = file(522, { activity: "idle", lastAgentWorkAt: (NOW - 120) * 1000, mtime: NOW - 120 });
+  const tasks = [task("quiet", "assigned", [quiet.path]), task("lately", "assigned", [lately.path]), task("never", "assigned")];
+  const column = model(tasks, [quiet, lately]).columns.assigned;
+  expect(column.cards.map((card) => card.motion.key)).toEqual(["stopped", "stopped", "stopped"]);
+  expect(column.cards.map((card) => card.task!.id)).toEqual(["lately", "quiet", "never"]);
+  /* «lately» stopped two minutes ago: it keeps its place among the worked cards. */
+  expect(column.parked).toEqual(column.cards.filter((card) => card.task!.id !== "lately").map((card) => card.id));
+  expect(column.stopped).toBe(2);
+  expect(model(tasks, [quiet, lately]).columns.inbox.stopped).toBe(0);
+});
+
 test("a card worked two minutes ago stands above a needs-you card parked two days ago, in Assigned and in Done", () => {
   const worked = file(511, { lastAgentWorkAt: (NOW - 120) * 1000, mtime: NOW - 120 });
   for (const status of ["assigned", "done"] as const) {

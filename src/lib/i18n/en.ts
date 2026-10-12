@@ -4478,6 +4478,7 @@ export const en = {
   "kanban.nextColumn": "Next column",
   "kanban.updated": "Updated {age}",
   "kanban.worked": "Last worked {age}",
+  "kanban.editedAge": "edited {age}",
   "kanban.justNow": "just now",
   "kanban.activityWorking": "{count} working",
   "kanban.activityConversations": { one: "{count} conversation", other: "{count} conversations" },

@@ -9374,7 +9374,7 @@ describe("recent first: columns order by the newest work, and a recently worked 
   /* The phone leads each tab with what asks the operator, as its own contract says. */
   const PHONE_ASSIGNED = ["t-rf-decision", "t-rf-running", "t-rf-finished", "t-rf-paused", "t-rf-old", "t-rf-notes"];
 
-  browserTest("every column reads newest work first, the recent hidden task is a card, and the foot age is the work's", async () => {
+  browserTest("every column reads newest work first, the recent hidden task is a card, the stopped count is one number, and each card states its age once", async () => {
     const pngDir = path.resolve(process.env.RECENT_FIRST_PNG_DIR ?? ".artifacts/recent-first");
     const out = path.resolve(".artifacts/recent-first-bundle");
     fs.mkdirSync(out, { recursive: true });
@@ -9413,7 +9413,19 @@ describe("recent first: columns order by the newest work, and a recently worked 
               return {
                 assigned: order("assigned"), inbox: order("inbox"), done: order("done"),
                 hiddenCount: Number(bar?.getAttribute("data-hidden-count") ?? "-1"),
-                foot: { finished: foot("t-rf-finished"), notes: foot("t-rf-notes") },
+                foot: { finished: foot("t-rf-finished"), old: foot("t-rf-old"), notes: foot("t-rf-notes") },
+                /* The header's number, the divider's number and what the divider holds. */
+                stoppedHeader: Number(document.querySelector('[data-kanban-board] .column[data-status="assigned"] [data-column-stopped]')?.getAttribute("data-count") ?? "-1"),
+                stoppedDivider: (document.querySelector('[data-kanban-board] .column[data-status="assigned"] .divider [role="separator"]')?.textContent ?? "").match(/\d+/)?.[0] ?? "",
+                belowDivider: (() => {
+                  const divider = document.querySelector('[data-kanban-board] .column[data-status="assigned"] .divider');
+                  if (!divider) return [];
+                  return [...document.querySelectorAll('[data-kanban-board] .column[data-status="assigned"] .card')]
+                    .filter((element) => Boolean(divider.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING))
+                    .map((element) => (element.getAttribute("data-id") ?? "").replace(/^task:/, ""));
+                })(),
+                stateLines: Object.fromEntries(["t-rf-finished", "t-rf-decision", "t-rf-paused", "t-rf-old"].map((id) => [id,
+                  (document.querySelector(`[data-kanban-board] .card[data-id="task:${id}"] .motion-line`)?.textContent ?? "").trim()])),
               };
             });
             readings[label] = read;
@@ -9421,12 +9433,21 @@ describe("recent first: columns order by the newest work, and a recently worked 
             if (JSON.stringify(read.inbox) !== JSON.stringify(INBOX)) failures.push(`${label}: Inbox reads ${JSON.stringify(read.inbox)}`);
             if (JSON.stringify(read.done) !== JSON.stringify(DONE)) failures.push(`${label}: Done reads ${JSON.stringify(read.done)}`);
             if (read.hiddenCount !== 3) failures.push(`${label}: the hidden tray counts ${read.hiddenCount}, not 3`);
-            const finished = read.foot.finished;
             const worked = lang === "en" ? /^Last worked/ : /^Остання робота/;
             const edited = lang === "en" ? /^Updated/ : /^Оновлено/;
-            const minutes = lang === "en" ? /^5\s?m/ : /^5\s?хв/;
-            if (!finished || !worked.test(finished.title) || !minutes.test(finished.text)) failures.push(`${label}: finished card foot ${JSON.stringify(finished)}`);
-            if (!read.foot.notes || !edited.test(read.foot.notes.title)) failures.push(`${label}: untouched card foot ${JSON.stringify(read.foot.notes)}`);
+            const editedWord = lang === "en" ? /^edited / : /^змінено /;
+            const days = lang === "en" ? /^6\s?d/ : /^6\s?д/;
+            /* A lane row states the finished lane's age: the foot says nothing more. */
+            if (read.foot.finished) failures.push(`${label}: finished card repeats the lane's age in its foot ${JSON.stringify(read.foot.finished)}`);
+            if (!read.foot.old || !worked.test(read.foot.old.title) || !days.test(read.foot.old.text)) failures.push(`${label}: worked card without a lane foot ${JSON.stringify(read.foot.old)}`);
+            if (!read.foot.notes || !edited.test(read.foot.notes.title) || !editedWord.test(read.foot.notes.text)) failures.push(`${label}: untouched card foot ${JSON.stringify(read.foot.notes)}`);
+            /* One stopped number: the header's, the divider's and the cards under the divider. */
+            if (read.stoppedHeader !== 2 || read.stoppedDivider !== "2" || JSON.stringify(read.belowDivider) !== JSON.stringify(["t-rf-old", "t-rf-notes"])) {
+              failures.push(`${label}: stopped header ${read.stoppedHeader}, divider ${read.stoppedDivider}, below ${JSON.stringify(read.belowDivider)}`);
+            }
+            /* The finished lane says it finished: no «no reason given» line above its lane row. */
+            if (read.stateLines["t-rf-finished"]) failures.push(`${label}: finished card state line ${JSON.stringify(read.stateLines["t-rf-finished"])}`);
+            if (!read.stateLines["t-rf-decision"] || !read.stateLines["t-rf-paused"]) failures.push(`${label}: decision or paused card lost its state line ${JSON.stringify(read.stateLines)}`);
             for (const [name, foot] of Object.entries(read.foot)) {
               if (foot && (!foot.inside || foot.overlaps)) failures.push(`${label}: ${name} foot age ${JSON.stringify(foot)}`);
             }
@@ -9452,9 +9473,13 @@ describe("recent first: columns order by the newest work, and a recently worked 
                 .map((element) => (element.getAttribute("data-phone-card") ?? "").replace(/^task:/, "")), tab);
             };
             const assigned = await readTab("assigned");
+            const edits = await page.evaluate(() => Object.fromEntries(["t-rf-notes", "t-rf-old"].map((id) => [id,
+              (document.querySelector(`[data-phone-card="task:${id}"] [data-phone-card-agents]`)?.textContent ?? "").trim()])));
             const inbox = await readTab("inbox");
             const overflowX = await page.evaluate(() => (document.scrollingElement ? document.scrollingElement.scrollWidth - document.scrollingElement.clientWidth : 0));
-            readings[label] = { assigned, inbox, overflowX };
+            readings[label] = { assigned, inbox, overflowX, edits };
+            const editedWord = lang === "en" ? /edited / : /змінено /;
+            if (!editedWord.test(edits["t-rf-notes"] ?? "") || editedWord.test(edits["t-rf-old"] ?? "")) failures.push(`${label}: phone age wording ${JSON.stringify(edits)}`);
             if (JSON.stringify(assigned) !== JSON.stringify(PHONE_ASSIGNED)) failures.push(`${label}: Assigned reads ${JSON.stringify(assigned)}`);
             if (JSON.stringify(inbox) !== JSON.stringify(INBOX)) failures.push(`${label}: Inbox reads ${JSON.stringify(inbox)}`);
             /* Measured against the 390 px viewport passed in: the layout viewport widens to fit overflow. */
