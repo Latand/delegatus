@@ -9,11 +9,12 @@ import { resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests
 import { decidePrototype, prototypeDecisionText } from "./decision";
 import { seatDecisionNotices } from "./read";
 import { prototypeReviewNotices } from "./model";
-import { roundDirectory } from "./store";
+import { publishPrototype, roundDirectory } from "./store";
 import { clearSeatRoundsForTests, loadSeatRounds } from "./seatRounds";
 import { prototypeWorld, type PrototypeWorld } from "./world";
 import type { OperatorDecisionsRead, PrototypeDecision, PrototypeReviewRead, PrototypeReviewRound, PublishPrototypeInput } from "./types";
 import { questions } from "./questionnaire.fixture";
+import { criticLane } from "./criticGate.fixture";
 
 /* docs/design/operator-decision-forms.md §2.1–§2.2: the project's seat asks
    without a task, through the same store, route and message. */
@@ -26,7 +27,7 @@ afterEach(async () => { await resetPrototypeDeliveryWorkerForTests(); for (const
 function request(url: string, body?: unknown) {
   return new NextRequest(`http://localhost${url}`, { headers: { host: "localhost", "sec-fetch-site": "same-origin" }, ...(body ? { method: "POST", body: JSON.stringify(body) } : {}) });
 }
-const seat: PrototypeWorld = { caller: () => ({ conversationId: "conversation_seat", project: "project-a" }), stage: () => null, orchestrator: () => "conversation_seat" };
+const seat: PrototypeWorld = { ...prototypeWorld, caller: () => ({ conversationId: "conversation_seat", project: "project-a" }), stage: () => null, orchestrator: () => "conversation_seat" };
 const operator: PrototypeWorld = { ...prototypeWorld, orchestrator: () => "conversation_seat" };
 const one = [{ id: "deploy", text: "Deploy now?", options: [{ label: "Now", recommended: true }, { label: "Tonight" }] }];
 function recorder() {
@@ -137,13 +138,18 @@ test("the seat reads its own questions and the receipt scope names them", async 
   expect(await (await reviewScopePOST(request("/api/prototype-reviews/scope", { mode: "publish" }), seat)).json()).toEqual({ conversationId: "conversation_seat", taskId: null });
 });
 
-test("a seat round's pictures are served without a task and survive another publication's cleanup", async () => {
+test("an existing seat round's pictures are served without a task and survive another publication's cleanup", async () => {
   const root = await fs.mkdtemp(path.join(process.env.HOME!, "seat-source-")); roots.push(root);
   await fs.writeFile(path.join(root, "v1.png"), PNG);
-  const id = (await (await publishAs(seat, { clientRequestId: "seat-frames", title: "Which layout?", questions: one,
-    variants: [{ number: 1, name: "Compact", description: "Tight.", frames: [{ path: path.join(root, "v1.png"), caption: "" }] }] })).json()).reviewId as string;
+  const input = { clientRequestId: "seat-frames", title: "Which layout?", questions: one,
+    variants: [{ number: 1, name: "Compact", description: "Tight.", frames: [{ path: path.join(root, "v1.png"), caption: "" }] }] };
+  // Existing media remains readable; new variants still need the lane's critic evidence.
+  const refused = await publishAs(seat, input);
+  expect(refused.status).toBe(409);
+  expect((await refused.json()).error).toContain("visual-critic");
+  const id = (await publishPrototype(input, null, { conversationId: "conversation_seat" }, "project-a")).id;
   /* A task publication sweeps orphan copies under the same lock. */
-  await publishAs(operator, { clientRequestId: "task-q", taskId: "task-prototype", title: "Before work", questions: one });
+  await publishAs(operator, { clientRequestId: "task-q", taskId: "task-prototype", title: "Before work", questions });
   await fs.access(roundDirectory(id));
   const view = (await decisions()).decisions.find(d => d.id === id)!;
   const url = view.variants[0]!.frames[0]!.image.url!;
@@ -157,6 +163,33 @@ test("a task-bound decision message stays byte for byte", () => {
   const round = { title: "Before work", taskId: "task-review", variants: [], questions: one } as unknown as PrototypeReviewRound;
   const text = prototypeDecisionText({ id: "task-review", text: "Review layout\nDetails" }, round, { chosen: [], answers: [{ questionId: "deploy", options: [0] }], comment: "Go" });
   expect(text).toBe("Prototype review decision\nTask: task-review — Review layout\nRound: Before work\n\nAnswers:\n1. Deploy now?\n   a) Now (recommended)\n\nComment:\nGo\n\nEnd of prototype review decision.");
+});
+
+test("the decision column rejects task variants with required corrections and delivers rejection to the seat", async () => {
+  const root = await fs.mkdtemp(path.join(process.env.HOME!, "form-source-")); roots.push(root);
+  await fs.writeFile(path.join(root, "v1.png"), PNG);
+  const publisher: PrototypeWorld = { ...seat, pipeline: () => criticLane(), stage: () => ({ taskIds: ["task-prototype"], project: "project-a",
+    source: { conversationId: "conversation_seat", pipelineId: "prototype-lane", stageId: "publish", attempt: 1 } }) };
+  const published = await publishAs(publisher, { clientRequestId: "form-variants", title: "Layout", questions,
+    variants: [{ number: 1, name: "Compact", description: "Tight.", frames: [{ path: path.join(root, "v1.png"), caption: "Controls" }] }] });
+  expect(published.status).toBe(200);
+  const reviewId = (await published.json()).reviewId as string;
+  expect(loadTasks()[0]!.prototypeReviews![0]!.critic?.outcome).toBe("passed");
+  const answers = questions.map(q => ({ questionId: q.id, options: [0] }));
+  const { sent, delivery } = recorder();
+  const body = { project: "project-a", reviewId, reject: true, chosen: [], answers, comment: "  Simplify all variants.  " };
+  for (const invalid of [{ ...body, comment: " " }, { ...body, chosen: [1] }]) {
+    expect((await decisionsPOST(request("/api/projects/decisions", invalid), operator, delivery)).status).toBe(400);
+    expect((await decisions()).decisions.map(d => d.id)).toEqual([reviewId]);
+  }
+  expect(sent).toEqual([]);
+  expect((await decisionsPOST(request("/api/projects/decisions", body), operator, delivery)).status).toBe(200);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toContain("Rejected: none of the variants fits.");
+  expect(sent[0]).toContain("Corrections:\n  Simplify all variants.  ");
+  expect(sent[0]).not.toContain("Chosen:");
+  expect((await decisions()).decisions).toEqual([]);
+  expect((await decisions("project-a", reviewId)).round?.decision).toMatchObject({ rejected: true, chosen: [], answers, delivery: { state: "sent" } });
 });
 
 test("an answered seat question's record takes the receipt's word on every read, and no read sends again", async () => {

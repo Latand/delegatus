@@ -133,7 +133,9 @@ export interface BandSources {
   untitled: string;
   /** Localized fallback for a review flow without a resolvable implementer. */
   reviewFlow?: string;
-  /** Kanban applies expiry with its seat and decision context after projection. */
+  /** Kanban applies done-task expiry and the board flag after projection, with
+      its seat, decision context and the lanes' recent work. A band that holds
+      nothing has claimed nothing, so building it moves no other band's members. */
   deferDoneVisibility?: boolean;
 }
 
@@ -392,7 +394,7 @@ export function buildTaskBands(base: SchemeLayout, sources: BandSources): TaskBa
      that holds nothing has claimed nothing, so dropping it here releases no
      conversation and moves no other band's members. */
   return bands.filter((band) => band.origin !== "task" || !band.task
-    || (sources.deferDoneVisibility && band.task.status === "done")
+    || sources.deferDoneVisibility
     || taskShowsOnBoard(band.task, bandHoldsMembers(band), {
       members: [...band.members.flatMap((member) => member.file ? [member.file] : []), ...band.mirrors.map((mirror) => mirror.file)],
       pipelines: projection.tasks.flatMap((entry) => entry.executions.map((execution) => execution.pipeline)),

@@ -1,0 +1,50 @@
+{
+  "en-light": {
+    "fixedFooter": true,
+    "focusReturned": true,
+    "pinchZoom": "225%",
+    "swipedAcrossFrames": true,
+    "geometry": {
+      "saveHeight": 44,
+      "footerVisible": true,
+      "promptVisible": true,
+      "overflow": false
+    }
+  },
+  "en-dark": {
+    "fixedFooter": true,
+    "focusReturned": true,
+    "pinchZoom": "225%",
+    "swipedAcrossFrames": true,
+    "geometry": {
+      "saveHeight": 44,
+      "footerVisible": true,
+      "promptVisible": true,
+      "overflow": false
+    }
+  },
+  "uk-light": {
+    "fixedFooter": true,
+    "focusReturned": true,
+    "pinchZoom": "225%",
+    "swipedAcrossFrames": true,
+    "geometry": {
+      "saveHeight": 44,
+      "footerVisible": true,
+      "promptVisible": true,
+      "overflow": false
+    }
+  },
+  "uk-dark": {
+    "fixedFooter": true,
+    "focusReturned": true,
+    "pinchZoom": "225%",
+    "swipedAcrossFrames": true,
+    "geometry": {
+      "saveHeight": 44,
+      "footerVisible": true,
+      "promptVisible": true,
+      "overflow": false
+    }
+  }
+}

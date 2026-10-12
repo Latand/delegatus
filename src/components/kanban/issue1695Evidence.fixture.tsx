@@ -380,6 +380,15 @@ const UNSTARTED = SCENARIO === "unstarted-regression";
 const WALL = SCENARIO === "elsewhere-wall";
 /* Board order: working cards first, then recently worked, then idle. */
 const BOARD_ORDER = SCENARIO === "board-order";
+/* Recent first (docs/design/kanban-recent-first.md): every column orders by
+   work in flight, then by the newest agent work with each lane's own last move
+   counted, never by motion. An Assigned column of six cards (a stage running,
+   a lane finished minutes ago whose transcript is not loaded, a lane parked
+   on the operator for two days, a lane paused for three, a transcript from six
+   days ago, a task nobody worked on), an Inbox and a Done column, and the
+   hidden tasks: one worked two days ago that the board shows, and three that
+   it keeps in the hidden tray. */
+const RECENT_FIRST = SCENARIO === "recent-first";
 /* Task priority: an Inbox of high, normal and low tasks read in its order,
    one low task with a working agent, and an Assigned column whose priorities
    do not change its order. */
@@ -2043,6 +2052,56 @@ if (BOARD_ORDER) {
     task("t-order-notes", "assigned", L("Write the upgrade notes", "Написати нотатки до оновлення"), L("Nobody has worked on it yet.", "Над нею ще ніхто не працював."), 1 * MIN),
   );
 }
+if (RECENT_FIRST) {
+  const DAY = 24 * 60 * MIN;
+  const agent = (id: string, title: string, over: Record<string, unknown>) => add(conversation(id, title, over));
+  files.splice(0, files.length, orchestrator);
+  pipelines.splice(0, pipelines.length);
+  tasks.splice(0, tasks.length);
+  const lane = (id: string, taskId: string, state: string, passed: string, moved: { startedAgo: number; completedAgo: number | null }, file: FileEntry | null = null, over: Record<string, unknown> = {}) => {
+    pipelines.push(pipeline(id, `Lane ${id}`, taskId, state, [stage("build", "builder", "review"), stage("review", "builder", null)],
+      [{ stageId: "build", attempts: [attempt(1, passed, file, {
+        startedAt: iso(moved.startedAgo), completedAt: moved.completedAgo === null ? null : iso(moved.completedAgo),
+        ...(file ? {} : { conversationId: `conversation_${id}_elsewhere` }),
+      })] }],
+      state === "completed" ? null : { stageId: "build", state: state === "needs_decision" ? "needs_decision" : "running", input: null, activatedBy: null },
+      over));
+  };
+  const running = agent("rf-running", L("Builder: the stage running now", "Білдер: етап, що йде зараз"), working({ lastAgentWorkAt: (now - 40) * 1_000 }));
+  lane("p-rf-running", "t-rf-running", "running", "running", { startedAgo: 2 * MIN, completedAgo: null }, running);
+  lane("p-rf-finished", "t-rf-finished", "completed", "passed", { startedAgo: 25 * MIN, completedAgo: 5 * MIN });
+  lane("p-rf-decision", "t-rf-decision", "needs_decision", "failed", { startedAgo: 2 * DAY + 20 * MIN, completedAgo: 2 * DAY });
+  lane("p-rf-paused", "t-rf-paused", "paused", "passed", { startedAgo: 3 * DAY + 20 * MIN, completedAgo: 3 * DAY }, null, { pausedState: "running", pausedAt: iso(3 * DAY) });
+  const old = agent("rf-old", L("Builder: the transcript from six days ago", "Білдер: транскрипт шестиденної давності"), { mtime: now - 6 * DAY, lastAgentWorkAt: (now - 6 * DAY) * 1_000 });
+  const inboxWorking = agent("rf-inbox-working", L("Builder: a low-priority task being worked", "Білдер: задача з низьким пріоритетом у роботі"), working({ lastAgentWorkAt: (now - 30) * 1_000 }));
+  lane("p-rf-yesterday", "t-rf-yesterday", "completed", "passed", { startedAgo: DAY + 20 * MIN, completedAgo: DAY });
+  lane("p-rf-hidden-recent", "t-rf-hidden-recent", "completed", "passed", { startedAgo: 2 * DAY + 20 * MIN, completedAgo: 2 * DAY });
+  const doneFresh = agent("rf-done-fresh", L("Builder: finished ten minutes ago", "Білдер: завершив десять хвилин тому"), { mtime: now - 10 * MIN, lastAgentWorkAt: (now - 10 * MIN) * 1_000 });
+  lane("p-rf-done-blocked", "t-rf-done-blocked", "needs_decision", "failed", { startedAgo: DAY + 20 * MIN, completedAgo: DAY });
+  tasks.push(
+    /* Assigned. Edit times run against the work times on purpose: the order is the work's. */
+    task("t-rf-notes", "assigned", L("Write the upgrade notes", "Написати нотатки до оновлення"), L("Nobody has worked on it yet.", "Над нею ще ніхто не працював."), 1 * MIN),
+    task("t-rf-old", "assigned", L("Rate-limit banner copy", "Текст банера про ліміт"), "", 6 * DAY, [old]),
+    task("t-rf-paused", "assigned", L("Index rebuild: paused lane", "Перебудова індексу: лінію призупинено"), "", 12 * MIN),
+    task("t-rf-decision", "assigned", L("Choose the migration window", "Обрати вікно міграції"), "", 3 * MIN),
+    task("t-rf-finished", "assigned", L("Image viewer: arrows and click-outside close", "Перегляд зображень: стрілки й закриття кліком поза ним"), "", 4 * DAY),
+    task("t-rf-running", "assigned", L("Every new task gets an icon and a colour by one rule", "Кожна нова задача отримує іконку й колір за одним правилом"), "", 5 * DAY, [running]),
+    /* Inbox. */
+    task("t-rf-low", "inbox", L("Try a compact density for the Done column", "Спробувати щільніший вигляд колонки «Готово»"), "", 2 * MIN, [], { priority: "low" }),
+    task("t-rf-normal", "inbox", L("Export a board as Markdown", "Експорт дошки в Markdown"), "", 5 * MIN),
+    task("t-rf-high", "inbox", L("A failed deploy tells the seat and the phone", "Невдалий деплой повідомляє сесію та телефон"), "", 5 * DAY, [], { priority: "high" }),
+    task("t-rf-hidden-recent", "inbox", L("Message queue during a Claude turn", "Черга повідомлень під час ходу Claude"), "", 9 * DAY, [], { board: "hidden" }),
+    task("t-rf-yesterday", "inbox", L("Document the merge setting", "Задокументувати налаштування мерджу"), "", 9 * DAY),
+    task("t-rf-inbox-working", "inbox", L("Remove the unused tmux helpers", "Прибрати невживані помічники tmux"), "", 6 * DAY, [inboxWorking], { priority: "low" }),
+    /* The hidden tray: never worked, an explicit choice, and a hidden group. */
+    task("t-rf-never", "inbox", L("Imported note nobody worked on", "Імпортована нотатка, над якою ніхто не працював"), "", 8 * DAY, [], { board: "hidden" }),
+    task("t-rf-chosen", "inbox", L("Duplicate of a finished task", "Дубль завершеної задачі"), "", 8 * DAY, [], { board: "hidden", boardChoice: true }),
+    task("t-rf-grouped", "inbox", L("Task the operator hid", "Задача, яку оператор сховав"), "", 8 * DAY, [], { board: "hidden", groupHidden: { at: iso(7 * DAY), by: "operator", admitted: [] } }),
+    /* Done. */
+    task("t-rf-done-blocked", "done", L("Release notes: merge blocked yesterday", "Нотатки до релізу: мердж заблоковано вчора"), "", 1 * DAY, [], { doneAt: iso(DAY) }),
+    task("t-rf-done-fresh", "done", L("Finished ten minutes ago", "Завершено десять хвилин тому"), "", 10 * MIN, [doneFresh], { doneAt: iso(10 * MIN) }),
+  );
+}
 if (TICK_CARDS) {
   /* Each card is present when the driver sends its text. An automatic
      rotation's card (#2577) carries its text and its folded details. */
@@ -2911,6 +2970,13 @@ if (PROTO) {
       { image: image(390, 760, 330, "cards · 390", true), caption: L("results, phone", "результати, телефон"), width: 390, lang: "uk" },
     ], videos: [{ media: { id: "v1", mime: "video/webm", bytes: 210_000, available: !gone, url: gone ? null : "/proto-video.webm" }, caption: L("hover and keyboard walk", "наведення і прохід клавіатурою") }] },
   ])];
+  /* `&duplicate-frames=1` gives the gallery identity regression two distinct
+     frames that reference the same media, as can happen when a review reuses
+     one image for multiple views. */
+  if (params.has("duplicate-frames")) {
+    const variants = protoRounds["t-search"]![0]!.variants;
+    variants[1]!.frames[0]!.image = variants[0]!.frames[0]!.image;
+  }
   protoRounds["t-upload"] = [round("r-upload", "t-upload", L("Upload progress sheet", "Панель перебігу завантаження"), 9 * MIN, [
     { number: 1, name: L("Progress under the attached file with speed, size and a stop", "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп"), description: L("A new design: the bar sits under the attached file.\nNothing existing changes.", "Новий дизайн: смуга стоїть під прикріпленим файлом.\nНаявне не змінюється."), videos: [], frames: [
       { image: image(960, 600, 190, "upload · running"), caption: L("uploading", "завантажується"), width: 1440, lang: "en" },
@@ -3022,6 +3088,7 @@ if (DECISIONS) {
     { number: 1, name: L("Account A for every lane", "Акаунт A на всі лейни"), description: "", videos: [], frames: [{ image: frame(265, "account A · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
     { number: 2, name: L("Split by engine", "Розподіл за рушієм"), description: "", videos: [], frames: [{ image: frame(32, "split · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
   ];
+  if (DECISIONS === "reject") seatRounds[0]!.variants = protoRounds["t-search"]![0]!.variants;
   /* `&decisions=long`: the first seat question has a title of ninety characters and a recommended option of a sentence. */
   if (DECISIONS === "long") {
     const held = seatRounds[0]!;
@@ -3388,11 +3455,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if ((DECISIONS || PROTO) && url.pathname === "/api/projects/decisions") {
     if (method === "POST") {
-      const body = JSON.parse(String(init?.body)) as { reviewId: string; answers?: PrototypeAnswer[]; comment?: string; chosen?: number[] };
+      const body = JSON.parse(String(init?.body)) as { reviewId: string; answers?: PrototypeAnswer[]; comment?: string; chosen?: number[]; reject?: true };
       decisionPosts.push(body);
       const held = [...seatRounds, ...Object.values(protoRounds).flat()].find((round) => round.id === body.reviewId);
       if (!held) return json({ error: "review not found" }, 404);
-      held.decision = { chosen: body.chosen ?? [], answers: body.answers, comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state: "sent", retryable: false } };
+      held.decision = { ...(body.reject ? { rejected: true as const } : {}), chosen: body.chosen ?? [], answers: body.answers, comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state: "sent", retryable: false } };
       protoPublish();
       return json({ project: PROJECT, decisions: fixtureDecisions() });
     }
@@ -3404,7 +3471,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const taskId = decodeURIComponent(url.pathname.split("/")[3]!);
     const rounds = protoRounds[taskId] ?? [];
     if (method === "POST") {
-      const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true; answers?: PrototypeAnswer[]; skip?: true };
+      const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true; reject?: true; answers?: PrototypeAnswer[]; skip?: true };
       protoPosts.push({ taskId, ...body });
       /* A held save has not been written yet: the decision is recorded only once it is released. */
       await (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave;
@@ -3418,7 +3485,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       }
       else if (!held.decision) {
         const state = phase === "saved" || phase === "delivering" ? "pending" : protoSaveState[taskId] ?? "sent";
-        held.decision = { ...(held.questions ? { answers: body.skip ? held.questions.map(q => ({ questionId: q.id, options: [q.options.findIndex(o => o.recommended)] })) : body.answers, ...(body.skip ? { skipped: true as const } : {}) } : {}), chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent", ...(phase ? { phase } : {}) } };
+        held.decision = { ...(body.reject ? { rejected: true as const } : {}), ...(held.questions ? { answers: body.skip ? held.questions.map(q => ({ questionId: q.id, options: [q.options.findIndex(o => o.recommended)] })) : body.answers, ...(body.skip ? { skipped: true as const } : {}) } : {}), chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent", ...(phase ? { phase } : {}) } };
       }
       protoPublish();
     }

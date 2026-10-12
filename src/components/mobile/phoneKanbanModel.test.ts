@@ -396,7 +396,7 @@ test("a closing lane is not among the reasons a card's Dismiss would clear", () 
   expect(closing.columns.assigned.cards[0]!.reasons).toEqual([]);
 });
 
-test("the phone's Inbox tab takes high first and low last, as the desktop Inbox does; Assigned ignores priority", () => {
+test("the phone's Inbox tab lifts work in flight, then takes high first and low last, as the desktop Inbox does; Assigned ignores priority", () => {
   const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
   const busy = working(31, { lastTurn: { startedAt: (NOW - 900) * 1000, endedAt: null }, lastAgentWorkAt: (NOW - 240) * 1000, mtime: NOW - 240 } as Partial<FileEntry>);
   const busyToo = working(32, { lastTurn: { startedAt: (NOW - 800) * 1000, endedAt: null }, lastAgentWorkAt: (NOW - 200) * 1000, mtime: NOW - 200 } as Partial<FileEntry>);
@@ -411,7 +411,7 @@ test("the phone's Inbox tab takes high first and low last, as the desktop Inbox 
   ];
   const model = desktop(tasks, [busy, busyToo]);
   const phone = buildPhoneKanban({ model, now: NOW });
-  expect(keys(phone.columns.inbox.cards)).toEqual(["high-old", "normal-new", "normal-old", "low-busy", "low-new"]);
+  expect(keys(phone.columns.inbox.cards)).toEqual(["low-busy", "high-old", "normal-new", "normal-old", "low-new"]);
   expect(keys(phone.columns.inbox.cards)).toEqual(model.columns.inbox.cards.map((card) => card.task!.id));
   expect(keys(phone.columns.assigned.cards)).toEqual(["assigned-low", "assigned-high"]);
 });
