@@ -10444,9 +10444,9 @@ describe("seat recovery failure history", () => {
     const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
     const evidence = [];
     try {
-      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) for (const state of ["healthy", "failed", "later"]) {
+      for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) for (const state of ["healthy", "failed", "later"]) {
         locale = lang; mode = state;
-        const { page, context, pageErrors } = await openFixture(browser, `${server.base}?kanban=1&scenario=seat-head&seatfailure=1#p=atlas`, { width, height: 900 }, "light", lang, "reduce", width === 390);
+        const { page, context, pageErrors } = await openFixture(browser, `${server.base}?kanban=1&scenario=seat-head&seatfailure=1#p=atlas`, { width, height: 900 }, scheme, lang, "reduce", width === 390);
         try {
           if (width === 390) {
             await page.locator("[data-mobile2-seat-open]").first().click();
@@ -10465,12 +10465,10 @@ describe("seat recovery failure history", () => {
           if (state === "failed") {
             await alert.waitFor();
             expect(await alert.innerText()).toContain("database is locked");
-            if (width === 390) {
-              const time = alert.locator("[data-orchestrator-failure-time]");
-              await time.waitFor();
-              expect(await time.getAttribute("datetime")).toBe(failedAt);
-              expect(await time.innerText()).not.toMatch(/AM|PM/);
-            }
+            const time = alert.locator("[data-orchestrator-failure-time]");
+            await time.waitFor();
+            expect(await time.getAttribute("datetime")).toBe(failedAt);
+            expect(await time.innerText()).not.toMatch(/AM|PM/);
           } else {
             await page.waitForFunction(() => document.querySelector('[data-orchestrator-state="live"], [data-orchestrator-sheet-state="live"]'));
             expect(await alert.count()).toBe(0);
@@ -10483,17 +10481,17 @@ describe("seat recovery failure history", () => {
               timeVisible: box ? box.width > 0 && box.left >= 0 && box.right <= viewportWidth && box.top >= 0 && box.bottom <= innerHeight : null };
           }, width);
           expect(reading.overflow).toBe(false);
-          if (width === 390 && state === "failed") expect(reading.timeVisible).toBe(true);
+          if (state === "failed") expect(reading.timeVisible).toBe(true);
           expect(pageErrors).toEqual([]);
-          await page.screenshot({ path: path.join(out, `${state}-${lang}-${width}.png`) });
-          evidence.push({ state, locale: lang, width, ...reading });
+          await page.screenshot({ path: path.join(out, `${state}-${scheme}-${lang}-${width}.png`) });
+          evidence.push({ state, scheme, locale: lang, width, ...reading });
         } catch (error) {
-          await page.screenshot({ path: path.join(out, `failed-${state}-${lang}-${width}.png`) });
+          await page.screenshot({ path: path.join(out, `failed-${state}-${scheme}-${lang}-${width}.png`) });
           throw error;
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/seat-recovery", { recursive: true });
       fs.writeFileSync("evidence/seat-recovery/geometry.json", JSON.stringify({ cases: evidence }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
-  }, 180_000);
+  }, 420_000);
 });

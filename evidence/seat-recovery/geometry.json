@@ -2,6 +2,7 @@
   "cases": [
     {
       "state": "healthy",
+      "scheme": "light",
       "locale": "en",
       "width": 1440,
       "error": false,
@@ -11,15 +12,17 @@
     },
     {
       "state": "failed",
+      "scheme": "light",
       "locale": "en",
       "width": 1440,
       "error": true,
-      "time": null,
+      "time": "11 Oct 2026, 20:11",
       "overflow": false,
-      "timeVisible": null
+      "timeVisible": true
     },
     {
       "state": "later",
+      "scheme": "light",
       "locale": "en",
       "width": 1440,
       "error": false,
@@ -29,6 +32,7 @@
     },
     {
       "state": "healthy",
+      "scheme": "light",
       "locale": "en",
       "width": 390,
       "error": false,
@@ -38,6 +42,7 @@
     },
     {
       "state": "failed",
+      "scheme": "light",
       "locale": "en",
       "width": 390,
       "error": true,
@@ -47,6 +52,7 @@
     },
     {
       "state": "later",
+      "scheme": "light",
       "locale": "en",
       "width": 390,
       "error": false,
@@ -56,6 +62,7 @@
     },
     {
       "state": "healthy",
+      "scheme": "light",
       "locale": "uk",
       "width": 1440,
       "error": false,
@@ -65,15 +72,17 @@
     },
     {
       "state": "failed",
+      "scheme": "light",
       "locale": "uk",
       "width": 1440,
       "error": true,
-      "time": null,
+      "time": "11 жовт. 2026 р., 20:11",
       "overflow": false,
-      "timeVisible": null
+      "timeVisible": true
     },
     {
       "state": "later",
+      "scheme": "light",
       "locale": "uk",
       "width": 1440,
       "error": false,
@@ -83,6 +92,7 @@
     },
     {
       "state": "healthy",
+      "scheme": "light",
       "locale": "uk",
       "width": 390,
       "error": false,
@@ -92,6 +102,7 @@
     },
     {
       "state": "failed",
+      "scheme": "light",
       "locale": "uk",
       "width": 390,
       "error": true,
@@ -101,6 +112,127 @@
     },
     {
       "state": "later",
+      "scheme": "light",
+      "locale": "uk",
+      "width": 390,
+      "error": false,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    },
+    {
+      "state": "healthy",
+      "scheme": "dark",
+      "locale": "en",
+      "width": 1440,
+      "error": false,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    },
+    {
+      "state": "failed",
+      "scheme": "dark",
+      "locale": "en",
+      "width": 1440,
+      "error": true,
+      "time": "11 Oct 2026, 20:11",
+      "overflow": false,
+      "timeVisible": true
+    },
+    {
+      "state": "later",
+      "scheme": "dark",
+      "locale": "en",
+      "width": 1440,
+      "error": false,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    },
+    {
+      "state": "healthy",
+      "scheme": "dark",
+      "locale": "en",
+      "width": 390,
+      "error": false,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    },
+    {
+      "state": "failed",
+      "scheme": "dark",
+      "locale": "en",
+      "width": 390,
+      "error": true,
+      "time": "11 Oct 2026, 20:11",
+      "overflow": false,
+      "timeVisible": true
+    },
+    {
+      "state": "later",
+      "scheme": "dark",
+      "locale": "en",
+      "width": 390,
+      "error": false,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    },
+    {
+      "state": "healthy",
+      "scheme": "dark",
+      "locale": "uk",
+      "width": 1440,
+      "error": false,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    },
+    {
+      "state": "failed",
+      "scheme": "dark",
+      "locale": "uk",
+      "width": 1440,
+      "error": true,
+      "time": "11 жовт. 2026 р., 20:11",
+      "overflow": false,
+      "timeVisible": true
+    },
+    {
+      "state": "later",
+      "scheme": "dark",
+      "locale": "uk",
+      "width": 1440,
+      "error": false,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    },
+    {
+      "state": "healthy",
+      "scheme": "dark",
+      "locale": "uk",
+      "width": 390,
+      "error": false,
+      "time": null,
+      "overflow": false,
+      "timeVisible": null
+    },
+    {
+      "state": "failed",
+      "scheme": "dark",
+      "locale": "uk",
+      "width": 390,
+      "error": true,
+      "time": "11 жовт. 2026 р., 20:11",
+      "overflow": false,
+      "timeVisible": true
+    },
+    {
+      "state": "later",
+      "scheme": "dark",
       "locale": "uk",
       "width": 390,
       "error": false,

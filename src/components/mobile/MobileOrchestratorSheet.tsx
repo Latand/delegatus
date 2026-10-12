@@ -24,6 +24,7 @@ import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SPAWN_CONFIG, ORCHESTRATOR_SY
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import type { FileEntry } from "@/lib/types";
 
+import { FailureTime } from "../orchestrator/FailureTime";
 import { boardContext } from "../orchestrator/IncumbentHeader";
 import { RunsOnRow } from "../orchestrator/RunsOnRow";
 import { MobilePreviousSeatsRow, MobilePreviousSeatsScreen } from "../orchestrator/PreviousSeats";
@@ -1333,16 +1334,6 @@ function IntentError({ error, retry, rotate, failedAt }: { error: string; retry:
       </p>
     </div>
   );
-}
-
-function FailureTime({ at }: { at?: string }) {
-  const { locale } = useLocale();
-  const timestamp = Date.parse(at ?? "");
-  if (!at || !Number.isFinite(timestamp)) return null;
-  const label = new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", {
-    year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-  }).format(timestamp);
-  return <time dateTime={at} className="mt-0.5 block text-caption text-muted" data-orchestrator-failure-time>{label}</time>;
 }
 
 function TransitionCard({ transition }: { transition: SeatTransition }) {

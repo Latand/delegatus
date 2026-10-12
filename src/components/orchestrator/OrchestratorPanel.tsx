@@ -33,6 +33,7 @@ import { RoleAvatar } from "../brand/RoleAvatar";
 import { RoleFrameMark } from "../RoleFrameMark";
 import { ProcessStatusControls } from "../TaskHeader";
 import { seatDraftReadiness, useOrchestratorDraftPrefill, useOrchestratorDraftReveal, usePendingSeatConfirm } from "./draftPrefill";
+import { FailureTime } from "./FailureTime";
 import { IncumbentHeader } from "./IncumbentHeader";
 import { incumbentHostLive, type OrchestratorIncumbent } from "./incumbent";
 import { DeputyTwin, liveSeatDeputy, SeatDeputyChip } from "./SeatDeputyChip";
@@ -1079,6 +1080,7 @@ function OrchestratorDraft({
                 ? rotate ? "orchPanel.rotateErrorUnknownTitle" : "orchPanel.errorUnknownTitle"
                 : rotate ? "orchPanel.rotateErrorTitle" : "orchPanel.errorTitle")}
             </p>
+            <FailureTime at={state.failedAt ?? state.designatedAt} />
             <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-sans text-ui leading-4 text-secondary" data-orchestrator-failure-text>
               {failureCopy ? t(failureCopy.text) : state.error}
             </pre>
@@ -1378,6 +1380,7 @@ function TransitionBanner({ transition }: { transition: SeatTransition }) {
         <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />
         {t("orchPanel.transitionFailed")}
       </p>
+      <FailureTime at={transition.failedAt} />
       <p className="mt-0.5 whitespace-pre-wrap break-words text-caption leading-4 text-secondary" data-orchestrator-failure-text>{failureCopy ? t(failureCopy.text) : transition.error}</p>
     </div>
   );
