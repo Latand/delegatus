@@ -38,3 +38,9 @@ test("invalid values, cross origin and agent capabilities are refused without wr
   expect((await PUT(request({ value: 8 }, { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) }))).status).toBe(403);
   expect(fs.existsSync(path.join(directory, "worker-limit.json"))).toBe(false);
 });
+
+test("an agent reads worker limits through the tool instead of the operator route", async () => {
+  setCallerConversationResolverForTests(() => "conversation_one");
+  const response = await GET(new NextRequest("http://localhost/api/operator/worker-limit", { headers: { [VIEWER_SPAWN_CAPABILITY_HEADER]: "a".repeat(43) } }));
+  expect(response.status).toBe(403);
+});

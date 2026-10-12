@@ -9,6 +9,8 @@ export const dynamic = "force-dynamic";
 const headers = { "Cache-Control": "no-store" };
 const projectOf = (value: unknown) => typeof value === "string" && value.trim() && value.trim().length <= 256 ? value.trim() : null;
 export async function GET(request: NextRequest) {
+  const authority = requireOperatorAuthority(request);
+  if (!authority.ok) return NextResponse.json({ error: authority.error, code: "operator_only", message: "agents read worker limits with role_presets" }, { status: authority.status, headers });
   const named = request.nextUrl.searchParams.get("project");
   if (named !== null && !projectOf(named)) return NextResponse.json({ error: "project is required" }, { status: 400, headers });
   return NextResponse.json(workerLimitAnswer(projectOf(named)), { headers });

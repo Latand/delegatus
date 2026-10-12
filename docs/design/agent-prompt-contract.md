@@ -1442,9 +1442,11 @@ in standard mode and obeys it (N6). Options weighed: an explicit cap in every
 mode, from the same parameter; backlog-campaign only, so standard mode has no
 cap; or no number, leaving it to account limits and admission.
 
-**Decided: an explicit cap in every mode.** The orchestrator scaffold and the
-mandate's "How work runs" state it in matching words, and both define a
-worker: each running lane and each live spawned agent counts as one (§2.10 B,
+**Decided: an explicit cap in every mode.** The machine-worker-limit design
+supersedes the role parameter: each wake and `get_orchestrator` reads the
+project's own limit, the machine default, or the fallback of 3. The mandate's
+"How work runs" names that current limit without a fixed number and defines
+a worker: each running lane and each live spawned agent counts as one (§2.10 B,
 §2.10 E). The other backlog-campaign lines (repository, issue query, urgent
 list, merge policy, completion policy) render only in that mode.
 
