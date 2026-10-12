@@ -17,6 +17,7 @@ import { effortScale } from "@/lib/agent/efforts";
 import { defaultModelFor, ENGINE_MODELS } from "@/lib/agent/models";
 import { KNOWN_RELAYS, verifyUrlAllowed, type KnownRelayInfo } from "@/lib/externalRelay/knownRelays";
 import { RELAY_MEMBER_ANSWERS_PER_HOUR } from "@/lib/externalRelay/profile";
+import { selectOwnerDestination } from "@/lib/externalRelay/ownerDestination";
 import { useLocale, type TFunction } from "@/lib/i18n";
 
 import { offersCloneCreate } from "@/lib/externalRelay/cloneNames";
@@ -675,13 +676,18 @@ export function ExternalRelaySection({ pairEngine = null, pairDisabled = false, 
       {error && !state ? <p role="alert" className="rounded-[8px] bg-danger/10 px-3 py-2 text-ui text-danger">{relayErrorText(t, error)}</p> : null}
       {!state && !error ? <p className="text-ui text-muted">{t("common.loading")}</p> : null}
       {state ? (() => {
+        const selected = selectOwnerDestination(state.relays);
+        const notice = <p key="review-destination" data-external-relay-review-destination={selected.reason ?? "ready"} className="text-caption leading-4 text-muted">
+          {selected.reason ? t(`externalRelay.review.${selected.reason}`)
+            : t("externalRelay.review.ready", { target: selected.relay.targets.find(target => target.id === selected.targetId)!.name })}
+        </p>;
         const connected = state.relays.map((relay) => relay.origin);
         const cards = state.relays.map((relay) => (
           <RelayCard key={relay.id} relay={relay} status={state.status.find((row) => row.id === relay.id) ?? null} signedIn={signedIn} onChanged={refresh} />
         ));
         const pairing = <RelayPairing key="pairing" resume={resume} disabled={pairDisabled} known={known} connected={connected} onPaired={paired} onChanged={() => void refresh()} />;
         // The one-button connection leads while a built-in relay is still to connect.
-        return known.some((relay) => !connected.includes(relay.origin)) ? [pairing, ...cards] : [...cards, pairing];
+        return known.some((relay) => !connected.includes(relay.origin)) ? [pairing, notice, ...cards] : [notice, ...cards, pairing];
       })() : null}
     </div>
   );
