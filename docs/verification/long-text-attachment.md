@@ -81,6 +81,6 @@ for every run. [readings.json](../../evidence/long-text-attachment/readings.json
 records the measured chip, caption and excerpt readings for each frame.
 Frames are written to `.artifacts/long-text-attachment/`.
 
-Rendered frames retained in review history: [desktop send](https://raw.githubusercontent.com/Latand/delegatus/c5cd826d2a8932ebc9cfdfacbeefb9fa15041704/.artifacts/long-text-attachment/1280-send.png),
-[desktop retry](https://raw.githubusercontent.com/Latand/delegatus/c5cd826d2a8932ebc9cfdfacbeefb9fa15041704/.artifacts/long-text-attachment/1280-retry.png), [phone send](https://raw.githubusercontent.com/Latand/delegatus/c5cd826d2a8932ebc9cfdfacbeefb9fa15041704/.artifacts/long-text-attachment/390-send.png),
-[phone retry](https://raw.githubusercontent.com/Latand/delegatus/c5cd826d2a8932ebc9cfdfacbeefb9fa15041704/.artifacts/long-text-attachment/390-retry.png).
+Rendered frames retained in review history: [desktop, light, Ukrainian, three files](https://raw.githubusercontent.com/Latand/delegatus/013b56f5b78c0d7e2af9cacbb2130ba7e23ccca7/.artifacts/long-text-attachment/1440-light-uk-files-send.png),
+[desktop hover, dark](https://raw.githubusercontent.com/Latand/delegatus/013b56f5b78c0d7e2af9cacbb2130ba7e23ccca7/.artifacts/long-text-attachment/1440-dark-en-plain-send-hover.png), [phone, dark, three files, after adoption](https://raw.githubusercontent.com/Latand/delegatus/013b56f5b78c0d7e2af9cacbb2130ba7e23ccca7/.artifacts/long-text-attachment/390-dark-uk-files-send-adopted.png),
+[phone, light, plain conversion](https://raw.githubusercontent.com/Latand/delegatus/013b56f5b78c0d7e2af9cacbb2130ba7e23ccca7/.artifacts/long-text-attachment/390-light-en-plain-send.png).
