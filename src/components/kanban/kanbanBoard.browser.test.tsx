@@ -28889,7 +28889,12 @@ describe("prototype review: none fits and the tile gallery", () => {
         await page.keyboard.press("Escape");
         const cardButton = page.locator(size.phone ? '[data-phone-card-prototype-button="t-search"]' : '[data-prototype-button="t-search"]');
         expect(await cardButton.getAttribute("aria-label")).toContain(locale === "uk" ? "Прототип відхилено" : "Prototype rejected");
-        if (size.phone) expect(await cardButton.innerText()).toContain(locale === "uk" ? "відхилено" : "rejected");
+        if (size.phone) {
+          await page.locator('[data-phone-card="task:t-search"]').click();
+          const row = page.locator('[data-phone-task-prototype="t-search"]');
+          await row.waitFor();
+          expect(await row.innerText()).toContain(locale === "uk" ? "відхилено" : "rejected");
+        }
         readings[name] = { geometry, returned, armed, footer, posted, frames: ["rest", "enlarged", "picked", "pickedtext", "asks", "armed", "rejected"].map(state => `.artifacts/prototype-review/${name}-${state}.png`) };
         fs.mkdirSync(path.dirname(evidencePath), { recursive: true }); fs.writeFileSync(evidencePath, `${JSON.stringify(readings, null, 2)}\n`);
         await context.close();
