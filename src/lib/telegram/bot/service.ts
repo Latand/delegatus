@@ -986,11 +986,11 @@ export class TelegramBotService {
     const chat = owner?.chat ?? this.resolveChat(store, input.chat);
     const refusal = owner ? null : postRefusal(chat);
     if (refusal) throw new TelegramBotError(refusal.code, refusal.reason);
-    if (!input.clientRequestId.trim() || !input.message.markdown || input.message.markdown.length > 32768
+    if (!input.clientRequestId.trim() || !input.message.markdown
       || input.message.images.length > 50 || input.message.images.some(i => !/^[A-Za-z0-9_-]{1,64}$/.test(i.id)
         || !(i.blob instanceof Blob) || i.blob.size > 10 * 1024 * 1024)
       || new Set(input.message.images.map(i => i.id)).size !== input.message.images.length
-      || (input.fallbackMarkdown !== undefined && (!input.fallbackMarkdown || input.fallbackMarkdown.length > 32768))) {
+      || (input.fallbackMarkdown !== undefined && !input.fallbackMarkdown)) {
       throw new TelegramBotError("bad_request", "invalid rich message");
     }
     const transport = this.transport();

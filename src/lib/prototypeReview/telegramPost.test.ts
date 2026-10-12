@@ -161,6 +161,32 @@ test("publication posts to the paired owner's private chat once and an unpaired 
   expect(transport.callsOf("sendRichMessage")).toHaveLength(2);
 });
 
+test("publication sends a schema-valid questionnaire when escaped Markdown exceeds Telegram's text limit", async () => {
+  const { transport } = await connected();
+  updateRelayStore(s => ({ ...s, relays: [destinationRelay()] }));
+  transport.handlers.getChat = () => ok({ id: 41, type: "private", first_name: "Owner" });
+  saveTasks([telegramTask([])]);
+  transport.script("sendRichMessage", ok({ message_id: 12, date: 3 }));
+  const questions = Array.from({ length: 7 }, (_, i) => ({
+    id: `question-${i + 1}`,
+    text: "<&".repeat(150),
+    options: Array.from({ length: 6 }, (_, j) => ({ label: `${j}` + "<&".repeat(59), recommended: j === 0 })),
+  }));
+  const response = await publishPOST(new NextRequest("http://localhost/api/prototype-reviews", { method: "POST", headers: { host: "localhost" },
+    body: JSON.stringify({ clientRequestId: "long-questionnaire", taskId: "task-prototype", title: "T".repeat(120), variants: [], questions }) }));
+  expect(response.status).toBe(200);
+  for (let n = 0; n < 100 && !transport.callsOf("sendRichMessage").length; n++) await Bun.sleep(10);
+  const sends = transport.callsOf("sendRichMessage");
+  expect(sends).toHaveLength(1);
+  const rich = sends[0]!.params.rich_message as { markdown: string };
+  expect(rich.markdown.length).toBeGreaterThan(32768);
+  for (let i = 1; i <= 7; i++) expect(rich.markdown).toContain(`Питання ${i}/7`);
+  expect(rich.markdown).toContain("&lt;&amp;".repeat(150));
+  expect(rich.markdown).toContain("a) 0&lt;&amp;&lt;&amp;");
+  expect(rich.markdown).toContain("Скопіювати рекомендовані");
+  expect(rich.markdown).toContain("type=\"copy_text\"");
+});
+
 test("owner review sends nothing with no target, a paused relay or a changed destination during lookup", async () => {
   const { service, transport, store } = await connected();
   const input = { clientRequestId: "owner-review", message: renderPrototypeTelegram(telegramRound(), []) };
