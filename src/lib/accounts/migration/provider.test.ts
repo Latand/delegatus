@@ -255,6 +255,48 @@ test("Codex successor host publication is single-owner and cleanup releases that
   expect(cleanups).toBe(1);
 });
 
+test.each(["codex", "claude"] as const)("%s account migration refreshes an adopted seat's memory selector", async (engine) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), `llv-provider-seat-memory-${engine}-`));
+  roots.push(base);
+  const target = accountRoot(engine, base, "target");
+  const registry = new AgentRegistry(path.join(base, "provider-registry.json"));
+  const nativeId = crypto.randomUUID();
+  const transcript = path.join(target.transcriptRoot, `${nativeId}.jsonl`);
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, JSON.stringify({ sessionId: nativeId }) + "\n", { mode: 0o600 });
+  const conversation = registry.ensureConversation(engine, transcript, target.accountId);
+  const project = `migration-seat-${engine}`;
+  registry.stampOrchestratorSeatIdentity({
+    project, seatEpoch: 1, conversationId: conversation.id, predecessorConversationId: null,
+    designatedAt: "2026-10-12T09:00:00.000Z", activatedAt: "2026-10-12T09:00:01.000Z",
+  });
+  let receivedProfile: import("./contracts").LaunchProfile | undefined;
+  const capture = async (input: { profile: import("./contracts").LaunchProfile }) => {
+    receivedProfile = input.profile;
+    return async () => {};
+  };
+  const provider = new RegisteredSuccessorProvider({
+    accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => target },
+    startCodex: async () => { throw new Error("unexpected Codex client"); },
+    claudeStatus: async () => ({ loggedIn: true }),
+    registry,
+    ...(engine === "codex" ? { publishCodexHost: capture } : { publishClaudeHost: capture }),
+    now: () => "2026-10-12T09:00:02.000Z",
+  });
+  const receipt: ProviderReceipt = {
+    operationId: `seat-migration-${engine}`, nativeId, path: transcript, continuityPaths: [], historyHash: "history",
+    host: engine === "codex"
+      ? { kind: "codex-app-server", identity: nativeId, epoch: 1, verifiedAt: "2026-10-12T09:00:02.000Z" }
+      : { kind: "claude-fork", identity: nativeId, epoch: 1, verifiedAt: "2026-10-12T09:00:02.000Z" },
+  };
+  await provider.publishHost(receipt, {
+    engine, conversationId: conversation.id, targetAccountId: target.accountId,
+    launchProfile: emptyLaunchProfile({ cwd: base, cleanMemory: true, learnedRules: { project: "former-stage-project", roleId: "reviewer" } }),
+  });
+  expect(receivedProfile?.cleanMemory).toBe(false);
+  expect(receivedProfile?.learnedRules).toEqual({ project, roleId: "orchestrator" });
+});
+
 test("Claude successor cleanup releases its published broker owner", async () => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-published-claude-host-"));
   roots.push(base);

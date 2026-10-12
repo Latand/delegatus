@@ -10,6 +10,23 @@ import { roleMemoryEnabled } from "./settings";
 /** Leave headroom below Linux's single-argument ceiling, including the notice. */
 export const LEARNED_RULES_MAX_BYTES = 120_000;
 
+/** Rebuild the text-free selector from durable conversation identity. Legacy
+    seat profiles predate the selector, while an adopted stage may carry the
+    selector and clean flag of its former role. */
+export function roleMemoryProfileForIdentity(
+  profile: LaunchProfile | null | undefined,
+  roleId: "orchestrator" | "maintainer" | null | undefined,
+  project: string | null | undefined,
+): LaunchProfile | null | undefined {
+  if (!profile || !roleId || !project || project === "*") return profile;
+  if (roleId !== "orchestrator" && roleId !== "maintainer") return profile;
+  return {
+    ...profile,
+    cleanMemory: false,
+    learnedRules: { project, roleId },
+  };
+}
+
 /** The selector survives in receipts; only the engine options carry its text. */
 export function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, "cleanMemory" | "learnedRules"> | null | undefined): string | undefined {
   const marker = profile?.learnedRules;

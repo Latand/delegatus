@@ -1,4 +1,4 @@
-import { learnedRulesForLaunchProfile } from "@/lib/memory/roleLaunch";
+import { learnedRulesForLaunchProfile, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -1502,11 +1502,26 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
     }
     const publication = (async () => {
       const target = this.dependencies.accounts.resolveSpawn(input.engine, input.targetAccountId);
+      const registry = this.dependencies.registry ?? agentRegistry();
+      const conversation = input.conversationId
+        ? registry.conversation(input.conversationId as ViewerConversationId)
+        : null;
+      const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer"
+        ? conversation.agentRole
+        : null;
+      const seatProject = conversation
+        ? registry.readOnlySnapshot().memberships[conversation.id]?.find(row => row.kind === "orchestrator" && row.role === "orchestrator")?.containerId
+        : null;
+      const profile = roleMemoryProfileForIdentity(
+        input.launchProfile,
+        memoryRole,
+        conversation?.projectOwnership?.project ?? seatProject ?? input.launchProfile.project,
+      ) ?? input.launchProfile;
       const publicationInput = {
         receipt,
         target,
-        profile: input.launchProfile,
-        registry: this.dependencies.registry ?? agentRegistry(),
+        profile,
+        registry,
         ownsOperation: input.ownsOperation,
         conversationId: input.conversationId,
       };
