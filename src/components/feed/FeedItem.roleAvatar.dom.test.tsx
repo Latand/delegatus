@@ -124,8 +124,16 @@ describe("the sender's costume on an internal card", () => {
 });
 
 describe("the conversation's costume on its answers", () => {
-  test("curator and unknown roles render the neutral drawing and retain the engine", () => {
-    const roles = ["curator", "future-role", "toString", "constructor", "__proto__"];
+  test("curator renders its cleaner variant and retains the engine", () => {
+    const host = mount(<ConversationRoleScope value="curator"><FeedItem item={prose()} /></ConversationRoleScope>);
+    expect(host.querySelector('[data-role-avatar="curator"]')?.getAttribute("src")).toBe(roleAvatarUri("curator"));
+    expect(roleAvatarUri("curator")).not.toBe(roleAvatarUri("neutral"));
+    expect(decodeURIComponent(roleAvatarUri("curator"))).toContain('fill="#84CC16"');
+    expect(text(host.querySelector("[data-message-engine]"))).toBe("Claude");
+  });
+
+  test("unknown roles render the neutral drawing and retain the engine", () => {
+    const roles = ["future-role", "toString", "constructor", "__proto__"];
     const host = mount(<>{roles.map((role) => (
       <ConversationRoleScope key={role} value={role as FrameRole}><FeedItem item={prose()} /></ConversationRoleScope>
     ))}</>);

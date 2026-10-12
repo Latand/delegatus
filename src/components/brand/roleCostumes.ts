@@ -73,10 +73,8 @@ const NEUTRAL_COSTUME: Costume = {
     + `<path fill="${INK}" d="M25.2 44.2 31 47.2 25.2 50.4Z"/><path fill="${INK}" d="M38.8 44.2 33 47.2 38.8 50.4Z"/><rect x="29.6" y="45.2" width="4.8" height="4.2" rx="1.2" fill="${INK}"/>`,
 };
 
-const COSTUMES: Record<FrameRole, Costume> = {
+const APPROVED_COSTUMES: Record<Exclude<FrameRole, "curator">, Costume> = {
   neutral: NEUTRAL_COSTUME,
-  /* Until a curator costume is chosen, it wears the neutral drawing. */
-  curator: NEUTRAL_COSTUME,
   /* A dispatcher's headset: a lighter indigo band holding the hair, cups that
      hold on the dark accent card, a boom ending in a capsule at the mouth corner. */
   orchestrator: {
@@ -161,6 +159,17 @@ const COSTUMES: Record<FrameRole, Costume> = {
   "visual-critic": {
     hair: "none",
     front: `<path d="M33.5 5.8 34.6 3.4" stroke="${INK}" stroke-width="2.6" stroke-linecap="round"/><path d="M10.5 18.5C8.5 11 20 5 33.5 5S57.5 10 55.5 16C53.5 22 41 22 31 21C21 20 12 23 10.5 18.5Z" fill="#6D28D9" ${OUT}/>`,
+  },
+};
+
+/* The curator shares the cleaner's drawing; only the cap fabric changes to
+   lime, between the approved amber and green caps (operator, 2026-10-12). */
+const CURATOR_CAP = "#84CC16";
+const COSTUMES: Record<FrameRole, Costume> = {
+  ...APPROVED_COSTUMES,
+  curator: {
+    ...APPROVED_COSTUMES.cleaner,
+    front: APPROVED_COSTUMES.cleaner.front?.replaceAll(/fill="#(?:F472B6|DB2777)"/g, `fill="${CURATOR_CAP}"`),
   },
 };
 

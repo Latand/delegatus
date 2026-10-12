@@ -16,6 +16,7 @@ describe("role costumes", () => {
   test("every id in ROLE_IDS and the agent with no role resolves to a drawing", () => {
     expect([...FRAME_ROLES]).toEqual([...ROLE_IDS, "neutral"]);
     const drawings = FRAME_ROLES.map((role) => costumeSvg(role));
+    expect(new Set(drawings).size).toBe(FRAME_ROLES.length);
     for (const svg of drawings) {
       expect(svg.startsWith('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">')).toBe(true);
       expect(svg.endsWith("</svg>")).toBe(true);
@@ -31,8 +32,15 @@ describe("role costumes", () => {
     expect(new Set([...approved, "neutral"].map(costumeSvg)).size).toBe(13);
   });
 
-  test("curator and unknown or future roles wear the neutral costume", () => {
-    for (const role of ["curator", "future-role", "", "toString", "constructor", "__proto__"]) {
+  test("curator changes only the cleaner's cap fabric to lime", () => {
+    const cleaner = costumeSvg("cleaner");
+    const capFills = /fill="#(?:F472B6|DB2777)"/g;
+    expect([...cleaner.matchAll(capFills)]).toHaveLength(3);
+    expect(costumeSvg("curator")).toBe(cleaner.replaceAll(capFills, 'fill="#84CC16"'));
+  });
+
+  test("unknown or future roles wear the neutral costume", () => {
+    for (const role of ["future-role", "", "toString", "constructor", "__proto__"]) {
       expect(costumeSvg(role)).toBe(costumeSvg("neutral"));
     }
   });
@@ -50,7 +58,7 @@ describe("role costumes", () => {
     expect(agent).toContain('fill="#FFFFFF" d="M23.5 45.4H40.5L32 61Z"');
     expect(agent).toContain('M25.2 44.2 31 47.2 25.2 50.4Z');
     /* Every costumed role keeps the clear glasses (the reviewer's loupe replaces its right lens). */
-    for (const role of ROLE_IDS.filter((role) => role !== "curator")) expect(costumeSvg(role)).toContain('<g fill="#FBEBDD" stroke="#231B1C" stroke-width="3.6"');
+    for (const role of ROLE_IDS) expect(costumeSvg(role)).toContain('<g fill="#FBEBDD" stroke="#231B1C" stroke-width="3.6"');
   });
 
   test("all ink sits inside x 3–61, y 2–62 of the 64 grid, so the keyline never meets the edge", async () => {
