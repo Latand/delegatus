@@ -16,6 +16,7 @@ const EMBLEM: Record<FrameRole, LucideIcon> = {
   "visual-critic": Eye,
   cleaner: Brush,
   maintainer: BrushCleaning,
+  curator: ScanEye,
   "prod-auditor": Radar,
   merger: GitMerge,
   "issue-reporter": Bug,

@@ -54,6 +54,7 @@ test("the operator reverts a version through the existing route and versions sta
   expect(response.status).toBe(200);
   const scope = projectView(source.project).scopes.find(scope => scope.scope === first.scope)!;
   expect(scope.active[0]!.rule).toBe(original);
-  expect(scope.active[0]!.versions).toHaveLength(2);
+  // The text now in force is not listed as an earlier text; the rewrite it replaced is.
+  expect(scope.active[0]!.versions).toEqual([expect.objectContaining({ rule: "Check stored receipts against both their owner and operation before replaying acknowledgements." })]);
   expect(scope.left).toEqual([]);
 });
