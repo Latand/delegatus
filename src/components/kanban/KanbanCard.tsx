@@ -516,8 +516,9 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       ?? (taskLinks?.repository && /^\d+$/.test(card.task.hold.ref ?? "") ? workLinkUrl(taskLinks.repository, Number(card.task.hold.ref), card.task.hold.kind as "pr" | "issue") : null)
     : null;
   const openHoldTask = card.holdTarget && card.task?.hold?.ref ? () => props.onFocusCard(`task:${card.task!.hold!.ref}`) : undefined;
+  /* Under a state line the motion line is its sentence, so a lane row never quiets it. */
   const motionLine = (plain: boolean) => (
-    <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain={plain} laneShown={!collapsed && card.pipelines.length > 0} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)}
+    <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain={plain} laneShown={!state && !collapsed && card.pipelines.length > 0} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)}
       taskTitle={card.holdTarget ? `${card.holdTarget.title}${card.holdTarget.done ? ` (${statusLabel(t, "done")})` : ""}` : undefined}
       onOpenTask={openHoldTask}
       referenceUrl={motionReference}

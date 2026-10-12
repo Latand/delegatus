@@ -654,3 +654,12 @@ test("the card draws no activity line: the footer counts the conversations, and 
   expect(card(parked.host).querySelector("[data-card-state-text]")?.textContent).toMatch(/^Needs your answer: /);
   expect(card(parked.host).querySelector("[data-foot-needs], [data-dismiss]")).toBeNull();
 });
+
+/* #2800: a motion line that is the state line's sentence is never quieted by a lane row. */
+test("an open card whose lane finished and whose work is stopped with no reason still says so in its state line", async () => {
+  const { host } = mount([headPipeline("completed", "build", "passed", { cursor: null, closedAt: iso(300) })]);
+  await tick();
+  expect(card(host).dataset.collapsed).toBe("0");
+  expect(card(host).querySelector(".pblock")).not.toBeNull();
+  expect(card(host).querySelector("[data-card-state-text]")?.textContent).toMatch(/^Stopped, no reason given/);
+});

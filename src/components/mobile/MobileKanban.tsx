@@ -524,7 +524,8 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   /* Who has the card (§5), said in one line in place of its motion and the lane's reason. */
   const state = item.kind === "task" ? cardState(card, now) : null;
   /* A loose row that shows the agent's activity badge in its head draws no motion line. */
-  const motion = loose && item.firstAgent?.agentActivity ? null : <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain laneShown={Boolean(item.shown && !loose)} taskTitle={card.holdTarget?.title} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)} />;
+  /* Under a state line the motion line is its sentence, so a lane row never quiets it. */
+  const motion = loose && item.firstAgent?.agentActivity ? null : <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain laneShown={Boolean(!state && item.shown && !loose)} taskTitle={card.holdTarget?.title} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)} />;
   /* The task's review row is already where a waiting round is answered. */
   const answerRow = onAnswer && state && cardAnswers(state) && !(state.subject.kind === "form" && item.waitsOnPrototype) ? state : null;
   const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), priority ? t(`kanban.priorityMark.${priority}`) : null, item.waitsOnPrototype ? t(card.task?.prototypeReview?.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready") : null, project].filter(Boolean).join(", ");
