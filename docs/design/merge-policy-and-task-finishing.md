@@ -445,9 +445,7 @@ PR is a draft; the PR was closed; the PR head changed after the lane finished;
 main keeps moving; GitHub CLI not signed in or unreachable; GitHub refused the
 merge (with its message).
 
-**Conflicts are never resolved by the runner.** A conflict needs code judgment,
-so it goes to the operator and the seat. A lane that resolves conflicts
-automatically is deferred (§9).
+**Conflict refresh work** follows [the automatic refresh design](auto-refresh-conflicting-prs.md). A freshly observed conflict starts a successor lane on the same task and delivery branch, with one review of the resolution; a semantic conflict parks for a decision. The merge runner leaves that lane in charge.
 
 ### 4.5 Who is attributed
 
@@ -691,8 +689,7 @@ starts. S2 needs S1's engine; S3 edits the same components as S2 and reads the
 - **A "Fix these findings" button on a parked card.** With the default changed,
   the lanes that still park are the ones whose creator chose it, and the issue
   names only the two buttons.
-- **Automatic conflict resolution** (a successor lane that merges main and
-  pushes). Conflicts are rare and need judgment; they surface to Needs you.
+- **Automatic conflict refresh** is specified in [the automatic refresh design](auto-refresh-conflicting-prs.md), which supersedes this deferral. Semantic conflicts still require a decision.
 - **A local `git merge` for repositories without GitHub.** The workflow
   engine's `finishMerge` (`src/lib/workflows/provision.ts:191`) is the precedent.
   Every repository in use here has a GitHub remote. Without one, the lane ends

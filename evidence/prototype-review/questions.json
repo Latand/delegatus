@@ -3,7 +3,7 @@
     "lang": "en",
     "scheme": "light",
     "width": 1440,
-    "needsYouRow": "Questions for you· 4m agoRestore search results after the index rebuildAnswer"
+    "needsYouRow": "Questions for you· 4m agoRestore search results after the index rebuildA few questions before workAnswer the questions in the form; the project orchestrator receives your answers and carries them on."
   },
   {
     "lang": "en",
@@ -96,7 +96,7 @@
         "width": 71.359375
       }
     ],
-    "actionsWidth": 130.703125,
+    "actionsWidth": 190.71875,
     "readonly": false,
     "skipped": false
   },
@@ -111,7 +111,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Skipped, recommended answers taken",
-    "decisionText": "Skipped, recommended answers taken9 Oct, 16:38Saved and sent to the orchestrator",
+    "decisionText": "Skipped, recommended answers taken12 Oct, 23:55Saved and sent to the orchestrator",
     "title": "Questions · Restore search results after the index rebuild",
     "sideways": 0,
     "questionWidth": 758,
@@ -252,7 +252,7 @@
         "width": 71.359375
       }
     ],
-    "actionsWidth": 130.703125,
+    "actionsWidth": 190.71875,
     "readonly": false,
     "skipped": false
   },
@@ -347,7 +347,7 @@
         "width": 71.359375
       }
     ],
-    "actionsWidth": 130.703125,
+    "actionsWidth": 190.71875,
     "readonly": false,
     "skipped": false
   },
@@ -362,7 +362,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Answered",
-    "decisionText": "Answered9 Oct, 16:38Saved and sent to the orchestrator",
+    "decisionText": "Answered12 Oct, 23:56Saved and sent to the orchestrator",
     "title": "Questions · Repair old links in the release notes",
     "sideways": 0,
     "questionWidth": 758,
@@ -503,7 +503,7 @@
         "width": 71.359375
       }
     ],
-    "actionsWidth": 130.703125,
+    "actionsWidth": 190.71875,
     "readonly": false,
     "skipped": false
   },
@@ -517,7 +517,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Skipped, recommended answers taken",
-    "decisionText": "Skipped, recommended answers taken9 Oct, 16:37Keep the recommended defaults.Saved and sent to the orchestrator",
+    "decisionText": "Skipped, recommended answers taken12 Oct, 23:55Keep the recommended defaults.Saved and sent to the orchestrator",
     "title": "Questions · Simplify the export settings sheet",
     "sideways": 0,
     "questionWidth": 758,
@@ -591,7 +591,7 @@
     "lang": "en",
     "scheme": "dark",
     "width": 1440,
-    "needsYouRow": "Questions for you· 4m agoRestore search results after the index rebuildAnswer"
+    "needsYouRow": "Questions for you· 4m agoRestore search results after the index rebuildA few questions before workAnswer the questions in the form; the project orchestrator receives your answers and carries them on."
   },
   {
     "lang": "en",
@@ -684,7 +684,7 @@
         "width": 71.359375
       }
     ],
-    "actionsWidth": 130.703125,
+    "actionsWidth": 190.71875,
     "readonly": false,
     "skipped": false
   },
@@ -699,7 +699,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Skipped, recommended answers taken",
-    "decisionText": "Skipped, recommended answers taken9 Oct, 16:39Saved and sent to the orchestrator",
+    "decisionText": "Skipped, recommended answers taken12 Oct, 23:56Saved and sent to the orchestrator",
     "title": "Questions · Restore search results after the index rebuild",
     "sideways": 0,
     "questionWidth": 758,
@@ -840,7 +840,7 @@
         "width": 71.359375
       }
     ],
-    "actionsWidth": 130.703125,
+    "actionsWidth": 190.71875,
     "readonly": false,
     "skipped": false
   },
@@ -935,7 +935,7 @@
         "width": 71.359375
       }
     ],
-    "actionsWidth": 130.703125,
+    "actionsWidth": 190.71875,
     "readonly": false,
     "skipped": false
   },
@@ -950,7 +950,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Answered",
-    "decisionText": "Answered9 Oct, 16:39Saved and sent to the orchestrator",
+    "decisionText": "Answered12 Oct, 23:57Saved and sent to the orchestrator",
     "title": "Questions · Repair old links in the release notes",
     "sideways": 0,
     "questionWidth": 758,
@@ -1091,7 +1091,7 @@
         "width": 71.359375
       }
     ],
-    "actionsWidth": 130.703125,
+    "actionsWidth": 190.71875,
     "readonly": false,
     "skipped": false
   },
@@ -1105,7 +1105,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Skipped, recommended answers taken",
-    "decisionText": "Skipped, recommended answers taken9 Oct, 16:38Keep the recommended defaults.Saved and sent to the orchestrator",
+    "decisionText": "Skipped, recommended answers taken12 Oct, 23:56Keep the recommended defaults.Saved and sent to the orchestrator",
     "title": "Questions · Simplify the export settings sheet",
     "sideways": 0,
     "questionWidth": 758,
@@ -1179,7 +1179,7 @@
     "lang": "uk",
     "scheme": "light",
     "width": 1440,
-    "needsYouRow": "Питання до вас· 4 хв томуRestore search results after the index rebuildВідповісти"
+    "needsYouRow": "Питання до вас· 4 хв томуRestore search results after the index rebuildКілька питань перед роботоюДайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі."
   },
   {
     "lang": "uk",
@@ -1272,7 +1272,7 @@
         "width": 92.84375
       }
     ],
-    "actionsWidth": 196.9375,
+    "actionsWidth": 280.46875,
     "readonly": false,
     "skipped": false
   },
@@ -1287,7 +1287,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Пропущено, взято рекомендовані",
-    "decisionText": "Пропущено, взято рекомендовані9 жовт., 16:39Збережено й надіслано оркестратору",
+    "decisionText": "Пропущено, взято рекомендовані12 жовт., 23:57Збережено й надіслано оркестратору",
     "title": "Питання · Restore search results after the index rebuild",
     "sideways": 0,
     "questionWidth": 758,
@@ -1428,7 +1428,7 @@
         "width": 92.84375
       }
     ],
-    "actionsWidth": 196.9375,
+    "actionsWidth": 280.46875,
     "readonly": false,
     "skipped": false
   },
@@ -1523,7 +1523,7 @@
         "width": 92.84375
       }
     ],
-    "actionsWidth": 196.9375,
+    "actionsWidth": 280.46875,
     "readonly": false,
     "skipped": false
   },
@@ -1538,7 +1538,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Відповіли",
-    "decisionText": "Відповіли9 жовт., 16:39Збережено й надіслано оркестратору",
+    "decisionText": "Відповіли12 жовт., 23:58Збережено й надіслано оркестратору",
     "title": "Питання · Repair old links in the release notes",
     "sideways": 0,
     "questionWidth": 758,
@@ -1679,7 +1679,7 @@
         "width": 92.84375
       }
     ],
-    "actionsWidth": 196.9375,
+    "actionsWidth": 280.46875,
     "readonly": false,
     "skipped": false
   },
@@ -1693,7 +1693,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Пропущено, взято рекомендовані",
-    "decisionText": "Пропущено, взято рекомендовані9 жовт., 16:38Залиште рекомендовані відповіді.Збережено й надіслано оркестратору",
+    "decisionText": "Пропущено, взято рекомендовані12 жовт., 23:57Залиште рекомендовані відповіді.Збережено й надіслано оркестратору",
     "title": "Питання · Simplify the export settings sheet",
     "sideways": 0,
     "questionWidth": 758,
@@ -1767,7 +1767,7 @@
     "lang": "uk",
     "scheme": "dark",
     "width": 1440,
-    "needsYouRow": "Питання до вас· 4 хв томуRestore search results after the index rebuildВідповісти"
+    "needsYouRow": "Питання до вас· 4 хв томуRestore search results after the index rebuildКілька питань перед роботоюДайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі."
   },
   {
     "lang": "uk",
@@ -1860,7 +1860,7 @@
         "width": 92.84375
       }
     ],
-    "actionsWidth": 196.9375,
+    "actionsWidth": 280.46875,
     "readonly": false,
     "skipped": false
   },
@@ -1875,7 +1875,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Пропущено, взято рекомендовані",
-    "decisionText": "Пропущено, взято рекомендовані9 жовт., 16:39Збережено й надіслано оркестратору",
+    "decisionText": "Пропущено, взято рекомендовані12 жовт., 23:59Збережено й надіслано оркестратору",
     "title": "Питання · Restore search results after the index rebuild",
     "sideways": 0,
     "questionWidth": 758,
@@ -2016,7 +2016,7 @@
         "width": 92.84375
       }
     ],
-    "actionsWidth": 196.9375,
+    "actionsWidth": 280.46875,
     "readonly": false,
     "skipped": false
   },
@@ -2111,7 +2111,7 @@
         "width": 92.84375
       }
     ],
-    "actionsWidth": 196.9375,
+    "actionsWidth": 280.46875,
     "readonly": false,
     "skipped": false
   },
@@ -2126,7 +2126,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Відповіли",
-    "decisionText": "Відповіли9 жовт., 16:39Збережено й надіслано оркестратору",
+    "decisionText": "Відповіли13 жовт., 00:00Збережено й надіслано оркестратору",
     "title": "Питання · Repair old links in the release notes",
     "sideways": 0,
     "questionWidth": 758,
@@ -2267,7 +2267,7 @@
         "width": 92.84375
       }
     ],
-    "actionsWidth": 196.9375,
+    "actionsWidth": 280.46875,
     "readonly": false,
     "skipped": false
   },
@@ -2281,7 +2281,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Пропущено, взято рекомендовані",
-    "decisionText": "Пропущено, взято рекомендовані9 жовт., 16:38Залиште рекомендовані відповіді.Збережено й надіслано оркестратору",
+    "decisionText": "Пропущено, взято рекомендовані12 жовт., 23:59Залиште рекомендовані відповіді.Збережено й надіслано оркестратору",
     "title": "Питання · Simplify the export settings sheet",
     "sideways": 0,
     "questionWidth": 758,

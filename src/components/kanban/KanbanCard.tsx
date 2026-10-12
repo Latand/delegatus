@@ -403,6 +403,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const linkIndex = useWorkLinks();
   const onWorkLinks = props.onWorkLinks;
   const workspace = status === "assigned";
+  const footWorked = card.lastAgentWorkAtMs > 0;
   const title = card.titlePending ? t("kanban.untitled") : card.title;
   /* A placeholder's text is no title to guess an icon from: it gets the quiet default. */
   const iconTitle = card.titlePending ? "" : card.title;
@@ -471,6 +472,14 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const drawnLanes = collapsed ? [] : completedOpen ? card.pipelines : shownPipelines;
   const drawnLinks = new Set(drawnLanes.flatMap((summary) => linkIndex.of({ kind: "pipeline", id: summary.pipeline.id })?.links.map((link) => link.key) ?? []));
   const taskLinks = withoutShown(linkIndex.of({ kind: "task", id: card.task?.id ?? "" }), drawnLinks);
+  /* The foot dates the last agent work as a bare age, and a card nobody worked
+     on as its last edit, worded as one so the two never read alike. A lane row
+     or an agent row on screen already states when its work moved, so the foot
+     says it only where no row does. */
+  const rowDatesWork = drawnLanes.length > 0 || (!collapsed && tiles.length > 0);
+  const footAge = footWorked
+    ? rowDatesWork ? "" : ageLabel(t, card.lastAgentWorkAtMs, nowMs)
+    : card.updatedAtMs ? t("kanban.editedAge", { age: ageLabel(t, card.updatedAtMs, nowMs) }) : "";
   const pipelineRow = (summary: KanbanPipeline) => (
     <PipelineBlock
       key={summary.pipeline.id}
@@ -508,7 +517,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
     : null;
   const openHoldTask = card.holdTarget && card.task?.hold?.ref ? () => props.onFocusCard(`task:${card.task!.hold!.ref}`) : undefined;
   const motionLine = (plain: boolean) => (
-    <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain={plain} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)}
+    <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain={plain} laneShown={!collapsed && card.pipelines.length > 0} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)}
       taskTitle={card.holdTarget ? `${card.holdTarget.title}${card.holdTarget.done ? ` (${statusLabel(t, "done")})` : ""}` : undefined}
       onOpenTask={openHoldTask}
       referenceUrl={motionReference}
@@ -925,7 +934,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
               draws nothing, and the ⋯ menu is where priority changes. With a
               state line, the mark ends that line instead. */}
           {state ? null : <PriorityMark priority={card.priority} />}
-          <span className="age num" title={t("kanban.updated", { age: ageLabel(t, card.updatedAtMs, nowMs) })}>{ageLabel(t, card.updatedAtMs, nowMs)}</span>
+          {footAge ? <span className="age num" title={t(footWorked ? "kanban.worked" : "kanban.updated", { age: footWorked ? footAge : ageLabel(t, card.updatedAtMs, nowMs) })}>{footAge}</span> : null}
           {footMeta}
           <span className="spacer" />
           {/* The task's prototype review: highlighted while a round waits. */}
@@ -956,7 +965,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
       ) : (
         <div className="foot">
           <span className="origin-chip">{t(`kanban.origin.${card.origin}`)}</span>
-          <span className="age num">{ageLabel(t, card.updatedAtMs, nowMs)}</span>
+          {footAge ? <span className="age num">{footAge}</span> : null}
           {footMeta}
         </div>
       )}

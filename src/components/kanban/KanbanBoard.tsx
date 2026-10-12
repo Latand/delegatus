@@ -3211,12 +3211,11 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
       holdEditing={holdEditingId === card.id}
     />
   );
-  // Motion ordering keeps stopped work in a trailing suffix, including
-  // tasks whose finished conversations are still attached.
-  let split = shown.length;
-  if (status === "assigned") while (split > 0 && shown[split - 1]!.motion.key === "stopped") split -= 1;
-  const active = shown.slice(0, split);
-  const idle = shown.slice(split);
+  // The long-quiet stopped cards gather under the divider, in column order;
+  // a card that stopped after recent work stays among the live ones.
+  const parked = new Set(column.parked);
+  const active = shown.filter((card) => !parked.has(card.id));
+  const idle = shown.filter((card) => parked.has(card.id));
   const held = (card: KanbanCardModel) => !card.task && !card.drafts.length && card.members.length > 0
     && card.members.every((member) => heldLaunches.has(conversationIdentity(member.file)));
   const unlinked = status === "inbox" ? model.unlinkedShown.filter((card) => !(holdsOnlyDrafts(card) && card.status === "assigned") && !held(card)) : [];

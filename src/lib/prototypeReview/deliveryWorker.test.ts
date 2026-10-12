@@ -4,7 +4,7 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 import { loadTasks, saveTasks } from "@/lib/tasks/store";
 import { prototypeButtonState } from "@/components/prototypeReview/prototypeReviewStore";
-import { publishPOST, reviewGET, reviewPOST } from "./http";
+import { publishPOST as gatedPublishPOST, reviewGET, reviewPOST } from "./http";
 import { decidePrototype, type PrototypeDelivery, type PrototypeDeliveryPorts, type PrototypeDeliveryResult } from "./decision";
 import { PROTOTYPE_DELIVERY_BACKOFF_MS, PROTOTYPE_DELIVERY_IN_FLIGHT_MS, prototypeDeliveryDelay, resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests, sweepPrototypeDeliveries } from "./deliveryWorker";
 import { PROTOTYPE_DELIVERY_ATTENTION_MS, prototypeDeliveryPhase, prototypeReviewNotices, prototypeReviewReplica } from "./model";
@@ -12,6 +12,13 @@ import { isPrototypeReplica } from "./replica";
 import { withPrototypeReviewSummaries } from "./read";
 import { prototypeWorld, type PrototypeWorld } from "./world";
 import type { PrototypeDecision, PrototypeReviewRead } from "./types";
+
+import { criticLane } from "./criticGate.fixture";
+const publishPOST: typeof gatedPublishPOST = (request, world) => gatedPublishPOST(request, world ?? {
+  caller: () => ({ conversationId: "conversation_publisher", project: "project-a" }),
+  stage: () => ({ taskIds: [TASK], project: "project-a", source: { conversationId: "conversation_publisher", pipelineId: "prototype-lane", stageId: "publish" } }),
+  pipeline: () => criticLane(), orchestrator: () => null,
+});
 
 const PNG = Buffer.from([137,80,78,71,13,10,26,10]);
 const TASK = "task-delivery";

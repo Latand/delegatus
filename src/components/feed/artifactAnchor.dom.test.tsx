@@ -8,6 +8,7 @@ import { previewTarget } from "@/components/preview/ArtifactPreviewHost";
 import { onArtifactPreview } from "@/components/preview/previewBus";
 
 import { md } from "./markdown";
+import { UserMessageRow } from "./UserMessageRow";
 
 installActEnv();
 
@@ -78,6 +79,21 @@ test("image and text artifact links intercept the same way", async () => {
     });
   }
   expect(opened).toEqual(["~/fixtures/shots/board.png", "/tmp/fixtures/run.log"]);
+});
+
+test("a generated message.txt chip opens its file preview without changing the conversation", async () => {
+  const filePath = "/inbox/files/batch/message.txt";
+  await act(async () => {
+    root!.render(<UserMessageRow text={`The full message is attached as message.txt. Read the file in full before responding.\n${filePath}`} />);
+  });
+  const chip = dom.document.querySelector("[data-text-attachment]") as unknown as HTMLAnchorElement;
+  expect(chip).not.toBeNull();
+  expect(chip.getAttribute("href")).toContain("/api/artifact?");
+  await act(async () => {
+    chip.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as unknown as Event);
+  });
+  expect(opened).toEqual([filePath]);
+  expect(dom.location.hash).toBe("");
 });
 
 test("a transcript .jsonl link keeps the conversation deep-link", async () => {

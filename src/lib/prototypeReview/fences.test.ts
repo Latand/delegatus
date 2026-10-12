@@ -11,12 +11,21 @@ import { stateDir } from "@/lib/configDir";
 import { loadTasks, saveTasks } from "@/lib/tasks/store";
 import type { PrototypeDelivery } from "./decision";
 import { settlePrototypeDeliveriesForTests } from "./deliveryWorker";
-import { publishPOST, reviewGET, reviewPOST } from "./http";
+import { publishPOST as gatedPublishPOST, reviewGET, reviewPOST } from "./http";
 import { admittedSource, PROTOTYPE_LIMITS } from "./input";
 import { prototypeMediaGET } from "./media";
 import { mediaFilename, roundDirectory, roundMedia } from "./store";
 import type { PrototypeReviewRead, PublishPrototypeInput } from "./types";
 
+import { criticLane } from "./criticGate.fixture";
+const publishPOST: typeof gatedPublishPOST = async (request, world) => {
+  const body = await request.clone().json();
+  return gatedPublishPOST(request, world ?? {
+  caller: () => ({ conversationId: "conversation_publisher", project: "project-a" }),
+  stage: () => ({ taskIds: [body.taskId], project: "project-a", source: { conversationId: "conversation_publisher", pipelineId: "prototype-lane", stageId: "publish" } }),
+  pipeline: () => criticLane(), orchestrator: () => null,
+  });
+};
 const roots: string[] = [];
 const PNG = Buffer.from([137,80,78,71,13,10,26,10]);
 const WEBM = Buffer.concat([Buffer.from([0x1a,0x45,0xdf,0xa3,0x42,0x82,0x84]),Buffer.from("webm"),Buffer.alloc(64,7)]);
@@ -394,7 +403,7 @@ test("a publication's cleanup while a delivery holds its round's lock leaves it 
     send: async () => { sends += 1; await gate; sent = true; return { state: "sent", operationId: "operation-1" }; },
     retry: async () => { throw new Error("nothing failed, so nothing is retried"); },
   };
-  const world = { caller: () => ({ conversationId: null, project: null }), stage: () => null, orchestrator: () => "conversation_seat" };
+  const world = { pipeline: () => null, caller: () => ({ conversationId: null, project: null }), stage: () => null, orchestrator: () => "conversation_seat" };
   const save = () => reviewPOST(request("/review",{ reviewId: id, chosen: [1], comment: "Chosen once." }),TASK,world,delivery);
   expect((await save()).status).toBe(200);
   for (let n = 0; sends === 0 && n < 500; n += 1) await Bun.sleep(5);

@@ -106,7 +106,7 @@ export function needsYouEvidence(entry: MobileAttentionEntry, ports: NeedsYouEvi
     for (const link of links?.links ?? []) {
       if (link.state === "merged" || link.state === "closed") add(`pr-${link.state}`, true, `The pull request is ${link.state}`, "forge", link.checkedAt);
     }
-    if (lane.merge && (PIPELINE_MERGE_LIVE_STATES.has(lane.merge.state) || lane.merge.state === "merged")) add("merge-queued", true, `Merge ${lane.merge.state}`, "pipelines", lane.merge.updatedAt);
+    if (lane.merge && (PIPELINE_MERGE_LIVE_STATES.has(lane.merge.state) || lane.merge.state === "refreshing" || lane.merge.state === "merged")) add("merge-queued", true, `Merge ${lane.merge.state}`, "pipelines", lane.merge.updatedAt);
     const tasks = ports.tasks.filter(t => lane.taskIds?.includes(t.id));
     if (ports.pipelines.some(p => p.id !== lane.id && p.taskIds?.some(id => lane.taskIds?.includes(id)) && after(p.createdAt, since)) || tasks.some(t => t.assignments.some(a => after(a.at, since)))) add("newer-work", true, "The task gained newer work after this lane parked", "pipelines/tasks");
     if (tasks.length && tasks.every(t => t.status === "done")) add("task-done", true, "Every task on this lane is done", "tasks");

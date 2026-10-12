@@ -1,5 +1,7 @@
 "use client";
 
+import { messageTextAttachmentFromText } from "@/lib/messageTextAttachment";
+
 import { TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -158,9 +160,11 @@ export function ConversationMessageRow({
       progress: pendingOperation ? progress.records.get(pendingOperation) ?? null : null,
     })
     : null;
-  const text = entry?.text.trim() ? entry.text : canonical?.text ?? entry?.text ?? "";
+  const text = entry?.textAttachment ? entry.textAttachment.text
+    : entry?.text.trim() ? entry.text : canonical?.text ?? entry?.text ?? "";
   const selectedContext = canonical?.selectedContext ?? entry?.selectedContext ?? null;
   const attachments = entry ? entry.images + (entry.files ?? 0) : 0;
+  const textFile = entry?.textAttachment ?? messageTextAttachmentFromText(text);
   const disclosureLabel = t(open ? "outbox.hideDelivery" : "outbox.showDelivery");
   const operationId = entry ? messageRowOperationId(entry) : null;
   const action = row?.phase === "pending" ? (
@@ -352,6 +356,7 @@ export function ConversationMessageRow({
   return (
     <UserMessageRow
       text={text}
+      copyText={entry?.textAttachment ? entry.text : undefined}
       sender={sender}
       tone={entry?.intent === "context" ? "context" : undefined}
       selectedContext={selectedContext}
@@ -365,7 +370,7 @@ export function ConversationMessageRow({
            moves (round-4 P2). It is a caption about the submission, not a
            second copy of the attachment: the transcript still carries the
            image itself as its own row below. */
-        <span className="mt-1 block text-caption font-semibold text-muted">
+        <span className={`${textFile ? "" : "mt-1 block "}text-caption font-semibold text-muted`}>
           {t(entry!.files ? "composer.attachmentsCount" : "composer.imagesCount", { count: attachments })}
         </span>
       ) : null}
