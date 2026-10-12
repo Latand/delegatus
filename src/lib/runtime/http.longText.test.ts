@@ -46,6 +46,14 @@ test("a short message is byte-identical to the current trimmed delivery", async 
   expect(Buffer.from(delivered.at(-1)!)).toEqual(Buffer.from(text.trim()));
 });
 
+test("padded short text keeps the existing delivery bytes and does not become a file", async () => {
+  const text = "\n".repeat(32_000) + "коротко\n\t ";
+  const response = await handleRuntimeCommand(request(text, "padded-short-text"), "send", dependencies);
+  expect(response.status).toBe(202);
+  expect(Buffer.from(delivered.at(-1)!)).toEqual(Buffer.from(text.trim()));
+  expect((await response.json()).textAttachment).toBeUndefined();
+});
+
 test("retry of a message refused by the old envelope guard succeeds and reuses its file", async () => {
   const text = "ю".repeat(30_000);
   expect(() => assertStructuredTextEnvelope(text)).toThrow("32000-byte envelope");

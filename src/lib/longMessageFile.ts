@@ -7,7 +7,7 @@ import { assertStructuredTextEnvelope, MAX_STRUCTURED_TEXT_BYTES } from "./runti
  * is additional to the operator's admitted batch, including a full five files. */
 export function prepareMessageFiles(text: string, files: readonly InboxFileUpload[], batch: string) {
   const payload = inboxFileText(text, inboxFilePaths(files, batch));
-  if (Buffer.byteLength(payload, "utf8") <= MAX_STRUCTURED_TEXT_BYTES) {
+  if (Buffer.byteLength(payload.trim(), "utf8") <= MAX_STRUCTURED_TEXT_BYTES) {
     return { files, payload, textAttachment: undefined };
   }
   const data = Buffer.from(text, "utf8");
