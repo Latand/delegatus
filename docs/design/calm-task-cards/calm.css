@@ -1,0 +1,140 @@
+/* The calm-task-cards prototype (docs/design/calm-task-cards.md §7). Frame
+   chrome is `fr-`; the proposed card parts are `cc-`. Everything reads the
+   product tokens, so light and dark follow the app's theme, and the card shell
+   is the board's own `.kb .card`. */
+
+html, body { margin: 0; background: var(--surface-board); }
+#root { height: auto !important; display: block !important; }
+
+/* ── Frame ─────────────────────────────────────────────────────────────── */
+.kb.fr-page { padding: 16px 24px 40px; box-sizing: border-box; min-height: 100vh; background: var(--surface-board); color: var(--color-primary); font-family: var(--font-sans); }
+.kb.fr-page.fr-phone { padding: 12px 12px 32px; }
+.fr-band { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0 0 16px; padding: 8px 12px; border-radius: var(--radius-control); background: var(--surface-sunken); font-size: var(--text-ui); }
+.fr-band-name { font-weight: 700; }
+.fr-band-meta { color: var(--color-muted); }
+.fr-phone .fr-band { flex-direction: column; gap: 2px; }
+
+.fr-board { display: grid; grid-template-columns: minmax(0, 1.9fr) minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.kb .fr-board > .column[data-status] { min-height: 0; grid-area: auto; }
+.kb .fr-col-body { contain: none; overflow: visible; padding-bottom: 16px; }
+.kb .fr-col-body > .card, .kb .fr-open .card, .kb .fr-phone .card { content-visibility: visible; }
+.fr-open { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.fr-cell { min-width: 0; }
+
+.fr-phone-list, .fr-phone-original { display: flex; flex-direction: column; gap: 16px; }
+.fr-phone-tab-name { margin: 4px 4px 8px; font-size: var(--text-ui); font-weight: 600; color: var(--color-secondary); }
+.fr-phone-cards { display: flex; flex-direction: column; gap: 10px; }
+.fr-phone-board { position: relative; }
+.fr-phone-screen { position: relative; min-width: 0; }
+.fr-phone-screen + .fr-phone-screen { margin-top: 4px; }
+
+/* ── The calm card ─────────────────────────────────────────────────────── */
+.kb .cc-card { gap: 6px; }
+.kb .cc-card .head { align-items: flex-start; }
+.kb .cc-card .title .clamp { -webkit-line-clamp: 2; }
+
+.cc-state { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cc-dotwrap { position: relative; display: inline-flex; flex: none; }
+.kb .cc-dot { width: 20px; height: 20px; margin: -5px; padding: 0; border: 0; border-radius: 50%; background: transparent; display: grid; place-items: center; cursor: default; }
+.cc-dot::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--color-muted); box-shadow: 0 0 0 3px var(--surface-card); }
+.cc-dot[data-owner="working"]::before { background: var(--color-success); }
+.cc-dot[data-owner="waiting"]::before { background: transparent; box-shadow: inset 0 0 0 2px var(--color-muted); }
+.cc-dot[data-owner="seat"]::before { background: var(--color-accent); }
+.cc-dot[data-owner="you"]::before { background: var(--color-warning); box-shadow: 0 0 0 3px var(--color-warning-soft); }
+.cc-dot[data-owner="done"]::before { background: var(--color-success); opacity: 0.55; }
+.kb .cc-dot:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.cc-pop {
+  position: absolute; top: calc(100% + 8px); left: -6px; z-index: 5; display: none; width: max-content; max-width: 260px;
+  padding: 6px 10px; border-radius: var(--radius-control); background: var(--surface-raised); color: var(--color-primary);
+  border: 1px solid var(--border-default); box-shadow: var(--shadow-2); font-size: var(--text-label); line-height: 1.35; white-space: normal;
+}
+.cc-dotwrap:hover .cc-pop, .cc-dotwrap:focus-within .cc-pop, .cc-dotwrap[data-cc-pop="open"] .cc-pop { display: block; }
+
+.kb .cc-line { all: unset; box-sizing: border-box; display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; cursor: pointer; font-size: var(--text-ui); line-height: 1.35; color: var(--color-secondary); border-radius: 4px; }
+.kb .cc-line:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.cc-line-text { min-width: 0; overflow-wrap: anywhere; }
+.cc-card[data-cc-owner="you"] .cc-line-text { color: var(--color-primary); font-weight: 600; }
+.cc-age { flex: none; margin-left: auto; color: var(--color-muted); font-size: var(--text-label); white-space: nowrap; }
+
+.cc-chain { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cc-chain .pblock { flex: 1; min-width: 0; }
+.cc-chain .pb-age { display: none; }
+/* A stop the orchestrator owns is not an alarm: its stage keeps the seat's tone. */
+.cc-card[data-cc-owner="seat"] .cc-chain .pb-pill.st-needs_decision,
+.cc-card[data-cc-owner="working"] .cc-chain .pb-pill.st-needs_decision { color: var(--color-accent); border-color: color-mix(in srgb, var(--color-accent) 45%, var(--border-default)); }
+.cc-grow { flex: 1; }
+/* The PR as the card's chain line draws it today (pipelineBlock.css .wl-text). */
+.kb .cc-chain .cc-pr { flex: none; display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; font-size: var(--text-label); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--color-secondary); }
+.kb .cc-chain .cc-pr[data-tone="open"] { color: var(--color-success); }
+.kb .cc-chain .cc-pr[data-tone="merged"] { color: var(--color-accent); }
+.kb .cc-chain .cc-pr[data-tone="closed"] { color: var(--color-danger); }
+.cc-more { flex: none; color: var(--color-muted); font-size: var(--text-label); white-space: nowrap; }
+
+.kb .cc-act {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 10px; border-radius: var(--radius-control);
+  border: 1px solid var(--border-default); background: var(--surface-card); color: var(--color-primary); font: inherit; font-size: var(--text-ui); cursor: pointer; white-space: nowrap;
+}
+.kb .cc-act:hover { border-color: var(--border-strong); }
+.kb .cc-act.primary { background: var(--color-brand); border-color: var(--color-brand); color: var(--color-on-brand); font-weight: 600; }
+.kb .cc-act.quiet { border-color: transparent; background: transparent; color: var(--color-secondary); padding-inline: 6px; }
+.cc-answerrow { display: flex; padding-left: 18px; }
+.kb .cc-phone .cc-act, .kb .cc-acts.phone .cc-act { min-height: 44px; }
+.cc-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.kb .cc-acts.phone .cc-act:not(.quiet) { flex: 1 1 auto; justify-content: center; }
+
+/* ── The opened card ───────────────────────────────────────────────────── */
+.cc-open { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border-default); }
+.cc-sec { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.cc-sec h4 { margin: 0; font-size: var(--text-label); font-weight: 600; color: var(--color-muted); }
+.cc-sec p { margin: 0; font-size: var(--text-ui); line-height: 1.45; overflow-wrap: anywhere; }
+.cc-seatline { display: flex; gap: 8px; align-items: flex-start; }
+.cc-seaticon { flex: none; margin-top: 2px; color: var(--color-accent); }
+.cc-sec[data-cc-seat="you"] .cc-seaticon { color: var(--color-muted); }
+.kb .cc-disclose { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 4px; width: max-content; min-height: 24px; cursor: pointer; color: var(--color-secondary); font-size: var(--text-label); border-radius: 4px; }
+.kb .cc-phone .cc-disclose { min-height: 44px; }
+.kb .cc-disclose:focus-visible { outline: 2px solid var(--color-accent); }
+.cc-raw { margin: 0; padding: 8px 10px; overflow: visible; border-radius: var(--radius-control); background: var(--surface-sunken); color: var(--color-secondary); font-family: var(--font-mono); font-size: var(--text-label); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.cc-tl { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.cc-tl-row { display: grid; grid-template-columns: 7.2em 14px minmax(0, 1fr); column-gap: 8px; align-items: start; position: relative; padding: 3px 0; font-size: var(--text-ui); line-height: 1.4; }
+.cc-phone .cc-tl-row { grid-template-columns: 6.6em 14px minmax(0, 1fr); }
+.cc-tl-time { color: var(--color-muted); font-size: var(--text-label); text-align: right; white-space: nowrap; padding-top: 1px; }
+.cc-tl-mark { position: relative; align-self: stretch; }
+.cc-tl-mark::before { content: ""; position: absolute; left: 6px; top: 0; bottom: -3px; width: 2px; background: var(--border-default); }
+.cc-tl-row:first-child .cc-tl-mark::before { top: 8px; }
+.cc-tl-row:last-child .cc-tl-mark::before { bottom: auto; height: 8px; }
+.cc-tl-mark::after { content: ""; position: absolute; left: 3px; top: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--color-muted); box-shadow: 0 0 0 2px var(--surface-card); }
+.cc-tl-row[data-tone="ok"] .cc-tl-mark::after { background: var(--color-success); }
+.cc-tl-row[data-tone="bad"] .cc-tl-mark::after { background: var(--color-danger); opacity: 0.7; }
+.cc-tl-row[data-tone="stop"] .cc-tl-mark::after { background: var(--surface-card); box-shadow: inset 0 0 0 2px var(--color-warning), 0 0 0 2px var(--surface-card); }
+.cc-tl-row[data-tone="live"] .cc-tl-mark::after { background: var(--color-success); }
+.cc-tl-row[data-tone="seat"] .cc-tl-mark::after { background: var(--color-accent); }
+.cc-tl-row[data-tone="you"] .cc-tl-mark::after { background: var(--color-warning); }
+.cc-tl-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.cc-tl-text { overflow-wrap: anywhere; }
+.cc-tl-row[data-tone="seat"] .cc-tl-text, .cc-tl-row[data-tone="you"] .cc-tl-text { font-weight: 600; }
+.cc-tl-row[data-tone="bad"] .cc-tl-text, .cc-tl-row[data-tone="info"] .cc-tl-text { color: var(--color-secondary); }
+.cc-tl-acts { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.kb .cc-link { all: unset; box-sizing: border-box; cursor: pointer; color: var(--color-accent); font-size: var(--text-label); min-height: 22px; display: inline-flex; align-items: center; border-radius: 4px; }
+.kb .cc-tl-acts.phone .cc-link { min-height: 44px; }
+.kb .cc-link:focus-visible { outline: 2px solid var(--color-accent); }
+.cc-askline { margin: 0; }
+
+.cc-sum { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: var(--text-ui); line-height: 1.45; }
+.cc-phone .cc-sum { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+.cc-sum dt { color: var(--color-muted); font-size: var(--text-label); font-weight: 600; padding-top: 2px; }
+.cc-phone .cc-sum dd + dt { margin-top: 8px; }
+.cc-sum dd { margin: 0; overflow-wrap: anywhere; }
+.cc-hint { margin: 0; color: var(--color-muted); font-size: var(--text-label); }
+.cc-menu { position: absolute; top: 40px; right: 8px; z-index: 6; display: flex; flex-direction: column; width: max-content; max-width: 100%; padding: 4px; border-radius: var(--radius-control); background: var(--surface-raised); border: 1px solid var(--border-default); box-shadow: var(--shadow-2); }
+.cc-menu-head { padding: 4px 8px; color: var(--color-muted); font-size: var(--text-label); font-weight: 600; }
+.kb .cc-menu-item { all: unset; box-sizing: border-box; padding: 6px 8px; min-height: 30px; border-radius: 4px; cursor: pointer; font-size: var(--text-ui); }
+.kb .cc-phone .cc-menu-item { min-height: 44px; display: flex; align-items: center; }
+.kb .cc-menu-item:hover { background: var(--surface-sunken); }
+
+.cc-desc { margin: 0; color: var(--color-secondary); font-size: var(--text-ui); line-height: 1.45; }
+.cc-desc .clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.cc-tl-fold .cc-disclose { min-height: 22px; }
+/* The phone's card is one tap target, as the phone board's is: no chevron
+   and no ⋯ (a long press opens the menu). */
+.kb .cc-phone .tools { display: none; }

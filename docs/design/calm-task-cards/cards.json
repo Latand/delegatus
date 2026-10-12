@@ -1,0 +1,3230 @@
+{
+ "snapshot": "2026-10-12T10:40:00.000Z",
+ "tasks": [
+  {
+   "id": "t-automerge-checks",
+   "project": "delegatus",
+   "status": "done",
+   "text": "Автомердж чекає лише на обов'язкові перевірки\nВиправлення #2723 доставлено через #2738 і розгорнуто у версії <id>; автомердж враховує обов’язкові перевірки.",
+   "placement": "unplaced",
+   "origin": {
+    "kind": "operator"
+   },
+   "assignments": [],
+   "createdAt": "2026-10-11T00:43:47.943Z",
+   "updatedAt": "2026-10-11T11:35:52.186Z",
+   "revision": "task-v1:fixture",
+   "color": "coral",
+   "icon": "git-merge",
+   "priority": "high",
+   "doneAt": "2026-10-11T11:35:52.186Z"
+  },
+  {
+   "id": "t-node-modules",
+   "project": "delegatus",
+   "status": "assigned",
+   "text": "Етап без node_modules комітить свої файли\nВиправлення пройшло рев’ю й опубліковане у гілці лінії. PR ще немає; публікація в main і деплой залишаються відкритими.",
+   "placement": "unplaced",
+   "origin": {
+    "kind": "operator"
+   },
+   "assignments": [],
+   "createdAt": "2026-10-11T11:36:57.724Z",
+   "updatedAt": "2026-10-12T09:20:51.444Z",
+   "revision": "task-v1:fixture",
+   "color": "coral",
+   "icon": "git-commit-horizontal"
+  },
+  {
+   "id": "t-unsafe-root",
+   "project": "delegatus",
+   "status": "blocked",
+   "text": "«Запитати паралельно» падає з unsafe-root\nНа другій установці оператора кнопка «Запитати паралельно» в зайнятого оркестратора відповідає «the seat's transcript could not be forked: unsafe-root». Паралельне питання має працювати, а помилка, якщо вона все ж буде, має бути зрозумілою людині.",
+   "placement": "unplaced",
+   "origin": {
+    "kind": "operator"
+   },
+   "assignments": [],
+   "createdAt": "2026-10-10T14:38:43.474Z",
+   "updatedAt": "2026-10-10T15:00:42.432Z",
+   "revision": "task-v1:fixture",
+   "color": "coral",
+   "icon": "bug",
+   "priority": "high"
+  },
+  {
+   "id": "t-midturn-review",
+   "project": "delegatus",
+   "status": "assigned",
+   "text": "Повідомлення, надіслані під час ходу агента, видно в розмові\nПовідомлення від голосу, оператора чи інших агентів, що приходять, поки агент працює, зараз не показуються в історії, хоча агент їх отримує. Вони мають з'являтися в розмові з позначкою відправника.",
+   "placement": "unplaced",
+   "origin": {
+    "kind": "operator"
+   },
+   "assignments": [],
+   "createdAt": "2026-10-11T11:23:50.160Z",
+   "updatedAt": "2026-10-11T23:30:22.000Z",
+   "revision": "task-v1:fixture",
+   "color": "coral",
+   "icon": "message-circle-warning",
+   "priority": "high"
+  },
+  {
+   "id": "t-activity-truth",
+   "project": "delegatus",
+   "status": "assigned",
+   "text": "Видно, коли агент реально стоїть, а коли працює\nІнструмент активності показує агентів «завислими по 4,8 год», хоча вони щойно щось робили. Тому ні оркестратор, ні оператор не бачать, хто справді стоїть. Потрібен простий чесний показник на кожному агенті: працює, чекає перевірку чи стоїть N хвилин. І оркестратор має отримувати сигнал, коли агент справді стоїть.",
+   "placement": "unplaced",
+   "origin": {
+    "kind": "operator"
+   },
+   "assignments": [],
+   "createdAt": "2026-10-12T05:46:21.914Z",
+   "updatedAt": "2026-10-12T07:57:27.644Z",
+   "revision": "task-v1:fixture",
+   "color": "coral",
+   "icon": "activity",
+   "priority": "high"
+  },
+  {
+   "id": "t-reject-redo",
+   "project": "delegatus",
+   "status": "assigned",
+   "text": "Прототипи: «Відхилити все» з поправками і критик перед показом\nУ формі прототипу немає способу відхилити всі варіанти — доводиться щось обирати. Потрібна кнопка «Відхилити й переробити», куди можна надиктувати чи написати поправки, і яка явно відкриває новий раунд. А кожен прототип до показу оператору має проходити візуального критика по всіх варіантах і виправлення.",
+   "placement": "unplaced",
+   "origin": {
+    "kind": "operator"
+   },
+   "assignments": [],
+   "createdAt": "2026-10-12T08:16:54.192Z",
+   "updatedAt": "2026-10-12T10:40:00.000Z",
+   "revision": "task-v1:fixture",
+   "color": "sky",
+   "icon": "thumbs-down",
+   "priority": "high"
+  },
+  {
+   "id": "t-voice-head",
+   "project": "delegatus",
+   "status": "assigned",
+   "text": "Голосовий Delegatus на телефоні: плаваюча голова, як на комп'ютері\nНа телефоні голосовий оркестратор зараз не з'являється. Потрібна та сама плаваюча голова зі словами, що вилітають, як на десктопі: завжди на екрані, лишається при переходах між проєктами, оркестраторами й агентами, а розмова триває. Її можна повністю сховати й повернути через меню.",
+   "placement": "unplaced",
+   "origin": {
+    "kind": "operator"
+   },
+   "assignments": [],
+   "createdAt": "2026-10-12T09:03:01.340Z",
+   "updatedAt": "2026-10-12T10:40:00.000Z",
+   "revision": "task-v1:fixture",
+   "color": "sky",
+   "icon": "smartphone",
+   "priority": "high"
+  }
+ ],
+ "pipelines": [
+  {
+   "id": "automerge-checks",
+   "task": "Auto-merge waits only for the base branch's required checks",
+   "taskIds": [
+    "t-automerge-checks"
+   ],
+   "project": "delegatus",
+   "repoDir": "/repo",
+   "worktreeDir": "/repo-lane",
+   "branch": "pipeline/sample",
+   "baseBranch": "main",
+   "baseRef": "main",
+   "lastPassedCommit": "",
+   "stages": [
+    {
+     "id": "build",
+     "kind": "run",
+     "role": {
+      "roleId": "builder"
+     },
+     "next": "review",
+     "onFail": null,
+     "engine": "codex",
+     "prompt": "Stage build.",
+     "effectiveRole": {
+      "roleId": "builder",
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "access": "read-write",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "review",
+     "kind": "run",
+     "role": {
+      "roleId": "reviewer"
+     },
+     "next": null,
+     "onFail": {
+      "to": "fix",
+      "maxRounds": 2,
+      "onExhausted": "advance"
+     },
+     "engine": "codex",
+     "prompt": "Stage review.",
+     "effectiveRole": {
+      "roleId": "reviewer",
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "xhigh",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "fix",
+     "kind": "run",
+     "role": {
+      "roleId": "builder",
+      "params": {
+       "mode": "apply-fixes"
+      }
+     },
+     "next": "review",
+     "onFail": null,
+     "engine": "codex",
+     "prompt": "Stage fix.",
+     "effectiveRole": {
+      "roleId": "builder",
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "access": "read-write",
+      "promptScaffold": null
+     }
+    }
+   ],
+   "runs": [
+    {
+     "stageId": "build",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "passed",
+       "effectiveRole": {
+        "roleId": "builder",
+        "engine": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "access": "read-write",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T00:45:14.905Z",
+       "completedAt": "2026-10-11T02:15:45.569Z",
+       "input": null,
+       "activatedBy": null,
+       "output": null,
+       "verdict": {
+        "status": "pass"
+       },
+       "error": null,
+       "report": {
+        "seq": 1,
+        "at": "2026-10-11T02:15:34.542Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "pass"
+        },
+        "summary": "Автомердж очікує лише обов’язкові контексти базової гілки; завершена помилка будь-якої перевірки блокує з її назвою. Збережено вікно стабілізації, захист голови, оновлення BEHIND і конфлікти; покрито UNSTABLE, історичні необов’язкові назви та порожній rollup тестами, що спершу падали. Усі 37 тестів автомерджу, типи, lint, privacy та повний локальний publica…",
+        "provenance": {},
+        "calls": 1
+       }
+      }
+     ]
+    },
+    {
+     "stageId": "review",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "passed",
+       "effectiveRole": {
+        "roleId": "reviewer",
+        "engine": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "xhigh",
+        "access": "read-only",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T02:15:51.427Z",
+       "completedAt": "2026-10-11T02:44:05.225Z",
+       "input": null,
+       "activatedBy": {
+        "stageId": "build",
+        "attempt": 1,
+        "edge": "pass"
+       },
+       "output": null,
+       "verdict": {
+        "status": "pass"
+       },
+       "error": null,
+       "report": {
+        "seq": 2,
+        "at": "2026-10-11T02:43:48.723Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "pass"
+        },
+        "summary": "Перевірка коректності пройшла: обов’язкові контексти базової гілки й далі утримують merge; завершена червона необов’язкова перевірка блокує з її назвою; pending необов’язкові перевірки не очікуються. Захист голови, BEHIND, конфлікти та стабілізація збережені; UNSTABLE перевірено також за офіційними визначеннями GitHub і шляхом gh. Усі 37 тестів autoMerge.te…",
+        "provenance": {},
+        "calls": 1
+       }
+      }
+     ]
+    },
+    {
+     "stageId": "fix",
+     "attempts": []
+    }
+   ],
+   "cursor": null,
+   "state": "completed",
+   "pausedState": null,
+   "stateDetail": null,
+   "srcPath": null,
+   "srcConversationId": "a seat conversation",
+   "createdAt": "2026-10-11T00:44:08.200Z",
+   "closedAt": "2026-10-11T02:44:06.598Z",
+   "finishesTaskIds": [
+    "t-automerge-checks"
+   ],
+   "merge": {
+    "state": "blocked",
+    "by": null,
+    "repository": "owner/delegatus",
+    "prNumber": 2723,
+    "reason": "the PR was closed",
+    "requestedAt": "2026-10-11T02:44:06.598Z",
+    "blockedAt": "2026-10-11T08:23:48.835Z",
+    "updatedAt": "2026-10-11T08:23:58.653Z",
+    "mergedAt": null,
+    "chain": [],
+    "updates": [],
+    "seenChecks": [],
+    "attempts": 0,
+    "readFailures": 0
+   },
+   "stageReports": [
+    {
+     "seq": 1,
+     "at": "2026-10-11T02:15:34.542Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "build",
+     "attempt": 1,
+     "status": "pass",
+     "findings": 0,
+     "replaces": null,
+     "summary": "Автомердж очікує лише обов’язкові контексти базової гілки; завершена помилка будь-якої перевірки блокує з її назвою. Збережено вікно стабілізації, захист голови, оновлення BEHIND і конфлікти; покрито UNSTABLE, історичні необов’язкові назви та порожній rollup тестами, що спершу падали. Усі 37 тестів автомерджу, типи, lint, privacy та повний локальний publica…"
+    },
+    {
+     "seq": 2,
+     "at": "2026-10-11T02:43:48.723Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "review",
+     "attempt": 1,
+     "status": "pass",
+     "findings": 0,
+     "replaces": null,
+     "summary": "Перевірка коректності пройшла: обов’язкові контексти базової гілки й далі утримують merge; завершена червона необов’язкова перевірка блокує з її назвою; pending необов’язкові перевірки не очікуються. Захист голови, BEHIND, конфлікти та стабілізація збережені; UNSTABLE перевірено також за офіційними визначеннями GitHub і шляхом gh. Усі 37 тестів autoMerge.te…"
+    }
+   ]
+  },
+  {
+   "id": "midturn-review-earlier-9",
+   "task": "Messages delivered mid-turn (Claude queued_command attachments) render in the conversation as sent messages",
+   "taskIds": [
+    "t-midturn-review"
+   ],
+   "project": "delegatus",
+   "repoDir": "/repo",
+   "worktreeDir": "/repo-lane",
+   "branch": "pipeline/sample",
+   "baseBranch": "main",
+   "baseRef": "main",
+   "lastPassedCommit": "",
+   "stages": [
+    {
+     "id": "build",
+     "kind": "run",
+     "role": {
+      "roleId": "builder"
+     },
+     "next": "review",
+     "onFail": null,
+     "engine": "claude",
+     "prompt": "Stage build.",
+     "effectiveRole": {
+      "roleId": "builder",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "xhigh",
+      "access": "read-write",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "review",
+     "kind": "run",
+     "role": {
+      "roleId": "reviewer"
+     },
+     "next": "ui-check",
+     "onFail": {
+      "to": "fix",
+      "maxRounds": 3
+     },
+     "access": "read-only",
+     "engine": "codex",
+     "prompt": "Stage review.",
+     "effectiveRole": {
+      "roleId": "reviewer",
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "fix",
+     "kind": "run",
+     "role": {
+      "roleId": "builder",
+      "params": {
+       "mode": "apply-fixes"
+      }
+     },
+     "next": "review",
+     "onFail": null,
+     "engine": "claude",
+     "prompt": "Stage fix.",
+     "effectiveRole": {
+      "roleId": "builder",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "access": "read-write",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "ui-check",
+     "kind": "run",
+     "role": {
+      "roleId": "visual-critic"
+     },
+     "next": null,
+     "onFail": {
+      "to": "fix",
+      "maxRounds": 1
+     },
+     "access": "read-only",
+     "engine": "claude",
+     "prompt": "Stage ui-check.",
+     "effectiveRole": {
+      "roleId": "visual-critic",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    }
+   ],
+   "runs": [
+    {
+     "stageId": "build",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "failed",
+       "effectiveRole": {
+        "roleId": "builder",
+        "engine": "claude",
+        "model": "opus",
+        "effort": "xhigh",
+        "access": "read-write",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T11:24:09.886Z",
+       "completedAt": "2026-10-11T11:31:16.251Z",
+       "input": null,
+       "activatedBy": null,
+       "output": null,
+       "verdict": null,
+       "error": "stage host was lost while its turn was open; replaced by a fresh stage attempt"
+      },
+      {
+       "n": 2,
+       "state": "failed",
+       "effectiveRole": {
+        "roleId": "builder",
+        "engine": "claude",
+        "model": "opus",
+        "effort": "xhigh",
+        "access": "read-write",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T11:32:22.305Z",
+       "completedAt": "2026-10-11T12:14:45.084Z",
+       "input": null,
+       "activatedBy": null,
+       "output": null,
+       "verdict": null,
+       "error": "interrupted by a Delegatus restart; replaced by a fresh stage attempt"
+      },
+      {
+       "n": 3,
+       "state": "failed",
+       "effectiveRole": {
+        "roleId": "builder",
+        "engine": "claude",
+        "model": "opus",
+        "effort": "xhigh",
+        "access": "read-write",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T12:14:46.698Z",
+       "completedAt": "2026-10-11T12:23:26.124Z",
+       "input": null,
+       "activatedBy": null,
+       "output": null,
+       "verdict": null,
+       "error": "stage host was lost while its turn was open; replaced by a fresh stage attempt"
+      },
+      {
+       "n": 4,
+       "state": "passed",
+       "effectiveRole": {
+        "roleId": "builder",
+        "engine": "claude",
+        "model": "opus",
+        "effort": "xhigh",
+        "access": "read-write",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T12:24:49.041Z",
+       "completedAt": "2026-10-11T13:48:17.343Z",
+       "input": null,
+       "activatedBy": null,
+       "output": null,
+       "verdict": {
+        "status": "pass"
+       },
+       "error": null,
+       "report": {
+        "seq": 1,
+        "at": "2026-10-11T13:47:49.501Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "pass"
+        },
+        "summary": "Повідомлення, що доходять до Claude посеред ходу (вкладення queued_command), тепер показуються в стрічці як надіслані рядки. PR #2749.\n\nПричина: такий запис має вигляд {type:\"attachment\", attachment:{type:\"queued_command\", commandMode:\"prompt\", prompt, source_uuid}}, а parse.ts рахував його лише в токенах і рядка не малював.\n\nВиправлення: claudeQueuedPrompt…",
+        "provenance": {},
+        "calls": 1
+       }
+      }
+     ]
+    },
+    {
+     "stageId": "review",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "needs_decision",
+       "effectiveRole": {
+        "roleId": "reviewer",
+        "engine": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "access": "read-only",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T13:48:23.300Z",
+       "completedAt": "2026-10-11T14:19:03.449Z",
+       "input": null,
+       "activatedBy": {
+        "stageId": "build",
+        "attempt": 4,
+        "edge": "pass"
+       },
+       "output": null,
+       "verdict": null,
+       "error": "stage spawn recovery stopped: runtime host recovery exhausted after 0 checks; original launch and first-message operation retained; last result: runtime host is unavailable; original launch retained"
+      }
+     ]
+    },
+    {
+     "stageId": "fix",
+     "attempts": []
+    },
+    {
+     "stageId": "ui-check",
+     "attempts": []
+    }
+   ],
+   "cursor": null,
+   "state": "closed",
+   "pausedState": null,
+   "stateDetail": null,
+   "srcPath": null,
+   "srcConversationId": "a seat conversation",
+   "createdAt": "2026-10-11T11:24:06.482Z",
+   "closedAt": "2026-10-11T14:19:02.486Z",
+   "finishesTaskIds": [
+    "t-midturn-review"
+   ],
+   "stageReports": [
+    {
+     "seq": 1,
+     "at": "2026-10-11T13:47:49.501Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "build",
+     "attempt": 4,
+     "status": "pass",
+     "findings": 0,
+     "replaces": null,
+     "summary": "Повідомлення, що доходять до Claude посеред ходу (вкладення queued_command), тепер показуються в стрічці як надіслані рядки. PR #2749.\n\nПричина: такий запис має вигляд {type:\"attachment\", attachment:{type:\"queued_command\", commandMode:\"prompt\", prompt, source_uuid}}, а parse.ts рахував його лише в токенах і рядка не малював.\n\nВиправлення: claudeQueuedPrompt…"
+    }
+   ]
+  },
+  {
+   "id": "node-modules",
+   "task": "A passed read-only stage commits its outputs even when its worktree has no node_modules (pre-commit eslint)",
+   "taskIds": [
+    "t-node-modules"
+   ],
+   "project": "delegatus",
+   "repoDir": "/repo",
+   "worktreeDir": "/repo-lane",
+   "branch": "pipeline/sample",
+   "baseBranch": "main",
+   "baseRef": "main",
+   "lastPassedCommit": "",
+   "stages": [
+    {
+     "id": "build",
+     "kind": "run",
+     "role": {
+      "roleId": "builder"
+     },
+     "next": "review",
+     "onFail": null,
+     "engine": "codex",
+     "prompt": "Stage build.",
+     "effectiveRole": {
+      "roleId": "builder",
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "access": "read-write",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "review",
+     "kind": "run",
+     "role": {
+      "roleId": "reviewer"
+     },
+     "next": null,
+     "onFail": {
+      "to": "fix",
+      "maxRounds": 3
+     },
+     "access": "read-only",
+     "engine": "claude",
+     "prompt": "Stage review.",
+     "effectiveRole": {
+      "roleId": "reviewer",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "fix",
+     "kind": "run",
+     "role": {
+      "roleId": "builder",
+      "params": {
+       "mode": "apply-fixes"
+      }
+     },
+     "next": "review",
+     "onFail": null,
+     "engine": "codex",
+     "prompt": "Stage fix.",
+     "effectiveRole": {
+      "roleId": "builder",
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "access": "read-write",
+      "promptScaffold": null
+     }
+    }
+   ],
+   "runs": [
+    {
+     "stageId": "build",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "failed",
+       "effectiveRole": {
+        "roleId": "builder",
+        "engine": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "access": "read-write",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T11:37:13.206Z",
+       "completedAt": "2026-10-11T12:15:55.328Z",
+       "input": null,
+       "activatedBy": null,
+       "output": null,
+       "verdict": null,
+       "error": "interrupted by a Delegatus restart; replaced by a fresh stage attempt"
+      },
+      {
+       "n": 2,
+       "state": "failed",
+       "effectiveRole": {
+        "roleId": "builder",
+        "engine": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "access": "read-write",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T12:16:01.120Z",
+       "completedAt": "2026-10-11T12:24:39.991Z",
+       "input": null,
+       "activatedBy": null,
+       "output": null,
+       "verdict": null,
+       "error": "interrupted by a Delegatus restart; replaced by a fresh stage attempt"
+      },
+      {
+       "n": 3,
+       "state": "failed",
+       "effectiveRole": {
+        "roleId": "builder",
+        "engine": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "access": "read-write",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T12:24:49.074Z",
+       "completedAt": "2026-10-11T13:52:44.862Z",
+       "input": null,
+       "activatedBy": null,
+       "output": null,
+       "verdict": null,
+       "error": "interrupted by a Delegatus restart; replaced by a fresh stage attempt"
+      },
+      {
+       "n": 4,
+       "state": "passed",
+       "effectiveRole": {
+        "roleId": "builder",
+        "engine": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "access": "read-write",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T13:53:20.081Z",
+       "completedAt": "2026-10-11T15:19:13.128Z",
+       "input": null,
+       "activatedBy": null,
+       "output": null,
+       "verdict": {
+        "status": "pass"
+       },
+       "error": null,
+       "report": {
+        "seq": 1,
+        "at": "2026-10-11T15:18:46.090Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "pass"
+        },
+        "summary": "Implemented parent-toolchain access scoped to settlement commits, actionable hook diagnostics, and retry-stage settlement of preserved passed work without relaunching the agent. Self-review and focused checks passed: 1,437 engine tests and 60 settlement tests under isolated HOME/XDG/TMPDIR/LLV_STATE_DIR with the control URL pinned to port 1, including real …",
+        "provenance": {},
+        "calls": 1
+       }
+      }
+     ]
+    },
+    {
+     "stageId": "review",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "failed",
+       "effectiveRole": {
+        "roleId": "reviewer",
+        "engine": "claude",
+        "model": "opus",
+        "effort": "high",
+        "access": "read-only",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T15:19:51.718Z",
+       "completedAt": "2026-10-11T15:50:14.446Z",
+       "input": null,
+       "activatedBy": {
+        "stageId": "build",
+        "attempt": 4,
+        "edge": "pass"
+       },
+       "output": null,
+       "verdict": {
+        "status": "fail",
+        "findings": [
+         "P2 — A settlement link that outlives a crash is adopted as a local install, so the next publication's install writes into the parent checkout. src/lib/pipelines/git.ts:620-642: prepareStageToolchain creates <worktree>/node_modules -> <repo…"
+        ],
+        "rankedFindings": [
+         {
+          "severity": "P2",
+          "text": "A settlement link that outlives a crash is adopted as a local install, so the next publication's install writes into the parent checkout. src/lib/pipelines/git.ts:620-642: prepareStageToolchain creates <worktree>/node_modules -> <repoDir>/…"
+         }
+        ]
+       },
+       "error": null,
+       "report": {
+        "seq": 2,
+        "at": "2026-10-11T15:49:55.376Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "fail",
+         "findings": [
+          "P2 — A settlement link that outlives a crash is adopted as a local install, so the next publication's install writes into the parent checkout. src/lib/pipelines/git.ts:620-642: prepareStageToolchain creates <worktree>/node_modules -> <repo…"
+         ],
+         "rankedFindings": [
+          {
+           "severity": "P2",
+           "text": "A settlement link that outlives a crash is adopted as a local install, so the next publication's install writes into the parent checkout. src/lib/pipelines/git.ts:620-642: prepareStageToolchain creates <worktree>/node_modules -> <repoDir>/…"
+          }
+         ]
+        },
+        "summary": "Reviewed <id>..<id> (git.ts prepareStageToolchain, engine.ts retryPassedStageCommit/afterCommitRepair, tests) for correctness. Acceptance 1–3 are met on the normal path. Hooks run without --no-verify or LLV_SKIP_HOOKS. The link is created only for an absent, ignored node_modules, after outputs are staged. A retry commits only when the attempt's verdict is p…",
+        "provenance": {},
+        "calls": 1
+       }
+      },
+      {
+       "n": 2,
+       "state": "passed",
+       "effectiveRole": {
+        "roleId": "reviewer",
+        "engine": "claude",
+        "model": "opus",
+        "effort": "high",
+        "access": "read-only",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T20:00:56.796Z",
+       "completedAt": "2026-10-11T20:15:00.620Z",
+       "input": null,
+       "activatedBy": {
+        "stageId": "fix",
+        "attempt": 3,
+        "edge": "pass"
+       },
+       "output": null,
+       "verdict": {
+        "status": "pass"
+       },
+       "error": null,
+       "report": {
+        "seq": 4,
+        "at": "2026-10-11T20:14:44.847Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "pass"
+        },
+        "summary": "Reviewed <id>..<id> for correctness.\n\nAC1: when the worktree has no node_modules, settlement links it to the parent's, but only after staging and only when the path is absent and git-ignored. Hooks run (no --no-verify, asserted by the test). The link is released in a finally, and re-entry reaps an interrupted link after checking its identity. Local installs…",
+        "provenance": {},
+        "calls": 1
+       }
+      }
+     ]
+    },
+    {
+     "stageId": "fix",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "failed",
+       "effectiveRole": {
+        "roleId": "builder",
+        "engine": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "access": "read-write",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T16:01:19.941Z",
+       "completedAt": "2026-10-11T16:31:36.249Z",
+       "input": null,
+       "activatedBy": {
+        "stageId": "review",
+        "attempt": 1,
+        "edge": "fail"
+       },
+       "output": null,
+       "verdict": null,
+       "error": "interrupted by a Delegatus restart; replaced by a fresh stage attempt"
+      },
+      {
+       "n": 2,
+       "state": "needs_decision",
+       "effectiveRole": {
+        "roleId": "builder",
+        "engine": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "access": "read-write",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T16:31:53.420Z",
+       "completedAt": null,
+       "input": null,
+       "activatedBy": {
+        "stageId": "review",
+        "attempt": 1,
+        "edge": "fail"
+       },
+       "output": null,
+       "verdict": null,
+       "error": "database is locked"
+      },
+      {
+       "n": 3,
+       "state": "passed",
+       "effectiveRole": {
+        "roleId": "builder",
+        "engine": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "access": "read-write",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T18:31:22.261Z",
+       "completedAt": "2026-10-11T19:50:49.835Z",
+       "input": null,
+       "activatedBy": {
+        "stageId": "review",
+        "attempt": 1,
+        "edge": "fail"
+       },
+       "output": null,
+       "verdict": {
+        "status": "pass"
+       },
+       "error": null,
+       "report": {
+        "seq": 3,
+        "at": "2026-10-11T19:48:49.213Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "pass"
+        },
+        "summary": "Fixed the interrupted parent-toolchain link in $HOME/… settlement re-entry releases the exact live parent link before normal commit or receipt recovery, preserving real installs and unrelated/dangling links. Also fixed directory-only node_modules/ ignore rules and the misleading non-repair retry refusal. Regression coverage: $HOME/… Explicit gate-slot check…",
+        "provenance": {},
+        "calls": 1
+       }
+      }
+     ]
+    }
+   ],
+   "cursor": null,
+   "state": "completed",
+   "pausedState": null,
+   "stateDetail": null,
+   "srcPath": null,
+   "srcConversationId": "a seat conversation",
+   "createdAt": "2026-10-11T11:37:10.243Z",
+   "closedAt": "2026-10-11T20:15:38.072Z",
+   "finishesTaskIds": [
+    "t-node-modules"
+   ],
+   "merge": {
+    "state": "blocked",
+    "by": null,
+    "repository": "owner/delegatus",
+    "prNumber": 2780,
+    "reason": "conflict with the base branch",
+    "requestedAt": "2026-10-11T20:15:38.072Z",
+    "blockedAt": "2026-10-12T09:06:41.605Z",
+    "updatedAt": "2026-10-12T09:06:42.408Z",
+    "mergedAt": null,
+    "chain": [],
+    "updates": [],
+    "seenChecks": [],
+    "attempts": 1,
+    "readFailures": 0
+   },
+   "stageReports": [
+    {
+     "seq": 1,
+     "at": "2026-10-11T15:18:46.090Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "build",
+     "attempt": 4,
+     "status": "pass",
+     "findings": 0,
+     "replaces": null,
+     "summary": "Implemented parent-toolchain access scoped to settlement commits, actionable hook diagnostics, and retry-stage settlement of preserved passed work without relaunching the agent. Self-review and focused checks passed: 1,437 engine tests and 60 settlement tests under isolated HOME/XDG/TMPDIR/LLV_STATE_DIR with the control URL pinned to port 1, including real …"
+    },
+    {
+     "seq": 2,
+     "at": "2026-10-11T15:49:55.376Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "review",
+     "attempt": 1,
+     "status": "fail",
+     "findings": 1,
+     "replaces": null,
+     "summary": "Reviewed <id>..<id> (git.ts prepareStageToolchain, engine.ts retryPassedStageCommit/afterCommitRepair, tests) for correctness. Acceptance 1–3 are met on the normal path. Hooks run without --no-verify or LLV_SKIP_HOOKS. The link is created only for an absent, ignored node_modules, after outputs are staged. A retry commits only when the attempt's verdict is p…"
+    },
+    {
+     "seq": 3,
+     "at": "2026-10-11T19:48:49.213Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "fix",
+     "attempt": 3,
+     "status": "pass",
+     "findings": 0,
+     "replaces": null,
+     "summary": "Fixed the interrupted parent-toolchain link in $HOME/… settlement re-entry releases the exact live parent link before normal commit or receipt recovery, preserving real installs and unrelated/dangling links. Also fixed directory-only node_modules/ ignore rules and the misleading non-repair retry refusal. Regression coverage: $HOME/… Explicit gate-slot check…"
+    },
+    {
+     "seq": 4,
+     "at": "2026-10-11T20:14:44.847Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "review",
+     "attempt": 2,
+     "status": "pass",
+     "findings": 0,
+     "replaces": null,
+     "summary": "Reviewed <id>..<id> for correctness.\n\nAC1: when the worktree has no node_modules, settlement links it to the parent's, but only after staging and only when the path is absent and git-ignored. Hooks run (no --no-verify, asserted by the test). The link is released in a finally, and re-entry reaps an interrupted link after checking its identity. Local installs…"
+    }
+   ]
+  },
+  {
+   "id": "midturn-review-earlier-10",
+   "task": "#2749 messages delivered mid-turn render as sent messages: review, fix, visual check (successor of stuck lane <id>, whose review died on a provider transport failure)",
+   "taskIds": [
+    "t-midturn-review"
+   ],
+   "project": "delegatus",
+   "repoDir": "/repo",
+   "worktreeDir": "/repo-lane",
+   "branch": "pipeline/sample",
+   "baseBranch": "main",
+   "baseRef": "main",
+   "lastPassedCommit": "",
+   "stages": [
+    {
+     "id": "review",
+     "kind": "run",
+     "role": {
+      "roleId": "reviewer"
+     },
+     "next": "ui-check",
+     "onFail": {
+      "to": "fix",
+      "maxRounds": 2,
+      "onExhausted": "advance"
+     },
+     "engine": "claude",
+     "prompt": "Stage review.",
+     "effectiveRole": {
+      "roleId": "reviewer",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "fix",
+     "kind": "run",
+     "role": {
+      "roleId": "builder",
+      "params": {
+       "mode": "apply-fixes",
+       "domain": "frontend"
+      }
+     },
+     "next": "review",
+     "onFail": null,
+     "prompt": "Stage fix.",
+     "effectiveRole": {
+      "roleId": "builder",
+      "engine": "claude",
+      "model": "claude-sonnet-5-5",
+      "effort": "high",
+      "access": "read-write",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "ui-check",
+     "kind": "run",
+     "role": {
+      "roleId": "visual-critic"
+     },
+     "next": null,
+     "onFail": {
+      "to": "ui-fix",
+      "maxRounds": 1,
+      "onExhausted": "advance"
+     },
+     "prompt": "Stage ui-check.",
+     "effectiveRole": {
+      "roleId": "visual-critic",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "ui-fix",
+     "kind": "run",
+     "role": {
+      "roleId": "builder",
+      "params": {
+       "mode": "apply-fixes",
+       "domain": "frontend"
+      }
+     },
+     "next": "ui-check",
+     "onFail": null,
+     "prompt": "Stage ui-fix.",
+     "effectiveRole": {
+      "roleId": "builder",
+      "engine": "claude",
+      "model": "claude-sonnet-5-5",
+      "effort": "high",
+      "access": "read-write",
+      "promptScaffold": null
+     }
+    }
+   ],
+   "runs": [
+    {
+     "stageId": "review",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "failed",
+       "effectiveRole": {
+        "roleId": "reviewer",
+        "engine": "claude",
+        "model": "opus",
+        "effort": "high",
+        "access": "read-only",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T21:10:47.733Z",
+       "completedAt": "2026-10-11T21:29:05.796Z",
+       "input": null,
+       "activatedBy": null,
+       "output": null,
+       "verdict": {
+        "status": "fail",
+        "findings": [
+         "P3 — The committed visual evidence covers only part of the matrix the acceptance names (1440, 1000 and 390 px, light and dark, uk and en). The mid-turn case in src/components/mobile/issue1671Evidence.browser.test.tsx:1555 (the loop `for (c…"
+        ],
+        "rankedFindings": [
+         {
+          "severity": "P3",
+          "text": "The committed visual evidence covers only part of the matrix the acceptance names (1440, 1000 and 390 px, light and dark, uk and en). The mid-turn case in src/components/mobile/issue1671Evidence.browser.test.tsx:1555 (the loop `for (const …"
+         }
+        ]
+       },
+       "error": null,
+       "report": {
+        "seq": 1,
+        "at": "2026-10-11T21:28:49.627Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "fail",
+         "findings": [
+          "P3 — The committed visual evidence covers only part of the matrix the acceptance names (1440, 1000 and 390 px, light and dark, uk and en). The mid-turn case in src/components/mobile/issue1671Evidence.browser.test.tsx:1555 (the loop `for (c…"
+         ],
+         "rankedFindings": [
+          {
+           "severity": "P3",
+           "text": "The committed visual evidence covers only part of the matrix the acceptance names (1440, 1000 and 390 px, light and dark, uk and en). The mid-turn case in src/components/mobile/issue1671Evidence.browser.test.tsx:1555 (the loop `for (const …"
+          }
+         ]
+        },
+        "summary": "Reviewed head <id>, which matches the expected head; it merges cleanly into origin/main <id>/<id> with no overlapping files. On correctness it passes. claudeQueuedPromptUser turns a prompt-mode queued_command into the user record it stands for, and the row lands at the attachment's position. Every row a message record pushes carries the record's engine id, …",
+        "provenance": {},
+        "calls": 1
+       }
+      },
+      {
+       "n": 2,
+       "state": "passed",
+       "effectiveRole": {
+        "roleId": "reviewer",
+        "engine": "claude",
+        "model": "opus",
+        "effort": "high",
+        "access": "read-only",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T22:55:57.279Z",
+       "completedAt": "2026-10-11T23:14:33.299Z",
+       "input": null,
+       "activatedBy": {
+        "stageId": "fix",
+        "attempt": 1,
+        "edge": "pass"
+       },
+       "output": null,
+       "verdict": {
+        "status": "pass"
+       },
+       "error": null,
+       "report": {
+        "seq": 3,
+        "at": "2026-10-11T23:14:08.954Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "pass"
+        },
+        "summary": "Reviewed head <id>, one commit past the expected <id> (test and rows.json only). Merge base is <id>. Lens: correctness, one pass.\n\nCode: claudeQueuedPromptUser maps a prompt-mode queued_command to its user record (source_uuid becomes uuid). renderClaude renders it in place, and context accounting is unchanged. buildSnapshot keeps rows only from the first li…",
+        "provenance": {},
+        "calls": 1
+       }
+      }
+     ]
+    },
+    {
+     "stageId": "fix",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "passed",
+       "effectiveRole": {
+        "roleId": "builder",
+        "engine": "claude",
+        "model": "claude-sonnet-5-5",
+        "effort": "high",
+        "access": "read-write",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T21:30:24.626Z",
+       "completedAt": "2026-10-11T22:55:51.636Z",
+       "input": null,
+       "activatedBy": {
+        "stageId": "review",
+        "attempt": 1,
+        "edge": "fail"
+       },
+       "output": null,
+       "verdict": {
+        "status": "pass"
+       },
+       "error": null,
+       "report": {
+        "seq": 2,
+        "at": "2026-10-11T22:55:38.957Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "pass"
+        },
+        "summary": "Виправлено єдине зауваження P3 (неповне візуальне покриття). Цикл у src/components/mobile/issue1671Evidence.browser.test.tsx тепер проходить темну й світлу схему × en та uk × 1440, 1000 і 390 px. Схема входить в імена кадрів і в кожен запис, тест вимагає рівно 12 записів, тайм-аут піднято зі 120 до 300 с. Запуск через gate-slot з ізольованими HOME, XDG, TMP…",
+        "provenance": {},
+        "calls": 1
+       }
+      }
+     ]
+    },
+    {
+     "stageId": "ui-check",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "passed",
+       "effectiveRole": {
+        "roleId": "visual-critic",
+        "engine": "claude",
+        "model": "opus",
+        "effort": "high",
+        "access": "read-only",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T23:15:13.114Z",
+       "completedAt": "2026-10-11T23:19:21.701Z",
+       "input": null,
+       "activatedBy": {
+        "stageId": "review",
+        "attempt": 2,
+        "edge": "pass"
+       },
+       "output": null,
+       "verdict": {
+        "status": "pass"
+       },
+       "error": null,
+       "report": {
+        "seq": 4,
+        "at": "2026-10-11T23:19:05.548Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "pass"
+        },
+        "summary": "I exported head <id> with git archive into a private /tmp tree, using its own HOME, XDG, TMPDIR and LLV_STATE_DIR, the control URL pointed at a closed port (127.0.0.1:9), and Playwright Chromium. I ran the existing phone driver's case \"messages delivered mid-turn\" (issue1671Evidence.browser.test.tsx) through gate-slot.sh: 1 pass, 469 checks, 24 frames cover…",
+        "provenance": {},
+        "calls": 1
+       }
+      }
+     ]
+    },
+    {
+     "stageId": "ui-fix",
+     "attempts": []
+    }
+   ],
+   "cursor": null,
+   "state": "completed",
+   "pausedState": null,
+   "stateDetail": null,
+   "srcPath": null,
+   "srcConversationId": "a seat conversation",
+   "createdAt": "2026-10-11T21:10:15.099Z",
+   "closedAt": "2026-10-11T23:19:42.481Z",
+   "finishesTaskIds": [
+    "t-midturn-review"
+   ],
+   "merge": {
+    "state": "merged",
+    "by": "auto-merge",
+    "repository": "owner/delegatus",
+    "prNumber": 2749,
+    "reason": null,
+    "requestedAt": "2026-10-11T23:19:42.481Z",
+    "blockedAt": null,
+    "updatedAt": "2026-10-11T23:55:26.466Z",
+    "mergedAt": "2026-10-11T23:55:24Z",
+    "chain": [],
+    "updates": [],
+    "seenChecks": [],
+    "attempts": 0,
+    "readFailures": 0
+   },
+   "stageReports": [
+    {
+     "seq": 1,
+     "at": "2026-10-11T21:28:49.627Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "review",
+     "attempt": 1,
+     "status": "fail",
+     "findings": 1,
+     "replaces": null,
+     "summary": "Reviewed head <id>, which matches the expected head; it merges cleanly into origin/main <id>/<id> with no overlapping files. On correctness it passes. claudeQueuedPromptUser turns a prompt-mode queued_command into the user record it stands for, and the row lands at the attachment's position. Every row a message record pushes carries the record's engine id, …"
+    },
+    {
+     "seq": 2,
+     "at": "2026-10-11T22:55:38.957Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "fix",
+     "attempt": 1,
+     "status": "pass",
+     "findings": 0,
+     "replaces": null,
+     "summary": "Виправлено єдине зауваження P3 (неповне візуальне покриття). Цикл у src/components/mobile/issue1671Evidence.browser.test.tsx тепер проходить темну й світлу схему × en та uk × 1440, 1000 і 390 px. Схема входить в імена кадрів і в кожен запис, тест вимагає рівно 12 записів, тайм-аут піднято зі 120 до 300 с. Запуск через gate-slot з ізольованими HOME, XDG, TMP…"
+    },
+    {
+     "seq": 3,
+     "at": "2026-10-11T23:14:08.954Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "review",
+     "attempt": 2,
+     "status": "pass",
+     "findings": 0,
+     "replaces": null,
+     "summary": "Reviewed head <id>, one commit past the expected <id> (test and rows.json only). Merge base is <id>. Lens: correctness, one pass.\n\nCode: claudeQueuedPromptUser maps a prompt-mode queued_command to its user record (source_uuid becomes uuid). renderClaude renders it in place, and context accounting is unchanged. buildSnapshot keeps rows only from the first li…"
+    },
+    {
+     "seq": 4,
+     "at": "2026-10-11T23:19:05.548Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "ui-check",
+     "attempt": 1,
+     "status": "pass",
+     "findings": 0,
+     "replaces": null,
+     "summary": "I exported head <id> with git archive into a private /tmp tree, using its own HOME, XDG, TMPDIR and LLV_STATE_DIR, the control URL pointed at a closed port (127.0.0.1:9), and Playwright Chromium. I ran the existing phone driver's case \"messages delivered mid-turn\" (issue1671Evidence.browser.test.tsx) through gate-slot.sh: 1 pass, 469 checks, 24 frames cover…"
+    }
+   ]
+  },
+  {
+   "id": "unsafe-root",
+   "task": "Ask in parallel refuses with «could not be forked: unsafe-root» on the operator's second installation: find which root check fails, fix it safely, make the refusal readable",
+   "taskIds": [
+    "t-unsafe-root"
+   ],
+   "project": "delegatus",
+   "repoDir": "/repo",
+   "worktreeDir": "/repo-lane",
+   "branch": "pipeline/sample",
+   "baseBranch": "main",
+   "baseRef": "main",
+   "lastPassedCommit": "",
+   "stages": [
+    {
+     "id": "diagnose",
+     "kind": "run",
+     "role": {
+      "roleId": "prod-auditor"
+     },
+     "next": "build",
+     "onFail": null,
+     "engine": "codex",
+     "prompt": "Stage diagnose.",
+     "effectiveRole": {
+      "roleId": "prod-auditor",
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "xhigh",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "build",
+     "kind": "run",
+     "role": {
+      "roleId": "builder"
+     },
+     "next": "review",
+     "onFail": null,
+     "engine": "codex",
+     "prompt": "Stage build.",
+     "effectiveRole": {
+      "roleId": "builder",
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "access": "read-write",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "review",
+     "kind": "run",
+     "role": {
+      "roleId": "reviewer"
+     },
+     "next": null,
+     "onFail": {
+      "to": "fix",
+      "maxRounds": 3,
+      "onExhausted": "advance"
+     },
+     "engine": "codex",
+     "prompt": "Stage review.",
+     "effectiveRole": {
+      "roleId": "reviewer",
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "xhigh",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "fix",
+     "kind": "run",
+     "role": {
+      "roleId": "builder",
+      "params": {
+       "mode": "apply-fixes"
+      }
+     },
+     "next": "review",
+     "onFail": null,
+     "engine": "codex",
+     "prompt": "Stage fix.",
+     "effectiveRole": {
+      "roleId": "builder",
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "access": "read-write",
+      "promptScaffold": null
+     }
+    }
+   ],
+   "runs": [
+    {
+     "stageId": "diagnose",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "needs_decision",
+       "effectiveRole": {
+        "roleId": "prod-auditor",
+        "engine": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "xhigh",
+        "access": "read-only",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-10T14:40:08.927Z",
+       "completedAt": "2026-10-10T14:48:11.730Z",
+       "input": null,
+       "activatedBy": null,
+       "output": null,
+       "verdict": {
+        "status": "needs_decision"
+       },
+       "error": "stage verdict: needs_decision",
+       "report": {
+        "seq": 1,
+        "at": "2026-10-10T14:47:13.523Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "needs_decision"
+        },
+        "summary": "Потрібен вивід read-only команди з фінального звіту на другій інсталяції, під UID/namespace Viewer, з точним generation.path та версією. Альтернатива: назвати дозволений read-only SSH/mounted endpoint. Рекомендую команду: brief/docs і transcript/memory searches не дали route; попередній orchestrator report прямо вказує відсутність доступу. Layout і failing …",
+        "provenance": {},
+        "calls": 1
+       }
+      }
+     ]
+    },
+    {
+     "stageId": "build",
+     "attempts": []
+    },
+    {
+     "stageId": "review",
+     "attempts": []
+    },
+    {
+     "stageId": "fix",
+     "attempts": []
+    }
+   ],
+   "cursor": {
+    "stageId": "diagnose",
+    "state": "pending",
+    "input": null,
+    "activatedBy": null
+   },
+   "state": "needs_decision",
+   "pausedState": null,
+   "stateDetail": "stage verdict: needs_decision",
+   "srcPath": null,
+   "srcConversationId": "a seat conversation",
+   "createdAt": "2026-10-10T14:40:07.501Z",
+   "closedAt": null,
+   "dismissedAt": "2026-10-12T08:18:26.992Z",
+   "dismissedBy": {
+    "kind": "operator"
+   },
+   "finishesTaskIds": [
+    "t-unsafe-root"
+   ],
+   "stageReports": [
+    {
+     "seq": 1,
+     "at": "2026-10-10T14:47:13.523Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "diagnose",
+     "attempt": 1,
+     "status": "needs_decision",
+     "findings": 0,
+     "replaces": null,
+     "summary": "Потрібен вивід read-only команди з фінального звіту на другій інсталяції, під UID/namespace Viewer, з точним generation.path та версією. Альтернатива: назвати дозволений read-only SSH/mounted endpoint. Рекомендую команду: brief/docs і transcript/memory searches не дали route; попередній orchestrator report прямо вказує відсутність доступу. Layout і failing …"
+    }
+   ]
+  },
+  {
+   "id": "midturn-review",
+   "task": "#2749 messages delivered mid-turn render as sent messages: review, fix, visual check (continues lane <id>, whose review launch was lost in a deploy restart)",
+   "taskIds": [
+    "t-midturn-review"
+   ],
+   "project": "delegatus",
+   "repoDir": "/repo",
+   "worktreeDir": "/repo-lane",
+   "branch": "pipeline/sample",
+   "baseBranch": "main",
+   "baseRef": "main",
+   "lastPassedCommit": "",
+   "stages": [
+    {
+     "id": "review",
+     "kind": "run",
+     "role": {
+      "roleId": "reviewer"
+     },
+     "next": "ui-check",
+     "onFail": {
+      "to": "fix",
+      "maxRounds": 3
+     },
+     "access": "read-only",
+     "prompt": "Stage review.",
+     "effectiveRole": {
+      "roleId": "reviewer",
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "xhigh",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "fix",
+     "kind": "run",
+     "role": {
+      "roleId": "builder",
+      "params": {
+       "domain": "frontend",
+       "mode": "apply-fixes"
+      }
+     },
+     "next": "review",
+     "onFail": null,
+     "engine": "claude",
+     "prompt": "Stage fix.",
+     "effectiveRole": {
+      "roleId": "builder",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "access": "read-write",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "ui-check",
+     "kind": "run",
+     "role": {
+      "roleId": "visual-critic"
+     },
+     "next": null,
+     "onFail": {
+      "to": "fix",
+      "maxRounds": 1
+     },
+     "access": "read-only",
+     "engine": "claude",
+     "prompt": "Stage ui-check.",
+     "effectiveRole": {
+      "roleId": "visual-critic",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    }
+   ],
+   "runs": [
+    {
+     "stageId": "review",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "failed",
+       "effectiveRole": {
+        "roleId": "reviewer",
+        "engine": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "xhigh",
+        "access": "read-only",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T14:16:44.595Z",
+       "completedAt": "2026-10-11T15:05:23.473Z",
+       "input": null,
+       "activatedBy": null,
+       "output": null,
+       "verdict": {
+        "status": "fail",
+        "findings": [
+         "P2 — src/components/feed/parse.ts:3931: дедуплікація охоплює лише SDK-рядки kind=\"sysmsg\" з deliveredMessage. Якщо queued_command і звичайний запис користувача мають однакові attachment.source_uuid / uuid та текст, звичайний запис без prom…"
+        ],
+        "rankedFindings": [
+         {
+          "severity": "P2",
+          "text": "src/components/feed/parse.ts:3931: дедуплікація охоплює лише SDK-рядки kind=\"sysmsg\" з deliveredMessage. Якщо queued_command і звичайний запис користувача мають однакові attachment.source_uuid / uuid та текст, звичайний запис без promptSou…"
+         }
+        ]
+       },
+       "error": null,
+       "report": {
+        "seq": 2,
+        "at": "2026-10-11T15:04:56.823Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "fail",
+         "findings": [
+          "P2 — src/components/feed/parse.ts:3931: дедуплікація охоплює лише SDK-рядки kind=\"sysmsg\" з deliveredMessage. Якщо queued_command і звичайний запис користувача мають однакові attachment.source_uuid / uuid та текст, звичайний запис без prom…"
+         ],
+         "rankedFindings": [
+          {
+           "severity": "P2",
+           "text": "src/components/feed/parse.ts:3931: дедуплікація охоплює лише SDK-рядки kind=\"sysmsg\" з deliveredMessage. Якщо queued_command і звичайний запис користувача мають однакові attachment.source_uuid / uuid та текст, звичайний запис без promptSou…"
+          }
+         ]
+        },
+        "summary": "Перевірено всю зміну проти прикріпленої специфікації; один блокувальний P2 щодо «рівно один раз». Усі 349 постійних тестів на перевіреній ревізії та 340 на захопленій базі пройшли; повні JUnit-звіти порівняно функціями проєктного local-gate-tests. Чотири незалежні перевірки одного дефекту Claude проходять на базі та падають на ревізії; окремі однакові надси…",
+        "provenance": {},
+        "calls": 2
+       }
+      },
+      {
+       "n": 2,
+       "state": "failed",
+       "effectiveRole": {
+        "roleId": "reviewer",
+        "engine": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "xhigh",
+        "access": "read-only",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T16:22:31.260Z",
+       "completedAt": "2026-10-11T16:36:22.409Z",
+       "input": null,
+       "activatedBy": {
+        "stageId": "fix",
+        "attempt": 1,
+        "edge": "pass"
+       },
+       "output": null,
+       "verdict": null,
+       "error": "interrupted by a Delegatus restart; replaced by a fresh stage attempt"
+      },
+      {
+       "n": 3,
+       "state": "needs_decision",
+       "effectiveRole": {
+        "roleId": "reviewer",
+        "engine": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "xhigh",
+        "access": "read-only",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T16:49:56.408Z",
+       "completedAt": "2026-10-11T18:37:14.737Z",
+       "input": null,
+       "activatedBy": {
+        "stageId": "fix",
+        "attempt": 1,
+        "edge": "pass"
+       },
+       "output": null,
+       "verdict": null,
+       "error": "provider transport recovery exhausted after 10 minutes; recovery after aborted stage turn: automatic continuation unavailable: recipient is not ready for an idle continuation (host=hosted, turn=idle, active turn=false, attention=0, retirement blocked=true)"
+      }
+     ]
+    },
+    {
+     "stageId": "fix",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "passed",
+       "effectiveRole": {
+        "roleId": "builder",
+        "engine": "claude",
+        "model": "opus",
+        "effort": "high",
+        "access": "read-write",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-11T15:11:48.628Z",
+       "completedAt": "2026-10-11T16:08:17.857Z",
+       "input": null,
+       "activatedBy": {
+        "stageId": "review",
+        "attempt": 1,
+        "edge": "fail"
+       },
+       "output": null,
+       "verdict": {
+        "status": "pass"
+       },
+       "error": null,
+       "report": {
+        "seq": 3,
+        "at": "2026-10-11T16:07:47.555Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "pass"
+        },
+        "summary": "P2 виправлено (src/components/feed/parse.ts): кожен рядок, який Claude-запис повідомлення додає зі свого тексту чи зображень (user, sysmsg, tmsg, inbox-image), тепер несе engine id запису (uuid / source_uuid queued_command) у полі StoredEntry.deliveryId. buildSnapshot залишає рядки лише першого запису у вікні з цим id, незалежно від виду рядка; частини одно…",
+        "provenance": {},
+        "calls": 1
+       }
+      }
+     ]
+    },
+    {
+     "stageId": "ui-check",
+     "attempts": []
+    }
+   ],
+   "cursor": {
+    "stageId": "review",
+    "state": "running",
+    "input": null,
+    "activatedBy": null
+   },
+   "state": "needs_decision",
+   "pausedState": null,
+   "stateDetail": "provider transport recovery exhausted after 10 minutes; recovery after aborted stage turn: automatic continuation unavailable: recipient is not ready for an idle continuation (host=hosted, turn=idle, active turn=false, attention=0, retirement blocked=true)",
+   "srcPath": null,
+   "srcConversationId": "a seat conversation",
+   "createdAt": "2026-10-11T14:09:45.000Z",
+   "closedAt": null,
+   "finishesTaskIds": [
+    "t-midturn-review"
+   ],
+   "stageReports": [
+    {
+     "seq": 1,
+     "at": "2026-10-11T14:59:15.137Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "review",
+     "attempt": 1,
+     "status": "fail",
+     "findings": 1,
+     "replaces": null,
+     "summary": "Знайдено один блокувальний P2 щодо вимоги «рівно один раз». Перевірки parser і contextTokens на базі та перевіреній ревізії пройшли; tsc чистий. Незалежна перевірка Codex підтвердила порядок і поглинання повторних записів посеред активного ходу; для Claude доведено чотири варіанти одного дефекту. Кадри автора в en/uk на 1440 і 390 px перевірено візуально, к…"
+    },
+    {
+     "seq": 2,
+     "at": "2026-10-11T15:04:56.823Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "review",
+     "attempt": 1,
+     "status": "fail",
+     "findings": 1,
+     "replaces": 1,
+     "summary": "Перевірено всю зміну проти прикріпленої специфікації; один блокувальний P2 щодо «рівно один раз». Усі 349 постійних тестів на перевіреній ревізії та 340 на захопленій базі пройшли; повні JUnit-звіти порівняно функціями проєктного local-gate-tests. Чотири незалежні перевірки одного дефекту Claude проходять на базі та падають на ревізії; окремі однакові надси…"
+    },
+    {
+     "seq": 3,
+     "at": "2026-10-11T16:07:47.555Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "fix",
+     "attempt": 1,
+     "status": "pass",
+     "findings": 0,
+     "replaces": null,
+     "summary": "P2 виправлено (src/components/feed/parse.ts): кожен рядок, який Claude-запис повідомлення додає зі свого тексту чи зображень (user, sysmsg, tmsg, inbox-image), тепер несе engine id запису (uuid / source_uuid queued_command) у полі StoredEntry.deliveryId. buildSnapshot залишає рядки лише першого запису у вікні з цим id, незалежно від виду рядка; частини одно…"
+    }
+   ]
+  },
+  {
+   "id": "activity-truth",
+   "task": "Agent activity tells the truth: working, waiting on a check, or idle N minutes — on every running agent, and the seat is woken when one is truly idle",
+   "taskIds": [
+    "t-activity-truth"
+   ],
+   "project": "delegatus",
+   "repoDir": "/repo",
+   "worktreeDir": "/repo-lane",
+   "branch": "pipeline/sample",
+   "baseBranch": "main",
+   "baseRef": "main",
+   "lastPassedCommit": "",
+   "stages": [
+    {
+     "id": "diagnose",
+     "kind": "run",
+     "role": {
+      "roleId": "architect"
+     },
+     "next": "build",
+     "onFail": null,
+     "engine": "claude",
+     "prompt": "Stage diagnose.",
+     "effectiveRole": {
+      "roleId": "architect",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "build",
+     "kind": "run",
+     "role": {
+      "roleId": "builder"
+     },
+     "next": "review",
+     "onFail": null,
+     "prompt": "Stage build.",
+     "effectiveRole": {
+      "roleId": "builder",
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "access": "read-write",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "review",
+     "kind": "run",
+     "role": {
+      "roleId": "reviewer"
+     },
+     "next": "ui-check",
+     "onFail": {
+      "to": "fix",
+      "maxRounds": 2,
+      "onExhausted": "advance"
+     },
+     "prompt": "Stage review.",
+     "effectiveRole": {
+      "roleId": "reviewer",
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "xhigh",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "fix",
+     "kind": "run",
+     "role": {
+      "roleId": "builder",
+      "params": {
+       "mode": "apply-fixes"
+      }
+     },
+     "next": "review",
+     "onFail": null,
+     "prompt": "Stage fix.",
+     "effectiveRole": {
+      "roleId": "builder",
+      "engine": "codex",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "access": "read-write",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "ui-check",
+     "kind": "run",
+     "role": {
+      "roleId": "visual-critic"
+     },
+     "next": null,
+     "onFail": {
+      "to": "ui-fix",
+      "maxRounds": 1,
+      "onExhausted": "advance"
+     },
+     "prompt": "Stage ui-check.",
+     "effectiveRole": {
+      "roleId": "visual-critic",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "ui-fix",
+     "kind": "run",
+     "role": {
+      "roleId": "builder",
+      "params": {
+       "mode": "apply-fixes",
+       "domain": "frontend"
+      }
+     },
+     "next": "ui-check",
+     "onFail": null,
+     "prompt": "Stage ui-fix.",
+     "effectiveRole": {
+      "roleId": "builder",
+      "engine": "claude",
+      "model": "claude-sonnet-5-5",
+      "effort": "high",
+      "access": "read-write",
+      "promptScaffold": null
+     }
+    }
+   ],
+   "runs": [
+    {
+     "stageId": "diagnose",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "passed",
+       "effectiveRole": {
+        "roleId": "architect",
+        "engine": "claude",
+        "model": "opus",
+        "effort": "high",
+        "access": "read-only",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-12T05:48:02.569Z",
+       "completedAt": "2026-10-12T06:27:46.198Z",
+       "input": null,
+       "activatedBy": null,
+       "output": null,
+       "verdict": {
+        "status": "pass"
+       },
+       "error": null,
+       "report": {
+        "seq": 1,
+        "at": "2026-10-12T06:26:58.822Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "pass"
+        },
+        "summary": "docs/design/true-agent-activity.md, against <id> (origin/main has not touched any cited file).\n\nCause: agent_activity runs in each agent's own MCP process, whose catalog refreshes only when called. The seat's MCP log shows its previous call at 00:54:06Z. At 05:45:28Z the catalog wait passed 650 ms, so rows came from the 00:54 catalog (inventorySelection.ts:…",
+        "provenance": {},
+        "calls": 1
+       }
+      }
+     ]
+    },
+    {
+     "stageId": "build",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "running",
+       "effectiveRole": {
+        "roleId": "builder",
+        "engine": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "access": "read-write",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-12T06:28:44.793Z",
+       "completedAt": null,
+       "input": null,
+       "activatedBy": {
+        "stageId": "diagnose",
+        "attempt": 1,
+        "edge": "pass"
+       },
+       "output": null,
+       "verdict": null,
+       "error": null
+      }
+     ]
+    },
+    {
+     "stageId": "review",
+     "attempts": []
+    },
+    {
+     "stageId": "fix",
+     "attempts": []
+    },
+    {
+     "stageId": "ui-check",
+     "attempts": []
+    },
+    {
+     "stageId": "ui-fix",
+     "attempts": []
+    }
+   ],
+   "cursor": {
+    "stageId": "build",
+    "state": "running",
+    "input": null,
+    "activatedBy": null
+   },
+   "state": "running",
+   "pausedState": null,
+   "stateDetail": null,
+   "srcPath": null,
+   "srcConversationId": "a seat conversation",
+   "createdAt": "2026-10-12T05:46:54.060Z",
+   "closedAt": null,
+   "finishesTaskIds": [
+    "t-activity-truth"
+   ],
+   "stageReports": [
+    {
+     "seq": 1,
+     "at": "2026-10-12T06:26:58.822Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "diagnose",
+     "attempt": 1,
+     "status": "pass",
+     "findings": 0,
+     "replaces": null,
+     "summary": "docs/design/true-agent-activity.md, against <id> (origin/main has not touched any cited file).\n\nCause: agent_activity runs in each agent's own MCP process, whose catalog refreshes only when called. The seat's MCP log shows its previous call at 00:54:06Z. At 05:45:28Z the catalog wait passed 650 ms, so rows came from the 00:54 catalog (inventorySelection.ts:…"
+    }
+   ]
+  },
+  {
+   "id": "reject-redo",
+   "task": "Prototype reviews: a «Reject and redo» answer with dictated or typed corrections that opens a new round, and a visual-critic gate before any prototype reaches the operator — design and prototype",
+   "taskIds": [
+    "t-reject-redo"
+   ],
+   "project": "delegatus",
+   "repoDir": "/repo",
+   "worktreeDir": "/repo-lane",
+   "branch": "pipeline/sample",
+   "baseBranch": "main",
+   "baseRef": "main",
+   "lastPassedCommit": "",
+   "stages": [
+    {
+     "id": "prototype",
+     "kind": "run",
+     "role": {
+      "roleId": "architect"
+     },
+     "next": "critic",
+     "onFail": null,
+     "engine": "claude",
+     "prompt": "Stage prototype.",
+     "effectiveRole": {
+      "roleId": "architect",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "critic",
+     "kind": "run",
+     "role": {
+      "roleId": "visual-critic"
+     },
+     "next": "publish",
+     "onFail": {
+      "to": "proto-fix",
+      "maxRounds": 2,
+      "onExhausted": "advance"
+     },
+     "prompt": "Stage critic.",
+     "effectiveRole": {
+      "roleId": "visual-critic",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "proto-fix",
+     "kind": "run",
+     "role": {
+      "roleId": "architect"
+     },
+     "next": "critic",
+     "onFail": null,
+     "engine": "claude",
+     "prompt": "Stage proto-fix.",
+     "effectiveRole": {
+      "roleId": "architect",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "publish",
+     "kind": "run",
+     "role": {
+      "roleId": "architect"
+     },
+     "next": null,
+     "onFail": null,
+     "engine": "claude",
+     "prompt": "Stage publish.",
+     "effectiveRole": {
+      "roleId": "architect",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "medium",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    }
+   ],
+   "runs": [
+    {
+     "stageId": "prototype",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "needs_decision",
+       "effectiveRole": {
+        "roleId": "architect",
+        "engine": "claude",
+        "model": "opus",
+        "effort": "high",
+        "access": "read-only",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-12T08:18:03.101Z",
+       "completedAt": null,
+       "input": null,
+       "activatedBy": null,
+       "output": null,
+       "verdict": {
+        "status": "pass"
+       },
+       "error": "committing the passed stage: pre-commit: staged whitespace\npre-commit: privacy\nPRIVACY GATE: PASS\npre-commit: eslint\neslint: Cannot find module 'eslint/package.json'\nRequire stack:\n- $HOME/…\npre-commit: bash failed (1); gate failed\nThe stage was asked once to repair its files and reported it cannot: The pre-commit refusal is environmental: the pipeline worktree has no node_modules, so the eslint …",
+       "report": {
+        "seq": 1,
+        "at": "2026-10-12T08:44:11.342Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "pass"
+        },
+        "summary": "Design doc docs/design/prototype-reject-and-critic-gate.md written (quote verbatim, code-grounded, options, Deferred). Part A: decision gets rejected?:true, decidePrototype admits reject without ticks but requires corrections; the message to the seat names round N+1 and the publishing pipeline (the pipeline has ended by decision time, so the seat is woken v…",
+        "provenance": {},
+        "calls": 1
+       }
+      }
+     ]
+    },
+    {
+     "stageId": "critic",
+     "attempts": []
+    },
+    {
+     "stageId": "proto-fix",
+     "attempts": []
+    },
+    {
+     "stageId": "publish",
+     "attempts": []
+    }
+   ],
+   "cursor": {
+    "stageId": "prototype",
+    "state": "committing",
+    "input": null,
+    "activatedBy": null
+   },
+   "state": "needs_decision",
+   "pausedState": null,
+   "stateDetail": "committing the passed stage: pre-commit: staged whitespace\npre-commit: privacy\nPRIVACY GATE: PASS\npre-commit: eslint\neslint: Cannot find module 'eslint/package.json'\nRequire stack:\n- $HOME/…\npre-commit: bash failed (1); gate failed\nThe stage was asked once to repair its files and reported it cannot: The pre-commit refusal is environmental: the pipeline worktree has no node_modules, so the eslint …",
+   "srcPath": null,
+   "srcConversationId": "a seat conversation",
+   "createdAt": "2026-10-12T08:17:19.424Z",
+   "closedAt": null,
+   "stageReports": [
+    {
+     "seq": 1,
+     "at": "2026-10-12T08:44:11.342Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "prototype",
+     "attempt": 1,
+     "status": "pass",
+     "findings": 0,
+     "replaces": null,
+     "summary": "Design doc docs/design/prototype-reject-and-critic-gate.md written (quote verbatim, code-grounded, options, Deferred). Part A: decision gets rejected?:true, decidePrototype admits reject without ticks but requires corrections; the message to the seat names round N+1 and the publishing pipeline (the pipeline has ended by decision time, so the seat is woken v…"
+    }
+   ]
+  },
+  {
+   "id": "voice-head",
+   "task": "Phone voice Delegatus prototype: the floating head with flying words, always on screen across navigation, fully hideable and restorable from the menu",
+   "taskIds": [
+    "t-voice-head"
+   ],
+   "project": "delegatus",
+   "repoDir": "/repo",
+   "worktreeDir": "/repo-lane",
+   "branch": "pipeline/sample",
+   "baseBranch": "main",
+   "baseRef": "main",
+   "lastPassedCommit": "",
+   "stages": [
+    {
+     "id": "prototype",
+     "kind": "run",
+     "role": {
+      "roleId": "architect"
+     },
+     "next": "critic",
+     "onFail": null,
+     "engine": "claude",
+     "prompt": "Stage prototype.",
+     "effectiveRole": {
+      "roleId": "architect",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "critic",
+     "kind": "run",
+     "role": {
+      "roleId": "visual-critic"
+     },
+     "next": "publish",
+     "onFail": {
+      "to": "proto-fix",
+      "maxRounds": 2,
+      "onExhausted": "advance"
+     },
+     "prompt": "Stage critic.",
+     "effectiveRole": {
+      "roleId": "visual-critic",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "proto-fix",
+     "kind": "run",
+     "role": {
+      "roleId": "architect"
+     },
+     "next": "critic",
+     "onFail": null,
+     "engine": "claude",
+     "prompt": "Stage proto-fix.",
+     "effectiveRole": {
+      "roleId": "architect",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "publish",
+     "kind": "run",
+     "role": {
+      "roleId": "architect"
+     },
+     "next": null,
+     "onFail": null,
+     "engine": "claude",
+     "prompt": "Stage publish.",
+     "effectiveRole": {
+      "roleId": "architect",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "medium",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    }
+   ],
+   "runs": [
+    {
+     "stageId": "prototype",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "needs_decision",
+       "effectiveRole": {
+        "roleId": "architect",
+        "engine": "claude",
+        "model": "opus",
+        "effort": "high",
+        "access": "read-only",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-12T09:04:09.308Z",
+       "completedAt": null,
+       "input": null,
+       "activatedBy": null,
+       "output": null,
+       "verdict": {
+        "status": "pass"
+       },
+       "error": "committing the passed stage: command timed out after 60000ms: pre-commit: staged whitespace\npre-commit: privacy\nPRIVACY GATE: PASS\npre-commit: eslint\nThe stage was asked once to repair its files and reported it cannot: The refusal is a 60 s commit timeout inside the hook's eslint step, not a defect in this stage's files. Whitespace and privacy passed. scripts/local-gate.ts:71 runs eslint as a cap…",
+       "report": {
+        "seq": 1,
+        "at": "2026-10-12T10:10:18.764Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "pass"
+        },
+        "summary": "Прототип готовий, НЕ опубліковано. Усе в docs/design/mobile-voice-floating: README.md (причина, варіанти, самоперевірка, питання), PhoneVoiceHead.tsx, harness/, geometry.json, FRAMES.md.\n\nПричина: свідомий вимикач. VoiceCompanionHost.tsx:27,29,34 — на телефоні налаштування не читаються і повертається null (рішення #2519, «Never on the phone», тест voiceComp…",
+        "provenance": {},
+        "calls": 1
+       }
+      }
+     ]
+    },
+    {
+     "stageId": "critic",
+     "attempts": []
+    },
+    {
+     "stageId": "proto-fix",
+     "attempts": []
+    },
+    {
+     "stageId": "publish",
+     "attempts": []
+    }
+   ],
+   "cursor": {
+    "stageId": "prototype",
+    "state": "committing",
+    "input": null,
+    "activatedBy": null
+   },
+   "state": "needs_decision",
+   "pausedState": null,
+   "stateDetail": "committing the passed stage: command timed out after 60000ms: pre-commit: staged whitespace\npre-commit: privacy\nPRIVACY GATE: PASS\npre-commit: eslint\nThe stage was asked once to repair its files and reported it cannot: The refusal is a 60 s commit timeout inside the hook's eslint step, not a defect in this stage's files. Whitespace and privacy passed. scripts/local-gate.ts:71 runs eslint as a cap…",
+   "srcPath": null,
+   "srcConversationId": "a seat conversation",
+   "createdAt": "2026-10-12T09:03:21.040Z",
+   "closedAt": null,
+   "stageReports": [
+    {
+     "seq": 1,
+     "at": "2026-10-12T10:10:18.764Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "prototype",
+     "attempt": 1,
+     "status": "pass",
+     "findings": 0,
+     "replaces": null,
+     "summary": "Прототип готовий, НЕ опубліковано. Усе в docs/design/mobile-voice-floating: README.md (причина, варіанти, самоперевірка, питання), PhoneVoiceHead.tsx, harness/, geometry.json, FRAMES.md.\n\nПричина: свідомий вимикач. VoiceCompanionHost.tsx:27,29,34 — на телефоні налаштування не читаються і повертається null (рішення #2519, «Never on the phone», тест voiceComp…"
+    }
+   ]
+  },
+  {
+   "id": "reject-redo-fix",
+   "task": "Reject-and-redo prototype: visual critic over all 3 variants, fixes, then publish (continues lane <id>, whose output commit is stuck)",
+   "taskIds": [
+    "t-reject-redo"
+   ],
+   "project": "delegatus",
+   "repoDir": "/repo",
+   "worktreeDir": "/repo-lane",
+   "branch": "pipeline/sample",
+   "baseBranch": "main",
+   "baseRef": "main",
+   "lastPassedCommit": "",
+   "stages": [
+    {
+     "id": "critic",
+     "kind": "run",
+     "role": {
+      "roleId": "visual-critic"
+     },
+     "next": "publish",
+     "onFail": {
+      "to": "proto-fix",
+      "maxRounds": 2,
+      "onExhausted": "advance"
+     },
+     "prompt": "Stage critic.",
+     "effectiveRole": {
+      "roleId": "visual-critic",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "proto-fix",
+     "kind": "run",
+     "role": {
+      "roleId": "architect"
+     },
+     "next": "critic",
+     "onFail": null,
+     "engine": "claude",
+     "prompt": "Stage proto-fix.",
+     "effectiveRole": {
+      "roleId": "architect",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "high",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "publish",
+     "kind": "run",
+     "role": {
+      "roleId": "architect"
+     },
+     "next": null,
+     "onFail": null,
+     "engine": "claude",
+     "prompt": "Stage publish.",
+     "effectiveRole": {
+      "roleId": "architect",
+      "engine": "claude",
+      "model": "opus",
+      "effort": "medium",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    }
+   ],
+   "runs": [
+    {
+     "stageId": "critic",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "failed",
+       "effectiveRole": {
+        "roleId": "visual-critic",
+        "engine": "claude",
+        "model": "opus",
+        "effort": "high",
+        "access": "read-only",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-12T09:12:20.119Z",
+       "completedAt": "2026-10-12T09:15:43.941Z",
+       "input": null,
+       "activatedBy": null,
+       "output": null,
+       "verdict": {
+        "status": "fail",
+        "findings": [
+         "P1 — All variants, every frame in uk (1440 and 390, light and dark, every state): the review header shows the task line in English, «Restore search results after the index rebuild», beside Ukrainian text («Огляд прототипів · …» at 1440, «М…",
+         "P1 — Variant 1, 1440 and 390, uk and en, light and dark, states rest / armed / asks (variant-1-*-rest-changed, -armed-changed, -asks): the only filled violet control is the disabled «Зберегти вибір», while «Відхилити й переробити» is a whi…",
+         "P1 — All variants, 390, uk and en, light and dark, state asks (variant-{1,2,3}-390-*-asks): the message «Спершу напишіть або надиктуйте, що переробити» sits under the action buttons, flush against the bottom edge of the sheet, one to two r…",
+         "P2 — Variant 1, 390, uk and en, light and dark (variant-1-390-*-rest-changed, -armed-changed, -asks): the footer becomes three large buttons in two rows, a full-width white «Відхилити й переробити» above white «Сховати» and the disabled vi…",
+         "P2 — Variant 1, 1440 and 390, all languages and themes, states rest and asks: the corrections field keeps the placeholder «Що змінити або додати…» even after reject was pressed (variant-1-*-asks), while variants 2 and 3 switch to «Що перер…",
+         "P2 — All variants, 1440 and 390, all languages and themes: voice input is a faint 16 px grey microphone in the bottom-right corner of the field, with no label, and it looks the same in redo mode. The operator asked specifically where to di…",
+         "P2 — Variants 2 and 3, 390, uk and en, light and dark, states armed and asks (variant-{2,3}-390-*-armed-changed, -asks): with «Переробити все» / «Жоден не підходить» active, the «Обрати» button still sits beside the variant description, an…",
+         "P2 — Variant 3, 1440, uk and en, light and dark, all open states (variant-3-1440-*-rest-changed, -armed-changed, -asks): the «Жоден не підходить» toggle is at the far right of the footer, about 1000 px from the «Обрано» line it changes. Ex…",
+         "P2 — Variant 3, rest state, 1440 and 390, uk and en (variant-3-*-rest-changed): the «Жоден не підходить» chip looks disabled, a pale grey pill with a barely visible empty box; in dark it almost merges with the panel. At 390 uk it drops to …",
+         "P2 — Variant 2, rest state, 390 uk and en, light and dark (variant-2-390-*-rest-changed) and 1440 (variant-2-1440-*-rest-changed): the footer gains a segmented control «Обрати варіант / Переробити все» directly above or beside «Обрано поки…",
+         "P3 — Variants 2 and 3, 1440 and 390, all languages and themes, armed and asks: «Відхилити й переробити» replaces «Зберегти вибір» in the same place with the same violet fill, so reject and choose differ only by icon and label. Expected: a …",
+         "P3 — All variants, rejected state, 1440 and 390, all languages and themes (variant-{1,2,3}-*-rejected): the footer says «Відхилено · далі раунд 2» and two lines below «Поправки доставлено · оркестратор готує раунд 2», the same fact twice. …"
+        ],
+        "rankedFindings": [
+         {
+          "severity": "P1",
+          "text": "All variants, every frame in uk (1440 and 390, light and dark, every state): the review header shows the task line in English, «Restore search results after the index rebuild», beside Ukrainian text («Огляд прототипів · …» at 1440, «Макет …"
+         },
+         {
+          "severity": "P1",
+          "text": "Variant 1, 1440 and 390, uk and en, light and dark, states rest / armed / asks (variant-1-*-rest-changed, -armed-changed, -asks): the only filled violet control is the disabled «Зберегти вибір», while «Відхилити й переробити» is a white ou…"
+         },
+         {
+          "severity": "P1",
+          "text": "All variants, 390, uk and en, light and dark, state asks (variant-{1,2,3}-390-*-asks): the message «Спершу напишіть або надиктуйте, що переробити» sits under the action buttons, flush against the bottom edge of the sheet, one to two rows a…"
+         },
+         {
+          "severity": "P2",
+          "text": "Variant 1, 390, uk and en, light and dark (variant-1-390-*-rest-changed, -armed-changed, -asks): the footer becomes three large buttons in two rows, a full-width white «Відхилити й переробити» above white «Сховати» and the disabled violet …"
+         },
+         {
+          "severity": "P2",
+          "text": "Variant 1, 1440 and 390, all languages and themes, states rest and asks: the corrections field keeps the placeholder «Що змінити або додати…» even after reject was pressed (variant-1-*-asks), while variants 2 and 3 switch to «Що переробити…"
+         },
+         {
+          "severity": "P2",
+          "text": "All variants, 1440 and 390, all languages and themes: voice input is a faint 16 px grey microphone in the bottom-right corner of the field, with no label, and it looks the same in redo mode. The operator asked specifically where to dictate…"
+         },
+         {
+          "severity": "P2",
+          "text": "Variants 2 and 3, 390, uk and en, light and dark, states armed and asks (variant-{2,3}-390-*-armed-changed, -asks): with «Переробити все» / «Жоден не підходить» active, the «Обрати» button still sits beside the variant description, and at …"
+         },
+         {
+          "severity": "P2",
+          "text": "Variant 3, 1440, uk and en, light and dark, all open states (variant-3-1440-*-rest-changed, -armed-changed, -asks): the «Жоден не підходить» toggle is at the far right of the footer, about 1000 px from the «Обрано» line it changes. Expecte…"
+         },
+         {
+          "severity": "P2",
+          "text": "Variant 3, rest state, 1440 and 390, uk and en (variant-3-*-rest-changed): the «Жоден не підходить» chip looks disabled, a pale grey pill with a barely visible empty box; in dark it almost merges with the panel. At 390 uk it drops to its o…"
+         },
+         {
+          "severity": "P2",
+          "text": "Variant 2, rest state, 390 uk and en, light and dark (variant-2-390-*-rest-changed) and 1440 (variant-2-1440-*-rest-changed): the footer gains a segmented control «Обрати варіант / Переробити все» directly above or beside «Обрано поки нічо…"
+         },
+         {
+          "severity": "P3",
+          "text": "Variants 2 and 3, 1440 and 390, all languages and themes, armed and asks: «Відхилити й переробити» replaces «Зберегти вибір» in the same place with the same violet fill, so reject and choose differ only by icon and label. Expected: a visib…"
+         },
+         {
+          "severity": "P3",
+          "text": "All variants, rejected state, 1440 and 390, all languages and themes (variant-{1,2,3}-*-rejected): the footer says «Відхилено · далі раунд 2» and two lines below «Поправки доставлено · оркестратор готує раунд 2», the same fact twice. Expec…"
+         }
+        ]
+       },
+       "error": null,
+       "report": {
+        "seq": 1,
+        "at": "2026-10-12T09:15:20.956Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "fail",
+         "findings": [
+          "P1 — All variants, every frame in uk (1440 and 390, light and dark, every state): the review header shows the task line in English, «Restore search results after the index rebuild», beside Ukrainian text («Огляд прототипів · …» at 1440, «М…",
+          "P1 — Variant 1, 1440 and 390, uk and en, light and dark, states rest / armed / asks (variant-1-*-rest-changed, -armed-changed, -asks): the only filled violet control is the disabled «Зберегти вибір», while «Відхилити й переробити» is a whi…",
+          "P1 — All variants, 390, uk and en, light and dark, state asks (variant-{1,2,3}-390-*-asks): the message «Спершу напишіть або надиктуйте, що переробити» sits under the action buttons, flush against the bottom edge of the sheet, one to two r…",
+          "P2 — Variant 1, 390, uk and en, light and dark (variant-1-390-*-rest-changed, -armed-changed, -asks): the footer becomes three large buttons in two rows, a full-width white «Відхилити й переробити» above white «Сховати» and the disabled vi…",
+          "P2 — Variant 1, 1440 and 390, all languages and themes, states rest and asks: the corrections field keeps the placeholder «Що змінити або додати…» even after reject was pressed (variant-1-*-asks), while variants 2 and 3 switch to «Що перер…",
+          "P2 — All variants, 1440 and 390, all languages and themes: voice input is a faint 16 px grey microphone in the bottom-right corner of the field, with no label, and it looks the same in redo mode. The operator asked specifically where to di…",
+          "P2 — Variants 2 and 3, 390, uk and en, light and dark, states armed and asks (variant-{2,3}-390-*-armed-changed, -asks): with «Переробити все» / «Жоден не підходить» active, the «Обрати» button still sits beside the variant description, an…",
+          "P2 — Variant 3, 1440, uk and en, light and dark, all open states (variant-3-1440-*-rest-changed, -armed-changed, -asks): the «Жоден не підходить» toggle is at the far right of the footer, about 1000 px from the «Обрано» line it changes. Ex…",
+          "P2 — Variant 3, rest state, 1440 and 390, uk and en (variant-3-*-rest-changed): the «Жоден не підходить» chip looks disabled, a pale grey pill with a barely visible empty box; in dark it almost merges with the panel. At 390 uk it drops to …",
+          "P2 — Variant 2, rest state, 390 uk and en, light and dark (variant-2-390-*-rest-changed) and 1440 (variant-2-1440-*-rest-changed): the footer gains a segmented control «Обрати варіант / Переробити все» directly above or beside «Обрано поки…",
+          "P3 — Variants 2 and 3, 1440 and 390, all languages and themes, armed and asks: «Відхилити й переробити» replaces «Зберегти вибір» in the same place with the same violet fill, so reject and choose differ only by icon and label. Expected: a …",
+          "P3 — All variants, rejected state, 1440 and 390, all languages and themes (variant-{1,2,3}-*-rejected): the footer says «Відхилено · далі раунд 2» and two lines below «Поправки доставлено · оркестратор готує раунд 2», the same fact twice. …"
+         ],
+         "rankedFindings": [
+          {
+           "severity": "P1",
+           "text": "All variants, every frame in uk (1440 and 390, light and dark, every state): the review header shows the task line in English, «Restore search results after the index rebuild», beside Ukrainian text («Огляд прототипів · …» at 1440, «Макет …"
+          },
+          {
+           "severity": "P1",
+           "text": "Variant 1, 1440 and 390, uk and en, light and dark, states rest / armed / asks (variant-1-*-rest-changed, -armed-changed, -asks): the only filled violet control is the disabled «Зберегти вибір», while «Відхилити й переробити» is a white ou…"
+          },
+          {
+           "severity": "P1",
+           "text": "All variants, 390, uk and en, light and dark, state asks (variant-{1,2,3}-390-*-asks): the message «Спершу напишіть або надиктуйте, що переробити» sits under the action buttons, flush against the bottom edge of the sheet, one to two rows a…"
+          },
+          {
+           "severity": "P2",
+           "text": "Variant 1, 390, uk and en, light and dark (variant-1-390-*-rest-changed, -armed-changed, -asks): the footer becomes three large buttons in two rows, a full-width white «Відхилити й переробити» above white «Сховати» and the disabled violet …"
+          },
+          {
+           "severity": "P2",
+           "text": "Variant 1, 1440 and 390, all languages and themes, states rest and asks: the corrections field keeps the placeholder «Що змінити або додати…» even after reject was pressed (variant-1-*-asks), while variants 2 and 3 switch to «Що переробити…"
+          },
+          {
+           "severity": "P2",
+           "text": "All variants, 1440 and 390, all languages and themes: voice input is a faint 16 px grey microphone in the bottom-right corner of the field, with no label, and it looks the same in redo mode. The operator asked specifically where to dictate…"
+          },
+          {
+           "severity": "P2",
+           "text": "Variants 2 and 3, 390, uk and en, light and dark, states armed and asks (variant-{2,3}-390-*-armed-changed, -asks): with «Переробити все» / «Жоден не підходить» active, the «Обрати» button still sits beside the variant description, and at …"
+          },
+          {
+           "severity": "P2",
+           "text": "Variant 3, 1440, uk and en, light and dark, all open states (variant-3-1440-*-rest-changed, -armed-changed, -asks): the «Жоден не підходить» toggle is at the far right of the footer, about 1000 px from the «Обрано» line it changes. Expecte…"
+          },
+          {
+           "severity": "P2",
+           "text": "Variant 3, rest state, 1440 and 390, uk and en (variant-3-*-rest-changed): the «Жоден не підходить» chip looks disabled, a pale grey pill with a barely visible empty box; in dark it almost merges with the panel. At 390 uk it drops to its o…"
+          },
+          {
+           "severity": "P2",
+           "text": "Variant 2, rest state, 390 uk and en, light and dark (variant-2-390-*-rest-changed) and 1440 (variant-2-1440-*-rest-changed): the footer gains a segmented control «Обрати варіант / Переробити все» directly above or beside «Обрано поки нічо…"
+          },
+          {
+           "severity": "P3",
+           "text": "Variants 2 and 3, 1440 and 390, all languages and themes, armed and asks: «Відхилити й переробити» replaces «Зберегти вибір» in the same place with the same violet fill, so reject and choose differ only by icon and label. Expected: a visib…"
+          },
+          {
+           "severity": "P3",
+           "text": "All variants, rejected state, 1440 and 390, all languages and themes (variant-{1,2,3}-*-rejected): the footer says «Відхилено · далі раунд 2» and two lines below «Поправки доставлено · оркестратор готує раунд 2», the same fact twice. Expec…"
+          }
+         ]
+        },
+        "summary": "Judged the 144 frames in /tmp/… (taken from the pinned specification, not re-rendered by me; no fix stage has listed newer ones). Every changed frame was viewed: 96 footers at full resolution for all 3 variants x 1440/390 x uk/en x light/dark x rest/armed/asks/rejected, plus full frames for uk light and samples of dark and en; the «original» baselines are i…",
+        "provenance": {},
+        "calls": 1
+       }
+      }
+     ]
+    },
+    {
+     "stageId": "proto-fix",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "needs_decision",
+       "effectiveRole": {
+        "roleId": "architect",
+        "engine": "claude",
+        "model": "opus",
+        "effort": "high",
+        "access": "read-only",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-12T09:17:30.326Z",
+       "completedAt": null,
+       "input": null,
+       "activatedBy": {
+        "stageId": "critic",
+        "attempt": 1,
+        "edge": "fail"
+       },
+       "output": null,
+       "verdict": {
+        "status": "pass"
+       },
+       "error": "committing the passed stage: pre-commit: staged whitespace\npre-commit: privacy\nPRIVACY GATE: PASS\npre-commit: eslint\neslint: Cannot find module 'eslint/package.json'\nRequire stack:\n- $HOME/…\npre-commit: bash failed (1); gate failed\nThe stage was asked once to repair its files and reported it cannot: The refusal is not about this stage's files. The pre-commit eslint step failed with \"Cannot find m…",
+       "report": {
+        "seq": 2,
+        "at": "2026-10-12T09:35:48.903Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "pass"
+        },
+        "summary": "Copied the design doc and prototype from lane <id> into docs/design/ and fixed all 12 critic findings in patch.ts. Re-rendered 144 frames from an export of <id> (short Chrome TMPDIR, browser closed, geometry.json: 0 failures over 112 measured states; each finding is now a measured check in render.ts). Not published.\n\nNew frames: /tmp/… (96 changed + 48 orig…",
+        "provenance": {},
+        "calls": 1
+       }
+      },
+      {
+       "n": 2,
+       "state": "needs_decision",
+       "effectiveRole": {
+        "roleId": "architect",
+        "engine": "claude",
+        "model": "opus",
+        "effort": "high",
+        "access": "read-only",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-12T09:50:45.724Z",
+       "completedAt": null,
+       "input": null,
+       "activatedBy": {
+        "stageId": "critic",
+        "attempt": 1,
+        "edge": "fail"
+       },
+       "output": null,
+       "verdict": {
+        "status": "pass"
+       },
+       "error": "read-only stage proto-fix created a commit",
+       "report": {
+        "seq": 3,
+        "at": "2026-10-12T10:22:25.888Z",
+        "actor": {
+         "kind": "agent"
+        },
+        "verdict": {
+         "status": "pass"
+        },
+        "summary": "The previous attempt's fixes were already in the worktree, and I kept them. I checked them against all 12 critic findings, viewing the rendered frames and the measured geometry. All but one were closed: the uk task line is Ukrainian; the «write first» words sit under the outlined field (above the actions on the phone); the field text names dictation and the…",
+        "provenance": {},
+        "calls": 1
+       }
+      }
+     ]
+    },
+    {
+     "stageId": "publish",
+     "attempts": []
+    }
+   ],
+   "cursor": {
+    "stageId": "proto-fix",
+    "state": "committing",
+    "input": null,
+    "activatedBy": null
+   },
+   "state": "needs_decision",
+   "pausedState": null,
+   "stateDetail": "read-only stage proto-fix created a commit",
+   "srcPath": null,
+   "srcConversationId": "a seat conversation",
+   "createdAt": "2026-10-12T09:06:13.228Z",
+   "closedAt": null,
+   "stageReports": [
+    {
+     "seq": 1,
+     "at": "2026-10-12T09:15:20.956Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "critic",
+     "attempt": 1,
+     "status": "fail",
+     "findings": 12,
+     "replaces": null,
+     "summary": "Judged the 144 frames in /tmp/… (taken from the pinned specification, not re-rendered by me; no fix stage has listed newer ones). Every changed frame was viewed: 96 footers at full resolution for all 3 variants x 1440/390 x uk/en x light/dark x rest/armed/asks/rejected, plus full frames for uk light and samples of dark and en; the «original» baselines are i…"
+    },
+    {
+     "seq": 2,
+     "at": "2026-10-12T09:35:48.903Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "proto-fix",
+     "attempt": 1,
+     "status": "pass",
+     "findings": 0,
+     "replaces": null,
+     "summary": "Copied the design doc and prototype from lane <id> into docs/design/ and fixed all 12 critic findings in patch.ts. Re-rendered 144 frames from an export of <id> (short Chrome TMPDIR, browser closed, geometry.json: 0 failures over 112 measured states; each finding is now a measured check in render.ts). Not published.\n\nNew frames: /tmp/… (96 changed + 48 orig…"
+    },
+    {
+     "seq": 3,
+     "at": "2026-10-12T10:22:25.888Z",
+     "actor": {
+      "kind": "agent"
+     },
+     "stageId": "proto-fix",
+     "attempt": 2,
+     "status": "pass",
+     "findings": 0,
+     "replaces": null,
+     "summary": "The previous attempt's fixes were already in the worktree, and I kept them. I checked them against all 12 critic findings, viewing the rendered frames and the measured geometry. All but one were closed: the uk task line is Ukrainian; the «write first» words sit under the outlined field (above the actions on the phone); the field text names dictation and the…"
+    }
+   ]
+  },
+  {
+   "id": "node-modules-refresh",
+   "task": "#2780 read-only stage commits outputs without node_modules: merge current main, resolve the conflict, review the resolution only",
+   "taskIds": [
+    "t-node-modules"
+   ],
+   "project": "delegatus",
+   "repoDir": "/repo",
+   "worktreeDir": "/repo-lane",
+   "branch": "pipeline/sample",
+   "baseBranch": "main",
+   "baseRef": "main",
+   "lastPassedCommit": "",
+   "stages": [
+    {
+     "id": "refresh",
+     "kind": "run",
+     "role": {
+      "roleId": "builder"
+     },
+     "next": "review",
+     "onFail": null,
+     "prompt": "Stage refresh.",
+     "effectiveRole": {
+      "roleId": "builder",
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "high",
+      "access": "read-write",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "review",
+     "kind": "run",
+     "role": {
+      "roleId": "reviewer"
+     },
+     "next": null,
+     "onFail": {
+      "to": "fix",
+      "maxRounds": 1,
+      "onExhausted": "advance"
+     },
+     "prompt": "Stage review.",
+     "effectiveRole": {
+      "roleId": "reviewer",
+      "engine": "codex",
+      "model": "gpt-6.1-sol",
+      "effort": "xhigh",
+      "access": "read-only",
+      "promptScaffold": null
+     }
+    },
+    {
+     "id": "fix",
+     "kind": "run",
+     "role": {
+      "roleId": "builder",
+      "params": {
+       "mode": "apply-fixes"
+      }
+     },
+     "next": "review",
+     "onFail": null,
+     "prompt": "Stage fix.",
+     "effectiveRole": {
+      "roleId": "builder",
+      "engine": "codex",
+      "model": "gpt-6-luna",
+      "effort": "high",
+      "access": "read-write",
+      "promptScaffold": null
+     }
+    }
+   ],
+   "runs": [
+    {
+     "stageId": "refresh",
+     "attempts": [
+      {
+       "n": 1,
+       "state": "running",
+       "effectiveRole": {
+        "roleId": "builder",
+        "engine": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "access": "read-write",
+        "promptScaffold": null
+       },
+       "launchId": null,
+       "conversationId": null,
+       "sessionId": null,
+       "agentPath": null,
+       "paneId": null,
+       "flowId": null,
+       "startedAt": "2026-10-12T09:20:49.504Z",
+       "completedAt": null,
+       "input": null,
+       "activatedBy": null,
+       "output": null,
+       "verdict": null,
+       "error": null
+      }
+     ]
+    },
+    {
+     "stageId": "review",
+     "attempts": []
+    },
+    {
+     "stageId": "fix",
+     "attempts": []
+    }
+   ],
+   "cursor": {
+    "stageId": "refresh",
+    "state": "running",
+    "input": null,
+    "activatedBy": null
+   },
+   "state": "running",
+   "pausedState": null,
+   "stateDetail": null,
+   "srcPath": null,
+   "srcConversationId": "a seat conversation",
+   "createdAt": "2026-10-12T09:20:25.539Z",
+   "closedAt": null,
+   "finishesTaskIds": [
+    "t-node-modules"
+   ],
+   "stageReports": []
+  }
+ ]
+}

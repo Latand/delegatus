@@ -1,0 +1,8282 @@
+{
+ "0|1440|en|dark|board": {
+  "side": "original",
+  "file": "original-1440-en-dark-board.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 2183,
+  "cards": [],
+  "original": {
+   "answerButtons": [
+    "Leave the PR open",
+    "Try the merge again",
+    "Skip Prototype",
+    "Retry Prototype",
+    "Skip Proto fix",
+    "Retry Proto fix",
+    "Skip Prototype",
+    "Retry Prototype",
+    "Skip Review",
+    "Retry Review",
+    "Skip Diagnose",
+    "Retry Diagnose",
+    "Leave the PR open",
+    "Try the merge again"
+   ],
+   "dismissButtons": 5,
+   "needsCards": 5,
+   "warningReasons": [
+    "Merge stopped: conflict with the base branch.",
+    "Prototype passed · 2h ago",
+    "Proto fix passed · 47m ago",
+    "Prototype passed · 60m ago",
+    "Review failed · 20h ago",
+    "Diagnose needs a decision · 2d ago",
+    "Merge stopped: the PR was closed."
+   ],
+   "cardHeights": [
+    405,
+    439,
+    286,
+    550,
+    289,
+    408,
+    453
+   ]
+  },
+  "pageErrors": []
+ },
+ "0|1440|en|dark|open": {
+  "side": "original",
+  "file": "original-1440-en-dark-open.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 958,
+  "cards": [],
+  "original": {
+   "answerButtons": [
+    "Skip Prototype",
+    "Retry Prototype",
+    "Skip Diagnose",
+    "Retry Diagnose",
+    "Leave the PR open",
+    "Try the merge again",
+    "Skip Review",
+    "Retry Review"
+   ],
+   "dismissButtons": 3,
+   "needsCards": 3,
+   "warningReasons": [
+    "Prototype passed · 60m ago",
+    "Diagnose needs a decision · 2d ago",
+    "Merge stopped: conflict with the base branch.",
+    "Review failed · 20h ago"
+   ],
+   "cardHeights": [
+    286,
+    286,
+    405,
+    550
+   ]
+  },
+  "pageErrors": []
+ },
+ "0|1440|en|light|board": {
+  "side": "original",
+  "file": "original-1440-en-light-board.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 2183,
+  "cards": [],
+  "original": {
+   "answerButtons": [
+    "Leave the PR open",
+    "Try the merge again",
+    "Skip Prototype",
+    "Retry Prototype",
+    "Skip Proto fix",
+    "Retry Proto fix",
+    "Skip Prototype",
+    "Retry Prototype",
+    "Skip Review",
+    "Retry Review",
+    "Skip Diagnose",
+    "Retry Diagnose",
+    "Leave the PR open",
+    "Try the merge again"
+   ],
+   "dismissButtons": 5,
+   "needsCards": 5,
+   "warningReasons": [
+    "Merge stopped: conflict with the base branch.",
+    "Prototype passed · 2h ago",
+    "Proto fix passed · 47m ago",
+    "Prototype passed · 59m ago",
+    "Review failed · 20h ago",
+    "Diagnose needs a decision · 2d ago",
+    "Merge stopped: the PR was closed."
+   ],
+   "cardHeights": [
+    405,
+    439,
+    286,
+    550,
+    289,
+    408,
+    453
+   ]
+  },
+  "pageErrors": []
+ },
+ "0|1440|en|light|open": {
+  "side": "original",
+  "file": "original-1440-en-light-open.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 958,
+  "cards": [],
+  "original": {
+   "answerButtons": [
+    "Skip Prototype",
+    "Retry Prototype",
+    "Skip Diagnose",
+    "Retry Diagnose",
+    "Leave the PR open",
+    "Try the merge again",
+    "Skip Review",
+    "Retry Review"
+   ],
+   "dismissButtons": 3,
+   "needsCards": 3,
+   "warningReasons": [
+    "Prototype passed · 59m ago",
+    "Diagnose needs a decision · 2d ago",
+    "Merge stopped: conflict with the base branch.",
+    "Review failed · 20h ago"
+   ],
+   "cardHeights": [
+    286,
+    286,
+    405,
+    550
+   ]
+  },
+  "pageErrors": []
+ },
+ "0|1440|uk|dark|board": {
+  "side": "original",
+  "file": "original-1440-uk-dark-board.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 2183,
+  "cards": [],
+  "original": {
+   "answerButtons": [
+    "Залишити PR відкритим",
+    "Спробувати мердж ще раз",
+    "Пропустити Prototype",
+    "Повторити Prototype",
+    "Пропустити Proto fix",
+    "Повторити Proto fix",
+    "Пропустити Prototype",
+    "Повторити Prototype",
+    "Пропустити Review",
+    "Повторити Review",
+    "Пропустити Diagnose",
+    "Повторити Diagnose",
+    "Залишити PR відкритим",
+    "Спробувати мердж ще раз"
+   ],
+   "dismissButtons": 5,
+   "needsCards": 5,
+   "warningReasons": [
+    "Мердж зупинено: конфлікт з базовою гілкою.",
+    "Prototype успішно · 2 год тому",
+    "Proto fix успішно · 47 хв тому",
+    "Prototype успішно · 59 хв тому",
+    "Review невдало · 20 год тому",
+    "Diagnose потрібне рішення · 2 д тому",
+    "Мердж зупинено: PR закрито."
+   ],
+   "cardHeights": [
+    405,
+    439,
+    286,
+    550,
+    289,
+    444,
+    465
+   ]
+  },
+  "pageErrors": []
+ },
+ "0|1440|uk|dark|open": {
+  "side": "original",
+  "file": "original-1440-uk-dark-open.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 958,
+  "cards": [],
+  "original": {
+   "answerButtons": [
+    "Пропустити Prototype",
+    "Повторити Prototype",
+    "Пропустити Diagnose",
+    "Повторити Diagnose",
+    "Залишити PR відкритим",
+    "Спробувати мердж ще раз",
+    "Пропустити Review",
+    "Повторити Review"
+   ],
+   "dismissButtons": 3,
+   "needsCards": 3,
+   "warningReasons": [
+    "Prototype успішно · 59 хв тому",
+    "Diagnose потрібне рішення · 2 д тому",
+    "Мердж зупинено: конфлікт з базовою гілкою.",
+    "Review невдало · 20 год тому"
+   ],
+   "cardHeights": [
+    286,
+    286,
+    405,
+    550
+   ]
+  },
+  "pageErrors": []
+ },
+ "0|1440|uk|light|board": {
+  "side": "original",
+  "file": "original-1440-uk-light-board.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 2183,
+  "cards": [],
+  "original": {
+   "answerButtons": [
+    "Залишити PR відкритим",
+    "Спробувати мердж ще раз",
+    "Пропустити Prototype",
+    "Повторити Prototype",
+    "Пропустити Proto fix",
+    "Повторити Proto fix",
+    "Пропустити Prototype",
+    "Повторити Prototype",
+    "Пропустити Review",
+    "Повторити Review",
+    "Пропустити Diagnose",
+    "Повторити Diagnose",
+    "Залишити PR відкритим",
+    "Спробувати мердж ще раз"
+   ],
+   "dismissButtons": 5,
+   "needsCards": 5,
+   "warningReasons": [
+    "Мердж зупинено: конфлікт з базовою гілкою.",
+    "Prototype успішно · 2 год тому",
+    "Proto fix успішно · 47 хв тому",
+    "Prototype успішно · 59 хв тому",
+    "Review невдало · 20 год тому",
+    "Diagnose потрібне рішення · 2 д тому",
+    "Мердж зупинено: PR закрито."
+   ],
+   "cardHeights": [
+    405,
+    439,
+    286,
+    550,
+    289,
+    444,
+    465
+   ]
+  },
+  "pageErrors": []
+ },
+ "0|1440|uk|light|open": {
+  "side": "original",
+  "file": "original-1440-uk-light-open.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 958,
+  "cards": [],
+  "original": {
+   "answerButtons": [
+    "Пропустити Prototype",
+    "Повторити Prototype",
+    "Пропустити Diagnose",
+    "Повторити Diagnose",
+    "Залишити PR відкритим",
+    "Спробувати мердж ще раз",
+    "Пропустити Review",
+    "Повторити Review"
+   ],
+   "dismissButtons": 3,
+   "needsCards": 3,
+   "warningReasons": [
+    "Prototype успішно · 59 хв тому",
+    "Diagnose потрібне рішення · 2 д тому",
+    "Мердж зупинено: конфлікт з базовою гілкою.",
+    "Review невдало · 20 год тому"
+   ],
+   "cardHeights": [
+    286,
+    286,
+    405,
+    550
+   ]
+  },
+  "pageErrors": []
+ },
+ "0|390|en|dark|board": {
+  "side": "original",
+  "file": "original-390-en-dark-board.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 1110,
+  "overflowX": 720,
+  "height": 1922,
+  "cards": [],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 15,
+   "warningReasons": [
+    "Prototype needs a decision · 2h 21m",
+    "Prototype needs a decision · 1h 35m",
+    "Review needs a decision · 16h 2m",
+    "Diagnose needs a decision · 43h 51m",
+    "Prototype needs a decision · 2h 21m",
+    "Prototype needs a decision · 1h 35m",
+    "Review needs a decision · 16h 2m",
+    "Diagnose needs a decision · 43h 51m",
+    "Prototype needs a decision · 2h 21m",
+    "Prototype needs a decision · 1h 35m",
+    "Review needs a decision · 16h 2m",
+    "Diagnose needs a decision · 43h 51m"
+   ],
+   "cardHeights": [
+    82,
+    100,
+    100,
+    100,
+    82,
+    105,
+    76,
+    82,
+    100,
+    100,
+    100,
+    82,
+    105,
+    76,
+    82,
+    100,
+    100,
+    100,
+    82,
+    105,
+    76
+   ]
+  },
+  "pageErrors": []
+ },
+ "0|390|en|dark|open": {
+  "side": "original",
+  "file": "original-390-en-dark-open.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 3764,
+  "cards": [],
+  "original": {
+   "answerButtons": [
+    "Skip stage",
+    "Retry stage",
+    "Skip stage",
+    "Retry stage",
+    "Leave the PR open",
+    "Try the merge again",
+    "Skip stage",
+    "Retry stage"
+   ],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [
+    "Prototype passed · 60m ago",
+    "Diagnose needs a decision · 2d ago",
+    "Merge stopped: conflict with the base branch.",
+    "Review failed · 20h ago"
+   ],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "0|390|en|light|board": {
+  "side": "original",
+  "file": "original-390-en-light-board.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 1110,
+  "overflowX": 720,
+  "height": 1922,
+  "cards": [],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 15,
+   "warningReasons": [
+    "Prototype needs a decision · 2h 21m",
+    "Prototype needs a decision · 1h 35m",
+    "Review needs a decision · 16h 2m",
+    "Diagnose needs a decision · 43h 51m",
+    "Prototype needs a decision · 2h 21m",
+    "Prototype needs a decision · 1h 35m",
+    "Review needs a decision · 16h 2m",
+    "Diagnose needs a decision · 43h 51m",
+    "Prototype needs a decision · 2h 21m",
+    "Prototype needs a decision · 1h 35m",
+    "Review needs a decision · 16h 2m",
+    "Diagnose needs a decision · 43h 51m"
+   ],
+   "cardHeights": [
+    82,
+    100,
+    100,
+    100,
+    82,
+    105,
+    76,
+    82,
+    100,
+    100,
+    100,
+    82,
+    105,
+    76,
+    82,
+    100,
+    100,
+    100,
+    82,
+    105,
+    76
+   ]
+  },
+  "pageErrors": []
+ },
+ "0|390|en|light|open": {
+  "side": "original",
+  "file": "original-390-en-light-open.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 3764,
+  "cards": [],
+  "original": {
+   "answerButtons": [
+    "Skip stage",
+    "Retry stage",
+    "Skip stage",
+    "Retry stage",
+    "Leave the PR open",
+    "Try the merge again",
+    "Skip stage",
+    "Retry stage"
+   ],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [
+    "Prototype passed · 60m ago",
+    "Diagnose needs a decision · 2d ago",
+    "Merge stopped: conflict with the base branch.",
+    "Review failed · 20h ago"
+   ],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "0|390|uk|dark|board": {
+  "side": "original",
+  "file": "original-390-uk-dark-board.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 1110,
+  "overflowX": 720,
+  "height": 1970,
+  "cards": [],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 15,
+   "warningReasons": [
+    "Prototype потребує рішення · 2 год 21 хв",
+    "Prototype потребує рішення · 1 год 35 хв",
+    "Review потребує рішення · 16 год 2 хв",
+    "Diagnose потребує рішення · 43 год 51 хв",
+    "Prototype потребує рішення · 2 год 21 хв",
+    "Prototype потребує рішення · 1 год 35 хв",
+    "Review потребує рішення · 16 год 2 хв",
+    "Diagnose потребує рішення · 43 год 51 хв",
+    "Prototype потребує рішення · 2 год 21 хв",
+    "Prototype потребує рішення · 1 год 35 хв",
+    "Review потребує рішення · 16 год 2 хв",
+    "Diagnose потребує рішення · 43 год 51 хв"
+   ],
+   "cardHeights": [
+    82,
+    116,
+    100,
+    100,
+    82,
+    122,
+    76,
+    82,
+    116,
+    100,
+    100,
+    82,
+    122,
+    76,
+    82,
+    116,
+    100,
+    100,
+    82,
+    122,
+    76
+   ]
+  },
+  "pageErrors": []
+ },
+ "0|390|uk|dark|open": {
+  "side": "original",
+  "file": "original-390-uk-dark-open.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 3896,
+  "cards": [],
+  "original": {
+   "answerButtons": [
+    "Пропустити етап",
+    "Повторити етап",
+    "Пропустити етап",
+    "Повторити етап",
+    "Залишити PR відкритим",
+    "Спробувати мердж ще раз",
+    "Пропустити етап",
+    "Повторити етап"
+   ],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [
+    "Prototype успішно · 60 хв тому",
+    "Diagnose потрібне рішення · 2 д тому",
+    "Мердж зупинено: конфлікт з базовою гілкою.",
+    "Review невдало · 20 год тому"
+   ],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "0|390|uk|light|board": {
+  "side": "original",
+  "file": "original-390-uk-light-board.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 1110,
+  "overflowX": 720,
+  "height": 1970,
+  "cards": [],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 15,
+   "warningReasons": [
+    "Prototype потребує рішення · 2 год 21 хв",
+    "Prototype потребує рішення · 1 год 35 хв",
+    "Review потребує рішення · 16 год 2 хв",
+    "Diagnose потребує рішення · 43 год 51 хв",
+    "Prototype потребує рішення · 2 год 21 хв",
+    "Prototype потребує рішення · 1 год 35 хв",
+    "Review потребує рішення · 16 год 2 хв",
+    "Diagnose потребує рішення · 43 год 51 хв",
+    "Prototype потребує рішення · 2 год 21 хв",
+    "Prototype потребує рішення · 1 год 35 хв",
+    "Review потребує рішення · 16 год 2 хв",
+    "Diagnose потребує рішення · 43 год 51 хв"
+   ],
+   "cardHeights": [
+    82,
+    116,
+    100,
+    100,
+    82,
+    122,
+    76,
+    82,
+    116,
+    100,
+    100,
+    82,
+    122,
+    76,
+    82,
+    116,
+    100,
+    100,
+    82,
+    122,
+    76
+   ]
+  },
+  "pageErrors": []
+ },
+ "0|390|uk|light|open": {
+  "side": "original",
+  "file": "original-390-uk-light-open.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 3896,
+  "cards": [],
+  "original": {
+   "answerButtons": [
+    "Пропустити етап",
+    "Повторити етап",
+    "Пропустити етап",
+    "Повторити етап",
+    "Залишити PR відкритим",
+    "Спробувати мердж ще раз",
+    "Пропустити етап",
+    "Повторити етап"
+   ],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [
+    "Prototype успішно · 60 хв тому",
+    "Diagnose потрібне рішення · 2 д тому",
+    "Мердж зупинено: конфлікт з базовою гілкою.",
+    "Review невдало · 20 год тому"
+   ],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "1|1440|en|dark|board": {
+  "side": "changed",
+  "file": "variant-1-1440-en-dark-board-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 900,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 109.2,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 225.4,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 341.6,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 44,
+     "y": 409.7,
+     "w": 203.6,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 457.8,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 574,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 715.6,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 162.4
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 746.6,
+      "y": 202.6,
+      "w": 65.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 1080.3,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 122.3
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "1|1440|en|dark|open": {
+  "side": "changed",
+  "file": "variant-1-1440-en-dark-open-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 967,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 65.4,
+     "w": 688,
+     "h": 480.1
+    },
+    "buttons": [
+     {
+      "text": "Skip Prototype",
+      "x": 37,
+      "y": 504.5,
+      "w": 100,
+      "h": 28
+     },
+     {
+      "text": "Retry Prototype",
+      "x": 145,
+      "y": 504.5,
+      "w": 105.4,
+      "h": 28
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 258.4,
+      "y": 504.5,
+      "w": 141.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 65.4,
+     "w": 688,
+     "h": 328.6
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 741,
+      "y": 353,
+      "w": 65.4,
+      "h": 28
+     },
+     {
+      "text": "Skip Diagnose",
+      "x": 814.4,
+      "y": 353,
+      "w": 99.4,
+      "h": 28
+     },
+     {
+      "text": "Retry Diagnose",
+      "x": 921.8,
+      "y": 353,
+      "w": 104.7,
+      "h": 28
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 1034.5,
+      "y": 353,
+      "w": 141.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 561.5,
+     "w": 688,
+     "h": 348.6
+    },
+    "buttons": [
+     {
+      "text": "Leave the PR open",
+      "x": 37,
+      "y": 869.1,
+      "w": 124.8,
+      "h": 28
+     },
+     {
+      "text": "Try the merge again",
+      "x": 169.8,
+      "y": 869.1,
+      "w": 129,
+      "h": 28
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 306.7,
+      "y": 869.1,
+      "w": 141.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 561.5,
+     "w": 688,
+     "h": 366
+    },
+    "buttons": [
+     {
+      "text": "Skip Review",
+      "x": 741,
+      "y": 886.5,
+      "w": 88,
+      "h": 28
+     },
+     {
+      "text": "Retry Review",
+      "x": 837,
+      "y": 886.5,
+      "w": 93.4,
+      "h": 28
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 938.4,
+      "y": 886.5,
+      "w": 141.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "1|1440|en|light|board": {
+  "side": "changed",
+  "file": "variant-1-1440-en-light-board-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 900,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 109.2,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 225.4,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 341.6,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 44,
+     "y": 409.7,
+     "w": 203.6,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 457.8,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 574,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 715.6,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 162.4
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 746.6,
+      "y": 202.6,
+      "w": 65.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 1080.3,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 122.3
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "1|1440|en|light|open": {
+  "side": "changed",
+  "file": "variant-1-1440-en-light-open-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 967,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 65.4,
+     "w": 688,
+     "h": 480.1
+    },
+    "buttons": [
+     {
+      "text": "Skip Prototype",
+      "x": 37,
+      "y": 504.5,
+      "w": 100,
+      "h": 28
+     },
+     {
+      "text": "Retry Prototype",
+      "x": 145,
+      "y": 504.5,
+      "w": 105.4,
+      "h": 28
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 258.4,
+      "y": 504.5,
+      "w": 141.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 65.4,
+     "w": 688,
+     "h": 328.6
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 741,
+      "y": 353,
+      "w": 65.4,
+      "h": 28
+     },
+     {
+      "text": "Skip Diagnose",
+      "x": 814.4,
+      "y": 353,
+      "w": 99.4,
+      "h": 28
+     },
+     {
+      "text": "Retry Diagnose",
+      "x": 921.8,
+      "y": 353,
+      "w": 104.7,
+      "h": 28
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 1034.5,
+      "y": 353,
+      "w": 141.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 561.5,
+     "w": 688,
+     "h": 348.6
+    },
+    "buttons": [
+     {
+      "text": "Leave the PR open",
+      "x": 37,
+      "y": 869.1,
+      "w": 124.8,
+      "h": 28
+     },
+     {
+      "text": "Try the merge again",
+      "x": 169.8,
+      "y": 869.1,
+      "w": 129,
+      "h": 28
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 306.7,
+      "y": 869.1,
+      "w": 141.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 561.5,
+     "w": 688,
+     "h": 366
+    },
+    "buttons": [
+     {
+      "text": "Skip Review",
+      "x": 741,
+      "y": 886.5,
+      "w": 88,
+      "h": 28
+     },
+     {
+      "text": "Retry Review",
+      "x": 837,
+      "y": 886.5,
+      "w": 93.4,
+      "h": 28
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 938.4,
+      "y": 886.5,
+      "w": 141.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "1|1440|uk|dark|board": {
+  "side": "changed",
+  "file": "variant-1-1440-uk-dark-board-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 900,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 109.2,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 225.4,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 341.6,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 44,
+     "y": 409.7,
+     "w": 205.4,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 457.8,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 574,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 715.6,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 162.4
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 746.6,
+      "y": 202.6,
+      "w": 86.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 1080.3,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 122.3
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "1|1440|uk|dark|open": {
+  "side": "changed",
+  "file": "variant-1-1440-uk-dark-open-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 950,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 65.4,
+     "w": 688,
+     "h": 480.1
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Prototype",
+      "x": 37,
+      "y": 504.5,
+      "w": 141.4,
+      "h": 28
+     },
+     {
+      "text": "Повторити Prototype",
+      "x": 186.4,
+      "y": 504.5,
+      "w": 135.7,
+      "h": 28
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 330.2,
+      "y": 504.5,
+      "w": 163.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 65.4,
+     "w": 688,
+     "h": 328.6
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 741,
+      "y": 353,
+      "w": 86.8,
+      "h": 28
+     },
+     {
+      "text": "Пропустити Diagnose",
+      "x": 835.8,
+      "y": 353,
+      "w": 140.8,
+      "h": 28
+     },
+     {
+      "text": "Повторити Diagnose",
+      "x": 984.6,
+      "y": 353,
+      "w": 135.1,
+      "h": 28
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 1127.7,
+      "y": 353,
+      "w": 163.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 561.5,
+     "w": 688,
+     "h": 348.6
+    },
+    "buttons": [
+     {
+      "text": "Залишити PR відкритим",
+      "x": 37,
+      "y": 869.1,
+      "w": 156.6,
+      "h": 28
+     },
+     {
+      "text": "Спробувати мердж ще раз",
+      "x": 201.6,
+      "y": 869.1,
+      "w": 169.5,
+      "h": 28
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 379.1,
+      "y": 869.1,
+      "w": 163.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 561.5,
+     "w": 688,
+     "h": 348.6
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Review",
+      "x": 741,
+      "y": 869.1,
+      "w": 129.4,
+      "h": 28
+     },
+     {
+      "text": "Повторити Review",
+      "x": 878.4,
+      "y": 869.1,
+      "w": 123.7,
+      "h": 28
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 1010.1,
+      "y": 869.1,
+      "w": 163.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "1|1440|uk|light|board": {
+  "side": "changed",
+  "file": "variant-1-1440-uk-light-board-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 900,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 109.2,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 225.4,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 341.6,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 44,
+     "y": 409.7,
+     "w": 205.4,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 457.8,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 574,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 715.6,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 162.4
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 746.6,
+      "y": 202.6,
+      "w": 86.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 1080.3,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 122.3
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "1|1440|uk|light|open": {
+  "side": "changed",
+  "file": "variant-1-1440-uk-light-open-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 950,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 65.4,
+     "w": 688,
+     "h": 480.1
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Prototype",
+      "x": 37,
+      "y": 504.5,
+      "w": 141.4,
+      "h": 28
+     },
+     {
+      "text": "Повторити Prototype",
+      "x": 186.4,
+      "y": 504.5,
+      "w": 135.7,
+      "h": 28
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 330.2,
+      "y": 504.5,
+      "w": 163.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 65.4,
+     "w": 688,
+     "h": 328.6
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 741,
+      "y": 353,
+      "w": 86.8,
+      "h": 28
+     },
+     {
+      "text": "Пропустити Diagnose",
+      "x": 835.8,
+      "y": 353,
+      "w": 140.8,
+      "h": 28
+     },
+     {
+      "text": "Повторити Diagnose",
+      "x": 984.6,
+      "y": 353,
+      "w": 135.1,
+      "h": 28
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 1127.7,
+      "y": 353,
+      "w": 163.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 561.5,
+     "w": 688,
+     "h": 348.6
+    },
+    "buttons": [
+     {
+      "text": "Залишити PR відкритим",
+      "x": 37,
+      "y": 869.1,
+      "w": 156.6,
+      "h": 28
+     },
+     {
+      "text": "Спробувати мердж ще раз",
+      "x": 201.6,
+      "y": 869.1,
+      "w": 169.5,
+      "h": 28
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 379.1,
+      "y": 869.1,
+      "w": 163.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 561.5,
+     "w": 688,
+     "h": 348.6
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Review",
+      "x": 741,
+      "y": 869.1,
+      "w": 129.4,
+      "h": 28
+     },
+     {
+      "text": "Повторити Review",
+      "x": 878.4,
+      "y": 869.1,
+      "w": 123.7,
+      "h": 28
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 1010.1,
+      "y": 869.1,
+      "w": 163.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "1|390|en|dark|board": {
+  "side": "changed",
+  "file": "variant-1-390-en-dark-board-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 1175,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 110.2,
+     "w": 366,
+     "h": 120.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 240.5,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 378.9,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 19,
+     "y": 463.1,
+     "w": 203.6,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 517.3,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 655.7,
+     "w": 366,
+     "h": 112.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 813.3,
+     "w": 366,
+     "h": 170.4
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 43,
+      "y": 898.6,
+      "w": 65.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 1029,
+     "w": 366,
+     "h": 114.3
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "1|390|en|dark|open": {
+  "side": "changed",
+  "file": "variant-1-390-en-dark-open-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 2262,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 80.8,
+     "w": 366,
+     "h": 690.8
+    },
+    "buttons": [
+     {
+      "text": "Skip Prototype",
+      "x": 25,
+      "y": 662.6,
+      "w": 163.3,
+      "h": 44
+     },
+     {
+      "text": "Retry Prototype",
+      "x": 196.3,
+      "y": 662.6,
+      "w": 168.7,
+      "h": 44
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 25,
+      "y": 714.6,
+      "w": 141.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 791.6,
+     "w": 366,
+     "h": 467.6
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 25,
+      "y": 1150.2,
+      "w": 83.5,
+      "h": 44
+     },
+     {
+      "text": "Skip Diagnose",
+      "x": 116.5,
+      "y": 1150.2,
+      "w": 117.6,
+      "h": 44
+     },
+     {
+      "text": "Retry Diagnose",
+      "x": 242.1,
+      "y": 1150.2,
+      "w": 122.9,
+      "h": 44
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 25,
+      "y": 1202.2,
+      "w": 141.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1279.2,
+     "w": 366,
+     "h": 470.1
+    },
+    "buttons": [
+     {
+      "text": "Leave the PR open",
+      "x": 25,
+      "y": 1640.4,
+      "w": 163.9,
+      "h": 44
+     },
+     {
+      "text": "Try the merge again",
+      "x": 196.9,
+      "y": 1640.4,
+      "w": 168.1,
+      "h": 44
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 25,
+      "y": 1692.4,
+      "w": 141.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1769.4,
+     "w": 366,
+     "h": 460.9
+    },
+    "buttons": [
+     {
+      "text": "Skip Review",
+      "x": 25,
+      "y": 2173.3,
+      "w": 88.6,
+      "h": 44
+     },
+     {
+      "text": "Retry Review",
+      "x": 121.6,
+      "y": 2173.3,
+      "w": 94,
+      "h": 44
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 223.6,
+      "y": 2173.3,
+      "w": 141.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "1|390|en|light|board": {
+  "side": "changed",
+  "file": "variant-1-390-en-light-board-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 1175,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 110.2,
+     "w": 366,
+     "h": 120.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 240.5,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 378.9,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 19,
+     "y": 463.1,
+     "w": 203.6,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 517.3,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 655.7,
+     "w": 366,
+     "h": 112.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 813.3,
+     "w": 366,
+     "h": 170.4
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 43,
+      "y": 898.6,
+      "w": 65.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 1029,
+     "w": 366,
+     "h": 114.3
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "1|390|en|light|open": {
+  "side": "changed",
+  "file": "variant-1-390-en-light-open-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 2262,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 80.8,
+     "w": 366,
+     "h": 690.8
+    },
+    "buttons": [
+     {
+      "text": "Skip Prototype",
+      "x": 25,
+      "y": 662.6,
+      "w": 163.3,
+      "h": 44
+     },
+     {
+      "text": "Retry Prototype",
+      "x": 196.3,
+      "y": 662.6,
+      "w": 168.7,
+      "h": 44
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 25,
+      "y": 714.6,
+      "w": 141.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 791.6,
+     "w": 366,
+     "h": 467.6
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 25,
+      "y": 1150.2,
+      "w": 83.5,
+      "h": 44
+     },
+     {
+      "text": "Skip Diagnose",
+      "x": 116.5,
+      "y": 1150.2,
+      "w": 117.6,
+      "h": 44
+     },
+     {
+      "text": "Retry Diagnose",
+      "x": 242.1,
+      "y": 1150.2,
+      "w": 122.9,
+      "h": 44
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 25,
+      "y": 1202.2,
+      "w": 141.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1279.2,
+     "w": 366,
+     "h": 470.1
+    },
+    "buttons": [
+     {
+      "text": "Leave the PR open",
+      "x": 25,
+      "y": 1640.4,
+      "w": 163.9,
+      "h": 44
+     },
+     {
+      "text": "Try the merge again",
+      "x": 196.9,
+      "y": 1640.4,
+      "w": 168.1,
+      "h": 44
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 25,
+      "y": 1692.4,
+      "w": 141.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1769.4,
+     "w": 366,
+     "h": 460.9
+    },
+    "buttons": [
+     {
+      "text": "Skip Review",
+      "x": 25,
+      "y": 2173.3,
+      "w": 88.6,
+      "h": 44
+     },
+     {
+      "text": "Retry Review",
+      "x": 121.6,
+      "y": 2173.3,
+      "w": 94,
+      "h": 44
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 223.6,
+      "y": 2173.3,
+      "w": 141.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "1|390|uk|dark|board": {
+  "side": "changed",
+  "file": "variant-1-390-uk-dark-board-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 1151,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 110.2,
+     "w": 366,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 224.4,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 362.7,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 19,
+     "y": 446.9,
+     "w": 205.4,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 501.1,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 639.5,
+     "w": 366,
+     "h": 112.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 797.1,
+     "w": 366,
+     "h": 170.4
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 43,
+      "y": 882.4,
+      "w": 86.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 1012.8,
+     "w": 366,
+     "h": 106.1
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "1|390|uk|dark|open": {
+  "side": "changed",
+  "file": "variant-1-390-uk-dark-open-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 2298,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 80.8,
+     "w": 366,
+     "h": 690.8
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Prototype",
+      "x": 25,
+      "y": 662.6,
+      "w": 168.9,
+      "h": 44
+     },
+     {
+      "text": "Повторити Prototype",
+      "x": 201.9,
+      "y": 662.6,
+      "w": 163.1,
+      "h": 44
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 25,
+      "y": 714.6,
+      "w": 163.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 791.6,
+     "w": 366,
+     "h": 467.6
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 25,
+      "y": 1150.2,
+      "w": 139,
+      "h": 44
+     },
+     {
+      "text": "Пропустити Diagnose",
+      "x": 172,
+      "y": 1150.2,
+      "w": 193,
+      "h": 44
+     },
+     {
+      "text": "Повторити Diagnose",
+      "x": 25,
+      "y": 1202.2,
+      "w": 168.2,
+      "h": 44
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 201.2,
+      "y": 1202.2,
+      "w": 163.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1279.2,
+     "w": 366,
+     "h": 454
+    },
+    "buttons": [
+     {
+      "text": "Залишити PR відкритим",
+      "x": 25,
+      "y": 1624.2,
+      "w": 159.6,
+      "h": 44
+     },
+     {
+      "text": "Спробувати мердж ще раз",
+      "x": 192.6,
+      "y": 1624.2,
+      "w": 172.4,
+      "h": 44
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 25,
+      "y": 1676.2,
+      "w": 163.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1753.2,
+     "w": 366,
+     "h": 512.9
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Review",
+      "x": 25,
+      "y": 2157.1,
+      "w": 168.9,
+      "h": 44
+     },
+     {
+      "text": "Повторити Review",
+      "x": 201.9,
+      "y": 2157.1,
+      "w": 163.1,
+      "h": 44
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 25,
+      "y": 2209.1,
+      "w": 163.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "1|390|uk|light|board": {
+  "side": "changed",
+  "file": "variant-1-390-uk-light-board-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 1151,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 110.2,
+     "w": 366,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 224.4,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 362.7,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 19,
+     "y": 446.9,
+     "w": 205.4,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 501.1,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 639.5,
+     "w": 366,
+     "h": 112.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 797.1,
+     "w": 366,
+     "h": 170.4
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 43,
+      "y": 882.4,
+      "w": 86.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 1012.8,
+     "w": 366,
+     "h": 106.1
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "1|390|uk|light|open": {
+  "side": "changed",
+  "file": "variant-1-390-uk-light-open-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 2298,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 80.8,
+     "w": 366,
+     "h": 690.8
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Prototype",
+      "x": 25,
+      "y": 662.6,
+      "w": 168.9,
+      "h": 44
+     },
+     {
+      "text": "Повторити Prototype",
+      "x": 201.9,
+      "y": 662.6,
+      "w": 163.1,
+      "h": 44
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 25,
+      "y": 714.6,
+      "w": 163.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 791.6,
+     "w": 366,
+     "h": 467.6
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 25,
+      "y": 1150.2,
+      "w": 139,
+      "h": 44
+     },
+     {
+      "text": "Пропустити Diagnose",
+      "x": 172,
+      "y": 1150.2,
+      "w": 193,
+      "h": 44
+     },
+     {
+      "text": "Повторити Diagnose",
+      "x": 25,
+      "y": 1202.2,
+      "w": 168.2,
+      "h": 44
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 201.2,
+      "y": 1202.2,
+      "w": 163.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1279.2,
+     "w": 366,
+     "h": 454
+    },
+    "buttons": [
+     {
+      "text": "Залишити PR відкритим",
+      "x": 25,
+      "y": 1624.2,
+      "w": 159.6,
+      "h": 44
+     },
+     {
+      "text": "Спробувати мердж ще раз",
+      "x": 192.6,
+      "y": 1624.2,
+      "w": 172.4,
+      "h": 44
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 25,
+      "y": 1676.2,
+      "w": 163.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1753.2,
+     "w": 366,
+     "h": 512.9
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Review",
+      "x": 25,
+      "y": 2157.1,
+      "w": 168.9,
+      "h": 44
+     },
+     {
+      "text": "Повторити Review",
+      "x": 201.9,
+      "y": 2157.1,
+      "w": 163.1,
+      "h": 44
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 25,
+      "y": 2209.1,
+      "w": 163.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "2|1440|en|dark|board": {
+  "side": "changed",
+  "file": "variant-2-1440-en-dark-board-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 900,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 109.2,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 225.4,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 341.6,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 44,
+     "y": 409.7,
+     "w": 203.6,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 457.8,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 574,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 715.6,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 162.4
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 746.6,
+      "y": 202.6,
+      "w": 65.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 1080.3,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 122.3
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "2|1440|en|dark|open": {
+  "side": "changed",
+  "file": "variant-2-1440-en-dark-open-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 903,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 65.4,
+     "w": 688,
+     "h": 331.2
+    },
+    "buttons": [
+     {
+      "text": "Skip Prototype",
+      "x": 153.4,
+      "y": 295.8,
+      "w": 71.5,
+      "h": 22
+     },
+     {
+      "text": "Retry Prototype",
+      "x": 236.9,
+      "y": 295.8,
+      "w": 76.4,
+      "h": 22
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 37,
+      "y": 355.5,
+      "w": 141.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 65.4,
+     "w": 688,
+     "h": 323.2
+    },
+    "buttons": [
+     {
+      "text": "Skip Diagnose",
+      "x": 857.4,
+      "y": 295.8,
+      "w": 70.9,
+      "h": 22
+     },
+     {
+      "text": "Retry Diagnose",
+      "x": 940.3,
+      "y": 295.8,
+      "w": 75.8,
+      "h": 22
+     },
+     {
+      "text": "Answer",
+      "x": 857.4,
+      "y": 344.5,
+      "w": 65.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 412.5,
+     "w": 688,
+     "h": 450.3
+    },
+    "buttons": [
+     {
+      "text": "Leave the PR open",
+      "x": 153.4,
+      "y": 739.3,
+      "w": 94.2,
+      "h": 22
+     },
+     {
+      "text": "Try the merge again",
+      "x": 259.6,
+      "y": 739.3,
+      "w": 98,
+      "h": 22
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 37,
+      "y": 821.9,
+      "w": 141.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 412.5,
+     "w": 688,
+     "h": 441.1
+    },
+    "buttons": [
+     {
+      "text": "Ask the orchestrator",
+      "x": 741,
+      "y": 812.7,
+      "w": 141.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "2|1440|en|light|board": {
+  "side": "changed",
+  "file": "variant-2-1440-en-light-board-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 900,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 109.2,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 225.4,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 341.6,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 44,
+     "y": 409.7,
+     "w": 203.6,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 457.8,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 574,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 715.6,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 162.4
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 746.6,
+      "y": 202.6,
+      "w": 65.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 1080.3,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 122.3
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "2|1440|en|light|open": {
+  "side": "changed",
+  "file": "variant-2-1440-en-light-open-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 903,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 65.4,
+     "w": 688,
+     "h": 331.2
+    },
+    "buttons": [
+     {
+      "text": "Skip Prototype",
+      "x": 153.4,
+      "y": 295.8,
+      "w": 71.5,
+      "h": 22
+     },
+     {
+      "text": "Retry Prototype",
+      "x": 236.9,
+      "y": 295.8,
+      "w": 76.4,
+      "h": 22
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 37,
+      "y": 355.5,
+      "w": 141.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 65.4,
+     "w": 688,
+     "h": 323.2
+    },
+    "buttons": [
+     {
+      "text": "Skip Diagnose",
+      "x": 857.4,
+      "y": 295.8,
+      "w": 70.9,
+      "h": 22
+     },
+     {
+      "text": "Retry Diagnose",
+      "x": 940.3,
+      "y": 295.8,
+      "w": 75.8,
+      "h": 22
+     },
+     {
+      "text": "Answer",
+      "x": 857.4,
+      "y": 344.5,
+      "w": 65.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 412.5,
+     "w": 688,
+     "h": 450.3
+    },
+    "buttons": [
+     {
+      "text": "Leave the PR open",
+      "x": 153.4,
+      "y": 739.3,
+      "w": 94.2,
+      "h": 22
+     },
+     {
+      "text": "Try the merge again",
+      "x": 259.6,
+      "y": 739.3,
+      "w": 98,
+      "h": 22
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 37,
+      "y": 821.9,
+      "w": 141.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 412.5,
+     "w": 688,
+     "h": 441.1
+    },
+    "buttons": [
+     {
+      "text": "Ask the orchestrator",
+      "x": 741,
+      "y": 812.7,
+      "w": 141.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "2|1440|uk|dark|board": {
+  "side": "changed",
+  "file": "variant-2-1440-uk-dark-board-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 900,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 109.2,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 225.4,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 341.6,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 44,
+     "y": 409.7,
+     "w": 205.4,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 457.8,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 574,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 715.6,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 162.4
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 746.6,
+      "y": 202.6,
+      "w": 86.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 1080.3,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 122.3
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "2|1440|uk|dark|open": {
+  "side": "changed",
+  "file": "variant-2-1440-uk-dark-open-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 903,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 65.4,
+     "w": 688,
+     "h": 331.2
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Prototype",
+      "x": 153.4,
+      "y": 295.8,
+      "w": 109.5,
+      "h": 22
+     },
+     {
+      "text": "Повторити Prototype",
+      "x": 274.9,
+      "y": 295.8,
+      "w": 104.3,
+      "h": 22
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 37,
+      "y": 355.5,
+      "w": 163.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 65.4,
+     "w": 688,
+     "h": 323.2
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Diagnose",
+      "x": 857.4,
+      "y": 295.8,
+      "w": 108.9,
+      "h": 22
+     },
+     {
+      "text": "Повторити Diagnose",
+      "x": 978.3,
+      "y": 295.8,
+      "w": 103.6,
+      "h": 22
+     },
+     {
+      "text": "Відповісти",
+      "x": 857.4,
+      "y": 344.5,
+      "w": 86.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 412.5,
+     "w": 688,
+     "h": 450.3
+    },
+    "buttons": [
+     {
+      "text": "Залишити PR відкритим",
+      "x": 153.4,
+      "y": 739.3,
+      "w": 123.4,
+      "h": 22
+     },
+     {
+      "text": "Спробувати мердж ще раз",
+      "x": 288.8,
+      "y": 739.3,
+      "w": 135.2,
+      "h": 22
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 37,
+      "y": 821.9,
+      "w": 163.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 412.5,
+     "w": 688,
+     "h": 441.1
+    },
+    "buttons": [
+     {
+      "text": "Запитати оркестратора",
+      "x": 741,
+      "y": 812.7,
+      "w": 163.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "2|1440|uk|light|board": {
+  "side": "changed",
+  "file": "variant-2-1440-uk-light-board-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 900,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 109.2,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 225.4,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 341.6,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 44,
+     "y": 409.7,
+     "w": 205.4,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 457.8,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 574,
+     "w": 636.6,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 715.6,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 162.4
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 746.6,
+      "y": 202.6,
+      "w": 86.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 1080.3,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 122.3
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "2|1440|uk|light|open": {
+  "side": "changed",
+  "file": "variant-2-1440-uk-light-open-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 903,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 65.4,
+     "w": 688,
+     "h": 331.2
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Prototype",
+      "x": 153.4,
+      "y": 295.8,
+      "w": 109.5,
+      "h": 22
+     },
+     {
+      "text": "Повторити Prototype",
+      "x": 274.9,
+      "y": 295.8,
+      "w": 104.3,
+      "h": 22
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 37,
+      "y": 355.5,
+      "w": 163.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 65.4,
+     "w": 688,
+     "h": 323.2
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Diagnose",
+      "x": 857.4,
+      "y": 295.8,
+      "w": 108.9,
+      "h": 22
+     },
+     {
+      "text": "Повторити Diagnose",
+      "x": 978.3,
+      "y": 295.8,
+      "w": 103.6,
+      "h": 22
+     },
+     {
+      "text": "Відповісти",
+      "x": 857.4,
+      "y": 344.5,
+      "w": 86.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 412.5,
+     "w": 688,
+     "h": 450.3
+    },
+    "buttons": [
+     {
+      "text": "Залишити PR відкритим",
+      "x": 153.4,
+      "y": 739.3,
+      "w": 123.4,
+      "h": 22
+     },
+     {
+      "text": "Спробувати мердж ще раз",
+      "x": 288.8,
+      "y": 739.3,
+      "w": 135.2,
+      "h": 22
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 37,
+      "y": 821.9,
+      "w": 163.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 412.5,
+     "w": 688,
+     "h": 441.1
+    },
+    "buttons": [
+     {
+      "text": "Запитати оркестратора",
+      "x": 741,
+      "y": 812.7,
+      "w": 163.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "2|390|en|dark|board": {
+  "side": "changed",
+  "file": "variant-2-390-en-dark-board-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 1175,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 110.2,
+     "w": 366,
+     "h": 120.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 240.5,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 378.9,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 19,
+     "y": 463.1,
+     "w": 203.6,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 517.3,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 655.7,
+     "w": 366,
+     "h": 112.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 813.3,
+     "w": 366,
+     "h": 170.4
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 43,
+      "y": 898.6,
+      "w": 65.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 1029,
+     "w": 366,
+     "h": 114.3
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "2|390|en|dark|open": {
+  "side": "changed",
+  "file": "variant-2-390-en-dark-open-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 2091,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 80.8,
+     "w": 366,
+     "h": 426.9
+    },
+    "buttons": [
+     {
+      "text": "Skip Prototype",
+      "x": 134.2,
+      "y": 335.3,
+      "w": 71.5,
+      "h": 44
+     },
+     {
+      "text": "Retry Prototype",
+      "x": 217.7,
+      "y": 335.3,
+      "w": 76.4,
+      "h": 44
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 25,
+      "y": 450.7,
+      "w": 141.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 527.7,
+     "w": 366,
+     "h": 377.3
+    },
+    "buttons": [
+     {
+      "text": "Skip Diagnose",
+      "x": 134.2,
+      "y": 774.3,
+      "w": 70.9,
+      "h": 44
+     },
+     {
+      "text": "Retry Diagnose",
+      "x": 217.1,
+      "y": 774.3,
+      "w": 75.8,
+      "h": 44
+     },
+     {
+      "text": "Answer",
+      "x": 134.2,
+      "y": 845.1,
+      "w": 65.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 925.1,
+     "w": 366,
+     "h": 560.1
+    },
+    "buttons": [
+     {
+      "text": "Leave the PR open",
+      "x": 134.2,
+      "y": 1323.6,
+      "w": 94.2,
+      "h": 44
+     },
+     {
+      "text": "Try the merge again",
+      "x": 240.4,
+      "y": 1323.6,
+      "w": 98,
+      "h": 44
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 25,
+      "y": 1428.2,
+      "w": 141.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1505.2,
+     "w": 366,
+     "h": 553.7
+    },
+    "buttons": [
+     {
+      "text": "Ask the orchestrator",
+      "x": 25,
+      "y": 2001.9,
+      "w": 141.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "2|390|en|light|board": {
+  "side": "changed",
+  "file": "variant-2-390-en-light-board-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 1175,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 110.2,
+     "w": 366,
+     "h": 120.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 240.5,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 378.9,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 19,
+     "y": 463.1,
+     "w": 203.6,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 517.3,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 655.7,
+     "w": 366,
+     "h": 112.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 813.3,
+     "w": 366,
+     "h": 170.4
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 43,
+      "y": 898.6,
+      "w": 65.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 1029,
+     "w": 366,
+     "h": 114.3
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "2|390|en|light|open": {
+  "side": "changed",
+  "file": "variant-2-390-en-light-open-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 2091,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 80.8,
+     "w": 366,
+     "h": 426.9
+    },
+    "buttons": [
+     {
+      "text": "Skip Prototype",
+      "x": 134.2,
+      "y": 335.3,
+      "w": 71.5,
+      "h": 44
+     },
+     {
+      "text": "Retry Prototype",
+      "x": 217.7,
+      "y": 335.3,
+      "w": 76.4,
+      "h": 44
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 25,
+      "y": 450.7,
+      "w": 141.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 527.7,
+     "w": 366,
+     "h": 377.3
+    },
+    "buttons": [
+     {
+      "text": "Skip Diagnose",
+      "x": 134.2,
+      "y": 774.3,
+      "w": 70.9,
+      "h": 44
+     },
+     {
+      "text": "Retry Diagnose",
+      "x": 217.1,
+      "y": 774.3,
+      "w": 75.8,
+      "h": 44
+     },
+     {
+      "text": "Answer",
+      "x": 134.2,
+      "y": 845.1,
+      "w": 65.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 925.1,
+     "w": 366,
+     "h": 560.1
+    },
+    "buttons": [
+     {
+      "text": "Leave the PR open",
+      "x": 134.2,
+      "y": 1323.6,
+      "w": 94.2,
+      "h": 44
+     },
+     {
+      "text": "Try the merge again",
+      "x": 240.4,
+      "y": 1323.6,
+      "w": 98,
+      "h": 44
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 25,
+      "y": 1428.2,
+      "w": 141.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1505.2,
+     "w": 366,
+     "h": 553.7
+    },
+    "buttons": [
+     {
+      "text": "Ask the orchestrator",
+      "x": 25,
+      "y": 2001.9,
+      "w": 141.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "2|390|uk|dark|board": {
+  "side": "changed",
+  "file": "variant-2-390-uk-dark-board-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 1151,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 110.2,
+     "w": 366,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 224.4,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 362.7,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 19,
+     "y": 446.9,
+     "w": 205.4,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 501.1,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 639.5,
+     "w": 366,
+     "h": 112.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 797.1,
+     "w": 366,
+     "h": 170.4
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 43,
+      "y": 882.4,
+      "w": 86.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 1012.8,
+     "w": 366,
+     "h": 106.1
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "2|390|uk|dark|open": {
+  "side": "changed",
+  "file": "variant-2-390-uk-dark-open-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 2140,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 80.8,
+     "w": 366,
+     "h": 443.7
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Prototype",
+      "x": 134.2,
+      "y": 352.1,
+      "w": 109.5,
+      "h": 44
+     },
+     {
+      "text": "Повторити Prototype",
+      "x": 255.7,
+      "y": 352.1,
+      "w": 104.3,
+      "h": 44
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 25,
+      "y": 467.5,
+      "w": 163.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 544.5,
+     "w": 366,
+     "h": 377.3
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Diagnose",
+      "x": 134.2,
+      "y": 791.1,
+      "w": 108.9,
+      "h": 44
+     },
+     {
+      "text": "Повторити Diagnose",
+      "x": 255.1,
+      "y": 791.1,
+      "w": 103.6,
+      "h": 44
+     },
+     {
+      "text": "Відповісти",
+      "x": 134.2,
+      "y": 861.9,
+      "w": 86.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 941.9,
+     "w": 366,
+     "h": 591.9
+    },
+    "buttons": [
+     {
+      "text": "Залишити PR відкритим",
+      "x": 134.2,
+      "y": 1324.2,
+      "w": 123.4,
+      "h": 44
+     },
+     {
+      "text": "Спробувати мердж ще раз",
+      "x": 134.2,
+      "y": 1372.2,
+      "w": 135.2,
+      "h": 44
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 25,
+      "y": 1476.8,
+      "w": 163.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1553.8,
+     "w": 366,
+     "h": 553.7
+    },
+    "buttons": [
+     {
+      "text": "Запитати оркестратора",
+      "x": 25,
+      "y": 2050.5,
+      "w": 163.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "2|390|uk|light|board": {
+  "side": "changed",
+  "file": "variant-2-390-uk-light-board-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 1151,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 110.2,
+     "w": 366,
+     "h": 104.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 224.4,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 362.7,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 19,
+     "y": 446.9,
+     "w": 205.4,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 501.1,
+     "w": 366,
+     "h": 128.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 639.5,
+     "w": 366,
+     "h": 112.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 797.1,
+     "w": 366,
+     "h": 170.4
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 43,
+      "y": 882.4,
+      "w": 86.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 1012.8,
+     "w": 366,
+     "h": 106.1
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "2|390|uk|light|open": {
+  "side": "changed",
+  "file": "variant-2-390-uk-light-open-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 2140,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 80.8,
+     "w": 366,
+     "h": 443.7
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Prototype",
+      "x": 134.2,
+      "y": 352.1,
+      "w": 109.5,
+      "h": 44
+     },
+     {
+      "text": "Повторити Prototype",
+      "x": 255.7,
+      "y": 352.1,
+      "w": 104.3,
+      "h": 44
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 25,
+      "y": 467.5,
+      "w": 163.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 544.5,
+     "w": 366,
+     "h": 377.3
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Diagnose",
+      "x": 134.2,
+      "y": 791.1,
+      "w": 108.9,
+      "h": 44
+     },
+     {
+      "text": "Повторити Diagnose",
+      "x": 255.1,
+      "y": 791.1,
+      "w": 103.6,
+      "h": 44
+     },
+     {
+      "text": "Відповісти",
+      "x": 134.2,
+      "y": 861.9,
+      "w": 86.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 941.9,
+     "w": 366,
+     "h": 591.9
+    },
+    "buttons": [
+     {
+      "text": "Залишити PR відкритим",
+      "x": 134.2,
+      "y": 1324.2,
+      "w": 123.4,
+      "h": 44
+     },
+     {
+      "text": "Спробувати мердж ще раз",
+      "x": 134.2,
+      "y": 1372.2,
+      "w": 135.2,
+      "h": 44
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 25,
+      "y": 1476.8,
+      "w": 163.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1553.8,
+     "w": 366,
+     "h": 553.7
+    },
+    "buttons": [
+     {
+      "text": "Запитати оркестратора",
+      "x": 25,
+      "y": 2050.5,
+      "w": 163.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "3|1440|en|dark|board": {
+  "side": "changed",
+  "file": "variant-3-1440-en-dark-board-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 900,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 109.2,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 197.4,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 285.6,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 44,
+     "y": 353.7,
+     "w": 203.6,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 373.8,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 462,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 715.6,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 134.4
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 746.6,
+      "y": 202.6,
+      "w": 65.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 1080.3,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 100.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "3|1440|en|dark|open": {
+  "side": "changed",
+  "file": "variant-3-1440-en-dark-open-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 1008,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 65.4,
+     "w": 688,
+     "h": 275.8
+    },
+    "buttons": [
+     {
+      "text": "Skip Prototype",
+      "x": 598.6,
+      "y": 135.3,
+      "w": 99.4,
+      "h": 30
+     },
+     {
+      "text": "Retry Prototype",
+      "x": 598.6,
+      "y": 165.3,
+      "w": 99.4,
+      "h": 30
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 65.4,
+     "w": 688,
+     "h": 360.6
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 741,
+      "y": 321,
+      "w": 65.4,
+      "h": 28
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 814.4,
+      "y": 321,
+      "w": 141.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 442,
+     "w": 688,
+     "h": 526.1
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 442,
+     "w": 688,
+     "h": 320.6
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "3|1440|en|light|board": {
+  "side": "changed",
+  "file": "variant-3-1440-en-light-board-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 900,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 109.2,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 197.4,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 285.6,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 44,
+     "y": 353.7,
+     "w": 203.6,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 373.8,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 462,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 715.6,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 134.4
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 746.6,
+      "y": 202.6,
+      "w": 65.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 1080.3,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 100.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "3|1440|en|light|open": {
+  "side": "changed",
+  "file": "variant-3-1440-en-light-open-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 1008,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 65.4,
+     "w": 688,
+     "h": 275.8
+    },
+    "buttons": [
+     {
+      "text": "Skip Prototype",
+      "x": 598.6,
+      "y": 135.3,
+      "w": 99.4,
+      "h": 30
+     },
+     {
+      "text": "Retry Prototype",
+      "x": 598.6,
+      "y": 165.3,
+      "w": 99.4,
+      "h": 30
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 65.4,
+     "w": 688,
+     "h": 360.6
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 741,
+      "y": 321,
+      "w": 65.4,
+      "h": 28
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 814.4,
+      "y": 321,
+      "w": 141.4,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 442,
+     "w": 688,
+     "h": 526.1
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 442,
+     "w": 688,
+     "h": 320.6
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "3|1440|uk|dark|board": {
+  "side": "changed",
+  "file": "variant-3-1440-uk-dark-board-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 900,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 109.2,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 197.4,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 285.6,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 44,
+     "y": 353.7,
+     "w": 205.4,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 373.8,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 462,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 715.6,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 134.4
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 746.6,
+      "y": 202.6,
+      "w": 86.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 1080.3,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 100.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "3|1440|uk|dark|open": {
+  "side": "changed",
+  "file": "variant-3-1440-uk-dark-open-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 1008,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 65.4,
+     "w": 688,
+     "h": 275.8
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Prototype",
+      "x": 562.6,
+      "y": 135.3,
+      "w": 135.4,
+      "h": 30
+     },
+     {
+      "text": "Повторити Prototype",
+      "x": 562.6,
+      "y": 165.3,
+      "w": 135.4,
+      "h": 30
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 65.4,
+     "w": 688,
+     "h": 360.6
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 741,
+      "y": 321,
+      "w": 86.8,
+      "h": 28
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 835.8,
+      "y": 321,
+      "w": 163.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 442,
+     "w": 688,
+     "h": 526.1
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 442,
+     "w": 688,
+     "h": 320.6
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "3|1440|uk|light|board": {
+  "side": "changed",
+  "file": "variant-3-1440-uk-light-board-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 900,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 109.2,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 197.4,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 285.6,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 44,
+     "y": 353.7,
+     "w": 205.4,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 373.8,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 37,
+     "y": 462,
+     "w": 636.6,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 715.6,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 134.4
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 746.6,
+      "y": 202.6,
+      "w": 86.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 1080.3,
+     "y": 109.2,
+     "w": 322.7,
+     "h": 100.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "3|1440|uk|light|open": {
+  "side": "changed",
+  "file": "variant-3-1440-uk-light-open-changed.png",
+  "width": 1440,
+  "scrollWidth": 1440,
+  "pans": 0,
+  "widestRight": 1440,
+  "overflowX": 0,
+  "height": 1008,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 65.4,
+     "w": 688,
+     "h": 275.8
+    },
+    "buttons": [
+     {
+      "text": "Пропустити Prototype",
+      "x": 562.6,
+      "y": 135.3,
+      "w": 135.4,
+      "h": 30
+     },
+     {
+      "text": "Повторити Prototype",
+      "x": 562.6,
+      "y": 165.3,
+      "w": 135.4,
+      "h": 30
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 65.4,
+     "w": 688,
+     "h": 360.6
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 741,
+      "y": 321,
+      "w": 86.8,
+      "h": 28
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 835.8,
+      "y": 321,
+      "w": 163.8,
+      "h": 28
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 24,
+     "y": 442,
+     "w": 688,
+     "h": 526.1
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 728,
+     "y": 442,
+     "w": 688,
+     "h": 320.6
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "3|390|en|dark|board": {
+  "side": "changed",
+  "file": "variant-3-390-en-dark-board-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 985,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 110.2,
+     "w": 366,
+     "h": 92.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 212.5,
+     "w": 366,
+     "h": 100.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 322.9,
+     "w": 366,
+     "h": 100.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 19,
+     "y": 407.1,
+     "w": 203.6,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 433.3,
+     "w": 366,
+     "h": 100.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 543.7,
+     "w": 366,
+     "h": 84.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 673.3,
+     "w": 366,
+     "h": 142.4
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 43,
+      "y": 758.6,
+      "w": 65.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 861,
+     "w": 366,
+     "h": 92.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "3|390|en|dark|open": {
+  "side": "changed",
+  "file": "variant-3-390-en-dark-open-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 2286,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 80.8,
+     "w": 366,
+     "h": 448.9
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 549.6,
+     "w": 366,
+     "h": 496.9
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 25,
+      "y": 905.6,
+      "w": 190.6,
+      "h": 44
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 223.6,
+      "y": 905.6,
+      "w": 141.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1066.5,
+     "w": 366,
+     "h": 701.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1787.9,
+     "w": 366,
+     "h": 466.3
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "3|390|en|light|board": {
+  "side": "changed",
+  "file": "variant-3-390-en-light-board-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 985,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 110.2,
+     "w": 366,
+     "h": 92.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 212.5,
+     "w": 366,
+     "h": 100.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 322.9,
+     "w": 366,
+     "h": 100.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 19,
+     "y": 407.1,
+     "w": 203.6,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 433.3,
+     "w": 366,
+     "h": 100.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 543.7,
+     "w": 366,
+     "h": 84.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 673.3,
+     "w": 366,
+     "h": 142.4
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 43,
+      "y": 758.6,
+      "w": 65.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 861,
+     "w": 366,
+     "h": 92.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "3|390|en|light|open": {
+  "side": "changed",
+  "file": "variant-3-390-en-light-open-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 2286,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 80.8,
+     "w": 366,
+     "h": 448.9
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 549.6,
+     "w": 366,
+     "h": 496.9
+    },
+    "buttons": [
+     {
+      "text": "Answer",
+      "x": 25,
+      "y": 905.6,
+      "w": 190.6,
+      "h": 44
+     },
+     {
+      "text": "Ask the orchestrator",
+      "x": 223.6,
+      "y": 905.6,
+      "w": 141.4,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1066.5,
+     "w": 366,
+     "h": 701.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1787.9,
+     "w": 366,
+     "h": 466.3
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "3|390|uk|dark|board": {
+  "side": "changed",
+  "file": "variant-3-390-uk-dark-board-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 961,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 110.2,
+     "w": 366,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 196.4,
+     "w": 366,
+     "h": 100.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 306.7,
+     "w": 366,
+     "h": 100.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 19,
+     "y": 390.9,
+     "w": 205.4,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 417.1,
+     "w": 366,
+     "h": 100.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 527.5,
+     "w": 366,
+     "h": 84.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 657.1,
+     "w": 366,
+     "h": 142.4
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 43,
+      "y": 742.4,
+      "w": 86.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 844.8,
+     "w": 366,
+     "h": 84.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "3|390|uk|dark|open": {
+  "side": "changed",
+  "file": "variant-3-390-uk-dark-open-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 2253,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 80.8,
+     "w": 366,
+     "h": 448.9
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 549.6,
+     "w": 366,
+     "h": 496.9
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 25,
+      "y": 905.6,
+      "w": 168.2,
+      "h": 44
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 201.2,
+      "y": 905.6,
+      "w": 163.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1066.5,
+     "w": 366,
+     "h": 685.3
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1771.8,
+     "w": 366,
+     "h": 448.9
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "3|390|uk|light|board": {
+  "side": "changed",
+  "file": "variant-3-390-uk-light-board-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 961,
+  "cards": [
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 110.2,
+     "w": 366,
+     "h": 76.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-reject-redo",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 196.4,
+     "w": 366,
+     "h": 100.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 306.7,
+     "w": 366,
+     "h": 100.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": {
+     "x": 19,
+     "y": 390.9,
+     "w": 205.4,
+     "h": 28.8,
+     "inside": true
+    },
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 417.1,
+     "w": 366,
+     "h": 100.4
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-activity-truth",
+    "owner": "working",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 527.5,
+     "w": 366,
+     "h": 84.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 657.1,
+     "w": 366,
+     "h": 142.4
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 43,
+      "y": 742.4,
+      "w": 86.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-automerge-checks",
+    "owner": "seat",
+    "state": "closed",
+    "box": {
+     "x": 12,
+     "y": 844.8,
+     "w": 366,
+     "h": 84.2
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ },
+ "3|390|uk|light|open": {
+  "side": "changed",
+  "file": "variant-3-390-uk-light-open-changed.png",
+  "width": 390,
+  "scrollWidth": 390,
+  "pans": 0,
+  "widestRight": 390,
+  "overflowX": 0,
+  "height": 2253,
+  "cards": [
+   {
+    "id": "task:t-voice-head",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 80.8,
+     "w": 366,
+     "h": 448.9
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-unsafe-root",
+    "owner": "you",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 549.6,
+     "w": 366,
+     "h": 496.9
+    },
+    "buttons": [
+     {
+      "text": "Відповісти",
+      "x": 25,
+      "y": 905.6,
+      "w": 168.2,
+      "h": 44
+     },
+     {
+      "text": "Запитати оркестратора",
+      "x": 201.2,
+      "y": 905.6,
+      "w": 163.8,
+      "h": 44
+     }
+    ],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-node-modules",
+    "owner": "working",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1066.5,
+     "w": 366,
+     "h": 685.3
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   },
+   {
+    "id": "task:t-midturn-review",
+    "owner": "seat",
+    "state": "open",
+    "box": {
+     "x": 12,
+     "y": 1771.8,
+     "w": 366,
+     "h": 448.9
+    },
+    "buttons": [],
+    "smallTargets": [],
+    "dot": 10,
+    "pop": null,
+    "cutTitle": false,
+    "cutLine": false,
+    "lineAnswerOverlap": 0
+   }
+  ],
+  "original": {
+   "answerButtons": [],
+   "dismissButtons": 0,
+   "needsCards": 0,
+   "warningReasons": [],
+   "cardHeights": []
+  },
+  "pageErrors": []
+ }
+}
