@@ -3,6 +3,9 @@
 import { TriangleAlert } from "lucide-react";
 import { memo, type CSSProperties } from "react";
 import { DelegatusMark } from "@/components/brand/BrandMark";
+import { RoleAvatar, useConversationRole } from "@/components/brand/RoleAvatar";
+import { frameRoleName } from "@/components/RoleFrameMark";
+import { roleFromWord, type FrameRole } from "@/lib/roleFrames";
 import { useLocale, type TFunction } from "@/lib/i18n";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -130,6 +133,15 @@ function agentRoleLabel(role: string, t: TFunction): string {
   }
 }
 
+/** The costume an internal card draws for its sender (docs/design/role-avatars.md):
+    a registry role, or the agent that names none. Delegatus's own relays
+    (controller, pipeline, a gateway) and unknown words keep the product's mark. */
+export function cardAvatarRole(peer: string, t: TFunction): FrameRole | null {
+  const role = roleFromWord(peer);
+  if (role) return role;
+  return peer === "agent" || peer === t("render.agentPeer") ? "neutral" : null;
+}
+
 /* Mobile v2 (#1439, lane 4): the engine mark is the only avatar left on the
    phone — a 16 px glyph in secondary colour beside the engine's name in the
    message header (README §5). Proper nouns, so no locale entry. */
@@ -179,6 +191,12 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
   /* Inside a deputy's block (docs/design/ghost-seat.md §6.2) the prose row is
      the seat's parallel self: outline mark, secondary ink. */
   const deputyInk = useDeputyInk();
+  /* The conversation's role, where the surface resolved one: its answers draw
+     Delegatus in that role's costume. The engine keeps its own mark and name
+     beside the time, apart from the role (operator, 2026-10-11). A deputy's
+     rows are the seat's parallel self and keep their outline mark. */
+  const conversationRole = useConversationRole();
+  const role = deputyInk ? null : conversationRole;
   const item = resolveDeliveredItem(sourceItem, provenance);
   /* Mobile v2 (#1439, lane 4): no avatar column on the phone, so nothing lines
      up with one — the `ml-9` chrome indent goes with it. */
@@ -223,6 +241,7 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
             className="mb-1 flex h-5 w-full min-w-0 items-center gap-1.5 text-label text-muted"
             title={resumesAsk ?? undefined}
           >
+            {role ? <RoleAvatar role={role} size={20} /> : null}
             {deputyInk ? <DeputyMark engine={item.engine} /> : avatarIcon("h-4 w-4 shrink-0 text-secondary")}
             {/* Inside a deputy's block the row is the parallel self's, and says so:
                 the bare engine name is what the seat's own rows carry. */}
@@ -244,7 +263,7 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
     }
     return (
       <div className="group/msg my-3 flex gap-2.5">
-        {deputyInk ? <DeputyMark engine={item.engine} size={26} className="mt-1" /> : (
+        {deputyInk ? <DeputyMark engine={item.engine} size={26} className="mt-1" /> : role ? <RoleAvatar role={role} size={26} className="mt-1 self-start" /> : (
           <div className={`mt-1 flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-full text-[color:var(--engine-fill-ink)] ${cls}`} style={fillStyle}>
             {avatarIcon("h-3.5 w-3.5")}
           </div>
@@ -270,7 +289,15 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
               now hold their own row above the text: they cover nothing at any
               width, and they are visible without a hover. */}
           <div className="mb-0.5 flex min-h-6 items-center gap-1">
-            {hhmm(item.ts) ? <span className="text-label tabular-nums text-muted">{hhmm(item.ts)}</span> : null}
+            {/* With the role's costume in the avatar column, the engine moves
+                beside the time in the phone header's form: glyph and name. */}
+            {role ? (
+              <span data-message-engine className="flex shrink-0 items-center gap-1.5 text-label font-semibold text-secondary">
+                {avatarIcon("h-4 w-4 shrink-0")}
+                {ENGINE_LABEL[item.engine]}
+              </span>
+            ) : null}
+            {hhmm(item.ts) ? <span className="text-label tabular-nums text-muted">{role ? `· ${hhmm(item.ts)}` : hhmm(item.ts)}</span> : null}
             <span className="ml-auto flex shrink-0 items-center gap-0.5">
               {speakText ? <SpeakButton text={speakText} answerId={speakId} /> : null}
               <CopyButton text={item.text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />
@@ -337,14 +364,21 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
     const long = item.text.length > 420 || item.text.split("\n").length > 6;
     /* The row draws the summary's pictures before the text's. */
     const first = mdImages(item.summary).length;
+    /* A message another agent sent carries Delegatus in the sender's costume
+       and the role's name alone; the phone's clock drops its seconds, as the
+       answers' clock does, so the longest role name fits at 390 px. */
+    const senderRole = item.internal && !item.voiceRelay ? cardAvatarRole(item.peer, t) : null;
+    const clock = isMobile ? mobileClock(item.ts) : hhmm(item.ts);
     return (
       <div className={`my-3 ${indent}overflow-hidden rounded-surface border shadow-1 ${item.voiceRelay ? "border-info/30 bg-info-soft" : "border-accent/25 bg-accent-soft"}`} data-voice-relay={item.voiceRelay ? "" : undefined}>
         <div className="flex items-center gap-2 px-3.5 pt-2">
-          <span className={`flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-lg ${item.voiceRelay ? "bg-info-soft text-info" : "bg-accent-soft text-accent"}`}>
-            {/* Internal traffic is relayed by Delegatus itself, so it carries the
-                product's mark; a peer's own team message keeps the envelope. */}
-            {item.internal ? <DelegatusMark size={20} /> : <Mail className="h-3.5 w-3.5" aria-hidden />}
-          </span>
+          {senderRole ? <RoleAvatar role={senderRole} size={26} /> : (
+            <span className={`flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-lg ${item.voiceRelay ? "bg-info-soft text-info" : "bg-accent-soft text-accent"}`}>
+              {/* Internal traffic is relayed by Delegatus itself, so it carries the
+                  product's mark; a peer's own team message keeps the envelope. */}
+              {item.internal ? <DelegatusMark size={20} /> : <Mail className="h-3.5 w-3.5" aria-hidden />}
+            </span>
+          )}
           {/* #1117: an MCP/structured relay says outright that it is internal
               traffic, and the peer pill names the sender ROLE, so the operator
               never mistakes it for their own words or for scaffold. */}
@@ -365,8 +399,8 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
               {tr("render.voiceDelegatusLabel")}
             </span>
           ) : item.internal ? (
-            <span className="min-w-0 text-[11px] font-semibold text-accent" data-agent-author data-agent-role={item.peer}>
-              {t("render.agentLabel")}{item.peer === "agent" || item.peer === t("render.agentPeer") ? null : ` · ${agentRoleLabel(item.peer, t)}`}
+            <span className={`min-w-0 ${senderRole ? "truncate " : ""}text-[11px] font-semibold text-accent`} data-agent-author data-agent-role={item.peer}>
+              {senderRole ? frameRoleName(t, senderRole) : <>{t("render.agentLabel")}{item.peer === "agent" || item.peer === t("render.agentPeer") ? null : ` · ${agentRoleLabel(item.peer, t)}`}</>}
               {item.senderProject ? <span className="inline-block max-w-full truncate whitespace-nowrap align-bottom" data-agent-project title={item.senderProject}>{` · ${item.senderProject}`}</span> : null}
               {item.senderConversationId ? <a className="ml-1 underline underline-offset-2" href={`#c=${encodeURIComponent(item.senderConversationId)}`} aria-label={tr("render.openSenderConversation")}>↗</a> : null}
             </span>
@@ -381,7 +415,7 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
               {item.delivery === "ok" ? tr("render.delivered") : tr("render.notDelivered")}
             </span>
           ) : null}
-          {hhmm(item.ts) ? <span className="ml-auto shrink-0 text-label tabular-nums text-muted">{hhmm(item.ts)}</span> : null}
+          {clock ? <span className="ml-auto shrink-0 text-label tabular-nums text-muted" data-card-clock>{clock}</span> : null}
         </div>
         <div className="px-3.5 pb-2.5 pt-1">
           {protocol ? (

@@ -4,6 +4,8 @@ import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { layeredReportResolution, sendDismissal, useDismissalLayerVersion } from "@/components/attention/dismissalOverlay";
+import { DoneSection } from "@/components/attention/DoneSection";
+import { useDoneItems } from "@/components/attention/doneItems";
 import { roleNameById } from "@/components/builderCopy";
 import type { DismissalSubjectRequest } from "@/lib/attention/dismissalTypes";
 import type { ReportLogAsk } from "@/lib/asks/types";
@@ -34,9 +36,19 @@ import { useReportLog } from "./useReportLog";
  * log, dimmed, with its check. The bar above the entries counts the open
  * questions, steps between them, resolves them all, and clears the resolved
  * ones out of the view (on this device; the rows stay in the log).
+ *
+ * Above all of it, «Готово» (docs/design/done-section.md) is pinned: the same
+ * list «Чекають на вас» opens with, from the same store, cut to this project
+ * and what belongs to no board, newest first. It folds to its head with the
+ * count and scrolls in its own band, at most 45% of the log's height, so the
+ * log never scrolls it away and keeps room for its entries.
  */
 
 type QuestionState = "open" | "resolved" | null;
+
+/* The report log is one project's; «Готово» rows here are that project's or
+   no board's, so none needs another project's name. */
+const NO_NAMES: Readonly<Record<string, string>> = {};
 
 function isQuestion(entry: ReportLogEntry): boolean {
   return entry.class === "question" || entry.class === "blocked";
@@ -99,6 +111,8 @@ export function ReportLog({ project, active = true, variant, headless = false, i
 }) {
   const { t, locale } = useLocale();
   const log = useReportLog(project, active, initial);
+  const allDone = useDoneItems(active);
+  const done = useMemo(() => allDone.filter((item) => item.project === null || item.project === project), [allDone, project]);
   const setting = useBridgeReportsSetting(project, log.bridgeReports ?? undefined);
   const off = setting.enabled === false;
 
@@ -245,6 +259,7 @@ export function ReportLog({ project, active = true, variant, headless = false, i
       {column && !headless ? (
         <h2 className="flex h-9 shrink-0 items-center border-b border-border px-3 text-ui font-semibold text-secondary">{t("reportLog.title")}</h2>
       ) : null}
+      <DoneSection items={done} current={project} projectNames={NO_NAMES} surface={surface} place="reports" band="max-h-[45%]" />
       {off ? null : questionBar}
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">{body}</div>
     </section>

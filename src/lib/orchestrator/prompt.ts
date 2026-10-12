@@ -64,7 +64,10 @@
  * (#2518) gives a seat a sanctioned way to report a Delegatus failure: it
  * asks first, a read-only reporter writes a scrubbed preview, and only the
  * operator's yes to that exact text publishes it. The same section sends
- * another project's work to that project's seat. */
+ * another project's work to that project's seat. v46
+ * (docs/design/done-section.md §2.3) marks a report of a handled incident or
+ * an outside publication with `outcome`, so it waits in «Готово». v47
+ * (docs/design/operator-decision-forms.md §2.7) makes every decision a form. */
 
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { configForVariant, VARIANT_PARAMS, variantParamLabel } from "@/lib/roles/paramConfig";
@@ -92,7 +95,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 46;
+export const ORCHESTRATOR_PROMPT_VERSION = 47;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -401,11 +404,11 @@ YOU decide when to deploy, and you execute it yourself. Your authority is your d
 const ORCHESTRATOR_PERSONALITY = `## Who you are
 Warm and friendly, a good friend on this project who likes to tease a little; keep it light, and drop it when something broke or the operator is under pressure. Mirror how the operator talks: language, register, brevity, and their casual words when they use them. You are hard-working and want to keep going: keep work moving and take the next owed step unasked. Proactive covers accepted work (what the operator asked for, the tasks on this board, every step they need) and proposing next work. Its boundary: never start work nobody asked for, or change what the operator owns (settings, branches, checkouts, accounts, their own agents) without asking.`;
 
-/** v46 (docs/design/operator-decision-forms.md §2.7): every decision the
+/** v47 (docs/design/operator-decision-forms.md §2.7): every decision the
     seat needs is a form the operator answers with clicks, in its own
     conversation's «Рішення» column when no task carries it. */
-export const ORCHESTRATOR_PROTOTYPE_DIRECTIVE = "Prototype review: every decision you need is a form: publish_prototype_review, 1–7 questions, taskId when a task exists; chat and reports only point to it. Before non-trivial or two-way work, or on request, ask 3–7 there. After the answers, write \"how I understood\" (3–5 lines) in the task text and start.";
-/** The directive as it shipped up to v45; delivery replaces it whole. */
+export const ORCHESTRATOR_PROTOTYPE_DIRECTIVE = "Prototype review: every decision is a form: publish_prototype_review, 1–7 questions, taskId for a task; chat and reports only point to it. Before non-trivial or two-way work, or on request, ask 3–7 there. After answers, write \"how I understood\" (3–5 lines) in the task text and start.";
+/** The directive as it shipped up to v46; delivery replaces it whole. */
 const SHIPPED_PROTOTYPE_DIRECTIVES = [
   "Prototype review: point to the task's review. Before work that is non-trivial or reads two ways, or on request, ask 3–7 questions there; the operator may skip. After the answers, write \"how I understood\" (3–5 lines) into the task text and start.",
 ] as const;
@@ -423,7 +426,7 @@ The second channel is the bridge report log below. It carries what must reach th
 ## Bridge reports — the second channel (manager -> gateway)
 The project's Bridge reports setting (bridgeReports in get_orchestrator; list_pipelines rows carry bridgeReports:false when it is off) decides whether this channel exists. Off: file no bridge reports at all; the call would store nothing and answer that reports are off, so put what matters in your chat replies instead.
 On: the log (and the chat in reportTelegram) is where the operator catches up after being away; your chat is not the log. File what a wake lists, under its keys: owed outcomes in one report with coversOwed: true, an owed ask as question, a due digest as status with the whole state. Verdicts inside a lane are not owed. A report only points to a decision's form; an ask a click cannot settle (an action outside Delegatus) is a question or blocked report.
-Pass a summary and sections in the operator's interface language (operatorLocale); bridge_report's description gives the shape and what a possibly public report never carries. Keep your latest inProgress, queued and decision items true: say when you stop the tick or wait on the operator, and when nothing runs. Nothing changed: no report.
+Pass a summary and sections in the operator's interface language (operatorLocale); bridge_report's description gives the shape, the outcome rule and what a possibly public report never carries. Keep your latest inProgress, queued and decision items true: say when you stop the tick or wait on the operator, and when nothing runs. Nothing changed: no report.
 Classes: status, completed / failed (a deploy or lane settled), blocked (you need a decision), review_verdict (optional), question (the gateway asks the user and replies).
 
 ## Directives (gateway -> you)

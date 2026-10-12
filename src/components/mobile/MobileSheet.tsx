@@ -23,6 +23,10 @@ import { Z } from "@/components/layers";
  * says which one is open, and the shell renders it last. The receipt slot
  * inside a sheet sits between its body and its footer, the same slot the
  * screen's receipt takes between the body and the dock.
+ *
+ * A `pinned` block stands between the header and the body, outside the body's
+ * scroller, so scrolling the body never carries it away; it bounds and scrolls
+ * its own rows (the needs-you sheet's «Готово», docs/design/done-section.md §4.3).
  */
 
 /** A drag of the handle past this many pixels closes the sheet. */
@@ -50,6 +54,7 @@ export function MobileSheet({
   title,
   extra,
   footer,
+  pinned,
   full = false,
   titleHidden = false,
   onClose,
@@ -61,6 +66,8 @@ export function MobileSheet({
   /** A header control beside the title (the queue's «Dismiss all», the switcher's «Board ›»). */
   extra?: ReactNode;
   footer?: ReactNode;
+  /** A block pinned above the scrolling body; it caps its own height. */
+  pinned?: ReactNode;
   /** Fullscreen (the prototype review): no handle, no rounded top, the footer at the screen's foot. */
   full?: boolean;
   /** The title only names the dialog for assistive tech: the body already says what it holds. */
@@ -150,9 +157,10 @@ export function MobileSheet({
             <X className="h-5 w-5" aria-hidden />
           </button>
         </div>
+        {pinned}
         {/* A full sheet's body takes the height the header and the footer leave,
             so the footer stands at the foot of the screen whatever the body holds. */}
-        <div className={`min-h-0 overflow-y-auto pb-1 ${full ? "flex-1" : ""}`} data-mobile2-sheet-body>
+        <div className={`min-h-0 overflow-y-auto overflow-x-hidden pb-1 ${full ? "flex-1" : ""}`} data-mobile2-sheet-body>
           {children}
         </div>
         <MobileReceipt store={receiptStore} placement="sheet" />

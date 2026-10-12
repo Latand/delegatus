@@ -38,6 +38,7 @@ function ports(): Omit<ClaudeLoginPorts, "pidStartToken" | "isExpectedClaude" | 
   return {
     spawn: () => child as never,
     kill: (_pid, signal) => { signals.push(signal); },
+    observeSignedIn: async () => {},
     status: async () => ({ loggedIn: true, method: "oauth", email: "person@example.com", plan: "max" }),
     now: () => 1_000,
     setTimeout: (fn, ms) => { if (ms <= 2_000) fn(); return {} as NodeJS.Timeout; },

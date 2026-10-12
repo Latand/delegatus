@@ -376,3 +376,75 @@ test("a questionnaire phone row asks the operator to answer", () => {
   expect(host.textContent).toContain("Questions for you");
   expect(q(host, "[data-attention-prototype]")?.getAttribute("aria-label")).toBe("Answer the questions for «Before work»");
 });
+
+/* «Готово» on the phone (docs/design/done-section.md §4.3, §5): the same
+   list pinned at the top of the sheet above its scroller, the header counting both, the square check the
+   frames draw, and the accepted row left in place with its Undo. */
+type DoneItemV1 = import("@/lib/done/types").DoneItemV1;
+const { useState } = await import("react");
+
+function doneItem(key: string, over: Partial<DoneItemV1> = {}): DoneItemV1 {
+  const at = new Date((NOW - 600) * 1000).toISOString();
+  return { key, kind: "task", look: "closed", project: PROJECT, at, createdAt: at, title: `Closed ${key}`, icon: null, refs: {}, frame: null, frameCheckedAt: at, acknowledgedAt: null, acknowledgedBy: null, ...over };
+}
+
+test("«Готово» opens the sheet above the queue, the header counts both, and a row's square check accepts it in place with Undo", async () => {
+  const calls: Array<{ keys: string[]; undo: boolean; surface: string }> = [];
+  const initial = [
+    doneItem("pr:acme/widgets#2691", { kind: "pr", look: "visible", title: "Landing cards no longer show through", refs: { pr: { repository: "acme/widgets", number: 2691, url: "https://github.com/acme/widgets/pull/2691" } },
+      frame: { src: "/api/image?media=after", before: "/api/image?media=before", caption: "Landing" } }),
+    doneItem("deploy:d1", { kind: "deploy", look: "deploy", project: null, title: "", refs: { sha: "1c41d361".padEnd(40, "0"), phase: "succeeded" } }),
+  ];
+  function Harness() {
+    const [done, setDone] = useState(initial);
+    return <MobileAttentionSheet entries={entries()} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} done={done}
+      acknowledgeDone={async (items, options) => {
+        calls.push({ keys: items.map((item) => item.key), undo: options.undo === true, surface: options.surface });
+        setDone((list) => (options.undo ? [...list, ...items] : list.filter((item) => !items.some((taken) => taken.key === item.key))));
+        return { ok: true };
+      }} />;
+  }
+  const host = mount(<Harness />);
+  expect(q(host, "h2")!.textContent).toBe("Waiting for you · 5");
+  /* «Dismiss all» names the decisions it clears, not the finished work. */
+  expect(q(host, "[data-needs-you-dismiss-all]")!.textContent).toBe("Dismiss all 3");
+  const list = q(host, "[data-mobile2-attention-list]")!;
+  const section = q(host, '[data-done-section="phone"]')!;
+  /* Pinned first: the queue follows it, and only the queue is in the sheet's
+     scroller; «Готово» sits between the header and that body in its own band. */
+  expect(section.compareDocumentPosition(list as unknown as Node) & 4).toBe(4);
+  const body = q(host, "[data-mobile2-sheet-body]")!;
+  expect(body.contains(list)).toBe(true);
+  expect(body.contains(section)).toBe(false);
+  expect(section.parentElement).toBe(body.parentElement);
+  expect(section.compareDocumentPosition(q(host, "[data-mobile2-sheet-header]") as unknown as Node) & 2).toBe(2);
+  expect(section.className).toContain("max-h-[40dvh]");
+  expect(q(section, "[data-done-list]")!.className).toContain("overflow-y-auto");
+  expect(section.getAttribute("data-done-place")).toBe("needs-you");
+  expect(q(section, "[data-done-accept-all]")!.textContent).toBe("Seen all");
+  const check = q(section, '[data-done-accept="pr:acme/widgets#2691"]')!;
+  /* The square check: a whole finger's target and no word. */
+  expect(check.textContent).toBe("");
+  expect(check.className).toContain("min-h-11");
+  expect(check.getAttribute("aria-label")).toBe("Accept: Landing cards no longer show through");
+  flushSync(() => click(check));
+  await new Promise((r) => setTimeout(r, 0));
+  expect(calls).toEqual([{ keys: ["pr:acme/widgets#2691"], undo: false, surface: "phone" }]);
+  expect(q(host, "h2")!.textContent).toBe("Waiting for you · 4");
+  const receipt = q(section, '[data-done-receipt="pr:acme/widgets#2691"]')!;
+  expect(receipt.querySelector("[data-done-receipt-text]")!.textContent).toBe("Landing cards no longer show through #2691\u00a0· accepted");
+  flushSync(() => click(q(receipt, "[data-done-undo]")));
+  await new Promise((r) => setTimeout(r, 0));
+  expect(calls[1]).toEqual({ keys: ["pr:acme/widgets#2691"], undo: true, surface: "phone" });
+  expect(q(host, "h2")!.textContent).toBe("Waiting for you · 5");
+});
+
+test("with no decision and nothing finished the sheet says so; finished work alone keeps the sheet's count", () => {
+  const empty = mount(<MobileAttentionSheet entries={[]} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} done={[]} />);
+  expect(q(empty, "[data-mobile2-attention-empty]")).not.toBeNull();
+  expect(q(empty, "[data-done-section]")).toBeNull();
+  const alone = mount(<MobileAttentionSheet entries={[]} now={NOW} onOpenConversation={() => {}} onClose={() => {}} screen={{ kind: "board" }} done={[doneItem("task:t1")]} />);
+  expect(q(alone, "[data-mobile2-attention-empty]")).toBeNull();
+  expect(qa(alone, "h2").at(-1)!.textContent).toBe("Waiting for you · 1");
+  expect(q(alone, '[data-done-group="closed"]')).not.toBeNull();
+});

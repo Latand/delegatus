@@ -74,7 +74,7 @@ if(c!=="off")document.documentElement.setAttribute("data-role-frame",c);
 const KNOWN = new Set<string>(ROLE_IDS);
 
 /** A review loop's two sides, and the older spawn words for the same jobs. */
-function roleFromWord(word: string | null | undefined): RoleId | null {
+export function roleFromWord(word: string | null | undefined): RoleId | null {
   const value = word?.trim().toLowerCase();
   if (!value) return null;
   if (KNOWN.has(value)) return value as RoleId;

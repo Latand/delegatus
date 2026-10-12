@@ -257,6 +257,12 @@ test.each([roleScope(PROJECT, "visual-critic"), projectScope(PROJECT)])("split u
   expect(row(one).rule).toBe(text); expect(row(part).reason).toBe("undone");
   expect(projectView(PROJECT).scopes.find(s => s.scope === to)!.active).toEqual([]);
 });
+test("curator edits accept generic Node.js and Next.js guidance", () => {
+  const scope = roleScope(PROJECT, "builder"), one = fixture(scope), p = pass();
+  const rule = "Before changing Node.js or Next.js streaming behavior, test errors after the first write.";
+  applyCuration(p, input({ [scope]: [one] }, { rewrite: [{ id: one, rule, note: "This validation applies to both runtime boundaries." }] }), at(100));
+  expect(row(one).rule).toBe(rule);
+});
 test("operator-kept rules cannot be archived, split or merged away", () => {
   const scope = roleScope(PROJECT, "builder"), one = fixture(scope, { keptByOperatorAt: at() }), two = fixture(scope), p = pass();
   refusal(p, input({ [scope]: [two] }, { archive: [{ id: one, reason: "stale", note: "The command was removed." }] }), "CURATE_KEPT");

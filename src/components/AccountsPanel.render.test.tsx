@@ -208,7 +208,7 @@ test("a weekly-horizon window in the session field is labelled by its horizon, n
   }));
   const detail = html.match(/<dl[^>]*Quota windows[^>]*>[\s\S]*?<\/dl>/)?.[0] ?? "";
   expect(detail).not.toBe("");
-  expect(detail).toContain(`<dt class="w-8 shrink-0 font-semibold">${translate("en", "limits.week")}</dt>`);
+  expect(detail).toContain(`<dt class="w-[52px] shrink-0 font-semibold">${translate("en", "limits.week")}</dt>`);
   const labels = [...detail.matchAll(/<dt[^>]*>([^<]*)<\/dt>/g)].map((match) => match[1]);
   expect(labels).not.toContain(translate("en", "limits.5h"));
   expect(detail).toContain("85%"); // 100 - 15, under the weekly label

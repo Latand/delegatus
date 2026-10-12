@@ -78,7 +78,7 @@ export function appendRule(active: readonly RoleMemoryRule[], incoming: RoleMemo
   const merged: { from: string; into: string }[] = [];
   const duplicate = next.find((rule) => sameRule(rule.rule, incoming.rule));
   if (duplicate) {
-    changed.push({ ...incoming, state: "merged", reason: "duplicate", mergedInto: duplicate.id, changedAt: at });
+    changed.push({ ...incoming, state: "merged", reason: "duplicate", mergedInto: duplicate.id, mergedAt: at, changedAt: at });
     merged.push({ from: incoming.id, into: duplicate.id });
     if (!duplicate.curatedAt && !duplicate.keptByOperatorAt) {
       next.splice(next.indexOf(duplicate), 1);
