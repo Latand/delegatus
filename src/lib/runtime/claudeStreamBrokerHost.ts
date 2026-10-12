@@ -46,7 +46,7 @@ import {
   type RuntimeEventStore,
 } from "./eventStore";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
-import { pendingPermissionFrom, type PendingPermissionRequest } from "./permissionRequests";
+import { pendingPermissionFrom, pendingToolUseFrom, type PendingPermissionRequest } from "./permissionRequests";
 import { NATIVE_MULTI_AGENT_DENY_FLAG } from "./hostActivityFlags";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
 import { resolveTelegramLaunchGrant, TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE, type TelegramLaunchGrant } from "./telegramConnectorEnv";
@@ -1232,11 +1232,17 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       activeTurnRef: this.activeTurnId,
       pendingAttention: [...this.attentions.keys()],
       pendingPermissions: this.pendingPermissions(),
+      ...this.pendingToolUses(),
       providerRetry: this.activeTurnId ? this.providerRetry : null,
       ...memoryField(this.memoryCell),
       activeFlags: [...this.launchFlags],
       account: this.account,
     };
+  }
+
+  private pendingToolUses(): Pick<HostState, "pendingToolUses"> {
+    const pendingToolUses = [...this.attentions].flatMap(([id, attention]) => pendingToolUseFrom(id, attention) ?? []);
+    return pendingToolUses.length ? { pendingToolUses } : {};
   }
 
   private pendingPermissions(): PendingPermissionRequest[] {

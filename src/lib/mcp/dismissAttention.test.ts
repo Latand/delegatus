@@ -376,3 +376,113 @@ test("the scoped maintainer reads through the binding with its capability, and s
     else process.env.LLV_SPAWN_CAPABILITY = oldCapability;
   }
 });
+
+/* docs/design/attention-auto-resolve.md: a seat hands a wait routed to it to
+   the operator through a decision form, a prototype-review round it already
+   published, behind the same gate as a dismissal. The escalation holds the
+   round and no question of its own (docs/design/operator-decision-forms.md §4). */
+test("the seat escalates a routed wait to a waiting decision round; a worker, another project's seat or a settled round cannot", async () => {
+  const state = world();
+  const round = (id: string, decided: boolean) => ({ id, title: id, createdAt: "2026-09-24T09:40:00.000Z", variants: [],
+    questions: [{ id: "q1", text: "Retry the build on the bigger runner, or close the lane?", options: [{ label: "Retry", recommended: true }, { label: "Close" }] }],
+    ...(decided ? { decision: { chosen: [], comment: "", at: "2026-09-24T09:45:00.000Z", delivery: { state: "sent" } } } : {}) });
+  const tasks = [
+    { ...TASK, prototypeReviews: [round("round-old", false), round("round-1", false)] },
+    { ...TASK, id: "task-decided", prototypeReviews: [round("round-decided", true)] },
+    { ...TASK, id: "task-elsewhere", project: "elsewhere", prototypeReviews: [round("round-elsewhere", false)] },
+  ] as unknown as BoardTask[];
+  const as = (authority: AttentionCallerAuthority) => serviceAs(authority, state, undefined, { loadTasks: () => tasks });
+  const lane = await as(MANAGER).callTool("dismiss_attention", { clientRequestId: "e-lane", target: { kind: "pipeline", pipelineId: "lane-1" }, escalate: { reviewId: "round-1" } }) as Answer & { escalated?: { key: string; seat: string | null } };
+  expect(lane.ok).toBe(true);
+  expect(lane.escalated).toMatchObject({ taskId: "task-1", reviewId: "round-1", seat: SEAT });
+  expect(Object.keys(lane.escalated!).sort()).toEqual(["at", "key", "reviewId", "seat", "taskId"]);
+  expect(lane.escalated!.key).toMatch(/^lane:lane-1:lane-decision:/);
+  expect(state.writes).toEqual([]);
+  expect(readAttentionDismissals().records).toMatchObject([{ kind: "escalation", subject: `escalation:${lane.escalated!.key}`, by: { kind: "manager", conversationId: SEAT } }]);
+
+  for (const [authority, refusedAs] of [[WORKER, "worker"], [OTHER_SEAT, "cross-project"]] as const) {
+    const refused = await as(authority).callTool("dismiss_attention", { clientRequestId: `e-${refusedAs}`, target: { kind: "pipeline", pipelineId: "lane-1" }, escalate: { reviewId: "round-1" } }) as Answer;
+    expect(refused.ok).toBe(false);
+    expect(refused.details).toMatchObject({ code: "DISMISS_NOT_PERMITTED", refusedAs });
+  }
+  /* A conversation's wait is named by its reason; a question of the seat's
+     own, a round of another project, a missing, retired or decided round are
+     refused before anything is written. */
+  const unnamed = await as(MANAGER).callTool("dismiss_attention", { clientRequestId: "e-no-reason", target: { kind: "conversation", conversationId: "conversation_asker" }, escalate: { reviewId: "round-1" } }) as Answer;
+  expect(unnamed.details).toMatchObject({ code: "INVALID_TARGET" });
+  for (const [escalate, code] of [
+    [{ question: "Which?", options: ["One", "Two"] }, "INVALID_ESCALATION"],
+    [{ reviewId: "round-elsewhere" }, "ROUND_NOT_FOUND"],
+    [{ reviewId: "round-missing" }, "ROUND_NOT_FOUND"],
+    [{ reviewId: "round-old" }, "ROUND_NOT_WAITING"],
+    [{ reviewId: "round-decided" }, "ROUND_NOT_WAITING"],
+  ] as const) {
+    const refused = await as(MANAGER).callTool("dismiss_attention", { clientRequestId: `e-${code}-${JSON.stringify(escalate)}`, target: { kind: "pipeline", pipelineId: "lane-1" }, escalate }) as Answer;
+    expect(refused.ok).toBe(false);
+    expect(refused.details).toMatchObject({ code });
+  }
+  expect(readAttentionDismissals().records).toHaveLength(1);
+
+  const withdrawn = await as(MANAGER).callTool("dismiss_attention", { clientRequestId: "e-undo", target: { kind: "pipeline", pipelineId: "lane-1" }, escalate: {}, undo: true }) as Answer & { changed?: boolean };
+  expect(withdrawn).toMatchObject({ ok: true, changed: true });
+  expect(readAttentionDismissals().records).toEqual([]);
+});
+
+/* A dismissed round is off the operator's board, so it is no form to hand a
+   wait to: the escalation is refused as the board reads it, with nothing
+   written, and the same round once restored can take it. */
+test("escalation refuses a round the operator dismissed, and takes it again once restored", async () => {
+  const state = world();
+  const round = { id: "round-a", title: "round-a", createdAt: "2026-09-24T09:40:00.000Z", variants: [],
+    questions: [{ id: "q1", text: "Retry the build on the bigger runner, or close the lane?", options: [{ label: "Retry", recommended: true }, { label: "Close" }] }] };
+  const task = { ...TASK, prototypeReviews: [round] } as unknown as BoardTask;
+  const as = serviceAs(MANAGER, state, undefined, { loadTasks: () => [task], dismissalPorts: { ...ports(state), task: (id: string) => id === task.id ? task : null } });
+  const target = { kind: "prototype", taskId: task.id, reviewId: "round-a" };
+  expect(await as.callTool("dismiss_attention", { clientRequestId: "p-clear", target })).toMatchObject({ ok: true, dismissed: [target] });
+  const { withPrototypeReviewSummaries } = await import("@/lib/prototypeReview/read");
+  expect(withPrototypeReviewSummaries([task])[0]!.prototypeReview).toMatchObject({ waitingReviewId: "round-a", waitingDismissal: { by: { kind: "manager" } } });
+
+  const refused = await as.callTool("dismiss_attention", { clientRequestId: "e-dismissed", target: { kind: "pipeline", pipelineId: "lane-1" }, escalate: { reviewId: "round-a" } }) as Answer;
+  expect(refused).toMatchObject({ ok: false, details: { code: "ROUND_NOT_WAITING" } });
+  expect(readAttentionDismissals().records.filter((record) => record.kind === "escalation")).toEqual([]);
+
+  expect(await as.callTool("dismiss_attention", { clientRequestId: "p-undo", target, undo: true })).toMatchObject({ ok: true });
+  expect(await as.callTool("dismiss_attention", { clientRequestId: "e-restored", target: { kind: "pipeline", pipelineId: "lane-1" }, escalate: { reviewId: "round-a" } })).toMatchObject({ ok: true, changed: true });
+});
+
+test("a taskless seat form persists its escalation and returns the wait after its answer, even while delivery is uncertain", async () => {
+  const { publishPrototype } = await import("@/lib/prototypeReview/store");
+  const { mutateSeatRound } = await import("@/lib/prototypeReview/seatRounds");
+  const { overlayAttentionRoutes, storedWaitingRoundIds } = await import("@/lib/attention/routeOverlay");
+  const { attentionEscalationIndex } = await import("@/lib/attention/dismissals");
+  const round = await publishPrototype({ clientRequestId: "seat-escalation", title: "Which runner?", questions: [
+    { id: "runner", text: "Retry the build?", options: [{ label: "Retry", recommended: true }, { label: "Close" }] },
+  ] }, null, { conversationId: SEAT }, PROJECT);
+  const state = world();
+  const as = serviceAs(MANAGER, state, undefined, { loadTasks: () => [] });
+  const target = { kind: "pipeline", pipelineId: "lane-1" };
+  const elsewhere = await publishPrototype({ clientRequestId: "seat-escalation-other", title: "Another project", questions: round.questions },
+    null, { conversationId: SEAT }, "elsewhere");
+  expect(await as.callTool("dismiss_attention", { clientRequestId: "seat-escalation-refused", target, escalate: { reviewId: elsewhere.id } }))
+    .toMatchObject({ ok: false, details: { code: "ROUND_NOT_FOUND" } });
+  expect(readAttentionDismissals().records).toHaveLength(0);
+  const escalated = await as.callTool("dismiss_attention", { clientRequestId: "seat-escalation-write", target, escalate: { reviewId: round.id } });
+  expect(escalated).toMatchObject({ ok: true, changed: true, escalated: { taskId: null, reviewId: round.id, seat: SEAT } });
+  const persisted = [...attentionEscalationIndex(readAttentionDismissals()).values()];
+  expect(persisted).toHaveLength(1);
+  expect(persisted[0]!.taskId).toBeNull();
+  expect(storedWaitingRoundIds([]).has(round.id)).toBe(true);
+  const lane = state.lanes.get("lane-1")!;
+  const sources = { seats: () => null, tickEnabled: () => false, escalations: () => attentionEscalationIndex(readAttentionDismissals()), canonicalConversationId: (id: string) => id };
+  overlayAttentionRoutes([], [lane], storedWaitingRoundIds([]), Date.now() / 1000, sources);
+  expect(lane.attentionRoute).toMatchObject({ owner: "form", form: { taskId: null, reviewId: round.id } });
+  mutateSeatRound(round.id, held => {
+    held.decision = { chosen: [], answers: [{ questionId: "runner", options: [0] }], comment: "", at: new Date().toISOString(),
+      delivery: { state: "uncertain", conversationId: SEAT, clientMessageId: "seat-escalation-answer", text: "Retry the build." } };
+  });
+  expect(storedWaitingRoundIds([]).has(round.id)).toBe(false);
+  overlayAttentionRoutes([], [lane], storedWaitingRoundIds([]), Date.now() / 1000, sources);
+  expect(lane.attentionRoute).toBeUndefined();
+  expect(await as.callTool("dismiss_attention", { clientRequestId: "seat-escalation-settled", target, escalate: { reviewId: round.id } }))
+    .toMatchObject({ ok: false, details: { code: "ROUND_NOT_WAITING" } });
+});

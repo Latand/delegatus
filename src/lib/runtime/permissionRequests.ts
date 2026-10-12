@@ -145,3 +145,32 @@ export function normalizePendingPermissions(value: unknown): PendingPermissionRe
   }
   return requests;
 }
+
+/** The native tool use one pending question or plan answers: the host's
+    request id beside the `tool_use_id` the transcript names it by. The answer
+    path binds to it, so an answer the caller built from one transcript
+    question never reaches a request the host raised after it. */
+export interface PendingToolUse {
+  id: string;
+  toolUseId: string;
+}
+
+/** The binding of a `can_use_tool` question or plan, or null for a
+    permission, another control, or a request that names no tool use. */
+export function pendingToolUseFrom(id: string, attention: unknown): PendingToolUse | null {
+  const tool = toolRequestName(attention);
+  if (tool === null || !QUESTION_TOOLS.has(tool)) return null;
+  const toolUseId = text(record(attention)?.tool_use_id);
+  return toolUseId ? { id, toolUseId } : null;
+}
+
+/** A persisted list, validated: anything that is not a well-formed binding is dropped. */
+export function normalizePendingToolUses(value: unknown): PendingToolUse[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate) => {
+    const source = record(candidate);
+    const id = text(source?.id);
+    const toolUseId = text(source?.toolUseId);
+    return id && toolUseId ? [{ id, toolUseId }] : [];
+  });
+}
