@@ -1754,6 +1754,36 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   return json({}, 404);
 }) as typeof fetch;
 
+/* Delivery confirmation evidence uses the real composer and runtime bus.
+   The server owns delivery; recent snapshots deliberately omit its receipt. */
+if (new URLSearchParams(location.search).has("delivery-recovery")) {
+  const fixtureFetch = window.fetch;
+  const frame = new URLSearchParams(location.search).get("delivery-recovery")!;
+  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), location.origin);
+    if (url.pathname === "/api/operator/settings") {
+      url.searchParams.set("frame", frame);
+      return serverFetch(url.href, init);
+    }
+    if (url.pathname === "/api/runtime/send" || url.pathname.startsWith("/api/runtime/operations/")) {
+      url.searchParams.set("frame", frame);
+      return serverFetch(url.href, init);
+    }
+    if (url.pathname === "/api/logs" && (init?.method ?? "GET") === "POST") {
+      const { transcript } = await serverFetch(`/api/evidence/delivery?frame=${encodeURIComponent(frame)}`)
+        .then(response => response.json()) as { transcript: string };
+      const chunks: Record<string, { offset: number; start: number; size: number; data: string }> = {};
+      const asked = JSON.parse(String(init?.body ?? "{}")) as { reqs?: Array<{ offset: number }> };
+      (asked.reqs ?? []).forEach((request, index) => {
+        const start = Math.min(Math.max(request.offset, 0), transcript.length);
+        chunks[index] = { offset: transcript.length, start, size: transcript.length, data: transcript.slice(start) };
+      });
+      return json({ chunks });
+    }
+    return fixtureFetch(input, init);
+  }) as typeof fetch;
+}
+
 if (OVERVIEW_SCENE) {
   /* The Overview is the bare route with no project behind it. */
   localStorage.setItem("llvProject", "__overview__");

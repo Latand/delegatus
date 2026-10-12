@@ -1394,6 +1394,7 @@ test.each([
   } as unknown as RuntimeSessionView;
   let polls = 0;
   const admitted = new Map<string, RuntimeReceipt>();
+  let admissionReadable = false;
   setTmuxComposerRuntimeDependenciesForTests({
     refreshRuntime: async () => { polls += 1; return false; },
     useRuntimeReceiptsForArtifact: () => useSyncExternalStore(
@@ -1415,6 +1416,8 @@ test.each([
        answers it out of the same `admitted` map the POST half writes: the
        server's own record of what it accepted. */
     if (String(input).startsWith("/api/runtime/send?")) {
+      // The initial receipt outage keeps fate unknown until this recovery case releases it.
+      if (!admissionReadable) return Response.json({ outcome: "unknown" });
       const key = new URL(String(input), "http://127.0.0.1").searchParams.get("clientMessageId") ?? "";
       const record = admitted.get(key);
       return Response.json(record
@@ -1528,6 +1531,7 @@ test.each([
        may already be delivering. The control asks instead, and the send count
        stays at the one attempt that was actually made. */
     const key = sends[0]!.idempotencyKey;
+    admissionReadable = true;
     flushSync(() => host.querySelector<HTMLButtonElement>("[data-outbox-check]")!.click());
     /* The reconciliation window may already have parked this entry as a
        failure; what the LOOKUP settles is its uncertainty, so that is what the

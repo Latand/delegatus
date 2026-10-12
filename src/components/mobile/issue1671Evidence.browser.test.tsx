@@ -10571,3 +10571,144 @@ describe("seat recovery failure history", () => {
     } finally { await browser.close(); server.stop(); }
   }, 420_000);
 });
+
+
+describe("delivery confirmation recovery", () => {
+  browserTest("lost POST answer reconciles the delivered phone bubble by original key", async () => {
+    const { NextRequest, NextResponse } = await import("next/server");
+    const { handleRuntimeAdmissionQuery } = await import("@/lib/runtime/http");
+    const { deliveryDedupToken } = await import("@/lib/runtime/deliveryDedup");
+    const out = path.resolve(".artifacts/delivery-confirmation");
+    fs.mkdirSync(out, { recursive: true });
+    type Frame = {
+      locale: "en" | "uk"; scheme: "light" | "dark"; posts: number; deliveries: number;
+      reads: number; exposed: boolean; transcript: string; receipt: import("@/components/runtime/runtimeModel").RuntimeReceipt | null;
+      holdRead: boolean; readHeld: boolean; releaseRead?: () => void;
+      journal: RuntimeJournal; ledger: FileClaudeDeliveryLedger;
+    };
+    const frames = new Map<string, Frame>();
+    const server = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx", {
+      "/api/operator/settings": (request: Request) => {
+        const frame = frames.get(new URL(request.url).searchParams.get("frame")!)!;
+        return Response.json({ language: frame.locale, lang: frame.locale });
+      },
+      "/api/evidence/delivery": (request: Request) => Response.json({ transcript:
+        frames.get(new URL(request.url).searchParams.get("frame")!)!.transcript }),
+      "/api/runtime/send": async (request: Request) => {
+        const frame = frames.get(new URL(request.url).searchParams.get("frame")!)!;
+        if (request.method === "GET") {
+          frame.reads += 1;
+          if (frame.exposed && frame.holdRead) {
+            frame.readHeld = true;
+            await new Promise<void>(resolve => { frame.releaseRead = resolve; });
+          }
+          return handleRuntimeAdmissionQuery(new NextRequest(request), {
+            enabled: () => true, sendInFlight: () => false,
+            registry: () => ({ deliveryAdmissionForKey: (_conversation: string, key: string) =>
+              frame.exposed && frame.receipt?.idempotencyKey === key
+                ? { outcome: "admitted", operationId: frame.receipt.operationId, state: "delivered" }
+                : { outcome: "unknown" },
+            }) as unknown as AgentRegistry,
+            query: async () => NextResponse.json({ receipt: frame.receipt }),
+          });
+        }
+        const body = await request.json() as { conversationId: string; idempotencyKey: string; text: string };
+        frame.posts += 1;
+        const operationId = "operation-confirmation";
+        const admission = frame.journal.executeOperation({ kind: "send", operationId,
+          conversationId: body.conversationId, idempotencyKey: body.idempotencyKey, text: body.text, policy: "queue" });
+        if (!admission.replayed) {
+          frame.deliveries += 1;
+          frame.ledger.recordQueued("session-confirmation", { id: operationId, text: body.text, origin: { kind: "operator" } }, "queued-next-turn");
+          frame.transcript = JSON.stringify({ type: "event_msg", timestamp: new Date().toISOString(),
+            payload: { type: "user_message", message: `<!-- llv:structured-user dedup=${deliveryDedupToken(operationId)} -->\n${body.text}` } }) + "\n";
+          expect(frame.ledger.confirmDelivered("session-confirmation", operationId, operationId)).toBe("accepted");
+          frame.journal.completeOperation(operationId, "delivered", {});
+          frame.receipt = frame.journal.operationResult(operationId)!.receipt;
+        }
+        return Response.json({ operationId, receipt: frame.receipt });
+      },
+    });
+    const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, headless: true,
+      args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: unknown[] = [];
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-confirmation-"));
+    try {
+      for (const locale of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const name = `${locale}-${scheme}`;
+        const frame: Frame = { locale, scheme, posts: 0, deliveries: 0, reads: 0, exposed: false, holdRead: false, readHeld: false, transcript: "", receipt: null,
+          journal: new RuntimeJournal(path.join(stateRoot, `${name}.sqlite`), { structuredHosts: true }),
+          ledger: new FileClaudeDeliveryLedger(path.join(stateRoot, `${name}-ledger`)) };
+        frames.set(name, frame);
+        frame.journal.append({ scope: runtimeScope("session", "conversation_running"), kind: "session-status",
+          payload: { sessionKey: { engine: "codex", sessionId: "session-confirmation" }, host: "hosted", hostKind: "codex-app-server",
+            turn: "idle", artifactPath: RUNNING_PATH, capabilities: { steer: true, structuredAttention: true } } });
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true,
+          isMobile: true, locale: locale === "uk" ? "uk-UA" : "en-US", colorScheme: scheme });
+        await context.addInitScript(lang => localStorage.setItem("llv_lang", lang), locale);
+        await context.route("**/api/runtime/send?**", async route => {
+          if (route.request().method() !== "POST") return route.continue();
+          await route.fetch();
+          await route.abort("failed");
+        });
+        const page = await context.newPage(), pageErrors: string[] = [];
+        page.on("pageerror", error => pageErrors.push(error.message));
+        try {
+          await page.goto(`${server.base}?context-mode=noinject&delivery-recovery=${name}#c=conversation_running`);
+          const input = page.locator("textarea:visible").first();
+          await input.waitFor(); await page.waitForTimeout(1000);
+          const message = ("Synthetic delivery confirmation message. ".repeat(20)).slice(0, 700);
+          await input.fill(message); await input.press("Enter");
+          await page.waitForFunction(() => document.body.textContent?.includes("Synthetic delivery confirmation message."));
+          const warning = translate(locale, "composer.deliveryUnconfirmed");
+          await page.waitForFunction(text => document.body.textContent?.includes(text), warning, { timeout: 50_000 });
+          await page.screenshot({ path: path.join(out, `${name}-unknown.png`) });
+          const readsBefore = frame.reads;
+          expect(frame.receipt?.status).toBe("delivered");
+          const newerDraft = "Keep this newer draft";
+          await input.fill(newerDraft);
+          if (name === "uk-dark") {
+            await page.reload(); await input.waitFor();
+          }
+          if (name === "en-dark") {
+            await page.locator("[data-outbox-progress]").first().click();
+            frame.holdRead = true;
+          }
+          frame.exposed = true;
+          if (name === "en-dark") {
+            for (let attempt = 0; attempt < 200 && !frame.readHeld; attempt += 1) await Bun.sleep(100);
+            expect(frame.readHeld).toBe(true);
+            const readsDuring = frame.reads;
+            await page.locator("[data-outbox-check]").first().click();
+            await page.waitForTimeout(100);
+            expect(frame.reads).toBe(readsDuring);
+            frame.holdRead = false; frame.releaseRead!();
+          }
+          await page.waitForFunction(text => !document.body.textContent?.includes(text), warning, { timeout: 45_000 });
+          await page.waitForFunction(() => {
+            const rows = Array.from(document.querySelectorAll("[data-message-row]"));
+            return rows.filter(row => row.textContent?.includes("Synthetic delivery confirmation message.")).length === 1;
+          });
+          expect(await input.inputValue()).toBe(newerDraft);
+          const geometry = await page.evaluate(() => ({
+            documentWidth: document.documentElement.scrollWidth,
+            messages: Array.from(document.querySelectorAll("[data-message-row]")).filter(row => row.textContent?.includes("Synthetic delivery confirmation message.")).length,
+            background: getComputedStyle(document.body).backgroundColor,
+          }));
+          expect(geometry.documentWidth).toBeLessThanOrEqual(390);
+          expect(geometry.messages).toBe(1);
+          expect(frame.posts).toBe(1); expect(frame.deliveries).toBe(1);
+          expect(frame.reads).toBeGreaterThan(readsBefore);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${name}-delivered.png`) });
+          readings.push({ locale, scheme, viewport: { width: 390, height: 844 }, transport: "POST answer dropped after ledger delivery",
+            receiptTail: "empty", variant: name === "uk-dark" ? "reload" : name === "en-dark" ? "concurrent check" : "automatic",
+            sends: frame.posts, deliveries: frame.deliveries, originalKeyReads: frame.reads, warningCount: 0,
+            newerDraftPreserved: true, ...geometry, pageErrors });
+        } finally { frame.releaseRead?.(); await context.close(); frame.journal.close(); }
+      }
+      fs.mkdirSync("evidence/delivery-confirmation", { recursive: true });
+      fs.writeFileSync("evidence/delivery-confirmation/phone.json", JSON.stringify({ browser: browser.version(), cases: readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 420_000);
+});
