@@ -20,7 +20,7 @@ import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/di
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import { sampleTranscript } from "@/components/voiceCompanion/transcriptSample.fixture";
-import type { CompanionEvent } from "@/lib/voiceCompanion/contract";
+import type { CompanionEvent, CompanionPlan } from "@/lib/voiceCompanion/contract";
 import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
@@ -141,16 +141,27 @@ const FEED_CONTINUITY = SCENARIO === "feed-continuity";
    `&sendlost=1` loses the first Send on its way to the Viewer, as a dropped request does.
    `&mount=product` leaves the companion to the shell's own mount: the fixture answers the settings routes from
    memory (off by default; `&usage=<usd>` and `&keysource=env|file|missing` set what they report) and the
-   driver turns the companion on through the settings dialog. `&transcript=1` (item 6 of
+   driver turns the companion on through the settings dialog. `&backend=codex` starts with Codex V3 chosen: the
+   settings report the last Codex call with its plan window (`&nocall=1` leaves none), the transcript record carries
+   a Codex call's usage, and a start reaches the session route, which refuses it at the plan limit with its reset
+   two hours after the page loaded, so no call starts. `&transcript=1` (item 6 of
    docs/design/voice-delegatus-live-feedback.md) lets the companion read a whole session's transcript record, as the
    live adapter does from the session route, and the conversation view a tap on the character opens. Desktop only. */
 const VOICE = SCENARIO === "voice-companion";
 const VOICE_PRODUCT = VOICE && new URLSearchParams(location.search).get("mount") === "product";
-const voice = { delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[],
+/* The plan window a fixture Codex call ran on: the primary window resets two hours after the page loaded, to the
+   minute, and the weekly one four days on, so the footer and the settings show a time and a date. The driver reads
+   `voiceCompanion.loaded` back rather than its own clock, which may have passed the next minute. */
+const VOICE_LOADED = Math.floor(Date.now() / 60_000) * 60;
+const voice = { loaded: VOICE_LOADED, delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[],
   /* What the settings routes were asked to write. The key itself is never kept: its length is all the driver needs. */
-  settingsWrites: [] as Array<Record<string, unknown>>, keyWrites: [] as number[], settingsOpened: 0 };
+  settingsWrites: [] as Array<Record<string, unknown>>, keyWrites: [] as number[], sessionStarts: [] as Array<Record<string, unknown>>, settingsOpened: 0 };
+const voicePlan = (): CompanionPlan => ({ type: "pro", limitReached: false, observedAt: VOICE_LOADED * 1000,
+  primary: { usedPercent: 23, resetsAt: VOICE_LOADED + 7_200, windowMinutes: 300 }, secondary: { usedPercent: 77, resetsAt: VOICE_LOADED + 4 * 86_400, windowMinutes: 10_080 } });
+const VOICE_CODEX = new URLSearchParams(location.search).get("backend") === "codex";
 const voiceSettings = {
-  enabled: false, monthlyCapUsd: 20,
+  enabled: false, backend: (VOICE_CODEX ? "codex" : "api") as "api" | "codex", monthlyCapUsd: 20,
+  ...(new URLSearchParams(location.search).get("nocall") === "1" ? {} : { lastCodexSession: { seconds: 471, endedAt: Date.UTC(2026, 9, 10, 9), plan: voicePlan() } }),
   keySource: (new URLSearchParams(location.search).get("keysource") ?? "missing") as "env" | "file" | "missing", keyEnvironment: "OPENAI_API_KEY" as const,
   lastSession: { usd: 0.4, seconds: 471, endedAt: Date.UTC(2026, 9, 10), incomplete: false },
   month: "2026-10", usageUsd: Number(new URLSearchParams(location.search).get("usage") ?? 0), reservedUsd: 0, incomplete: false,
@@ -385,6 +396,10 @@ const LAUNCH_CLS = SCENARIO === "launch-cls";
    that runs on the clock of `launch-cls`, held a little longer before its receipt so the frame between the
    press and the receipt can be read. */
 const NEW_AGENT = SCENARIO === "new-agent";
+/* Role avatars (docs/design/role-avatars.md): the seat's feed holds one internal message from each of the
+   other eleven roles and one from an agent that names no role; the second implement attempt is the builder's
+   conversation, and a conversation started by hand, which no card holds, names no role: the agent in the tuxedo. */
+const ROLE_AVATARS = SCENARIO === "role-avatars";
 /* Five states no single press reaches (`?naseed=`): a handoff draft, restored the way the product restores
    a tab's drafts, continuing the conversation «Worker waiting for a seat»; the same draft when the source's
    folder is on no record; the engine's active account signed out; a launch the server refuses by name; and
@@ -459,6 +474,7 @@ const searchVer1 = add(conversation("search-ver-1", "Results empty for 40 s afte
 const searchVer2 = add(conversation("search-ver-2", "Re-running the rebuild with traffic", working({ plan: { current: "Re-running the rebuild with traffic" } })));
 
 if (FEED_FAILURES) { searchVer2.engine = "codex"; searchVer2.fmt = "codex"; }
+const roleAvatarAgent = ROLE_AVATARS ? add(conversation("ra-agent", L("Why the search results went empty", "Чому результати пошуку зникли"), { mtime: now - 20 * MIN })) : null;
 /* `&stage-switch`: the running verify conversation carries its stage membership, as a launched stage does,
    so its runtime pill moves the attempt through the pipeline. */
 if (new URLSearchParams(location.search).has("stage-switch")) {
@@ -2119,12 +2135,57 @@ function roleMemoryStageTranscript(): string {
   ].join("\n")}\n`;
 }
 
+/* Role avatars: what each role reported to the seat, delivered by Delegatus (`promptSource: "sdk"` with an engine
+   uuid the provenance route names the sender of). `null` is an agent that names no role. */
+const ROLE_AVATAR_REPORTS: [string | null, string, string][] = [
+  ["architect", "The design note is ready: costumes from 20 px, smaller places keep the glyph.", "Дизайн-нотатка готова: костюми від 20 px, менші місця лишають гліф."],
+  ["builder", "The role avatar in the feed and the conversation header is built; component tests are green. PR opened.", "Аватар ролі у стрічці й заголовку розмови готовий, тести компонентів зелені. PR відкрито."],
+  ["reviewer", "Round 1: two P2 findings — hat contrast on the dark theme and an empty alt.", "Раунд 1: два зауваження P2 — контраст капелюха на темній темі й порожній alt."],
+  ["visual-critic", "Frames at 390 and 1280 reviewed: nothing is cut, the 20 px avatar reads.", "Кадри 390 і 1280 переглянуто: нічого не обрізано, аватар 20 px читається."],
+  ["verifier", "Checked on the built branch: each of the 12 roles has its avatar, the agent with no role wears the tuxedo.", "Перевірив на зібраній гілці: кожна з 12 ролей має свій аватар, агент без ролі — у смокінгу."],
+  ["cleaner", "Removed the second set of role glyphs from the pipeline graph: one source now.", "Прибрав другий набір гліфів ролей із графа пайплайна: тепер одне джерело."],
+  ["merger", "The PR merged in a batch with two others.", "PR злито пакетом разом із двома іншими."],
+  ["deployer", "Deployed on this machine, the Viewer restarted, the health check answers 200.", "Розгорнуто на цій машині, Viewer перезапущено, перевірка здоров'я відповідає 200."],
+  ["prod-auditor", "Production is clean: no avatar render errors in the log for 30 minutes.", "Прод чистий: помилок рендеру аватарів у журналі за 30 хвилин немає."],
+  ["maintainer", "Board tidied: the card moved to Done, duplicates closed.", "Дошку прибрано: картку перенесено в «Готово», дублікати закрито."],
+  ["issue-reporter", "Filed an issue: on the phone the agent window names the role twice.", "Завів задачу: на телефоні у вікні агента роль названо двічі."],
+  [null, "A helper agent finished the export check: nothing changed.", "Допоміжний агент завершив перевірку експорту: нічого не змінилося."],
+];
+const ROLE_AVATAR_BRIEF = L("Add the role avatars to the message feed as the chosen variant draws them.", "Додай аватари ролей у стрічку повідомлень за обраним варіантом.");
+const roleAvatarUuid = (text: string) => `ra_${messageTextDigest(text).slice(0, 12)}`;
+const roleAvatarRelay = (secondsAgo: number, text: string) => line(secondsAgo, { type: "user", uuid: roleAvatarUuid(text), message: { role: "user", content: text }, promptSource: "sdk" });
+/** Each delivered text and its sender's role, for the provenance route: the reports, and the seat's brief to the builder. */
+function roleAvatarSenders(): { text: string; role: string | null; secondsAgo: number }[] {
+  return [
+    ...ROLE_AVATAR_REPORTS.map(([role, en, uk], index) => ({ text: L(en, uk), role, secondsAgo: (30 - index * 2) * MIN })),
+    { text: ROLE_AVATAR_BRIEF, role: "orchestrator", secondsAgo: 12 * MIN },
+  ];
+}
+function roleAvatarSeat(): string {
+  return `${[
+    asked(34 * MIN, L("Where is the role avatars lane? Briefly, every stage.", "Що з лейном аватарів ролей? Коротко по всіх стадіях.")),
+    said(33 * MIN, L("Collecting the stage reports. Below is what each role reported in the last hour.", "Збираю звіти стадій. Нижче те, що кожна роль повідомила за останню годину.")),
+    ...roleAvatarSenders().filter((sender) => sender.role !== "orchestrator").map((sender) => roleAvatarRelay(sender.secondsAgo, sender.text)),
+    said(4 * MIN, L("Every stage reported. The lane can close once you confirm.", "Усі стадії звітували. Лейн можна закривати після вашого підтвердження.")),
+  ].join("\n")}\n`;
+}
+
 function transcriptOf(pathname: string): string {
   const file = files.find((entry) => entry.path === pathname);
   if (!file || file === pendingWorker) return "";
   if (ROLE_MEMORY && (file as { conversationId?: string }).conversationId === "conversation_md-impl") return roleMemoryStageTranscript();
   /* A launch the transcript has not appeared for reads nothing. */
   if ((LAUNCH_CLS || SEAT_CLS || NEW_AGENT) && file.path.startsWith("spawn:")) return "";
+  if (ROLE_AVATARS && file === orchestrator) return roleAvatarSeat();
+  if (ROLE_AVATARS && file === searchImpl2) return `${[
+    roleAvatarRelay(12 * MIN, ROLE_AVATAR_BRIEF),
+    said(11 * MIN, L("Started with FeedItem: the role's avatar takes the answer's avatar column, and the engine keeps its mark and name beside the time.", "Почав з FeedItem: аватар ролі стає в колонку аватара відповіді, а рушій лишає свій знак і назву біля часу.")),
+    said(9 * MIN, L("Done. RoleAvatar draws the role's costume; the component tests are green.", "Готово. RoleAvatar малює костюм ролі; тести компонентів зелені.")),
+  ].join("\n")}\n`;
+  if (ROLE_AVATARS && file === roleAvatarAgent) return `${[
+    asked(95 * MIN, L("Why are the results empty after the swap?", "Чому після заміни результати порожні?")),
+    said(93 * MIN, L("The alias moved before the warm-up query answered; the new index served empty results for 40 s.", "Псевдонім перемкнувся раніше, ніж відповів прогрівальний запит; новий індекс 40 с віддавав порожні результати.")),
+  ].join("\n")}\n`;
   if (SCENARIO === "fast-tts") return `${said(10, "The first sentence should start speaking immediately. The next sentences should arrive while the first one plays. A single tap in the conversation header starts reading the answer. A second tap stops the voice immediately. Starting another answer cancels the previous read. Highlighting follows the sentence that is being spoken.")}\n`;
   /* The running verifier has a long transcript: its reader scrolls. */
   if (FEED_RELOAD && file === searchVer2) return `${[
@@ -3772,6 +3833,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "PUT") { const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>; voice.settingsWrites.push(body); Object.assign(voiceSettings, body); }
     return json(voiceSettings);
   }
+  if (VOICE && url.pathname === "/api/voice-companion/session" && method === "POST" && voiceSettings.backend === "codex") {
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    if (body.action !== "start") return json({ ok: true });
+    voice.sessionStarts.push({ project: body.project, locale: body.locale, offer: typeof body.sdp === "string" && body.sdp.startsWith("v=0") });
+    return json({ code: "CODEX_LIMIT_REACHED", resetsAt: VOICE_LOADED + 7_200 }, 409);
+  }
   if (VOICE && url.pathname === "/api/voice-companion/key" && method === "PUT") {
     if (voiceSettings.keySource === "env") return json({ code: "KEY_FROM_ENV" }, 409);
     const key = String((JSON.parse(String(init?.body ?? "{}")) as { key?: unknown }).key ?? "");
@@ -3782,6 +3849,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (VOICE && url.pathname === "/api/telemetry") return json({ enabled: false, locked: false, noticeDismissed: true });
   if (VOICE && url.pathname === "/api/memory/settings") return json({ enabled: false, capUsd: 5, spentUsd: 0 });
+  if (url.pathname === "/api/log/provenance" && ROLE_AVATARS) {
+    const senders = roleAvatarSenders().map(({ text, role, secondsAgo }) => ({ text, secondsAgo, origin: { origin: "agent", ...(role ? { senderRole: role } : {}) } }));
+    return json({
+      messages: Object.fromEntries(senders.map((sender) => [roleAvatarUuid(sender.text), sender.origin])),
+      occurrences: senders.map((sender) => ({ ...sender.origin, textDigest: messageTextDigest(sender.text), deliveredAt: iso(sender.secondsAgo) })),
+    });
+  }
   if (url.pathname === "/api/log/provenance" && VOICE) {
     const relay = { origin: "operator", channel: "voice-delegatus", submissionId: DEMO_IDS.clientMessageId };
     const internal = { origin: "agent", senderRole: "reviewer", senderProject: PROJECT };
@@ -4007,7 +4081,8 @@ function voiceCompanionScene() {
       const record = sampleTranscript(UK ? "uk" : "en", PROJECT);
       record.entries.push({ id: "standalone-report", kind: "report", atMs: 90_000, order: 100,
         data: { project: PROJECT, projectName: "Atlas", status: "result", text: UK ? "Усі перевірки завершено. Звіт збережено після завершення розмови." : "All checks completed. This report remains saved after the call ended." } });
-      return { ...record, usage: { callUsd: 0.19, callFinal: true, callIncomplete: false, month: "2026-10", monthUsd: 0.51, monthCapUsd: 20 } };
+      return { ...record, usage: VOICE_CODEX ? { backend: "codex" as const, callSeconds: 252, callFinal: true, plan: voicePlan(), planStartPercent: 21 }
+        : { callUsd: 0.19, callFinal: true, callIncomplete: false, month: "2026-10", monthUsd: 0.51, monthCapUsd: 20 } };
     } } : {}),
   };
   /* The underlay: cells that count the clicks that reach them, so a driver can tell a click that passed through

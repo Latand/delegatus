@@ -1,3 +1,4 @@
+import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
 import { spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
@@ -1720,6 +1721,7 @@ export function claudeStructuredHostOptions(
   access: Pick<StructuredHostAccessMaterialization, "env" | "host">,
   initialEventCursor?: number,
   validateTelegramGrant?: () => void,
+  agentRole?: string | null,
 ) {
   const profile = input.spec.launchProfile ?? {} as LaunchProfile;
   return {
@@ -1728,6 +1730,7 @@ export function claudeStructuredHostOptions(
     ...claudeHostLaunchPaths(input.account),
     providerAccount: Boolean(input.account.claudeProvider),
     allowSubagents: profile.allowSubagents,
+    operatorDecisionForms: operatorDecisionFormsRequired(agentRole, input.spec.transcript),
     cleanMemory: profile.cleanMemory === true,
     appendSystemPrompt: learnedRulesForLaunchProfile(profile),
     mcpServers: profile.mcpServers,
@@ -1798,6 +1801,7 @@ export async function defaultStartHost(
       model: profile.model ?? undefined,
       effort: profile.effort ?? undefined,
       allowSubagents: profile.allowSubagents,
+      operatorDecisionForms: operatorDecisionFormsRequired(input.receipt.agentRole, input.receipt.artifactPath ?? input.spec.transcript),
       cleanMemory: profile.cleanMemory === true,
       developerInstructions: learnedRulesForLaunchProfile(profile),
       mcpServers: profile.mcpServers,
@@ -1819,7 +1823,7 @@ export async function defaultStartHost(
   }
   const form = structuredClaudeLaunchForm(input);
   const options = {
-    ...claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor, validateTelegramGrant),
+    ...claudeStructuredHostOptions(input, { env, host: access.host }, initialEventCursor, validateTelegramGrant, input.receipt.agentRole),
     ...engineProcess.claude,
     ...(memoryCell ? { memoryCell } : {}),
   };

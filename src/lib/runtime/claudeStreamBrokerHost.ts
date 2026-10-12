@@ -243,6 +243,8 @@ export interface ClaudeStreamBrokerHostOptions {
   claudeProjectsDir?: string;
   spawnPolicyBaseSettingsPath?: string | null;
   allowSubagents?: boolean;
+  /** Seats ask operator decisions through Delegatus forms. Workers keep native tools. */
+  operatorDecisionForms?: boolean;
   /** No automatic memory: no shared-memory hook and Claude's auto memory off. */
   cleanMemory?: boolean;
   appendSystemPrompt?: string;
@@ -834,6 +836,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     const disallowedTools = [
       ...(!options.allowSubagents ? NATIVE_MULTI_AGENT_TOOLS : []),
       ...(options.readOnly ? ["Edit", "Write", "NotebookEdit"] : []),
+      ...(options.operatorDecisionForms ? ["AskUserQuestion", "ExitPlanMode"] : []),
     ];
     if (disallowedTools.length > 0) args.push("--disallowedTools", disallowedTools.join(","));
     if (options.claudeConfigDir) {

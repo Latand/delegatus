@@ -3750,6 +3750,7 @@ async function accountRemovalMain(): Promise<void> {
  * 1440 × 900 and 390 × 844, en and uk, light and dark.
  */
 async function claudeLoginMain(): Promise<void> {
+  process.env.CLAUDE_CODE_TMPDIR = process.env.TMPDIR;
   const { tasks, reviewers } = seedHome();
   const failures: string[] = [];
   const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
@@ -3784,33 +3785,51 @@ async function claudeLoginMain(): Promise<void> {
       const context = await browser.newContext({ viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 900 }, hasTouch: phone, colorScheme, reducedMotion: "reduce" });
       await context.addInitScript(seedInit);
       await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
-      let phase: "awaiting_code" | "timed_out" = "awaiting_code";
+      let phase: "awaiting_code" | "timed_out" | "verifying" | "authenticated" = "awaiting_code";
+      let accountId = "";
+      let limitsReads = 0;
+      let successfulReads = 0;
       let polls = 0;
       /* A poll still in flight when the context closes is dropped, not raised. */
       await context.route("**/api/accounts", async (route) => {
         try {
           const response = await route.fetch();
-          const body = await response.json() as { claude?: { accounts?: { label?: string; login?: unknown; loginPending?: boolean; authPresent?: boolean; authHealth?: string }[] } };
+          const body = await response.json() as { claude?: { active?: string; accounts?: { id: string; label?: string; login?: unknown; loginPending?: boolean; authPresent?: boolean; authHealth?: string; auth?: unknown; limits?: unknown }[] } };
           const row = body.claude?.accounts?.find((account) => account.label === "Account B");
           if (row) {
             polls += 1;
             /* Signed out, as an account is when the operator signs it in. */
-            row.authPresent = false;
-            row.authHealth = "signed_out";
-            row.loginPending = phase === "awaiting_code";
+            accountId = row.id;
+            body.claude!.active = row.id;
+            const signedIn = phase === "authenticated";
+            if (signedIn) successfulReads += 1;
+            row.authPresent = phase === "verifying" || signedIn;
+            row.authHealth = signedIn ? "authenticated" : phase === "verifying" ? "error" : "signed_out";
+            row.auth = { state: row.authHealth, plan: signedIn ? "max" : null };
+            row.limits = signedIn ? { state: "fresh", session: { usedPercent: 7, observedAt: Math.floor(Date.now() / 1000) }, weekly: { usedPercent: 31, observedAt: Math.floor(Date.now() / 1000) }, checkedAt: new Date().toISOString() } : null;
+            row.loginPending = phase === "awaiting_code" || phase === "verifying";
             row.login = {
-              operationId: "fixture-claude-login",
+              operationId: phase === "verifying" || phase === "authenticated" ? "fixture-claude-retry" : "fixture-claude-login",
               phase,
               loginUrl: phase === "awaiting_code" ? "https://claude.ai/oauth/authorize?state=fixture" : null,
               acceptsCode: phase === "awaiting_code",
               deadlineAt: new Date(Date.now() + 9 * 60_000).toISOString(),
-              result: phase === "timed_out" ? { status: "failure", code: "timed_out", message: "Claude login timed out" } : null,
+              result: phase === "timed_out" ? { status: "failure", code: "timed_out", message: "Claude login timed out" } : phase === "authenticated" ? { status: "success", code: "authenticated", message: "Claude authentication completed" } : null,
             };
           }
           await route.fulfill({ response, json: body });
         } catch {
           /* the context is gone */
         }
+      });
+      await context.route("**/api/accounts/claude", async (route) => {
+        phase = "verifying";
+        await route.fulfill({ status: 202, json: { login: { operationId: "fixture-claude-retry", phase: "verifying", loginUrl: null, acceptsCode: false, deadlineAt: new Date(Date.now() + 60_000).toISOString(), result: null } } });
+      });
+      await context.route("**/api/limits", async (route) => {
+        limitsReads += 1;
+        await route.fulfill({ json: { claudeAccountId: accountId, claude: phase === "authenticated" ? { plan: "max", session: { usedPercent: 7 }, weekly: { usedPercent: 31 } } : null,
+          codex: null, provenance: { claude: { source: "live", reason: null, staleSince: null } } } });
       });
       const page = await context.newPage();
       await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
@@ -3894,7 +3913,72 @@ async function claudeLoginMain(): Promise<void> {
       must(expired.shown, `${tag}: the timed-out row does not say «${expiredText}»`);
       must(expired.retry === translate(lang, "accounts.retry"), `${tag}: the timed-out row offers ${JSON.stringify(expired.retry)}`);
       await shoot("expired");
-      report[tag] = { polls: polls - pollsBefore, held, expired };
+      const cardSelector = phone ? `[data-mobile2-account="${accountId}"]` : `[data-account-row="${accountId}"]`;
+      await page.locator(cardSelector).getByRole("button", { name: translate(lang, "accounts.retry"), exact: true }).click();
+      await page.waitForFunction(({ selector, text }) => document.querySelector(selector)?.textContent?.includes(text), { selector: cardSelector, text: translate(lang, "accounts.claudeLogin.verifying") });
+      const measureCard = () => page.evaluate(({ selector, retryText }) => {
+        const card = document.querySelector(selector);
+        const panel = card?.closest('[role="dialog"]') ?? card?.closest("[data-mobile2-accounts]");
+        const footer = document.querySelector(`[data-engine-limits="claude"] [data-footer-account="${card?.getAttribute("data-account-row") ?? card?.getAttribute("data-mobile2-account")}"]`);
+        const box = (element: Element | null | undefined) => { const r = element?.getBoundingClientRect(); return r ? { x: r.x, y: r.y, w: r.width, h: r.height } : null; };
+        return { text: card?.textContent?.replace(/\s+/g, " ").trim() ?? "", badgeText: [...(card?.querySelectorAll("span.rounded-full") ?? [])].map((badge) => badge.textContent?.trim() ?? ""),
+          limitRows: card?.querySelectorAll("[data-limit-row]").length ?? 0,
+          rowFit: [...(card?.querySelectorAll("[data-limit-row]") ?? [])].map((row) => {
+            const label = row.querySelector("dt");
+            const bar = row.querySelector('span[aria-hidden="true"], [role="meter"]');
+            const range = document.createRange();
+            if (label) range.selectNodeContents(label);
+            return { label: label?.textContent?.trim() ?? "", labelOverflow: label ? label.scrollWidth > label.clientWidth + 1 : false,
+              gap: label && bar ? bar.getBoundingClientRect().left - range.getBoundingClientRect().right : null,
+              clipped: [...row.querySelectorAll("*")].filter((element) => element.scrollWidth > element.clientWidth + 1 && getComputedStyle(element).overflowX !== "visible").map((element) => element.textContent?.trim() ?? ""),
+              text: row.textContent?.replace(/\s+/g, " ").trim() ?? "" };
+          }),
+          weeklyFigures: (card?.textContent?.match(/69%/g) ?? []).length,
+          retry: [...(card?.querySelectorAll("button") ?? [])].some((button) => button.textContent?.trim() === retryText),
+          targets: [...(card?.querySelectorAll("button, a[href]") ?? [])].map((element) => ({ text: element.textContent?.trim(), box: box(element)! })),
+          card: box(card), panel: box(panel), footer: box(footer), footerText: footer?.textContent?.replace(/\s+/g, " ").trim() ?? null,
+          overflow: card ? card.scrollWidth > card.clientWidth + 1 : true };
+      }, { selector: cardSelector, retryText: translate(lang, "accounts.retry") });
+      await page.locator(cardSelector).scrollIntoViewIfNeeded();
+      const before = await measureCard();
+      must(!before.text.includes(translate(lang, "accounts.auth.error")), `${tag}: verifying still shows the old auth error`);
+      must(!before.text.includes(translate(lang, "limits.noDataYet")), `${tag}: verifying still says no data next to a running verification`);
+      must(before.text.includes(translate(lang, "accounts.claudeLogin.verifying")), `${tag}: verifying line absent`);
+      await shoot("verifying");
+      const readsBeforeSuccess = polls;
+      const limitsBeforeSuccess = limitsReads;
+      phase = "authenticated";
+      await page.waitForFunction((selector) => document.querySelector(selector)?.querySelectorAll("[data-limit-row]").length === 2, cardSelector, { timeout: 5_000 });
+      if (!phone) await page.waitForFunction((id) => document.querySelector(`[data-engine-limits="claude"] [data-footer-account="${id}"] [data-meter-value]`)?.textContent?.includes("69%"), accountId, { timeout: 5_000 });
+      await page.locator(cardSelector).scrollIntoViewIfNeeded();
+      const after = await measureCard();
+      must(after.limitRows === 2 && !after.retry, `${tag}: success did not replace Retry with both windows`);
+      must(!after.text.includes(translate(lang, "limits.noDataYet")), `${tag}: success still says no data`);
+      must(!after.text.includes(translate(lang, "accounts.auth.error")), `${tag}: success still carries auth error`);
+      must(after.text.includes(translate(lang, phone ? "accounts.active" : "accounts.auth.authenticated")), `${tag}: success badge absent`);
+      must(polls - readsBeforeSuccess >= 1 && successfulReads >= 1, `${tag}: success arrived without an accounts poll`);
+      if (!phone) must(limitsReads > limitsBeforeSuccess, `${tag}: footer did not re-read limits at success`);
+      must(!phone || after.weeklyFigures === 1, `${tag}: the weekly figure is stated ${after.weeklyFigures} times on the card`);
+      for (const [name, measured] of [["before", before], ["after", after]] as const) {
+        must(!measured.overflow, `${tag} ${name}: card overflows horizontally`);
+        for (const row of measured.rowFit) {
+          must(!row.labelOverflow, `${tag} ${name}: «${row.label}» overflows its label column`);
+          must(phone || row.gap === null || row.gap >= 4, `${tag} ${name}: «${row.label}» touches its bar (gap ${row.gap})`);
+          must(row.clipped.length === 0, `${tag} ${name}: «${row.label}» row cuts ${JSON.stringify(row.clipped)}`);
+        }
+        if (measured.card && measured.panel) must(measured.card.x >= measured.panel.x - 1 && measured.card.x + measured.card.w <= measured.panel.x + measured.panel.w + 1 && measured.card.y >= measured.panel.y - 1 && measured.card.y + measured.card.h <= measured.panel.y + measured.panel.h + 1, `${tag} ${name}: card clipped by panel`);
+        for (const target of measured.targets) {
+          must(target.box.w > 0 && target.box.h > 0, `${tag} ${name}: zero-sized control`);
+          if (measured.panel) must(target.box.x >= measured.panel.x - 1 && target.box.x + target.box.w <= measured.panel.x + measured.panel.w + 1
+            && target.box.y >= Math.max(0, measured.panel.y) - 1 && target.box.y + target.box.h <= Math.min(phone ? 844 : 900, measured.panel.y + measured.panel.h) + 1, `${tag} ${name}: control clipped by the visible panel`);
+          if (phone) must(target.box.h >= 44, `${tag} ${name}: phone target under 44 px`);
+        }
+      }
+      await shoot("authenticated");
+      if (!phone) await page.screenshot({ path: path.join(OUT_DIR, `claude-login-${tag}-authenticated-footer.png`), fullPage: false });
+      report[tag] = { polls: polls - pollsBefore, held, expired, before, after,
+        successAccountReads: polls - readsBeforeSuccess, successLimitsReads: limitsReads - limitsBeforeSuccess,
+        phoneFooter: phone ? "The phone has no sidebar footer; the active card carries its weekly summary." : null };
       await context.close();
     }
   } finally {

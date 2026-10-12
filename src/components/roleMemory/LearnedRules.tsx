@@ -175,7 +175,7 @@ function RuleRow({ rule, kind, focused, scopeRole, onDelete, onRevert }: { rule:
   const author = rule.roleId && rule.roleId !== scopeRole ? roleNameById(t, rule.roleId) : null;
   const revision = rule.revisedBy;
   const awaitingCurator = rule.awaitingCuration ?? (!rule.curatedAt || revision?.by === "agent" && revision.at > rule.curatedAt);
-  const meta = [rule.keptByOperatorAt ? t("roleMemory.kept") : awaitingCurator ? t("roleMemory.unreviewed") : null, revision ? t(`roleMemory.revised.${revision.by}`, { role: roleNameById(t, revision.roleId ?? "") }) : author, (revision?.fixRound ?? rule.fixRound) ? t("roleMemory.fixRound") : null, rule.mergedFrom?.length ? t("roleMemory.mergedFrom", { count: rule.mergedFrom.length }) : null].filter(Boolean).join(" · ");
+  const meta = [rule.keptByOperatorAt ? t("roleMemory.kept") : awaitingCurator ? t("roleMemory.unreviewed") : null, revision ? t(`roleMemory.revised.${revision.by}`, { role: roleNameById(t, revision.roleId ?? "") }) : author, (revision?.fixRound ?? rule.fixRound) ? t("roleMemory.fixRound") : null, rule.mergedFrom?.length ? t("roleMemory.mergedFrom", { count: rule.mergedFrom.length }) : null, (rule.tasks ?? 0) >= 2 ? t("roleMemory.tasks", { count: rule.tasks! }) : null].filter(Boolean).join(" · ");
   return (
     <li ref={row} data-learned-rule={rule.id} data-focused={focused ? "" : undefined} data-open={open ? "" : undefined}
       className={`group flex items-start gap-2 rounded-[8px] px-2 py-1.5 ${focused ? KIND_TONE[kind].soft : "hover:bg-sunken"}`}>
@@ -187,7 +187,7 @@ function RuleRow({ rule, kind, focused, scopeRole, onDelete, onRevert }: { rule:
         {open ? (
           <span className="mt-0.5 block text-[11.5px] leading-4 text-secondary">
             <b className="font-semibold">{t("roleMemory.why")}</b> {rule.why}
-            {meta ? <span className="text-muted"> · {meta}</span> : null}
+            {meta ? <span data-rule-provenance="" className="text-muted"> · {meta}</span> : null}
           </span>
         ) : null}
         {rule.hints.length ? (
