@@ -238,7 +238,8 @@ export function CompanionTranscript({ record, usage = record.usage, left, top, w
     >
       <div className="vc-tr-head">
         <span className="vc-tr-title">{L.title}</span>
-        <span className="vc-tr-sub">{ended ? L.ended : L.live} · {clock(last)}</span>
+        {/* A Codex call's footer carries its length on the server clock, so the header does not add a second one. */}
+        <span className="vc-tr-sub">{ended ? L.ended : L.live}{usage?.backend === "codex" ? null : ` · ${clock(last)}`}</span>
         <button type="button" className="vc-btn vc-tr-close" aria-label={L.close} title={L.close} data-transcript-close onClick={onClose}><X size={14} aria-hidden /></button>
       </div>
       <div ref={body} className="vc-tr-body" data-transcript-body onScroll={(event) => { const node = event.currentTarget; following.current = node.scrollTop + node.clientHeight >= node.scrollHeight - 40; }}>

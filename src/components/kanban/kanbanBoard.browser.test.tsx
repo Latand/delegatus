@@ -21302,14 +21302,15 @@ describe("floating voice companion", () => {
     let processes = { started: 0, leftAfterClose: 0 };
     const KEY = "fixture-voice-key-0000";
     const writes = (page: Page) => page.evaluate(() => { const v = (window as unknown as { voiceCompanion: Voice & { sessionStarts: unknown[] } }).voiceCompanion; return { settings: v.settingsWrites, keys: v.keyWrites, starts: v.sessionStarts }; });
-    /* The Codex plan line as the dialog writes it, with the reset and read times the page itself formats. */
-    const planLine = (page: Page, lang: "en" | "uk") => page.evaluate((lang) => {
+    /* The Codex plan lines as the dialog writes them, with the reset and read times the page itself formats in the
+       board's 24-hour form: the whole-account note, one line a window, the reading time. */
+    const planLines = (page: Page, lang: "en" | "uk") => page.evaluate((lang) => {
       const loaded = (window as unknown as { voiceCompanion: { loaded: number } }).voiceCompanion.loaded;
-      const time = (seconds: number) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit" }).format(new Date(seconds * 1000));
+      const time = (seconds: number) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(seconds * 1000));
       const date = (seconds: number) => new Intl.DateTimeFormat(lang, { day: "numeric", month: lang === "uk" ? "long" : "short" }).format(new Date(seconds * 1000));
       return lang === "uk"
-        ? `План Pro, увесь акаунт разом з агентами: вікно «5 год» використано на 23%, оновлення ${time(loaded + 7_200)}; вікно «тиждень» використано на 77%, оновлення ${date(loaded + 4 * 86_400)}. Станом на ${time(loaded)}.`
-        : `Pro plan, the whole account with its agents: 5 h window 23% used, resets ${time(loaded + 7_200)}; week window 77% used, resets ${date(loaded + 4 * 86_400)}. As of ${time(loaded)}.`;
+        ? ["План Pro, увесь акаунт разом з агентами", `5\u00a0год 23%, оновлення ${time(loaded + 7_200)}`, `тиждень 77%, оновлення ${date(loaded + 4 * 86_400)}`, `Станом на ${time(loaded)}.`]
+        : ["Pro plan, the whole account with its agents", `5\u00a0h 23%, resets ${time(loaded + 7_200)}`, `week 77%, resets ${date(loaded + 4 * 86_400)}`, `As of ${time(loaded)}.`];
     }, lang);
     /* The way the operator reaches the rows: the header's ⋯, its Settings page, then «Voice Delegatus», which opens the dialog. */
     const openSettings = async (page: Page) => {
@@ -21381,9 +21382,18 @@ describe("floating voice companion", () => {
             const box = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
             const section = document.querySelector<HTMLElement>("[data-voice-companion-setting]")!;
             const cut = [...section.querySelectorAll<HTMLElement>("button, label, legend, p, span")].filter((node) => node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).overflow !== "visible").map((node) => node.innerText.slice(0, 30));
-            return { insideViewport: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sectionWidth: Math.round(section.getBoundingClientRect().width), overflowsDialog: section.scrollWidth > section.clientWidth + 1, cut };
+            /* A placeholder is never cut: its text, set in the field's own font, fits the field's content box. */
+            const field = section.querySelector<HTMLInputElement>("[data-voice-companion-key] input")!;
+            const style = getComputedStyle(field);
+            const pen = document.createElement("canvas").getContext("2d")!;
+            pen.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+            const room = field.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+            const placeholder = { text: field.placeholder, width: Math.ceil(pen.measureText(field.placeholder).width), room: Math.floor(room) };
+            return { insideViewport: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sectionWidth: Math.round(section.getBoundingClientRect().width), overflowsDialog: section.scrollWidth > section.clientWidth + 1, cut, placeholder };
           });
           expect([dialog.insideViewport, dialog.overflowsDialog, dialog.cut], `${label}: the rows fit the dialog`).toEqual([true, false, []]);
+          expect(dialog.placeholder.text, `${label}: the replace placeholder shows`).toBe(translate(lang, "voiceCompanion.settings.key.replace"));
+          expect(dialog.placeholder.width, `${label}: the whole placeholder fits its field (${JSON.stringify(dialog.placeholder)})`).toBeLessThanOrEqual(dialog.placeholder.room);
           await page.screenshot({ path: path.join(HANDOFF, `settings-on-${label}.png`) });
           const monthSpend = await section.locator("[data-voice-companion-usage]").innerText();
           /* Codex V3 chosen: the key and the cap close, nothing asks for a key, and the last Codex call shows with the
@@ -21394,8 +21404,30 @@ describe("floating voice companion", () => {
           expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap]").count(), `${label}: no key and no cap on Codex`).toBe(0);
           const codexLastCall = await section.locator("[data-voice-companion-codex] [data-voice-companion-last-call]").innerText();
           expect(codexLastCall, `${label}: the last Codex call`).toBe(lang === "uk" ? "Остання розмова: 7:51 · 10 жовтня." : "Last call: 7:51 · Oct 10.");
-          const codexPlan = await section.locator("[data-voice-companion-plan]").innerText();
-          expect(codexPlan, `${label}: the plan window`).toBe(await planLine(page, lang));
+          const codexPlan = await section.locator("[data-voice-companion-plan]").evaluate((block) => {
+            const lines = [...block.children] as HTMLElement[];
+            /* Every number joined to its unit stays on one line box, and each window reads as one line. */
+            const parted = [...block.querySelectorAll<HTMLElement>("[data-plan-window]")].flatMap((line) => {
+              const node = line.firstChild!;
+              return [...(node.textContent ?? "").matchAll(/\d+\u00a0\S+/gu)].filter((match) => {
+                const range = document.createRange();
+                range.setStart(node, match.index!);
+                range.setEnd(node, match.index! + match[0].length);
+                return new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size > 1;
+              }).map((match) => match[0]);
+            });
+            return {
+              lines: lines.map((line) => line.textContent ?? ""),
+              windowLines: [...block.querySelectorAll<HTMLElement>("[data-plan-window]")].map((line) => Math.round(line.getBoundingClientRect().height / parseFloat(getComputedStyle(line).lineHeight))),
+              figures: [...block.querySelectorAll<HTMLElement>("[data-plan-figure]")].map((figure) => ({ text: figure.textContent, weight: Number(getComputedStyle(figure).fontWeight), color: getComputedStyle(figure).color })),
+              muted: getComputedStyle(lines[0]!).color, lastMuted: getComputedStyle(lines.at(-1)!).color,
+              parted, twelveHour: /AM|PM/u.test(block.textContent ?? ""),
+            };
+          });
+          expect(codexPlan.lines, `${label}: the plan window, one line a window`).toEqual(await planLines(page, lang));
+          expect([codexPlan.parted, codexPlan.windowLines, codexPlan.twelveHour], `${label}: no window name split, each window one line, 24-hour times`).toEqual([[], [1, 1], false]);
+          expect(codexPlan.figures.map((figure) => [figure.text, figure.weight >= 600, figure.color !== codexPlan.muted]), `${label}: the figures read at a glance`).toEqual([["23%", true, true], ["77%", true, true]]);
+          expect(codexPlan.lastMuted, `${label}: the reading time is muted`).toBe(codexPlan.muted);
           const codexRows = await section.evaluate((node) => ({
             controls: node.querySelectorAll("input, button, select").length,
             keyWords: /\bkey\b|ключ|OpenAI|\$/iu.test(node.querySelector("[data-voice-companion-codex]")?.textContent ?? ""),
@@ -21488,7 +21520,8 @@ describe("floating voice companion", () => {
           await page.waitForSelector('[data-companion-notice][data-code="CODEX_LIMIT_REACHED"]', { timeout: 15_000 });
           const notice = (await page.locator('[data-companion-notice][data-code="CODEX_LIMIT_REACHED"] .vc-notice-text').innerText()).trim();
           const resetsAt = await page.evaluate(() => (window as unknown as { voiceCompanion: { loaded: number } }).voiceCompanion.loaded + 7_200);
-          const reset = await page.evaluate(([lang, at]) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit" }).format(new Date(at * 1000)), [lang, resetsAt] as const);
+          const reset = await page.evaluate(([lang, at]) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(at * 1000)), [lang, resetsAt] as const);
+          expect(notice, `codex without a key, ${lang}: the reset is in the board's 24-hour form`).not.toMatch(/AM|PM/u);
           /* The words are the shared message's; the time is the page's own, in the browser's time zone. */
           expect(notice, `codex without a key, ${lang}: the limit refusal names its reset`).toBe(companionErrorMessage("CODEX_LIMIT_REACHED", lang, { resetsAt }).replace(limitResetText(resetsAt, lang), reset));
           expect(await page.locator('[data-companion-notice][data-code="NO_KEY"]').count(), `codex without a key, ${lang}: no key is asked for`).toBe(0);
@@ -21687,6 +21720,7 @@ describe("floating voice companion", () => {
             const windowFill = meter.querySelector<HTMLElement>("[data-window-fill]")!;
             const riseFill = meter.querySelector<HTMLElement>("[data-rise-fill]")!;
             return {
+              header: view.querySelector<HTMLElement>(".vc-tr-sub")!.innerText,
               spend: [...amounts.children].map(node => (node as HTMLElement).innerText).join(" · "),
               spendHeight: spendBox.height,
               lines: Math.round(amounts.getBoundingClientRect().height / parseFloat(getComputedStyle(amounts).lineHeight)),
@@ -21707,9 +21741,11 @@ describe("floating voice companion", () => {
           await page.screenshot({ path: path.join(out, `transcript-codex-${label}.png`) });
           await page.locator("[data-companion-spend]").screenshot({ path: path.join(out, `footer-codex-${label}.png`) });
           /* The primary window resets two hours after the fixture page loaded, in the page's own clock and language. */
-          const reset = await page.evaluate((lang) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit" })
+          const reset = await page.evaluate((lang) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
             .format(new Date(((window as unknown as { voiceCompanion: { loaded: number } }).voiceCompanion.loaded + 7_200) * 1000)), lang);
-          expect(reading.spend, `${label}: the call's length and the plan window`).toBe(lang === "uk" ? `Ця розмова 4:12 · Pro · 5 год 23%, оновлення ${reset} · тиждень 77%` : `This call 4:12 · Pro · 5 h 23%, resets ${reset} · week 77%`);
+          expect(reading.spend, `${label}: the call's length and the plan window, in 24-hour time`).toBe(lang === "uk" ? `Ця розмова 4:12 · Pro · 5\u00a0год 23%, оновлення ${reset} · тиждень 77%` : `This call 4:12 · Pro · 5\u00a0h 23%, resets ${reset} · week 77%`);
+          /* One call length in the panel: the footer's. The header says only whether the call goes on. */
+          expect(reading.header, `${label}: the header carries no second length`).toMatch(lang === "uk" ? /^(триває|завершено)$/u : /^(in progress|ended)$/u);
           expect([reading.lines <= 2, reading.cut], `${label}: the figures fit in at most two lines, nothing cut`).toEqual([true, false]);
           expect(reading.spendHeight, `${label}: figures and thin meter fit the footer`).toBeLessThanOrEqual(64);
           expect(reading.label, `${label}: the label names the whole account`).toContain(lang === "uk" ? "увесь акаунт разом з агентами" : "the whole account with its agents");

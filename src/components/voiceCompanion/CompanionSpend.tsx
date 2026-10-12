@@ -46,16 +46,20 @@ export function callDuration(seconds: number): string {
 }
 /** The plan type as the accounts panel writes it. */
 export const planName = (plan: CompanionPlan) => plan.type ? plan.type.charAt(0).toUpperCase() + plan.type.slice(1) : "Codex";
-/** A window named by its length: 5 h, week, day. */
+/** A window named by its length: 5 h, week, day. The number and its unit are joined by a no-break space, so a
+ * narrow line never parts them. */
 export function windowName(window: PlanWindow, t: TFunction): string {
   const minutes = window.windowMinutes;
   if (minutes === null) return t("voiceCompanion.usage.window");
   if (minutes === 10_080) return t("voiceCompanion.usage.week");
   if (minutes === 1_440) return t("voiceCompanion.usage.day");
-  return minutes % 60 === 0 ? t("voiceCompanion.usage.hours", { n: minutes / 60 }) : t("voiceCompanion.usage.minutes", { n: minutes });
+  return (minutes % 60 === 0 ? t("voiceCompanion.usage.hours", { n: minutes / 60 }) : t("voiceCompanion.usage.minutes", { n: minutes })).replaceAll(" ", "\u00a0");
 }
 const percent = (value: number) => `${Math.round(value)}%`;
 export const planWindows = (plan: CompanionPlan) => [plan.primary, plan.secondary].filter((window): window is PlanWindow => window !== null);
+/** One window's tone: at its limit (or the plan's reached limit on its first window) danger, from 80% a warning. */
+export const windowTone = (window: PlanWindow, plan: CompanionPlan) =>
+  window.usedPercent >= 100 || (plan.limitReached && window === planWindows(plan)[0]) ? "danger" : window.usedPercent >= 80 ? "warning" : undefined;
 export const planTone = (plan: CompanionPlan | null) => !plan ? undefined
   : plan.limitReached || planWindows(plan).some((window) => window.usedPercent >= 100) ? "danger" : (plan.primary?.usedPercent ?? 0) >= 80 ? "warning" : undefined;
 /** Every window of the plan in one sentence, each with its reset, for a label or the settings. */

@@ -337,6 +337,8 @@ test("the transcript footer shows live, settled and incomplete spend with the mo
       await render(usage);
       const line = () => host.querySelector<HTMLElement>("[data-companion-spend]")!;
       expect(line().textContent).toBe(locale === "en" ? "This call $0.19 October $0.51 of $20.00" : "Ця розмова $0.19 жовтень $0.51 із $20.00");
+      /* An API call's footer carries no length, so the header keeps the time of the last line. */
+      expect(host.querySelector(".vc-tr-sub")!.textContent).toMatch(locale === "en" ? /^in progress · \d+:\d\d$/u : /^триває · \d+:\d\d$/u);
       expect(line().previousElementSibling?.hasAttribute("data-transcript-body")).toBe(true);
       /* Variant 2's emphasis: both sums spent carry the weight, the cap is muted. */
       const valued = (role: string) => line().querySelector<HTMLElement>(`[data-spend-amounts] [data-spend-value="${role}"]`)!;
@@ -425,7 +427,12 @@ test("a Codex call's footer shows its length and the account's plan window, with
       const line = () => host.querySelector<HTMLElement>("[data-companion-spend]")!;
       const reset = limitResetText(now + 7_200, locale);
       const weekly = limitResetText(now + 4 * 86_400, locale);
-      expect(line().textContent).toBe(locale === "en" ? `This call 4:12Pro · 5 h 23%, resets ${reset} · week 77%` : `Ця розмова 4:12Pro · 5 год 23%, оновлення ${reset} · тиждень 77%`);
+      /* The reset is in the board's 24-hour form in both languages, and a window's number never parts from its unit. */
+      expect(reset).toMatch(/^\d\d:\d\d$/u);
+      expect(line().textContent).toBe(locale === "en" ? `This call 4:12Pro · 5\u00a0h 23%, resets ${reset} · week 77%` : `Ця розмова 4:12Pro · 5\u00a0год 23%, оновлення ${reset} · тиждень 77%`);
+      expect(line().getAttribute("aria-label")).not.toMatch(/AM|PM/u);
+      /* The call's length shows once, in the footer: the header says only that the call is in progress. */
+      expect(host.querySelector(".vc-tr-sub")!.textContent).toBe(locale === "en" ? "in progress" : "триває");
       expect(line().previousElementSibling?.hasAttribute("data-transcript-body")).toBe(true);
       expect(line().parentElement!.lastElementChild).toBe(line());
       /* Variant 2's emphasis: the two figures carry the weight, the second window is muted. */
@@ -436,8 +443,8 @@ test("a Codex call's footer shows its length and the account's plan window, with
       expect(TRANSCRIPT_CSS).toMatch(/\.vc-tr-spend-muted\s*\{[^}]*color:\s*var\(--color-muted\)/);
       /* The label and the hint say the window is the whole account's, its agents included. */
       expect(line().getAttribute("aria-label")).toBe(locale === "en"
-        ? `This call: 4:12. Pro plan, the whole account with its agents: 5 h window 23% used, resets ${reset}; week window 77% used, resets ${weekly}.`
-        : `Ця розмова: 4:12. План Pro, увесь акаунт разом з агентами: вікно «5 год» використано на 23%, оновлення ${reset}; вікно «тиждень» використано на 77%, оновлення ${weekly}.`);
+        ? `This call: 4:12. Pro plan, the whole account with its agents: 5\u00a0h window 23% used, resets ${reset}; week window 77% used, resets ${weekly}.`
+        : `Ця розмова: 4:12. План Pro, увесь акаунт разом з агентами: вікно «5\u00a0год» використано на 23%, оновлення ${reset}; вікно «тиждень» використано на 77%, оновлення ${weekly}.`);
       expect(line().querySelector<HTMLElement>("[data-spend-plan]")!.title).toBe(locale === "en" ? "The whole account's use, its agents included" : "Використання всього акаунта, разом з його агентами");
       const meter = () => line().querySelector<HTMLElement>('[data-companion-spend-meter][role="meter"]')!;
       const fill = (kind: "window" | "rise") => line().querySelector<HTMLElement>(`[data-${kind}-fill]`)!.style.transform;

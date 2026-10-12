@@ -47,7 +47,12 @@
         "insideViewport": true,
         "sectionWidth": 470,
         "overflowsDialog": false,
-        "cut": []
+        "cut": [],
+        "placeholder": {
+          "text": "Paste a new key to replace it",
+          "width": 167,
+          "room": 332
+        }
       },
       "codex": {
         "lastCall": "Last call: 7:51 · Oct 10.",
@@ -121,7 +126,12 @@
         "insideViewport": true,
         "sectionWidth": 470,
         "overflowsDialog": false,
-        "cut": []
+        "cut": [],
+        "placeholder": {
+          "text": "Вставте новий ключ",
+          "width": 121,
+          "room": 304
+        }
       },
       "codex": {
         "lastCall": "Остання розмова: 7:51 · 10 жовтня.",
@@ -195,7 +205,12 @@
         "insideViewport": true,
         "sectionWidth": 470,
         "overflowsDialog": false,
-        "cut": []
+        "cut": [],
+        "placeholder": {
+          "text": "Вставте новий ключ",
+          "width": 121,
+          "room": 304
+        }
       },
       "codex": {
         "lastCall": "Остання розмова: 7:51 · 10 жовтня.",
@@ -269,7 +284,12 @@
         "insideViewport": true,
         "sectionWidth": 470,
         "overflowsDialog": false,
-        "cut": []
+        "cut": [],
+        "placeholder": {
+          "text": "Paste a new key to replace it",
+          "width": 167,
+          "room": 332
+        }
       },
       "codex": {
         "lastCall": "Last call: 7:51 · Oct 10.",
@@ -308,7 +328,12 @@
         "insideViewport": true,
         "sectionWidth": 316,
         "overflowsDialog": false,
-        "cut": []
+        "cut": [],
+        "placeholder": {
+          "text": "Paste a new key to replace it",
+          "width": 167,
+          "room": 204
+        }
       },
       "monthSpend": "Used in October: $3.40 of $35.00.",
       "lastCall": "Last call: $0.40 · 7:51 · Oct 10.",
@@ -335,7 +360,12 @@
         "insideViewport": true,
         "sectionWidth": 316,
         "overflowsDialog": false,
-        "cut": []
+        "cut": [],
+        "placeholder": {
+          "text": "Вставте новий ключ",
+          "width": 121,
+          "room": 176
+        }
       },
       "monthSpend": "Витрачено за жовтень: $3.40 із $35.00.",
       "lastCall": "Остання розмова: $0.40 · 7:51 · 10 жовтня.",

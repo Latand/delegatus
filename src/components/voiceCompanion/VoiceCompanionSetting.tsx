@@ -7,9 +7,9 @@ import { Z } from "@/components/layers";
 import { useNowSeconds } from "@/hooks/useNowSeconds";
 import { useVoiceCompanionSettings } from "@/hooks/useVoiceCompanionSettings";
 import { useLocale } from "@/lib/i18n";
-import { companionErrorMessage } from "@/lib/voiceCompanion/errors";
+import { companionErrorMessage, limitResetText } from "@/lib/voiceCompanion/errors";
 
-import { callDuration, planName, planSentence, planTone, spendTone, voiceMoney, voiceMonth } from "./CompanionSpend";
+import { callDuration, planName, planTone, planWindows, spendTone, voiceMoney, voiceMonth, windowName, windowTone } from "./CompanionSpend";
 import { COMPANION_SETTINGS_EVENT } from "./hostSurfaces";
 
 export const OPEN_VOICE_COMPANION_SETTINGS_EVENT = "delegatus:open-voice-companion-settings";
@@ -95,7 +95,7 @@ export function VoiceCompanionSetting() {
   const clock = useNowSeconds(60_000);
   const now = clock ? clock * 1000 : plan?.observedAt ?? 0;
   const codexCallDate = codexCall ? new Intl.DateTimeFormat(locale, { day: "numeric", month: speech === "uk" ? "long" : "short" }).format(new Date(codexCall.endedAt)) : "";
-  const readAt = plan ? new Intl.DateTimeFormat(locale, now - plan.observedAt < 86_400_000 ? { hour: "2-digit", minute: "2-digit" } : { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(plan.observedAt)) : "";
+  const readAt = plan ? new Intl.DateTimeFormat(locale, now - plan.observedAt < 86_400_000 ? { hour: "2-digit", minute: "2-digit", hourCycle: "h23" } : { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(plan.observedAt)) : "";
   const tone = planTone(plan);
   /* The masked field holds what is being typed and nothing else: no saved key is ever put into it. */
   const typed = { type: "password", value: key, onChange: (event: ChangeEvent<HTMLInputElement>) => { setKey(event.target.value); setKeySaved(false); } } as const;
@@ -160,9 +160,22 @@ export function VoiceCompanionSetting() {
                       <p className="text-[12px] leading-snug text-muted tabular-nums" data-voice-companion-last-call>
                         {codexCall ? t("voiceCompanion.settings.lastCodexCall", { duration: callDuration(codexCall.seconds), date: codexCallDate }) : t("voiceCompanion.settings.noCall")}
                       </p>
-                      {plan ? <p className="text-[12px] leading-snug text-muted tabular-nums" data-voice-companion-plan data-tone={tone} style={{ color: tone ? `var(--color-${tone})` : undefined }}>
-                        {t("voiceCompanion.settings.plan", { plan: planName(plan), windows: planSentence(plan, t, locale, now), time: readAt })}
-                      </p> : null}
+                      {/* The plan as the footer sets it: one short line a window with its figure emphasised, the
+                          whole-account note once above them and the reading time muted below. */}
+                      {plan ? <div className="mt-1 flex flex-col gap-0.5 tabular-nums" data-voice-companion-plan data-tone={tone}>
+                        <p className="text-[12px] leading-snug text-muted">{t("voiceCompanion.settings.planHead", { plan: planName(plan) })}</p>
+                        {planWindows(plan).map((window, index) => {
+                          const used = `${Math.round(window.usedPercent)}%`;
+                          const figureTone = windowTone(window, plan);
+                          const text = window.resetsAt === null
+                            ? t("voiceCompanion.usage.windowFigure", { window: windowName(window, t), used: "\u0001" })
+                            : t("voiceCompanion.usage.windowFigureReset", { window: windowName(window, t), used: "\u0001", reset: limitResetText(window.resetsAt, speech, now) });
+                          return <p key={index} className="text-[13px] leading-snug text-secondary" data-plan-window>
+                            {text.split("\u0001").map((part, at) => at === 0 ? part : [<span key="figure" className="font-semibold text-primary" data-plan-figure data-tone={figureTone} style={{ color: figureTone ? `var(--color-${figureTone})` : undefined }}>{used}</span>, part])}
+                          </p>;
+                        })}
+                        <p className="text-[12px] leading-snug text-muted">{t("voiceCompanion.settings.asOf", { time: readAt })}</p>
+                      </div> : null}
                     </div>
                   ) : null}
                 </div>

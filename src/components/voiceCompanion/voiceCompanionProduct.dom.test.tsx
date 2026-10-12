@@ -242,7 +242,18 @@ test("the settings rows: the switch reveals the choice of voice with the API cho
     expect(section.querySelector("[data-voice-companion-key], [data-voice-companion-cap], [data-voice-companion-usage]")).toBeNull();
     const codex = section.querySelector<HTMLElement>("[data-voice-backend='codex'] [data-voice-companion-codex]")!;
     expect(codex.querySelector("[data-voice-companion-last-call]")?.textContent).toBe("Last call: 7:51 · Oct 10.");
-    expect(codex.querySelector("[data-voice-companion-plan]")?.textContent).toMatch(/^Pro plan, the whole account with its agents: 5 h window 23% used, resets \d\d:\d\d [AP]M; week window 77% used, resets [A-Z][a-z]{2} \d{1,2}\. As of \d\d:\d\d [AP]M\.$/u);
+    /* The plan reads as one short line a window, its figure emphasised, between the whole-account note and the muted
+       reading time; times are the board's 24-hour form and a window's number never parts from its unit. */
+    const planBlock = codex.querySelector<HTMLElement>("[data-voice-companion-plan]")!;
+    expect([...planBlock.children].map((node) => node.textContent)).toEqual([
+      "Pro plan, the whole account with its agents",
+      expect.stringMatching(/^5\u00a0h 23%, resets \d\d:\d\d$/u),
+      expect.stringMatching(/^week 77%, resets [A-Z][a-z]{2} \d{1,2}$/u),
+      expect.stringMatching(/^As of \d\d:\d\d\.$/u),
+    ]);
+    expect([...planBlock.querySelectorAll<HTMLElement>("[data-plan-figure]")].map((node) => [node.textContent, node.className.includes("font-semibold")])).toEqual([["23%", true], ["77%", true]]);
+    expect([planBlock.firstElementChild!.className.includes("text-muted"), planBlock.lastElementChild!.className.includes("text-muted"), planBlock.children[1]!.className.includes("text-muted")]).toEqual([true, true, false]);
+    expect(planBlock.textContent).not.toMatch(/AM|PM/u);
     expect(section.querySelectorAll("input, button, select")).toHaveLength(3);
     expect(codex.textContent).not.toMatch(/\bkey\b|OpenAI|\$/iu);
     expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ enabled: true }, { monthlyCapUsd: 35.5 }, { backend: "codex" }]);
@@ -952,7 +963,8 @@ test("on Codex, before any call the settings say so, and a plan at its limit is 
   const limited = await mount(<VoiceCompanionSetting />);
   const window = limited.querySelector<HTMLElement>("[data-voice-companion-plan]")!;
   expect(window.dataset.tone).toBe("danger");
-  expect(window.textContent).toMatch(/^Plus plan, the whole account with its agents: 5 h window 100% used, resets /u);
+  expect(window.children[1]!.textContent).toMatch(/^5\u00a0h 100%, resets \d\d:\d\d$/u);
+  expect(window.querySelector<HTMLElement>("[data-plan-figure]")!.dataset.tone).toBe("danger");
 });
 
 test("phone settings on Codex keep the last Codex call and its plan window in both languages, with no meter and no key", async () => {
@@ -969,10 +981,12 @@ test("phone settings on Codex keep the last Codex call and its plan window in bo
       expect(document.querySelector("[data-companion-spend-meter]")).toBeNull();
       expect(document.querySelector("[data-voice-companion-key], [data-voice-companion-cap]")).toBeNull();
       expect(document.querySelector("[data-voice-companion-last-call]")?.textContent).toBe(locale === "en" ? "Last call: 7:51 · Oct 10." : "Остання розмова: 7:51 · 10 жовтня.");
-      expect(document.querySelector("[data-voice-companion-plan]")?.textContent).toContain(locale === "en" ? "Pro plan, the whole account with its agents: 5 h window 23% used" : "План Pro, увесь акаунт разом з агентами: вікно «5 год» використано на 23%");
-      /* The weekly reset is a date; in Ukrainian its month is written in full, so no abbreviation's dot doubles the sentence's. */
-      expect(document.querySelector("[data-voice-companion-plan]")?.textContent).toContain(locale === "en" ? "week window 77% used, resets " : "вікно «тиждень» використано на 77%, оновлення ");
-      expect(document.querySelector("[data-voice-companion-plan]")?.textContent).not.toContain("..");
+      const lines = [...document.querySelector<HTMLElement>("[data-voice-companion-plan]")!.children].map((node) => node.textContent);
+      expect(lines.slice(0, 2)).toEqual(locale === "en" ? ["Pro plan, the whole account with its agents", expect.stringMatching(/^5\u00a0h 23%, resets \d\d:\d\d$/u)]
+        : ["План Pro, увесь акаунт разом з агентами", expect.stringMatching(/^5\u00a0год 23%, оновлення \d\d:\d\d$/u)]);
+      /* The weekly reset is a date; in Ukrainian its month is written in full. */
+      expect(lines[2]).toMatch(locale === "en" ? /^week 77%, resets [A-Z][a-z]{2} \d{1,2}$/u : /^тиждень 77%, оновлення \d{1,2} [а-яіїєґ]+$/u);
+      expect(lines[3]).toMatch(locale === "en" ? /^As of \d\d:\d\d\.$/u : /^Станом на \d\d:\d\d\.$/u);
       await unmountNow();
     }
   } finally { await act(async () => setLocale("en")); }
