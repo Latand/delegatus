@@ -83,7 +83,8 @@ function decodeWithOffsets(
   offsets.length = decoded.length;
   // A decoder shape outside the mapped tokens still gets scanned in full,
   // but cannot confer a RAW exemption without proven source correspondence.
-  for (let i = 0; i < decoded.length; i += 1) offsets[i] = mapped === decoded ? nextOffsets[i] : -1;
+  const mappedMatchesDecoded = mapped === decoded;
+  for (let i = 0; i < decoded.length; i += 1) offsets[i] = mappedMatchesDecoded ? nextOffsets[i] : -1;
   return decoded;
 }
 
