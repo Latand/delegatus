@@ -211,6 +211,23 @@ export interface BridgeReportV1 {
   /** The Telegram copy of a manager report, rendered once beside the body
       from the same cut report, and what became of posting it (§5.5). */
   telegram?: BridgeReportTelegram;
+  /** A manager report that tells of a finished outcome the operator
+      acknowledges in «Готово» (docs/design/done-section.md §2.3), with the
+      report's own summary as it was stored. Only the designated orchestrator's
+      rows carry it; the body and the Telegram copy are unchanged by it. */
+  outcome?: BridgeReportOutcome;
+}
+
+export const BRIDGE_REPORT_OUTCOME_KINDS = ["incident", "publication"] as const;
+export type BridgeReportOutcomeKind = typeof BRIDGE_REPORT_OUTCOME_KINDS[number];
+
+export interface BridgeReportOutcome {
+  kind: BridgeReportOutcomeKind;
+  summary: string;
+}
+
+export function isBridgeReportOutcomeKind(value: unknown): value is BridgeReportOutcomeKind {
+  return typeof value === "string" && (BRIDGE_REPORT_OUTCOME_KINDS as readonly string[]).includes(value);
 }
 
 export type BridgeReportTelegramState = "pending" | "sent" | "failed" | "uncertain";
@@ -254,6 +271,8 @@ export interface BridgeReportInput {
   coversOwed?: boolean;
   /** The Telegram copy to keep beside the row, when the project has a chat. */
   telegram?: { chat: string; html: string; topicId?: number } | null;
+  /** Kept only beside a manager row; the binding drops it for every other origin. */
+  outcome?: BridgeReportOutcome | null;
 }
 
 export interface BridgeReportLogV1 {

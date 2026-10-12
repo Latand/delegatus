@@ -30,7 +30,11 @@ function capacity(observation: DurableQuotaObservation | undefined, now: number,
      preserving the account as a fallback while its next probe is pending. */
   if (!authFresh || (!observationFresh && !copilotTranscript)) return { kind: "unknown" };
   if (!observation.authenticated) return observationFresh ? { kind: "unavailable" } : { kind: "unknown" };
-  if (!observation.limits) return { kind: "unknown" };
+  /* The provider's own word that the limit is reached holds without a window
+     to read beside it (a workspace member's reading can carry none); it names
+     no reset, and holds only while the live reading is fresh. */
+  const reached = observationFresh && observation.provenance.source === "live" && observation.limitReached === true;
+  if (!observation.limits) return reached ? { kind: "exhausted", resetsAt: null } : { kind: "unknown" };
   /* A tier weekly (issues #1358, #1796) gates an unattended spawn like the
      general week does, but only the tier the spawn's own model draws on
      (issue #1431); an unstated model resolves to the launch default. */
@@ -38,7 +42,7 @@ function capacity(observation: DurableQuotaObservation | undefined, now: number,
     .map((entry) => entry.value)
     .filter((window) => window !== null && window !== undefined);
   if (!windows.length || windows.some((window) => !Number.isFinite(window.usedPercent) || window.usedPercent < 0 || window.usedPercent > 100 || (window.resetsAt !== null && (!Number.isSafeInteger(window.resetsAt) || window.resetsAt < 0)))) {
-    return { kind: "unknown" };
+    return reached ? { kind: "exhausted", resetsAt: null } : { kind: "unknown" };
   }
   const remaining = Math.min(...windows.map((window) => 100 - window.usedPercent));
   const nowSeconds = Math.floor(now / 1_000);
@@ -58,7 +62,10 @@ function capacity(observation: DurableQuotaObservation | undefined, now: number,
   if (observation.provenance.source !== "live"
     && !(copilotTranscript && (observationFresh || staleCopilotExhaustion))
     && !(observation.provenance.source === "transcript" && observationFresh && remaining <= 0)) return { kind: "unknown" };
-  if (remaining > 0) return { kind: "available", remaining };
+  /* The provider's own word that the limit is reached outranks windows that
+     still show room; it holds only while the reading is fresh, like they do. */
+  if (remaining > 0 && !reached) return { kind: "available", remaining };
+  if (!exhaustedWindows.length) return { kind: "exhausted", resetsAt: null };
   if (copilotTranscript && exhaustedWindows.some((window) => window.resetsAt === null || window.resetsAt <= nowSeconds)) return { kind: "unknown" };
   if (exhaustedWindows.some((window) => window.resetsAt === null || window.resetsAt <= nowSeconds)) return { kind: "exhausted", resetsAt: null };
   return { kind: "exhausted", resetsAt: Math.max(...exhaustedWindows.map((window) => window.resetsAt!)) };

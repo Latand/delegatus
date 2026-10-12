@@ -33,6 +33,7 @@ test("Claude cancellation releases the lease during termination grace", async ()
       kill: (_pid, signal) => { signals.push(signal); if (signal === "SIGKILL") child.emit("close", 0); },
       pidStartToken: () => "fixture-process", isExpectedClaude: () => true,
       waitForExit: async () => true,
+      observeSignedIn: async () => {},
       status: async () => ({ loggedIn: false, method: null, email: null, plan: null }),
       now: Date.now,
       setTimeout: (fn, ms) => { if (ms <= 2_000) void pause().then(fn); return {} as NodeJS.Timeout; },

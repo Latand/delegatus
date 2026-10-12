@@ -4,6 +4,7 @@ import type { Root } from "react-dom/client";
 
 import { installActEnv } from "@/test-helpers/actEnv";
 import { installOnboardingDom, settle } from "@/test-helpers/onboardingDom";
+import type { CompanionUsage } from "@/lib/voiceCompanion/contract";
 
 /*
  * The conversation view (item 6 of docs/design/voice-delegatus-live-feedback.md), the operator's pick "Glass panel":
@@ -336,6 +337,8 @@ test("the transcript footer shows live, settled and incomplete spend with the mo
       await render(usage);
       const line = () => host.querySelector<HTMLElement>("[data-companion-spend]")!;
       expect(line().textContent).toBe(locale === "en" ? "This call $0.19 October $0.51 of $20.00" : "Ця розмова $0.19 жовтень $0.51 із $20.00");
+      /* An API call's footer carries no length, so the header keeps the time of the last line. */
+      expect(host.querySelector(".vc-tr-sub")!.textContent).toMatch(locale === "en" ? /^in progress · \d+:\d\d$/u : /^триває · \d+:\d\d$/u);
       expect(line().previousElementSibling?.hasAttribute("data-transcript-body")).toBe(true);
       /* Variant 2's emphasis: both sums spent carry the weight, the cap is muted. */
       const valued = (role: string) => line().querySelector<HTMLElement>(`[data-spend-amounts] [data-spend-value="${role}"]`)!;
@@ -402,6 +405,69 @@ test("a short call without final usage shows its retained reservation as an esti
       expect(line.getAttribute("aria-label")!.toLowerCase()).toContain(qualifier);
       expect(line.textContent).not.toMatch(/at least|щонайменше/iu);
       expect(line.dataset.final).toBe("false");
+    }
+  } finally { await act(async () => setLocale("en")); }
+});
+
+test("a Codex call's footer shows its length and the account's plan window, with the call's rise on the meter, in both languages", async () => {
+  const { setLocale } = await import("@/lib/i18n");
+  const { limitResetText } = await import("@/lib/voiceCompanion/errors");
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  mounted = { root, host };
+  const now = Math.floor(Date.now() / 1000);
+  const plan = { type: "pro", primary: { usedPercent: 23, resetsAt: now + 7_200, windowMinutes: 300 }, secondary: { usedPercent: 77, resetsAt: now + 4 * 86_400, windowMinutes: 10_080 }, limitReached: false, observedAt: now * 1000 };
+  try {
+    for (const locale of ["en", "uk"] as const) {
+      await act(async () => setLocale(locale));
+      const usage = { backend: "codex" as const, callSeconds: 252, callFinal: false, plan, planStartPercent: 21 };
+      const render = async (value: CompanionUsage) => act(async () => root.render(<CompanionTranscript record={{ ...sampleTranscript(locale), usage: value }} left={0} top={0} width={360} height={560} onClose={() => {}} />));
+      await render(usage);
+      const line = () => host.querySelector<HTMLElement>("[data-companion-spend]")!;
+      const reset = limitResetText(now + 7_200, locale);
+      const weekly = limitResetText(now + 4 * 86_400, locale);
+      /* The reset is in the board's 24-hour form in both languages, and a window's number never parts from its unit. */
+      expect(reset).toMatch(/^\d\d:\d\d$/u);
+      expect(line().textContent).toBe(locale === "en" ? `This call 4:12Pro · 5\u00a0h 23%, resets ${reset} · week 77%` : `Ця розмова 4:12Pro · 5\u00a0год 23%, оновлення ${reset} · тиждень 77%`);
+      expect(line().getAttribute("aria-label")).not.toMatch(/AM|PM/u);
+      /* The call's length shows once, in the footer: the header says only that the call is in progress. */
+      expect(host.querySelector(".vc-tr-sub")!.textContent).toBe(locale === "en" ? "in progress" : "триває");
+      expect(line().previousElementSibling?.hasAttribute("data-transcript-body")).toBe(true);
+      expect(line().parentElement!.lastElementChild).toBe(line());
+      /* Variant 2's emphasis: the two figures carry the weight, the second window is muted. */
+      const valued = (role: string) => line().querySelector<HTMLElement>(`[data-spend-amounts] [data-spend-value="${role}"]`)!;
+      expect([valued("duration"), valued("used")].map((node) => [node.className, node.textContent])).toEqual([["vc-tr-spend-value", "4:12"], ["vc-tr-spend-value", "23%"]]);
+      expect(line().querySelector(".vc-tr-spend-muted")!.textContent).toBe(locale === "en" ? " · week 77%" : " · тиждень 77%");
+      expect(TRANSCRIPT_CSS).toMatch(/\.vc-tr-spend-value\s*\{[^}]*font-weight:\s*600/);
+      expect(TRANSCRIPT_CSS).toMatch(/\.vc-tr-spend-muted\s*\{[^}]*color:\s*var\(--color-muted\)/);
+      /* The label and the hint say the window is the whole account's, its agents included. */
+      expect(line().getAttribute("aria-label")).toBe(locale === "en"
+        ? `This call: 4:12. Pro plan, the whole account with its agents: 5\u00a0h window 23% used, resets ${reset}; week window 77% used, resets ${weekly}.`
+        : `Ця розмова: 4:12. План Pro, увесь акаунт разом з агентами: вікно «5\u00a0год» використано на 23%, оновлення ${reset}; вікно «тиждень» використано на 77%, оновлення ${weekly}.`);
+      expect(line().querySelector<HTMLElement>("[data-spend-plan]")!.title).toBe(locale === "en" ? "The whole account's use, its agents included" : "Використання всього акаунта, разом з його агентами");
+      const meter = () => line().querySelector<HTMLElement>('[data-companion-spend-meter][role="meter"]')!;
+      const fill = (kind: "window" | "rise") => line().querySelector<HTMLElement>(`[data-${kind}-fill]`)!.style.transform;
+      expect(meter().getAttribute("aria-valuenow")).toBe("23");
+      expect(fill("window")).toBe("scaleX(0.23)");
+      /* The teal share is the rise since the call started: from 21% to 23%. */
+      expect(fill("rise")).toMatch(/^translateX\(21%\) scaleX\(0\.0200000/);
+      expect(line().querySelector("[data-spend-plan]")!.hasAttribute("data-tone")).toBe(false);
+      await render({ ...usage, callSeconds: 3_727, callFinal: true, plan: { ...plan, primary: { ...plan.primary, usedPercent: 84 } } });
+      expect(line().dataset.final).toBe("true");
+      expect(valued("duration").textContent).toBe("1:02:07");
+      expect(line().querySelector("[data-spend-plan]")!.getAttribute("data-tone")).toBe("warning");
+      await render({ ...usage, plan: { ...plan, limitReached: true, primary: { ...plan.primary, usedPercent: 100 } } });
+      expect(line().querySelector("[data-spend-plan]")!.getAttribute("data-tone")).toBe("danger");
+      expect(line().hasAttribute("data-limit")).toBe(true);
+      expect(fill("window")).toBe("scaleX(1)");
+      /* A window that reset during the call has no rise to show. */
+      await render({ ...usage, plan: { ...plan, primary: { ...plan.primary, usedPercent: 2 } } });
+      expect(fill("rise")).toBe("translateX(2%) scaleX(0)");
+      /* Before the first reading of the window the call's length still shows. */
+      await render({ ...usage, plan: null, planStartPercent: null });
+      expect(line().textContent).toBe(locale === "en" ? "This call 4:12Plan window not read yet" : "Ця розмова 4:12Вікно плану ще не прочитано");
+      expect(meter().getAttribute("aria-valuenow")).toBe("0");
     }
   } finally { await act(async () => setLocale("en")); }
 });

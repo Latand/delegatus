@@ -61,8 +61,11 @@ import {
   resolveDirectedAttentionView,
 } from "@/lib/attention/service";
 import { readAttentionFile } from "@/lib/attention/store";
-import { DismissalError, dismissAttention as dismissAttentionService, parseDismissalTarget, type DismissalPorts } from "@/lib/attention/dismissals";
+import { DismissalError, dismissAttention as dismissAttentionService, parseDismissalTarget, writeAttentionEscalation, type DismissalPorts } from "@/lib/attention/dismissals";
 import type { DismissalTarget, DismissedBy } from "@/lib/attention/dismissalTypes";
+import { conversationRouteKey, laneNeedKind, laneRouteKey, parseEscalation } from "@/lib/attention/routeTypes";
+import { prototypeWaitsOnOperator } from "@/lib/prototypeReview/model";
+import { withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
 import {
   CONVERSATION_PATH_EXAMPLE,
   describeFocusTargetRejection,
@@ -95,7 +98,7 @@ import { isLifecycleEventType } from "@/lib/lifecycle/vocabulary";
 import { recordBridgeDirectiveAnswer, recordBridgeDirectivePendingAnswer, recordManagerReport } from "@/lib/bridge/service";
 import { bridgeDirectiveBody, bridgeDirectiveId, type BridgeTrailer } from "@/lib/bridge/directive";
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
-import { BRIDGE_REPORT_COMPLETE_MAX_BYTES, isBridgeReportClass, type BridgeReportCompleteV1, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
+import { BRIDGE_REPORT_COMPLETE_MAX_BYTES, isBridgeReportClass, isBridgeReportOutcomeKind, type BridgeReportCompleteV1, type BridgeReportOutcome, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
 import { bridgeReportComplete, findBridgeReport, recordBridgeReportTelegram, scopedReportId } from "@/lib/bridge/store";
 import { EMPTY_DENY_LIST, type PublicDenyList } from "@/lib/bridge/publicSafe";
 import { issueReportApproval, issueReportApprovalDrafts, issueReportApprovalReplies, operatorMessagesOf, type OperatorMessage } from "@/lib/issueReports/approval";
@@ -146,6 +149,7 @@ import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/o
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
+import { readMemoryProblem } from "@/lib/memory/roleProblems";
 import { RoleMemoryRefusal, storedLessonTexts } from "@/lib/memory/roleStore";
 import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt, latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
@@ -2459,7 +2463,7 @@ function stageLessonRequest(result: { pipelineId?: string; stageId?: string; att
 async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const pipelines = dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [];
   try {
-    const result = leaveLessonForConversation(pipelines, attributionOf(dependencies).conversationId, { lesson: args.lesson, rewrite: args.rewrite, none: args.none });
+    const result = leaveLessonForConversation(pipelines, attributionOf(dependencies).conversationId, { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem });
     return { ...result };
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) {
@@ -3454,6 +3458,8 @@ async function bridgeReport(
     ? [...new Set(args.covers.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "").map((entry) => entry.trim()))].slice(0, 64)
     : [];
   const coversOwed = args.coversOwed === true;
+  const outcomeKind = args.outcome === undefined || args.outcome === null ? null : text(args.outcome);
+  if (outcomeKind !== null && !isBridgeReportOutcomeKind(outcomeKind)) throw new Error("outcome must be incident or publication");
 
   const origin = attributionOf(dependencies);
   /* Folded through the project aliases once, here: the seat tick reads the log
@@ -3508,6 +3514,10 @@ async function bridgeReport(
   let storedBody: string;
   let complete: BridgeReportCompleteV1 | null = null;
   let telegramCopy: { chat: string; html: string; topicId?: number } | null = null;
+  /* «Готово» (docs/design/done-section.md §2.3): the marker is the
+     orchestrator's own, kept beside its row with the summary it rendered. */
+  let outcome: BridgeReportOutcome | null = null;
+  if (outcomeKind !== null && origin.kind !== "manager") warnings.push("outcome was ignored: only the project's orchestrator marks an outcome.");
   if (origin.kind === "manager") {
     /* Only a chat the operator chose for the project is posted to (§5.6). */
     const destination = project ? effectiveReportTelegram(project) : null;
@@ -3548,6 +3558,11 @@ async function bridgeReport(
     const language = languageMismatchWarning("report", [summary, ...Object.values(sections).flat(), hasSections ? "" : body].join("\n"), locale);
     if (language) warnings.push(language);
     storedBody = renderPlain(rendered.cut);
+    if (outcomeKind !== null) {
+      const line = rendered.cut.summary || rendered.cut.sections.flatMap((section) => section.items)[0] || "";
+      if (line) outcome = { kind: outcomeKind, summary: line };
+      else warnings.push("outcome was ignored: the report has no summary to show for it.");
+    }
     /* The voice relays the report whole; the body stays the display copy. */
     complete = rendered.complete;
     if (destination) {
@@ -3575,6 +3590,7 @@ async function bridgeReport(
     covers,
     coversOwed,
     telegram: telegramCopy,
+    outcome,
   });
 
   /* A replay under the same key appends nothing, and says so rather than pretending
@@ -4500,6 +4516,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
       ...(verbose ? { setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null } : {}),
       ...autoRotationFailureAnswer(project) },
     maintenance: boardMaintenanceAnswer(project, effective, { verbose }),
+    ...(typeof args.problemId === "string" ? { problem: readMemoryProblem(project, args.problemId) } : {}),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
     /* Why the tick is mute, when it is (#1746). A seat that is enabled, on a
        twenty-minute interval and receiving nothing was reading a settings
@@ -6133,6 +6150,15 @@ async function conversationAction(
     label: args.label,
     question: args.question,
     ...(action === "permission" ? { decision: text(args.decision), requestId: text(args.requestId) } : {}),
+    ...(action === "answer" ? {
+      requestId: text(args.requestId),
+      answer: {
+        ...(args.answers !== undefined ? { answers: args.answers } : {}),
+        ...(args.text !== undefined ? { text: args.text } : {}),
+        ...(args.approve !== undefined ? { approve: args.approve } : {}),
+        ...(args.message !== undefined ? { message: args.message } : {}),
+      },
+    } : {}),
   }, callerCapabilityHeaders()).catch((error: unknown) => {
     if (error instanceof McpDispatchUncertainError) {
       throw new McpDispatchUncertainError(error.message, { operationId });
@@ -6746,7 +6772,83 @@ async function dismissThroughService(
   }
 }
 
+/**
+ * A seat hands one routed wait to the operator
+ * (docs/design/attention-auto-resolve.md): it asks the question in a decision
+ * form with publish_prototype_review, then names that round here. The
+ * escalation holds the round's id and no question of its own
+ * (docs/design/operator-decision-forms.md §4), keyed by the exact wait so a
+ * newer ask or a lane that moved is not covered. While the round waits, its
+ * row is the operator's row for the wait; once answered, the wait is the
+ * seat's again. The gate is the dismissal's, in the same two phases, and a
+ * refused caller writes nothing.
+ */
+async function escalateThroughService(
+  target: DismissalTarget,
+  escalate: unknown,
+  undo: boolean,
+  operationKey: string,
+  dependencies: ViewerMcpDomainDependencies,
+): Promise<McpToolPayload> {
+  const authority = dependencies.attentionAuthority();
+  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+  const admission = permitAttentionDismissal(authority, seats, null);
+  if (!admission.allowed) throw new McpToolRefusal(admission.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: admission.refusedAs });
+  const round = undo ? null : parseEscalation(escalate);
+  if (typeof round === "string") throw new McpToolRefusal(round, { code: "INVALID_ESCALATION" });
+  let key: string;
+  let focus: FocusTarget;
+  if (target.kind === "conversation") {
+    if (!target.reasonId) throw new McpToolRefusal("escalate names the reason it hands on: pass target.reasonId from the read", { code: "INVALID_TARGET" });
+    key = conversationRouteKey(target.reasonId);
+    focus = focusTargetFromArgs({ kind: "conversation", ...(target.conversationId ? { conversationId: target.conversationId } : {}), ...(target.path ? { path: target.path } : {}) }, dependencies);
+  } else if (target.kind === "pipeline") {
+    const pipeline = dependencies.readPipelineRecord ? dependencies.readPipelineRecord(target.pipelineId) : dependencies.getPipelines().pipelines.find(row => row.id === target.pipelineId);
+    if (!pipeline) throw new McpToolRefusal(`no pipeline ${target.pipelineId}`, { code: "PIPELINE_NOT_FOUND" });
+    const kind = laneNeedKind(pipeline);
+    if (!kind) throw new McpToolRefusal("the lane waits on nothing to escalate", { code: "NOTHING_TO_ESCALATE" });
+    key = laneRouteKey(pipeline, kind);
+    focus = focusTargetFromArgs(target, dependencies);
+  } else {
+    throw new McpToolRefusal("escalate takes a conversation target with its reasonId, or a pipeline target", { code: "INVALID_TARGET" });
+  }
+  const project = canonicalOrchestratorProject(await focusTargetProject(focus, "", dependencies));
+  const verdict = permitAttentionDismissal(authority, seats, project);
+  if (!verdict.allowed) throw new McpToolRefusal(verdict.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: verdict.refusedAs });
+  let taskId = "";
+  if (round) {
+    /* The round is the operator's question: it has to exist in this project
+       and still wait, or the wait would leave the seat for a form nobody sees. */
+    const task = dependencies.loadTasks().find(candidate => candidate.prototypeReviews?.some(held => held.id === round.reviewId));
+    if (!task || canonicalOrchestratorProject(task.project) !== project) {
+      throw new McpToolRefusal(`no decision round ${round.reviewId} in this project: ask with publish_prototype_review first and pass the reviewId it answers`, { code: "ROUND_NOT_FOUND" });
+    }
+    /* Waiting as the operator's board draws it: the task's newest round,
+       undecided and not dismissed. A dismissed round is invisible, and a
+       wait escalated to it would leave the seat for a form nobody sees. */
+    const summary = withPrototypeReviewSummaries([task])[0]?.prototypeReview;
+    if (!prototypeWaitsOnOperator(summary) || summary?.waitingReviewId !== round.reviewId) {
+      throw new McpToolRefusal(`decision round ${round.reviewId} no longer waits: read it with read_prototype_review and carry its answer to the asker`, { code: "ROUND_NOT_WAITING" });
+    }
+    taskId = task.id;
+  }
+  const attribution = attributionOf(dependencies);
+  const by: DismissedBy = {
+    kind: attribution.kind,
+    conversationId: attribution.conversationId,
+    role: attribution.role,
+    ...(attribution.via ? { via: { deputy: attribution.via.deputy } } : {}),
+  };
+  const written = writeAttentionEscalation(
+    { key, seat: attribution.conversationId, taskId, reviewId: round?.reviewId ?? "" },
+    by,
+    { undo, operationKey },
+  );
+  return { escalated: undo ? null : written.escalation, key, changed: written.changed, undo, by };
+}
+
 async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, control: ViewerControlDependencies, context?: McpToolCallContext): Promise<McpToolPayload> {
+  if (args.target === undefined && args.escalate !== undefined) throw new McpToolRefusal("escalate needs the target it hands to the operator", { code: "INVALID_TARGET" });
   if (args.target === undefined) {
     if (args.undo !== undefined || args.reason !== undefined) throw new McpToolRefusal("undo and reason require a target", { code: "INVALID_TARGET" });
     const authority = dependencies.attentionAuthority();
@@ -6770,6 +6872,7 @@ async function dismissAttentionTool(args: McpToolArgs, dependencies: ViewerMcpDo
     if (error instanceof DismissalError) throw new McpToolRefusal(error.message, { code: error.code });
     throw error;
   }
+  if (args.escalate !== undefined) return escalateThroughService(target, args.escalate, args.undo === true, mcpOperationId("dismiss_attention", requestId(args)), dependencies);
   const outcome = await dismissThroughService(target, args.undo === true, mcpOperationId("dismiss_attention", requestId(args)), dependencies, args.reason as string | undefined);
   return {
     dismissed: outcome.dismissed,

@@ -4,7 +4,7 @@ import http from "node:http";
 import dns from "node:dns/promises";
 import { callBody, toolSleep, type ToolLoopRuntime } from "./toolLoop";
 import { requestSchema, handoffAnswerSchema, answerSchema, replyAnswerSchema, type ToolCallResult } from "./protocol";
-import { ownerRequest, x1Request, x1Results, x1Errors, x1Dir } from "./toolLoop.fixture";
+import { ownerRequest, pendingRetryAfterSeconds, x1Request, x1Results, x1Errors, x1Dir } from "./toolLoop.fixture";
 import { relayClaimCapabilities } from "./poller";
 import { setRelaySwitch } from "./switches";
 import { assertOwnerCaptureResponse } from "./ownerCapture.fixture";
@@ -1750,7 +1750,7 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
             const item = { chat_id: last ? 102 : 101, name: last ? "Chat B" : "Chat A", username: null,
               avatar_url: null, total_participants: 2, synced_section_count: 0 };
             result = { ...result, effect: "read", output: JSON.stringify({ items: [item], next_cursor: last ? null : page }) };
-            if (!last && attempt === 1) { sample = "owner_pending"; result = { ...result, status: "pending", output: "", retry_after_s: 1 }; }
+            if (!last && attempt === 1) { sample = "owner_pending"; result = { ...result, status: "pending", output: "", retry_after_s: pendingRetryAfterSeconds }; }
             else sample = last ? "owner_last_page" : "owner_first_page";
           } else if (name === "inner_404") {
             result = { ...result, effect: "read", ...(tool === "owner_get_grid" ? { status: "error", output: '{"http_status":404,"message":"Grid not found"}' } : { output: '{"items":[]}' }) };
@@ -1774,6 +1774,7 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
         expect(run.completion).toBeNull(); expect(run.completions).toEqual([]); expect(run.record?.outcome).toBe("lease_lost");
       } else expect(run.completion?.outcome).toBe(name === "retry_ceiling" ? "declined" : "answered");
       if (name === "reads") {
+        expect(waits).toEqual([5000]);
         expect(run.calls).toHaveLength(3); expect(run.calls[1]).toEqual(run.calls[0]);
         expect(run.calls[2]).toEqual(callBody(run.request, { tool: "owner_list_grid_chats", arguments: { grid_id: grid, cursor: page, limit: 2 } }));
         expect(projectionsOf(run, 3)).toHaveLength(2); // cached repetition grows no prompt

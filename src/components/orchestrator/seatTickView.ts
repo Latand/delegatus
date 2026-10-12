@@ -67,6 +67,7 @@ const REASONS: Record<SeatTickWakeReasonKind, MessageKey> = {
   "release-blocked": "seatTick.reason.releaseBlocked",
   "maintenance-settled": "seatTick.reason.maintenanceSettled",
   "permission-request": "seatTick.reason.permissionRequest",
+  "worker-ask": "seatTick.reason.workerAsk",
   "disk-pressure": "seatTick.reason.diskPressure",
 };
 

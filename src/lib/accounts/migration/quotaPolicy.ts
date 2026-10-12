@@ -32,6 +32,11 @@ export interface QuotaObservation {
   envelope?: "headerless" | "jsonrpc-2.0" | null;
   /** Codex only; null when the probe carried no reset-credit summary. */
   resetCredits?: QuotaResetCredits | null;
+  /** Codex only: the provider's `rateLimitReachedType` said the account is out,
+      which it can say while every window still has room (a workspace member's
+      limit, spent credits). The windows keep the percentages it read. Absent
+      when the reading did not say either way. */
+  limitReached?: boolean;
 }
 
 export interface EffectiveRemaining {
@@ -72,14 +77,17 @@ export function effectiveRemaining(observation: QuotaObservation, now = Date.now
     (observation.authCheckedAt !== undefined && !Number.isFinite(observation.authCheckedAt))) return null;
   const age = now - observation.observedAt;
   const authAge = now - (observation.authCheckedAt ?? observation.observedAt);
-  if (!observation.authenticated || observation.provenance.source !== "live" || age < 0 || authAge < 0 || age > AUTO_BALANCE_FRESH_MS || authAge > AUTO_BALANCE_FRESH_MS || !observation.limits) return null;
+  if (!observation.authenticated || observation.provenance.source !== "live" || age < 0 || authAge < 0 || age > AUTO_BALANCE_FRESH_MS || authAge > AUTO_BALANCE_FRESH_MS) return null;
+  // A provider that says the limit is reached leaves no headroom, whatever the windows show or whether it sent any.
+  const reached = observation.limitReached === true;
+  if (!observation.limits) return reached ? { window: "session", percent: 0 } : null;
   const reportedWindows = gatingWindows(observation.engine, observation.limits, options.model)
     .filter((entry): entry is { window: QuotaWindowKey; value: LimitWindow } => entry.value !== null && entry.value !== undefined);
   if (reportedWindows.some(({ value }) => !Number.isFinite(value.usedPercent) || value.usedPercent < 0 || value.usedPercent > 100 ||
-    (value.resetsAt !== null && (!Number.isSafeInteger(value.resetsAt) || value.resetsAt < 0)))) return null;
+    (value.resetsAt !== null && (!Number.isSafeInteger(value.resetsAt) || value.resetsAt < 0)))) return reached ? { window: "session", percent: 0 } : null;
   const windows = reportedWindows;
-  if (!windows.length) return null;
-  return windows.map(({ window, value }) => ({ window, percent: 100 - value.usedPercent }))
+  if (!windows.length) return reached ? { window: "session", percent: 0 } : null;
+  return windows.map(({ window, value }) => ({ window, percent: reached ? 0 : 100 - value.usedPercent }))
     .sort((a, b) => a.percent - b.percent || a.window.localeCompare(b.window))[0] ?? null;
 }
 

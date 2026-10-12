@@ -15,7 +15,7 @@ process.env.LLV_STATE_DIR = path.join(QUOTA_SANDBOX, "state");
 
 const { AgentRegistry } = await import("@/lib/agent/registry");
 const { withAccountMutationLock, withAccountMutationLockAsync } = await import("@/lib/accounts/accountMutation");
-const { QuotaController } = await import("./quotaController");
+const { QuotaController, codexObservationFromProbe, durableQuotaObservation } = await import("./quotaController");
 
 afterAll(() => {
   if (PREVIOUS_STATE === undefined) delete process.env.LLV_STATE_DIR;
@@ -490,3 +490,18 @@ test("a long provider wait never becomes an account mutation lease", async () =>
     openSpy.mockRestore(); removeSpy.mockRestore();
   }
 }, 15_000);
+
+test("a Codex probe records the provider's reached-limit marker beside the percentages it read", async () => {
+  const sessionsDir = path.join(QUOTA_SANDBOX, "reached-sessions");
+  const account = { id: "managed", kind: "managed", home: path.join(QUOTA_SANDBOX, "reached-home"), sessionsDir } as CodexAccount;
+  const probe = (limitReached?: boolean) => ({
+    account: { account: null, requiresOpenaiAuth: true },
+    rateLimits: { primary: { usedPercent: 10, resetsAt: null, windowDurationMins: 300 }, secondary: null, planType: "pro" },
+    resetCredits: null, authenticated: true, envelope: null, ...(limitReached === undefined ? {} : { limitReached }),
+  });
+  const now = Date.now();
+  const reached = durableQuotaObservation(await codexObservationFromProbe(account, probe(true), now), "boot-reached-test");
+  expect(reached).toMatchObject({ limitReached: true, limits: { session: { usedPercent: 10 } } });
+  expect(durableQuotaObservation(await codexObservationFromProbe(account, probe(false), now), "boot-reached-test")).toMatchObject({ limitReached: false });
+  expect(durableQuotaObservation(await codexObservationFromProbe(account, probe(), now), "boot-reached-test")).not.toHaveProperty("limitReached");
+});

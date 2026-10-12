@@ -11,7 +11,7 @@ import { logQuotaEvent } from "@/lib/events";
 import { forgetCachedLimits } from "@/lib/limits";
 
 /**
- * An operator-triggered live re-read of one account's limits (issue #1418).
+ * A live re-read of one account's limits, including after login (issue #1418).
  *
  * The background controller probes every account once a minute; until now the
  * only way to a fresh number was to wait for it. This runs the SAME probe for
@@ -25,7 +25,7 @@ import { forgetCachedLimits } from "@/lib/limits";
  */
 
 /** Which reader took the observation, for the quota telemetry line. */
-export type LiveReadPhase = "operator-refresh" | "reset-credit-redeem" | "spawn-admission";
+export type LiveReadPhase = "operator-refresh" | "reset-credit-redeem" | "spawn-admission" | "login-complete";
 
 export interface LiveLimitsDeps {
   registry?: Pick<AgentRegistry, "recordQuotaObservation">;

@@ -1,0 +1,1643 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "?scenario=role-avatars",
+  "frames": {
+    "seat-1440-light-en": {
+      "answers": [
+        {
+          "avatar": "orchestrator:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "orchestrator:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "architect:26x26",
+          "label": "Architect",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:17:24"
+        },
+        {
+          "avatar": "builder:26x26",
+          "label": "Builder",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:19:24"
+        },
+        {
+          "avatar": "reviewer:26x26",
+          "label": "Reviewer",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:21:24"
+        },
+        {
+          "avatar": "visual-critic:26x26",
+          "label": "Visual critic",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:23:24"
+        },
+        {
+          "avatar": "verifier:26x26",
+          "label": "Verifier",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:25:24"
+        },
+        {
+          "avatar": "cleaner:26x26",
+          "label": "Cleaner",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:27:24"
+        },
+        {
+          "avatar": "merger:26x26",
+          "label": "Merger",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:29:24"
+        },
+        {
+          "avatar": "deployer:26x26",
+          "label": "Deployer",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:31:24"
+        },
+        {
+          "avatar": "prod-auditor:26x26",
+          "label": "Prod auditor",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:33:24"
+        },
+        {
+          "avatar": "maintainer:26x26",
+          "label": "Maintainer",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:35:24"
+        },
+        {
+          "avatar": "issue-reporter:26x26",
+          "label": "Issue reporter",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:37:24"
+        },
+        {
+          "avatar": "neutral:26x26",
+          "label": "Agent",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:39:24"
+        }
+      ],
+      "header": [
+        "orchestrator:26x26"
+      ],
+      "models": [
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "builder-1440-light-en": {
+      "answers": [
+        {
+          "avatar": "builder:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "builder:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "orchestrator:26x26",
+          "label": "Orchestrator",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:35:26"
+        }
+      ],
+      "header": [
+        "orchestrator:26x26",
+        "builder:26x26"
+      ],
+      "models": [
+        "Opus 5.5",
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "agent-1440-light-en": {
+      "answers": [
+        {
+          "avatar": "neutral:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [],
+      "header": [
+        "orchestrator:26x26",
+        "neutral:26x26"
+      ],
+      "models": [
+        "Opus 5.5",
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "builder-1000-light-en": {
+      "answers": [
+        {
+          "avatar": "builder:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "builder:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "orchestrator:26x26",
+          "label": "Orchestrator",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:35:30"
+        }
+      ],
+      "header": [
+        "orchestrator:26x26",
+        "builder:26x26"
+      ],
+      "models": [
+        "Opus 5.5",
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "agent-1000-light-en": {
+      "answers": [
+        {
+          "avatar": "neutral:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [],
+      "header": [
+        "orchestrator:26x26",
+        "neutral:26x26"
+      ],
+      "models": [
+        "Opus 5.5",
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "seat-390-light-en": {
+      "answers": [
+        {
+          "avatar": "orchestrator:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "orchestrator:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "architect:26x26",
+          "label": "Architect",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:17"
+        },
+        {
+          "avatar": "builder:26x26",
+          "label": "Builder",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:19"
+        },
+        {
+          "avatar": "reviewer:26x26",
+          "label": "Reviewer",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:21"
+        },
+        {
+          "avatar": "visual-critic:26x26",
+          "label": "Visual critic",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:23"
+        },
+        {
+          "avatar": "verifier:26x26",
+          "label": "Verifier",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:25"
+        },
+        {
+          "avatar": "cleaner:26x26",
+          "label": "Cleaner",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:27"
+        },
+        {
+          "avatar": "merger:26x26",
+          "label": "Merger",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:29"
+        },
+        {
+          "avatar": "deployer:26x26",
+          "label": "Deployer",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:31"
+        },
+        {
+          "avatar": "prod-auditor:26x26",
+          "label": "Prod auditor",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:33"
+        },
+        {
+          "avatar": "maintainer:26x26",
+          "label": "Maintainer",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:35"
+        },
+        {
+          "avatar": "issue-reporter:26x26",
+          "label": "Issue reporter",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:37"
+        },
+        {
+          "avatar": "neutral:26x26",
+          "label": "Agent",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:39"
+        }
+      ],
+      "header": [
+        "orchestrator:26x26"
+      ],
+      "models": [],
+      "phoneBar": {
+        "marks": 0,
+        "avatars": 1,
+        "line": "working 6:40·Opus 5.5",
+        "lineOver": 19
+      },
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "builder-390-light-en": {
+      "answers": [
+        {
+          "avatar": "builder:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "builder:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "orchestrator:26x26",
+          "label": "Orchestrator",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:35"
+        }
+      ],
+      "header": [
+        "builder:26x26"
+      ],
+      "models": [],
+      "phoneBar": {
+        "marks": 0,
+        "avatars": 1,
+        "line": "done · 70m ago·Opus 5.5",
+        "lineOver": 0
+      },
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "agent-390-light-en": {
+      "answers": [
+        {
+          "avatar": "neutral:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [],
+      "header": [
+        "neutral:26x26"
+      ],
+      "models": [],
+      "phoneBar": {
+        "marks": 0,
+        "avatars": 1,
+        "line": "done · 20m ago·Opus 5.5",
+        "lineOver": 0
+      },
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "seat-1440-dark-en": {
+      "answers": [
+        {
+          "avatar": "orchestrator:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "orchestrator:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "architect:26x26",
+          "label": "Architect",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:17:38"
+        },
+        {
+          "avatar": "builder:26x26",
+          "label": "Builder",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:19:38"
+        },
+        {
+          "avatar": "reviewer:26x26",
+          "label": "Reviewer",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:21:38"
+        },
+        {
+          "avatar": "visual-critic:26x26",
+          "label": "Visual critic",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:23:38"
+        },
+        {
+          "avatar": "verifier:26x26",
+          "label": "Verifier",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:25:38"
+        },
+        {
+          "avatar": "cleaner:26x26",
+          "label": "Cleaner",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:27:38"
+        },
+        {
+          "avatar": "merger:26x26",
+          "label": "Merger",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:29:38"
+        },
+        {
+          "avatar": "deployer:26x26",
+          "label": "Deployer",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:31:38"
+        },
+        {
+          "avatar": "prod-auditor:26x26",
+          "label": "Prod auditor",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:33:38"
+        },
+        {
+          "avatar": "maintainer:26x26",
+          "label": "Maintainer",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:35:38"
+        },
+        {
+          "avatar": "issue-reporter:26x26",
+          "label": "Issue reporter",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:37:38"
+        },
+        {
+          "avatar": "neutral:26x26",
+          "label": "Agent",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:39:38"
+        }
+      ],
+      "header": [
+        "orchestrator:26x26"
+      ],
+      "models": [
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "builder-1440-dark-en": {
+      "answers": [
+        {
+          "avatar": "builder:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "builder:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "orchestrator:26x26",
+          "label": "Orchestrator",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:35:40"
+        }
+      ],
+      "header": [
+        "orchestrator:26x26",
+        "builder:26x26"
+      ],
+      "models": [
+        "Opus 5.5",
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "agent-1440-dark-en": {
+      "answers": [
+        {
+          "avatar": "neutral:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [],
+      "header": [
+        "orchestrator:26x26",
+        "neutral:26x26"
+      ],
+      "models": [
+        "Opus 5.5",
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "builder-1000-dark-en": {
+      "answers": [
+        {
+          "avatar": "builder:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "builder:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "orchestrator:26x26",
+          "label": "Orchestrator",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:35:44"
+        }
+      ],
+      "header": [
+        "orchestrator:26x26",
+        "builder:26x26"
+      ],
+      "models": [
+        "Opus 5.5",
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "agent-1000-dark-en": {
+      "answers": [
+        {
+          "avatar": "neutral:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [],
+      "header": [
+        "orchestrator:26x26",
+        "neutral:26x26"
+      ],
+      "models": [
+        "Opus 5.5",
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "seat-390-dark-en": {
+      "answers": [
+        {
+          "avatar": "orchestrator:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "orchestrator:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "architect:26x26",
+          "label": "Architect",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:17"
+        },
+        {
+          "avatar": "builder:26x26",
+          "label": "Builder",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:19"
+        },
+        {
+          "avatar": "reviewer:26x26",
+          "label": "Reviewer",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:21"
+        },
+        {
+          "avatar": "visual-critic:26x26",
+          "label": "Visual critic",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:23"
+        },
+        {
+          "avatar": "verifier:26x26",
+          "label": "Verifier",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:25"
+        },
+        {
+          "avatar": "cleaner:26x26",
+          "label": "Cleaner",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:27"
+        },
+        {
+          "avatar": "merger:26x26",
+          "label": "Merger",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:29"
+        },
+        {
+          "avatar": "deployer:26x26",
+          "label": "Deployer",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:31"
+        },
+        {
+          "avatar": "prod-auditor:26x26",
+          "label": "Prod auditor",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:33"
+        },
+        {
+          "avatar": "maintainer:26x26",
+          "label": "Maintainer",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:35"
+        },
+        {
+          "avatar": "issue-reporter:26x26",
+          "label": "Issue reporter",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:37"
+        },
+        {
+          "avatar": "neutral:26x26",
+          "label": "Agent",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:39"
+        }
+      ],
+      "header": [
+        "orchestrator:26x26"
+      ],
+      "models": [],
+      "phoneBar": {
+        "marks": 0,
+        "avatars": 1,
+        "line": "working 6:41·Opus 5.5",
+        "lineOver": 19
+      },
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "builder-390-dark-en": {
+      "answers": [
+        {
+          "avatar": "builder:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "builder:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "orchestrator:26x26",
+          "label": "Orchestrator",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:35"
+        }
+      ],
+      "header": [
+        "builder:26x26"
+      ],
+      "models": [],
+      "phoneBar": {
+        "marks": 0,
+        "avatars": 1,
+        "line": "done · 70m ago·Opus 5.5",
+        "lineOver": 0
+      },
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "agent-390-dark-en": {
+      "answers": [
+        {
+          "avatar": "neutral:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [],
+      "header": [
+        "neutral:26x26"
+      ],
+      "models": [],
+      "phoneBar": {
+        "marks": 0,
+        "avatars": 1,
+        "line": "done · 20m ago·Opus 5.5",
+        "lineOver": 0
+      },
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "seat-1440-light-uk": {
+      "answers": [
+        {
+          "avatar": "orchestrator:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "orchestrator:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "architect:26x26",
+          "label": "Архітектор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:17:53"
+        },
+        {
+          "avatar": "builder:26x26",
+          "label": "Білдер",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:19:53"
+        },
+        {
+          "avatar": "reviewer:26x26",
+          "label": "Рев'юер",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:21:53"
+        },
+        {
+          "avatar": "visual-critic:26x26",
+          "label": "Критик вигляду",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:23:53"
+        },
+        {
+          "avatar": "verifier:26x26",
+          "label": "Верифікатор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:25:53"
+        },
+        {
+          "avatar": "cleaner:26x26",
+          "label": "Клінер",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:27:53"
+        },
+        {
+          "avatar": "merger:26x26",
+          "label": "Мерджер",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:29:53"
+        },
+        {
+          "avatar": "deployer:26x26",
+          "label": "Деплоєр",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:31:53"
+        },
+        {
+          "avatar": "prod-auditor:26x26",
+          "label": "Прод-аудитор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:33:53"
+        },
+        {
+          "avatar": "maintainer:26x26",
+          "label": "Доглядач дошки",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:35:53"
+        },
+        {
+          "avatar": "issue-reporter:26x26",
+          "label": "Автор звітів про помилки",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:37:53"
+        },
+        {
+          "avatar": "neutral:26x26",
+          "label": "Агент",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:39:53"
+        }
+      ],
+      "header": [
+        "orchestrator:26x26"
+      ],
+      "models": [
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "builder-1440-light-uk": {
+      "answers": [
+        {
+          "avatar": "builder:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "builder:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "orchestrator:26x26",
+          "label": "Оркестратор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:35:54"
+        }
+      ],
+      "header": [
+        "orchestrator:26x26",
+        "builder:26x26"
+      ],
+      "models": [
+        "Opus 5.5",
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "agent-1440-light-uk": {
+      "answers": [
+        {
+          "avatar": "neutral:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [],
+      "header": [
+        "orchestrator:26x26",
+        "neutral:26x26"
+      ],
+      "models": [
+        "Opus 5.5",
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "builder-1000-light-uk": {
+      "answers": [
+        {
+          "avatar": "builder:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "builder:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "orchestrator:26x26",
+          "label": "Оркестратор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:35:58"
+        }
+      ],
+      "header": [
+        "orchestrator:26x26",
+        "builder:26x26"
+      ],
+      "models": [
+        "Opus 5.5",
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "agent-1000-light-uk": {
+      "answers": [
+        {
+          "avatar": "neutral:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [],
+      "header": [
+        "orchestrator:26x26",
+        "neutral:26x26"
+      ],
+      "models": [
+        "Opus 5.5",
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "seat-390-light-uk": {
+      "answers": [
+        {
+          "avatar": "orchestrator:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "orchestrator:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "architect:26x26",
+          "label": "Архітектор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:18"
+        },
+        {
+          "avatar": "builder:26x26",
+          "label": "Білдер",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:20"
+        },
+        {
+          "avatar": "reviewer:26x26",
+          "label": "Рев'юер",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:22"
+        },
+        {
+          "avatar": "visual-critic:26x26",
+          "label": "Критик вигляду",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:24"
+        },
+        {
+          "avatar": "verifier:26x26",
+          "label": "Верифікатор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:26"
+        },
+        {
+          "avatar": "cleaner:26x26",
+          "label": "Клінер",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:28"
+        },
+        {
+          "avatar": "merger:26x26",
+          "label": "Мерджер",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:30"
+        },
+        {
+          "avatar": "deployer:26x26",
+          "label": "Деплоєр",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:32"
+        },
+        {
+          "avatar": "prod-auditor:26x26",
+          "label": "Прод-аудитор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:34"
+        },
+        {
+          "avatar": "maintainer:26x26",
+          "label": "Доглядач дошки",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:36"
+        },
+        {
+          "avatar": "issue-reporter:26x26",
+          "label": "Автор звітів про помилки",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:38"
+        },
+        {
+          "avatar": "neutral:26x26",
+          "label": "Агент",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:40"
+        }
+      ],
+      "header": [
+        "orchestrator:26x26"
+      ],
+      "models": [],
+      "phoneBar": {
+        "marks": 0,
+        "avatars": 1,
+        "line": "працює 6:40·Opus 5.5",
+        "lineOver": 19
+      },
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "builder-390-light-uk": {
+      "answers": [
+        {
+          "avatar": "builder:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "builder:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "orchestrator:26x26",
+          "label": "Оркестратор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:36"
+        }
+      ],
+      "header": [
+        "builder:26x26"
+      ],
+      "models": [],
+      "phoneBar": {
+        "marks": 0,
+        "avatars": 1,
+        "line": "готово · 70 хв тому·Opus 5.5",
+        "lineOver": 7
+      },
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "agent-390-light-uk": {
+      "answers": [
+        {
+          "avatar": "neutral:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [],
+      "header": [
+        "neutral:26x26"
+      ],
+      "models": [],
+      "phoneBar": {
+        "marks": 0,
+        "avatars": 1,
+        "line": "готово · 20 хв тому·Opus 5.5",
+        "lineOver": 7
+      },
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "seat-1440-dark-uk": {
+      "answers": [
+        {
+          "avatar": "orchestrator:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "orchestrator:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "architect:26x26",
+          "label": "Архітектор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:18:05"
+        },
+        {
+          "avatar": "builder:26x26",
+          "label": "Білдер",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:20:05"
+        },
+        {
+          "avatar": "reviewer:26x26",
+          "label": "Рев'юер",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:22:05"
+        },
+        {
+          "avatar": "visual-critic:26x26",
+          "label": "Критик вигляду",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:24:05"
+        },
+        {
+          "avatar": "verifier:26x26",
+          "label": "Верифікатор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:26:05"
+        },
+        {
+          "avatar": "cleaner:26x26",
+          "label": "Клінер",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:28:05"
+        },
+        {
+          "avatar": "merger:26x26",
+          "label": "Мерджер",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:30:05"
+        },
+        {
+          "avatar": "deployer:26x26",
+          "label": "Деплоєр",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:32:05"
+        },
+        {
+          "avatar": "prod-auditor:26x26",
+          "label": "Прод-аудитор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:34:05"
+        },
+        {
+          "avatar": "maintainer:26x26",
+          "label": "Доглядач дошки",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:36:05"
+        },
+        {
+          "avatar": "issue-reporter:26x26",
+          "label": "Автор звітів про помилки",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:38:05"
+        },
+        {
+          "avatar": "neutral:26x26",
+          "label": "Агент",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:40:05"
+        }
+      ],
+      "header": [
+        "orchestrator:26x26"
+      ],
+      "models": [
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "builder-1440-dark-uk": {
+      "answers": [
+        {
+          "avatar": "builder:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "builder:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "orchestrator:26x26",
+          "label": "Оркестратор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:36:06"
+        }
+      ],
+      "header": [
+        "orchestrator:26x26",
+        "builder:26x26"
+      ],
+      "models": [
+        "Opus 5.5",
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "agent-1440-dark-uk": {
+      "answers": [
+        {
+          "avatar": "neutral:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [],
+      "header": [
+        "orchestrator:26x26",
+        "neutral:26x26"
+      ],
+      "models": [
+        "Opus 5.5",
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "builder-1000-dark-uk": {
+      "answers": [
+        {
+          "avatar": "builder:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "builder:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "orchestrator:26x26",
+          "label": "Оркестратор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:36:10"
+        }
+      ],
+      "header": [
+        "orchestrator:26x26",
+        "builder:26x26"
+      ],
+      "models": [
+        "Opus 5.5",
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "agent-1000-dark-uk": {
+      "answers": [
+        {
+          "avatar": "neutral:26x26",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [],
+      "header": [
+        "orchestrator:26x26",
+        "neutral:26x26"
+      ],
+      "models": [
+        "Opus 5.5",
+        "Opus 5.5"
+      ],
+      "phoneBar": null,
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "seat-390-dark-uk": {
+      "answers": [
+        {
+          "avatar": "orchestrator:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "orchestrator:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "architect:26x26",
+          "label": "Архітектор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:18"
+        },
+        {
+          "avatar": "builder:26x26",
+          "label": "Білдер",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:20"
+        },
+        {
+          "avatar": "reviewer:26x26",
+          "label": "Рев'юер",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:22"
+        },
+        {
+          "avatar": "visual-critic:26x26",
+          "label": "Критик вигляду",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:24"
+        },
+        {
+          "avatar": "verifier:26x26",
+          "label": "Верифікатор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:26"
+        },
+        {
+          "avatar": "cleaner:26x26",
+          "label": "Клінер",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:28"
+        },
+        {
+          "avatar": "merger:26x26",
+          "label": "Мерджер",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:30"
+        },
+        {
+          "avatar": "deployer:26x26",
+          "label": "Деплоєр",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:32"
+        },
+        {
+          "avatar": "prod-auditor:26x26",
+          "label": "Прод-аудитор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:34"
+        },
+        {
+          "avatar": "maintainer:26x26",
+          "label": "Доглядач дошки",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:36"
+        },
+        {
+          "avatar": "issue-reporter:26x26",
+          "label": "Автор звітів про помилки",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:38"
+        },
+        {
+          "avatar": "neutral:26x26",
+          "label": "Агент",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:40"
+        }
+      ],
+      "header": [
+        "orchestrator:26x26"
+      ],
+      "models": [],
+      "phoneBar": {
+        "marks": 0,
+        "avatars": 1,
+        "line": "працює 6:40·Opus 5.5",
+        "lineOver": 19
+      },
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "builder-390-dark-uk": {
+      "answers": [
+        {
+          "avatar": "builder:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        },
+        {
+          "avatar": "builder:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [
+        {
+          "avatar": "orchestrator:26x26",
+          "label": "Оркестратор",
+          "cut": 0,
+          "head": 34,
+          "clock": "18:36"
+        }
+      ],
+      "header": [
+        "builder:26x26"
+      ],
+      "models": [],
+      "phoneBar": {
+        "marks": 0,
+        "avatars": 1,
+        "line": "готово · 70 хв тому·Opus 5.5",
+        "lineOver": 7
+      },
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    },
+    "agent-390-dark-uk": {
+      "answers": [
+        {
+          "avatar": "neutral:20x20",
+          "engine": "Claude",
+          "engineInsideAvatar": false,
+          "overflow": 0
+        }
+      ],
+      "cards": [],
+      "header": [
+        "neutral:26x26"
+      ],
+      "models": [],
+      "phoneBar": {
+        "marks": 0,
+        "avatars": 1,
+        "line": "готово · 20 хв тому·Opus 5.5",
+        "lineOver": 7
+      },
+      "sideways": 0,
+      "broken": 0,
+      "pageErrors": []
+    }
+  },
+  "failures": []
+}

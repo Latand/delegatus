@@ -13,8 +13,10 @@ const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal"
 afterAll(registerPipelineTick(async () => {}));
 const { viewerMcpBindings } = await import("./bindings");
 const { createMcpToolService, MCP_TOOL_NAMES, MemoryMcpReceiptStore, MUTATING_MCP_TOOL_NAMES, TOOL_INPUT_SCHEMAS } = await import("./server");
-const { learnedRulesBlock } = await import("@/lib/memory/roleStore");
+const { learnedRulesBlock, lessonRequest, stageLessons, projectView } = await import("@/lib/memory/roleStore");
 const { parseLessons } = await import("@/lib/memory/roleStage");
+const { lessonRequestLines } = await import("@/lib/memory/roleRender");
+const { memoryProblemSignals } = await import("@/lib/memory/roleProblems");
 type Pipeline = import("@/lib/pipelines/types").Pipeline;
 type McpToolResult = import("./server").McpToolResult;
 
@@ -53,7 +55,7 @@ function pipeline(): Pipeline {
     n, state: "running", conversationId, effectiveRole: { roleId: null }, verdict: null, ...extra,
   });
   return {
-    id: `p-lesson-${fixture}`, project: PROJECT,
+    id: `p-lesson-${fixture}`, project: PROJECT, taskIds: [`task-${fixture}`],
     stages: [
       { id: "review", kind: "run", prompt: "Review", next: null, onFail: { to: "fix", maxRounds: 1 }, effectiveRole: { roleId: "reviewer" } },
       { id: "fix", kind: "run", prompt: "Fix", next: null, effectiveRole: { roleId: "builder" } },
@@ -65,10 +67,10 @@ function pipeline(): Pipeline {
   } as unknown as Pipeline;
 }
 
-function serviceAs(conversationId: string, replaced = false) {
-  const record = pipeline();
+function serviceAs(conversationId: string, replaced = false, record = pipeline()) {
   const bindings = viewerMcpBindings(undefined, undefined, {
     callerAttribution: () => ({ kind: "agent", conversationId, role: null }),
+    callerProject: () => PROJECT,
     reportStageCompletion: async () => ({
       pipelineId: record.id, stageId: conversationId === "conversation_fix" ? "fix" : "review", attempt: 1, replaced,
       report: { seq: 1, at: "2026-10-07T12:00:00.000Z", actor: { kind: "agent", role: null, conversationId }, verdict: { status: "pass", findings: [] }, summary: "done", provenance: { state: "pending", head: null, branch: "b", uncommitted: null, pullRequest: null, pullRequestState: "pending", outputs: [] }, calls: 1 },
@@ -76,7 +78,8 @@ function serviceAs(conversationId: string, replaced = false) {
     readPipelineRecord: () => record,
     getPipelines: () => ({ pipelines: [record] }),
   } as never);
-  return createMcpToolService(bindings, new MemoryMcpReceiptStore());
+  const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
+  return { callTool: (...args: Parameters<typeof service.callTool>) => service.callTool(...args) as Promise<McpToolResult & Record<string, unknown>> };
 }
 
 let fixture = 0;
@@ -102,7 +105,7 @@ test("an accepted fix report asks for a lesson naming the handed findings, and l
   const fix = await call("conversation_fix", "stage_report", { verdict: "pass", summary: "fixed" });
   expect(fix.ok).toBe(true);
   expect(Array.isArray(fix.lessonRequest)).toBe(true);
-  expect((fix.lessonRequest as string[]).join("\n")).toContain("handed 1 finding from stage review (P1 ×1)");
+  expect((fix.lessonRequest as string[]).join("\n")).toContain("- P1: empty input throws");
   const repeat = await call("conversation_fix", "stage_report", { verdict: "pass", summary: "fixed again" }, true);
   expect(repeat.lessonRequest).toBeUndefined();
 
@@ -110,6 +113,103 @@ test("an accepted fix report asks for a lesson naming the handed findings, and l
   const left = await call("conversation_fix", "leave_lesson", { lesson: { scope: "role", rule: RULE, why: "Review failed on an untested empty path." } });
   expect(left).toMatchObject({ ok: true, stageId: "fix", left: [{ scope: `role:${PROJECT}:builder`, state: "active" }] });
   expect(learnedRulesBlock(PROJECT, "builder")).toContain(RULE);
+});
+
+test("a fix request quotes finding classes and asks for the rule needed before the first review", async () => {
+  const record = pipeline();
+  record.runs[0].attempts[0].verdict!.rankedFindings = [
+    { severity: "P3", text: "The endpoint accepts a request without its required field. Another sentence." },
+    { severity: "P1", text: "A failed successor can pass the promotion gate.\nDetails follow." },
+    { severity: "P2", text: "The decision row clips at phone width in Ukrainian." },
+  ];
+  const response = await serviceAs("conversation_fix", false, record).callTool("stage_report", { clientRequestId: "finding-classes", verdict: "pass" });
+  const lines = response.lessonRequest as string[];
+  expect(lines.filter(line => /^- P\d:/.test(line))).toEqual([
+    "- P1: A failed successor can pass the promotion gate.",
+    "- P2: The decision row clips at phone width in Ukrainian.",
+    "- P3: The endpoint accepts a request without its required field.",
+  ]);
+  const prompt = lines.join("\n");
+  expect(prompt).toContain("before the first review");
+  expect(prompt.indexOf("- rewrite:")).toBeLessThan(prompt.indexOf("- lesson:"));
+  for (const clause of ["this specification alone", "finding was not a defect", "a gate every task runs now catches it", '"Existing rules cover it" is no reason', "No lesson may be about a task.", "choose the narrowest true level:", "- role on every project:", "- project: every role", "- machine: every role"]) expect(prompt).toContain(clause);
+  for (const line of lessonRequestLines(null).filter(line => line.startsWith("No lesson may") || /^- (role|project|machine):|^- role on every project:/.test(line))) expect(lines).toContain(line);
+  expect(lessonRequest(record.id, "fix", 1)?.taskId).toBe(record.taskIds[0]);
+});
+
+test("finding openings are bounded by sentences, first lines and Unicode code points", async () => {
+  const record = pipeline();
+  const long = "\u{10330}".repeat(300);
+  record.runs[0].attempts[0].verdict!.rankedFindings = [
+    { severity: "P1", text: long }, { severity: "P1", text: "One sentence. Another sentence." },
+    { severity: "P2", text: "First line\nSecond line" },
+    ...Array.from({ length: 4 }, (_, i) => ({ severity: "P3" as const, text: `Other finding ${i}` })),
+  ];
+  const result = await serviceAs("conversation_fix", false, record).callTool("stage_report", { clientRequestId: "bounded-findings", verdict: "pass" });
+  const lines = result.lessonRequest as string[];
+  expect(lines.filter(line => /^- P\d:/.test(line))).toHaveLength(5);
+  expect(lines).toContain(`- P1: ${"\u{10330}".repeat(140)}…`);
+  expect(lines).toContain("- P1: One sentence.");
+  expect(lines).toContain("- P2: First line");
+  expect(lines).toContain("- and 2 more, in your prompt");
+});
+
+test("legacy unranked findings are quoted; attempts without findings retain the default wording", async () => {
+  const record = pipeline();
+  record.runs[0].attempts[0].verdict = { status: "fail", findings: ["The saved shape omits a required property."] };
+  const result = await serviceAs("conversation_fix", false, record).callTool("stage_report", { clientRequestId: "unranked-findings", verdict: "pass" });
+  expect(result.lessonRequest).toContain("- unranked: The saved shape omits a required property.");
+  expect(lessonRequestLines({ stageId: "review", findings: [] })).toEqual(lessonRequestLines(null));
+  fixture += 1;
+  const first = pipeline();
+  first.runs[1].attempts[0].activatedBy = null;
+  const initial = await serviceAs("conversation_fix", false, first).callTool("stage_report", { clientRequestId: "first-findings", verdict: "pass" });
+  expect(initial.lessonRequest).toEqual(lessonRequestLines(null));
+});
+
+test("none is recorded under the attempt with its gate reason; the server does not judge prose", async () => {
+  for (const none of ["The required schema gate now rejects this shape on every task.", "Existing rules cover it."]) {
+    fixture += 1;
+    const record = pipeline();
+    await call("conversation_fix", "stage_report", { verdict: "pass" });
+    expect(await call("conversation_fix", "leave_lesson", { none })).toMatchObject({ ok: true, none });
+    expect(lessonRequest(record.id, "fix", 1)?.none).toBe(none);
+    expect(stageLessons(PROJECT).find(row => row.pipelineId === record.id)).toMatchObject({ rules: [], none });
+  }
+});
+
+test("a concrete problem answer is retained for the seat and never stored as a rule", async () => {
+  const record = pipeline();
+  const service = serviceAs("conversation_fix", false, record);
+  const report = await service.callTool("stage_report", { clientRequestId: "problem-request", verdict: "pass" });
+  expect((report.lessonRequest as string[]).join("\n")).toContain("- problem:");
+  const problem = { statement: "The locale list in the instructions disagrees with the required locale gate.", evidence: "config/supported-locales.js lists six locales; the instructions list four." };
+  const before = projectView(PROJECT).scopes.flatMap(scope => scope.active).length;
+  const answer = await service.callTool("leave_lesson", { clientRequestId: "problem-answer", problem });
+  expect(answer).toMatchObject({ ok: true, left: [], problem });
+  expect(lessonRequest(record.id, "fix", 1)?.problem).toEqual(problem);
+  const signal = memoryProblemSignals(PROJECT, []).find(signal => signal.label.includes(problem.statement))!;
+  const read = await service.callTool("seat_tick_settings", { clientRequestId: "problem-read", project: PROJECT, verbose: true, problemId: signal.id });
+  expect(read).toMatchObject({ ok: true, problem });
+  expect(projectView(PROJECT).scopes.flatMap(scope => scope.active)).toHaveLength(before);
+  expect(await service.callTool("leave_lesson", { clientRequestId: "problem-again", none: "No further lesson." })).toMatchObject({ ok: false, details: { code: "LESSON_LIMIT" } });
+});
+
+test("path-specific and defective rules are steered to problem without consuming the request", async () => {
+  await call("conversation_fix", "stage_report", { verdict: "pass" });
+  for (const rule of ["Size translation work from config/supported-locales.js before editing translations.", "The locale list is mismatched with the instructions.", "The persistence endpoint accepts requests without their required field."]) {
+    const result = await call("conversation_fix", "leave_lesson", { lesson: { scope: "project", rule, why: "The locale gate rejected a missing language." } });
+    expect(result).toMatchObject({ ok: false, details: { code: "LESSON_IS_PROBLEM" } });
+  }
+  const machine = await call("conversation_fix", "leave_lesson", { lesson: { scope: "machine", rule: "In this project, validate the pinned locale list before translation work.", why: "The local list differed from the required gate." } });
+  expect(machine).toMatchObject({ ok: false, details: { code: "LESSON_WRONG_LEVEL" } });
+  expect(await call("conversation_fix", "leave_lesson", { lesson: { scope: "role", rule: "When a locale list is mismatched, verify the authoritative list before changing translations.", why: "The locale gate rejected a missing language." } })).toMatchObject({ ok: true });
+});
+
+test("generic imperative checks can name a missing or broken state as their condition", () => {
+  for (const rule of ["Check the retry path when a durable owner is missing.", "Verify the recovery boundary when a successor is broken.", "Never replay a write while its acknowledgement is missing."]) {
+    expect(parseLessons({ lesson: { scope: "role", rule, why: "A missing owner exposed an unchecked recovery branch." } }, "builder").lessons).toHaveLength(1);
+  }
 });
 
 test("text limits count Unicode code points in the schema and in the store alike", async () => {

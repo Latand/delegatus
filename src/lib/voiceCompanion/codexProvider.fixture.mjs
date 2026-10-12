@@ -31,7 +31,8 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
   if (!message.method) return;
   let result = {};
   if (message.method === "account/read") result = { account: { type: mode === "auth" ? "apiKey" : "chatgpt", planType: "pro", email: "withheld" }, requiresOpenaiAuth: true };
-  if (message.method === "account/rateLimits/read") result = { rateLimits: { primary: { usedPercent: mode === "limit" ? 100 : 10, resetsAt: 2000000000, windowDurationMins: 300 }, secondary: null, planType: "pro" } };
+  // A test that drops no-windows gets a reading with no percentage window, as a workspace member's can be.
+  if (message.method === "account/rateLimits/read") result = { rateLimits: { primary: fs.existsSync(`${root}/no-windows`) ? null : { usedPercent: mode === "limit" ? 100 : 10, resetsAt: 2000000000, windowDurationMins: 300 }, secondary: null, planType: "pro" } };
   if (message.method === "thread/start") result = { thread: { id: threadId } };
   if (message.method === "thread/realtime/stop" && mode?.startsWith("hangup-timeout")) {
     // Establish the inherited stdout before acknowledging stop: the Viewer
@@ -60,6 +61,15 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
         const answer = { method: "thread/realtime/sdp", params: { threadId, sdp: "v=0\r\nanswer\r\n" } };
         if (mode === "sdp-error") process.stdout.write(`${JSON.stringify(answer)}\n${JSON.stringify({ method: "thread/realtime/error", params: { threadId, message: "connection failed" } })}\n`);
         else send(answer);
+        // Notifications a test drops as notify-<n>.json reach the call in name order, each once.
+        const relay = setInterval(() => {
+          if (!fs.existsSync(root) || process.stdin.readableEnded) { clearInterval(relay); return; }
+          for (const name of fs.readdirSync(root).filter(name => /^notify-\d+\.json$/.test(name)).sort()) {
+            const file = `${root}/${name}`;
+            send(JSON.parse(fs.readFileSync(file, "utf8")));
+            fs.renameSync(file, `${file}.sent`);
+          }
+        }, 10);
         if (mode === "hangup-timeout-closed" || mode === "hangup-timeout-overflow") {
           const trigger = setInterval(() => {
             if (!fs.existsSync(`${root}/notify-close`)) return;

@@ -1060,6 +1060,10 @@ export type Pipeline = {
       before attribution existed. */
   dismissedNote?: string;
   dismissedBy?: import("@/lib/attention/dismissalTypes").DismissedBy | null;
+  /** Projection only, never stored: who answers what the lane waits on when
+      it is not the operator (docs/design/attention-auto-resolve.md), stamped
+      by `/api/files` for the movement it names. */
+  attentionRoute?: import("@/lib/attention/routeTypes").AttentionRouteMark;
   /** PRs and issues attached by hand (#2059), at most MAX_WORK_LINKS. What the
       pipeline's own branches, `delivery.pr` and stage provenance say is joined
       at read time and never stored here. */

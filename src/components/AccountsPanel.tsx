@@ -173,12 +173,12 @@ function AccountLimitsBlock({ account, engine, quota, now, busy, disabled, wideL
     ? formatQuotaAsOf(sharedStaleAt) ?? t("accounts.limitsStale")
     : !stale && observedAt !== null
       ? `${t("accounts.limitsChecked")} · ${formatCheckedClock(new Date(observedAt * 1000).toISOString())}`
-      : rows.length === 0 ? t("limits.noDataYet") : null;
+      : rows.length === 0 && !account.loginPending ? t("limits.noDataYet") : null;
   const resets = engine === "codex" ? account.resetCredits ?? null : null;
   const canRedeem = resets !== null && resets.availableCount > 0;
   const refreshing = busy === "refreshLimits";
   const redeeming = busy === "resetCredit";
-  const labelWidth = wideLabels ? "w-[72px]" : "w-8";
+  const labelWidth = wideLabels ? "w-[72px]" : "w-[52px]";
   return (
     <dl
       data-account-limits={account.id}
@@ -223,16 +223,16 @@ function AccountLimitsBlock({ account, engine, quota, now, busy, disabled, wideL
             return (
               <div key={key} data-limit-row={key} className="flex items-center gap-2 text-[10px] leading-snug text-muted">
                 <dt className={`${labelWidth} shrink-0 font-semibold`}>{label}</dt>
-                <dd className="flex min-w-0 flex-1 items-center gap-2">
+                <dd className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
                   <span aria-hidden className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-sunken sm:w-20">
                     <span className="block h-full rounded-full" style={{ width: `${left}%`, backgroundColor: color }} />
                   </span>
                   <span className="font-bold tabular-nums text-primary">{Math.round(left)}%</span>
                   <span>{t("limits.left")}</span>
                   {w.resetsAt ? (
-                    <span className="truncate">· {t("limits.reset", { eta: formatResetEta(w.resetsAt, now), at: formatResetClock(w.resetsAt, now) })}</span>
+                    <span className="min-w-0 break-words">· {t("limits.reset", { eta: formatResetEta(w.resetsAt, now), at: formatResetClock(w.resetsAt, now) })}</span>
                   ) : null}
-                  {staleHint ? <span className="truncate">{w.resetsAt ? "· " : ""}{staleHint}</span> : null}
+                  {staleHint ? <span className="min-w-0 break-words">{w.resetsAt ? "· " : ""}{staleHint}</span> : null}
                 </dd>
               </div>
             );
@@ -312,7 +312,8 @@ function AuthIdentity({ account }: { account: AccountOption }) {
     <span className="flex min-w-0 items-center gap-1 text-[9.5px] font-medium text-muted">
       <code className="truncate font-mono" title={account.id}>{account.id}</code>
       {account.plan ? <Badge tone="neutral" className="px-1.5 py-0 text-[9px]">{account.plan}</Badge> : null}
-      <Badge tone={tone} className="px-1.5 py-0 text-[9px]">{t(account.provider && health === "error" ? "accounts.provider.credentialError" : AUTH_HEALTH_KEY[health])}</Badge>
+      {/* A sign-in in flight owns the card: the badge of the attempt before it would read as this attempt's result. */}
+      {account.loginPending ? null : <Badge tone={tone} className="px-1.5 py-0 text-[9px]">{t(account.provider && health === "error" ? "accounts.provider.credentialError" : AUTH_HEALTH_KEY[health])}</Badge>}
     </span>
   );
 }
@@ -1223,7 +1224,11 @@ function MobileCorner({ corner, t }: { corner: NonNullable<ReturnType<typeof mob
 const MOBILE_ACTION = "inline-flex min-h-11 min-w-11 items-center gap-1.5 rounded-[8px] px-2 text-ui font-semibold text-accent active:bg-sunken disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
 
 function MobileAccountHead({ account, engine, state, quota, t }: { account: AccountOption; engine: "claude" | "codex"; state: MobileAccountState; quota: ReconciledQuota; t: TFunction }) {
-  const corner = state === "pending" ? null : mobileAccountCorner(quota, t);
+  const summary = state === "pending" ? null : mobileAccountCorner(quota, t);
+  // The active card lists its windows right below, so a weekly figure up here
+  // would state the same number twice; the corner stays for a card that is
+  // collapsed and for an expanded one that has no week to list.
+  const corner = state === "active" && summary?.left !== null ? null : summary;
   const plan = planLabel(account.plan ?? quota.plan, t);
   const observed = limitRows(quota, t).map((row) => row.window.observedAt).filter((value): value is number => value !== null);
   const checked = observed.length ? formatCheckedClock(new Date(Math.min(...observed) * 1000).toISOString()) : null;
@@ -1248,7 +1253,7 @@ function MobileAccountHead({ account, engine, state, quota, t }: { account: Acco
           {plan ? <span className="min-w-0 truncate">{plan}</span> : null}
           {plan && checked ? <span aria-hidden className="shrink-0 opacity-60">·</span> : null}
           {checked ? <span className="min-w-0 truncate">{t("mobile2.accounts.checked", { time: checked })}</span> : null}
-          {!plan && !checked ? <span className="min-w-0 truncate">{t(account.provider && authHealth(account) === "error" ? "accounts.provider.credentialError" : AUTH_HEALTH_KEY[authHealth(account)])}</span> : null}
+          {!plan && !checked && state !== "pending" ? <span className="min-w-0 truncate">{t(account.provider && authHealth(account) === "error" ? "accounts.provider.credentialError" : AUTH_HEALTH_KEY[authHealth(account)])}</span> : null}
         </span>
       </span>
       {corner ? <MobileCorner corner={corner} t={t} /> : null}

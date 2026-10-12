@@ -5,6 +5,7 @@ import { contextReading, readOrchestratorTranscriptFacts } from "@/lib/orchestra
 import type { SeatContextUsage } from "./seatAutoRotation";
 import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
+import { memoryProblemSignals } from "@/lib/memory/roleProblems";
 import { ruleReports } from "./ruleReports";
 import { readAttentionDismissals } from "@/lib/attention/dismissals";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
@@ -107,6 +108,7 @@ import {
   type SeatTickSourceGap,
   type SeatTickTaskInput,
   type SeatTickTranscriptGap,
+  type SeatTickWorkerAskInput,
 } from "./types";
 
 /**
@@ -468,7 +470,12 @@ export async function withdrawRuntimeWake(
 }
 
 export interface SeatTickSources {
+  memoryProblems?: (project: string, shown: readonly string[]) => SeatTickSignalInput[];
   recordRuleReports?: (project: string, at: string) => void;
+  /** The waits «Waiting for you» routes to this project's seat
+      (docs/design/attention-auto-resolve.md), read from the board projection
+      the panel itself reads. Absent: none. */
+  workerAsks?: (project: string) => Promise<readonly SeatTickWorkerAskInput[]>;
   seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
   seatContextUsage?: (conversationId: string) => SeatContextUsage | null;
   diskPressure?: () => Promise<DiskPressure>;
@@ -648,6 +655,7 @@ export async function settleRecordFromJournal(
 
 export function defaultSeatTickSources(): SeatTickSources {
   return {
+    memoryProblems: memoryProblemSignals,
     recordRuleReports(project, at) {
       const seat = orchestratorSeatForCurrentProject(project).active;
       if (!seat?.conversationId) return;
@@ -710,6 +718,13 @@ export function defaultSeatTickSources(): SeatTickSources {
     },
     retirementJournal: (sinceMs) => readRetirementJournalWindow(statePath("host-retirement-journal.ndjson"), sinceMs),
     settings: (project) => readSeatTickSettings(project),
+    workerAsks: async (project) => {
+      const [{ operatorBoardRepresentation }, { seatAgendaAsks }] = await Promise.all([
+        import("@/app/api/files/operatorProjection"),
+        import("@/lib/attention/seatAgenda"),
+      ]);
+      return seatAgendaAsks(await operatorBoardRepresentation(), Date.now() / 1000, project);
+    },
     openPullRequests: (options) => openPullRequestsForRepo(options),
     /* One rule for both halves: ask, and act on, the layer that is actually
        holding the payload. A send the runtime host queued belongs to the runtime
@@ -2304,6 +2319,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
   const openIds = new Set(hotLanes.filter(isOpen).map((lane) => lane.id));
   return {
     ...input, now, pipelines, tasks, ownLanes,
+    ...(sources.memoryProblems ? { signals: [...input.signals.filter(signal => !signal.id.startsWith("memory-problem:")), ...sources.memoryProblems(input.project, input.state.itemsShown ?? [])] } : {}),
     events: input.events.map((event) => ({ ...event, pipelineTerminal: event.pipelineId !== null && !openIds.has(event.pipelineId) })),
     settings: effectiveSeatTickSettings(sources.settings(input.project), now, SEAT_TICK_WAKE_INTERVAL_MS),
     changeFingerprint: changeFingerprint(pipelines, tasks, input.children, input.pullRequests, input.pullRequestsUnavailable, ownLanes, input.settledDeploys, input.settledMaintenance),
@@ -2429,6 +2445,13 @@ export async function gatherSeatTickInput(
   }
   const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, hotLanes, sources);
   const { children, unavailable: childrenUnavailable } = await childWork(canonical, seat, state, policy, sources);
+  /* An unreadable board costs this check its routed asks, never the check:
+     the waits stay routed and the next check reads them again. */
+  let workerAsks: readonly SeatTickWorkerAskInput[] = [];
+  if (seat && settings.enabled && sources.workerAsks) {
+    try { workerAsks = await sources.workerAsks(canonical); }
+    catch (error) { console.error("[seat tick] routed asks unavailable", error instanceof Error ? error.name : "unknown"); }
+  }
   /* The children source's run of failures (#1465), kept exactly as the
      pull-request source's: advanced by a check that could not account for
      every child, cleared by one that could, and reported once by the decision
@@ -2460,11 +2483,12 @@ export async function gatherSeatTickInput(
     ...(seat ? {} : { seatEverHeld: sources.seatEverHeld?.(canonical) ?? true }),
     pipelines,
     tasks,
+    ...(workerAsks.length ? { workerAsks } : {}),
     events,
     pullRequests,
     pullRequestsUnavailable,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
-    signals: [...signals(canonical, seat, sources), ...await diskPressureSignals(sources)],
+    signals: [...signals(canonical, seat, sources), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? []) ?? []), ...await diskPressureSignals(sources)],
     ownLanes,
     settledDeploys,
     settledMaintenance,

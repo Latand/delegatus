@@ -5,6 +5,7 @@ import { useCallback, useState, type ReactNode } from "react";
 
 import { projectTitle } from "@/lib/displayNames";
 import { useLocale } from "@/lib/i18n";
+import type { DoneItemV1 } from "@/lib/done/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 
 import { AutoDrainDecision } from "../selfUpdate/AutoDrainDecision";
@@ -12,6 +13,8 @@ import { RoleTag } from "../RoleFrameMark";
 import { fmtAge } from "../utils";
 import type { MobileAttentionEntry } from "./attentionQueue";
 import { sendDismissal, type DismissalRequestOutcome } from "./dismissalOverlay";
+import { DoneSection } from "./DoneSection";
+import type { acknowledgeDone } from "./doneItems";
 import {
   isFocusedNeedsYouEntry,
   needsYouDismissal,
@@ -21,6 +24,7 @@ import {
   needsYouRowText,
   needsYouSections,
 } from "./needsYouPanel";
+import { NeedsYouAskText } from "./NeedsYouAskText";
 import { PermissionActions } from "./PermissionActions";
 
 /*
@@ -42,6 +46,11 @@ import { PermissionActions } from "./PermissionActions";
  *
  * `docked`: a column beside the board, whose head lines up with the board's
  * bar. `overlay`: the same list under the header control, over the board.
+ *
+ * «Готово» (docs/design/done-section.md) is pinned under the head, above the
+ * decisions: the finished work waiting to be accepted, newest first, which the
+ * title counts with the decisions until it is accepted. «Dismiss all» still
+ * counts what it clears.
  */
 
 export type AttentionPanelPlacement = "docked" | "overlay";
@@ -66,9 +75,15 @@ export interface AttentionPanelProps {
   focus?: { path: string | null; laneId: string | null };
   /** Rows pinned above the sections (the current project's crowned conversations). */
   pinned?: ReactNode;
+  /** «Готово»: finished work still waiting to be accepted, every project's. */
+  done?: readonly DoneItemV1[];
   /** Test seam. */
   dismiss?: Dismiss;
+  /** Test seam. */
+  acknowledgeDone?: typeof acknowledgeDone;
 }
+
+const NO_DONE: readonly DoneItemV1[] = [];
 
 const FOLD_KEY = "llvNeedsYouFolds";
 
@@ -111,7 +126,9 @@ export function AttentionPanel({
   onOpen,
   focus = { path: null, laneId: null },
   pinned,
+  done = NO_DONE,
   dismiss = sendDismissal,
+  acknowledgeDone,
 }: AttentionPanelProps) {
   const { t } = useLocale();
   const sections = needsYouSections(queue, current, order);
@@ -150,7 +167,7 @@ export function AttentionPanel({
 
   const docked = placement === "docked";
   const dismissible = needsYouDismissibleCount(queue);
-  const title = t("attention.panelTitle", { count: queue.length });
+  const title = t("attention.panelTitle", { count: queue.length + done.length });
   const head = (
     <div className={`flex shrink-0 items-center gap-1 border-b border-border pl-3 pr-1.5 ${docked ? "h-12" : "h-10"}`}>
       <h2 className="min-w-0 flex-1 truncate text-ui font-semibold text-secondary" data-needs-you-title="">{title}</h2>
@@ -194,9 +211,10 @@ export function AttentionPanel({
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain p-1.5" data-needs-you-body="">
       {pinned}
       {error ? <p className="px-2.5 py-1.5 text-[11px] text-danger" role="status" data-needs-you-error="">{error}</p> : null}
-      {sections.length === 0 ? (
+      {sections.length === 0 && done.length === 0 ? (
         <p className="px-2.5 py-3 text-[12px] text-muted" data-needs-you-empty="">{t("attention.empty")}</p>
-      ) : sections.map((section, index) => {
+      ) : null}
+      {sections.map((section, index) => {
         const name = projectTitle(section.project, projectNames[section.project]) ?? section.project;
         const isFolded = folded(section.project);
         return (
@@ -240,11 +258,15 @@ export function AttentionPanel({
       })}
     </div>
   );
+  /* «Готово» is pinned under the head, above the scrolling decisions, in a
+     band of its own that scrolls inside itself. */
+  const doneSection = <DoneSection items={done} current={current} projectNames={projectNames} surface="desktop" place="needs-you" band="max-h-[42vh]" {...(acknowledgeDone ? { acknowledge: acknowledgeDone } : {})} />;
 
   if (docked) {
     return (
       <aside className="flex h-full w-[320px] shrink-0 flex-col border-l border-border bg-card" aria-label={t("attention.panelAria")} data-needs-you-panel="docked">
         {head}
+        {doneSection}
         {body}
       </aside>
     );
@@ -257,6 +279,7 @@ export function AttentionPanel({
       className="absolute right-0 top-[calc(100%+6px)] z-50 flex max-h-[75vh] w-[360px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-[10px] border border-border bg-card shadow-1"
     >
       {head}
+      {doneSection}
       {body}
     </div>
   );
@@ -264,10 +287,11 @@ export function AttentionPanel({
 
 /**
  * One row: the agent's role and how long it has waited on the first line,
- * with «Dismiss»; the title on the second; the wait on the third, two lines
- * at most, since a list that stays open has room for an ask's whole sentence.
- * An orchestrator's question is its own title, the question itself, and the
- * line under it says it is a question. A permission prompt answers under it.
+ * with «Dismiss»; the title on the second; then what it asks, whole: the
+ * question in its author's words, its choices, and the sentence saying what to
+ * choose and what happens next (docs/design/attention-auto-resolve.md). A list
+ * that stays open has room for all of it. An orchestrator's question is its
+ * own title. A permission prompt answers under it.
  */
 function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
   entry: MobileAttentionEntry;
@@ -281,7 +305,8 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
   if (entry.kind === "prototype") return <PrototypeRow entry={entry} onOpen={onOpen} />;
   const role = needsYouEntryRole(entry, pipelines);
   const since = needsYouEntrySince(entry);
-  const { title, line } = needsYouRowText(t, entry);
+  const { title, line, question, options, recommended } = needsYouRowText(t, entry);
+  const asksInTitle = entry.kind === "conversation" && Boolean(entry.item.reason.report?.body);
   const permission = entry.kind === "conversation" && entry.item.reason.kind === "permission" && entry.item.file.pendingPermission ? entry.item.file : null;
   return (
     <div
@@ -303,8 +328,15 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
             <RoleTag role={role} />
             {since !== null ? <span data-attention-age className="shrink-0 text-[10.5px] text-muted">· {fmtAge(since)}</span> : null}
           </span>
-          <span className="line-clamp-2 w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]" data-needs-you-title-line="">{title}</span>
-          <span data-attention-decision className={entry.kind === "conversation" && entry.item.reason.kind === "memory" ? "w-full text-[11px] text-muted [overflow-wrap:anywhere]" : "line-clamp-2 w-full text-[11px] text-muted [overflow-wrap:anywhere]"}>{line}</span>
+          {/* An orchestrator's question is its own title, so it is shown whole. */}
+          <span
+            className={`${asksInTitle ? "" : "line-clamp-2 "}w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]`}
+            data-needs-you-title-line=""
+            data-needs-you-question-title={asksInTitle ? "" : undefined}
+          >
+            {title}
+          </span>
+          <NeedsYouAskText ask={{ question, options, recommended, sentence: line }} />
         </button>
         <button
           type="button"
@@ -330,6 +362,7 @@ function PrototypeRow({ entry, onOpen }: { entry: Extract<MobileAttentionEntry, 
   const undelivered = entry.notice.undelivered === true;
   const Mark = undelivered ? TriangleAlert : entry.notice.asks === "questions" ? MessageCircleQuestionMark : GalleryHorizontalEnd;
   const since = needsYouEntrySince(entry);
+  const { question, options, recommended, line } = needsYouRowText(t, entry);
   return (
     <div className="rounded-[8px]" data-needs-you-row={entry.id} data-needs-you-kind={entry.kind} data-needs-you-since={since ?? undefined}>
       <button
@@ -345,7 +378,7 @@ function PrototypeRow({ entry, onOpen }: { entry: Extract<MobileAttentionEntry, 
           {since !== null ? <span data-attention-age className="shrink-0 font-normal text-muted">· {fmtAge(since)}</span> : null}
         </span>
         <span className="line-clamp-2 w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]" data-needs-you-title-line="">{entry.notice.title}</span>
-        <span data-attention-decision className="w-full text-[11px] text-muted">{t(entry.notice.asks === "questions" && !undelivered ? "proto.notice.answer" : "proto.notice.open")}</span>
+        <NeedsYouAskText ask={{ question, options, recommended, sentence: undelivered ? t("proto.notice.open") : line }} />
       </button>
     </div>
   );
