@@ -1383,7 +1383,7 @@ test("the stall threshold the tick configures is the one the liveness read appli
      `policy.stallAfterMs` into the liveness request, and that same value is
      what `evaluateLiveness` compares silence against. A default that never
      reached the reader would make the whole verification above vacuous. */
-  expect(DEFAULT_SEAT_TICK_POLICY.stallAfterMs).toBe(40 * MINUTE);
+  expect(DEFAULT_SEAT_TICK_POLICY.stallAfterMs).toBe(10 * MINUTE);
   const justUnder = evaluateLiveness({ ...ALIVE, turnState: "busy", silentForMs: DEFAULT_SEAT_TICK_POLICY.stallAfterMs - 1 });
   const exactly = evaluateLiveness({ ...ALIVE, turnState: "busy", silentForMs: DEFAULT_SEAT_TICK_POLICY.stallAfterMs });
   expect(justUnder.lifecycle).toBe("running");

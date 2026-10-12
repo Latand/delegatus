@@ -1,0 +1,76 @@
+[
+  {
+    "lang": "en",
+    "viewport": 1440,
+    "clipped": false,
+    "width": 428,
+    "text": "Waiting for the CPU queue · 2nd · up to 7 min"
+  },
+  {
+    "lang": "en",
+    "viewport": 1000,
+    "clipped": false,
+    "width": 676,
+    "text": "Waiting for the CPU queue · 2nd · up to 7 min"
+  },
+  {
+    "lang": "en",
+    "viewport": 390,
+    "clipped": false,
+    "width": 223,
+    "text": "Waiting for the CPU queue · 2nd · up to 7 min"
+  },
+  {
+    "lang": "en",
+    "viewport": 390,
+    "surface": "task",
+    "clipped": false,
+    "visible": true,
+    "text": "Waiting for the CPU queue · 2nd · up to 7 min"
+  },
+  {
+    "lang": "en",
+    "viewport": 390,
+    "surface": "stages",
+    "clipped": false,
+    "visible": true,
+    "text": "Waiting for the CPU queue · 2nd · up to 7 min"
+  },
+  {
+    "lang": "uk",
+    "viewport": 1440,
+    "clipped": false,
+    "width": 428,
+    "text": "Чекає черги CPU · 2-й · до 7 хв"
+  },
+  {
+    "lang": "uk",
+    "viewport": 1000,
+    "clipped": false,
+    "width": 676,
+    "text": "Чекає черги CPU · 2-й · до 7 хв"
+  },
+  {
+    "lang": "uk",
+    "viewport": 390,
+    "clipped": false,
+    "width": 159,
+    "text": "Чекає черги CPU · 2-й · до 7 хв"
+  },
+  {
+    "lang": "uk",
+    "viewport": 390,
+    "surface": "task",
+    "clipped": false,
+    "visible": true,
+    "text": "Чекає черги CPU · 2-й · до 7 хв"
+  },
+  {
+    "lang": "uk",
+    "viewport": 390,
+    "surface": "stages",
+    "clipped": false,
+    "visible": true,
+    "text": "Чекає черги CPU · 2-й · до 7 хв"
+  }
+]

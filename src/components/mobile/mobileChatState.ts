@@ -1,5 +1,6 @@
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { activeCardMigration } from "@/lib/accounts/migration";
+import { fileAgentActivity } from "@/lib/lifecycle/agentActivity";
 import type { TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
@@ -185,8 +186,13 @@ export function chatStateBits(t: TFunction, file: FileEntry, options: ChatStateO
       return { key, tone, phrase: t("mobile2.chat.stateOffline"), badge: null };
     case "killed":
       return { key, tone, phrase: t("mobile2.chat.stateKilledAge", { age }), badge: null };
-    case "stalled":
+    case "stalled": {
+      if (file.agentActivity) {
+        const minutes = Math.floor((fileAgentActivity(file, nowMs).idleForMs ?? 0) / 60_000);
+        return { key, tone, phrase: `${t("cardStatus.idle")} ${t("cardStatus.idleMinutes", { n: minutes })}`, badge: t("mobile2.chat.badgeStalled") };
+      }
       return { key, tone, phrase: t("mobile2.chat.stateStalled", { age }), badge: t("mobile2.chat.badgeStalled") };
+    }
     case "limit": {
       const reset = limitReset(file);
       const account = file.rateLimit?.accountId ?? null;
@@ -209,6 +215,9 @@ export function chatStateBits(t: TFunction, file: FileEntry, options: ChatStateO
       };
     }
     case "working": {
+      if (file.agentActivity && file.proc === "running" && fileAgentActivity(file, nowMs).state === "checking") {
+        return { key, tone, phrase: t("cardStatus.checking"), badge: null };
+      }
       const elapsed = workingElapsed(file, nowMs);
       return { key, tone, phrase: elapsed === null ? t("mobile2.chat.stateWorking") : t("mobile2.chat.stateWorkingFor", { elapsed }), badge: null };
     }

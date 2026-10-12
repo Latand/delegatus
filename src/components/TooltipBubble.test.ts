@@ -31,3 +31,9 @@ test("it never leaves the window sideways", () => {
   const far = { top: 400, bottom: 432, left: 1420, right: 1440, width: 20 };
   expect(tooltipPlacement(far, size, desktop, "top", "left").left).toBe(1440 - 98 - 8);
 });
+
+test("when neither side fits, a short popover shifts inside the viewport", () => {
+  const dot = { top: 10, bottom: 18, left: 30, right: 38, width: 8 };
+  const position = tooltipPlacement(dot, size, { width: 160, height: 40 }, "bottom", "center");
+  expect(position.top + size.height).toBeLessThanOrEqual(32);
+});

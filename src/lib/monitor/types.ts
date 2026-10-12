@@ -341,6 +341,9 @@ export type SeatTickVerdict =
     kind: "wake";
     reasons: SeatTickWakeReason[];
     items: SeatTickItem[];
+    /** Current stall episodes let a landed wake retire stale episode history
+        without evicting an unchanged conversation behind unrelated wakes. */
+    activeStallTokens?: string[];
     /** All owed merges in this page, including those the item bound cut. */
     pendingMergeSeqs?: number[];
     deferred: number;
@@ -441,6 +444,10 @@ export interface SeatTickSourceGap {
  * "progressing" either.
  */
 export interface SeatTickActivity {
+  verified?: boolean;
+  conversationId?: string | null;
+  lastRecordAt?: string | null;
+  activity?: import("@/lib/lifecycle/agentActivity").AgentActivity;
   lifecycle: LifecycleState;
   reason: string;
   /**
@@ -859,6 +866,8 @@ export interface SeatTickWakeCommit {
   diskPressure?: { episode: string; version: string };
   /** Versions of agenda items carried by this frozen delivery plan. */
   itemsShown?: string[];
+  /** Stall episodes still active when this wake was decided. */
+  activeStallTokens?: string[];
   /** Complete redacted bullets used to verify visibility in the frozen text. */
   itemLines?: { version: string; line: string }[];
   /** Each settlement credit is bound to the complete frozen bullet that earns it. */
