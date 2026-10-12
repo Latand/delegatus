@@ -149,7 +149,7 @@
    (`[data-project-bar]`) takes the first two from its width. */
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="accounts"] [data-bar-group="where"] > :not(h1) { display: none; }
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="labels"] [data-fit-label] { display: none; }
-:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="labels"] :is([data-orchestrator-toggle], [data-task-panel-toggle]) { padding-left: 8px; padding-right: 8px; }
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="labels"] [data-orchestrator-toggle] { padding-left: 8px; padding-right: 8px; }
 .kb .bar[data-bar="project"][data-fit~="chip"] [data-attention-chip-label] { display: none; }
 .kb .bar[data-bar="project"][data-fit~="tight"], .kb .bar[data-bar="project"][data-fit~="tight"] .bar-trail { gap: 8px; }
 /* The last step, on a window narrower than the board is made for: the field may go under its placeholder. */

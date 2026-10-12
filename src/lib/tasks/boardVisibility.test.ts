@@ -4,9 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  boardConversationKeys,
   EMPTY_BOARD_VISIBILITY_MIGRATION,
-  taskHasBoardMembers,
   taskShowsOnBoard,
 } from "./boardVisibility";
 import {
@@ -38,13 +36,13 @@ function task(id: string, over: Partial<BoardTask> = {}): BoardTask {
 }
 
 const assignment = { path: "/agent.jsonl", conversationId: "conversation-agent", panePid: null, state: "delivered" as const, error: null, at: "2026-01-01T00:00:00.000Z" };
+
 /* A row left behind by a launch whose conversation the board no longer draws —
    archived, hidden, or simply never scanned again. On the reported board 319 of
    385 empty bands looked exactly like this. */
 const staleAssignment = { ...assignment, path: "/archived.jsonl", conversationId: "conversation-archived" };
 /* The board carries one conversation: the one `assignment` names. */
 const scanFiles = [{ path: "/agent.jsonl", conversationId: "conversation-agent" }];
-const board = boardConversationKeys(scanFiles);
 
 test("the flag governs tasks with nothing on the board — a task still holding one shows whatever it says", () => {
   expect(taskShowsOnBoard(task("plain"), false)).toBe(true);
@@ -53,33 +51,17 @@ test("the flag governs tasks with nothing on the board — a task still holding 
   /* The invariant that keeps a live conversation reachable: a member overrides
      the flag, so hiding can never take a working band off the board. */
   const staffed = task("staffed", { board: "hidden", assignments: [assignment] });
-  expect(taskHasBoardMembers(staffed, board)).toBe(true);
-  expect(taskShowsOnBoard(staffed, taskHasBoardMembers(staffed, board))).toBe(true);
+  expect(taskShowsOnBoard(staffed, true)).toBe(true);
 });
 
-test("membership is what the board carries, not that an assignment row exists (#1614)", () => {
+test("membership is what the band resolved, not that an assignment row exists (#1614)", () => {
   /* The interpretation this replaces asked `assignments.length > 0`, which is
      true for every task ever launched. It is the difference between 66 bands
      leaving the operator's board and 385. */
   const stale = task("stale", { board: "hidden", assignments: [staleAssignment] });
   expect(stale.assignments).toHaveLength(1);
-  expect(taskHasBoardMembers(stale, board)).toBe(false);
-  expect(taskShowsOnBoard(stale, taskHasBoardMembers(stale, board))).toBe(false);
-
-  /* One resolving row among several stale ones is still membership. */
-  const mixed = task("mixed", { board: "hidden", assignments: [staleAssignment, assignment] });
-  expect(taskShowsOnBoard(mixed, taskHasBoardMembers(mixed, board))).toBe(true);
-
-  /* Either key resolves it: a durable conversation id survives the transcript
-     moving to a new path, and a spawn awaiting attribution has only the path. */
-  const moved = task("moved", { board: "hidden", assignments: [{ ...assignment, path: "/agent-2.jsonl" }] });
-  expect(taskHasBoardMembers(moved, board)).toBe(true);
-  const pathOnly = task("path-only", { board: "hidden", assignments: [{ ...assignment, conversationId: null }] });
-  expect(taskHasBoardMembers(pathOnly, board)).toBe(true);
-
-  /* Nothing here consults a camera: the key set is the board's conversations,
-     however far outside the viewport they are laid out. */
-  expect(taskHasBoardMembers(task("none", { assignments: [] }), board)).toBe(false);
+  expect(taskShowsOnBoard(stale, false)).toBe(false);
+  expect(taskShowsOnBoard(stale, true)).toBe(true);
 });
 
 test("the one-time migration hides existing empty tasks, keeps every task, and never runs twice", () => {
