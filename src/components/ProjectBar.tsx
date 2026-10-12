@@ -100,10 +100,9 @@ export type BarFitStep = (typeof BAR_FIT_STEPS)[number];
 function barFits(bar: HTMLElement): boolean {
   if (bar.scrollWidth > bar.clientWidth + 0.5) return false;
   const name = bar.querySelector<HTMLElement>("h1");
-  if (!name || name.scrollWidth <= name.clientWidth + 0.5) return true;
-  /* A name longer than its own cap is cut by the cap at every width: no step would give it room. */
-  const cap = parseFloat(getComputedStyle(name).maxWidth);
-  return Number.isFinite(cap) && name.clientWidth >= cap - 0.5;
+  /* The name has no cap of its own: it is whole while the row has room, and it is cut only once
+     every step is taken and the search sits at its floor. */
+  return !name || name.scrollWidth <= name.clientWidth + 0.5;
 }
 
 /**

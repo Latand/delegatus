@@ -2104,7 +2104,7 @@ function ProjectDashboardView({
   const panelTasks = useMemo(() => (seatTaskIds.size ? tasks.filter((task) => !seatTaskIds.has(task.id)) : tasks), [seatTaskIds, tasks]);
   const barLead = () => (
     <>
-      <h1 className="min-w-12 max-w-[220px] truncate text-[13.5px] font-bold" title={knownProjectName ?? undefined}>{projectTitleNode}</h1>
+      <h1 className="min-w-12 truncate text-[13.5px] font-bold" title={knownProjectName ?? undefined}>{projectTitleNode}</h1>
       <ProjectAccounts project={project} appearance="bar" />
     </>
   );

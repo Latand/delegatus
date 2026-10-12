@@ -2833,7 +2833,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   return (
     <AccountChoiceContext.Provider value={accountChoice}>
     <KanbanDraftContext.Provider value={draftActions}>
-    <div ref={rootRef} className="kb" data-kanban-board="" data-mode={mode}>
+    <div ref={rootRef} className="kb" data-kanban-board="" data-mode={mode} data-bar-menu={menu.open?.value.kind === "create" || menu.open?.value.kind === "tray" ? "" : undefined}>
       <CardFlights placements={placements} rootRef={rootRef} />
       {props.overview ? null : <SeatActionWires rootRef={rootRef} phone={false} seatRefs={seatRefs} tasks={storedTasks} pipelines={pipelines} files={files} onJump={jumpToWiredCard} />}
       {/* The project board's one header bar (#1801, docs/design/board-header.md): where am I, what is

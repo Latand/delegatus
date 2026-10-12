@@ -712,6 +712,29 @@ test("the create menu's two rows carry icons, like the ⋯ rows", async () => {
   for (const item of items) expect(item.querySelector("svg.ico")).not.toBeNull();
 });
 
+test("the project name has no cap of its own: the row's steps give it room, and only the last step cuts it", async () => {
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+  const name = bar(host).querySelector("h1") as HTMLElement;
+  expect(name.className).not.toMatch(/max-w-/);
+  /* It truncates (min-w-12) only because a flex item shrinks once the search sits at its floor. */
+  expect(name.className).toContain("truncate");
+});
+
+test("a menu opened from the row marks the board, so the toast steps aside while it is open", async () => {
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+  const board = host.querySelector("[data-kanban-board]") as HTMLElement;
+  expect(board.hasAttribute("data-bar-menu")).toBe(false);
+  click(bar(host).querySelector("[data-bar-create]"));
+  expect(board.hasAttribute("data-bar-menu")).toBe(true);
+  /* Escape closes the menu and the mark goes with it. */
+  flushSync(() => (host.ownerDocument.activeElement ?? host.ownerDocument.body).dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as never));
+  expect(await waitFor(() => !board.hasAttribute("data-bar-menu"))).toBe(true);
+});
+
 test("a project with nothing in it draws the same bar: its two ends, the message search, no board controls", async () => {
   barWidth = 1032;
   const host = dom.document.createElement("div");

@@ -2897,6 +2897,13 @@ async function headerMain(): Promise<void> {
           if (inWindow) must(onTop.inWindow, `${tag}: ${label} runs out of the window (${JSON.stringify(onTop.rect)})`);
           return onTop;
         };
+        /* A menu opened from the row owns the space under it: no part of the «Needs you» toast is
+           drawn beside it (it is not drawn at all until the menu closes, and then it returns). */
+        const toastDrawn = () => page.evaluate(() => {
+          const toast = document.querySelector("[data-attention-toast]");
+          return toast !== null && getComputedStyle(toast).visibility !== "hidden" && toast.getBoundingClientRect().width > 0;
+        });
+        const noToastBeside = async (label: string) => must(!(await toastDrawn()), `${tag}: the toast is drawn beside ${label}`);
         /* A press outside whatever is open, on the project's name: it is in the row and does nothing. */
         const pressOutside = async () => {
           await page.keyboard.press("Escape");
@@ -2914,6 +2921,7 @@ async function headerMain(): Promise<void> {
         if (fit.includes("accounts")) await page.waitForSelector('[data-bar-more-menu] [data-bar-menu-head="accounts"]', { timeout: 15_000 }).catch(() => {});
         const menu: MenuReading = await page.evaluate(readMenu);
         const menuOnTop = await surface("the ⋯ menu", "menu");
+        await noToastBeside("the ⋯ menu");
         await page.screenshot({ path: shot("-more"), clip: clipTo(menu.rect) });
         must(menu.groups.length > 0 && !menu.groups[0]!.ruled && menu.groups.slice(1).every((group) => group.ruled), `${tag}: ⋯ rules ${JSON.stringify(menu.groups)}`);
         must(!/undo|redo|скасувати|повторити/i.test(menu.text), `${tag}: ⋯ still offers undo or redo`);
@@ -2948,6 +2956,7 @@ async function headerMain(): Promise<void> {
           await page.waitForTimeout(400);
           await page.mouse.move(1, 880);
           entry.tray = await surface("the Hidden tray", ".hidden-tray");
+          await noToastBeside("the Hidden tray");
           await page.screenshot({ path: shot("-hidden"), clip: clipTo((entry.tray as { rect: Rect | null }).rect) });
         }
         await pressOutside();
@@ -2958,7 +2967,10 @@ async function headerMain(): Promise<void> {
         await page.screenshot({ path: shot("-create"), clip: { x: 0, y: 0, width, height: 200 } });
         must(create.length === 2 && create.every((item) => item.icon && item.text.length > 0), `${tag}: the + menu offers ${JSON.stringify(create)}`);
         entry.create = create.map((item) => item.text);
+        await noToastBeside("the + menu");
         await pressOutside();
+        /* The toast comes back when the menu closes: a menu must not take it for good. */
+        must(reading.toast === null || await toastDrawn(), `${tag}: the toast did not return after the + menu closed`);
 
         /* The one filter: «Needs you» with its key, every task, and each other reason with its count. */
         await page.click(`${barSelector} [data-bar-filter-toggle]`);
@@ -2969,6 +2981,7 @@ async function headerMain(): Promise<void> {
           reasons: [...document.querySelectorAll("[data-bar-filter-reason]")].map((item) => ({ id: item.getAttribute("data-bar-filter-reason"), text: item.textContent?.replace(/\s+/g, " ").trim() ?? "" })),
         }));
         const filterOnTop = await surface("the filter menu", "[data-bar-filter-menu]");
+        await noToastBeside("the filter menu");
         await page.screenshot({ path: shot("-filter"), clip: clipTo(filterOnTop.rect) });
         must(filter.needs !== null && /F$/.test(filter.needs) && filter.needsEnabled, `${tag}: the filter's «Needs you» row reads «${filter.needs}»`);
         must(filter.reasons[0]?.id === "" && filter.reasons.length >= 2 && !filter.reasons.some((item) => item.id === "needs-you"), `${tag}: the filter's reasons are ${JSON.stringify(filter.reasons)}`);
@@ -2996,6 +3009,7 @@ async function headerMain(): Promise<void> {
           board: document.querySelector("[data-kanban-board] .board-frame") !== null,
         }));
         const recentOnTop = await surface("the recent agents' list", "[data-bar-recent-list]");
+        await noToastBeside("the recent agents' list");
         await page.screenshot({ path: shot("-recent"), clip: { x: 0, y: 0, width, height: Math.min(900, Math.max(420, (recentOnTop.rect?.y ?? 0) + (recentOnTop.rect?.h ?? 0) + 16)) } });
         must(recent.rows > 0 && recent.board, `${tag}: the recent agents' list shows ${recent.rows} rows${recent.board ? "" : ", and the board is gone"}`);
         clean(`${tag} recent agents open`, await page.evaluate(readHeader));
@@ -3048,7 +3062,8 @@ async function headerMain(): Promise<void> {
     }
 
     /* The quiet project: nothing runs there, so Archive and Delete show in ⋯ beside the rest; and its
-       name is longer than a name's cap, which is cut there at every width and costs the row no step. */
+       name is the longest the row meets: it shows whole while the row has room (it is the bar's last
+       step to cut it, after the search sits at its 144 px floor). */
     if (widths.includes(2254) && !rowOnly) {
       const quiet = await browser.newContext({ viewport: { width: 2254, height: 900 }, reducedMotion: "reduce" });
       try {
@@ -3057,20 +3072,34 @@ async function headerMain(): Promise<void> {
         await quietPage.goto(`${baseUrl}/#p=${encodeURIComponent(projects.quiet)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
         await quietPage.waitForSelector("[data-bar-more]", { timeout: 120_000 });
         await quietPage.waitForTimeout(2_500);
-        const long = await quietPage.evaluate(() => {
+        const readLong = () => quietPage.evaluate(() => {
           const bar = document.querySelector("header.bar, [data-project-bar]");
           const name = bar?.querySelector("h1");
-          return { fit: bar?.getAttribute("data-fit") ?? null, height: bar?.getBoundingClientRect().height ?? 0, nameWidth: name?.getBoundingClientRect().width ?? 0, nameCut: Boolean(name && name.scrollWidth > name.clientWidth), overflow: bar ? Math.max(0, bar.scrollWidth - bar.clientWidth) : 0 };
+          return { fit: bar?.getAttribute("data-fit") ?? null, height: bar?.getBoundingClientRect().height ?? 0, nameWidth: name?.getBoundingClientRect().width ?? 0, nameText: name?.textContent ?? "", nameCut: Boolean(name && name.scrollWidth > name.clientWidth), overflow: bar ? Math.max(0, bar.scrollWidth - bar.clientWidth) : 0 };
         });
+        const long = await readLong();
         await quietPage.screenshot({ path: path.join(frames, "header-2254-long-name.png"), clip: { x: 0, y: 0, width: 2254, height: 120 } });
-        must(long.nameCut && near(long.nameWidth, 220, 0.5), `quiet: the long name is ${long.nameWidth}px wide${long.nameCut ? "" : ", uncut"}`);
-        must(long.fit === "" && near(long.height, 48, 0.5) && long.overflow <= 0.5, `quiet: a name cut by its cap took steps [${long.fit}] of a ${long.height}px bar`);
+        must(!long.nameCut && long.nameWidth > 220, `quiet: the long name «${long.nameText}» is ${long.nameWidth}px wide${long.nameCut ? " and cut" : ""} with the row's room free`);
+        must(long.fit === "" && near(long.height, 48, 0.5) && long.overflow <= 0.5, `quiet: the long name took steps [${long.fit}] of a ${long.height}px bar at 2254`);
+        /* Narrower windows take steps for it, and cut it only once every step is taken. */
+        const narrower: Record<string, unknown> = {};
+        for (const narrow of HEADER_WIDTHS.filter((value) => value < 2254)) {
+          await quietPage.setViewportSize({ width: narrow, height: 900 });
+          await quietPage.waitForTimeout(600);
+          const at = await readLong();
+          const steps = (at.fit ?? "").split(" ").filter(Boolean).length;
+          must(near(at.height, 48, 0.5) && at.overflow <= 0.5, `quiet ${narrow}: the bar is ${at.height}px with ${at.overflow}px past its box`);
+          must(!at.nameCut || steps === 5, `quiet ${narrow}: the long name is cut with ${5 - steps} steps left [${at.fit}]`);
+          narrower[String(narrow)] = at;
+        }
+        await quietPage.setViewportSize({ width: 2254, height: 900 });
+        await quietPage.waitForTimeout(400);
         await quietPage.click("[data-bar-more]");
         await quietPage.waitForSelector("[data-bar-more-menu]");
         const quietMenu = await quietPage.evaluate(readMenu);
         await quietPage.screenshot({ path: path.join(frames, "header-2254-quiet-more.png"), clip: { x: Math.max(0, quietMenu.rect.x - 40), y: 0, width: Math.min(2254 - Math.max(0, quietMenu.rect.x - 40), quietMenu.rect.w + 80), height: quietMenu.rect.y + quietMenu.rect.h + 16 } });
         must(quietMenu.sections.includes("project") && quietMenu.rows.length >= 4, `quiet: ⋯ holds ${quietMenu.rows.length} rows without Archive and Delete`);
-        report["2254:quiet"] = { long, menu: { rows: quietMenu.rows.map((item) => item.label), sections: quietMenu.sections } };
+        report["2254:quiet"] = { long, narrower, menu: { rows: quietMenu.rows.map((item) => item.label), sections: quietMenu.sections } };
       } catch (error) {
         must(false, `quiet: ${String(error)}`);
       } finally {

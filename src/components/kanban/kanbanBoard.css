@@ -132,6 +132,11 @@
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > button:first-child { border-top-left-radius: var(--radius-control); border-bottom-left-radius: var(--radius-control); }
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > button:last-child { border-top-right-radius: var(--radius-control); border-bottom-right-radius: var(--radius-control); }
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > [data-bar-recent] > button { border-radius: 0 var(--radius-control) var(--radius-control) 0; }
+/* A menu opened from the row owns the space under it: the «Needs you» toast hangs at the window's
+   right edge 8 px under the row, so while the «+» menu, the Hidden tray, ⋯, the filter or the
+   recent agents' list is open the toast is not drawn, and it returns when the menu closes. */
+.kb:is([data-bar-menu], :has([data-bar-recent-list], [data-bar-more-menu], [data-bar-filter-menu])) [data-attention-toast],
+[data-project-bar]:has([data-bar-more-menu]) [data-attention-toast] { visibility: hidden; }
 /* The one primary action: while something waits, the needs-you chip is the only filled control in
    the row, so the eye goes there first; at zero it is outlined and muted. */
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-attention-count]:has([data-attention-dot]):not([aria-expanded="true"]) {
