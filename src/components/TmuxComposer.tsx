@@ -1,5 +1,7 @@
 "use client";
 
+import { messageTextAttachmentFromText, type MessageTextAttachment } from "@/lib/messageTextAttachment";
+
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
@@ -205,12 +207,17 @@ interface ComposerSendResult {
   imagePaths?: string[];
   /** Inbox paths the send's non-image attachments landed on (#1224). */
   filePaths?: string[];
+  textAttachment?: MessageTextAttachment;
   target?: string;
   spawned?: boolean;
   outcome?: "delivered-to-live" | "resumed" | "held" | "queued" | "delivering" | "delivered" | "recovering" | "failed";
   receipt?: RuntimeReceipt;
   /** The send route's own classification of this attempt (#1593). */
   delivery?: AttachmentDeliveryOutcome;
+}
+
+function receiptPreviewText(text: string): string {
+  return messageTextAttachmentFromText(text)?.name ?? stripTaskReferenceLines(text);
 }
 
 const SENT_LIMIT = 8;
@@ -613,7 +620,7 @@ export function RuntimeComposerReceipts({
     <DeliveryCheckCard
       key={receipt.operationId}
       operationId={receipt.operationId}
-      text={receipt.text ? stripTaskReferenceLines(receipt.text) : null}
+      text={receipt.text ? receiptPreviewText(receipt.text) : null}
       status={unknownStatusText(receipt)}
       statusShown={notice?.current.operationId !== receipt.operationId}
       detail={unknownDetail(receipt)}
@@ -654,7 +661,7 @@ export function RuntimeComposerReceipts({
   const receiptSummaryLabel = t("runtime.receipt.summary", { count: visibleAttempts.length + textlessProblems.length });
   /* A relay's fixed preamble would fill the one truncated line and hide the
      handoff's own words, so the preview starts at those. */
-  const summaryText = visibleAttempts[0]?.text ? stripTaskReferenceLines(visibleAttempts[0].text) : null;
+  const summaryText = visibleAttempts[0]?.text ? receiptPreviewText(visibleAttempts[0].text) : null;
   const summaryPreview = summaryText ? splitRelayMessageText(summaryText)?.body ?? summaryText : null;
   const disclosureLabel = t(detailsOpen ? "runtime.receipt.hideDetails" : "runtime.receipt.showDetails");
   const summaryAriaLabel = noticeLine
@@ -772,10 +779,10 @@ export function RuntimeComposerReceipts({
             className={`min-w-[8rem] flex-1 whitespace-pre-wrap break-words text-right text-secondary ${
               chipNamesState ? "sm:min-w-0 sm:truncate sm:text-left" : ""
             }`}
-            title={chipNamesState && receipt.text ? stripTaskReferenceLines(receipt.text) : undefined}
+            title={chipNamesState && receipt.text ? receiptPreviewText(receipt.text) : undefined}
             data-receipt-message
           >
-            {receipt.text ? stripTaskReferenceLines(receipt.text) : receipt.text}
+            {receipt.text ? receiptPreviewText(receipt.text) : receipt.text}
           </span>
           {group.attempts.length > 1 ? (
             <Badge
@@ -3600,7 +3607,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         const composed = [taskLines, prelude, requestedText].filter(Boolean).join("\n");
         const wireText = bridge?.text ? `${bridge.text}\n\n${composed}` : composed;
         const content = {
-          text: deliveryRoute ? wireText.trim() : wireText,
+          text: wireText,
           images: requestedImages.map(({ base64, mime }) => ({ base64, mime })),
           ...(requestedFiles.length ? { files: requestedFiles.map(({ name, base64 }) => ({ name, base64 })) } : {}),
           idempotencyKey: clientMessageId,
@@ -4140,7 +4147,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           ? { ok: false, structured: true, error: structuredImagesReason }
           : runtimeDependencies.sendRuntimeMessage((durable?.envelope?.body ?? {
               conversationId: deliveryRoute!.session.conversationId,
-              text: payloadText.trim(),
+              text: payloadText,
               images: sentImages.map((image) => ({ base64: image.base64, mime: image.mime })),
               /* #1224: the bytes ride the request and the SERVER writes them to
                  the conversation's inbox, then names the path in the delivered
@@ -4163,6 +4170,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
               operationId: result.operationId,
               held: result.held,
               delivery: result.delivery,
+              textAttachment: result.textAttachment,
               outcome: (result.receipt?.status === "delivering" || result.receipt?.status === "delivered"
                 ? result.receipt.status
                 : "queued") as "delivering" | "delivered" | "queued",
@@ -4196,6 +4204,12 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         || (json.operationId && json.receipt.operationId !== json.operationId))) {
         json = { ...json, ok: false, receipt: undefined, operationId: undefined, held: undefined,
           error: "receipt-identity-mismatch" };
+      }
+      if (outboxId && json.textAttachment && json.error !== "receipt-identity-mismatch") {
+        updateOutbox(cardId, outboxId, {
+          textAttachment: json.textAttachment,
+          echoText: json.textAttachment.text,
+        });
       }
       /* #1593: the route said itself that it refused this message above the
          delivery attempt — nothing journaled, no operation minted, nothing on
@@ -4380,6 +4394,16 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           if (receipt && (receipt.conversationId !== cardId || receipt.idempotencyKey !== clientMessageId
             || (result.operationId && result.operationId !== receipt.operationId))) return null;
           if (receipt && (receiptIsAdmitted(receipt.status) || receiptIsTerminal(receipt.status))) {
+            /* The timely path stores this server-created file metadata before
+               receipt settlement. A response beyond the admission deadline
+               reaches this callback instead, so retain it only after the
+               receipt has proved the same conversation, key and operation. */
+            if (outboxId && result.textAttachment && result.error !== "receipt-identity-mismatch") {
+              updateOutbox(cardId, outboxId, {
+                textAttachment: result.textAttachment,
+                echoText: result.textAttachment.text,
+              });
+            }
             return isMessageReceipt(receipt)
               && !receipt.text && payloadText.trim()
               ? { ...receipt, text: payloadText.trim() }
@@ -5483,9 +5507,9 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           <span className="sr-only">{t("composer.deliveredEcho")}</span>
           <span
             className="min-w-0 max-w-[85%] truncate text-label text-secondary"
-            title={receipt.text ? stripTaskReferenceLines(receipt.text) : undefined}
+            title={receipt.text ? receiptPreviewText(receipt.text) : undefined}
           >
-            {receipt.text ? stripTaskReferenceLines(receipt.text) : receipt.text}
+            {receipt.text ? receiptPreviewText(receipt.text) : receipt.text}
           </span>
           <span className="inline-flex shrink-0 items-center gap-0.5 text-caption tabular-nums text-muted">
             {hhmm(Date.parse(receipt.at))}

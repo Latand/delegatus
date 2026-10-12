@@ -3449,24 +3449,28 @@ describe("#1695 K5a pipeline graphs and Past attempts", () => {
       }, WIDE);
 
       await production("light", "past attempts and helpers", async (page) => {
-        const limits = await page.evaluate((selector) => [...document.querySelectorAll(`${selector} details.history [data-past-kind]`)].map((row) => ({
-          kind: (row as HTMLElement).dataset.pastKind, label: row.querySelector(".lbl")?.textContent, verdict: row.querySelector(".verdict")?.textContent,
+        /* Attempts and review rounds are the expanded card's timeline
+           (docs/design/calm-task-cards-build.md §3); «Past attempts» keeps the helpers. */
+        const limits = await page.evaluate((selector) => [...document.querySelectorAll<HTMLElement>(`${selector} [data-chronology-entry]`)].map((row) => ({
+          kind: row.dataset.chronologyKind, text: row.querySelector(".chronology-what")?.textContent ?? "",
         })), card("t-limits"));
         frames["failed-latest"] = { production: limits };
-        if (!limits.some((row) => row.kind === "attempt" && row.label === "Build" && row.verdict === "failed")) failures.push(`failed latest attempt missing from Past attempts: ${JSON.stringify(limits)}`);
+        if (!limits.some((row) => row.kind === "attempt-failed" && row.text.startsWith("Build"))) failures.push(`failed latest attempt missing from the timeline: ${JSON.stringify(limits)}`);
 
         await page.locator(`${card("t-search")} details.history`).evaluate((element) => { (element as HTMLDetailsElement).open = true; element.scrollIntoView({ block: "center" }); });
         await page.waitForTimeout(300);
-        const past = await page.evaluate((selector) => [...document.querySelectorAll(`${selector} details.history [data-past-kind]`)].map((row) => ({
-          kind: (row as HTMLElement).dataset.pastKind, label: row.querySelector(".lbl")?.textContent, verdict: row.querySelector(".verdict")?.textContent, open: Boolean(row.querySelector(".hopen")),
-        })), card("t-search"));
+        const past = await page.evaluate((selector) => ({
+          entries: [...document.querySelectorAll<HTMLElement>(`${selector} [data-chronology-entry]`)].map((row) => ({ key: row.dataset.chronologyEntry, kind: row.dataset.chronologyKind, open: Boolean(row.querySelector(".chronology-open")) })),
+          helpers: [...document.querySelectorAll(`${selector} details.history [data-past-kind]`)].map((row) => ({ kind: (row as HTMLElement).dataset.pastKind, label: row.querySelector(".lbl")?.textContent, open: Boolean(row.querySelector(".hopen")) })),
+        }), card("t-search"));
         await shot(page, "production", "history-open", "light");
         frames["history-open"] = { production: past };
-        const labels = past.map((row) => row.label).sort();
-        /* One attempt caption: a stage's name, with "· N" once it has more than one attempt of its own. */
-        const expected = ["Implement · 1", "Implement · 2", "Implement · helper conversation 1", "Review", "Review · round 1", "Verify · 1"];
-        if (JSON.stringify(labels) !== JSON.stringify(expected) || !past.every((row) => row.open)) failures.push(`past attempts: ${JSON.stringify(past)}`);
-        if (past.some((row) => row.label === "Verify · 2")) failures.push("past attempts: the running Verify attempt is listed");
+        const keys = past.entries.map((row) => row.key);
+        for (const key of ["p-search:implement:attempt:1", "p-search:implement:attempt:2", "p-search:review:attempt:1", "p-search:review:attempt:1:round:1", "p-search:verify:attempt:1"]) {
+          if (!keys.includes(key)) failures.push(`timeline misses ${key}: ${JSON.stringify(past.entries)}`);
+        }
+        if (keys.includes("p-search:verify:attempt:2")) failures.push("timeline: the running Verify attempt is listed as finished");
+        if (JSON.stringify(past.helpers.map((row) => [row.kind, row.label, row.open])) !== JSON.stringify([["helper", "Implement · helper conversation 1", true]])) failures.push(`past attempts keeps the helper alone: ${JSON.stringify(past.helpers)}`);
         await page.click(`${card("t-search")} details.history [data-past-kind="helper"] .hopen`);
         /* It opens in the agent window. */
         await page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]", { timeout: 10_000 });
@@ -3999,7 +4003,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await page.click(`${card("t-links")} [data-menu]`);
         await openLaneActions(page);
         await page.locator('.menu [role="menuitem"]', { hasText: "Skip Implement" }).first().click();
-        await page.waitForSelector("[data-kanban-receipt].error", { timeout: 5_000 });
+        /* Skip waits out its receipt before it is sent (docs/design/calm-task-cards-build.md §4.1). */
+        await page.waitForSelector("[data-kanban-receipt].error", { timeout: 10_000 });
         const refused = await page.locator("[data-kanban-receipt].error .msg").textContent();
         await page.evaluate(() => (window as unknown as Hook).evidence.moveCursor("p-links", "review"));
         await page.click("[data-kanban-receipt].error .act");
@@ -5462,15 +5467,12 @@ describe("#1865 stage conversations lead with the stage and its attempt", () => 
               await leaveWindow(opened.page);
               await clickAt(opened.page, `${CARD} .pb-pill[data-stage="critique"]`);
               await leaveWindow(opened.page);
-              /* Critique's first attempt opens from the card's Past attempts,
-                 which the card keeps folded. */
-              if (!(await opened.page.locator(`${CARD} details.history`).first().evaluate((element) => (element as HTMLDetailsElement).open))) {
-                await clickAt(opened.page, `${CARD} details.history > summary`);
-              }
-              const pastKey = await opened.page.evaluate((selector) => [...document.querySelectorAll<HTMLElement>(`${selector} details.history [data-past]`)]
-                .find((row) => /^Critique/.test(row.querySelector(".lbl")?.textContent ?? ""))?.dataset.past ?? null, CARD);
-              if (!pastKey) fail("Past attempts lists no earlier critique");
-              else await clickAt(opened.page, `${CARD} details.history [data-past=${JSON.stringify(pastKey)}] .hopen`);
+              /* Critique's first attempt opens from the card's timeline
+                 (docs/design/calm-task-cards-build.md §3). */
+              const pastKey = await opened.page.evaluate((selector) => [...document.querySelectorAll<HTMLElement>(`${selector} [data-chronology-entry]`)]
+                .find((row) => /^Critique/.test(row.querySelector(".chronology-open")?.textContent ?? ""))?.dataset.chronologyEntry ?? null, CARD);
+              if (!pastKey) fail("the timeline lists no earlier critique");
+              else await clickAt(opened.page, `${CARD} [data-chronology-entry=${JSON.stringify(pastKey)}] .chronology-open`);
               await opened.page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]", { timeout: 10_000 });
               const headers = await measureHeaders(opened.page);
               await opened.page.screenshot({ path: path.join(OUT, `window-${label}.png`) });
@@ -8912,9 +8914,10 @@ describe("#2072 one pipeline block, desktop and phone", () => {
   const SCREENS = [
     { id: "p-upload", name: "running", current: "verify-backward-compatibility-and-migrations", answers: [], fold: "3", completed: false, motion: "live" },
     { id: "p-md-accept", name: "paused", current: "accept", answers: [], fold: null, completed: false, motion: "held" },
-    { id: "p-md-decision", name: "decision", current: "implement", answers: ["skip-stage", "retry-stage"], fold: null, completed: false, motion: null },
-    /* A spent review budget answers «Accept as is» or «Review again» (#2187 S2). */
-    { id: "p-review-spent", name: "review", current: "critique", answers: ["accept-head", "continue-review"], fold: null, completed: false, motion: null },
+    /* A decision and a spent review budget say what they stopped on; their
+       answers are the screen's ⋯ sheet (docs/design/calm-task-cards-build.md §4.2). */
+    { id: "p-md-decision", name: "decision", current: "implement", answers: [], fold: null, completed: false, motion: null },
+    { id: "p-review-spent", name: "review", current: "critique", answers: [], fold: null, completed: false, motion: null },
     { id: "p-compact", name: "done", current: null, answers: [], fold: null, completed: true, motion: null },
   ] as const;
 
@@ -9653,11 +9656,172 @@ describe("board order: working cards first, then recently worked, then idle", ()
   }, 600_000);
 });
 
+describe("recent first: columns order by the newest work, and a recently worked hidden task is drawn", () => {
+  /* The `recent-first` scenario (docs/design/kanban-recent-first.md). Assigned:
+     a stage running now, a lane finished five minutes ago whose transcript is
+     not loaded, a lane parked on the operator for two days, a lane paused for
+     three, a transcript from six days ago, and a task nobody worked on that
+     was edited a minute ago. Inbox: a low-priority task with an agent working,
+     a normal one whose lane moved yesterday, the hidden-flag task whose lane
+     moved two days ago, then high, normal and low untouched ones. Done: one
+     finished ten minutes ago above one whose merge blocked yesterday. The
+     hidden tray holds the three tasks the board keeps off: never worked, an
+     explicit choice, a hidden group. On the desktop at 1440×900 and the phone
+     at 390×844, en and uk. Frames go to RECENT_FIRST_PNG_DIR, or
+     `.artifacts/recent-first/`, never committed; the readings go to
+     `evidence/kanban-recent-first/readings.json`, each frame taken before any
+     gate is read, so the same case renders the "before" frames on a tree
+     without the change.
+
+       CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+         bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "recent first" */
+  const ASSIGNED = ["t-rf-running", "t-rf-finished", "t-rf-decision", "t-rf-paused", "t-rf-old", "t-rf-notes"];
+  const INBOX = ["t-rf-inbox-working", "t-rf-yesterday", "t-rf-hidden-recent", "t-rf-high", "t-rf-normal", "t-rf-low"];
+  const DONE = ["t-rf-done-fresh", "t-rf-done-blocked"];
+  /* The phone leads each tab with what asks the operator, as its own contract says. */
+  const PHONE_ASSIGNED = ["t-rf-decision", "t-rf-running", "t-rf-finished", "t-rf-paused", "t-rf-old", "t-rf-notes"];
+
+  browserTest("every column reads newest work first, the recent hidden task is a card, the stopped count is one number, and each card states its age once", async () => {
+    const pngDir = path.resolve(process.env.RECENT_FIRST_PNG_DIR ?? ".artifacts/recent-first");
+    const out = path.resolve(".artifacts/recent-first-bundle");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const url = `${server.base}?scenario=recent-first`;
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        {
+          const label = `desktop-1440-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, VIEWPORT, "light", lang);
+          try {
+            await page.waitForSelector(card("t-rf-running"), { timeout: 30_000 });
+            const fold = page.locator("[data-seat-collapse]");
+            if (await fold.count()) await fold.first().click();
+            await page.waitForTimeout(800);
+            await page.screenshot({ path: path.join(pngDir, `${label}-board.png`) });
+            const read = await page.evaluate(() => {
+              const order = (status: string) => [...document.querySelectorAll(`[data-kanban-board] .column[data-status="${status}"] .card`)]
+                .map((element) => (element.getAttribute("data-id") ?? "").replace(/^task:/, ""));
+              const foot = (id: string) => {
+                const age = document.querySelector(`[data-kanban-board] .card[data-id="task:${id}"] .foot .age`) as HTMLElement | null;
+                if (!age) return null;
+                const box = age.getBoundingClientRect();
+                const parent = age.parentElement!.getBoundingClientRect();
+                const overlaps = [...age.parentElement!.children].filter((other) => other !== age).some((other) => {
+                  const o = other.getBoundingClientRect();
+                  return o.width > 0 && o.height > 0 && o.left < box.right - 0.5 && o.right > box.left + 0.5 && o.top < box.bottom - 0.5 && o.bottom > box.top + 0.5;
+                });
+                return { text: age.textContent ?? "", title: age.getAttribute("title") ?? "", inside: box.left >= parent.left - 0.5 && box.right <= parent.right + 0.5, overlaps };
+              };
+              const bar = document.querySelector('[data-bar="project"]');
+              return {
+                assigned: order("assigned"), inbox: order("inbox"), done: order("done"),
+                hiddenCount: Number(bar?.getAttribute("data-hidden-count") ?? "-1"),
+                foot: { finished: foot("t-rf-finished"), old: foot("t-rf-old"), notes: foot("t-rf-notes") },
+                /* The header's number, the divider's number and what the divider holds. */
+                stoppedHeader: Number(document.querySelector('[data-kanban-board] .column[data-status="assigned"] [data-column-stopped]')?.getAttribute("data-count") ?? "-1"),
+                stoppedDivider: (document.querySelector('[data-kanban-board] .column[data-status="assigned"] .divider [role="separator"]')?.textContent ?? "").match(/\d+/)?.[0] ?? "",
+                belowDivider: (() => {
+                  const divider = document.querySelector('[data-kanban-board] .column[data-status="assigned"] .divider');
+                  if (!divider) return [];
+                  return [...document.querySelectorAll('[data-kanban-board] .column[data-status="assigned"] .card')]
+                    .filter((element) => Boolean(divider.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING))
+                    .map((element) => (element.getAttribute("data-id") ?? "").replace(/^task:/, ""));
+                })(),
+                /* Cards whose foot dates work (not an edit) while an agent row or a lane row on the same card already does. */
+                doubleDated: [...document.querySelectorAll("[data-kanban-board] .card")]
+                  .filter((element) => element.querySelector(".foot .age") && element.querySelector(".members .tile, [data-pipeline]"))
+                  .map((element) => ({ id: element.getAttribute("data-id") ?? "", foot: (element.querySelector(".foot .age")?.textContent ?? "").trim() })),
+                tileCards: [...document.querySelectorAll("[data-kanban-board] .card")].filter((element) => element.querySelector(".members .tile")).length,
+                stateLines: Object.fromEntries(["t-rf-finished", "t-rf-decision", "t-rf-paused", "t-rf-old"].map((id) => [id,
+                  (document.querySelector(`[data-kanban-board] .card[data-id="task:${id}"] .motion-line`)?.textContent ?? "").trim()])),
+              };
+            });
+            readings[label] = read;
+            if (JSON.stringify(read.assigned) !== JSON.stringify(ASSIGNED)) failures.push(`${label}: Assigned reads ${JSON.stringify(read.assigned)}`);
+            if (JSON.stringify(read.inbox) !== JSON.stringify(INBOX)) failures.push(`${label}: Inbox reads ${JSON.stringify(read.inbox)}`);
+            if (JSON.stringify(read.done) !== JSON.stringify(DONE)) failures.push(`${label}: Done reads ${JSON.stringify(read.done)}`);
+            if (read.hiddenCount !== 3) failures.push(`${label}: the hidden tray counts ${read.hiddenCount}, not 3`);
+            const worked = lang === "en" ? /^Last worked/ : /^Остання робота/;
+            const edited = lang === "en" ? /^Updated/ : /^Оновлено/;
+            const editedWord = lang === "en" ? /^edited / : /^змінено /;
+            const days = lang === "en" ? /^6\s?d/ : /^6\s?д/;
+            /* A lane row states the finished lane's age: the foot says nothing more. */
+            if (read.foot.finished) failures.push(`${label}: finished card repeats the lane's age in its foot ${JSON.stringify(read.foot.finished)}`);
+            if (!read.foot.old || !worked.test(read.foot.old.title) || !days.test(read.foot.old.text)) failures.push(`${label}: worked card without a lane foot ${JSON.stringify(read.foot.old)}`);
+            if (!read.foot.notes || !edited.test(read.foot.notes.title) || !editedWord.test(read.foot.notes.text)) failures.push(`${label}: untouched card foot ${JSON.stringify(read.foot.notes)}`);
+            /* One stopped number: the header's, the divider's and the cards under the divider. */
+            if (read.stoppedHeader !== 2 || read.stoppedDivider !== "2" || JSON.stringify(read.belowDivider) !== JSON.stringify(["t-rf-old", "t-rf-notes"])) {
+              failures.push(`${label}: stopped header ${read.stoppedHeader}, divider ${read.stoppedDivider}, below ${JSON.stringify(read.belowDivider)}`);
+            }
+            /* The finished lane says it finished: no «no reason given» line above its lane row. */
+            if (read.stateLines["t-rf-finished"]) failures.push(`${label}: finished card state line ${JSON.stringify(read.stateLines["t-rf-finished"])}`);
+            if (!read.stateLines["t-rf-decision"] || !read.stateLines["t-rf-paused"]) failures.push(`${label}: decision or paused card lost its state line ${JSON.stringify(read.stateLines)}`);
+            /* An agent row dates the work: the foot of that card says no work age (an «edited …» foot has no row to repeat). */
+            const repeated = read.doubleDated.filter((entry) => !editedWord.test(entry.foot));
+            if (repeated.length) failures.push(`${label}: foot repeats the age a row already shows ${JSON.stringify(repeated)}`);
+            if (read.tileCards < 2) failures.push(`${label}: only ${read.tileCards} cards drew an agent row, the repeat check has nothing to read`);
+            for (const [name, foot] of Object.entries(read.foot)) {
+              if (foot && (!foot.inside || foot.overlaps)) failures.push(`${label}: ${name} foot age ${JSON.stringify(foot)}`);
+            }
+            for (const status of ["assigned", "inbox", "done"] as const) {
+              await page.locator(`[data-kanban-board] .column[data-status="${status}"]`).screenshot({ path: path.join(pngDir, `${label}-${status}.png`) });
+            }
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+        {
+          const label = `phone-390-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, url, { width: 390, height: 844 }, "light", lang, "no-preference", true);
+          try {
+            await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+            const readTab = async (tab: string) => {
+              await page.locator(`[data-phone-kanban-tab="${tab}"]`).first().click();
+              await page.waitForSelector(`[data-phone-kanban-column="${tab}"] [data-phone-card^="task:"]`, { timeout: 30_000 });
+              await page.waitForTimeout(600);
+              await page.screenshot({ path: path.join(pngDir, `${label}-${tab}.png`) });
+              return page.evaluate((column) => [...document.querySelectorAll(`[data-phone-kanban-column="${column}"] [data-phone-card^="task:"]`)]
+                .map((element) => (element.getAttribute("data-phone-card") ?? "").replace(/^task:/, "")), tab);
+            };
+            const assigned = await readTab("assigned");
+            const edits = await page.evaluate(() => Object.fromEntries(["t-rf-notes", "t-rf-old"].map((id) => [id,
+              (document.querySelector(`[data-phone-card="task:${id}"] [data-phone-card-agents]`)?.textContent ?? "").trim()])));
+            const inbox = await readTab("inbox");
+            const overflowX = await page.evaluate(() => (document.scrollingElement ? document.scrollingElement.scrollWidth - document.scrollingElement.clientWidth : 0));
+            readings[label] = { assigned, inbox, overflowX, edits };
+            const editedWord = lang === "en" ? /edited / : /змінено /;
+            if (!editedWord.test(edits["t-rf-notes"] ?? "") || editedWord.test(edits["t-rf-old"] ?? "")) failures.push(`${label}: phone age wording ${JSON.stringify(edits)}`);
+            if (JSON.stringify(assigned) !== JSON.stringify(PHONE_ASSIGNED)) failures.push(`${label}: Assigned reads ${JSON.stringify(assigned)}`);
+            if (JSON.stringify(inbox) !== JSON.stringify(INBOX)) failures.push(`${label}: Inbox reads ${JSON.stringify(inbox)}`);
+            /* Measured against the 390 px viewport passed in: the layout viewport widens to fit overflow. */
+            if (overflowX > 0.5) failures.push(`${label}: overflows sideways by ${overflowX}px`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/kanban-recent-first", { recursive: true });
+    fs.writeFileSync("evidence/kanban-recent-first/readings.json", `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
 describe("task priority: the Inbox takes high first and low last, the other columns keep their order", () => {
   /* The `task-priority` scenario: an Inbox of two high, two normal and two
-     low tasks (one low task with a working agent, which still sits under
-     every normal one), and an Assigned column whose high and low tasks keep
-     the most recent agent work on top. On the desktop at 1440×900 the board,
+     low tasks (one low task with a working agent, which leads: work in flight
+     stands above the priority queue), and an Assigned column whose high and
+     low tasks keep the most recent agent work on top. On the desktop at 1440×900 the board,
      the Inbox and the card's ⋯ with its Priority group; on the phone at
      390×844 the Inbox tab and the task sheet's Priority face; en and uk.
      Frames go to PRIORITY_PNG_DIR, or `.artifacts/task-priority/`, never
@@ -9665,7 +9829,7 @@ describe("task priority: the Inbox takes high first and low last, the other colu
 
        CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 PRIORITY_PNG_DIR=… \
          bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "task priority" */
-  const INBOX = ["t-prio-deploy", "t-prio-limits", "t-prio-notes", "t-prio-export", "t-prio-cleanup", "t-prio-idea"];
+  const INBOX = ["t-prio-cleanup", "t-prio-deploy", "t-prio-limits", "t-prio-notes", "t-prio-export", "t-prio-idea"];
   const ASSIGNED = ["t-prio-banner", "t-prio-search", "t-prio-docs"];
   const MARKS: Record<string, string> = { "t-prio-deploy": "high", "t-prio-limits": "high", "t-prio-cleanup": "low", "t-prio-idea": "low", "t-prio-banner": "low", "t-prio-search": "high" };
 
@@ -9707,9 +9871,13 @@ describe("task priority: the Inbox takes high first and low last, the other colu
                   .map((element) => Math.round(element.querySelector(".head > .title")?.getBoundingClientRect().width ?? 0));
                 return Math.max(...widths) - Math.min(...widths) > 1 ? [`${status} ${JSON.stringify(widths)}`] : [];
               });
-              /* And it leads the foot line, in the foot's own row. */
-              const misplaced = [...document.querySelectorAll("[data-kanban-board] .card .prio-mark")].flatMap((mark) =>
-                mark.parentElement?.classList.contains("foot") && mark.parentElement.firstElementChild === mark ? [] : [(mark.closest(".card")?.getAttribute("data-id") ?? "")]);
+              /* And it ends the card's state line, or leads the foot of a card
+                 that draws none (docs/design/calm-task-cards-build.md §2.2). */
+              const misplaced = [...document.querySelectorAll("[data-kanban-board] .card .prio-mark")].flatMap((mark) => {
+                const parent = mark.parentElement;
+                const placed = parent?.classList.contains("card-state") ? parent.lastElementChild === mark : parent?.classList.contains("foot") && parent.firstElementChild === mark;
+                return placed ? [] : [(mark.closest(".card")?.getAttribute("data-id") ?? "")];
+              });
               return { inbox: column("inbox"), assigned: column("assigned"), marks, squeezed, misplaced };
             });
             readings[label] = read;
@@ -9741,8 +9909,8 @@ describe("task priority: the Inbox takes high first and low last, the other colu
             const raised = await page.evaluate(() => [...document.querySelectorAll('[data-kanban-board] .column[data-status="inbox"] .card')]
               .map((element) => (element.getAttribute("data-id") ?? "").replace(/^task:/, "")));
             readings[`${label}-raised`] = raised;
-            /* The newest edit leads its level, as it did among the normal ones. */
-            const RAISED = ["t-prio-notes", "t-prio-deploy", "t-prio-limits", "t-prio-export", "t-prio-cleanup", "t-prio-idea"];
+            /* The working task still leads; the newest edit leads the high level, as it did among the normal ones. */
+            const RAISED = ["t-prio-cleanup", "t-prio-notes", "t-prio-deploy", "t-prio-limits", "t-prio-export", "t-prio-idea"];
             if (JSON.stringify(raised) !== JSON.stringify(RAISED)) failures.push(`${label}: after High the Inbox reads ${JSON.stringify(raised)}`);
             await page.mouse.move(0, 0);
             await page.locator('[data-kanban-board] .column[data-status="inbox"]').screenshot({ path: path.join(pngDir, `${label}-inbox-raised.png`) });
@@ -11549,8 +11717,16 @@ describe("#2187 a lane parked on a review says why in one line and answers in pl
                 const [head, tail] = t(lane.reason, { stage: "\u0000" }).split("\u0000");
                 if (!got.reason?.startsWith(head!) || !got.reason.endsWith(tail!)) fail(`reason ${JSON.stringify(got.reason)}`);
               } else if (got.reason !== t(lane.reason, lane.kind === "park" ? { count: 3 } : undefined)) fail(`reason ${JSON.stringify(got.reason)}`);
-              const want = lane.answers.map(([action, key]) => [action, t(key)]);
-              if (JSON.stringify(got.answers) !== JSON.stringify(want)) fail(`answers ${JSON.stringify(got.answers)}, expected ${JSON.stringify(want)}`);
+              /* The answers left the lane row for the card's ⋯ (docs/design/calm-task-cards-build.md §4):
+                 the row draws none, and the ⋯ holds each in its words. */
+              if (got.answers.length) fail(`answers on the lane row: ${JSON.stringify(got.answers)}`);
+              await page.locator(`[data-menu="task:${lane.task}"]`).click();
+              await page.locator('.menu [data-cm-section^="lane:"]').click();
+              const menu = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.menu [data-cm-item^="answer:"]')].map((item) => [item.getAttribute("data-cm-item")!.slice("answer:".length), item.querySelector(".lbl")?.firstChild?.textContent ?? ""]));
+              await page.keyboard.press("Escape");
+              /* One more review round is no longer offered (the fixed budget rule), so it is not looked for. */
+              const want = lane.answers.filter(([action]) => action !== "continue-review").map(([action, key]) => [action, t(key)]);
+              if (JSON.stringify(menu) !== JSON.stringify(want)) fail(`⋯ answers ${JSON.stringify(menu)}, expected ${JSON.stringify(want)}`);
               if (lane.kind === "legacy" && got.findings.some((text) => /round limit reached/.test(text))) fail(`the flow's own detail is still listed as a finding: ${JSON.stringify(got.findings)}`);
               if (!got.findings.length) fail("no finding listed under the reason");
               for (const entry of [...got.clipped, ...got.overlaps]) fail(entry);
@@ -11714,9 +11890,15 @@ describe("#2187 a completed lane's automatic merge, and the project's merge sett
               if (lane.word === "stopped") {
                 const want = t("pipelineBlock.merge.reason", { reason: t("pipelineBlock.mergeReason.check", { name: "privacy-publication" }) });
                 if (got.reason !== want) fail(`reason ${JSON.stringify(got.reason)}, expected ${JSON.stringify(want)}`);
+                /* The answers are the card's ⋯ (docs/design/calm-task-cards-build.md §4). */
+                await page.locator(`[data-menu="task:${lane.task}"]`).click();
+                await page.locator('.menu [data-cm-section^="lane:"]').click();
+                const menu = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.menu [data-cm-item^="answer:"]')].map((item) => [item.getAttribute("data-cm-item")!.slice("answer:".length), item.querySelector(".lbl")?.firstChild?.textContent ?? ""]));
+                await page.keyboard.press("Escape");
                 const answers = [["dismiss", t("pipelineBlock.answer.leaveOpen")], ["retry-merge", t("pipelineBlock.answer.retryMerge")]];
-                if (JSON.stringify(got.answers) !== JSON.stringify(answers)) fail(`answers ${JSON.stringify(got.answers)}`);
-              } else if (got.answers.length) fail(`answers ${JSON.stringify(got.answers)} on a merge that asks nothing`);
+                if (JSON.stringify(menu) !== JSON.stringify(answers)) fail(`⋯ answers ${JSON.stringify(menu)}`);
+              }
+              if (got.answers.length) fail(`answers ${JSON.stringify(got.answers)} on the lane row`);
               for (const entry of [...got.clipped, ...got.overlaps]) fail(entry);
               for (const entry of got.escapes) fail(`paints outside its card: ${entry}`);
             }
@@ -11762,9 +11944,11 @@ describe("#2187 a completed lane's automatic merge, and the project's merge sett
             const writes = await page.evaluate(() => (window as unknown as { evidence?: { settingWrites: unknown[] } }).evidence?.settingWrites ?? null);
             for (const entry of [on, off]) if (entry.labelMeetsSwitch || entry.labelCut || !entry.inside) failures.push(`${label} menu geometry: ${JSON.stringify(entry)}`);
             await page.keyboard.press("Escape");
-            /* Try the merge again sends retry-merge for the stopped lane. */
+            /* Try the merge again, from the card's ⋯, sends retry-merge for the stopped lane. */
             if (scheme === "light") {
-              await page.locator(`${card("t-merge-stop")} [data-answer-action="retry-merge"]`).click();
+              await page.locator('[data-menu="task:t-merge-stop"]').click();
+              await page.locator('.menu [data-cm-section^="lane:"]').click();
+              await page.locator('.menu [data-cm-item="answer:retry-merge"]').click();
               await page.waitForTimeout(1_200);
             }
             const patches = await page.evaluate(() => (window as unknown as { evidence?: { pipelinePatches: Array<{ id: string; body: Record<string, unknown> }> } }).evidence?.pipelinePatches ?? null);
@@ -14154,8 +14338,9 @@ describe("asks you: an agent that asked the operator, on its card, in the report
         const fail = (text: string) => failures.push(`${label}: ${text}`);
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=asks-you`, VIEWPORT, "light", lang);
         try {
-          /* The card: its foot names the reason and the agent's role. */
-          await page.waitForSelector(`${card("t-export")} [data-foot-needs]`, { timeout: 30_000 });
+          /* The card: its state line names the reason and the agent's role
+             (docs/design/calm-task-cards-build.md §5.3). */
+          await page.waitForSelector(`${card("t-export")} [data-card-state="you"]`, { timeout: 30_000 });
           await page.waitForSelector("[data-report-log] [data-report-ask]", { timeout: 30_000 });
           await page.waitForTimeout(600);
           const toast = await page.evaluate(() => document.querySelector("[data-attention-toast]")?.textContent?.trim() ?? null);
@@ -14167,11 +14352,10 @@ describe("asks you: an agent that asked the operator, on its card, in the report
           await exportCard.screenshot({ path: path.join(OUT, `card-${label}.png`) });
           await page.screenshot({ path: path.join(OUT, `board-${label}.png`) });
           const foot = await page.evaluate((selector) => {
-            const needs = document.querySelector(`${selector} [data-foot-needs]`) as HTMLElement | null;
-            const clamp = needs?.querySelector(".clamp") as HTMLElement | null;
-            return { text: needs?.textContent?.trim() ?? "", title: needs?.getAttribute("title") ?? "", cut: clamp ? clamp.scrollWidth > clamp.clientWidth + 1 : false };
+            const words = document.querySelector(`${selector} [data-card-state-text]`) as HTMLElement | null;
+            return { text: words?.textContent?.trim() ?? "", cut: words ? words.scrollHeight > words.clientHeight + 1 : false };
           }, card("t-export"));
-          if (!foot.title.startsWith(`${t("needs.ask")} · `)) fail(`the card's reason reads ${JSON.stringify(foot)}`);
+          if (!foot.text.startsWith(t("cardState.you.conversation", { need: `${t("needs.ask")} · ` }))) fail(`the card's reason reads ${JSON.stringify(foot)}`);
 
           /* The report log: the ask by time among the reports, its agent a link. */
           const seat = page.locator("[data-kanban-seat]");
@@ -15089,8 +15273,9 @@ describe("attention auto resolve", () => {
           }
         }
 
-        /* The answered ask's card says Delegatus cleared it and why, with
-           Undo. Seats handed on draw no tile (#1841); their clears are in the
+        /* The answered ask's card says Delegatus cleared it and why, in its
+           timeline, with Undo in its ⋯ (docs/design/calm-task-cards-build.md
+           §2.2). Seats handed on draw no tile (#1841); their clears are in the
            project read's cleared list. */
         opened = await open("", SIZES[0], "light", lang);
         try {
@@ -15098,14 +15283,17 @@ describe("attention auto resolve", () => {
           const card = page.locator('[data-kanban-board] .card[data-id="task:t-september"]');
           await card.waitFor({ timeout: 10_000 });
           await card.scrollIntoViewIfNeeded();
-          const foot = await card.evaluate((element) => {
-            const cleared = element.querySelector("[data-foot-cleared]");
-            const undo = element.querySelector("[data-undo-dismiss]") as HTMLElement | null;
-            const box = undo?.getBoundingClientRect();
-            return { kind: cleared?.getAttribute("data-foot-cleared") ?? null, text: cleared?.textContent ?? null, undo: Boolean(box && box.width > 0 && box.height > 0) };
+          const cleared = await card.evaluate((element) => element.querySelector('[data-chronology-kind="need-cleared"] .chronology-what')?.textContent ?? null);
+          await card.locator("[data-menu]").click();
+          const undo = await page.evaluate(() => {
+            const row = document.querySelector<HTMLElement>('.menu [data-cm-item="undoFlag"]');
+            const box = row?.getBoundingClientRect();
+            return { shown: Boolean(box && box.width > 0 && box.height > 0), why: row?.querySelector(".why")?.textContent ?? null };
           });
+          await page.keyboard.press("Escape");
+          const foot = { text: cleared, undo: undo.shown, why: undo.why };
           readings[`${lang}/card-cleared`] = foot;
-          check(`${lang}/card-cleared`, foot.kind === "system" && foot.undo && Boolean(foot.text?.includes(translate(lang, "needs.clearedRule.operator-replied"))), `the card's foot reads ${JSON.stringify(foot)}`);
+          check(`${lang}/card-cleared`, foot.undo && Boolean(foot.text?.includes(translate(lang, "needs.clearedRule.operator-replied"))), `the card's clearing reads ${JSON.stringify(foot)}`);
           await shot(page, `${lang}/1440x900-light-cleared-card`);
         } finally { await opened.context.close(); }
       }
@@ -20163,6 +20351,9 @@ describe("a task card folds the conversations outside this board into one line o
                 sectionOpen: section?.open ?? null,
                 head: (section?.querySelector("summary .hl")?.textContent ?? "").trim(),
                 attempts: [...(section?.querySelectorAll("li[data-past]") ?? [])].map((row) => row.getAttribute("data-past")),
+                /* Attempts and rounds are the timeline's (docs/design/calm-task-cards-build.md §3). */
+                timeline: [...element.querySelectorAll<HTMLElement>("[data-chronology-entry]")].filter((row) => /^attempt-|^round$/.test(row.dataset.chronologyKind ?? "")).map((row) => row.dataset.chronologyEntry),
+                hiddenInTimeline: Number(element.querySelector("[data-chronology]")?.getAttribute("data-chronology-hidden") ?? 0),
                 lineVisible: (() => { const line = element.querySelector<HTMLElement>("[data-elsewhere-toggle]"); return line ? line.checkVisibility({ contentVisibilityAuto: true, visibilityProperty: true }) : false; })(),
               };
             });
@@ -20194,13 +20385,15 @@ describe("a task card folds the conversations outside this board into one line o
               hash = await page.evaluate(() => location.hash);
             }
             readings[label] = { closed, sectionOpen, listOpen, hash };
-            const head = translate(lang, "kanban.past.head", { count: ATTEMPTS });
+            const head = translate(lang, "kanban.past.elsewhereHead", { count: WALL });
             if (closed.wall.rows !== 0 || closed.only.rows !== 0 || sectionOpen.rows !== 0 || listOpen.rows !== 0) failures.push(`${label}: rows of «conversation outside this board» stand on the card ${JSON.stringify({ closed, listOpen })}`);
             if (closed.wall.lines !== 1 || closed.only.lines !== 1) failures.push(`${label}: not exactly one line per card ${JSON.stringify(closed)}`);
             if (closed.wall.sectionOpen !== false || closed.wall.lineVisible || closed.only.lineVisible) failures.push(`${label}: the line shows while Past attempts is closed ${JSON.stringify(closed)}`);
             if (closed.wall.listed !== 0) failures.push(`${label}: rows listed before the line is opened`);
             if (closed.wall.head !== head) failures.push(`${label}: the header reads «${closed.wall.head}», not «${head}»`);
-            if (closed.wall.attempts.length !== ATTEMPTS || new Set(closed.wall.attempts).size !== ATTEMPTS) failures.push(`${label}: the header counts ${ATTEMPTS} and the section lists ${JSON.stringify(closed.wall.attempts)}`);
+            if (closed.wall.attempts.length !== 0) failures.push(`${label}: the section still lists attempts ${JSON.stringify(closed.wall.attempts)}`);
+            /* The latest eight entries show; the rest fold behind «Earlier · N». */
+            if (new Set(closed.wall.timeline).size !== closed.wall.timeline.length || closed.wall.timeline.length + closed.wall.hiddenInTimeline < ATTEMPTS) failures.push(`${label}: the timeline lists ${JSON.stringify(closed.wall.timeline)} and hides ${closed.wall.hiddenInTimeline}, fewer than ${ATTEMPTS} attempts`);
             if (closed.wall.lineText !== lineOf(lang, WALL, false)) failures.push(`${label}: the line reads «${closed.wall.lineText}»`);
             if (closed.only.head !== translate(lang, "kanban.past.elsewhereHead", { count: ONLY })) failures.push(`${label}: the conversations-only card's header reads «${closed.only.head}»`);
             if (!sectionOpen.lineVisible) failures.push(`${label}: the line is not visible in the open section`);
@@ -20236,6 +20429,8 @@ describe("a task card folds the conversations outside this board into one line o
                   lines: document.querySelectorAll("[data-phone-task-elsewhere-toggle]").length,
                   lineText: (document.querySelector("[data-phone-task-elsewhere-toggle]")?.textContent ?? "").trim(),
                   attempts: [...document.querySelectorAll("[data-phone-task-past-row]")].map((row) => row.getAttribute("data-phone-task-past-row")),
+                  timeline: [...document.querySelectorAll<HTMLElement>("[data-chronology] [data-chronology-entry]")].filter((row) => /^attempt-|^round$/.test(row.dataset.chronologyKind ?? "")).length,
+                  hiddenInTimeline: Number(document.querySelector("[data-chronology]")?.getAttribute("data-chronology-hidden") ?? 0),
                   pageHeight: Math.round(document.documentElement.scrollHeight),
                 };
               });
@@ -20270,9 +20465,11 @@ describe("a task card folds the conversations outside this board into one line o
               if (opened.lines !== 1 || opened.lineText !== lineOf(lang, expected, false)) failures.push(`${label}: ${id}'s line ${JSON.stringify(opened)}`);
               if (listed.rows !== expected) failures.push(`${label}: ${id}'s list holds ${listed.rows} of ${expected}`);
               if (id === "t-wall") {
-                const head = translate(lang, "kanban.past.head", { count: ATTEMPTS });
+                /* Attempts are the timeline's; the section keeps the conversations elsewhere. */
+                const head = translate(lang, "kanban.past.elsewhereHead", { count: WALL });
                 if (closed.head !== head) failures.push(`${label}: the header reads «${closed.head}», not «${head}»`);
-                if (opened.attempts.length !== ATTEMPTS || new Set(opened.attempts).size !== ATTEMPTS) failures.push(`${label}: the header counts ${ATTEMPTS} and the section lists ${JSON.stringify(opened.attempts)}`);
+                if (opened.attempts.length !== 0) failures.push(`${label}: the section still lists attempts ${JSON.stringify(opened.attempts)}`);
+                if (closed.timeline + closed.hiddenInTimeline < ATTEMPTS) failures.push(`${label}: the timeline holds ${closed.timeline} attempts and hides ${closed.hiddenInTimeline}, fewer than ${ATTEMPTS}`);
                 if (!hash?.includes("wall-5")) failures.push(`${label}: the fifth row opened ${JSON.stringify(hash)}`);
               } else if (opened.head !== translate(lang, "kanban.past.elsewhereHead", { count: ONLY })) failures.push(`${label}: the conversations-only task's header reads «${opened.head}»`);
               await page.goBack().catch(() => {});
@@ -26217,1010 +26414,34 @@ describe("issue report advisory preview", () => {
 });
 
 describe("prototype review on a task: the card's button, the review and the orchestrator's notice", () => {
-  /*
-   * A task's prototype review as the operator meets it. The card's foot
-   * carries the review button in each of its states; the orchestrator's pane
-   * says a prototype is ready above its message field, and «Go to prototype»
-   * brings the task up and opens its review; the review shows one variant or
-   * four, an original beside its change, a video, forty pictures in one
-   * variant, a combination chosen with a dictated comment, the saved decision
-   * and the earlier round; a name of 60 characters with a caption of 200 read
-   * in full, and a close while speech is still transcribed asks first; speech
-   * started in one round stays in it while another round is pressed. Measured at 1440, 1000 and 390, in English and
-   * Ukrainian, light and dark: nothing overlaps and nothing leaves its frame.
-   * A card's review button carries its word at every desktop width with no
-   * reason line beside it, and is cut out whole in each of its five states;
-   * the phone's card carries the same button, which opens the review in one
-   * tap; the phone's seat chip says the word with its count; the accent in a
-   * decided review marks exactly the chosen variants, and the sheet's round
-   * line is never cut under its header; the line over the picture parts the variant's name from the caption,
-   * the slider's two labels stand clear of both drawn pictures, and a delivery
-   * line keeps its mark on the first line of its words.
-   *
-   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "prototype review"
-   *
-   * The video is a two-second test pattern `ffmpeg` writes beside the bundle,
-   * and the microphone is Chromium's fake device answered by the fixture's
-   * transcription. Frames go to PROTOTYPE_REVIEW_PNG_DIR (default
-   * `.artifacts/prototype-review/`); readings to
-   * `evidence/prototype-review/readings.json`.
-   */
-  const SIZES = [
-    { name: "desktop-1440", viewport: { width: 1440, height: 900 }, phone: false },
-    { name: "pane-1000", viewport: { width: 1000, height: 700 }, phone: false },
-    { name: "phone-390", viewport: { width: 390, height: 844 }, phone: true },
-  ] as const;
-  const only = (process.env.PROTOTYPE_REVIEW_ONLY ?? "").split(",").filter(Boolean);
-
-  /* Every pair of the named regions that overlaps, and every one that leaves
-     the frame: the reading the gate is about. */
-  const measure = (page: Page, frame: string, regions: Record<string, string>) => page.evaluate(({ frame, regions }) => {
-    const host = document.querySelector<HTMLElement>(frame);
-    if (!host) return { missing: [frame], overlaps: [] as string[], outside: [] as string[], boxes: {} as Record<string, number[]> };
-    const bounds = host.getBoundingClientRect();
-    const boxes: [string, DOMRect][] = [];
-    const missing: string[] = [];
-    for (const [name, selector] of Object.entries(regions)) {
-      const found = [...document.querySelectorAll<HTMLElement>(selector)].filter((element) => element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0);
-      if (!found.length) missing.push(name);
-      found.forEach((element, at) => boxes.push([found.length > 1 ? `${name}#${at + 1}` : name, element.getBoundingClientRect()]));
-    }
-    const overlaps: string[] = [];
-    for (let i = 0; i < boxes.length; i += 1) for (let j = i + 1; j < boxes.length; j += 1) {
-      const [an, a] = boxes[i]!, [bn, b] = boxes[j]!;
-      if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) overlaps.push(`${an} × ${bn}`);
-    }
-    const outside = boxes.filter(([, box]) => box.left < bounds.left - 0.5 || box.right > bounds.right + 0.5 || box.top < bounds.top - 0.5 || box.bottom > bounds.bottom + 0.5).map(([name]) => name);
-    const round = (value: number) => Math.round(value * 10) / 10;
-    return { missing, overlaps, outside, boxes: Object.fromEntries(boxes.map(([name, box]) => [name, [round(box.left), round(box.top), round(box.width), round(box.height)]])) };
-  }, { frame, regions });
-
-  browserTest("prototype review: card button states, the orchestrator notice and its jump, and the review's variants, pair, video, forty pictures, combination and decision", async () => {
-    const out = path.resolve(".artifacts/prototype-review");
-    const pngDir = process.env.PROTOTYPE_REVIEW_PNG_DIR ?? out;
-    fs.mkdirSync(out, { recursive: true });
-    fs.mkdirSync(pngDir, { recursive: true });
-    fs.mkdirSync("evidence/prototype-review", { recursive: true });
-    const video = path.join(out, "proto-video.webm");
-    execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=12:duration=2", "-c:v", "libvpx", "-b:v", "400k", video]);
-    const server = await serveEvidenceFixture(out, undefined, {
-      "/proto-video.webm": () => new Response(Bun.file(video), { headers: { "content-type": "video/webm", "accept-ranges": "bytes" } }),
-    });
-    const launch: LaunchOptions = { ...LAUNCH, args: [...(LAUNCH.args ?? []), "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"] };
-    let browser = await chromium.launch(launch);
-    const failures: string[] = [];
-    const readings: Record<string, unknown> = {};
-    const url = `${server.base}?proto=1`;
-    const REVIEW = "[data-prototype-review]";
-    /* What each waiting task's line has to name: the card's own first line, which «Go to prototype» lands on. This fixture keeps its task texts in English in both languages. */
-    const TASK_TITLES: Record<string, string> = { "t-search": "Restore search results after the index rebuild", "t-links": "Repair old links in the release notes", "t-upload": "Redesign attachment upload for large files" };
-    const DESKTOP_REGIONS = {
-      header: `${REVIEW} [role=dialog] > header`,
-      rail: `${REVIEW} aside`,
-      toolbar: `${REVIEW} [data-prototype-stage] > div:first-child`,
-      canvas: `${REVIEW} [data-prototype-canvas]`,
-      strip: `${REVIEW} [data-prototype-strip]`,
-      footer: `${REVIEW} [role=dialog] > footer`,
-    };
-    const DESKTOP_PARTS = {
-      variant: `${REVIEW} [data-prototype-variant]`,
-      caption: `${REVIEW} [data-prototype-caption]`,
-      tools: `${REVIEW} [data-prototype-stage] > div:first-child > span:last-child > *`,
-      rounds: `${REVIEW} [data-prototype-rounds]`,
-      close: `${REVIEW} [data-prototype-close]`,
-      heading: `${REVIEW} [role=dialog] > header > div:not([data-prototype-rounds])`,
-      field: `${REVIEW} [data-prototype-comment-field]`,
-      save: `${REVIEW} [data-prototype-save]`,
-      decisionComment: `${REVIEW} [data-prototype-comment]`,
-      delivery: `${REVIEW} [data-prototype-delivery]`,
-      chosen: `${REVIEW} [data-prototype-chosen]`,
-    };
-    const PHONE_REGIONS = {
-      header: "[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-header]",
-      body: "[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-body]",
-      footer: "[data-mobile2-sheet=prototype-review] > div:last-child",
-    };
-    const PHONE_PARTS = {
-      chips: `${REVIEW} [data-prototype-variant]`,
-      choose: `${REVIEW} [data-prototype-choose]`,
-      caption: `${REVIEW} [data-prototype-caption]`,
-      tools: `${REVIEW} [data-prototype-stage] > div:first-child > span:last-child > *`,
-      canvas: `${REVIEW} [data-prototype-canvas]`,
-      strip: `${REVIEW} [data-prototype-strip]`,
-    };
+  browserTest("prototype review: card states, choices, history and unavailable media remain usable with the gallery", async () => {
+    const out = path.resolve(".artifacts/prototype-review"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
     try {
-      for (const size of SIZES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
-        const label = `${size.name}-${lang}-${scheme}`;
-        if (only.length && !only.some((part) => label.includes(part))) continue;
-        if (!browser.isConnected()) browser = await chromium.launch(launch);
-        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) => translate(lang, key, vars);
-        const { context, page, pageErrors } = await openFixture(browser, url, size.viewport, scheme, lang, "reduce", size.phone);
-        await context.addInitScript(`try { if (!localStorage.getItem("llv.prototypeReview.seen")) localStorage.setItem("llv.prototypeReview.seen", '["r-upload"]'); } catch {}`);
-        await page.reload();
-        /* The phone's sheet draws the decision in its own footer, outside the review's scrolling body. */
-        const scope = size.phone ? "[data-mobile2-sheet=prototype-review]" : REVIEW;
-        const shot = (name: string) => page.screenshot({ path: path.join(pngDir, `${label}-${name}.png`) });
-        const record = (name: string, value: unknown) => { readings[`${label}-${name}`] = value; };
-        /* The review's own frame: regions that must not overlap, then the
-           parts inside them, each kind among its own. */
-        const frameCheck = async (name: string) => {
-          const frame = size.phone ? "[data-mobile2-sheet=prototype-review]" : `${REVIEW} [role=dialog]`;
-          const regions = await measure(page, frame, size.phone ? PHONE_REGIONS : DESKTOP_REGIONS);
-          const parts = await measure(page, frame, size.phone ? PHONE_PARTS : DESKTOP_PARTS);
-          const sideways = await page.evaluate((phone) => {
-            const scroller = document.querySelector<HTMLElement>(phone ? "[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-body]" : "[data-prototype-review] [role=dialog]");
-            return scroller ? scroller.scrollWidth - scroller.clientWidth : -1;
-          }, size.phone);
-          /* Chips and thumbnails are rows that scroll on purpose: what leaves the frame there is off screen, not on top of anything. */
-          const scrolled = (entry: string) => /^(chips|variant|tools)/.test(entry) && size.phone;
-          /* On the phone a frame is drawn at its own height and the sheet's body scrolls: a part below the fold is scrolled to, and only a part out to a side is outside. */
-          const beside = (entry: string) => { const box = parts.boxes[entry]; return Boolean(box && (box[0]! < -0.5 || box[0]! + box[2]! > size.viewport.width + 0.5)); };
-          const outside = [...regions.outside, ...parts.outside.filter((entry) => !scrolled(entry) && (!size.phone || beside(entry)))];
-          /* The phone's chips stand in the sheet's sticky head: a part of the body scrolled up under that head is covered by it, not on top of it. */
-          const headBottom = size.phone ? await page.evaluate(() => document.querySelector<HTMLElement>("[data-prototype-context]")?.getBoundingClientRect().bottom ?? 0) : 0;
-          const underHead = (pair: string) => {
-            const [a, b] = pair.split(" × ") as [string, string];
-            const other = /^chips/.test(a) ? b : /^chips/.test(b) ? a : null;
-            return Boolean(size.phone && other && (parts.boxes[other]?.[1] ?? Infinity) < headBottom - 0.5);
-          };
-          const partOverlaps = parts.overlaps.filter((pair) => !underHead(pair));
-          record(`${name}-geometry`, { regions: regions.boxes, overlaps: [...regions.overlaps, ...partOverlaps], underHead: parts.overlaps.filter(underHead), outside, sideways });
-          if (regions.overlaps.length || partOverlaps.length) failures.push(`${label} ${name}: overlapping ${[...regions.overlaps, ...partOverlaps].join(", ")}`);
-          if (outside.length) failures.push(`${label} ${name}: outside the review's frame: ${outside.join(", ")}`);
-          if (sideways > 0) failures.push(`${label} ${name}: the review scrolls sideways by ${sideways}px`);
-          /* The phone's sheet is the screen: its footer stands at the screen's foot, under the sheet's 6 px inset, whatever the stage holds. */
-          if (size.phone) {
-            const footGap = await page.evaluate(() => Math.round((innerHeight - document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] > :last-child")!.getBoundingClientRect().bottom) * 10) / 10);
-            record(`${name}-foot-gap`, footGap);
-            if (footGap > 6.5) failures.push(`${label} ${name}: an empty band of ${footGap}px under the sheet's footer`);
-          }
-        };
-        const stageState = () => page.evaluate(() => {
-          const review = document.querySelector<HTMLElement>("[data-prototype-review]")!;
-          const canvas = review.querySelector<HTMLElement>("[data-prototype-canvas]")!.getBoundingClientRect();
-          const inside = (element: Element) => { const box = element.getBoundingClientRect(); return box.width > 0 && box.left >= canvas.left - 0.5 && box.right <= canvas.right + 0.5 && box.top >= canvas.top - 0.5 && box.bottom <= canvas.bottom + 0.5; };
-          const media = [...review.querySelectorAll<HTMLElement>("[data-prototype-canvas] img, [data-prototype-canvas] video")];
-          return {
-            slide: review.querySelector<HTMLElement>("[data-prototype-stage]")?.dataset.prototypeStage ?? null,
-            caption: review.querySelector("[data-prototype-caption]")?.textContent ?? null,
-            captionParts: ["number", "name", "text"].map((part) => review.querySelector(`[data-prototype-caption-${part}]`)?.textContent ?? null),
-            position: review.querySelector("[data-prototype-position]")?.textContent ?? null,
-            canvas: [Math.round(canvas.width), Math.round(canvas.height)],
-            media: media.map((element) => { const box = element.getBoundingClientRect(); return [Math.round(box.width), Math.round(box.height)]; }),
-            mediaInside: media.every(inside),
-            loaded: media.every((element) => (element instanceof HTMLImageElement ? element.complete && element.naturalWidth > 0 : (element as HTMLVideoElement).readyState >= 1)),
-            pair: review.querySelector<HTMLElement>("[data-prototype-pair]")?.dataset.prototypePair ?? null,
-            thumbs: review.querySelectorAll("[data-prototype-thumb]").length,
-            chosen: [...document.querySelectorAll<HTMLElement>("[data-prototype-chosen]")].map((element) => element.dataset.prototypeChosen),
-            round: review.dataset.prototypeRoundShown ?? document.querySelector<HTMLElement>("[data-prototype-round-shown]")?.dataset.prototypeRoundShown ?? null,
-          };
-        });
-        /* The line over the picture reads number, name, a dash, caption: the name ends where the dash stands. */
-        const captionParted = (name: string, state: { caption: string | null; captionParts: (string | null)[] }) => {
-          const [number, variantName, text] = state.captionParts;
-          if (!number || !variantName || !text || state.caption !== `${number}${variantName} — ${text}`) failures.push(`${label} ${name}: the line over the picture runs the name into the caption: ${JSON.stringify(state.caption)}`);
-        };
-        /* A delivery line: the mark on the first line of its words, the retry inside the review and a full target on the phone. */
-        const deliveryRow = async (name: string) => {
-          const row = await page.evaluate((frameSelector) => {
-            const line = document.querySelector<HTMLElement>("[data-prototype-delivery]")!;
-            const frame = document.querySelector<HTMLElement>(frameSelector)!.getBoundingClientRect();
-            const said = line.querySelector<HTMLElement>("[data-prototype-delivery-said]");
-            const mark = said?.querySelector("svg")?.getBoundingClientRect() ?? null;
-            /* The words' own lines, read off the text: the span that holds them is one box however often it wraps. */
-            const text = document.createRange();
-            if (said?.lastElementChild) text.selectNodeContents(said.lastElementChild);
-            const words = [...text.getClientRects()].filter((box) => box.width > 0);
-            const retry = line.querySelector<HTMLElement>("[data-prototype-retry]")?.getBoundingClientRect() ?? null;
-            const first = words[0] ?? null;
-            const round = (value: number) => Math.round(value * 10) / 10;
-            return {
-              state: line.dataset.prototypeDelivery, lines: new Set(words.map((box) => Math.round(box.top))).size,
-              mark: mark ? [round(mark.left), round(mark.top), round(mark.width), round(mark.height)] : null,
-              firstLine: first ? [round(first.left), round(first.top), round(first.width), round(first.height)] : null,
-              markOnFirstLine: Boolean(mark && first && (mark.top + mark.bottom) / 2 > first.top && (mark.top + mark.bottom) / 2 < first.bottom && mark.right <= first.left + 0.5),
-              retry: retry ? [round(retry.left), round(retry.top), round(retry.width), round(retry.height)] : null,
-              retryInside: !retry || (retry.left >= frame.left - 0.5 && retry.right <= frame.right + 0.5 && retry.top >= frame.top - 0.5 && retry.bottom <= frame.bottom + 0.5),
-            };
-          }, size.phone ? "[data-mobile2-sheet=prototype-review]" : `${REVIEW} [role=dialog]`);
-          record(`${name}-delivery-row`, row);
-          if (!row.markOnFirstLine || !row.retry || !row.retryInside || (size.phone && row.retry[3]! < 44)) failures.push(`${label} ${name}: the delivery line reads ${JSON.stringify(row)}`);
-        };
-        const showVariant = (number: number) => page.locator(size.phone ? `${REVIEW} button[data-prototype-variant="${number}"]` : `${REVIEW} [data-prototype-show="${number}"]`).click();
-        const choose = async (number: number) => {
-          if (size.phone) await showVariant(number);
-          await page.locator(`${REVIEW} [data-prototype-choose="${number}"]`).click();
-        };
-        const settle = () => page.waitForTimeout(250);
-        const posts = () => page.evaluate(() => (window as unknown as { protoPosts: { taskId: string; retry?: boolean }[] }).protoPosts);
-        /* Each task card on the phone's board: whether it waits, the words
-           that say why, its review button, and its lines measured against each
-           other and the card. The button stands under the card's face, inside
-           the card's frame, so the face stays the card's one tap. */
-        const phoneCards = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-phone-card^="task:"]')].map((cardElement) => {
-          const shell = cardElement.closest<HTMLElement>("[data-phone-card-frame]") ?? cardElement;
-          const frame = shell.getBoundingClientRect();
-          const drawn = (element: Element) => element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
-          const button = shell.querySelector<HTMLElement>("[data-phone-card-prototype-button]");
-          const pill = button?.firstElementChild as HTMLElement | null | undefined;
-          const lines = [...cardElement.children, ...(button ? [button] : [])].filter(drawn);
-          const overlaps: string[] = [];
-          for (let i = 0; i < lines.length; i += 1) for (let j = i + 1; j < lines.length; j += 1) {
-            const a = lines[i]!.getBoundingClientRect(), b = lines[j]!.getBoundingClientRect();
-            if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) overlaps.push(`#${i + 1} × #${j + 1}`);
-          }
-          const own = button?.getBoundingClientRect();
-          return {
-            task: cardElement.dataset.phoneCard!.slice("task:".length), needs: cardElement.dataset.needs === "1" || cardElement.dataset.edge === "warning",
-            /* A line that only says a prototype is ready is gone; the button is the card's one new element. */
-            line: Boolean(cardElement.querySelector("[data-phone-card-prototype]")),
-            button: button && own && drawn(button) ? {
-              state: button.dataset.prototypeState ?? null, text: button.textContent?.trim() ?? "", size: [Math.round(own.width), Math.round(own.height)],
-              insideFace: cardElement.contains(button), clipped: Boolean(pill && pill.scrollWidth > pill.clientWidth + 0.5),
-            } : null,
-            reasons: [...cardElement.querySelectorAll<HTMLElement>("[data-phone-card-badge], [data-phone-card-ask]"), ...(button ? [button] : [])].filter(drawn).map((element) => element.textContent?.trim() ?? "").filter(Boolean),
-            overlaps, outside: lines.flatMap((element, at) => { const b = element.getBoundingClientRect(); return b.left < frame.left - 0.5 || b.right > frame.right + 0.5 || b.top < frame.top - 0.5 || b.bottom > frame.bottom + 0.5 ? [`#${at + 1}`] : []; }),
-          };
-        }));
-        /* In a review, the accent belongs to the choice: the variants drawn on
-           the accent's soft fill are exactly the chosen ones, whichever one is
-           on the stage. On a freshly opened decided round, the stage shows the
-           first chosen variant. */
-        const accentCheck = async (name: string, opensOnChoice: boolean) => {
-          const reading = await page.evaluate(() => {
-            const review = document.querySelector<HTMLElement>("[data-prototype-review]")!;
-            const probe = document.createElement("span");
-            probe.className = "bg-accent-soft";
-            review.appendChild(probe);
-            const soft = getComputedStyle(probe).backgroundColor;
-            probe.remove();
-            return {
-              soft,
-              variants: [...review.querySelectorAll<HTMLElement>("[data-prototype-variant]")].map((element) => {
-                const style = getComputedStyle(element);
-                const current = element.getAttribute("aria-pressed") === "true" || Boolean(element.querySelector('[aria-current="true"]'));
-                return { number: Number(element.dataset.prototypeVariant), chosen: element.dataset.chosen === "1", current, background: style.backgroundColor, border: style.borderTopColor, accented: style.backgroundColor === soft };
-              }),
-            };
-          });
-          record(`${name}-accent`, reading);
-          const accented = reading.variants.filter((entry) => entry.accented).map((entry) => entry.number);
-          const chosen = reading.variants.filter((entry) => entry.chosen).map((entry) => entry.number);
-          if (!chosen.length || JSON.stringify(accented) !== JSON.stringify(chosen)) failures.push(`${label} ${name}: the accent marks ${JSON.stringify(accented)} while ${JSON.stringify(chosen)} were chosen`);
-          const current = reading.variants.find((entry) => entry.current);
-          if (opensOnChoice && current?.number !== chosen[0]) failures.push(`${label} ${name}: the decided round opened on variant ${current?.number}, not on the first chosen ${chosen[0]}`);
-        };
-        /* The sheet's line naming the round and its task is whole or wholly
-           scrolled away: never cut by the sheet's header. */
-        const contextCheck = async (name: string) => {
-          if (!size.phone) return;
-          const reading = await page.evaluate(() => {
-            const header = document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-header]")!.getBoundingClientRect();
-            const line = document.querySelector<HTMLElement>("[data-prototype-context]")!.getBoundingClientRect();
-            const body = document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-body]")!;
-            /* The variants' chips stand whole under the round's line, and none is cut through its words on the left. */
-            const words = document.querySelector<HTMLElement>("[data-prototype-context-line]")!.getBoundingClientRect();
-            const row = document.querySelector<HTMLElement>("[data-prototype-chips]")!.getBoundingClientRect();
-            const cut = [...document.querySelectorAll<HTMLElement>("[data-prototype-chips] > button")].map((chip) => chip.getBoundingClientRect()).filter((chip) => chip.left < row.left - 0.5 && chip.right - row.left > 12).length;
-            return { headerBottom: Math.round(header.bottom * 10) / 10, line: [Math.round(line.top * 10) / 10, Math.round(line.bottom * 10) / 10], scrolled: body.scrollTop, whole: line.top >= header.bottom - 0.5, hidden: line.bottom <= header.bottom + 0.5, chips: { top: Math.round(row.top * 10) / 10, under: row.top >= words.bottom - 0.5, cut } };
-          });
-          record(`${name}-context`, reading);
-          if (!reading.whole && !reading.hidden) failures.push(`${label} ${name}: the sheet's round line is cut by its header: ${JSON.stringify(reading)}`);
-          if (!reading.chips.under || reading.chips.cut) failures.push(`${label} ${name}: the variants' chips are cut: ${JSON.stringify(reading.chips)}`);
-        };
-        const closeReview = async () => {
-          await page.keyboard.press("Escape");
-          await page.waitForSelector(REVIEW, { state: "detached", timeout: 5_000 });
-        };
-        try {
-          /* 1. The board: one button per state. */
-          let openTask: (taskId: string) => Promise<void>;
-          if (size.phone) {
-            await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
-            const tab = page.locator('[data-phone-kanban-tab="assigned"]');
-            if (await tab.count()) await tab.first().click();
-            await page.waitForTimeout(400);
-            openTask = async (taskId) => {
-              const phoneCard = page.locator(`[data-phone-card="task:${taskId}"]`).first();
-              await phoneCard.scrollIntoViewIfNeeded();
-              await phoneCard.click();
-              const row = page.locator(`[data-phone-task-prototype="${taskId}"]`);
-              await row.waitFor({ timeout: 10_000 });
-              await row.scrollIntoViewIfNeeded();
-            };
-            /* The phone's card carries the review button under its face: the
-               mark and the word while a round waits, a full touch target. */
-            const cards = await phoneCards();
-            record("cards", cards);
-            const byTask = Object.fromEntries(cards.map((entry) => [entry.task, entry]));
-            for (const task of ["t-search", "t-upload", "t-links"]) if (!byTask[task]) failures.push(`${label}: the phone board draws no card for ${task}`);
-            for (const entry of cards) {
-              if (entry.needs && !entry.reasons.length) failures.push(`${label}: the phone card of ${entry.task} waits on the operator without a word why`);
-              if (entry.line) failures.push(`${label}: the phone card of ${entry.task} still draws a line that only says a prototype is ready`);
-              if (entry.overlaps.length || entry.outside.length || entry.button?.clipped) failures.push(`${label}: the phone card of ${entry.task} overlaps ${entry.overlaps.join(", ")}, leaves the card ${entry.outside.join(", ")} or clips its review button: ${JSON.stringify(entry.button)}`);
-              if (entry.button && (entry.button.insideFace || entry.button.size[0]! < 44 || entry.button.size[1]! < 44)) failures.push(`${label}: the review button of ${entry.task} is not a full target of its own: ${JSON.stringify(entry.button)}`);
-            }
-            const phoneStates = { "t-search": "ready", "t-upload": "opened", "t-links": "ready" } as const;
-            for (const [task, state] of Object.entries(phoneStates)) if (byTask[task]?.button?.state !== state || byTask[task]?.button?.text !== tr("proto.button.word")) failures.push(`${label}: the phone card of ${task} carries the review button ${JSON.stringify(byTask[task]?.button)}`);
-            if (cards.some((entry) => entry.button && !["t-search", "t-upload", "t-links", "t-export", "t-disk"].includes(entry.task))) failures.push(`${label}: a phone card with no review carries a review button`);
-            await page.locator('[data-phone-card="task:t-search"]').first().scrollIntoViewIfNeeded();
-            await shot("cards");
-            for (const [task, state] of Object.entries(phoneStates)) {
-              const shell = page.locator(`[data-phone-card-frame="task:${task}"]`);
-              await shell.scrollIntoViewIfNeeded();
-              await shell.screenshot({ path: path.join(pngDir, `${label}-card-${task === "t-links" ? "newer-round" : state}.png`) });
-            }
-            /* One tap on the card's button opens the review over the board. */
-            const cardTap = page.locator('[data-phone-card-prototype-button="t-upload"]');
-            await cardTap.scrollIntoViewIfNeeded();
-            await cardTap.click();
-            await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
-            await settle();
-            const tapped = await page.evaluate(() => ({ review: document.querySelector<HTMLElement>("[data-prototype-review]")?.dataset.prototypeReview ?? null, board: Boolean(document.querySelector("[data-phone-kanban]")), taskScreen: Boolean(document.querySelector("[data-phone-task-prototype]")) }));
-            record("card-tap", tapped);
-            await shot("card-tap");
-            if (tapped.review !== "t-upload" || tapped.taskScreen) failures.push(`${label}: one tap on the card's review button read ${JSON.stringify(tapped)}`);
-            await closeReview();
-            await settle();
-          } else {
-            await page.waitForSelector("[data-prototype-button]", { state: "attached", timeout: 30_000 });
-            const tab = page.locator('.tabs-nav [data-tab="assigned"]');
-            if (await tab.count() && await tab.first().isVisible()) await tab.first().click();
-            await page.waitForTimeout(400);
-            openTask = async (taskId) => {
-              const button = page.locator(`[data-prototype-button="${taskId}"]`);
-              await button.scrollIntoViewIfNeeded();
-              await button.click();
-            };
-            const cards = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-prototype-button]")].map((button) => {
-              const cardElement = button.closest<HTMLElement>(".card")!;
-              const foot = button.closest<HTMLElement>(".foot")!;
-              const box = (element: Element) => element.getBoundingClientRect();
-              const own = box(button);
-              const others = [...foot.children].filter((child) => child !== button && box(child).width > 0 && !child.classList.contains("spacer"));
-              const style = getComputedStyle(button);
-              return {
-                task: button.dataset.prototypeButton, state: button.dataset.prototypeState, text: button.textContent?.trim() ?? "", aria: button.getAttribute("aria-label"),
-                word: Boolean(button.querySelector<HTMLElement>(".proto-word")?.getBoundingClientRect().width),
-                /* «Ask» and «+ Agent» share one line: neither is left alone below the other. */
-                actionsTogether: (() => {
-                  const ask = foot.querySelector<HTMLElement>("[data-ask-orchestrator]"), agent = foot.querySelector<HTMLElement>("[data-add-agent]");
-                  return !ask || !agent || Math.abs((box(ask).top + box(ask).bottom) / 2 - (box(agent).top + box(agent).bottom) / 2) < 2;
-                })(),
-                /* Any drawn line in the foot that says only that a prototype is ready: there must be none. */
-                reason: [...foot.querySelectorAll<HTMLElement>(".foot-meta")].filter((line) => box(line).width > 0 && /prototype|прототип/i.test(line.textContent ?? "")).map((line) => line.textContent?.trim() ?? "")[0] ?? null,
-                background: style.backgroundColor, color: style.color, size: [Math.round(own.width), Math.round(own.height)],
-                insideCard: own.left >= box(cardElement).left - 0.5 && own.right <= box(cardElement).right + 0.5,
-                overlaps: others.filter((other) => { const b = box(other); return own.left < b.right - 0.5 && b.left < own.right - 0.5 && own.top < b.bottom - 0.5 && b.top < own.bottom - 0.5; }).length,
-                footLines: new Set([...others, button].map((child) => { const b = box(child); return Math.round((b.top + b.bottom) / 2); })).size,
-              };
-            }));
-            record("cards", cards);
-            const states = Object.fromEntries(cards.map((entry) => [entry.task, entry.state]));
-            const expected = { "t-search": "ready", "t-upload": "opened", "t-export": "decided", "t-links": "ready", "t-disk": "unsent" };
-            if (JSON.stringify(states) !== JSON.stringify(expected) && Object.entries(expected).some(([task, state]) => states[task] !== state)) failures.push(`${label}: the card buttons read ${JSON.stringify(states)}`);
-            if (cards.length !== 5) failures.push(`${label}: ${cards.length} review buttons on the board, expected the five tasks with a review`);
-            /* The foot lines each card had before its word moved into the button: none may grow. */
-            const footBefore: Record<string, number> = size.name === "desktop-1440" ? { "t-search": 2, "t-upload": 2, "t-links": 2, "t-export": 1, "t-disk": 1 } : { "t-search": 1, "t-upload": 1, "t-links": 1, "t-export": 1, "t-disk": 1 };
-            for (const entry of cards) {
-              if (!entry.insideCard || entry.overlaps) failures.push(`${label}: the button of ${entry.task} leaves its card or overlaps the foot: ${JSON.stringify(entry)}`);
-              if (entry.footLines > (footBefore[entry.task ?? ""] ?? 2)) failures.push(`${label}: the foot of ${entry.task} wraps onto ${entry.footLines} lines, ${footBefore[entry.task ?? ""]} before`);
-              if (!entry.actionsTogether) failures.push(`${label}: «Ask» and «+ Agent» of ${entry.task} stand on different lines`);
-              /* Every state says the word: a number alone reads as a count. */
-              if (!entry.word || entry.text !== tr("proto.button.word")) failures.push(`${label}: the ${entry.state} button of ${entry.task} says ${JSON.stringify(entry.text)}`);
-            }
-            /* A waiting button names itself to assistive tech at every width; its word is drawn where the foot has room. */
-            const byTask = Object.fromEntries(cards.map((entry) => [entry.task, entry]));
-            if (!byTask["t-search"]?.aria?.includes(tr("proto.title").split(" ")[0]!.slice(0, 5)) && !byTask["t-search"]?.aria?.toLowerCase().includes(tr("proto.button.word").toLowerCase())) failures.push(`${label}: the waiting button is unnamed: ${byTask["t-search"]?.aria}`);
-            /* A waiting card says so on its button, in its word and in the accent, at every desktop width; no reason line repeats it. */
-            for (const task of ["t-search", "t-upload", "t-links"]) {
-              const entry = byTask[task];
-              if (!entry || !entry.word || entry.text !== tr("proto.button.word") || entry.reason !== null) failures.push(`${label}: the waiting card of ${task} draws the word ${entry?.word} (${JSON.stringify(entry?.text)}) and the line ${JSON.stringify(entry?.reason)}`);
-            }
-            if (cards.some((entry) => entry.reason !== null)) failures.push(`${label}: a card's foot says a prototype is ready beside its button`);
-            if (!byTask["t-export"]?.aria?.includes("2 · ") || !byTask["t-disk"]?.aria?.includes("2 · ")) failures.push(`${label}: the decided buttons do not name the chosen variants: ${JSON.stringify(cards.map((entry) => entry.aria))}`);
-            if (byTask["t-search"]?.background === byTask["t-upload"]?.background) failures.push(`${label}: a waiting unopened review is not highlighted against an opened one`);
-            await page.locator(card("t-search")).scrollIntoViewIfNeeded();
-            await shot("cards");
-            /* The button cut out whole in each of its states. */
-            const stateShots = { "t-search": "ready", "t-upload": "opened", "t-export": "decided", "t-disk": "unsent", "t-links": "newer-round" } as const;
-            const cutouts: Record<string, unknown> = {};
-            for (const [task, name] of Object.entries(stateShots)) {
-              const status = await page.locator(card(task)).evaluate((element) => element.closest<HTMLElement>(".column")?.dataset.status ?? null);
-              const columnTab = page.locator(`.tabs-nav [data-tab="${status}"]`);
-              if (status && await columnTab.count() && await columnTab.first().isVisible()) await columnTab.first().click();
-              await page.locator(card(task)).scrollIntoViewIfNeeded();
-              await settle();
-              const whole = await page.evaluate((selector) => {
-                const cardElement = document.querySelector<HTMLElement>(selector)!;
-                const button = cardElement.querySelector<HTMLElement>("[data-prototype-button]")!.getBoundingClientRect();
-                const own = cardElement.getBoundingClientRect();
-                return { button: [Math.round(button.left), Math.round(button.top), Math.round(button.width), Math.round(button.height)], inCard: button.left >= own.left - 0.5 && button.right <= own.right + 0.5 && button.top >= own.top - 0.5 && button.bottom <= own.bottom + 0.5, onScreen: button.left >= 0 && button.top >= 0 && button.right <= window.innerWidth && button.bottom <= window.innerHeight };
-              }, card(task));
-              cutouts[name] = whole;
-              if (!whole.inCard || !whole.onScreen) failures.push(`${label}: the ${name} button of ${task} is not whole in its cut-out: ${JSON.stringify(whole)}`);
-              await page.locator(card(task)).screenshot({ path: path.join(pngDir, `${label}-card-${name}.png`) });
-            }
-            record("card-cutouts", cutouts);
-            if (await tab.count() && await tab.first().isVisible()) await tab.first().click();
-          }
-
-          /* 1b. A waiting review is counted where everything that needs the
-             operator is counted, and its row goes to the task and opens the
-             review. The three waiting tasks stand beside the board's other
-             waits; the choice saved further down takes exactly one of them out. */
-          const needsYouCount = () => page.evaluate((phone) => {
-            if (phone) return Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0");
-            return Number(document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? "NaN");
-          }, size.phone);
-          const tabCount = async () => Number(/^\((\d+)\)/.exec(await page.title())?.[1] ?? "0");
-          const waitingBefore = await needsYouCount();
-          {
-            const LIST = size.phone ? '[data-mobile2-sheet="attention"]' : "[data-needs-you-panel]";
-            await page.locator(size.phone ? "[data-mobile2-attention-count]" : "[data-attention-count]").click();
-            await page.waitForSelector(`${LIST} [data-attention-prototype]`, { timeout: 10_000 });
-            await settle();
-            const rows = await page.evaluate((list) => [...document.querySelectorAll<HTMLElement>(`${list} [data-needs-you-row]`)].map((row) => ({
-              id: row.dataset.needsYouRow, prototype: row.dataset.attentionPrototype ?? row.querySelector<HTMLElement>("[data-attention-prototype]")?.dataset.attentionPrototype ?? null,
-              text: row.textContent, dismiss: Boolean(row.querySelector("[data-needs-you-dismiss]")), height: Math.round(row.getBoundingClientRect().height),
-            })), LIST);
-            const geometry = await measure(page, LIST, { rows: `${LIST} [data-needs-you-row]` });
-            const prototypes = rows.filter((row) => row.prototype);
-            record("needs-you", { count: waitingBefore, tab: await tabCount(), rows: rows.length, prototypes: prototypes.map((row) => ({ task: row.prototype, height: row.height, dismiss: row.dismiss })), overlaps: geometry.overlaps, outside: geometry.outside.filter((entry) => !size.phone || !/^rows/.test(entry)) });
-            await shot("needs-you");
-            if (JSON.stringify(prototypes.map((row) => row.prototype).sort()) !== JSON.stringify(["t-links", "t-search", "t-upload"])) failures.push(`${label}: the needs-you list names the waiting reviews of ${JSON.stringify(prototypes.map((row) => row.prototype))}`);
-            if (rows.length !== waitingBefore || (!size.phone && await tabCount() !== waitingBefore)) failures.push(`${label}: the needs-you control counts ${waitingBefore}, the tab ${await tabCount()} and the list holds ${rows.length} rows`);
-            if (geometry.overlaps.length || prototypes.some((row) => row.dismiss || !row.text?.includes(tr("proto.notice.ready")) || (size.phone && row.height < 44))) failures.push(`${label}: a waiting review's needs-you row is broken: ${JSON.stringify({ prototypes, overlaps: geometry.overlaps })}`);
-            record("needs-you-text", prototypes.map((row) => ({ task: row.prototype, text: rows.find((entry) => entry.prototype === row.prototype)?.text ?? null })));
-            /* On the phone a prototype's row is built as its neighbours: titles start and chevrons stand in one column. */
-            if (size.phone) {
-              const columns = await page.evaluate((list) => [...document.querySelectorAll<HTMLElement>(`${list} [data-attention-row]`)].map((row) => ({
-                row: row.dataset.attentionRow,
-                title: Math.round(row.querySelector<HTMLElement>(":scope > span > span.text-body")?.getBoundingClientRect().left ?? -1),
-                chevron: Math.round(row.querySelector<SVGElement>(":scope > svg:last-child")?.getBoundingClientRect().left ?? -1),
-              })), LIST);
-              record("needs-you-columns", columns);
-              const spread = (values: number[]) => Math.max(...values) - Math.min(...values);
-              if (spread(columns.map((entry) => entry.title)) > 2 || spread(columns.map((entry) => entry.chevron)) > 2) failures.push(`${label}: the needs-you rows do not line up: ${JSON.stringify(columns)}`);
-            }
-            for (const row of rows.filter((entry) => entry.prototype)) if (!row.text?.includes(TASK_TITLES[row.prototype!]!)) failures.push(`${label}: the needs-you row of ${row.prototype} does not name its task: «${row.text}»`);
-            await page.locator(`${LIST} [data-attention-prototype="t-links"]`).click();
-            await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
-            await page.waitForTimeout(500);
-            const landed = await page.evaluate((phone) => ({
-              review: document.querySelector<HTMLElement>("[data-prototype-review]")?.dataset.prototypeReview ?? null,
-              round: document.querySelector<HTMLElement>("[data-prototype-round-shown]")?.dataset.prototypeRoundShown ?? null,
-              task: phone ? Boolean(document.querySelector('[data-phone-task-prototype="t-links"]')) : Boolean(document.querySelector('[data-kanban-board] .card[data-id="task:t-links"]')),
-            }), size.phone);
-            record("needs-you-jump", landed);
-            if (landed.review !== "t-links" || landed.round !== "r-links-2" || !landed.task) failures.push(`${label}: the needs-you row did not go to the task and open its waiting round: ${JSON.stringify(landed)}`);
-            await closeReview();
-            if (size.phone) { await page.goBack(); await page.waitForTimeout(400); }
-            else if (await page.locator("[data-needs-you-close]").count()) await page.locator("[data-needs-you-close]").click();
-            await settle();
-          }
-
-          /* 2. The orchestrator's notice and its jump. */
-          if (!size.phone) {
-            /* Where the seat is folded to its strip, the strip carries the notice as one chip; unfolded, the composer carries the lines. */
-            const chip = page.locator("[data-kanban-seat] [data-prototype-notice-chip]");
-            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) {
-              await chip.waitFor({ timeout: 15_000 });
-              const strip = await measure(page, "[data-kanban-seat] [data-seat-head]", { parts: "[data-kanban-seat] [data-seat-head] > *" });
-              const chipLabel = await chip.getAttribute("aria-label");
-              record("notice-strip", { ...strip, text: await chip.textContent(), label: chipLabel, count: await chip.getAttribute("data-prototype-notice-chip") });
-              if (!Object.values(TASK_TITLES).some((title) => chipLabel?.includes(title))) failures.push(`${label}: the folded seat's notice chip names no task: «${chipLabel}»`);
-              if (strip.overlaps.length || strip.outside.length || await chip.getAttribute("data-prototype-notice-chip") !== "3") failures.push(`${label}: the folded seat's notice chip overlaps ${strip.overlaps.join(", ")}, leaves the strip ${strip.outside.join(", ")} or miscounts`);
-              await shot("notice-folded");
-              await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
-            }
-            /* Unfolded, the seat's «Рішення» column lists every waiting round (variant 3 of
-               docs/design/operator-decision-forms.md); the composer carries no notice lines. */
-            if (!await page.locator("[data-orchestrator-panel] [data-decision-column]").count()) await page.locator("[data-decision-strip]").click();
-            await page.locator('[data-decision-tab="decisions"]').click();
-            await page.waitForSelector("[data-decision-list='3']", { timeout: 15_000 });
-            if (await chip.count()) failures.push(`${label}: the unfolded seat repeats the notice as a chip`);
-            if (await page.locator("[data-orchestrator-conversation] [data-prototype-notice]").count()) failures.push(`${label}: the composer still carries notice lines beside the «Рішення» column`);
-            const notice = await measure(page, "[data-decision-list]", { row: "[data-decision-list] [data-decision-row]", card: "[data-decision-list] [data-decision-card]" });
-            const listed = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-decision-list] [data-decision-row], [data-decision-list] [data-decision-card]")].map((row) => row.dataset.decisionRow ?? row.dataset.decisionReview));
-            record("notice", { ...notice, listed });
-            if (listed.length !== 3 || !listed.includes("r-search")) failures.push(`${label}: the «Рішення» column lists ${JSON.stringify(listed)}, expected the three waiting rounds`);
-            /* The list scrolls inside the column, so a folded row below the fold is in place; rows never overlap. */
-            if (notice.overlaps.length) failures.push(`${label}: the column's rows overlap ${notice.overlaps.join(", ")}`);
-            await shot("notice");
-            if (await page.locator('[data-decision-row="r-search"]').count()) await page.locator('[data-decision-row="r-search"]').click();
-            await page.locator('[data-decision-review="r-search"] [data-decision-thumbs] button').first().click();
-            await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
-            await page.waitForTimeout(600);
-            const jump = await page.evaluate(() => {
-              const cardElement = document.querySelector<HTMLElement>('[data-kanban-board] .card[data-id="task:t-search"]');
-              const box = cardElement?.getBoundingClientRect();
-              return { review: document.querySelector<HTMLElement>("[data-prototype-review]")?.dataset.prototypeReview ?? null, cardOnScreen: Boolean(box && box.bottom > 0 && box.top < window.innerHeight && box.right > 0 && box.left < window.innerWidth) };
-            });
-            record("jump", jump);
-            if (jump.review !== "t-search" || !jump.cardOnScreen) failures.push(`${label}: «Go to prototype» did not bring the task up and open its review: ${JSON.stringify(jump)}`);
-          } else {
-            /* The phone board's seat card carries the notice with its count; a tap goes to the task and opens the review over it. */
-            const chip = page.locator("[data-mobile2-seat-card] [data-prototype-notice-chip]");
-            await chip.waitFor({ timeout: 15_000 });
-            const seatCard = await measure(page, "[data-mobile2-seat-card]", { parts: "[data-mobile2-seat-card] > *" });
-            const chipBox = (await chip.boundingBox())!;
-            /* The chip says the word with the count, and the seat's title beside it is read whole. */
-            const seatWords = await page.evaluate(() => {
-              const word = document.querySelector<HTMLElement>("[data-mobile2-seat-card] [data-prototype-notice-chip-word]");
-              const titles = [...document.querySelectorAll<HTMLElement>("[data-mobile2-seat-card] button span.truncate")].filter((element) => element.getBoundingClientRect().width > 0);
-              return { chip: document.querySelector("[data-mobile2-seat-card] [data-prototype-notice-chip]")?.textContent ?? null, word: word?.textContent ?? null, wordClipped: Boolean(word && word.scrollWidth > word.clientWidth + 0.5), titleClipped: titles.some((element) => element.scrollWidth > element.clientWidth + 0.5) };
-            });
-            const chipLabel = await chip.getAttribute("aria-label");
-            record("notice", { ...seatCard, ...seatWords, label: chipLabel, count: await chip.getAttribute("data-prototype-notice-chip"), chipSize: [Math.round(chipBox.width), Math.round(chipBox.height)] });
-            if (!Object.values(TASK_TITLES).some((title) => chipLabel?.includes(title))) failures.push(`${label}: the seat card's notice chip names no task: «${chipLabel}»`);
-            if (seatCard.overlaps.length || seatCard.outside.length || chipBox.height < 44 || chipBox.width < 44 || await chip.getAttribute("data-prototype-notice-chip") !== "3") failures.push(`${label}: the seat card's notice chip reads ${JSON.stringify({ seatCard, chipBox })}`);
-            if (seatWords.word !== tr("proto.button.word") || seatWords.chip !== `${tr("proto.button.word")}3` || seatWords.wordClipped || seatWords.titleClipped) failures.push(`${label}: the seat card's chip and title read ${JSON.stringify(seatWords)}`);
-            await shot("notice");
-            await chip.click();
-            await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
-            await page.waitForTimeout(500);
-            const jump = await page.evaluate(() => ({ review: document.querySelector<HTMLElement>("[data-prototype-review]")?.dataset.prototypeReview ?? null, taskScreen: Boolean(document.querySelector('[data-phone-task-prototype="t-search"]')) }));
-            record("jump", jump);
-            if (jump.review !== "t-search" || !jump.taskScreen) failures.push(`${label}: the seat card's notice did not bring the task up and open its review: ${JSON.stringify(jump)}`);
-            await shot("jump");
-            await page.keyboard.press("Escape");
-            await page.waitForSelector(REVIEW, { state: "detached", timeout: 5_000 });
-            const row = await page.locator('[data-phone-task-prototype="t-search"]').evaluate((element) => {
-              const box = element.getBoundingClientRect();
-              return { text: element.textContent, state: element.getAttribute("data-prototype-state"), height: Math.round(box.height), right: box.right, width: window.innerWidth, background: getComputedStyle(element).backgroundColor };
-            });
-            record("task-row", row);
-            /* Opened a moment ago through the notice and left undecided: the row keeps its mark and drops the «ready» highlight. */
-            if (row.state !== "opened" || row.height < 44 || row.right > row.width) failures.push(`${label}: the task screen's review row reads ${JSON.stringify(row)}`);
-            await shot("task-row");
-            await page.locator('[data-phone-task-prototype="t-search"]').click();
-            await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
-            await page.waitForTimeout(500);
-          }
-
-          /* 3. Four variants. */
-          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
-          await shot("four-variants");
-          const four = await stageState();
-          record("four-variants", four);
-          await frameCheck("four-variants");
-          captionParted("four-variants", four);
-          if (await page.locator(`${REVIEW} [data-prototype-variant]`).count() !== 4) failures.push(`${label}: the review does not list four variants`);
-          if (!four.caption?.includes(lang === "en" ? "Compact list" : "Компактний список") || !four.caption.startsWith("1") || four.position?.trim() !== "1 / 3" || !four.mediaInside || !four.loaded) failures.push(`${label}: the first picture reads ${JSON.stringify(four)}`);
-
-          /* 4. Arrows walk the pictures into the next variant: a pair. */
-          if (!size.phone) for (let step = 0; step < 3; step += 1) await page.keyboard.press("ArrowRight");
-          else await showVariant(2);
-          await settle();
-          if (!size.phone) {
-            const side = await stageState();
-            record("pair-side", side);
-            await shot("pair-side");
-            await frameCheck("pair-side");
-            const sides = await measure(page, "[data-prototype-canvas]", { side: "[data-prototype-pair-side]" });
-            if (side.pair !== "side" || side.media.length !== 2 || sides.overlaps.length || sides.outside.length || !side.mediaInside || !side.caption?.startsWith("2")) failures.push(`${label}: the pair side by side reads ${JSON.stringify({ side, sides })}`);
-            await page.locator('[data-prototype-pair-mode="slider"]').click();
-            await settle();
-          }
-          await page.locator("[data-prototype-split]").fill("35");
-          await settle();
-          const slider = await stageState();
-          const clip = await page.evaluate(() => getComputedStyle(document.querySelectorAll<HTMLElement>("[data-prototype-pair] img")[1]!).clipPath);
-          /* The two names against what each picture really paints inside its box. */
-          const sliderLabels = await page.evaluate((phone) => {
-            const round = (value: number) => Math.round(value * 10) / 10;
-            const canvas = document.querySelector<HTMLElement>("[data-prototype-canvas]")!.getBoundingClientRect();
-            const drawn = [...document.querySelectorAll<HTMLImageElement>("[data-prototype-pair] img")].map((image) => {
-              const box = image.getBoundingClientRect();
-              const scale = Math.min(box.width / image.naturalWidth, box.height / image.naturalHeight);
-              const width = image.naturalWidth * scale, height = image.naturalHeight * scale;
-              return { left: box.left + (box.width - width) / 2, top: box.top + (box.height - height) / 2, right: box.left + (box.width + width) / 2, bottom: box.top + (box.height + height) / 2 };
-            });
-            const labels = [...document.querySelectorAll<HTMLElement>("[data-prototype-pair-label]")].map((element) => {
-              const box = element.getBoundingClientRect();
-              return {
-                side: element.dataset.prototypePairLabel, box: [round(box.left), round(box.top), round(box.width), round(box.height)],
-                inside: box.width > 0 && box.left >= canvas.left - 0.5 && box.right <= canvas.right + 0.5 && box.top >= canvas.top - 0.5 && box.bottom <= canvas.bottom + 0.5,
-                overPicture: drawn.some((picture) => box.left < picture.right - 0.5 && picture.left < box.right - 0.5 && box.top < picture.bottom - 0.5 && picture.top < box.bottom - 0.5),
-              };
-            });
-            /* The track and the two names end where the changed picture's drawn
-               edges are; on the phone the picture runs edge to edge and they keep the sheet's 16 px inset. */
-            const track = document.querySelector<HTMLElement>("[data-prototype-split]")!.getBoundingClientRect();
-            const changed = drawn[0]!;
-            const inset = phone ? 16 : 0;
-            const names = labels.map((entry) => [entry.box[0]!, entry.box[0]! + entry.box[2]!]);
-            const fitted = Math.abs(track.left - changed.left - inset) <= 2 && Math.abs(changed.right - track.right - inset) <= 2 && Math.abs(names[0]![0]! - changed.left - inset) <= 2 && Math.abs(changed.right - names[1]![1]! - inset) <= 2;
-            return { drawn: drawn.map((picture) => [round(picture.left), round(picture.top), round(picture.right - picture.left), round(picture.bottom - picture.top)]), labels, track: [round(track.left), round(track.right)], fitted };
-          }, size.phone);
-          record("pair-slider", { ...slider, clip, labels: sliderLabels });
-          captionParted("pair-slider", slider);
-          if (sliderLabels.labels.length !== 2 || sliderLabels.labels.some((entry) => !entry.inside || entry.overPicture) || sliderLabels.labels[0]!.box[0]! + sliderLabels.labels[0]!.box[2]! > sliderLabels.labels[1]!.box[0]!) failures.push(`${label}: the slider's labels lie over a picture, leave the stage or meet: ${JSON.stringify(sliderLabels)}`);
-          await shot("pair-slider");
-          await frameCheck("pair-slider");
-          if (slider.pair !== "slider" || slider.media.length !== 2 || !slider.mediaInside || !clip.includes("65%")) failures.push(`${label}: the pair slider reads ${JSON.stringify({ slider, clip })}`);
-          if (!sliderLabels.fitted) failures.push(`${label}: the slider's track and names do not end at the picture's edges: ${JSON.stringify(sliderLabels)}`);
-
-          /* 5. Forty pictures in one variant. */
-          await showVariant(3);
-          await settle();
-          await page.locator(`${REVIEW} [data-prototype-thumb]`).last().click();
-          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
-          await settle();
-          const forty = await stageState();
-          const strip = await page.evaluate(() => {
-            const element = document.querySelector<HTMLElement>("[data-prototype-strip]")!;
-            const current = element.querySelector<HTMLElement>("[aria-current=true]")!.getBoundingClientRect();
-            const box = element.getBoundingClientRect();
-            return { scrolls: element.scrollWidth > element.clientWidth, tall: element.scrollHeight - element.clientHeight, currentInView: current.left >= box.left - 0.5 && current.right <= box.right + 0.5, height: Math.round(box.height) };
-          });
-          record("forty", { ...forty, strip });
-          await shot("forty-pictures");
-          await frameCheck("forty-pictures");
-          captionParted("forty-pictures", forty);
-          if (forty.thumbs !== 40 || forty.position?.trim() !== "40 / 40" || !strip.scrolls || strip.tall > 0 || !strip.currentInView || !forty.mediaInside) failures.push(`${label}: forty pictures read ${JSON.stringify({ forty, strip })}`);
-
-          /* 6. A video. */
-          await showVariant(4);
-          await page.locator(`${REVIEW} [data-prototype-thumb]`).last().click();
-          await page.waitForFunction(() => (document.querySelector<HTMLVideoElement>("[data-prototype-video]")?.readyState ?? 0) >= 2, undefined, { timeout: 15_000 });
-          await settle();
-          const videoState = await stageState();
-          const videoSize = await page.evaluate(() => { const element = document.querySelector<HTMLVideoElement>("[data-prototype-video]")!; return [element.videoWidth, element.videoHeight, element.controls]; });
-          record("video", { ...videoState, videoSize });
-          await shot("video");
-          await frameCheck("video");
-          if (!videoState.mediaInside || videoSize[0] !== 640 || videoSize[2] !== true || videoState.position?.trim() !== "3 / 3") failures.push(`${label}: the video reads ${JSON.stringify({ videoState, videoSize })}`);
-
-          /* 7. Full size in the existing viewer, with the variant's number, its name and the caption. */
-          await showVariant(1);
-          await settle();
-          await page.locator("[data-prototype-fullsize]").click();
-          await page.waitForSelector("[data-lightbox-position]", { timeout: 5_000 });
-          await page.waitForTimeout(300);
-          const viewer = await page.evaluate(() => ({ position: document.querySelector("[data-lightbox-position]")?.textContent ?? null, caption: document.querySelector("[data-lightbox-caption]")?.textContent ?? null }));
-          record("viewer", viewer);
-          await shot("full-size");
-          if (!viewer.caption?.includes(lang === "en" ? "1 · Compact list — results, desktop" : "1 · Компактний список — результати, десктоп") || viewer.position?.trim() !== "1 / 3") failures.push(`${label}: the full-size viewer does not count as the review does: ${JSON.stringify(viewer)}`);
-          await page.keyboard.press("Escape");
-          await page.waitForSelector("[data-lightbox-position]", { state: "detached" });
-          if (!await page.locator(REVIEW).count()) failures.push(`${label}: Escape in the viewer closed the review too`);
-
-          /* 7b. A tall phone frame on the stage: fitted on the desktop, the stage's whole width on the phone. */
-          await page.locator(`${REVIEW} [data-prototype-step="next"]`).click();
-          await page.locator(`${REVIEW} [data-prototype-step="next"]`).click();
-          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
-          await settle();
-          const tallFrame = await stageState();
-          record("tall-frame", tallFrame);
-          await shot("tall-frame");
-          await frameCheck("tall-frame");
-          const [tallWidth, tallHeight] = tallFrame.media[0] ?? [0, 0];
-          if (tallFrame.position?.trim() !== "3 / 3" || (size.phone ? Math.abs(tallWidth! - size.viewport.width) > 1 : !tallFrame.mediaInside || tallHeight! < tallFrame.canvas[1]! - 30)) failures.push(`${label}: the tall phone frame reads ${JSON.stringify(tallFrame)}`);
-
-          /* 7c. A pair full screen is one picture with a switch that puts the original in its place, at the same zoom. */
-          await showVariant(2);
-          await settle();
-          await page.locator("[data-prototype-fullsize]").click();
-          await page.waitForSelector("[data-lightbox-compare]", { timeout: 5_000 });
-          await page.locator(`[role=dialog] button[aria-label="${tr("lightbox.zoomIn")}"]`).click();
-          await page.locator('[data-lightbox-compare-side="before"]').click();
-          await settle();
-          const pairViewer = await page.evaluate(() => {
-            const shown = [...document.querySelectorAll<HTMLImageElement>("img[data-lightbox-side]")].filter((image) => !image.hidden);
-            const sides = [...document.querySelectorAll<HTMLElement>("[data-lightbox-compare-side]")].map((element) => [element.dataset.lightboxCompareSide, element.getAttribute("aria-pressed"), element.textContent]);
-            return { shown: shown.map((image) => image.dataset.lightboxSide), position: document.querySelector("[data-lightbox-position]")?.textContent ?? null, caption: document.querySelector("[data-lightbox-caption]")?.textContent ?? null, zoom: document.querySelector("[role=dialog] [data-lightbox-position]")?.parentElement?.textContent ?? null, sides };
-          });
-          record("viewer-pair", pairViewer);
-          await shot("viewer-pair-original");
-          if (JSON.stringify(pairViewer.shown) !== JSON.stringify(["before"]) || pairViewer.position?.trim() !== "1 / 3" || !pairViewer.caption?.includes(tr("proto.pair.original")) || !pairViewer.zoom?.includes("140%") || JSON.stringify(pairViewer.sides) !== JSON.stringify([["before", "true", tr("lightbox.original")], ["after", "false", tr("lightbox.changed")]])) failures.push(`${label}: the pair full screen reads ${JSON.stringify(pairViewer)}`);
-          await page.keyboard.press("Escape");
-          await page.waitForSelector("[data-lightbox-position]", { state: "detached" });
-
-          /* 8. A combination and a dictated comment. */
-          if (size.phone) { await choose(2); await choose(3); } else { await page.keyboard.press("2"); await page.keyboard.press("3"); }
-          await page.locator(`${scope} button[aria-label="${tr("mic.dictate")}"]`).click();
-          const stop = page.locator(`${scope} button[aria-label="${tr("mic.stopRecognize")}"]`);
-          await stop.waitFor({ timeout: 10_000 });
-          await page.waitForTimeout(1_200);
-          await shot("dictating");
-          await frameCheck("dictating");
-          await contextCheck("dictating");
-          /* A saved decision cannot be changed, so the shortcut saves nothing while the recording runs. */
-          await page.locator("[data-prototype-comment-field]").press("Control+Enter");
-          await page.waitForTimeout(300);
-          if ((await posts()).some((post) => post.taskId === "t-search") || await page.locator(`${scope} [data-prototype-decision]`).count()) failures.push(`${label}: Ctrl+Enter saved the decision while the comment was still being dictated`);
-          await stop.click();
-          const spoken = lang === "en" ? "Take the header from the two columns and keep the dense rows of the table." : "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.";
-          await page.waitForFunction((text) => document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")?.value === text, spoken, { timeout: 10_000 });
-          await settle();
-          const combination = await stageState();
-          record("combination", combination);
-          await shot("combination");
-          await frameCheck("combination");
-          await contextCheck("combination");
-          if (JSON.stringify(combination.chosen) !== JSON.stringify(["2", "3"])) failures.push(`${label}: the combination reads ${JSON.stringify(combination.chosen)}`);
-
-          /* 9. Escape with an unsaved comment asks first. */
-          await page.keyboard.press("Escape");
-          await page.waitForSelector("[data-prototype-guard]", { timeout: 5_000 });
-          await shot("unsaved-guard");
-          await contextCheck("unsaved-guard");
-          const guard = await measure(page, "body", { guard: "[data-prototype-guard]", actions: "[data-prototype-guard] button" });
-          record("guard", guard);
-          if (guard.outside.length || guard.overlaps.some((entry) => entry.includes("actions#1 × actions#2"))) failures.push(`${label}: the unsaved-comment guard is broken: ${JSON.stringify(guard)}`);
-          await page.locator("[data-prototype-guard-keep]").click();
-          if (!await page.locator(REVIEW).count() || await page.locator("[data-prototype-comment-field]").inputValue() !== spoken) failures.push(`${label}: keeping the edit lost the review or the comment`);
-
-          /* 10. Saved: the decision stays on the review and on the card, sent once. */
-          await page.locator("[data-prototype-save]").click();
-          await page.waitForSelector(`${scope} [data-prototype-decision]`, { timeout: 10_000 });
-          await settle();
-          const decided = await page.evaluate(() => ({
-            chosen: [...document.querySelectorAll<HTMLElement>("[data-prototype-decision] [data-prototype-chosen]")].map((element) => element.textContent),
-            comment: document.querySelector("[data-prototype-decision] [data-prototype-comment]")?.textContent ?? null,
-            delivery: document.querySelector<HTMLElement>("[data-prototype-delivery]")?.dataset.prototypeDelivery ?? null,
-            deliveryText: document.querySelector("[data-prototype-delivery]")?.textContent ?? null,
-            time: document.querySelector("[data-prototype-decision] time")?.textContent ?? null,
-          }));
-          const sent = (await posts()).filter((post) => post.taskId === "t-search");
-          record("decided", { ...decided, posts: sent });
-          await shot("decided");
-          await contextCheck("decided");
-          await frameCheck("decided");
-          await accentCheck("decided", false);
-          if (decided.comment !== spoken || decided.delivery !== "sent" || decided.chosen.length !== 2 || !decided.time || sent.length !== 1) failures.push(`${label}: the saved decision reads ${JSON.stringify({ decided, sent })}`);
-          await closeReview();
-          if (!size.phone) {
-            await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-prototype-button="t-search"]')?.dataset.prototypeState === "decided", undefined, { timeout: 10_000 });
-            const after = await page.locator('[data-prototype-button="t-search"]').textContent();
-            if (after?.trim() !== tr("proto.button.word")) failures.push(`${label}: the card says ${after} after the choice`);
-            await page.locator(card("t-search")).scrollIntoViewIfNeeded();
-            await page.locator(card("t-search")).screenshot({ path: path.join(pngDir, `${label}-card-after-choice.png`) });
-            const leftColumn = await page.waitForSelector('[data-decision-list] [data-decision-review="r-search"], [data-decision-row="r-search"]', { state: "detached", timeout: 10_000 }).then(() => true, () => false);
-            if (!leftColumn) failures.push(`${label}: the decided review stays in the «Рішення» column`);
-          } else {
-            await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-phone-task-prototype="t-search"]')?.dataset.prototypeState === "decided", undefined, { timeout: 10_000 });
-            await shot("task-row-decided");
-            await page.goBack();
-            await page.waitForTimeout(400);
-            /* The choice checks the card's button, which keeps its word; the card that still waits keeps its own. */
-            const after = await phoneCards();
-            record("cards-after-choice", after.filter((entry) => entry.task === "t-search" || entry.task === "t-upload"));
-            const searchAfter = after.find((entry) => entry.task === "t-search")?.button;
-            const uploadAfter = after.find((entry) => entry.task === "t-upload")?.button;
-            if (searchAfter?.state !== "decided" || searchAfter.text !== tr("proto.button.word") || uploadAfter?.state !== "opened" || uploadAfter.text !== tr("proto.button.word")) failures.push(`${label}: after the choice the phone cards read ${JSON.stringify(after.map((entry) => [entry.task, entry.button]))}`);
-            const shell = page.locator('[data-phone-card-frame="task:t-search"]');
-            await shell.scrollIntoViewIfNeeded();
-            await shell.screenshot({ path: path.join(pngDir, `${label}-card-after-choice.png`) });
-          }
-
-          /* The choice took exactly this review out of the count. */
-          await page.waitForFunction(({ phone, want }) => (phone
-            ? Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0")
-            : Number(document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? "NaN")) === want, { phone: size.phone, want: waitingBefore - 1 }, { timeout: 10_000 }).catch(() => {});
-          const waitingAfterChoice = await needsYouCount();
-          if (waitingAfterChoice !== waitingBefore - 1) failures.push(`${label}: ${waitingAfterChoice} wait after the choice, expected ${waitingBefore - 1}`);
-
-          /* 11. One variant, saved into a project with no orchestrator. */
-          await openTask("t-upload");
-          if (size.phone) await page.locator('[data-phone-task-prototype="t-upload"]').click();
-          await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
-          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
-          await settle();
-          await shot("one-variant");
-          await frameCheck("one-variant");
-          record("one-variant", await stageState());
-          if (await page.locator(`${REVIEW} [data-prototype-variant]`).count() !== 1) failures.push(`${label}: the one-variant review lists more than one`);
-
-          /* 11a. The longest name and the longest caption the schema admits:
-             the number, the name and the caption are all read inside the stage. */
-          await page.locator(`${REVIEW} [data-prototype-step="next"]`).click();
-          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
-          await settle();
-          const longest = await page.evaluate(() => {
-            const stage = document.querySelector<HTMLElement>("[data-prototype-stage]")!.getBoundingClientRect();
-            const line = document.querySelector<HTMLElement>("[data-prototype-caption]")!;
-            const part = (name: string) => {
-              const element = line.querySelector<HTMLElement>(`[data-prototype-caption-${name}]`);
-              const boxes = element ? [...element.getClientRects()] : [];
-              return {
-                text: element?.textContent ?? null,
-                left: Math.round(Math.min(...boxes.map((box) => box.left)) * 10) / 10,
-                right: Math.round(Math.max(...boxes.map((box) => box.right)) * 10) / 10,
-                lines: new Set(boxes.map((box) => Math.round(box.top))).size,
-                inside: boxes.length > 0 && boxes.every((box) => box.width > 0 && box.left >= stage.left - 0.5 && box.right <= stage.right + 0.5 && box.right <= window.innerWidth + 0.5),
-              };
-            };
-            /* A point in the middle of each part's last line lands on that part: nothing covers or clips it. */
-            const reachable = (name: string) => {
-              const element = line.querySelector<HTMLElement>(`[data-prototype-caption-${name}]`)!;
-              const last = [...element.getClientRects()].at(-1)!;
-              const hit = document.elementFromPoint(last.left + last.width / 2, last.top + last.height / 2);
-              return hit === element || element.contains(hit);
-            };
-            return { viewport: window.innerWidth, stage: [Math.round(stage.left), Math.round(stage.right)], clipped: line.scrollWidth - line.clientWidth, number: part("number"), name: part("name"), caption: part("text"), reachable: { number: reachable("number"), name: reachable("name"), caption: reachable("text") } };
-          });
-          record("longest-name-and-caption", longest);
-          await shot("longest-name-and-caption");
-          await frameCheck("longest-name-and-caption");
-          if (longest.name.text?.length !== 60 || (longest.caption.text?.length ?? 0) < 190) failures.push(`${label}: the boundary case shows a name of ${longest.name.text?.length} and a caption of ${longest.caption.text?.length} characters`);
-          if (!longest.number.inside || !longest.name.inside || !longest.caption.inside || longest.clipped > 0) failures.push(`${label}: the longest name and caption leave the stage: ${JSON.stringify(longest)}`);
-          if (!longest.reachable.number || !longest.reachable.name || !longest.reachable.caption) failures.push(`${label}: part of the longest name and caption is covered: ${JSON.stringify(longest.reachable)}`);
-          await page.locator(`${REVIEW} [data-prototype-step="previous"]`).click();
-
-          /* 11b. Closing while speech is transcribed, with nothing typed, asks
-             first; the words that come back afterwards are kept and saved once. */
-          await page.evaluate(() => { (window as unknown as { protoTranscribeDelay: number }).protoTranscribeDelay = 2_500; });
-          await page.locator(`${scope} button[aria-label="${tr("mic.dictate")}"]`).click();
-          const stopSpeech = page.locator(`${scope} button[aria-label="${tr("mic.stopRecognize")}"]`);
-          await stopSpeech.waitFor({ timeout: 10_000 });
-          await page.waitForTimeout(1_600);
-          await stopSpeech.click();
-          await stopSpeech.waitFor({ state: "detached", timeout: 5_000 });
-          const emptyWhileTranscribed = await page.locator("[data-prototype-comment-field]").inputValue();
-          await page.keyboard.press("Escape");
-          await page.waitForTimeout(300);
-          const asked = { field: emptyWhileTranscribed, review: await page.locator(REVIEW).count(), guard: await page.locator("[data-prototype-guard]").count() };
-          await shot("transcribing-guard").catch(() => {});
-          await contextCheck("transcribing-guard");
-          const late = lang === "en" ? "Take the header from the two columns and keep the dense rows of the table." : "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.";
-          const arrived = asked.review === 1 && await page.waitForFunction((text) => document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")?.value === text, late, { timeout: 10_000 }).then(() => true, () => false);
-          const stillAsking = await page.locator("[data-prototype-guard]").count();
-          if (stillAsking) await page.locator("[data-prototype-guard-keep]").click();
-          record("transcribing-guard", { ...asked, arrived, guardAfterArrival: stillAsking });
-          if (asked.field !== "" || asked.review !== 1 || asked.guard !== 1 || !arrived || stillAsking !== 1) throw new Error(`closing while speech was transcribed read ${JSON.stringify({ ...asked, arrived, stillAsking })}`);
-          await page.evaluate(() => { (window as unknown as { protoTranscribeDelay: number }).protoTranscribeDelay = 0; });
-
-          await page.locator(`${REVIEW} [data-prototype-choose="1"]`).click();
-          await page.locator("[data-prototype-save]").click();
-          await page.waitForSelector(`${scope} [data-prototype-delivery="no-orchestrator"]`, { timeout: 10_000 });
-          await settle();
-          await shot("no-orchestrator");
-          await frameCheck("no-orchestrator");
-          await deliveryRow("no-orchestrator");
-          const unsent = await page.locator("[data-prototype-delivery]").textContent();
-          record("no-orchestrator", unsent);
-          const keptSpeech = { comment: await page.locator(`${scope} [data-prototype-decision] [data-prototype-comment]`).textContent(), posts: (await posts()).filter((post) => post.taskId === "t-upload").length };
-          record("transcribed-comment-saved", keptSpeech);
-          if (keptSpeech.comment !== late || keptSpeech.posts !== 1) failures.push(`${label}: the comment kept through the guard was saved as ${JSON.stringify(keptSpeech)}`);
-          if (!unsent?.includes(tr("proto.delivery.no-orchestrator"))) failures.push(`${label}: with no orchestrator the review says ${unsent}`);
-          await closeReview();
-          if (size.phone) { await page.goBack(); await page.waitForTimeout(400); }
-
-          await page.waitForFunction(({ phone, want }) => (phone
-            ? Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0")
-            : Number(document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? "NaN")) === want, { phone: size.phone, want: waitingBefore - 2 }, { timeout: 10_000 }).catch(() => {});
-          const waitingAfterBoth = await needsYouCount();
-          record("needs-you-after", { before: waitingBefore, afterChoice: waitingAfterChoice, afterBoth: waitingAfterBoth, tab: await tabCount() });
-          /* The newer round of the links task still waits, with the board's other waits. */
-          if (waitingAfterBoth !== waitingBefore - 2) failures.push(`${label}: ${waitingAfterBoth} wait after two choices, expected ${waitingBefore - 2}`);
-
-          /* 12. A newer round after a decision, and the earlier round still opens. */
-          await openTask("t-links");
-          if (size.phone) await page.locator('[data-phone-task-prototype="t-links"]').click();
-          await page.waitForSelector(`${REVIEW} [data-prototype-rounds]`, { timeout: 10_000 });
-          await settle();
-          const newer = await stageState();
-          await shot("newer-round");
-          await frameCheck("newer-round");
-          await page.locator('[data-prototype-round="r-links-1"]').click();
-          await page.waitForSelector(`${scope} [data-prototype-decision="r-links-1"]`, { timeout: 5_000 });
-          await settle();
-          await shot("earlier-round");
-          await frameCheck("earlier-round");
-          await accentCheck("earlier-round", true);
-          const earlier = await stageState();
-          record("rounds", { newer: newer.round, earlier: earlier.round, earlierChosen: earlier.chosen });
-          if (newer.round !== "r-links-2" || earlier.round !== "r-links-1" || JSON.stringify(earlier.chosen) !== JSON.stringify(["1"])) failures.push(`${label}: the rounds read ${JSON.stringify({ newer: newer.round, earlier: earlier.round, chosen: earlier.chosen })}`);
-
-          /* 12a. Speech belongs to the round it was started in: while it is
-             recorded and transcribed the other round does not open, and the
-             words land in the waiting round only. */
-          await page.locator('[data-prototype-round="r-links-2"]').click();
-          await page.waitForSelector(`${scope} [data-prototype-decide="r-links-2"]`, { timeout: 5_000 });
-          await page.evaluate(() => { (window as unknown as { protoTranscribeDelay: number }).protoTranscribeDelay = 2_000; });
-          await page.locator(`${scope} button[aria-label="${tr("mic.dictate")}"]`).click();
-          const stopPinned = page.locator(`${scope} button[aria-label="${tr("mic.stopRecognize")}"]`);
-          await stopPinned.waitFor({ timeout: 10_000 });
-          await page.waitForTimeout(1_200);
-          /* A press the way the operator makes it: a click on the tab's middle, through anything drawn over it. */
-          const tryEarlier = () => page.evaluate(() => {
-            const tab = document.querySelector<HTMLButtonElement>('[data-prototype-round="r-links-1"]')!;
-            const box = tab.getBoundingClientRect();
-            const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
-            (hit instanceof HTMLElement ? hit : tab).click();
-            return { disabled: tab.disabled, title: tab.title };
-          });
-          const duringRecording = await tryEarlier();
-          await settle();
-          const shownRecording = (await stageState()).round;
-          await shot("dictating-round-pinned");
-          await frameCheck("dictating-round-pinned");
-          if (shownRecording !== "r-links-2") {
-            failures.push(`${label}: pressing the earlier round while speech was recorded showed ${shownRecording}`);
-            await page.locator('[data-prototype-round="r-links-2"]').click();
-          }
-          await stopPinned.click();
-          await stopPinned.waitFor({ state: "detached", timeout: 5_000 });
-          const duringTranscription = await tryEarlier();
-          await settle();
-          const shownTranscribing = (await stageState()).round;
-          const pinnedWords = lang === "en" ? "Take the header from the two columns and keep the dense rows of the table." : "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.";
-          const landed = await page.waitForFunction((text) => document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")?.value === text, pinnedWords, { timeout: 10_000 }).then(() => true, () => false);
-          await page.evaluate(() => { (window as unknown as { protoTranscribeDelay: number }).protoTranscribeDelay = 0; });
-          await page.locator('[data-prototype-round="r-links-1"]').click();
-          await page.waitForSelector(`${scope} [data-prototype-decision="r-links-1"]`, { timeout: 5_000 });
-          const earlierComment = await page.locator(`${scope} [data-prototype-decision] [data-prototype-comment]`).textContent().catch(() => null);
-          await page.locator('[data-prototype-round="r-links-2"]').click();
-          await page.waitForSelector(`${scope} [data-prototype-decide="r-links-2"]`, { timeout: 5_000 });
-          const keptInWaiting = await page.locator("[data-prototype-comment-field]").inputValue();
-          const pinned = { duringRecording, shownRecording, duringTranscription, shownTranscribing, landed, earlierComment, keptInWaiting, linksPosts: (await posts()).filter((post) => post.taskId === "t-links").length };
-          record("dictation-round-pinned", pinned);
-          if (!duringRecording.disabled || !duringTranscription.disabled || duringRecording.title !== tr("proto.round.speaking") || shownRecording !== "r-links-2" || shownTranscribing !== "r-links-2" || !landed || earlierComment?.includes(pinnedWords) || keptInWaiting !== pinnedWords || pinned.linksPosts !== 0) failures.push(`${label}: speech left the round it was started in: ${JSON.stringify(pinned)}`);
-          /* The dictated comment is unsaved: closing asks, and discarding closes. */
-          await page.keyboard.press("Escape");
-          await page.waitForSelector("[data-prototype-guard]", { timeout: 5_000 });
-          await page.locator("[data-prototype-guard-discard]").click();
-          await page.waitForSelector(REVIEW, { state: "detached", timeout: 5_000 });
-          if (size.phone) { await page.goBack(); await page.waitForTimeout(400); }
-
-          /* 13. Files no longer readable: the variants and the decision stay. */
-          await openTask("t-export");
-          if (size.phone) await page.locator('[data-phone-task-prototype="t-export"]').click();
-          await page.waitForSelector(`${REVIEW} [data-prototype-gone]`, { timeout: 10_000 });
-          await settle();
-          await shot("files-gone");
-          await frameCheck("files-gone");
-          await accentCheck("files-gone", true);
-          const goneState = await page.evaluate(() => ({ retired: Boolean(document.querySelector("[data-prototype-retired]")), banner: document.querySelector("[data-prototype-retired]")?.textContent ?? "", decision: Boolean(document.querySelector("[data-prototype-decision]")), images: document.querySelectorAll("[data-prototype-canvas] img").length }));
-          record("files-gone", goneState);
-          if (!goneState.retired || !goneState.decision || goneState.images) failures.push(`${label}: a retired round reads ${JSON.stringify(goneState)}`);
-          if (lang === "en" && /\d+\/\d+\/\d{4}/.test(goneState.banner)) failures.push(`${label}: the files-gone banner writes a numeric date: ${goneState.banner}`);
-          await closeReview();
-          if (size.phone) { await page.goBack(); await page.waitForTimeout(400); }
-
-          /* 14. A send that failed: the decision is kept and one retry sends it. */
-          await openTask("t-disk");
-          if (size.phone) await page.locator('[data-phone-task-prototype="t-disk"]').click();
-          await page.waitForSelector(`${scope} [data-prototype-delivery="failed"]`, { timeout: 10_000 });
-          await settle();
-          await shot("send-failed");
-          await frameCheck("send-failed");
-          await accentCheck("send-failed", true);
-          await deliveryRow("send-failed");
-          /* The first retry comes back unconfirmed and offers itself again; the second lands. */
-          await page.evaluate(() => { (window as unknown as { protoRetryAnswers: string[] }).protoRetryAnswers = ["uncertain"]; });
-          await page.locator("[data-prototype-retry]").click();
-          await page.waitForSelector(`${scope} [data-prototype-delivery="uncertain"]`, { timeout: 10_000 });
-          await settle();
-          await shot("send-uncertain");
-          await frameCheck("send-uncertain");
-          await deliveryRow("send-uncertain");
-          await page.locator("[data-prototype-retry]").click();
-          await page.waitForSelector(`${scope} [data-prototype-delivery="sent"]`, { timeout: 10_000 });
-          const retries = (await posts()).filter((post) => post.taskId === "t-disk");
-          record("retry", { posts: retries, button: await page.locator("[data-prototype-retry]").count() });
-          if (retries.length !== 2 || retries.some((post) => post.retry !== true) || await page.locator("[data-prototype-retry]").count()) failures.push(`${label}: the retry sent ${JSON.stringify(retries)} and the button ${await page.locator("[data-prototype-retry]").count() ? "stays" : "went"}`);
-          await shot("retry-sent");
-          await closeReview();
-          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
-        } catch (error) {
-          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}${pageErrors.length ? ` (page errors: ${pageErrors.join(" | ")})` : ""}`);
-          await shot("failed-here").catch(() => {});
-        } finally {
-          await context.close();
-        }
+      const { context, page } = await openFixture(browser, `${server.base}?proto=1`, VIEWPORT, "light", "en", "reduce");
+      for (const [task, state] of [["t-search", "ready"], ["t-upload", "ready"], ["t-export", "decided"], ["t-links", "ready"]]) {
+        const button = page.locator(`[data-prototype-button="${task}"]`);
+        expect(await button.getAttribute("data-prototype-state")).toBe(state);
       }
-    } finally {
-      await browser.close();
-      server.stop();
-    }
-    if (!only.length) fs.writeFileSync("evidence/prototype-review/readings.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
-    else fs.writeFileSync(path.join(out, "partial-readings.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
-    if (failures.length) throw new Error(failures.join("\n"));
-  }, 1_800_000);
+      await page.locator('[data-prototype-button="t-search"]').click();
+      await page.locator('[data-prototype-gallery]').waitFor();
+      expect(await page.locator('[data-prototype-tile]').count()).toBe(49);
+      await page.locator('[data-prototype-choose="1"]').click();
+      await page.keyboard.press("3");
+      await page.locator('[data-prototype-comment-field]').fill("Combine the compact list with the dense table.");
+      await page.locator('[data-prototype-save]').click();
+      await page.locator('[data-prototype-decision]').waitFor();
+      const posts = await page.evaluate(() => (window as unknown as { protoPosts: { chosen: number[]; comment: string }[] }).protoPosts);
+      expect(posts.at(-1)?.chosen).toEqual([1, 3]);
+      await page.keyboard.press("Escape");
+      await page.locator('[data-prototype-button="t-export"]').click();
+      await page.locator('[data-prototype-retired]').waitFor();
+      expect(await page.locator('[data-prototype-gone]').count()).toBeGreaterThan(0);
+      expect(await page.locator('[data-prototype-save]').count()).toBe(0);
+      await context.close();
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
 });
 
 describe("orchestrator wires after a seat action", () => {
@@ -29100,6 +28321,7 @@ describe("short questionnaire rendered evidence", () => {
     const readings: unknown[] = [];
     try {
       for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        if (process.env.PROTOTYPE_QUESTION_ONLY && process.env.PROTOTYPE_QUESTION_ONLY !== `${lang}-${scheme}`) continue;
         for (const taskId of ["t-search", "t-upload", "t-links", "t-disk", "t-export"]) {
           const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=questions`, { width: 1440, height: 900 }, scheme, lang, "reduce", false);
           try {
@@ -29119,7 +28341,8 @@ describe("short questionnaire rendered evidence", () => {
               await opener.scrollIntoViewIfNeeded();
               await opener.click();
             }
-            await page.waitForSelector("[data-prototype-questions]");
+            await page.waitForSelector("[data-prototype-review] [data-prototype-questions]");
+            const review = page.locator("[data-prototype-review]");
             const reading = await capturePrototypeQuestions(page, false);
             expect(reading.sideways).toBeLessThanOrEqual(1);
             expect(reading.pillOverflow).toBe(0);
@@ -29138,11 +28361,11 @@ describe("short questionnaire rendered evidence", () => {
             readings.push({ lang, scheme, taskId, width: 1440, ...reading });
             if (taskId === "t-search" || taskId === "t-upload") {
               /* Arrows in a single-choice group move focus and answer together, Other included, and never the gallery. */
-              const checkedOf = (id: string) => page.locator(`[data-prototype-question="${id}"] [role="radio"]`).evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-checked") === "true"));
+              const checkedOf = (id: string) => review.locator(`[data-prototype-question="${id}"] [role="radio"]`).evaluateAll(nodes => nodes.map(node => node.getAttribute("aria-checked") === "true"));
               const focusedOption = () => page.evaluate(() => (document.activeElement as HTMLElement | null)?.getAttribute("data-prototype-option") ?? (document.activeElement as HTMLElement | null)?.getAttribute("data-prototype-other"));
-              const position = () => page.locator("[data-prototype-position]").first().textContent().catch(() => null);
+              const position = () => review.locator("[data-prototype-position]").first().textContent().catch(() => null);
               const before = taskId === "t-upload" ? await position() : null;
-              await page.locator('[data-prototype-option="place:0"]').focus();
+              await review.locator('[data-prototype-option="place:0"]').focus();
               const places = (await checkedOf("place")).length;
               await page.keyboard.press("ArrowRight");
               expect((await checkedOf("place")).slice(0, 2)).toEqual([false, true]);
@@ -29156,21 +28379,21 @@ describe("short questionnaire rendered evidence", () => {
               expect(await focusedOption()).toBe(`place:${places - 1}`);
               await page.keyboard.press("ArrowRight");
               expect((await checkedOf("place"))[0]).toBe(true);
-              await page.locator('[data-prototype-option="timing:0"]').focus();
+              await review.locator('[data-prototype-option="timing:0"]').focus();
               await page.keyboard.press("ArrowLeft");
               expect(await focusedOption()).toBe("timing");
-              expect(await page.locator('[data-prototype-other="timing"]').getAttribute("aria-checked")).toBe("true");
+              expect(await review.locator('[data-prototype-other="timing"]').getAttribute("aria-checked")).toBe("true");
               expect((await checkedOf("timing")).filter(Boolean)).toHaveLength(1);
               await page.keyboard.press("ArrowRight");
               expect(await focusedOption()).toBe("timing:0");
-              expect(await page.locator('[data-prototype-other="timing"]').getAttribute("aria-checked")).toBe("false");
+              expect(await review.locator('[data-prototype-other="timing"]').getAttribute("aria-checked")).toBe("false");
               expect((await checkedOf("timing"))[0]).toBe(true);
               if (taskId === "t-upload") expect(await position()).toBe(before);
             }
             if (taskId === "t-links") {
-              await page.locator('[data-prototype-option="place:1"]').click();
-              await page.locator('[data-prototype-save]').click();
-              await page.waitForSelector('[data-prototype-decision]');
+              await review.locator('[data-prototype-option="place:1"]').click();
+              await review.locator('[data-prototype-save]').click();
+              await review.locator('[data-prototype-decision]').waitFor();
               const posted = await page.evaluate(() => (window as unknown as { protoPosts: Array<{ answers: Array<{ questionId: string; options: number[] }> }> }).protoPosts.at(-1));
               expect(posted?.answers[0]?.options).toEqual([0,1]);
               const settled = await capturePrototypeQuestions(page, false);
@@ -29181,8 +28404,8 @@ describe("short questionnaire rendered evidence", () => {
               await page.screenshot({ path: path.join(out, `${label}-answered.png`) });
             }
             if (taskId === "t-search") {
-              await page.locator('[data-prototype-skip]').click();
-              await page.waitForSelector('[data-prototype-skipped]');
+              await review.locator('[data-prototype-skip]').click();
+              await review.locator('[data-prototype-skipped]').waitFor();
               const skipped = await capturePrototypeQuestions(page, false);
               expect(skipped.readonly).toBe(true); expect(skipped.hints).toBe(0); expect(skipped.unpickedFaded).toBe(true);
               expect(skipped.statusLine).toBe(lang === "uk" ? "Пропущено, взято рекомендовані" : "Skipped, recommended answers taken");
@@ -29198,7 +28421,10 @@ describe("short questionnaire rendered evidence", () => {
         }
       }
       fs.mkdirSync("evidence/prototype-review", { recursive: true });
-      fs.writeFileSync("evidence/prototype-review/questions.json", JSON.stringify(readings, null, 2) + "\n");
+      const file = "evidence/prototype-review/questions.json";
+      const prior = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as { lang: string; scheme: string }[] : [];
+      const retained = process.env.PROTOTYPE_QUESTION_ONLY ? prior.filter(row => `${row.lang}-${row.scheme}` !== process.env.PROTOTYPE_QUESTION_ONLY) : [];
+      fs.writeFileSync(file, JSON.stringify([...retained, ...readings], null, 2) + "\n");
     } finally { await browser.close(); await launched.close(); server.stop(); fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: true })); }
   }, 900_000);
 });
@@ -29522,7 +28748,7 @@ describe("operator decision forms: the «Рішення» column beside the seat
   const SEAT_SECOND = `pr_${"e".repeat(32)}`;
   const waitingCount = (page: Page, phone: boolean) => page.evaluate((onPhone) => onPhone
     ? Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0")
-    : Number(document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? "0"), phone);
+    : Number((document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? document.querySelector("[data-needs-you-title]")?.textContent?.match(/\d+\s*$/)?.[0] ?? "0")), phone);
   const readMirror = (page: Page, list: string) => page.evaluate(({ list, ids }) => {
     const root = document.querySelector<HTMLElement>(list);
     const frame = root?.getBoundingClientRect();
@@ -29599,7 +28825,7 @@ describe("operator decision forms: the «Рішення» column beside the seat
           await page.waitForSelector(`[data-decision-list] [data-decision-review="${SEAT_ASK}"], [data-decision-row="${SEAT_ASK}"]`, { state: "detached", timeout: 10_000 });
           await page.waitForFunction(({ phone, expected }) => (phone
             ? Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0")
-            : Number(document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? "0")) === expected, { phone, expected: before - 1 }, { timeout: 15_000 }).catch(() => {});
+            : Number((document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? document.querySelector("[data-needs-you-title]")?.textContent?.match(/\d+\s*$/)?.[0] ?? "0"))) === expected, { phone, expected: before - 1 }, { timeout: 15_000 }).catch(() => {});
           /* The sheet that stood in for the column closes as any sheet does. */
           if (await page.locator("[data-decision-sheet]").count()) { await page.keyboard.press("Escape"); await page.waitForSelector("[data-decision-sheet]", { state: "detached", timeout: 5_000 }); }
           await openList();
@@ -30418,6 +29644,72 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
   }, 300_000);
 });
 
+describe("automatic conflict refresh", () => {
+  browserTest("refresh and stopped reasons fit at 1440 and 390 in en and uk", async () => {
+    const out = path.resolve(".artifacts/auto-refresh");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=auto-refresh`, { width, height: 900 }, "light", lang, "reduce", width === 390);
+        try {
+          if (width === 390) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          const openTask = async (id: string) => {
+            if (width === 390) {
+              await page.locator(`[data-phone-card="task:${id}"]`).click();
+              await page.locator("[data-phone-task-body] .pblock").first().waitFor();
+              return page.locator("[data-phone-task-body]");
+            }
+            return page.locator(card(id));
+          };
+          const back = async () => {
+            if (width === 390) {
+              await page.locator("[data-mobile2-back]").first().click();
+              await page.locator("[data-phone-kanban]").waitFor();
+            }
+          };
+          const parent = await openTask("t-merge-wait");
+          await parent.scrollIntoViewIfNeeded();
+          await parent.locator('[data-merge-state="updating"]').waitFor();
+          expect(await parent.locator('[data-merge-state="updating"]').textContent()).toBe(translate(lang, "pipelineBlock.merge.updating"));
+          expect(await parent.locator('[data-answer-action="retry-merge"]').count()).toBe(0);
+          expect(await parent.textContent()).toContain(lang === "en" ? "Refresh the delivery branch" : "Оновити гілку PR");
+          await parent.screenshot({ path: path.join(out, `refresh-${width}-${lang}.png`) });
+          await back();
+          for (const [id, key, message] of [
+            ["t-merge-update", "refreshClosed", null], ["t-merge-stop", "refreshSameBase", null], ["t-merge-done", "refusedRefresh", "target already owned"],
+          ] as const) {
+            const target = await openTask(id);
+            await target.scrollIntoViewIfNeeded();
+            const line = target.locator("[data-merge-stop]");
+            await line.waitFor();
+            expect(await line.innerText()).toContain(translate(lang, `pipelineBlock.mergeReason.${key}`, message ? { message } : undefined));
+            const geometry = await line.evaluate((element) => {
+              const frame = element.closest('[data-phone-task-body], .card')!.getBoundingClientRect();
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const ink = [...range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0);
+              const controls = [...element.closest(".pblock")!.querySelectorAll("button")].map(button => button.getBoundingClientRect());
+              return {
+                escapes: ink.filter(rect => rect.left < frame.left - 1 || rect.right > frame.right + 1).length,
+                overlaps: ink.filter(rect => controls.some(control => Math.min(rect.right, control.right) - Math.max(rect.left, control.left) > 1 && Math.min(rect.bottom, control.bottom) - Math.max(rect.top, control.top) > 1)).length,
+              };
+            });
+            readings.push({ lang, width, id, ...geometry });
+            expect(geometry).toEqual({ escapes: 0, overlaps: 0 });
+            await target.screenshot({ path: path.join(out, `${id}-${width}-${lang}.png`) });
+            await back();
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/auto-refresh", { recursive: true });
+      fs.writeFileSync("evidence/auto-refresh/readings.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 60_000);
+});
 
 describe("true agent activity", () => {
   browserTest("true activity dots open short unclipped popovers without changing the row", async () => {
@@ -30693,4 +29985,612 @@ describe("the seat column and the agent window keep 60% of the conversation", ()
     fs.writeFileSync(path.join(EVIDENCE, "board.json"), `${JSON.stringify({ floor: FLOOR, frames, failures }, null, 2)}\n`);
     expect(failures).toEqual([]);
   }, 900_000);
+});
+
+describe("calm task cards: closed by default, a timeline when opened, answers in the ⋯", () => {
+  /*
+   * docs/design/calm-task-cards-build.md §10: the nine cards of
+   * `?scenario=calm-cards` at 1440 and 1000 on the desktop board and at 390 on
+   * the phone, en and uk, light and dark. Closed, each card names who has it
+   * in one state line, offers «Answer» only where the operator owes one, and
+   * no card or screen draws an answer button. Opened, C8's timeline shows its
+   * latest eight with its first lane's stop pulled above them. The answers are
+   * in the ⋯: as many as the lane's own answers, marked manual where the
+   * orchestrator owns the lane; on the phone in the lane's sheet. Amber is the
+   * operator's alone.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 CALM_CARDS_PNG_DIR=… \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "calm task cards"
+   *
+   * PNGs go to `CALM_CARDS_PNG_DIR`, or `.artifacts/calm-cards/`, never committed;
+   * the readings to `evidence/calm-task-cards/`.
+   */
+  const OUT = path.resolve(process.env.CALM_CARDS_PNG_DIR ?? ".artifacts/calm-cards");
+  const EVIDENCE = path.resolve("evidence/calm-task-cards");
+  const OWNERS: Record<string, string> = {
+    "t-calm-commit": "seat", "t-calm-merge": "seat", "t-calm-form": "you", "t-calm-ask": "you", "t-calm-run": "working",
+    "t-calm-wait": "waiting", "t-calm-done": "done", "t-calm-long": "seat", "t-calm-cleared": "waiting",
+  };
+  /* The answers each lane's own `pipelineAnswers` gives, split by where they live: on a lane the seat owns,
+     Skip and Retry are the stop entry's links (`links`) and the ⋯ holds the rest (`actions`); the operator's
+     own lane keeps both in the ⋯. */
+  const ANSWERS: Record<string, { lane: string; actions: string[]; links: string[] }> = {
+    "t-calm-commit": { lane: "p-calm-commit", actions: [], links: ["skip-stage", "retry-stage"] },
+    "t-calm-merge": { lane: "p-calm-merge", actions: ["answer:dismiss", "answer:retry-merge"], links: [] },
+    "t-calm-form": { lane: "p-calm-form", actions: ["answer:skip-stage", "answer:retry-stage"], links: [] },
+    "t-calm-long": { lane: "p-calm-long-a", actions: [], links: ["skip-stage", "retry-stage"] },
+  };
+  /* A stop entry's links as drawn: on one row, whole inside the entry, at least `minHeight` tall, and no ⋯ beside them. */
+  const READ_STOP_LINKS = ({ root, lane }: { root: string; lane: string }) => {
+    const entry = document.querySelector<HTMLElement>(`${root} [data-chronology-stop="${lane}"]`);
+    const links = entry ? [...entry.querySelectorAll<HTMLElement>("[data-chronology-link]")] : [];
+    const box = entry?.getBoundingClientRect();
+    const boxes = links.map((link) => link.getBoundingClientRect());
+    return {
+      found: Boolean(entry),
+      actions: links.map((link) => link.getAttribute("data-chronology-link") ?? ""),
+      labels: links.map((link) => (link.textContent ?? "").trim()),
+      oneRow: new Set(boxes.map((rect) => Math.round(rect.top))).size <= 1,
+      inside: Boolean(box) && boxes.every((rect) => rect.width > 0 && rect.left >= box!.left - 1 && rect.right <= box!.right + 1 && rect.bottom <= box!.bottom + 1),
+      minHeight: boxes.length ? Math.min(...boxes.map((rect) => rect.height)) : 0,
+      menu: Boolean(entry?.querySelector("[data-chronology-stop-menu]")),
+    };
+  };
+  const checkStopLinks = (label: string, id: string, got: ReturnType<typeof READ_STOP_LINKS>, failures: string[], minHeight: number) => {
+    const want = ANSWERS[id]!;
+    if (!got.found) failures.push(`${label} ${id}: no stop entry`);
+    else if (JSON.stringify(got.actions) !== JSON.stringify(want.links)) failures.push(`${label} ${id}: stop links ${JSON.stringify(got.actions)}`);
+    if (!got.oneRow) failures.push(`${label} ${id}: stop links on several rows`);
+    if (!got.inside) failures.push(`${label} ${id}: a stop link sticks out of its entry`);
+    if (got.minHeight < minHeight) failures.push(`${label} ${id}: a stop link is ${got.minHeight}px tall`);
+    if (got.menu) failures.push(`${label} ${id}: a seat-handled stop keeps its ⋯`);
+  };
+  /* Every card asked of the closed board: who has it, its line, its dot, its «Answer», and whatever amber it draws. */
+  type CardReading = {
+    id: string; found: boolean; owner: string | null; subject: string | null; text: string; lines: number; dotOffset: number | null;
+    answer: { kind: string | null; height: number } | null; answerButtons: number; needs: boolean; attention: string | null;
+    warningInk: string[]; textCut: boolean; ampm: boolean;
+  };
+  const READ_CARDS = ({ ids, phone }: { ids: string[]; phone: boolean }) => {
+    const probe = document.createElement("span");
+    probe.style.color = "var(--color-warning)";
+    document.body.append(probe);
+    const warning = getComputedStyle(probe).color;
+    probe.remove();
+    return ids.map((id): CardReading => {
+      const element = document.querySelector<HTMLElement>(phone ? `[data-phone-card="task:${id}"]` : `[data-kanban-board] .card[data-id="task:${id}"]`);
+      const frame = phone ? element?.closest<HTMLElement>("[data-phone-card-frame]") ?? element : element;
+      const out: CardReading = { id, found: Boolean(element), owner: null, subject: null, text: "", lines: 0, dotOffset: null, answer: null, answerButtons: 0, needs: false, attention: null, warningInk: [], textCut: false, ampm: false };
+      if (!element || !frame) return out;
+      const state = element.querySelector<HTMLElement>("[data-card-state]");
+      out.owner = state?.getAttribute("data-card-state") ?? null;
+      out.subject = state?.getAttribute("data-card-state-subject") ?? null;
+      const words = state?.querySelector<HTMLElement>("[data-card-state-text]");
+      out.text = (words?.textContent ?? "").replace(/\s+/g, " ").trim();
+      out.ampm = /\b(AM|PM)\b/.test(out.text);
+      if (words) {
+        const range = document.createRange();
+        range.selectNodeContents(words);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0.5 && rect.height > 0.5);
+        const tops = [...new Set(rects.map((rect) => Math.round(rect.top)))];
+        out.lines = tops.length;
+        const box = words.getBoundingClientRect();
+        out.textCut = rects.some((rect) => rect.bottom > box.bottom + 1 || rect.right > box.right + 1 || rect.left < box.left - 1);
+        const dot = state!.querySelector<HTMLElement>(".card-state-dot")!.getBoundingClientRect();
+        const first = rects.filter((rect) => Math.round(rect.top) === Math.min(...tops));
+        if (first.length) out.dotOffset = Math.abs((dot.top + dot.bottom) / 2 - (Math.min(...first.map((r) => r.top)) + Math.max(...first.map((r) => r.bottom))) / 2);
+      }
+      const answer = frame.querySelector<HTMLElement>(phone ? "[data-phone-card-answer]" : "[data-card-answer]");
+      out.answer = answer ? { kind: answer.getAttribute(phone ? "data-phone-card-answer" : "data-card-answer"), height: answer.getBoundingClientRect().height } : null;
+      out.answerButtons = frame.querySelectorAll("[data-answer-action]").length;
+      out.needs = Boolean(frame.querySelector('[data-needs="1"]')) || element.getAttribute("data-needs") === "1";
+      out.attention = element.getAttribute("data-attention");
+      /* The fail edge's own count («↺ 2/3») keeps its ink: it says a loop fired, not that anyone is asked. */
+      for (const ink of frame.querySelectorAll<HTMLElement>(".pb-pill, .card-state-dot, .pstate-word, .pb-answer .stage-report, .pb-merge, .pb-reason")) {
+        const style = getComputedStyle(ink);
+        if (style.color === warning || style.borderColor === warning || style.backgroundColor === warning) out.warningInk.push(ink.className.slice(0, 60));
+      }
+      return out;
+    });
+  };
+  const checkCards = (label: string, readings: CardReading[], phone: boolean, failures: string[]) => {
+    for (const got of readings) {
+      const fail = (text: string) => failures.push(`${label} ${got.id}: ${text}`);
+      if (!got.found) { fail("not drawn"); continue; }
+      if (got.owner !== OWNERS[got.id]) fail(`owner ${got.owner}, expected ${OWNERS[got.id]}`);
+      if (got.answerButtons) fail(`${got.answerButtons} answer buttons on the card`);
+      if (got.lines > 2) fail(`state line takes ${got.lines} lines: ${got.text}`);
+      if (got.textCut) fail(`state line cut: ${got.text}`);
+      if (got.dotOffset !== null && got.dotOffset > 2) fail(`dot ${got.dotOffset.toFixed(1)}px off its first line`);
+      if (got.ampm) fail(`AM/PM in ${got.text}`);
+      /* «Answer» on C3 and C4 only; on the phone C3's own review row is that answer. */
+      const wantsAnswer = got.id === "t-calm-ask" || (got.id === "t-calm-form" && !phone);
+      if (wantsAnswer !== Boolean(got.answer)) fail(`«Answer» ${got.answer ? "drawn" : "missing"}`);
+      if (phone && got.answer && got.answer.height < 44) fail(`«Answer» ${got.answer.height}px tall`);
+      if (!["t-calm-form", "t-calm-ask"].includes(got.id)) {
+        if (got.needs || got.attention === "needs") fail("draws the operator's amber");
+        if (got.warningInk.length) fail(`warning ink on ${got.warningInk.join(", ")}`);
+      }
+    }
+  };
+
+  /* The task's deadline and images on the card: the old Tasks panel's two facts, in its words. */
+  type MetaReading = { id: string; due: string | null; dueState: string | null; dueInk: string; danger: string; images: string | null; lines: number; cut: boolean };
+  const READ_META = ({ ids, phone }: { ids: string[]; phone: boolean }) => {
+    const probe = document.createElement("span");
+    probe.style.color = "var(--color-danger)";
+    document.body.append(probe);
+    const danger = getComputedStyle(probe).color;
+    probe.remove();
+    return ids.map((id): MetaReading => {
+      const element = document.querySelector<HTMLElement>(phone ? `[data-phone-card="task:${id}"]` : `[data-kanban-board] .card[data-id="task:${id}"]`);
+      const meta = element?.querySelector<HTMLElement>("[data-task-meta]");
+      const due = meta?.querySelector<HTMLElement>("[data-task-due]");
+      const box = meta?.getBoundingClientRect();
+      const range = document.createRange();
+      if (meta) range.selectNodeContents(meta);
+      const rects = meta ? [...range.getClientRects()].filter((rect) => rect.width > 0.5) : [];
+      return {
+        id, due: due?.textContent ?? null, dueState: due?.getAttribute("data-task-due") ?? null, dueInk: due ? getComputedStyle(due).color : "", danger,
+        images: meta?.querySelector("[data-task-images]")?.textContent ?? null,
+        lines: new Set(rects.map((rect) => Math.round(rect.top))).size,
+        cut: Boolean(box && rects.some((rect) => rect.right > box.right + 1 || rect.left < box.left - 1)),
+      };
+    });
+  };
+  const checkMeta = (label: string, readings: MetaReading[], failures: string[], overdueWord: string) => {
+    for (const got of readings) {
+      const fail = (text: string) => failures.push(`${label} ${got.id} meta: ${text}`);
+      if (!got.due?.startsWith("⏰ ") || /\b(AM|PM)\b/.test(got.due)) fail(`deadline ${JSON.stringify(got.due)}`);
+      if (got.cut || got.lines > 2) fail(`cut or on ${got.lines} lines`);
+      if (got.id === "t-calm-commit") {
+        if (got.dueState !== "due" || got.dueInk === got.danger) fail(`a deadline ahead drawn as ${got.dueState}`);
+        if (got.images !== "📎 2") fail(`images ${JSON.stringify(got.images)}`);
+      } else if (got.dueState !== "overdue" || got.dueInk !== got.danger || !got.due?.endsWith(` · ${overdueWord}`)) fail(`an overdue deadline drawn as ${got.dueState} in ${got.dueInk}: ${JSON.stringify(got.due)}`);
+    }
+  };
+
+  browserTest("the closed board at 1440 and 1000, en and uk, light and dark: one state line, «Answer» only where asked, no amber on the seat's cards; opened, the timeline and the ⋯ answers", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/calm-cards-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const width of [1440, 1000]) {
+        const label = `${width}-${lang}-${scheme}`;
+        const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=calm-cards`, { width, height: 900 }, scheme, lang, "reduce");
+        try {
+          await page.locator("[data-kanban-board]").waitFor({ timeout: 30_000 });
+          const show = async (status: string) => {
+            const tab = page.locator(`.tabs-nav [data-tab="${status}"]`);
+            if (await tab.isVisible()) await tab.click();
+          };
+          await show("assigned");
+          await page.waitForSelector(`${card("t-calm-commit")} [data-card-state]`, { timeout: 30_000 });
+          /* The fixture's toast goes, and the seat's panel folds, so the frame is the board. */
+          await page.locator("[data-attention-toast-dismiss]").click({ timeout: 5_000 }).catch(() => {});
+          const fold = page.locator("[data-seat-collapse]");
+          if (await fold.count()) await fold.first().click({ timeout: 5_000 }).catch(() => {});
+          await page.mouse.move(2, 2);
+          await page.waitForTimeout(600);
+          await page.screenshot({ path: path.join(OUT, `board-closed-${label}.png`) });
+          await page.locator('[data-kanban-board] .column[data-status="assigned"]').screenshot({ path: path.join(OUT, `column-closed-${label}.png`) });
+          const ids = Object.keys(OWNERS).filter((id) => id !== "t-calm-done");
+          const closed = await page.evaluate(READ_CARDS, { ids, phone: false });
+          await show("done");
+          closed.push(...await page.evaluate(READ_CARDS, { ids: ["t-calm-done"], phone: false }));
+          await show("assigned");
+          checkCards(label, closed, false, failures);
+          const reading: Record<string, unknown> = { closed };
+          if (await page.locator("[data-kanban-board] [data-answer-action]").count()) failures.push(`${label}: an answer button on the board`);
+          /* The task's deadline and images, as the old Tasks panel wrote them: C1's ahead with two images, C9's overdue. */
+          const metas = await page.evaluate(READ_META, { ids: ["t-calm-commit", "t-calm-cleared"], phone: false });
+          checkMeta(label, metas, failures, t("cardState.overdue"));
+          reading.meta = metas;
+          await page.locator(card("t-calm-commit")).screenshot({ path: path.join(OUT, `meta-closed-c1-${label}.png`) });
+          await page.locator(card("t-calm-cleared")).screenshot({ path: path.join(OUT, `meta-closed-c9-${label}.png`) });
+          /* A closed card that has not started keeps its priority mark. */
+          await show("inbox");
+          const mark = await page.evaluate((selector) => document.querySelector(`${selector} .card-state .prio-mark`)?.getAttribute("data-priority") ?? null, card("t-calm-inbox"));
+          if (mark !== "high") failures.push(`${label}: the closed Inbox card's priority mark reads ${mark}`);
+          await show("assigned");
+          const sideways = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+          if (sideways > 0) failures.push(`${label}: the page scrolls sideways by ${sideways}px`);
+          if (scheme === "light") {
+            /* The dot's popover: the owner and how long, over no word of the line. */
+            const dot = page.locator(`${card("t-calm-commit")} [data-card-state-dot]`);
+            await dot.hover();
+            const pop = page.locator("[data-card-state-pop]");
+            await pop.waitFor({ timeout: 10_000 });
+            const popover = await page.evaluate((selector) => {
+              const bubble = document.querySelector("[data-card-state-pop]")!.closest('[role="tooltip"]')!.getBoundingClientRect();
+              const words = document.querySelector(`${selector} [data-card-state-text]`)!;
+              const range = document.createRange();
+              range.selectNodeContents(words);
+              const covered = [...range.getClientRects()].some((rect) => Math.min(rect.right, bubble.right) - Math.max(rect.left, bubble.left) > 0.5 && Math.min(rect.bottom, bubble.bottom) - Math.max(rect.top, bubble.top) > 0.5);
+              return { text: document.querySelector("[data-card-state-pop]")!.textContent ?? "", covered };
+            }, card("t-calm-commit"));
+            if (popover.covered) failures.push(`${label}: the popover covers the state line`);
+            if (!popover.text.startsWith(t("cardState.popover.seat", { age: "\u0000" }).split("\u0000")[0]!)) failures.push(`${label}: popover ${JSON.stringify(popover.text)}`);
+            await page.screenshot({ path: path.join(OUT, `popover-c1-${label}.png`) });
+            await page.mouse.move(2, 2);
+            reading.popover = popover;
+
+            /* The ⋯ answers: as many as the lane's own, manual where the seat owns it. */
+            const menus: Record<string, unknown> = {};
+            for (const [id, want] of Object.entries(ANSWERS)) {
+              await page.locator(`[data-menu="task:${id}"]`).click();
+              const multi = page.locator('.menu [data-cm-section="pipelines"]');
+              if (await multi.count()) await multi.click();
+              await page.locator(`.menu [data-cm-section="lane:${want.lane}"]`).click();
+              const items = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.menu [data-cm-item^="answer:"]')].map((item) => ({
+                id: item.getAttribute("data-cm-item"), label: item.querySelector(".lbl")?.firstChild?.textContent ?? "", why: item.querySelector(".why")?.textContent ?? null, height: item.getBoundingClientRect().height,
+              })));
+              if (JSON.stringify(items.map((item) => item.id)) !== JSON.stringify(want.actions)) failures.push(`${label} ${id}: ⋯ answers ${JSON.stringify(items.map((item) => item.id))}`);
+              const manual = OWNERS[id] === "seat";
+              for (const item of items) if ((item.why === t("cardState.manualHint")) !== manual) failures.push(`${label} ${id}: ${item.label} hint ${JSON.stringify(item.why)}`);
+              if (id === "t-calm-commit") await page.locator(".menu").first().screenshot({ path: path.join(OUT, `menu-c1-${label}.png`) });
+              menus[id] = items;
+              await page.keyboard.press("Escape");
+            }
+            reading.menus = menus;
+
+            /* C3's «Answer» opens the decision form it names. */
+            await page.locator(`${card("t-calm-form")} [data-card-answer]`).click();
+            await page.locator('[data-prototype-review="t-calm-form"]').first().waitFor({ timeout: 15_000 });
+            await page.waitForTimeout(400);
+            await page.screenshot({ path: path.join(OUT, `answer-c3-form-${label}.png`) });
+            await page.keyboard.press("Escape");
+            await page.waitForTimeout(300);
+
+            /* Opened: C1, C3 and C8 with their timelines. */
+            for (const id of ["t-calm-commit", "t-calm-form", "t-calm-long"]) {
+              await page.locator(`${card(id)} [data-card-state-toggle]`).click();
+              const element = page.locator(card(id));
+              await element.locator("[data-chronology]").waitFor({ timeout: 10_000 });
+              await element.scrollIntoViewIfNeeded();
+              await element.screenshot({ path: path.join(OUT, `open-${id.replace("t-calm-", "")}-${label}.png`) });
+            }
+            const timeline = await page.evaluate((selector) => {
+              const root = document.querySelector(`${selector} [data-chronology]`)!;
+              const entries = [...root.querySelectorAll<HTMLElement>("[data-chronology-entry]")];
+              const stop = root.querySelector<HTMLElement>('[data-chronology-stop="p-calm-long-a"]');
+              const box = stop?.querySelector<HTMLElement>("[data-chronology-link]")?.getBoundingClientRect();
+              return {
+                entries: entries.length, earlier: root.querySelector("[data-chronology-earlier]")?.textContent ?? null,
+                stopShown: Boolean(stop && box && box.width > 0 && box.height > 0), stopFirst: entries[0] === stop,
+                times: [...root.querySelectorAll(".chronology-time")].map((node) => node.textContent ?? ""), texts: entries.map((entry) => entry.querySelector(".chronology-what")?.textContent ?? ""),
+              };
+            }, card("t-calm-long"));
+            if (timeline.entries !== 8) failures.push(`${label}: C8 shows ${timeline.entries} entries`);
+            if (!timeline.earlier?.startsWith(t("chronology.earlier", { count: "\u0000" }).split("\u0000")[0]!)) failures.push(`${label}: C8 fold row ${JSON.stringify(timeline.earlier)}`);
+            if (!timeline.stopShown || !timeline.stopFirst) failures.push(`${label}: C8's stop is not first after the fold, with its links`);
+            if (timeline.times.some((text) => /\b(AM|PM)\b/i.test(text))) failures.push(`${label}: AM/PM in ${timeline.times.join(", ")}`);
+            reading.timeline = timeline;
+            const openMeta = await page.evaluate(READ_META, { ids: ["t-calm-commit"], phone: false });
+            checkMeta(`${label} opened`, openMeta, failures, t("cardState.overdue"));
+            /* Opened, the seat's cards still draw no amber. */
+            const opened = await page.evaluate(READ_CARDS, { ids: ["t-calm-commit", "t-calm-long"], phone: false });
+            for (const got of opened) if (got.needs || got.warningInk.length) failures.push(`${label} ${got.id} opened: amber on ${got.warningInk.join(", ") || "data-needs"}`);
+            reading.opened = opened;
+
+            /* The seat-handled stop carries Skip and Retry as links on its entry, on one row, and no ⋯ of its own. */
+            const stopLinks: Record<string, unknown> = {};
+            for (const id of ["t-calm-commit", "t-calm-long"]) {
+              const got = await page.evaluate(READ_STOP_LINKS, { root: card(id), lane: ANSWERS[id]!.lane });
+              checkStopLinks(label, id, got, failures, 20);
+              stopLinks[id] = got;
+              const entry = page.locator(`${card(id)} [data-chronology-stop="${ANSWERS[id]!.lane}"]`);
+              await entry.scrollIntoViewIfNeeded();
+              await entry.screenshot({ path: path.join(OUT, `stop-links-${id.replace("t-calm-", "")}-${label}.png`) });
+            }
+            /* The operator's own stop keeps its ⋯ and draws no link. */
+            const own = await page.evaluate(READ_STOP_LINKS, { root: card("t-calm-form"), lane: ANSWERS["t-calm-form"]!.lane });
+            if (own.actions.length || !own.menu) failures.push(`${label}: the operator's own stop ${JSON.stringify(own)}`);
+            reading.stopLinks = stopLinks;
+            if (lang === "en") {
+              /* A manual retry goes out as the board's guarded retry. */
+              await page.locator(`${card("t-calm-commit")} [data-chronology-link="retry-stage"]`).click();
+              await page.waitForTimeout(800);
+              const patches = await page.evaluate(() => (window as unknown as { evidence?: { pipelinePatches: Array<{ id: string; body: Record<string, unknown> }> } }).evidence?.pipelinePatches ?? []);
+              if (!patches.some((entry) => entry.id === "p-calm-commit" && entry.body.action === "retry-stage" && entry.body.expectedStageId === "build")) failures.push(`${label}: manual retry sent ${JSON.stringify(patches)}`);
+              reading.patches = patches;
+            }
+          }
+          readings[label] = reading;
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "desktop.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 600_000);
+
+  browserTest("the phone at 390, en and uk, light and dark: the card's state line and «Answer», the task screen's timeline, and the lane sheet's answers", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/calm-cards-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `390-${lang}-${scheme}`;
+        const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=calm-cards`, { width: 390, height: 844 }, scheme, lang, "reduce", true);
+        try {
+          await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          await page.waitForSelector('[data-phone-card="task:t-calm-commit"] [data-card-state]', { timeout: 30_000 });
+          await page.waitForTimeout(600);
+          await page.screenshot({ path: path.join(OUT, `board-closed-${label}.png`), fullPage: false });
+          const ids = Object.keys(OWNERS).filter((id) => id !== "t-calm-done");
+          const closed = await page.evaluate(READ_CARDS, { ids, phone: true });
+          await page.locator('[data-phone-kanban-tab="done"]').click();
+          await page.waitForSelector('[data-phone-card="task:t-calm-done"]', { timeout: 10_000 });
+          closed.push(...await page.evaluate(READ_CARDS, { ids: ["t-calm-done"], phone: true }));
+          await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          checkCards(label, closed, true, failures);
+          const metas = await page.evaluate(READ_META, { ids: ["t-calm-commit", "t-calm-cleared"], phone: true });
+          checkMeta(label, metas, failures, t("cardState.overdue"));
+          await page.locator('[data-phone-card="task:t-calm-commit"]').scrollIntoViewIfNeeded();
+          await page.locator('[data-phone-card="task:t-calm-commit"]').screenshot({ path: path.join(OUT, `meta-closed-c1-${label}.png`) });
+          await page.locator('[data-phone-card="task:t-calm-cleared"]').scrollIntoViewIfNeeded();
+          await page.locator('[data-phone-card="task:t-calm-cleared"]').screenshot({ path: path.join(OUT, `meta-closed-c9-${label}.png`) });
+          const sideways = await page.evaluate(() => {
+            const scroller = document.scrollingElement!;
+            scroller.scrollLeft = 200;
+            const moved = scroller.scrollLeft;
+            scroller.scrollLeft = 0;
+            return moved + Math.max(0, document.documentElement.scrollWidth - 390);
+          });
+          if (sideways > 0) failures.push(`${label}: the page scrolls sideways by ${sideways}px`);
+          const reading: Record<string, unknown> = { closed, meta: metas };
+          if (scheme === "light") {
+            /* C1's task screen: its timeline, and its stop's ⋯ opening the lane sheet with the answers. */
+            await page.locator('[data-phone-card="task:t-calm-commit"]').click();
+            const chronology = page.locator("[data-chronology]");
+            await chronology.waitFor({ timeout: 15_000 });
+            await chronology.scrollIntoViewIfNeeded();
+            await page.screenshot({ path: path.join(OUT, `task-c1-${label}.png`) });
+            if (await page.locator("[data-answer-action]").count()) failures.push(`${label}: an answer button on the task screen`);
+            /* The stop's links stand on the entry, 44 px tall and on one row; the lane sheet holds the other answers only. */
+            const links = await page.evaluate(READ_STOP_LINKS, { root: "body", lane: "p-calm-commit" });
+            checkStopLinks(label, "t-calm-commit", links, failures, 44);
+            reading.stopLinks = links;
+            await page.screenshot({ path: path.join(OUT, `stop-links-c1-${label}.png`) });
+            await page.locator('[data-phone-task-lane="p-calm-commit"] [data-pipeline-menu]').click();
+            await page.locator('[data-phone-task-lane-sheet="p-calm-commit"]').waitFor({ timeout: 10_000 });
+            await page.waitForTimeout(300);
+            const sheet = await page.evaluate(() => ({
+              answers: [...document.querySelectorAll<HTMLElement>("[data-phone-lane-answer]")].map((row) => row.getAttribute("data-phone-lane-answer")),
+              caption: document.querySelector("[data-phone-lane-answers-caption]")?.textContent ?? null,
+            }));
+            if (sheet.answers.length) failures.push(`${label}: the lane sheet still lists ${JSON.stringify(sheet.answers)}`);
+            reading.sheet = sheet;
+            await page.locator("[data-mobile2-close]").first().click();
+            await page.goBack();
+
+            /* C8's task screen: eight entries, the fold row and the pinned stop. */
+            await page.locator('[data-phone-kanban-tab="assigned"]').click();
+            await page.locator('[data-phone-card="task:t-calm-long"]').click();
+            await chronology.waitFor({ timeout: 15_000 });
+            await chronology.scrollIntoViewIfNeeded();
+            const timeline = await page.evaluate(() => {
+              const root = document.querySelector("[data-chronology]")!;
+              const entries = [...root.querySelectorAll<HTMLElement>("[data-chronology-entry]")];
+              return { entries: entries.length, earlier: Boolean(root.querySelector("[data-chronology-earlier]")), stopFirst: entries[0]?.getAttribute("data-chronology-stop") === "p-calm-long-a" };
+            });
+            if (timeline.entries !== 8 || !timeline.earlier || !timeline.stopFirst) failures.push(`${label}: C8 timeline ${JSON.stringify(timeline)}`);
+            checkStopLinks(label, "t-calm-long", await page.evaluate(READ_STOP_LINKS, { root: "body", lane: "p-calm-long-a" }), failures, 44);
+            await page.screenshot({ path: path.join(OUT, `task-c8-${label}.png`) });
+            reading.timeline = timeline;
+            await page.goBack();
+
+            /* C3's task screen, the operator's decision form waiting. */
+            await page.locator('[data-phone-kanban-tab="assigned"]').click();
+            await page.locator('[data-phone-card="task:t-calm-form"]').click();
+            await chronology.waitFor({ timeout: 15_000 });
+            await page.screenshot({ path: path.join(OUT, `task-c3-${label}.png`) });
+          }
+          readings[label] = reading;
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "phone.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
+describe("prototype review: none fits and the tile gallery", () => {
+  const SIZES = [
+    { name: "desktop-1440", viewport: { width: 1440, height: 900 }, phone: false, columns: 5 },
+    { name: "pane-1000", viewport: { width: 1000, height: 700 }, phone: false, columns: 3 },
+    { name: "phone-390", viewport: { width: 390, height: 844 }, phone: true, columns: 2 },
+  ];
+  browserTest("prototype review: none fits and the tile gallery at desktop and phone widths", async () => {
+    const out = path.resolve(".artifacts/prototype-review"); fs.mkdirSync(out, { recursive: true });
+    const video = path.join(out, "proto-video.webm");
+    execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=12:duration=2", "-c:v", "libvpx", "-b:v", "400k", video]);
+    const server = await serveEvidenceFixture(out, undefined, { "/proto-video.webm": () => new Response(Bun.file(video), { headers: { "content-type": "video/webm" } }) });
+    const browser = await chromium.launch(LAUNCH);
+    const evidencePath = "evidence/prototype-review/none-fits-gallery.json";
+    const readings: Record<string, unknown> = fs.existsSync(evidencePath) ? JSON.parse(fs.readFileSync(evidencePath, "utf8")) : {};
+    const only = (process.env.PROTOTYPE_REVIEW_ONLY ?? "").split(",").filter(Boolean);
+    try {
+      for (const size of SIZES) for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const name = `${size.name}-${locale}-${theme}`;
+        if (only.length && !only.some(filter => name.includes(filter))) continue;
+        const context = await browser.newContext({ viewport: size.viewport, locale: locale === "uk" ? "uk-UA" : "en-GB", isMobile: size.phone, hasTouch: size.phone, colorScheme: theme, reducedMotion: "reduce" });
+        await context.addInitScript(language => localStorage.setItem("llv_lang", language), locale);
+        const page = await context.newPage();
+        await page.route("**/api/operator/settings", route => route.fulfill({ json: { language: locale } }));
+        await page.goto(`${server.base}?proto=1&duplicate-frames=1&lang=${locale}`);
+        await page.evaluate(theme => { document.documentElement.setAttribute("data-theme", theme); localStorage.setItem("llv-theme", theme); }, theme);
+        await page.locator('[data-prototype-button="t-search"], [data-phone-card-prototype-button="t-search"]').first().waitFor();
+        await page.locator(size.phone ? '[data-phone-card-prototype-button="t-search"]' : '[data-prototype-button="t-search"]').click();
+        await page.locator('[data-prototype-gallery]').waitFor();
+        const capture = async (state: string) => { await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-tile] img")].filter(img => { const box = img.getBoundingClientRect(); return box.bottom > 0 && box.top < innerHeight; }).every(img => img.complete && img.naturalWidth > 0)); await page.screenshot({ path: path.join(out, `${name}-${state}.png`) }); };
+        const geometry = await page.evaluate(({ width, phone }) => {
+          const gallery = document.querySelector<HTMLElement>("[data-prototype-gallery]")!;
+          const scroll = phone ? gallery.closest<HTMLElement>("[data-mobile2-sheet-body]")! : gallery;
+          const bounds = gallery.getBoundingClientRect(); gallery.scrollLeft = 10000;
+          const tiles = [...gallery.querySelectorAll<HTMLElement>("[data-prototype-tile]")];
+          const squares = [...gallery.querySelectorAll<HTMLElement>("[data-prototype-tile-square]")].map(el => el.getBoundingClientRect());
+          const captions = [...gallery.querySelectorAll<HTMLElement>("[data-prototype-tile-caption]")].map(el => {
+            const range = document.createRange(); range.selectNodeContents(el);
+            const own = el.getBoundingClientRect(); const text = range.getBoundingClientRect();
+            return { text: el.textContent, fits: text.left >= own.left - .5 && text.right <= own.right + .5 && text.bottom <= own.bottom + .5 };
+          });
+          return {
+            tiles: tiles.length, stage: !!document.querySelector("[data-prototype-stage]"), strip: !!document.querySelector("[data-prototype-strip]"),
+            columns: getComputedStyle(document.querySelector("[data-prototype-grid]")!).gridTemplateColumns.split(" ").length,
+            scrollLeft: gallery.scrollLeft, vertical: scroll.scrollHeight > scroll.clientHeight,
+            contained: tiles.every(el => el.getBoundingClientRect().right <= Math.min(bounds.right, width) + .5),
+            squares: squares.every(box => Math.abs(box.width - box.height) <= .5),
+            numbers: tiles.every(el => el.querySelector("[data-prototype-tile-number]")?.textContent === el.closest<HTMLElement>("[data-prototype-group]")?.dataset.prototypeGroup),
+            captions,
+          };
+        }, { width: size.viewport.width, phone: size.phone });
+        expect(geometry.stage).toBe(false); expect(geometry.strip).toBe(false);
+        expect(geometry.tiles).toBe(49); expect(geometry.columns).toBe(size.columns);
+        expect(geometry.scrollLeft).toBe(0); expect(geometry.vertical).toBe(true);
+        expect(geometry.contained).toBe(true); expect(geometry.squares).toBe(true); expect(geometry.numbers).toBe(true);
+        expect(geometry.captions.every(caption => caption.fits)).toBe(true);
+        await capture("rest");
+        const tile = page.locator('[data-prototype-tile="1:f0"]');
+        const src = await tile.locator("img").getAttribute("src"); await tile.click();
+        await page.locator('[data-lightbox-position]').waitFor();
+        expect(await page.locator('[role=dialog]:has([data-lightbox-position]) img:visible').first().getAttribute("src")).toBe(src);
+        await capture("enlarged"); await page.keyboard.press("Escape");
+        await page.waitForFunction(() => document.activeElement?.getAttribute("data-prototype-tile") === "1:f0");
+        const returned = await tile.evaluate(el => { const box = el.getBoundingClientRect(); const body = el.closest<HTMLElement>("[data-mobile2-sheet-body]"); const scroll = (body ?? el.closest<HTMLElement>("[data-prototype-gallery]")!).getBoundingClientRect(); const context = body?.querySelector<HTMLElement>("[data-prototype-context]")?.getBoundingClientRect(); return box.top >= Math.max(scroll.top, context?.bottom ?? scroll.top) - .5 && box.bottom <= scroll.bottom + .5; });
+        expect(returned).toBe(true);
+        const duplicateTile = page.locator('[data-prototype-tile="2:f0"]');
+        const duplicateSrc = await duplicateTile.locator("img").getAttribute("src");
+        expect(duplicateSrc).toBe(src);
+        await duplicateTile.click(); await page.locator('[data-lightbox-position]').waitFor();
+        const duplicateOpened = { position: await page.locator('[data-lightbox-position]').innerText(), caption: await page.locator('[data-lightbox-caption]').innerText() };
+        expect(duplicateOpened.position).toBe("4 / 48");
+        expect(duplicateOpened.caption).toContain(locale === "uk" ? "2 · Дві колонки" : "2 · Two columns");
+        await capture("duplicate-frame");
+        await page.keyboard.press("ArrowLeft");
+        expect(await page.locator('[data-lightbox-position]').innerText()).toBe("3 / 48");
+        await page.keyboard.press("ArrowRight");
+        expect(await page.locator('[data-lightbox-position]').innerText()).toBe("4 / 48");
+        await page.keyboard.press("Escape");
+        await page.waitForFunction(() => document.activeElement?.getAttribute("data-prototype-tile") === "2:f0");
+        const duplicateReturned = await page.evaluate(() => (document.activeElement as HTMLElement | null)?.getAttribute("data-prototype-tile"));
+        await page.locator('[data-prototype-choose="1"]').first().click(); await capture("picked");
+        await page.locator('[data-prototype-comment-field]').fill(locale === "uk" ? "Спростити всі варіанти." : "Simplify every variant."); await capture("pickedtext");
+        await page.locator('[data-prototype-comment-field]').fill("");
+        await page.locator('[data-prototype-reject]').click();
+        const armed = await page.locator('[data-prototype-variant]').evaluateAll(rows => rows.every(el => el.getAttribute("data-chosen") === "0")); expect(armed).toBe(true);
+        expect(await page.locator('[data-prototype-save]').innerText()).toBe(translate(locale, "proto.reject.save"));
+        const postsBefore = await page.evaluate(() => (window as unknown as { protoPosts: unknown[] }).protoPosts.length);
+        await page.locator('[data-prototype-save]').click(); await page.locator('[data-prototype-reject-needs]').waitFor();
+        expect(await page.locator('[data-prototype-comment-field]').getAttribute("aria-invalid")).toBe("true");
+        expect(await page.evaluate(() => (window as unknown as { protoPosts: unknown[] }).protoPosts.length)).toBe(postsBefore);
+        await capture("asks");
+        const footer = await page.evaluate(() => {
+          const chip = document.querySelector<HTMLElement>("[data-prototype-reject]")!.getBoundingClientRect();
+          const actions = [...document.querySelectorAll<HTMLElement>("[data-prototype-actions] button")].map(el => el.getBoundingClientRect());
+          const prompt = document.querySelector<HTMLElement>("[data-prototype-reject-needs]")!.getBoundingClientRect();
+          const colors = getComputedStyle(document.querySelector<HTMLElement>("[data-prototype-save]")!);
+          const luminance = (color: string) => color.match(/[\d.]+/g)!.slice(0, 3).map(Number).map(channel => channel / 255).map(channel => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4).reduce((sum, channel, i) => sum + channel * [.2126, .7152, .0722][i]!, 0);
+          const luminances = [luminance(colors.color), luminance(colors.backgroundColor)].sort((a, b) => a - b);
+          const contrast = (luminances[1]! + .05) / (luminances[0]! + .05);
+          return { chipHeight: chip.height, actionHeights: actions.map(box => box.height), oneRow: actions.every(box => Math.abs(box.top - actions[0]!.top) < .5), promptVisible: prompt.bottom <= innerHeight, contrast, overlaps: actions.some(box => box.left < chip.right && box.right > chip.left && box.top < chip.bottom && box.bottom > chip.top) };
+        });
+        expect(footer.overlaps).toBe(false); expect(footer.promptVisible).toBe(true); expect(footer.oneRow).toBe(true);
+        expect(footer.contrast).toBeGreaterThanOrEqual(4.5);
+        expect(footer.actionHeights.every(height => Math.abs(height - footer.chipHeight) < .5)).toBe(true);
+        if (size.phone) expect(footer.chipHeight).toBe(44);
+        const corrections = locale === "uk" ? "Спростити всі варіанти." : "Simplify every variant.";
+        await page.locator('[data-prototype-comment-field]').fill(corrections); await capture("armed");
+        await page.locator('[data-prototype-save]').click(); await page.locator('[data-prototype-rejected]').waitFor();
+        const posted = await page.evaluate(() => (window as unknown as { protoPosts: Record<string, unknown>[] }).protoPosts.at(-1));
+        expect(posted).toEqual({ taskId: "t-search", reviewId: "r-search", chosen: [], comment: corrections, reject: true });
+        expect(await page.locator('[data-prototype-comment]').innerText()).toBe(corrections); await capture("rejected");
+        await page.keyboard.press("Escape");
+        const cardButton = page.locator(size.phone ? '[data-phone-card-prototype-button="t-search"]' : '[data-prototype-button="t-search"]');
+        expect(await cardButton.getAttribute("aria-label")).toContain(locale === "uk" ? "Прототип відхилено" : "Prototype rejected");
+        if (size.phone) {
+          await page.locator('[data-phone-card="task:t-search"]').click();
+          const row = page.locator('[data-phone-task-prototype="t-search"]');
+          await row.waitFor();
+          expect(await row.innerText()).toContain(locale === "uk" ? "відхилено" : "rejected");
+        }
+        readings[name] = { geometry, returned, duplicateOpened, duplicateReturned, armed, footer, posted, frames: ["rest", "enlarged", "duplicate-frame", "picked", "pickedtext", "asks", "armed", "rejected"].map(state => `.artifacts/prototype-review/${name}-${state}.png`) };
+        fs.mkdirSync(path.dirname(evidencePath), { recursive: true }); fs.writeFileSync(evidencePath, `${JSON.stringify(readings, null, 2)}\n`);
+        await context.close();
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
+});
+
+
+describe("operator decision forms: rejecting the task's prototype variants", () => {
+  browserTest("none fits needs corrections in the form and sends an empty choice as rejection", async () => {
+    const out = path.resolve(".artifacts/prototype-review/decision-rejection");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?decisions=1`, { width, height: phone ? 844 : 900 }, scheme, lang, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator("[data-mobile2-seat-open]").click();
+            await page.locator("[data-decision-strip]").click();
+          }
+          const card = page.locator('[data-decision-card="open"]');
+          await card.waitFor({ timeout: 30_000 });
+          const reject = card.locator("[data-decision-reject]");
+          await reject.click();
+          expect(await reject.getAttribute("aria-checked")).toBe("true");
+          expect(await card.locator("[data-decision-send]").isEnabled()).toBe(false);
+          await card.locator("[data-decision-comment]").fill("Redo all variants with fewer controls.");
+          const send = card.locator("[data-decision-send]");
+          expect(await send.textContent()).toContain(translate(lang, "proto.reject.save"));
+          await send.scrollIntoViewIfNeeded();
+          const geometry = await send.evaluate((element, width) => {
+            const box = element.getBoundingClientRect();
+            const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+            return { height: box.height, inside: box.left >= 0 && box.right <= width && box.top >= 0 && box.bottom <= innerHeight,
+              overflow: document.documentElement.scrollWidth > width,
+              uncovered: hit === element || element.contains(hit), background: getComputedStyle(element).backgroundColor };
+          }, width);
+          expect(geometry.inside).toBe(true); expect(geometry.uncovered).toBe(true);
+          expect(geometry.overflow).toBe(false);
+          expect(geometry.background).not.toBe("rgba(0, 0, 0, 0)");
+          if (phone) expect(geometry.height).toBeGreaterThanOrEqual(44);
+          await page.screenshot({ path: path.join(out, `${width}-${lang}-${scheme}-corrections.png`) });
+          await send.click();
+          await page.waitForFunction(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length === 1);
+          const posts = await page.evaluate(() => (window as unknown as { decisionPosts: { reviewId: string; reject?: boolean; chosen: number[]; comment: string }[] }).decisionPosts);
+          expect(posts[0]).toMatchObject({ reviewId: `pr_${"c".repeat(32)}`, reject: true, chosen: [], comment: "Redo all variants with fewer controls." });
+          await page.waitForFunction(() => !document.querySelector(`[data-decision-card="open"][data-decision-review="pr_${"c".repeat(32)}"]`));
+          expect(pageErrors).toEqual([]);
+          readings.push({ width, lang, scheme, geometry, posts });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync("evidence/prototype-review/decision-rejection.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); served.stop(); }
+  }, 300_000);
 });

@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { prototypeReviewNotices, prototypeReviewSummary, withPrototypeReviewSummaries } from "./read";
-import { prototypeRoundsSuperseded } from "./model";
+import { prototypeRoundsSuperseded, prototypeRoundMetadata } from "./model";
 import type { PrototypeReviewRound } from "./types";
 
 function round(id: string, title: string, createdAt: string, decided: boolean): PrototypeReviewRound {
@@ -81,4 +81,14 @@ test("a covered waiting round leaves the attention queue, undo and a newer round
   expect(prototypeReviewNotices(withPrototypeReviewSummaries([held], new Map()))).toHaveLength(1);
   held.prototypeReviews!.push(round("review-b", "Next", "2026-10-04T00:00:00Z", false));
   expect(prototypeReviewNotices(withPrototypeReviewSummaries([held], index))[0]!.reviewId).toBe("review-b");
+});
+
+
+test("rejection survives summary and metadata while critic provenance stays local", () => {
+  const review = round("r-rejected", "Redo", "2026-10-12T10:00:00Z", true);
+  review.decision!.chosen = []; review.decision!.rejected = true;
+  review.critic = { pipelineId: "lane", stageId: "critic", attempt: 1, outcome: "passed" };
+  expect(prototypeReviewSummary([review])?.decision).toMatchObject({ chosen: [], rejected: true, comment: "Smaller." });
+  const metadata = prototypeRoundMetadata(review);
+  expect(metadata.decision?.rejected).toBe(true); expect(metadata).not.toHaveProperty("critic");
 });

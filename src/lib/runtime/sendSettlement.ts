@@ -10,6 +10,7 @@ import {
 } from "@/lib/agent/registry";
 import { MIGRATION_DELIVERY_CANCELLATION_PREFIX } from "@/lib/accounts/migration/intentLiveness";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
+import { hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
 import { confirmedSend } from "./confirmedSend";
@@ -674,11 +675,12 @@ export async function settleDueSends(
   const file = registry.readOnlySnapshot();
   const now = (ports.now ?? Date.now)();
   const operations = new Set<string>();
-  for (const delivery of Object.values(file.heldDeliveries)) {
+  /* Open sends are never archived: only hot rows can be due (#2761). */
+  for (const [, delivery] of hotRegistryRows(file, "heldDeliveries")) {
     if (!SETTLEABLE_DELIVERY_STATES.has(delivery.state) || !delivery.command.operationId) continue;
     operations.add(delivery.command.operationId);
   }
-  for (const [operationId, owner] of Object.entries(file.deliveryOperationOwners)) {
+  for (const [operationId, owner] of hotRegistryRows(file, "deliveryOperationOwners")) {
     if (ownsItsSettlement(owner) && owner.terminalState === null) operations.add(operationId);
   }
   const result: SettlementSweepResult = { examined: 0, settled: [] };

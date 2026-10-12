@@ -43,15 +43,15 @@ test("only allowlisted pure reads may omit keys; explicit keys still replay afte
     const service = createMcpToolService(bindings, receipts);
     for (const name of OPTIONAL_READ_KEY_TOOLS) {
       expect(MUTATING_MCP_TOOL_NAMES.has(name)).toBe(false);
-      const first = await service.callTool(name, {});
-      const second = await service.callTool(name, {});
+      const first = await service.callTool(name, name === "relay_owner_history" ? { action: "groups" } : {});
+      const second = await service.callTool(name, name === "relay_owner_history" ? { action: "groups" } : {});
       expect(first).toMatchObject({ ok: true, clientRequestId: null, replayed: false });
       if (!first.ok || !second.ok) throw new Error("read refused");
       expect(second.version).not.toBe(first.version);
     }
     const count = version;
     for (const name of MCP_TOOL_NAMES.filter(name => !OPTIONAL_READ_KEY_TOOLS.has(name))) {
-      expect(await service.callTool(name, {})).toMatchObject({ ok: false, code: "invalid_request" });
+      expect(await service.callTool(name, name === "backfill_worktree_projects" ? { dryRun: false } : {})).toMatchObject({ ok: false, code: "invalid_request" });
     }
     expect(version).toBe(count);
     const first = await service.callTool("get_pipeline", { clientRequestId: "stable", pipelineId: "fixture" });
@@ -65,7 +65,12 @@ test("only allowlisted pure reads may omit keys; explicit keys still replay afte
   try {
     const tools = await mcp.client.listTools();
     for (const name of OPTIONAL_READ_KEY_TOOLS) expect(tools.tools.find(tool => tool.name === name)!.inputSchema.required ?? []).not.toContain("clientRequestId");
-    for (const name of MUTATING_MCP_TOOL_NAMES) expect(tools.tools.find(tool => tool.name === name)!.inputSchema.required).toContain("clientRequestId");
+    for (const name of MUTATING_MCP_TOOL_NAMES) {
+      const required = tools.tools.find(tool => tool.name === name)!.inputSchema.required ?? [];
+      // Backfill defaults to a keyless preview; its write path above requires a key.
+      if (name === "backfill_worktree_projects") expect(required).not.toContain("clientRequestId");
+      else expect(required).toContain("clientRequestId");
+    }
     expect((await mcp.client.callTool({ name: "get_pipeline", arguments: { pipelineId: "fixture" } })).isError).toBeUndefined();
   } finally { await mcp.close(); }
 });

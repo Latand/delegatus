@@ -3,7 +3,7 @@
     "lang": "en",
     "scheme": "light",
     "width": 390,
-    "needsYouRow": "Questions for youRestore search results after the index rebuild4m ago"
+    "needsYouRow": "Questions for youRestore search results after the index rebuildA few questions before workAnswer the questions in the form; the project orchestrator receives your answers and carries them on.4m ago"
   },
   {
     "lang": "en",
@@ -84,14 +84,14 @@
       {
         "text": "Skip",
         "visible": true,
-        "x": 16,
-        "y": 794,
+        "x": 199,
+        "y": 742,
         "width": 175
       },
       {
         "text": "Answer",
         "visible": true,
-        "x": 199,
+        "x": 16,
         "y": 794,
         "width": 175
       }
@@ -111,7 +111,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Skipped, recommended answers taken",
-    "decisionText": "Skipped, recommended answers taken9 Oct, 16:37Saved and sent to the orchestrator",
+    "decisionText": "Skipped, recommended answers taken12 Oct, 23:51Saved and sent to the orchestrator",
     "title": "Questions",
     "sideways": 0,
     "questionWidth": 390,
@@ -240,14 +240,14 @@
       {
         "text": "Skip",
         "visible": true,
-        "x": 16,
-        "y": 794,
+        "x": 199,
+        "y": 742,
         "width": 175
       },
       {
         "text": "Answer",
         "visible": true,
-        "x": 199,
+        "x": 16,
         "y": 794,
         "width": 175
       }
@@ -335,14 +335,14 @@
       {
         "text": "Skip",
         "visible": true,
-        "x": 16,
-        "y": 794,
+        "x": 199,
+        "y": 742,
         "width": 175
       },
       {
         "text": "Answer",
         "visible": true,
-        "x": 199,
+        "x": 16,
         "y": 794,
         "width": 175
       }
@@ -362,7 +362,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Answered",
-    "decisionText": "Answered9 Oct, 16:38Saved and sent to the orchestrator",
+    "decisionText": "Answered12 Oct, 23:51Saved and sent to the orchestrator",
     "title": "Questions",
     "sideways": 0,
     "questionWidth": 390,
@@ -491,14 +491,14 @@
       {
         "text": "Skip",
         "visible": true,
-        "x": 16,
-        "y": 794,
+        "x": 199,
+        "y": 742,
         "width": 175
       },
       {
         "text": "Answer",
         "visible": true,
-        "x": 199,
+        "x": 16,
         "y": 794,
         "width": 175
       }
@@ -517,7 +517,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Skipped, recommended answers taken",
-    "decisionText": "Skipped, recommended answers taken9 Oct, 16:37Keep the recommended defaults.Saved and sent to the orchestrator",
+    "decisionText": "Skipped, recommended answers taken12 Oct, 23:50Keep the recommended defaults.Saved and sent to the orchestrator",
     "title": "Questions",
     "sideways": 0,
     "questionWidth": 390,
@@ -591,7 +591,7 @@
     "lang": "en",
     "scheme": "dark",
     "width": 390,
-    "needsYouRow": "Questions for youRestore search results after the index rebuild4m ago"
+    "needsYouRow": "Questions for youRestore search results after the index rebuildA few questions before workAnswer the questions in the form; the project orchestrator receives your answers and carries them on.4m ago"
   },
   {
     "lang": "en",
@@ -672,14 +672,14 @@
       {
         "text": "Skip",
         "visible": true,
-        "x": 16,
-        "y": 794,
+        "x": 199,
+        "y": 742,
         "width": 175
       },
       {
         "text": "Answer",
         "visible": true,
-        "x": 199,
+        "x": 16,
         "y": 794,
         "width": 175
       }
@@ -699,7 +699,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Skipped, recommended answers taken",
-    "decisionText": "Skipped, recommended answers taken9 Oct, 16:38Saved and sent to the orchestrator",
+    "decisionText": "Skipped, recommended answers taken12 Oct, 23:51Saved and sent to the orchestrator",
     "title": "Questions",
     "sideways": 0,
     "questionWidth": 390,
@@ -828,14 +828,14 @@
       {
         "text": "Skip",
         "visible": true,
-        "x": 16,
-        "y": 794,
+        "x": 199,
+        "y": 742,
         "width": 175
       },
       {
         "text": "Answer",
         "visible": true,
-        "x": 199,
+        "x": 16,
         "y": 794,
         "width": 175
       }
@@ -923,14 +923,14 @@
       {
         "text": "Skip",
         "visible": true,
-        "x": 16,
-        "y": 794,
+        "x": 199,
+        "y": 742,
         "width": 175
       },
       {
         "text": "Answer",
         "visible": true,
-        "x": 199,
+        "x": 16,
         "y": 794,
         "width": 175
       }
@@ -950,7 +950,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Answered",
-    "decisionText": "Answered9 Oct, 16:38Saved and sent to the orchestrator",
+    "decisionText": "Answered12 Oct, 23:51Saved and sent to the orchestrator",
     "title": "Questions",
     "sideways": 0,
     "questionWidth": 390,
@@ -1079,14 +1079,14 @@
       {
         "text": "Skip",
         "visible": true,
-        "x": 16,
-        "y": 794,
+        "x": 199,
+        "y": 742,
         "width": 175
       },
       {
         "text": "Answer",
         "visible": true,
-        "x": 199,
+        "x": 16,
         "y": 794,
         "width": 175
       }
@@ -1105,7 +1105,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Skipped, recommended answers taken",
-    "decisionText": "Skipped, recommended answers taken9 Oct, 16:37Keep the recommended defaults.Saved and sent to the orchestrator",
+    "decisionText": "Skipped, recommended answers taken12 Oct, 23:50Keep the recommended defaults.Saved and sent to the orchestrator",
     "title": "Questions",
     "sideways": 0,
     "questionWidth": 390,
@@ -1179,7 +1179,7 @@
     "lang": "uk",
     "scheme": "light",
     "width": 390,
-    "needsYouRow": "Питання до васRestore search results after the index rebuild4 хв тому"
+    "needsYouRow": "Питання до васRestore search results after the index rebuildКілька питань перед роботоюДайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.4 хв тому"
   },
   {
     "lang": "uk",
@@ -1260,14 +1260,14 @@
       {
         "text": "Пропустити",
         "visible": true,
-        "x": 16,
-        "y": 794,
+        "x": 199,
+        "y": 742,
         "width": 175
       },
       {
         "text": "Відповісти",
         "visible": true,
-        "x": 199,
+        "x": 16,
         "y": 794,
         "width": 175
       }
@@ -1287,7 +1287,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Пропущено, взято рекомендовані",
-    "decisionText": "Пропущено, взято рекомендовані9 жовт., 16:38Збережено й надіслано оркестратору",
+    "decisionText": "Пропущено, взято рекомендовані12 жовт., 23:51Збережено й надіслано оркестратору",
     "title": "Питання",
     "sideways": 0,
     "questionWidth": 390,
@@ -1416,14 +1416,14 @@
       {
         "text": "Пропустити",
         "visible": true,
-        "x": 16,
-        "y": 794,
+        "x": 199,
+        "y": 742,
         "width": 175
       },
       {
         "text": "Відповісти",
         "visible": true,
-        "x": 199,
+        "x": 16,
         "y": 794,
         "width": 175
       }
@@ -1511,14 +1511,14 @@
       {
         "text": "Пропустити",
         "visible": true,
-        "x": 16,
-        "y": 794,
+        "x": 199,
+        "y": 742,
         "width": 175
       },
       {
         "text": "Відповісти",
         "visible": true,
-        "x": 199,
+        "x": 16,
         "y": 794,
         "width": 175
       }
@@ -1538,7 +1538,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Відповіли",
-    "decisionText": "Відповіли9 жовт., 16:38Збережено й надіслано оркестратору",
+    "decisionText": "Відповіли12 жовт., 23:51Збережено й надіслано оркестратору",
     "title": "Питання",
     "sideways": 0,
     "questionWidth": 390,
@@ -1667,14 +1667,14 @@
       {
         "text": "Пропустити",
         "visible": true,
-        "x": 16,
-        "y": 794,
+        "x": 199,
+        "y": 742,
         "width": 175
       },
       {
         "text": "Відповісти",
         "visible": true,
-        "x": 199,
+        "x": 16,
         "y": 794,
         "width": 175
       }
@@ -1693,7 +1693,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Пропущено, взято рекомендовані",
-    "decisionText": "Пропущено, взято рекомендовані9 жовт., 16:37Залиште рекомендовані відповіді.Збережено й надіслано оркестратору",
+    "decisionText": "Пропущено, взято рекомендовані12 жовт., 23:50Залиште рекомендовані відповіді.Збережено й надіслано оркестратору",
     "title": "Питання",
     "sideways": 0,
     "questionWidth": 390,
@@ -1767,7 +1767,7 @@
     "lang": "uk",
     "scheme": "dark",
     "width": 390,
-    "needsYouRow": "Питання до васRestore search results after the index rebuild4 хв тому"
+    "needsYouRow": "Питання до васRestore search results after the index rebuildКілька питань перед роботоюДайте відповіді на запитання форми; їх отримає оркестратор проєкту й передасть далі.4 хв тому"
   },
   {
     "lang": "uk",
@@ -1848,14 +1848,14 @@
       {
         "text": "Пропустити",
         "visible": true,
-        "x": 16,
-        "y": 794,
+        "x": 199,
+        "y": 742,
         "width": 175
       },
       {
         "text": "Відповісти",
         "visible": true,
-        "x": 199,
+        "x": 16,
         "y": 794,
         "width": 175
       }
@@ -1875,7 +1875,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Пропущено, взято рекомендовані",
-    "decisionText": "Пропущено, взято рекомендовані9 жовт., 16:38Збережено й надіслано оркестратору",
+    "decisionText": "Пропущено, взято рекомендовані12 жовт., 23:51Збережено й надіслано оркестратору",
     "title": "Питання",
     "sideways": 0,
     "questionWidth": 390,
@@ -2004,14 +2004,14 @@
       {
         "text": "Пропустити",
         "visible": true,
-        "x": 16,
-        "y": 794,
+        "x": 199,
+        "y": 742,
         "width": 175
       },
       {
         "text": "Відповісти",
         "visible": true,
-        "x": 199,
+        "x": 16,
         "y": 794,
         "width": 175
       }
@@ -2099,14 +2099,14 @@
       {
         "text": "Пропустити",
         "visible": true,
-        "x": 16,
-        "y": 794,
+        "x": 199,
+        "y": 742,
         "width": 175
       },
       {
         "text": "Відповісти",
         "visible": true,
-        "x": 199,
+        "x": 16,
         "y": 794,
         "width": 175
       }
@@ -2126,7 +2126,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Відповіли",
-    "decisionText": "Відповіли9 жовт., 16:38Збережено й надіслано оркестратору",
+    "decisionText": "Відповіли12 жовт., 23:51Збережено й надіслано оркестратору",
     "title": "Питання",
     "sideways": 0,
     "questionWidth": 390,
@@ -2255,14 +2255,14 @@
       {
         "text": "Пропустити",
         "visible": true,
-        "x": 16,
-        "y": 794,
+        "x": 199,
+        "y": 742,
         "width": 175
       },
       {
         "text": "Відповісти",
         "visible": true,
-        "x": 199,
+        "x": 16,
         "y": 794,
         "width": 175
       }
@@ -2281,7 +2281,7 @@
     "hints": 0,
     "unpickedFaded": true,
     "statusLine": "Пропущено, взято рекомендовані",
-    "decisionText": "Пропущено, взято рекомендовані9 жовт., 16:37Залиште рекомендовані відповіді.Збережено й надіслано оркестратору",
+    "decisionText": "Пропущено, взято рекомендовані12 жовт., 23:50Залиште рекомендовані відповіді.Збережено й надіслано оркестратору",
     "title": "Питання",
     "sideways": 0,
     "questionWidth": 390,

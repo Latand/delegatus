@@ -1,4 +1,4 @@
-import type { LiveCommand, LiveConnection, LiveProvider } from "./provider";
+import type { LiveCommand, LiveConnection, LiveProvider, LiveToolHandler } from "./provider";
 import type { Locale } from "./contract";
 import type { BackendRequest } from "./sessionConfig";
 
@@ -23,7 +23,7 @@ export const delegationCreated = (id: string, offsetMs: number) =>
 export class FakeLiveProvider implements LiveProvider {
   readonly commands: LiveCommand[] = [];
   readonly sessions: Array<{ id: string; locale: Locale; sdp: string }> = [];
-  private readonly receivers = new Map<string, { event(value: unknown): void; lost(): void }>();
+  private readonly receivers = new Map<string, { event(value: unknown): void; lost(): void; tool?: LiveToolHandler }>();
   private readonly disconnected = new Set<string>();
   autoClose = true;
   /** Every hangup asked, including the ones that failed. */
@@ -61,8 +61,8 @@ export class FakeLiveProvider implements LiveProvider {
       new Promise((_, reject) => signal.addEventListener("abort", () => reject(new Error("PROVIDER_ERROR")), { once: true }))]);
     return result;
   }
-  async attach(id: string, _key: string, event: (value: unknown) => void, lost: () => void): Promise<LiveConnection> {
-    this.receivers.set(id, { event, lost });
+  async attach(id: string, _key: string, event: (value: unknown) => void, lost: () => void, tool?: LiveToolHandler): Promise<LiveConnection> {
+    this.receivers.set(id, { event, lost, tool });
     return { send: command => {
       if (this.disconnected.has(id)) throw new Error("PROVIDER_ERROR");
       // Commentary, thinking and instructions take at most 500 tokens. A token
@@ -82,6 +82,11 @@ export class FakeLiveProvider implements LiveProvider {
   /** Appended text the provider would refuse: over its documented 500 tokens. */
   readonly refused: LiveCommand[] = [];
   replay(id: string, ...events: unknown[]): void { for (const event of events) this.receivers.get(id)?.event(event); }
+  async callTool(id: string, name: string, args: unknown, callId: string, turnId: string): Promise<unknown> {
+    const tool = this.receivers.get(id)?.tool;
+    if (!tool) throw new Error("PROVIDER_ERROR");
+    return tool(name, args, callId, turnId);
+  }
   disconnect(id: string): void { this.disconnected.add(id); this.receivers.get(id)?.lost(); }
   get attached() { return this.receivers.size; }
 }

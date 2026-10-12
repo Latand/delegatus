@@ -111,6 +111,7 @@ export const MCP_TOOL_NAMES = [
   "telegram_bot_send_media",
   "telegram_bot_send_document",
   "telegram_bot_messages",
+  "relay_owner_history",
   "issue_report",
 ] as const;
 
@@ -203,8 +204,12 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
   "issue_report",
 ]);
 
+/** Private reads must never persist their answer, even with an explicit key. */
+export const RECEIPT_FREE_READ_TOOLS = new Set<McpToolName>(["relay_owner_history"]);
+
 /** Explicit allowlist: read-like tools with durable effects still need keys. */
 export const OPTIONAL_READ_KEY_TOOLS = new Set<McpToolName>([
+  "relay_owner_history",
   "read_prototype_review",
   "message_receipt", "list_conversations", "search_transcripts", "get_conversation",
   "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot",
@@ -399,6 +404,7 @@ export const MCP_BOUNDED_NUMERIC_ARGS: Partial<Record<McpToolName, readonly McpB
   list_conversations: [
     { path: ["limit"], min: 1, max: 100, fallback: 50 },
   ],
+  relay_owner_history: [{ path: ["limit"], min: 1, max: 100, fallback: 50 }],
   telegram_bot_messages: [
     { path: ["limit"], ...BOT_MESSAGES_LIMIT },
     { path: ["maxChars"], ...BOT_MESSAGES_MAX_CHARS },
@@ -2574,8 +2580,8 @@ export function createMcpToolService(
       const retention: ReceiptRetention = MUTATING_MCP_TOOL_NAMES.has(typedTool) ? "durable" : "bounded";
       const requestId = clientRequestId(effectiveArgs);
       // Omitted keys on pure reads mean a fresh observation, without a receipt.
-      // Explicit keys continue through the unchanged claim/replay path below.
-      if ((typedTool === "backfill_worktree_projects" && effectiveArgs.dryRun !== false)
+      // Private reads bypass receipts with explicit keys too; other keyed reads replay below.
+      if (RECEIPT_FREE_READ_TOOLS.has(typedTool) || (typedTool === "backfill_worktree_projects" && effectiveArgs.dryRun !== false)
         || (effectiveArgs.clientRequestId === undefined && OPTIONAL_READ_KEY_TOOLS.has(typedTool))) {
         const verdict = permit();
         if (verdict && !verdict.allowed) return finish(failure(typedTool, null, verdict.code, verdict.error, false), "failure");
@@ -3376,7 +3382,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Authority is the same as request_attention's, and for the same reason \u2014 this writes into the surface they are answering in: the operator's own session or a designated orchestrator seat. A worker or unidentified caller is refused (SUGGEST_REPLIES_NOT_PERMITTED) with nothing recorded.",
     "The drafts always land under your OWN message: conversationId defaults to your conversation, and naming any other one is refused. To offer drafts elsewhere, ask that conversation's own session to offer them.",
   ].join(" "),
-  publish_prototype_review: "questions (1–7): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. A seat may omit taskId: the form (questions required) then lives in its conversation and the «Рішення» column. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state; nothing is uploaded. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
+  publish_prototype_review: "questions (3–7 on a task, 1–7 without one): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. Variants require a lane visual-critic pass or a passed fix after its last fail; use prototype → critic → proto-fix (2 rounds) → publish, whose publish stage calls this tool. A refusal names the missing evidence; retry after it is resolved with a new clientRequestId. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. A seat may omit taskId: the form (questions required) then lives in its conversation and the «Рішення» column. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state; nothing is uploaded. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
   read_prototype_review: "Rounds carry questions; decision.answers holds option indexes per question id, and skipped:true means the operator took the recommendations. Read a task's prototype reviews, newest waiting round, chosen variant numbers, exact operator comment, time and delivery state. Only the newest round can wait; an undecided round a later decision retired stays in the history with supersededBy naming that decided round. Pipeline callers may omit taskId; a seat that omits it reads its own taskless questions; other callers supply it. Only your own project is readable. Media URLs are installation-local and absent where copies are unavailable. This tool makes no choice and sends no message.",
   dismiss_attention: [
     "Omit target to read exactly this project's Waiting-for-you panel, with each row's clear target and server evidence as hints. project defaults to your seat or maintenance run; the operator names one. Compact by default: 40 rows, 24 KB, nextCursor for more; kinds filters and full evidence are available. Use a fresh clientRequestId for each observation.",
@@ -3462,6 +3468,10 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "`document.path` is absolute on the Viewer host and must resolve, symlinks followed, under a document root the operator set in the Telegram panel (by default `handoff/` in the Viewer host's home), so write reports there first. Paths through a dot-directory or the Delegatus state directory are refused even inside a root.",
     "Types: .md .markdown .txt .log .json .csv .pdf .png .jpg .jpeg .html, non-empty, at most 20 MB; text files are scanned, as UTF-8 and UTF-16, for private keys, tokens and credentials (including `password: word` assignments) and refused with document_secret naming the class (`details.secretClass`). Other refusals: document_invalid, document_outside_roots, document_forbidden_path, document_type, document_too_large.",
     "`document.filename` is the shown name (default the file's own name) and must keep the file's type class (text, PDF or image: a .md may be shown as .txt, never as .pdf); `document.caption` up to 1024 characters, plain or html by `format`. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send: a completed send replays its receipt, an unconfirmed one answers send_uncertain instead of sending twice. The post appears in telegram_bot_messages with kind document and its filename.",
+  ].join(" "),
+  relay_owner_history: [
+    "Read the operator's Telegram groups where Celestia or a clone is present. action groups lists them; action messages reads one page for chat and today or inclusive from/to dates. The existing owner-tools switch defaults OFF. The operator's stored time zone is sent to Celestia. Messages are oldest first; sentAt is when Celestia stored them. A short page may continue: pass nextCursor alone as cursor, retaining the original dates and zone; nextCursor null ends the range. oldestStoredAt marks retained history. Received edits keep first text; Telegram-side deletions may remain stored. Author ids and file ids are excluded. Live relay agents replying in Telegram cannot read this history. No MCP receipt is stored, even with an explicit clientRequestId.",
+    "Use history only to answer the operator in this conversation. Never copy message text, names, usernames, chat titles or chat ids into bridge reports, requests or messages to other agents or seats, spawn prompts, task text or details, files, commits, pull requests, issues or lessons. A report may say the answer is in this conversation.",
   ].join(" "),
   telegram_bot_messages: [
     "Read recent messages the operator's Telegram bot received in one chat, newest first, from Delegatus's local store — a bot has no history API, so only what arrived while it was connected exists.",
@@ -4333,6 +4343,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Project whose allowed set to read or change. Defaults to your own on a list; required to add or remove."),
   }).passthrough(),
   seat_tick_settings: z.object({
+    release: z.object({ enabled: z.boolean().optional(), askBeforePublish: z.boolean().optional(), minChanges: z.union([z.number(), z.string()]).nullable().optional(), minGapHours: z.union([z.number(), z.string()]).nullable().optional(), why: z.string().nullable().optional(), requestNow: z.boolean().optional(), taskId: z.string().optional(), hold: z.string().nullable().optional() }).optional()
+      .describe("Automatic releases: off until enabled, 30 visible changes, 12-hour gap, six-hour production soak and screenshots every time. why is required from agents. requestNow skips amount/gap but keeps every blocker; hold names an incident, null clears it. Only the project seat or operator may turn askBeforePublish off, quoting the operator request. Read release status here."),
     problemId: z.string().trim().min(1).max(128).optional().describe("Read the full local problem report named by a wake, including after delivery. Undo or replacement returns null for the old identity."),
     autoRotate: z.object({ enabled: z.boolean().optional(), thresholdPercent: z.union([z.number(), z.string(), z.null()]).optional(), why: z.string().nullable().optional() }).optional()
       .describe("Automatic context rotation, off by default. thresholdPercent is 50–90 (default 50; null restores it). Every non-gateway change requires why, naming the request."),
@@ -4442,6 +4454,10 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     topicId: z.number().int().positive().optional().describe("Forum topic (message_thread_id) to post into."),
     silent: z.boolean().optional().describe("Send without a notification sound."),
   }).passthrough(),
+  relay_owner_history: z.object({
+    action: z.enum(["groups", "messages"]), chat: z.string().optional(), from: z.string().optional(), to: z.string().optional(),
+    cursor: z.string().max(400).optional(), limit: boundedNumericInput("relay_owner_history", "limit"),
+  }),
   telegram_bot_messages: z.object({
     clientRequestId: clientRequestIdSchema,
     chat: z.string().trim().min(1).describe("The chat's alias or chat id, as telegram_bot_chats lists it."),

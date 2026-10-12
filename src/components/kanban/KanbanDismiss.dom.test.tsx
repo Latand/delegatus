@@ -7,6 +7,11 @@ import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import type { TaskMutationPorts } from "./useTaskMutations";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* A card's Dismiss (docs/design/needs-attention.md §4, §5), rendered by React
    over invented tasks: the foot names why the card needs the operator, one
@@ -192,17 +197,28 @@ const click = (element: Element | null | undefined) => {
   flushSync(() => (element as HTMLElement).click());
 };
 
-test("the foot names why the card needs the operator, and a member tile names its own reason", () => {
+/* Dismiss and its Undo are rows of the card's ⋯ (docs/design/calm-task-cards-build.md §2.2). */
+const menuRow = (host: HTMLElement, id: string, cardId = "task:a") => {
+  click(cardEl(host, cardId)!.querySelector("[data-menu]"));
+  return host.querySelector<HTMLElement>(`.menu [data-cm-item="${id}"]`);
+};
+const stateText = (card: HTMLElement) => card.querySelector("[data-card-state-text]")?.textContent ?? null;
+const clearedEntry = (card: HTMLElement) => card.querySelector('[data-chronology-kind="need-cleared"]')?.textContent ?? null;
+
+test("the state line names why the card needs the operator, and a member tile names its own reason", () => {
   const first = asking(1, "Unit", 900);
   const second = asking(2, "Port", 300);
   const { host } = mount({ tasks: [task("a", "assigned", "Retire the systemd install path", [first, second])], files: [first, second] });
   const card = cardEl(host, "task:a")!;
   expect(card.getAttribute("data-attention")).toBe("needs");
-  /* The oldest reason, and how many more. */
-  expect(card.querySelector("[data-foot-needs]")?.textContent).toBe("Unit +1");
-  expect(card.querySelector("[data-foot-needs]")?.getAttribute("data-foot-needs")).toBe("2");
+  /* The oldest reason, said once; the card's label keeps how many more. */
+  expect(card.querySelector("[data-card-state]")?.getAttribute("data-card-state")).toBe("you");
+  expect(stateText(card)).toMatch(/^Needs your answer: Unit · /);
+  expect(card.getAttribute("aria-label")).toContain("Unit +1");
   expect(card.querySelector(`[data-member="${first.path}"]`)?.getAttribute("title")).toBe("Unit");
-  expect(card.querySelector("[data-dismiss]")?.getAttribute("aria-label")).toContain("stop flagging it until something new");
+  expect(card.querySelector("[data-foot-needs], [data-dismiss]")).toBeNull();
+  const dismiss = menuRow(host, "dismissFlag");
+  expect(dismiss?.textContent).toContain("Stop flagging");
 });
 
 test("a card that waits only on its prototype says so on its review button, with no reason line and nothing to dismiss, until the choice", () => {
@@ -218,7 +234,10 @@ test("a card that waits only on its prototype says so on its review button, with
   /* The button is the one thing in the foot that says it: no amber line beside it. */
   expect(foot.querySelector(".foot-meta.needs")).toBeNull();
   expect(foot.textContent).not.toContain("Prototype ready");
-  expect(foot.querySelector("[data-dismiss]")).toBeNull();
+  /* The state line names the round, and there is nothing to dismiss. */
+  expect(card.querySelector("[data-card-state]")?.getAttribute("data-card-state-subject")).toBe("form");
+  expect(stateText(card)).toMatch(/^Needs your answer: Layout/);
+  expect(menuRow(host, "dismissFlag", "task:p")).toBeNull();
   render({ tasks: [{ ...waiting, prototypeReview: { ...review, waitingReviewId: null } } as BoardTask] });
   expect(cardEl(host, "task:p")!.hasAttribute("data-attention")).toBe(false);
 });
@@ -227,12 +246,12 @@ test("one click posts what the card drew, clears it at once with who cleared it,
   const asker = asking(1, "Unit", 900);
   const { host } = mount({ tasks: [task("a", "assigned", "Retire the systemd install path", [asker])], files: [asker] });
 
-  click(cardEl(host, "task:a")!.querySelector("[data-dismiss]"));
-  /* Drawn on the click, before any answer. */
+  click(menuRow(host, "dismissFlag"));
+  /* Drawn on the click, before any answer: the timeline says who cleared it. */
   let card = cardEl(host, "task:a")!;
   expect(card.hasAttribute("data-attention")).toBe(false);
-  expect(card.querySelector("[data-foot-needs]")).toBeNull();
-  expect(card.querySelector("[data-foot-cleared]")?.textContent).toBe("Cleared · you · just now");
+  expect(card.querySelector("[data-card-state]")?.getAttribute("data-card-state")).not.toBe("you");
+  expect(clearedEntry(card)).toContain("Cleared · you");
 
   await tick();
   expect(posted).toEqual([{
@@ -246,35 +265,37 @@ test("one click posts what the card drew, clears it at once with who cleared it,
   }]);
   /* The server's own instant replaced the click's, and the card still reads cleared. */
   card = cardEl(host, "task:a")!;
-  expect(card.querySelector("[data-foot-cleared]")?.getAttribute("data-foot-cleared")).toBe("operator");
+  expect(clearedEntry(card)).toContain("Cleared · you");
 
-  click(card.querySelector("[data-undo-dismiss]"));
+  const undo = menuRow(host, "undoFlag");
+  expect(undo?.textContent).toContain("Flag again");
+  click(undo);
   await tick();
   expect(posted.at(-1)).toMatchObject({ undo: true, target: { kind: "task", taskId: "a" } });
   card = cardEl(host, "task:a")!;
   expect(card.getAttribute("data-attention")).toBe("needs");
-  expect(card.querySelector("[data-foot-needs]")?.textContent).toBe("Unit");
+  expect(stateText(card)).toMatch(/^Needs your answer: Unit/);
 });
 
 test("a newer question comes back past the cleared line", () => {
   const cleared = { ...asking(1, "Unit", 900), attentionDismissal: { at: iso(600), by: { kind: "manager" as const, conversationId: "conversation_seat", role: "orchestrator" } } };
   const { host, render } = mount({ tasks: [task("a", "assigned", "Retire the systemd install path", [cleared])], files: [cleared] });
   let card = cardEl(host, "task:a")!;
-  expect(card.querySelector("[data-foot-cleared]")?.textContent).toMatch(/^Cleared · orchestrator · /);
+  expect(clearedEntry(card)).toMatch(/Cleared · orchestrator$/);
 
   const asksAgain = { ...asking(1, "Port", 60), attentionDismissal: cleared.attentionDismissal };
   render({ files: [asksAgain] });
   card = cardEl(host, "task:a")!;
   expect(card.getAttribute("data-attention")).toBe("needs");
-  expect(card.querySelector("[data-foot-needs]")?.textContent).toBe("Port");
-  expect(card.querySelector("[data-foot-cleared]")).toBeNull();
+  expect(stateText(card)).toMatch(/^Needs your answer: Port/);
+  expect(clearedEntry(card)).toBeNull();
 });
 
 test("a refused dismissal puts the flag back and says why", async () => {
   refuse = true;
   const asker = asking(1, "Unit", 900);
   const { host } = mount({ tasks: [task("a", "assigned", "Retire the systemd install path", [asker])], files: [asker] });
-  click(cardEl(host, "task:a")!.querySelector("[data-dismiss]"));
+  click(menuRow(host, "dismissFlag"));
   await tick();
   await tick();
   const card = cardEl(host, "task:a")!;
@@ -298,7 +319,7 @@ test("a lane that parked again before the click landed stays flagged, and the re
   const { host } = mount({ tasks: [task("a", "assigned", "Retire the systemd install path")], files: [], pipelines: [parked] });
   expect(cardEl(host, "task:a")!.getAttribute("data-attention")).toBe("needs");
 
-  click(cardEl(host, "task:a")!.querySelector("[data-dismiss]"));
+  click(menuRow(host, "dismissFlag"));
   /* Drawn cleared on the click, as any dismissal is. */
   expect(cardEl(host, "task:a")!.hasAttribute("data-attention")).toBe(false);
   expect(host.textContent).toContain("Cleared «");
@@ -311,4 +332,22 @@ test("a lane that parked again before the click landed stays flagged, and the re
   expect(cardEl(host, "task:a")!.getAttribute("data-attention")).toBe("needs");
   expect(host.textContent).toContain("changed since you saw it, so it stays flagged");
   expect(host.textContent).not.toContain("Cleared «");
+});
+
+test("a needs-you card with no task still dismisses and restores from its own ⋯", async () => {
+  const asker = asking(1, "Unit", 900);
+  const { host } = mount({ tasks: [], files: [asker] });
+  const loose = [...host.querySelectorAll<HTMLElement>(".card")].find((card) => card.getAttribute("data-attention") === "needs") ?? null;
+  expect(loose).toBeTruthy();
+  const id = loose!.getAttribute("data-id")!;
+  expect(id.startsWith("task:")).toBe(false);
+  click(menuRow(host, "dismissFlag", id));
+  const afterDismiss = cardEl(host, id)!;
+  expect(afterDismiss.hasAttribute("data-attention")).toBe(false);
+  await tick();
+  expect(posted.at(-1)).toMatchObject({ undo: false, target: { kind: "subjects", subjects: [{ kind: "conversation", conversationId: asker.conversationId }] } });
+  click(menuRow(host, "undoFlag", id));
+  await tick();
+  expect(posted.at(-1)).toMatchObject({ undo: true });
+  expect(cardEl(host, id)!.getAttribute("data-attention")).toBe("needs");
 });

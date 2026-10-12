@@ -6,7 +6,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import type { ConversationReasonKind, LaneReasonKind } from "./dismissalTypes";
-import { conversationRouteKey, laneNeedKind, laneRouteKey, type AttentionEscalationMark, type AttentionRouteMark } from "./routeTypes";
+import { conversationRouteKey, laneNeedKind, laneRouteKey, laneWaitCleared, type AttentionEscalationMark, type AttentionRouteMark } from "./routeTypes";
 
 /*
  * Who answers a needs-you reason first (docs/design/attention-auto-resolve.md,
@@ -124,6 +124,10 @@ export function conversationRoute(file: FileEntry, now: number, inputs: Attentio
 export function laneRoute(pipeline: Pipeline, inputs: AttentionRoutingInputs): AttentionRoute {
   const kind = laneNeedKind(pipeline);
   if (!kind) return OPERATOR;
+  /* A wait someone already cleared («Leave the PR open», a dismissed
+     decision) is answered: nobody is woken for it, and the card says who
+     cleared it (docs/design/calm-task-cards-build.md §7.3). */
+  if (laneWaitCleared(pipeline)) return OPERATOR;
   const key = laneRouteKey(pipeline, kind);
   if (kind === "lane-decision" && laneAwaitsAutomaticRetry(pipeline)) return { key, owner: "system" };
   if (laneReservedForOperator(pipeline, kind)) return OPERATOR;

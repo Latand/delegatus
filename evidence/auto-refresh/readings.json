@@ -1,0 +1,86 @@
+[
+  {
+    "lang": "en",
+    "width": 1440,
+    "id": "t-merge-update",
+    "escapes": 0,
+    "overlaps": 0
+  },
+  {
+    "lang": "en",
+    "width": 1440,
+    "id": "t-merge-stop",
+    "escapes": 0,
+    "overlaps": 0
+  },
+  {
+    "lang": "en",
+    "width": 1440,
+    "id": "t-merge-done",
+    "escapes": 0,
+    "overlaps": 0
+  },
+  {
+    "lang": "en",
+    "width": 390,
+    "id": "t-merge-update",
+    "escapes": 0,
+    "overlaps": 0
+  },
+  {
+    "lang": "en",
+    "width": 390,
+    "id": "t-merge-stop",
+    "escapes": 0,
+    "overlaps": 0
+  },
+  {
+    "lang": "en",
+    "width": 390,
+    "id": "t-merge-done",
+    "escapes": 0,
+    "overlaps": 0
+  },
+  {
+    "lang": "uk",
+    "width": 1440,
+    "id": "t-merge-update",
+    "escapes": 0,
+    "overlaps": 0
+  },
+  {
+    "lang": "uk",
+    "width": 1440,
+    "id": "t-merge-stop",
+    "escapes": 0,
+    "overlaps": 0
+  },
+  {
+    "lang": "uk",
+    "width": 1440,
+    "id": "t-merge-done",
+    "escapes": 0,
+    "overlaps": 0
+  },
+  {
+    "lang": "uk",
+    "width": 390,
+    "id": "t-merge-update",
+    "escapes": 0,
+    "overlaps": 0
+  },
+  {
+    "lang": "uk",
+    "width": 390,
+    "id": "t-merge-stop",
+    "escapes": 0,
+    "overlaps": 0
+  },
+  {
+    "lang": "uk",
+    "width": 390,
+    "id": "t-merge-done",
+    "escapes": 0,
+    "overlaps": 0
+  }
+]

@@ -43,23 +43,34 @@ function entryTargeted(command: NativeQueueCommand): boolean {
 /** Called inside the journal's admission/transition transaction. No transport. */
 export class NativeQueueJournal {
   constructor(private readonly db: Database) {
+    /* One statement per exec: Bun reports only the last statement's failure
+       of a batch. A table creation refused for a peer's lock would surface as
+       the following index's missing table, and a refused BEGIN IMMEDIATE would
+       let every following statement wait out the busy timeout again. */
     db.exec(`CREATE TABLE IF NOT EXISTS native_queue_entries (
       entry_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, state_json TEXT NOT NULL
-    ); CREATE INDEX IF NOT EXISTS native_queue_conversation ON native_queue_entries(conversation_id);
-    CREATE TABLE IF NOT EXISTS native_queue_operation_holds (operation_id TEXT PRIMARY KEY, entry_id TEXT NOT NULL);
-    CREATE INDEX IF NOT EXISTS native_queue_operation_holds_entry ON native_queue_operation_holds(entry_id);`);
+    )`);
+    db.exec("CREATE INDEX IF NOT EXISTS native_queue_conversation ON native_queue_entries(conversation_id)");
+    db.exec("CREATE TABLE IF NOT EXISTS native_queue_operation_holds (operation_id TEXT PRIMARY KEY, entry_id TEXT NOT NULL)");
+    db.exec("CREATE INDEX IF NOT EXISTS native_queue_operation_holds_entry ON native_queue_operation_holds(entry_id)");
     /* Rebuilt from the entries on every open, so a journal written before the
        holds existed gains them before its first compaction. Bounded by the
        entries they mirror, which are never deleted: at most two ids per
        unsettled entry (admission refuses a conversation's 2001st), and at most
        one, its unresolved mutation, per settled entry. */
-    db.exec(`BEGIN IMMEDIATE; DELETE FROM native_queue_operation_holds;
-      INSERT OR IGNORE INTO native_queue_operation_holds(operation_id, entry_id)
-        SELECT entry_id, entry_id FROM native_queue_entries WHERE json_extract(state_json, '$.state') NOT IN ('delivered', 'removed', 'refused');
-      INSERT OR IGNORE INTO native_queue_operation_holds(operation_id, entry_id)
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec("DELETE FROM native_queue_operation_holds");
+      db.exec(`INSERT OR IGNORE INTO native_queue_operation_holds(operation_id, entry_id)
+        SELECT entry_id, entry_id FROM native_queue_entries WHERE json_extract(state_json, '$.state') NOT IN ('delivered', 'removed', 'refused')`);
+      db.exec(`INSERT OR IGNORE INTO native_queue_operation_holds(operation_id, entry_id)
         SELECT json_extract(state_json, '$.mutationOperationId'), entry_id FROM native_queue_entries
-        WHERE json_extract(state_json, '$.mutationOperationId') IS NOT NULL AND json_extract(state_json, '$.mutationOperationId') <> entry_id;
-      COMMIT;`);
+        WHERE json_extract(state_json, '$.mutationOperationId') IS NOT NULL AND json_extract(state_json, '$.mutationOperationId') <> entry_id`);
+      db.exec("COMMIT");
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      throw error;
+    }
   }
 
   /** True when this id names a retained entry, settled or not. */

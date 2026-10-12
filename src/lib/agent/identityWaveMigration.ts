@@ -104,13 +104,31 @@ function newestSemanticConversationTitle(conversation: RegistryConversation): st
   return null;
 }
 
-function conversationNeedsTitleCleanup(file: RegistryFile, conversation: RegistryConversation): boolean {
+/** Where a placeholder title still lives outside the conversations: the paths
+    of entries that carry one, and the conversations of receipts that do. Read
+    once per wave; asked per conversation, the entries and receipts were walked
+    once for every conversation, which over retained history held a first
+    boot's event loop for more than a minute (#2761). */
+interface PlaceholderOwners { entryPaths: ReadonlySet<string>; receiptConversations: ReadonlySet<string> }
+
+function placeholderOwners(file: RegistryFile): PlaceholderOwners {
+  const entryPaths = new Set<string>();
+  for (const entry of Object.values(file.entries)) {
+    if (placeholderTitle(entry.launchProfile?.title)) entryPaths.add(entry.artifactPath);
+  }
+  const receiptConversations = new Set<string>();
+  for (const receipt of Object.values(file.receipts)) {
+    if (!placeholderTitle(receipt.launchProfile.title)) continue;
+    const owner = canonicalConversationId(file, receipt.conversationId);
+    if (owner) receiptConversations.add(owner);
+  }
+  return { entryPaths, receiptConversations };
+}
+
+function conversationNeedsTitleCleanup(conversation: RegistryConversation, owners: PlaceholderOwners): boolean {
   if (conversation.generations.some((generation) => placeholderTitle(generation.launchProfile.title))) return true;
-  const ownedPaths = new Set(conversation.generations.map((generation) => generation.path));
-  if (Object.values(file.entries).some((entry) => ownedPaths.has(entry.artifactPath)
-    && placeholderTitle(entry.launchProfile?.title))) return true;
-  return Object.values(file.receipts).some((receipt) => canonicalConversationId(file, receipt.conversationId) === conversation.id
-    && placeholderTitle(receipt.launchProfile.title));
+  if (conversation.generations.some((generation) => owners.entryPaths.has(generation.path))) return true;
+  return owners.receiptConversations.has(conversation.id);
 }
 
 function safeSharedPath(
@@ -150,11 +168,12 @@ function resolveConversationEvidence(
   input: IdentityWaveMigrationInput,
 ): Map<ViewerConversationId, ConversationEvidence> {
   const evidence = new Map<ViewerConversationId, ConversationEvidence>();
+  const owners = placeholderOwners(file);
   for (const conversation of Object.values(file.conversations)) {
     const generation = conversation.generations.at(-1);
     if (!generation) continue;
     const conversationTitle = newestSemanticConversationTitle(conversation);
-    const needsTitleCleanup = conversationNeedsTitleCleanup(file, conversation);
+    const needsTitleCleanup = conversationNeedsTitleCleanup(conversation, owners);
     const pathRekeys = conversation.generations.flatMap((ownedGeneration) => {
       const candidate = evidenceValue(safeSharedPath(input, ownedGeneration.path));
       return candidate ? [{ legacyPath: ownedGeneration.path, ...candidate }] : [];

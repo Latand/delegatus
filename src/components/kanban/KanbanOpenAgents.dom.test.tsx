@@ -7,6 +7,11 @@ import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import type { TaskMutationPorts } from "./useTaskMutations";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* The agent window's list of open agents and the header's pill
    (docs/design/agent-window.md), rendered by React over the real board with

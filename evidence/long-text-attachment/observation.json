@@ -1,0 +1,19 @@
+{
+  "characters": 30000,
+  "utf8Bytes": 60000,
+  "status": 413,
+  "body": {
+    "error": "structured message text exceeds the 32000-byte envelope bound"
+  },
+  "viewer": "isolated Next.js development Viewer",
+  "controlUrl": "http://127.0.0.1:1",
+  "isolation": [
+    "HOME",
+    "TMPDIR",
+    "CLAUDE_CODE_TMPDIR",
+    "XDG_CONFIG_HOME",
+    "LLV_STATE_DIR"
+  ],
+  "runtimeHost": "absent isolated socket",
+  "reservationCreated": false
+}

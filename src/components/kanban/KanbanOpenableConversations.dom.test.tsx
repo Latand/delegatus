@@ -4,6 +4,11 @@ import type { Root } from "react-dom/client";
 
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* A card counts only the conversations the operator can open, and each one it
    counts opens on click; a launch that never produced a transcript is listed

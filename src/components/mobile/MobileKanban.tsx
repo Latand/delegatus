@@ -20,6 +20,11 @@ import { KANBAN_STATUSES, type KanbanCard as KanbanCardModel } from "@/component
 import { subjectOf } from "@/components/kanban/cardDismissal";
 import { SeatActionWires } from "@/components/kanban/SeatActionWires";
 import { TaskMotionLine } from "@/components/kanban/TaskMotionLine";
+import { cardAnswers, cardState, formAnswerTarget, type CardState } from "@/components/kanban/cardState";
+import { CardStateLine } from "@/components/kanban/CardStateLine";
+import { hasTaskMeta, TaskMeta } from "@/components/kanban/TaskMeta";
+import { openPrototypeReview } from "@/hooks/usePrototypeReview";
+import { requestTaskLane } from "./taskLaneRequest";
 import { TaskStepsLine } from "@/components/kanban/TaskStepsLine";
 import { statusLabel, TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
 import { RemoteAgents, type RemoteAgentView } from "@/components/kanban/RemoteAgents";
@@ -434,7 +439,7 @@ function AgentsLine({ item, nowMs, remote }: { item: PhoneCard; nowMs: number; r
         </>
       ) : null}
       {word ? <span className="shrink-0">{word}</span> : null}
-      {agents.atMs > 0 ? <>{word ? <Sep /> : null}<span className="shrink-0">{ageText(t, agents.atMs, nowMs)}</span></> : null}
+      {agents.atMs > 0 ? <>{word ? <Sep /> : null}<span className="shrink-0">{agents.worked ? ageText(t, agents.atMs, nowMs) : t("kanban.editedAge", { age: ageText(t, agents.atMs, nowMs) })}</span></> : null}
     </span>
   );
 }
@@ -486,7 +491,7 @@ function RemoteCardLines({ remote, title, nowMs, withLane }: { remote: RemoteCar
   );
 }
 
-function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPress, lift, onDismiss, onUndo }: {
+function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPress, lift, onDismiss, onUndo, onAnswer }: {
   item: PhoneCard;
   /** The task runs on another linked machine. */
   remote: RemoteCard | null;
@@ -503,6 +508,8 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   onDismiss: (() => void) | null;
   /** Bring back what the card shows as cleared. */
   onUndo: (() => void) | null;
+  /** «Answer» (docs/design/calm-task-cards-build.md §4.3): where the operator answers what the card asks. */
+  onAnswer: ((state: CardState) => void) | null;
 }) {
   const { t } = useLocale();
   const { card } = item;
@@ -514,6 +521,13 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   const loose = item.kind === "conversation" || item.kind === "flow";
   /* High and low only, as on the desktop card; the card's label says it. */
   const priority = item.kind === "task" && card.priority !== "normal" ? card.priority : null;
+  /* Who has the card (§5), said in one line in place of its motion and the lane's reason. */
+  const state = item.kind === "task" ? cardState(card, now) : null;
+  /* A loose row that shows the agent's activity badge in its head draws no motion line. */
+  /* Under a state line the motion line is its sentence, so a lane row never quiets it. */
+  const motion = loose && item.firstAgent?.agentActivity ? null : <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain laneShown={Boolean(!state && item.shown && !loose)} taskTitle={card.holdTarget?.title} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)} />;
+  /* The task's review row is already where a waiting round is answered. */
+  const answerRow = onAnswer && state && cardAnswers(state) && !(state.subject.kind === "form" && item.waitsOnPrototype) ? state : null;
   const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), priority ? t(`kanban.priorityMark.${priority}`) : null, item.waitsOnPrototype ? t(card.task?.prototypeReview?.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready") : null, project].filter(Boolean).join(", ");
   const body = (
     <>
@@ -552,12 +566,15 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
         {loose && item.firstAgent?.agentActivity ? <CardStatusBadge file={item.firstAgent} /> : null}
         <NeedBadge item={item} />
       </span>
-      {loose && item.firstAgent?.agentActivity ? null : <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain taskTitle={card.holdTarget?.title} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)} />}
+      {state ? (
+        <CardStateLine state={state} nowMs={nowMs} title={title} phone motion={motion} />
+      ) : motion}
+      {item.kind === "task" && card.task && hasTaskMeta(card.task) ? <span className="card-meta-line"><TaskMeta task={card.task} nowMs={nowMs} /></span> : null}
       <TaskStepsLine summary={card.stepSummary} />
       {/* The needs-you question has its own slot below motion. */}
       {item.kind === "task" ? <TaskStatusNote note={card.task?.note} nowMs={nowMs} /> : null}
       {item.shown && !loose ? (
-        <PipelineBlock summary={item.shown} density="card" nowMs={nowMs} taskTitle={item.kind === "task" ? title : null} aside={othersText(t, item)} />
+        <PipelineBlock summary={item.shown} density="card" nowMs={nowMs} taskTitle={item.kind === "task" ? title : null} aside={othersText(t, item)} reasonLine={!state} />
       ) : null}
       {loose ? <LooseLine item={item} now={now} /> : <AskLine item={item} />}
       <AgentsLine item={item} nowMs={nowMs} remote={remote !== null} />
@@ -571,7 +588,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   /* The task's prototype review has its own button under the face, so the
      card's one tap still opens the task and the review is one tap away. */
   const review = usePrototypeButton(item.kind === "task" ? card.task ?? null : null);
-  const framed = Boolean(aside || review);
+  const framed = Boolean(aside || review || answerRow);
   const className = framed ? `${BODY}${aside ? "" : " pr-3"}${review ? " pb-1" : ""}` : `${CARD} ${tone}`;
   /* The phone draws no borders, so the remote card's tinted line joins the
      shadows its colour edge and its lift already write. */
@@ -595,7 +612,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
     <>
     <Pressable onLongPress={onLongPress} lift={lift} waits={item.reasons.length > 0 || item.waitsOnPrototype}>
       {framed ? (
-        <div data-phone-card-frame={item.key} className={`${FRAME} ${review ? "flex-col" : ""} ${tone}`} style={colour}>
+        <div data-phone-card-frame={item.key} className={`${FRAME} ${review || answerRow ? "flex-col" : ""} ${tone}`} style={colour}>
           {aside ? <div className="flex w-full min-w-0 items-stretch">{face}{onDismiss ? (
             <button
               type="button"
@@ -621,6 +638,19 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
           {review && card.task ? (
             <div data-phone-card-review-row="" className="flex justify-end px-1 pb-1">
               <PhoneCardPrototypeButton task={card.task} title={title} review={review} />
+            </div>
+          ) : null}
+          {answerRow ? (
+            <div className="px-1 pb-1">
+              <button
+                type="button"
+                data-phone-card-answer={answerRow.subject.kind}
+                aria-label={t("cardState.answerAria", { title })}
+                className="inline-flex min-h-11 w-full items-center justify-center rounded-[12px] border border-border bg-card px-3 text-ui font-semibold text-primary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+                onClick={() => onAnswer?.(answerRow)}
+              >
+                {t("cardState.answer")}
+              </button>
             </div>
           ) : null}
         </div>
@@ -1163,6 +1193,18 @@ export function MobileKanban(props: MobileKanbanProps) {
     const file = item.firstAgent;
     return file ? () => props.onOpenConversation(file) : null;
   };
+  /* «Answer» goes where the answer is given: the form, the asking
+     conversation, or the task screen with the lane's sheet open. */
+  const answerCard = (item: PhoneCard, state: CardState) => {
+    const subject = state.subject;
+    const task = item.card.task;
+    if (subject.kind === "form") openPrototypeReview(formAnswerTarget(subject, item.card.project));
+    else if (subject.kind === "conversation") props.onOpenConversation(subject.need.file);
+    else if (subject.kind === "lane" && task) {
+      requestTaskLane(task.id, subject.lane.pipeline.id);
+      props.onOpenTask(tasksById.current.get(task.id) ?? task);
+    }
+  };
   const projectLabel = props.projectLabel;
   const cardOf = (item: PhoneCard) => (
     <CardView
@@ -1177,6 +1219,7 @@ export function MobileKanban(props: MobileKanbanProps) {
       lift={item.kind === "task" && item.card.task ? { status: item.card.status, onDrop: (to) => move(item, to) } : null}
       onDismiss={item.reasons.length ? () => sendCardDismissal(item, false) : null}
       onUndo={item.cleared ? () => sendCardDismissal(item, true) : null}
+      onAnswer={item.kind === "task" ? (state) => answerCard(item, state) : null}
     />
   );
 

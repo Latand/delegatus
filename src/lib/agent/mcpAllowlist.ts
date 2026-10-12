@@ -397,12 +397,15 @@ function storedGrantOwnership(
   file: StoredGrantFile,
   policy: McpGrantPolicy,
   decideGenerations: boolean,
+  /** The conversations to read; the whole file when absent. Keyed reads of
+      parents, edges and receipts still go to `file`. */
+  conversations: Iterable<[string, StoredConversation]> = Object.entries(file.conversations),
 ): StoredGrantOwnership {
   const grants = new Map<string, string[] | null>();
   const pathOwner = new Map<string, string | null>();
   const origins = new Map<string, SessionOrigin | null>();
   const conversationOrigins = new Map<string, SessionOrigin>();
-  for (const [conversationId, conversation] of Object.entries(file.conversations)) {
+  for (const [conversationId, conversation] of conversations) {
     const edge = file.lineageEdges?.[conversationId];
     const lineageDelegated = Boolean(edge?.parentConversationId && edge.parentConversationId !== conversationId);
     conversationOrigins.set(conversationId, storedSessionOriginFor({
@@ -695,16 +698,22 @@ export function reboundAssembledMcpGrants<T extends StoredGrantFile>(file: T, po
  * unowned here and falls back to the baseline, as it would in an assembled
  * read. The generation profiles are left alone: this is a single-row decision
  * inside somebody else's transaction.
+ *
+ * `attestors` names the conversations that can bear on the row: every one
+ * holding a generation of it or recording its transcript path. The decision
+ * reads nothing else of the conversations collection, so a caller that can
+ * select them by index spares a retained history its whole-file read (#2761).
  */
 export function reboundEntryMcpGrant(
   file: StoredGrantFile,
   key: { engine: string; sessionId: string },
   policy: McpGrantPolicy = MCP_GRANT_POLICY,
+  attestors?: (entry: StoredEntry) => Iterable<[string, StoredConversation]>,
 ): void {
   const id = sessionKeyId({ engine: key.engine as never, sessionId: key.sessionId });
   const entry = file.entries[id];
   const stored = entry?.launchProfile?.mcpServers;
   if (!entry || !stored || isBaselineGrant(stored)) return;
-  const granted = entryGrant(id, entry, storedGrantOwnership(file, policy, false)) ?? DEFAULT_SPAWN_MCP_SERVERS;
+  const granted = entryGrant(id, entry, storedGrantOwnership(file, policy, false, attestors?.(entry))) ?? DEFAULT_SPAWN_MCP_SERVERS;
   if (!sameGrant(stored, granted)) entry.launchProfile!.mcpServers = [...granted];
 }

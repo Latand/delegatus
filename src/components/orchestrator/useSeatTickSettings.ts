@@ -26,6 +26,7 @@ export const SEAT_TICK_POLL_MS = 60_000;
 /** The change fields the route takes. `untilMinutes` is minutes from now, as
     the `seat_tick_settings` tool's own argument is. */
 export interface SeatTickChange {
+  release?: { enabled?: boolean; askBeforePublish?: boolean; minChanges?: number | string | null; minGapHours?: number | string | null; hold?: string | null };
   autoRotate?: { enabled?: boolean; thresholdPercent?: number | string | null };
   enabled?: boolean;
   /**
@@ -173,6 +174,11 @@ function optimistic(answer: SeatTickSettingsAnswer, change: SeatTickChange): Sea
   return {
     ...answer,
     ...(maintenance ? { maintenance } : {}),
+    ...(answer.release && change.release ? { release: { ...answer.release,
+      ...(typeof change.release.enabled === "boolean" ? { enabled: change.release.enabled } : {}),
+      ...(typeof change.release.askBeforePublish === "boolean" ? { askBeforePublish: change.release.askBeforePublish } : {}),
+      ...(typeof change.release.minChanges === "number" ? { minChanges: change.release.minChanges } : {}),
+      ...(typeof change.release.minGapHours === "number" ? { minGapHours: change.release.minGapHours } : {}) } } : {}),
     ...(answer.autoRotate && change.autoRotate ? { autoRotate: { ...answer.autoRotate,
       ...(change.autoRotate.enabled !== undefined ? { enabled: change.autoRotate.enabled } : {}),
       ...(typeof change.autoRotate.thresholdPercent === "number" ? { thresholdPercent: change.autoRotate.thresholdPercent } : {}),

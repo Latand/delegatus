@@ -3,6 +3,7 @@ import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { refuseAnonymous, teamActor } from "@/lib/team";
 import { parsePrototypeInput, PrototypeError } from "./input";
+import { prototypeCriticGate, criticRefusal } from "./criticGate";
 import { publishPrototype } from "./store";
 import { operatorDecisionRound, operatorDecisions, readPrototypeReviews, readSeatRounds } from "./read";
 import { findSeatRound, loadSeatRounds } from "./seatRounds";
@@ -91,9 +92,16 @@ export async function publishPOST(request: NextRequest,world: PrototypeWorld = p
     const input = parsePrototypeInput(await request.json());
     const { caller, stage, taskId, seat } = publicationTarget(request,input.taskId,world);
     if (taskId === null && !input.questions?.length) throw new PrototypeError("a decision asked without a task is a form: give it 1–7 questions");
-    const round = await publishPrototype(input,taskId,stage?.source ?? { conversationId: caller.conversationId },seat);
+    let critic;
+    if (input.variants?.length) {
+      const gate = prototypeCriticGate(stage?.source.pipelineId ? world.pipeline(stage.source.pipelineId) : null, stage?.source.stageId ?? "");
+      if (!gate.ok) throw new PrototypeError(criticRefusal(gate.missing), 409);
+      critic = gate.pass;
+    }
+    const round = await publishPrototype(input,taskId,stage?.source ?? { conversationId: caller.conversationId },seat,critic);
     void postPrototypeReviewToTelegram(round);
     return NextResponse.json({ reviewId: round.id, taskId, project: round.project, title: round.title, variants: round.variants.length,
+      ...(round.critic ? { critic: { stageId: round.critic.stageId, attempt: round.critic.attempt, outcome: round.critic.outcome } } : {}),
       ...(round.questions ? { questions: round.questions.length } : {}),
       frames: round.variants.reduce((n,v) => n + v.frames.length,0), videos: round.variants.reduce((n,v) => n + v.videos.length,0) });
   } catch (error) { return prototypeFailure(error); }

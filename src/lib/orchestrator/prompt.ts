@@ -67,7 +67,9 @@
  * another project's work to that project's seat. v46
  * (docs/design/done-section.md §2.3) marks a report of a handled incident or
  * an outside publication with `outcome`, so it waits in «Готово». v47
- * (docs/design/operator-decision-forms.md §2.7) makes every decision a form. */
+ * (docs/design/operator-decision-forms.md §2.7) makes every decision a form. v52
+ * combines those rules with automatic release control through the seat-tick
+ * setting, incident holds and the reviewed branch's refreshing fence. */
 
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { configForVariant, VARIANT_PARAMS, variantParamLabel } from "@/lib/roles/paramConfig";
@@ -95,7 +97,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 50;
+export const ORCHESTRATOR_PROMPT_VERSION = 52;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -472,8 +474,8 @@ Every piece of accepted work runs as a pipeline on its board task: find or creat
 - A stage that hands a document on (a design, an audit report) declares its path in outputs: read-only stages write only declared outputs.
 - Role params hold short values; put the rest in the brief.
 - Work no pipeline can host (a deploy, a review of a fork's pull request or of uncommitted work in another checkout) goes through spawn_agent with a role and the task's taskId; the agent ends with a Verdict line in the same three words.
-- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. A PR is ready when reviews passed its final head or the last budget fix passed, required checks are green and its body is read. Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks settle green; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging), and act on merge.state blocked: fix its reason or ask the operator, then pipeline_action retry-merge. Red checks hold merging; unverified, assumed or synthetic premises go to the operator. Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent; exclude held merge.state. needs-review → independent git show --remerge-diff review, then next batch. culprit → lane finding.
-- The project's own release step runs only when the operator has turned releases on for this project, in their message or as a standing line in your monitor note.
+- Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. A PR is ready when reviews passed its final head or the last budget fix passed, required checks are green and its body is read. Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks settle green; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating, refreshing or merging), and act on merge.state blocked: fix its reason or ask the operator, then pipeline_action retry-merge. Red checks hold merging; unverified, assumed or synthetic premises go to the operator. Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent; exclude held merge.state. needs-review → independent git show --remerge-diff review, then next batch. culprit → lane finding.
+- Releases run only when seat_tick_settings.release enables them or requestNow asks for one. Hold releases during known production incidents.
 - Keep the task current.
 - update_task note on changes: why parked, waiting on whom/what, runs now; brief, plain operator language.
 

@@ -1,3 +1,4 @@
+import { changeRelease, normalizeRelease, type ReleaseSetting, type ReleaseSettingChange } from "@/lib/release/settings";
 import fs from "node:fs";
 
 import { statePath } from "@/lib/configDir";
@@ -99,6 +100,7 @@ export interface AutoRotateSetting {
   why: string | null;
 }
 export interface SeatTickSettings {
+  release?: ReleaseSetting | null;
   autoRotate?: AutoRotateSetting | null;
   maintenance?: BoardMaintenanceSetting | null;
   project: string;
@@ -126,6 +128,7 @@ export interface SeatTickSettings {
 /** The settings as one check should read them: the record with its expiry
     already applied. */
 export interface EffectiveSeatTickSettings {
+  release?: ReleaseSetting | null;
   autoRotate?: AutoRotateSetting | null;
   maintenance: { enabled: boolean; intervalHours: number; intervalMs: number };
   maintenanceSetting?: BoardMaintenanceSetting | null;
@@ -160,6 +163,7 @@ export interface EffectiveSeatTickSettings {
 }
 
 export interface SeatTickSettingsChange {
+  release?: ReleaseSettingChange;
   autoRotate?: { enabled?: boolean; thresholdPercent?: number | string | null; why?: string | null };
   maintenance?: { enabled?: boolean; intervalHours?: number | string | null };
   enabled?: boolean;
@@ -233,6 +237,7 @@ function normalizeRow(project: string, value: unknown): SeatTickSettings {
   const raw = value as Record<string, unknown>;
   return {
     project,
+    ...(normalizeRelease(raw.release) ? { release: normalizeRelease(raw.release) } : {}),
     ...(normalizeAutoRotate(raw.autoRotate) ? { autoRotate: normalizeAutoRotate(raw.autoRotate) } : {}),
     ...(normalizeMaintenance(raw.maintenance) ? { maintenance: normalizeMaintenance(raw.maintenance) } : {}),
     enabled: raw.enabled !== false,
@@ -373,7 +378,7 @@ export function effectiveSeatTickSettings(
   const configured = settings.updatedAt !== null;
   if (lapsed || seatTickSettingsAreDefault(settings)) {
     return {
-      maintenance, maintenanceSetting: settings.maintenance, autoRotate: settings.autoRotate,
+      release: settings.release, maintenance, maintenanceSetting: settings.maintenance, autoRotate: settings.autoRotate,
       enabled: true,
       wakeIntervalMs: defaultWakeIntervalMs,
       reason: settings.reason,
@@ -389,7 +394,7 @@ export function effectiveSeatTickSettings(
     };
   }
   return {
-    maintenance, maintenanceSetting: settings.maintenance, autoRotate: settings.autoRotate,
+    release: settings.release, maintenance, maintenanceSetting: settings.maintenance, autoRotate: settings.autoRotate,
     enabled: settings.enabled,
     wakeIntervalMs: settings.wakeIntervalMinutes === null
       ? defaultWakeIntervalMs
@@ -419,11 +424,11 @@ export function effectiveSeatTickSettings(
  */
 export function seatTickSettingsAfterLapse(
   project: string,
-  lapsed: Pick<EffectiveSeatTickSettings, "reason" | "monitorPrompt" | "updatedAt" | "setBy"> & Partial<Pick<EffectiveSeatTickSettings, "maintenanceSetting" | "autoRotate">>,
+  lapsed: Pick<EffectiveSeatTickSettings, "reason" | "monitorPrompt" | "updatedAt" | "setBy"> & Partial<Pick<EffectiveSeatTickSettings, "maintenanceSetting" | "autoRotate" | "release">>,
 ): SeatTickSettings {
   const restored = defaultSeatTickSettings(project);
-  if (!lapsed.reason && !lapsed.monitorPrompt && !lapsed.maintenanceSetting && !lapsed.autoRotate) return restored;
-  return { ...restored, ...(lapsed.maintenanceSetting ? { maintenance: lapsed.maintenanceSetting } : {}), ...(lapsed.autoRotate ? { autoRotate: lapsed.autoRotate } : {}), reason: lapsed.reason, monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
+  if (!lapsed.reason && !lapsed.monitorPrompt && !lapsed.maintenanceSetting && !lapsed.autoRotate && !lapsed.release) return restored;
+  return { ...restored, ...(lapsed.release ? { release: lapsed.release } : {}), ...(lapsed.maintenanceSetting ? { maintenance: lapsed.maintenanceSetting } : {}), ...(lapsed.autoRotate ? { autoRotate: lapsed.autoRotate } : {}), reason: lapsed.reason, monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
 }
 
 export type SeatTickSettingsChangeResult =
@@ -445,7 +450,7 @@ export function applySeatTickSettingsChange(
   change: SeatTickSettingsChange,
   context: { at: string; actor: SeatTickSettingsActor },
 ): SeatTickSettingsChangeResult {
-  const touched = ["enabled", "wakeIntervalMinutes", "reason", "monitorPrompt", "until", "maintenance", "autoRotate"].filter((key) => Object.hasOwn(change, key));
+  const touched = ["enabled", "wakeIntervalMinutes", "reason", "monitorPrompt", "until", "maintenance", "autoRotate", "release"].filter((key) => Object.hasOwn(change, key));
   if (touched.length === 0) return { ok: false, error: "a tick settings change needs at least one field" };
 
   const enabled = Object.hasOwn(change, "enabled") ? change.enabled : current.enabled;
@@ -549,7 +554,13 @@ export function applySeatTickSettingsChange(
     }
     autoRotate = { enabled: on, thresholdPercent: percent, updatedAt: context.at, setBy: context.actor, why };
   }
+  let release = current.release;
+  if (Object.hasOwn(change, "release")) {
+    try { release = changeRelease(release, change.release!, context, current.project); }
+    catch (error) { return { ok: false, error: error instanceof Error ? error.message : "invalid release change" }; }
+  }
   const next: SeatTickSettings = {
+    ...(release ? { release } : {}),
     project: current.project,
     ...(maintenance ? { maintenance } : {}),
     ...(autoRotate ? { autoRotate } : {}),

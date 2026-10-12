@@ -3,6 +3,11 @@ import { Window } from "happy-dom";
 import type { Root } from "react-dom/client";
 
 import type { BoardTask } from "@/lib/tasks/types";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* The standing tick notice's «Tick settings» button. The seat's tick chip is
    what answers it, so the button is offered while a live seat holds the

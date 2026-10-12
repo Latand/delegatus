@@ -18,6 +18,7 @@ import { createMcpToolService, SqliteMcpReceiptStore, type McpReceiptStore, type
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { publishPOST, reviewPOST, reviewReadPOST, reviewScopePOST } from "./http";
 import { prototypeWorld, type PrototypeWorld } from "./world";
+import { criticLane } from "./criticGate.fixture";
 
 const PNG = Buffer.from([137,80,78,71,13,10,26,10]);
 const CAPABILITY = { a: "a".repeat(43), b: "b".repeat(43) } as const;
@@ -50,7 +51,15 @@ function control(prototype = world()) {
     const req = request(url, body, headers);
     const route = url.endsWith("/read") ? reviewReadPOST : url.endsWith("/scope") ? reviewScopePOST : publishPOST;
     dispatches.push(url);
-    const response = await route(req, prototype);
+    const caller = prototype.caller(req);
+    const heldStage = caller.conversationId ? prototype.stage(caller.conversationId) : null;
+    const stage = heldStage ?? { taskIds: [String(body.taskId)], project: caller.project!, source: { conversationId: caller.conversationId, pipelineId: "prototype-lane", stageId: "publish" } };
+    const publication = { ...prototype, stage: () => stage, pipeline: (id: string) => {
+      const lane = criticLane(); lane.id = id;
+      if (!lane.stages.some(s => s.id === stage.source.stageId)) lane.stages.push({ ...lane.stages[0]!, id: stage.source.stageId! });
+      return lane;
+    } };
+    const response = await route(req, route === publishPOST ? publication : prototype);
     const answer = await response.json();
     if (!response.ok) throw new Error(answer.error ?? `HTTP ${response.status}`);
     return answer;

@@ -1252,3 +1252,97 @@ browserTest("context auto-rotation rendered in the shared tick panel, English an
   } finally { await browser.close(); server.stop(true); }
   fs.writeFileSync(path.join(EVIDENCE, "auto-rotation.json"), `${JSON.stringify(readings, null, 2)}\n`);
 }, 360_000);
+
+
+browserTest("automatic releases rendered in the shared tick panel, English and Ukrainian, light and dark", async () => {
+  fs.mkdirSync(OUT, { recursive: true });
+  fs.mkdirSync(EVIDENCE, { recursive: true });
+  const build = await Bun.build({
+    entrypoints: [path.resolve("src/components/orchestrator/issue1681Evidence.fixture.tsx")],
+    target: "browser",
+    plugins: [serverActionBoundary],
+    outdir: path.join(OUT, "bundle-release"),
+    define: { "process.env.NODE_ENV": '"production"', "process.env": "{}" },
+  });
+  if (!build.success) throw new Error(build.logs.join("\n"));
+  const entry = build.outputs.find((output) => output.kind === "entry-point")!.path;
+  const css = await postcss([tailwind()]).process(fs.readFileSync("src/app/globals.css", "utf8"), { from: path.resolve("src/app/globals.css") });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const pathname = new URL(request.url).pathname;
+      if (pathname === "/app.js") return new Response(Bun.file(entry), { headers: { "content-type": "text/javascript" } });
+      if (pathname === "/style.css") return new Response(css.css, { headers: { "content-type": "text/css" } });
+      return new Response(
+        '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"></head>'
+        + '<body><div id="root" style="height:100dvh;display:flex;flex-direction:column"></div><script type="module" src="/app.js"></script></body></html>',
+        { headers: { "content-type": "text/html" } },
+      );
+    },
+  });
+  const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+
+  const base = `http://127.0.0.1:${server.port}`;
+  const readings: unknown[] = [];
+  try {
+    for (const theme of ["light", "dark"] as const) for (const locale of ["en", "uk"] as const) {
+      for (const layout of [{ width: 1440, height: 900, dock: 440, surface: "desktop" }, { width: 390, height: 844, dock: 0, surface: "phone" }]) {
+        const context = await browser.newContext({ viewport: { width: layout.width, height: layout.height }, colorScheme: theme });
+        try {
+          const page = await context.newPage();
+          await page.addInitScript(language => localStorage.setItem("llv_lang", language), locale);
+          const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+          await page.goto(`${base}/?surface=${layout.surface}&dock=${layout.dock}&locale=${locale}&release=blocked&face=default`);
+          const phone = layout.surface === "phone";
+          await page.waitForSelector(phone ? "[data-seat-tick-row]" : "[data-seat-tick-chip]");
+          await page.click(phone ? '[data-mobile2-open="tick"]' : "[data-seat-tick-chip]");
+          await page.waitForSelector("[data-seat-tick-release]");
+          expect(await page.locator("[data-seat-tick-release-enabled]").getAttribute("aria-checked")).toBe("true");
+          expect(await page.locator("[data-seat-tick-release-ask]").isChecked()).toBe(true);
+          await page.locator("[data-seat-tick-release-enabled]").click();
+          expect(await page.locator("[data-seat-tick-release-enabled]").getAttribute("aria-checked")).toBe("false");
+          await page.locator("[data-seat-tick-release-enabled]").click();
+          expect(await page.locator("[data-seat-tick-release-enabled]").getAttribute("aria-checked")).toBe("true");
+          expect(await page.locator("[data-seat-tick-release-reason]").innerText()).toBe(translate(locale, "seatTick.release.wait.tools"));
+          await page.locator('[data-seat-tick-release-field=changes]').fill("31");
+          await page.locator('[data-seat-tick-release-field="hours"]').fill("13");
+          await page.locator("[data-seat-tick-release]").scrollIntoViewIfNeeded();
+          await page.locator("[data-seat-tick-save]").scrollIntoViewIfNeeded();
+          await page.evaluate(() => {
+            const caption = document.querySelector("[data-seat-tick-release-clear]")!;
+            const save = document.querySelector("[data-seat-tick-save]")!;
+            for (let parent = caption.parentElement; parent; parent = parent.parentElement) {
+              if (parent.scrollHeight > parent.clientHeight && /auto|scroll/.test(getComputedStyle(parent).overflowY)) {
+                parent.scrollTop += Math.max(0, caption.getBoundingClientRect().bottom - save.getBoundingClientRect().top + 8);
+                break;
+              }
+            }
+          });
+          const geometry = await page.evaluate(() => {
+            const host = document.querySelector("[data-seat-tick-popover]") ?? document.querySelector('[data-mobile2-sheet="tick"]')!;
+            const hostBox = host.getBoundingClientRect();
+            const save = document.querySelector("[data-seat-tick-save]")!.getBoundingClientRect();
+            const clipped: string[] = [];
+            for (const selector of ["[data-seat-tick-release-enabled]", "[data-seat-tick-release-ask]", "[data-seat-tick-release-field=changes]", "[data-seat-tick-release-reason]", "[data-seat-tick-release-field=hours]", "[data-seat-tick-release-clear]", "[data-seat-tick-save]"]) {
+              const control = document.querySelector(selector)!;
+              const box = control.getBoundingClientRect();
+              if (box.left < hostBox.left - 1 || box.right > hostBox.right + 1 || box.left < -1 || box.right > innerWidth + 1
+                || box.top < hostBox.top - 1 || box.bottom > (selector.includes("save") ? innerHeight : save.top) + 1) clipped.push(selector);
+            }
+            return { overflow: host.scrollWidth > host.clientWidth, clipped, saveReachable: save.top >= 0 && save.bottom <= innerHeight, width: hostBox.width };
+          });
+          expect(errors).toEqual([]); expect(geometry.overflow).toBe(false); expect(geometry.clipped).toEqual([]); expect(geometry.saveReachable).toBe(true);
+          await page.screenshot({ path: path.join(OUT, `release-${theme}-${locale}-${layout.width}.png`) });
+          readings.push({ theme, locale, viewport: layout, ...geometry });
+          await page.goto(`${base}/?surface=${layout.surface}&dock=${layout.dock}&locale=${locale}&release=unknown&face=default`);
+          await page.waitForSelector(phone ? "[data-seat-tick-row]" : "[data-seat-tick-chip]");
+          await page.click(phone ? '[data-mobile2-open="tick"]' : "[data-seat-tick-chip]");
+          await page.waitForSelector("[data-seat-tick-release]");
+          expect(await page.locator("[data-seat-tick-release-reason]").count()).toBe(0);
+        } finally { await context.close(); }
+      }
+    }
+  } finally { await browser.close(); server.stop(true); }
+  fs.writeFileSync(path.join(EVIDENCE, "release.json"), `${JSON.stringify(readings, null, 2)}\n`);
+}, 360_000);

@@ -51,3 +51,45 @@ test("a routed lane names the stage's own question, the decision answer path and
   expect(line!.label).toContain("pipeline_action resolve-decision");
   expect(line!.label).toContain('publish_prototype_review, then dismiss_attention escalate {reviewId} with target {kind:"pipeline", pipelineId:"lane"}');
 });
+
+/* docs/design/calm-task-cards-build.md §7.2: a stopped merge's step follows
+   its class, since a retry of a closed or missing PR stops again at once. */
+const mergeLane = (id: string, reason: string): Pipeline => ({
+  id, task: `Merge ${id}`, project: "project-a", state: "completed", createdAt: at, stateDetail: null, stages: [], cursor: null, runs: [],
+  merge: { state: "blocked", reason, blockedAt: at, updatedAt: at },
+  attentionRoute: { key: `lane:${id}:merge:${at}`, owner: "seat", seat: "conversation_seat" },
+}) as unknown as Pipeline;
+
+test("each stopped merge's class gets its own step, and the line names the class first", () => {
+  const lanes = [
+    mergeLane("closed", "the PR was closed"),
+    mergeLane("nopr", "no pull request is linked to this lane; open or attach its PR, then try the merge again"),
+    mergeLane("off", "the project's merge setting was turned off"),
+    mergeLane("conflict", "conflict with the base branch"),
+    mergeLane("moving", "main keeps moving"),
+    mergeLane("red", 'check "build" failed'),
+    mergeLane("slow", "checks did not finish in 90 min"),
+    mergeLane("draft", "the PR is a draft"),
+  ];
+  const labels = new Map(seatAgendaAsks({ files: [], pipelines: lanes }, now, "project-a").map((item) => [item.id, item.label] as const));
+  for (const id of ["closed", "nopr", "off"]) {
+    expect(labels.get(id)).toStartWith("[merge] ");
+    expect(labels.get(id)).toContain(`dismiss_attention target {kind:"pipeline", pipelineId:"${id}"} and a one-line reason`);
+    expect(labels.get(id)).not.toContain("retry-merge");
+  }
+  for (const id of ["conflict", "moving"]) expect(labels.get(id)).toContain("merges current main into this branch, resolves the conflict and has one review of the resolution, then pipeline_action retry-merge");
+  for (const id of ["red", "slow"]) expect(labels.get(id)).toContain("pipeline_action retry-merge once the PR's checks are green");
+  expect(labels.get("draft")).toContain("repair it and pipeline_action retry-merge");
+});
+
+test("a parked lane's line names its stop class before the stage's words", () => {
+  const lane = {
+    id: "commit", task: "Ship the panel", project: "project-a", state: "needs_decision", createdAt: at, stateDetail: "stage failed",
+    stages: [{ id: "build", kind: "run" }], cursor: { stageId: "build" },
+    runs: [{ stageId: "build", attempts: [{ n: 1, state: "failed", error: "committing the passed stage: fatal: unable to write new index file" }] }],
+    attentionRoute: { key: "lane:commit:lane-decision:none", owner: "seat", seat: "conversation_seat" },
+  } as unknown as Pipeline;
+  const [line] = seatAgendaAsks({ files: [], pipelines: [lane] }, now, "project-a");
+  expect(line!.label).toStartWith("[commit] Ship the panel — stage build asks stopped: stage failed");
+  expect(line!.label).toContain("retry-stage for a mechanical stop");
+});

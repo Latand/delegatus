@@ -1,0 +1,5533 @@
+{
+  "commit": "128f9500a081acb1c35400d11c35af2c9253d548",
+  "dataset": {
+    "rows": 30036,
+    "coldRows": 27836,
+    "payloadBytes": 96123013,
+    "transcripts": 320
+  },
+  "bounds": {
+    "readyMs": 10000,
+    "filesP95Ms": 5000,
+    "filesMaxMs": 10000,
+    "apiMaxMs": 10000,
+    "bootLagMaxMs": 1000,
+    "lagP95Ms": 50,
+    "lagMaxMs": 500,
+    "inputMs": 500
+  },
+  "failures": [],
+  "measurements": {
+    "views": 8,
+    "writes": {
+      "count": 940,
+      "p95Ms": 14,
+      "maxMs": 75,
+      "failures": 0
+    },
+    "readyMaxMs": 5863,
+    "filesP95Ms": 2403,
+    "filesMaxMs": 2403,
+    "filesErrors": 0,
+    "viewsWithoutAnswerDuringWrites": 0,
+    "apiMaxMs": 9261,
+    "apiMaxRoute": "/api/tmux/targets",
+    "apiErrors": 0,
+    "apiFirstError": null,
+    "apiUnfinished": 8,
+    "bootLagMaxMs": 552,
+    "lagP95Ms": 5,
+    "lagMaxMs": 202,
+    "inputMaxMs": 34,
+    "inputsMin": 2,
+    "selectionsLost": 0,
+    "staleNotices": 0
+  },
+  "views": [
+    {
+      "view": 0,
+      "readyMs": 5498,
+      "cards": 1,
+      "selection": {
+        "stillSelected": true,
+        "checksLost": 0,
+        "staleNoticeSeen": 0
+      },
+      "files": {
+        "answered": 9,
+        "answeredDuringWrites": 8,
+        "errors": 0,
+        "p95Ms": 2381,
+        "maxMs": 2381,
+        "queuedMaxMs": 924
+      },
+      "api": {
+        "requests": 98,
+        "maxMs": 8762,
+        "slowestRoute": "/api/tmux/targets",
+        "errors": 0,
+        "firstError": null,
+        "unfinished": 0
+      },
+      "lag": {
+        "bootMaxMs": 426,
+        "samples": 618,
+        "p95Ms": 5,
+        "maxMs": 105
+      },
+      "inputMs": [
+        34,
+        34
+      ],
+      "diagnostics": {
+        "view": 0,
+        "hash": "#c=<selected>",
+        "slowest": [
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 8762,
+            "queuedMs": 718,
+            "firstByteMs": 8742,
+            "at": 5272
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 5339,
+            "queuedMs": 4671,
+            "firstByteMs": 5335,
+            "at": 9997
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 5281,
+            "queuedMs": 0,
+            "firstByteMs": 5277,
+            "at": 9387
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5225,
+            "queuedMs": 0,
+            "firstByteMs": 5224,
+            "at": 9464
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 4681,
+            "queuedMs": 3517,
+            "firstByteMs": 4678,
+            "at": 13994
+          }
+        ],
+        "opening": [
+          {
+            "route": "/api/team",
+            "files": false,
+            "status": 200,
+            "ms": 104,
+            "queuedMs": 0,
+            "firstByteMs": 99,
+            "at": 1329
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1292,
+            "queuedMs": 1071,
+            "firstByteMs": 1290,
+            "at": 1397
+          },
+          {
+            "route": "/api/accounts/copilot",
+            "files": false,
+            "status": 200,
+            "ms": 359,
+            "queuedMs": 0,
+            "firstByteMs": 356,
+            "at": 1398
+          },
+          {
+            "route": "/api/telegram",
+            "files": false,
+            "status": 200,
+            "ms": 364,
+            "queuedMs": 0,
+            "firstByteMs": 363,
+            "at": 1399
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 527,
+            "queuedMs": 2,
+            "firstByteMs": 520,
+            "at": 1400
+          },
+          {
+            "route": "/api/limits",
+            "files": false,
+            "status": 200,
+            "ms": 1653,
+            "queuedMs": 1,
+            "firstByteMs": 1649,
+            "at": 1400
+          },
+          {
+            "route": "/api/runtime/snapshot",
+            "files": false,
+            "status": 200,
+            "ms": 1236,
+            "queuedMs": 1,
+            "firstByteMs": 1235,
+            "at": 1404
+          },
+          {
+            "route": "/api/onboarding",
+            "files": false,
+            "status": 200,
+            "ms": 382,
+            "queuedMs": 20,
+            "firstByteMs": 379,
+            "at": 1410
+          },
+          {
+            "route": "/api/telemetry",
+            "files": false,
+            "status": 200,
+            "ms": 410,
+            "queuedMs": 340,
+            "firstByteMs": 402,
+            "at": 1417
+          },
+          {
+            "route": "/api/staging",
+            "files": false,
+            "status": 200,
+            "ms": 412,
+            "queuedMs": 344,
+            "firstByteMs": 407,
+            "at": 1418
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 773,
+            "queuedMs": 369,
+            "firstByteMs": 769,
+            "at": 1420
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 807,
+            "queuedMs": 402,
+            "firstByteMs": 804,
+            "at": 1424
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 920,
+            "queuedMs": 448,
+            "firstByteMs": 909,
+            "at": 1472
+          },
+          {
+            "route": "/api/voice-companion/settings",
+            "files": false,
+            "status": 200,
+            "ms": 972,
+            "queuedMs": 721,
+            "firstByteMs": 961,
+            "at": 1472
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1347,
+            "queuedMs": 726,
+            "firstByteMs": 1344,
+            "at": 1479
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 713,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 1497,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 2381,
+            "queuedMs": 924,
+            "firstByteMs": 2346,
+            "at": 1513
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 838,
+            "queuedMs": 431,
+            "firstByteMs": 837,
+            "at": 2207
+          },
+          {
+            "route": "/api/resources",
+            "files": false,
+            "status": 200,
+            "ms": 909,
+            "queuedMs": 0,
+            "firstByteMs": 903,
+            "at": 2891
+          },
+          {
+            "route": "/api/links/agents",
+            "files": false,
+            "status": 200,
+            "ms": 283,
+            "queuedMs": 2,
+            "firstByteMs": 248,
+            "at": 4161
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 0,
+            "ms": 198,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 4191,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 663,
+            "queuedMs": 0,
+            "firstByteMs": 657,
+            "at": 4264
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 685,
+            "queuedMs": 0,
+            "firstByteMs": 665,
+            "at": 4265
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 674,
+            "queuedMs": 1,
+            "firstByteMs": 662,
+            "at": 4280
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 70,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 4336,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/task-icons",
+            "files": false,
+            "status": 200,
+            "ms": 919,
+            "queuedMs": 53,
+            "firstByteMs": 844,
+            "at": 4341
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 632,
+            "queuedMs": 34,
+            "firstByteMs": 612,
+            "at": 4798
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 1104,
+            "queuedMs": 0,
+            "firstByteMs": 1091,
+            "at": 4980
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 976,
+            "queuedMs": 0,
+            "firstByteMs": 969,
+            "at": 5052
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 937,
+            "queuedMs": 0,
+            "firstByteMs": 931,
+            "at": 5053
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 3638,
+            "queuedMs": 1972,
+            "firstByteMs": 3632,
+            "at": 5053
+          },
+          {
+            "route": "/api/tts/backend",
+            "files": false,
+            "status": 200,
+            "ms": 2066,
+            "queuedMs": 145,
+            "firstByteMs": 2058,
+            "at": 5141
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 1778,
+            "queuedMs": 266,
+            "firstByteMs": 1771,
+            "at": 5145
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 1821,
+            "queuedMs": 783,
+            "firstByteMs": 1779,
+            "at": 5240
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 8762,
+            "queuedMs": 718,
+            "firstByteMs": 8742,
+            "at": 5272
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 2835,
+            "queuedMs": 1449,
+            "firstByteMs": 2832,
+            "at": 5468
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 2716,
+            "queuedMs": 1102,
+            "firstByteMs": 2714,
+            "at": 5920
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 2784,
+            "queuedMs": 1120,
+            "firstByteMs": 2774,
+            "at": 6083
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 2571,
+            "queuedMs": 239,
+            "firstByteMs": 2565,
+            "at": 8067
+          },
+          {
+            "route": "/api/log/provenance",
+            "files": false,
+            "status": 200,
+            "ms": 4096,
+            "queuedMs": 554,
+            "firstByteMs": 4078,
+            "at": 8081
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 5281,
+            "queuedMs": 0,
+            "firstByteMs": 5277,
+            "at": 9387
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5225,
+            "queuedMs": 0,
+            "firstByteMs": 5224,
+            "at": 9464
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 4285,
+            "queuedMs": 636,
+            "firstByteMs": 4282,
+            "at": 9997
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 5339,
+            "queuedMs": 4671,
+            "firstByteMs": 5335,
+            "at": 9997
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 4116,
+            "queuedMs": 1894,
+            "firstByteMs": 4114,
+            "at": 10266
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 1524,
+            "queuedMs": 675,
+            "firstByteMs": 1522,
+            "at": 13340
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1887,
+            "queuedMs": 1222,
+            "firstByteMs": 1882,
+            "at": 13467
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 3473,
+            "queuedMs": 1340,
+            "firstByteMs": 3471,
+            "at": 13994
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 4681,
+            "queuedMs": 3517,
+            "firstByteMs": 4678,
+            "at": 13994
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 4356,
+            "queuedMs": 263,
+            "firstByteMs": 4355,
+            "at": 14017
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 711,
+            "queuedMs": 105,
+            "firstByteMs": 709,
+            "at": 14277
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 470,
+            "queuedMs": 0,
+            "firstByteMs": 469,
+            "at": 15170
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 1246,
+            "queuedMs": 0,
+            "firstByteMs": 1244,
+            "at": 16265
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 1494,
+            "queuedMs": 0,
+            "firstByteMs": 1492,
+            "at": 16423
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1058,
+            "queuedMs": 0,
+            "firstByteMs": 1055,
+            "at": 17074
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 346,
+            "queuedMs": 3,
+            "firstByteMs": 345,
+            "at": 17464
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1164,
+            "queuedMs": 684,
+            "firstByteMs": 1162,
+            "at": 17994
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1528,
+            "queuedMs": 1163,
+            "firstByteMs": 1527,
+            "at": 17994
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 1788,
+            "queuedMs": 1,
+            "firstByteMs": 1787,
+            "at": 18374
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 504,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 19290,
+            "error": "net::ERR_ABORTED"
+          }
+        ],
+        "unfinished": [],
+        "failures": [],
+        "document": {
+          "responseStartMs": 82,
+          "responseEndMs": 140,
+          "domContentLoadedMs": 424,
+          "loadMs": 1205
+        },
+        "assets": {
+          "count": 12,
+          "bytes": 1261155,
+          "lastEndMs": 972,
+          "slowest": [
+            {
+              "name": "page-e397641131242dd0.js",
+              "startMs": 148,
+              "ms": 824,
+              "sentMs": 452,
+              "firstByteMs": 467,
+              "endMs": 824
+            },
+            {
+              "name": "7900-3a1d9b4cc5223a5e.js",
+              "startMs": 148,
+              "ms": 577,
+              "sentMs": 298,
+              "firstByteMs": 354,
+              "endMs": 577
+            },
+            {
+              "name": "3794-83acfce05009cf38.js",
+              "startMs": 148,
+              "ms": 445,
+              "sentMs": 292,
+              "firstByteMs": 356,
+              "endMs": 445
+            },
+            {
+              "name": "2045-101ceb843ee652f2.js",
+              "startMs": 148,
+              "ms": 443,
+              "sentMs": 393,
+              "firstByteMs": 416,
+              "endMs": 443
+            }
+          ]
+        }
+      }
+    },
+    {
+      "view": 1,
+      "readyMs": 5187,
+      "cards": 1,
+      "selection": {
+        "stillSelected": true,
+        "checksLost": 0,
+        "staleNoticeSeen": 0
+      },
+      "files": {
+        "answered": 9,
+        "answeredDuringWrites": 8,
+        "errors": 0,
+        "p95Ms": 2314,
+        "maxMs": 2314,
+        "queuedMaxMs": 1119
+      },
+      "api": {
+        "requests": 100,
+        "maxMs": 8724,
+        "slowestRoute": "/api/tmux/targets",
+        "errors": 0,
+        "firstError": null,
+        "unfinished": 1
+      },
+      "lag": {
+        "bootMaxMs": 496,
+        "samples": 629,
+        "p95Ms": 3,
+        "maxMs": 126
+      },
+      "inputMs": [
+        33,
+        33
+      ],
+      "diagnostics": {
+        "view": 1,
+        "hash": "#c=<selected>",
+        "slowest": [
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 8724,
+            "queuedMs": 660,
+            "firstByteMs": 8683,
+            "at": 5219
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 5629,
+            "queuedMs": 3,
+            "firstByteMs": 5627,
+            "at": 8111
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 5497,
+            "queuedMs": 4,
+            "firstByteMs": 5495,
+            "at": 9137
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 5362,
+            "queuedMs": 4770,
+            "firstByteMs": 5360,
+            "at": 9865
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5150,
+            "queuedMs": 0,
+            "firstByteMs": 5148,
+            "at": 9546
+          }
+        ],
+        "opening": [
+          {
+            "route": "/api/team",
+            "files": false,
+            "status": 200,
+            "ms": 414,
+            "queuedMs": 0,
+            "firstByteMs": 411,
+            "at": 1421
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1487,
+            "queuedMs": 1286,
+            "firstByteMs": 1483,
+            "at": 1506
+          },
+          {
+            "route": "/api/accounts/copilot",
+            "files": false,
+            "status": 200,
+            "ms": 434,
+            "queuedMs": 23,
+            "firstByteMs": 430,
+            "at": 1507
+          },
+          {
+            "route": "/api/telegram",
+            "files": false,
+            "status": 200,
+            "ms": 465,
+            "queuedMs": 18,
+            "firstByteMs": 454,
+            "at": 1513
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 437,
+            "queuedMs": 17,
+            "firstByteMs": 424,
+            "at": 1514
+          },
+          {
+            "route": "/api/limits",
+            "files": false,
+            "status": 200,
+            "ms": 1540,
+            "queuedMs": 16,
+            "firstByteMs": 1522,
+            "at": 1515
+          },
+          {
+            "route": "/api/onboarding",
+            "files": false,
+            "status": 200,
+            "ms": 749,
+            "queuedMs": 415,
+            "firstByteMs": 743,
+            "at": 1516
+          },
+          {
+            "route": "/api/telemetry",
+            "files": false,
+            "status": 200,
+            "ms": 751,
+            "queuedMs": 425,
+            "firstByteMs": 746,
+            "at": 1516
+          },
+          {
+            "route": "/api/runtime/snapshot",
+            "files": false,
+            "status": 200,
+            "ms": 1557,
+            "queuedMs": 318,
+            "firstByteMs": 1529,
+            "at": 1516
+          },
+          {
+            "route": "/api/staging",
+            "files": false,
+            "status": 200,
+            "ms": 759,
+            "queuedMs": 450,
+            "firstByteMs": 749,
+            "at": 1521
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 981,
+            "queuedMs": 751,
+            "firstByteMs": 977,
+            "at": 1521
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 976,
+            "queuedMs": 742,
+            "firstByteMs": 969,
+            "at": 1522
+          },
+          {
+            "route": "/api/voice-companion/settings",
+            "files": false,
+            "status": 200,
+            "ms": 1147,
+            "queuedMs": 935,
+            "firstByteMs": 1145,
+            "at": 1552
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1246,
+            "queuedMs": 847,
+            "firstByteMs": 1240,
+            "at": 1552
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 937,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 1560,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1256,
+            "queuedMs": 912,
+            "firstByteMs": 1234,
+            "at": 1578
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 2314,
+            "queuedMs": 1119,
+            "firstByteMs": 2277,
+            "at": 1578
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 401,
+            "queuedMs": 306,
+            "firstByteMs": 394,
+            "at": 2512
+          },
+          {
+            "route": "/api/resources",
+            "files": false,
+            "status": 200,
+            "ms": 792,
+            "queuedMs": 0,
+            "firstByteMs": 786,
+            "at": 2994
+          },
+          {
+            "route": "/api/links/agents",
+            "files": false,
+            "status": 200,
+            "ms": 291,
+            "queuedMs": 1,
+            "firstByteMs": 288,
+            "at": 4163
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 0,
+            "ms": 114,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 4196,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 592,
+            "queuedMs": 1,
+            "firstByteMs": 589,
+            "at": 4238
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 598,
+            "queuedMs": 0,
+            "firstByteMs": 582,
+            "at": 4249
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 599,
+            "queuedMs": 1,
+            "firstByteMs": 596,
+            "at": 4251
+          },
+          {
+            "route": "/api/task-icons",
+            "files": false,
+            "status": 200,
+            "ms": 852,
+            "queuedMs": 94,
+            "firstByteMs": 842,
+            "at": 4284
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 81,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 4309,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 668,
+            "queuedMs": 45,
+            "firstByteMs": 642,
+            "at": 4774
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 1085,
+            "queuedMs": 0,
+            "firstByteMs": 1079,
+            "at": 4861
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 866,
+            "queuedMs": 0,
+            "firstByteMs": 862,
+            "at": 5016
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 837,
+            "queuedMs": 1,
+            "firstByteMs": 832,
+            "at": 5017
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 3347,
+            "queuedMs": 1896,
+            "firstByteMs": 3341,
+            "at": 5017
+          },
+          {
+            "route": "/api/tts/backend",
+            "files": false,
+            "status": 200,
+            "ms": 1155,
+            "queuedMs": 31,
+            "firstByteMs": 1134,
+            "at": 5107
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 1822,
+            "queuedMs": 315,
+            "firstByteMs": 1802,
+            "at": 5107
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 1835,
+            "queuedMs": 718,
+            "firstByteMs": 1828,
+            "at": 5132
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 8724,
+            "queuedMs": 660,
+            "firstByteMs": 8683,
+            "at": 5219
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1572,
+            "queuedMs": 682,
+            "firstByteMs": 1556,
+            "at": 5563
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 2564,
+            "queuedMs": 1010,
+            "firstByteMs": 2562,
+            "at": 5952
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 2659,
+            "queuedMs": 1031,
+            "firstByteMs": 2658,
+            "at": 5956
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 5629,
+            "queuedMs": 3,
+            "firstByteMs": 5627,
+            "at": 8111
+          },
+          {
+            "route": "/api/log/provenance",
+            "files": false,
+            "status": 200,
+            "ms": 3307,
+            "queuedMs": 246,
+            "firstByteMs": 3305,
+            "at": 8114
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 5497,
+            "queuedMs": 4,
+            "firstByteMs": 5495,
+            "at": 9137
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5150,
+            "queuedMs": 0,
+            "firstByteMs": 5148,
+            "at": 9546
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 4448,
+            "queuedMs": 1555,
+            "firstByteMs": 4447,
+            "at": 9865
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 5362,
+            "queuedMs": 4770,
+            "firstByteMs": 5360,
+            "at": 9865
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 4376,
+            "queuedMs": 3503,
+            "firstByteMs": 4367,
+            "at": 10236
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 1295,
+            "queuedMs": 357,
+            "firstByteMs": 1293,
+            "at": 13547
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1870,
+            "queuedMs": 1149,
+            "firstByteMs": 1868,
+            "at": 13547
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 2699,
+            "queuedMs": 1361,
+            "firstByteMs": 2696,
+            "at": 13866
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 3838,
+            "queuedMs": 2696,
+            "firstByteMs": 3835,
+            "at": 13866
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 4407,
+            "queuedMs": 408,
+            "firstByteMs": 4406,
+            "at": 13905
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 927,
+            "queuedMs": 363,
+            "firstByteMs": 926,
+            "at": 14249
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 2261,
+            "queuedMs": 0,
+            "firstByteMs": 2260,
+            "at": 15137
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 1651,
+            "queuedMs": 0,
+            "firstByteMs": 1648,
+            "at": 16238
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 1506,
+            "queuedMs": 0,
+            "firstByteMs": 1504,
+            "at": 16524
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1362,
+            "queuedMs": 0,
+            "firstByteMs": 1360,
+            "at": 17547
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 939,
+            "queuedMs": 1,
+            "firstByteMs": 935,
+            "at": 17865
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1377,
+            "queuedMs": 939,
+            "firstByteMs": 1375,
+            "at": 17865
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 993,
+            "queuedMs": 0,
+            "firstByteMs": 990,
+            "at": 17903
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 1710,
+            "queuedMs": 0,
+            "firstByteMs": 1709,
+            "at": 18313
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 547,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 19253,
+            "error": "net::ERR_ABORTED"
+          }
+        ],
+        "unfinished": [
+          {
+            "route": "/api/files",
+            "at": 37496,
+            "ageMs": 80
+          }
+        ],
+        "failures": [],
+        "document": {
+          "responseStartMs": 59,
+          "responseEndMs": 116,
+          "domContentLoadedMs": 1045,
+          "loadMs": 1276
+        },
+        "assets": {
+          "count": 12,
+          "bytes": 1261155,
+          "lastEndMs": 929,
+          "slowest": [
+            {
+              "name": "page-e397641131242dd0.js",
+              "startMs": 122,
+              "ms": 807,
+              "sentMs": 391,
+              "firstByteMs": 415,
+              "endMs": 807
+            },
+            {
+              "name": "7900-3a1d9b4cc5223a5e.js",
+              "startMs": 120,
+              "ms": 551,
+              "sentMs": 267,
+              "firstByteMs": 305,
+              "endMs": 551
+            },
+            {
+              "name": "2045-101ceb843ee652f2.js",
+              "startMs": 122,
+              "ms": 430,
+              "sentMs": 375,
+              "firstByteMs": 414,
+              "endMs": 430
+            },
+            {
+              "name": "7984-13d2335eed51b7c1.js",
+              "startMs": 122,
+              "ms": 427,
+              "sentMs": 377,
+              "firstByteMs": 401,
+              "endMs": 427
+            }
+          ]
+        }
+      }
+    },
+    {
+      "view": 2,
+      "readyMs": 5863,
+      "cards": 1,
+      "selection": {
+        "stillSelected": true,
+        "checksLost": 0,
+        "staleNoticeSeen": 0
+      },
+      "files": {
+        "answered": 10,
+        "answeredDuringWrites": 9,
+        "errors": 0,
+        "p95Ms": 2294,
+        "maxMs": 2294,
+        "queuedMaxMs": 933
+      },
+      "api": {
+        "requests": 99,
+        "maxMs": 8990,
+        "slowestRoute": "/api/tmux/targets",
+        "errors": 0,
+        "firstError": null,
+        "unfinished": 1
+      },
+      "lag": {
+        "bootMaxMs": 529,
+        "samples": 621,
+        "p95Ms": 4,
+        "maxMs": 144
+      },
+      "inputMs": [
+        33,
+        33
+      ],
+      "diagnostics": {
+        "view": 2,
+        "hash": "#c=<selected>",
+        "slowest": [
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 8990,
+            "queuedMs": 1422,
+            "firstByteMs": 8988,
+            "at": 5835
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 6749,
+            "queuedMs": 3247,
+            "firstByteMs": 6746,
+            "at": 5457
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 5380,
+            "queuedMs": 1929,
+            "firstByteMs": 5378,
+            "at": 6770
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5141,
+            "queuedMs": 0,
+            "firstByteMs": 5139,
+            "at": 9572
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 5022,
+            "queuedMs": 1672,
+            "firstByteMs": 5020,
+            "at": 7264
+          }
+        ],
+        "opening": [
+          {
+            "route": "/api/team",
+            "files": false,
+            "status": 200,
+            "ms": 408,
+            "queuedMs": 1,
+            "firstByteMs": 406,
+            "at": 1427
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1504,
+            "queuedMs": 1288,
+            "firstByteMs": 1497,
+            "at": 1504
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 461,
+            "queuedMs": 19,
+            "firstByteMs": 449,
+            "at": 1507
+          },
+          {
+            "route": "/api/accounts/copilot",
+            "files": false,
+            "status": 200,
+            "ms": 512,
+            "queuedMs": 10,
+            "firstByteMs": 502,
+            "at": 1518
+          },
+          {
+            "route": "/api/telegram",
+            "files": false,
+            "status": 200,
+            "ms": 508,
+            "queuedMs": 5,
+            "firstByteMs": 502,
+            "at": 1521
+          },
+          {
+            "route": "/api/limits",
+            "files": false,
+            "status": 200,
+            "ms": 1526,
+            "queuedMs": 5,
+            "firstByteMs": 1508,
+            "at": 1521
+          },
+          {
+            "route": "/api/runtime/snapshot",
+            "files": false,
+            "status": 200,
+            "ms": 1536,
+            "queuedMs": 307,
+            "firstByteMs": 1512,
+            "at": 1527
+          },
+          {
+            "route": "/api/onboarding",
+            "files": false,
+            "status": 200,
+            "ms": 732,
+            "queuedMs": 426,
+            "firstByteMs": 731,
+            "at": 1528
+          },
+          {
+            "route": "/api/telemetry",
+            "files": false,
+            "status": 200,
+            "ms": 751,
+            "queuedMs": 479,
+            "firstByteMs": 745,
+            "at": 1539
+          },
+          {
+            "route": "/api/staging",
+            "files": false,
+            "status": 200,
+            "ms": 750,
+            "queuedMs": 484,
+            "firstByteMs": 746,
+            "at": 1540
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 941,
+            "queuedMs": 710,
+            "firstByteMs": 936,
+            "at": 1550
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 964,
+            "queuedMs": 717,
+            "firstByteMs": 950,
+            "at": 1570
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1222,
+            "queuedMs": 814,
+            "firstByteMs": 1214,
+            "at": 1577
+          },
+          {
+            "route": "/api/voice-companion/settings",
+            "files": false,
+            "status": 200,
+            "ms": 1127,
+            "queuedMs": 905,
+            "firstByteMs": 1117,
+            "at": 1581
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 936,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 1584,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 2294,
+            "queuedMs": 933,
+            "firstByteMs": 2257,
+            "at": 1584
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1222,
+            "queuedMs": 933,
+            "firstByteMs": 1215,
+            "at": 1590
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 431,
+            "queuedMs": 306,
+            "firstByteMs": 427,
+            "at": 2505
+          },
+          {
+            "route": "/api/resources",
+            "files": false,
+            "status": 200,
+            "ms": 791,
+            "queuedMs": 15,
+            "firstByteMs": 786,
+            "at": 2987
+          },
+          {
+            "route": "/api/links/agents",
+            "files": false,
+            "status": 200,
+            "ms": 798,
+            "queuedMs": 23,
+            "firstByteMs": 762,
+            "at": 4319
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 791,
+            "queuedMs": 0,
+            "firstByteMs": 790,
+            "at": 4362
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 787,
+            "queuedMs": 1,
+            "firstByteMs": 783,
+            "at": 4363
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 0,
+            "ms": 67,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 4368,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 886,
+            "queuedMs": 16,
+            "firstByteMs": 814,
+            "at": 4387
+          },
+          {
+            "route": "/api/task-icons",
+            "files": false,
+            "status": 200,
+            "ms": 2261,
+            "queuedMs": 368,
+            "firstByteMs": 2250,
+            "at": 4414
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 370,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 4430,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1358,
+            "queuedMs": 245,
+            "firstByteMs": 1346,
+            "at": 4900
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 1986,
+            "queuedMs": 9,
+            "firstByteMs": 1982,
+            "at": 5274
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 2044,
+            "queuedMs": 1,
+            "firstByteMs": 2042,
+            "at": 5456
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1619,
+            "queuedMs": 648,
+            "firstByteMs": 1617,
+            "at": 5457
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 6749,
+            "queuedMs": 3247,
+            "firstByteMs": 6746,
+            "at": 5457
+          },
+          {
+            "route": "/api/tts/backend",
+            "files": false,
+            "status": 200,
+            "ms": 1571,
+            "queuedMs": 677,
+            "firstByteMs": 1546,
+            "at": 5571
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 3389,
+            "queuedMs": 1103,
+            "firstByteMs": 3367,
+            "at": 5572
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 3032,
+            "queuedMs": 1411,
+            "firstByteMs": 3023,
+            "at": 5665
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 2876,
+            "queuedMs": 1291,
+            "firstByteMs": 2872,
+            "at": 5828
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 8990,
+            "queuedMs": 1422,
+            "firstByteMs": 8988,
+            "at": 5835
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 5380,
+            "queuedMs": 1929,
+            "firstByteMs": 5378,
+            "at": 6770
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 5022,
+            "queuedMs": 1672,
+            "firstByteMs": 5020,
+            "at": 7264
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5141,
+            "queuedMs": 0,
+            "firstByteMs": 5139,
+            "at": 9572
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 4000,
+            "queuedMs": 1774,
+            "firstByteMs": 3987,
+            "at": 10374
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 3333,
+            "queuedMs": 1127,
+            "firstByteMs": 3332,
+            "at": 11080
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 3950,
+            "queuedMs": 3341,
+            "firstByteMs": 3948,
+            "at": 11081
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1615,
+            "queuedMs": 0,
+            "firstByteMs": 1614,
+            "at": 12806
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 1409,
+            "queuedMs": 799,
+            "firstByteMs": 1407,
+            "at": 13562
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1918,
+            "queuedMs": 1141,
+            "firstByteMs": 1917,
+            "at": 13571
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 594,
+            "queuedMs": 33,
+            "firstByteMs": 593,
+            "at": 14380
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 3739,
+            "queuedMs": 0,
+            "firstByteMs": 3738,
+            "at": 14825
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 706,
+            "queuedMs": 48,
+            "firstByteMs": 700,
+            "at": 14923
+          },
+          {
+            "route": "/api/log/provenance",
+            "files": false,
+            "status": 200,
+            "ms": 1340,
+            "queuedMs": 49,
+            "firstByteMs": 1333,
+            "at": 14930
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1246,
+            "queuedMs": 1,
+            "firstByteMs": 1244,
+            "at": 15081
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 2519,
+            "queuedMs": 1244,
+            "firstByteMs": 2516,
+            "at": 15082
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 1247,
+            "queuedMs": 0,
+            "firstByteMs": 1246,
+            "at": 16362
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 936,
+            "queuedMs": 0,
+            "firstByteMs": 934,
+            "at": 16558
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1059,
+            "queuedMs": 1,
+            "firstByteMs": 1055,
+            "at": 17059
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1098,
+            "queuedMs": 0,
+            "firstByteMs": 1095,
+            "at": 17572
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 1859,
+            "queuedMs": 4,
+            "firstByteMs": 1857,
+            "at": 18580
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 288,
+            "queuedMs": 1,
+            "firstByteMs": 286,
+            "at": 19080
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 550,
+            "queuedMs": 287,
+            "firstByteMs": 548,
+            "at": 19081
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 398,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 19391,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/runtime/snapshot",
+            "files": false,
+            "status": 200,
+            "ms": 719,
+            "queuedMs": 2,
+            "firstByteMs": 718,
+            "at": 20209
+          }
+        ],
+        "unfinished": [
+          {
+            "route": "/api/attention",
+            "at": 37572,
+            "ageMs": 188
+          }
+        ],
+        "failures": [],
+        "document": {
+          "responseStartMs": 48,
+          "responseEndMs": 105,
+          "domContentLoadedMs": 1023,
+          "loadMs": 1280
+        },
+        "assets": {
+          "count": 12,
+          "bytes": 1261155,
+          "lastEndMs": 895,
+          "slowest": [
+            {
+              "name": "page-e397641131242dd0.js",
+              "startMs": 108,
+              "ms": 787,
+              "sentMs": 430,
+              "firstByteMs": 443,
+              "endMs": 787
+            },
+            {
+              "name": "7900-3a1d9b4cc5223a5e.js",
+              "startMs": 108,
+              "ms": 581,
+              "sentMs": 312,
+              "firstByteMs": 358,
+              "endMs": 581
+            },
+            {
+              "name": "3794-83acfce05009cf38.js",
+              "startMs": 108,
+              "ms": 443,
+              "sentMs": 305,
+              "firstByteMs": 356,
+              "endMs": 443
+            },
+            {
+              "name": "2045-101ceb843ee652f2.js",
+              "startMs": 108,
+              "ms": 436,
+              "sentMs": 398,
+              "firstByteMs": 421,
+              "endMs": 436
+            }
+          ]
+        }
+      }
+    },
+    {
+      "view": 3,
+      "readyMs": 5334,
+      "cards": 1,
+      "selection": {
+        "stillSelected": true,
+        "checksLost": 0,
+        "staleNoticeSeen": 0
+      },
+      "files": {
+        "answered": 9,
+        "answeredDuringWrites": 8,
+        "errors": 0,
+        "p95Ms": 2403,
+        "maxMs": 2403,
+        "queuedMaxMs": 941
+      },
+      "api": {
+        "requests": 102,
+        "maxMs": 8573,
+        "slowestRoute": "/api/tmux/targets",
+        "errors": 0,
+        "firstError": null,
+        "unfinished": 3
+      },
+      "lag": {
+        "bootMaxMs": 465,
+        "samples": 631,
+        "p95Ms": 4,
+        "maxMs": 202
+      },
+      "inputMs": [
+        17,
+        21
+      ],
+      "diagnostics": {
+        "view": 3,
+        "hash": "#c=<selected>",
+        "slowest": [
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 8573,
+            "queuedMs": 313,
+            "firstByteMs": 8564,
+            "at": 5257
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 5488,
+            "queuedMs": 4908,
+            "firstByteMs": 5482,
+            "at": 9613
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5245,
+            "queuedMs": 0,
+            "firstByteMs": 5244,
+            "at": 9406
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 4596,
+            "queuedMs": 988,
+            "firstByteMs": 4590,
+            "at": 9613
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 4427,
+            "queuedMs": 378,
+            "firstByteMs": 4426,
+            "at": 13826
+          }
+        ],
+        "opening": [
+          {
+            "route": "/api/team",
+            "files": false,
+            "status": 200,
+            "ms": 114,
+            "queuedMs": 0,
+            "firstByteMs": 108,
+            "at": 1278
+          },
+          {
+            "route": "/api/accounts/copilot",
+            "files": false,
+            "status": 200,
+            "ms": 141,
+            "queuedMs": 1,
+            "firstByteMs": 120,
+            "at": 1367
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1275,
+            "queuedMs": 1051,
+            "firstByteMs": 1271,
+            "at": 1367
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 533,
+            "queuedMs": 0,
+            "firstByteMs": 525,
+            "at": 1368
+          },
+          {
+            "route": "/api/telegram",
+            "files": false,
+            "status": 200,
+            "ms": 163,
+            "queuedMs": 1,
+            "firstByteMs": 159,
+            "at": 1369
+          },
+          {
+            "route": "/api/limits",
+            "files": false,
+            "status": 200,
+            "ms": 1656,
+            "queuedMs": 1,
+            "firstByteMs": 1651,
+            "at": 1370
+          },
+          {
+            "route": "/api/runtime/snapshot",
+            "files": false,
+            "status": 200,
+            "ms": 1240,
+            "queuedMs": 1,
+            "firstByteMs": 1238,
+            "at": 1372
+          },
+          {
+            "route": "/api/onboarding",
+            "files": false,
+            "status": 200,
+            "ms": 430,
+            "queuedMs": 11,
+            "firstByteMs": 422,
+            "at": 1380
+          },
+          {
+            "route": "/api/telemetry",
+            "files": false,
+            "status": 200,
+            "ms": 391,
+            "queuedMs": 136,
+            "firstByteMs": 385,
+            "at": 1384
+          },
+          {
+            "route": "/api/staging",
+            "files": false,
+            "status": 200,
+            "ms": 400,
+            "queuedMs": 154,
+            "firstByteMs": 395,
+            "at": 1385
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 785,
+            "queuedMs": 384,
+            "firstByteMs": 781,
+            "at": 1386
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 822,
+            "queuedMs": 415,
+            "firstByteMs": 816,
+            "at": 1390
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 942,
+            "queuedMs": 486,
+            "firstByteMs": 937,
+            "at": 1406
+          },
+          {
+            "route": "/api/voice-companion/settings",
+            "files": false,
+            "status": 200,
+            "ms": 1006,
+            "queuedMs": 761,
+            "firstByteMs": 1005,
+            "at": 1407
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1365,
+            "queuedMs": 761,
+            "firstByteMs": 1350,
+            "at": 1451
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 721,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 1462,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 2403,
+            "queuedMs": 941,
+            "firstByteMs": 2362,
+            "at": 1471
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 649,
+            "queuedMs": 430,
+            "firstByteMs": 648,
+            "at": 2181
+          },
+          {
+            "route": "/api/resources",
+            "files": false,
+            "status": 200,
+            "ms": 916,
+            "queuedMs": 0,
+            "firstByteMs": 910,
+            "at": 2856
+          },
+          {
+            "route": "/api/links/agents",
+            "files": false,
+            "status": 200,
+            "ms": 231,
+            "queuedMs": 2,
+            "firstByteMs": 215,
+            "at": 4119
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 0,
+            "ms": 82,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 4141,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 628,
+            "queuedMs": 4,
+            "firstByteMs": 557,
+            "at": 4214
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 625,
+            "queuedMs": 4,
+            "firstByteMs": 561,
+            "at": 4214
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 621,
+            "queuedMs": 4,
+            "firstByteMs": 564,
+            "at": 4214
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 153,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 4215,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/task-icons",
+            "files": false,
+            "status": 200,
+            "ms": 495,
+            "queuedMs": 128,
+            "firstByteMs": 483,
+            "at": 4215
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 672,
+            "queuedMs": 6,
+            "firstByteMs": 666,
+            "at": 4692
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 996,
+            "queuedMs": 0,
+            "firstByteMs": 994,
+            "at": 4811
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 778,
+            "queuedMs": 0,
+            "firstByteMs": 774,
+            "at": 4869
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 696,
+            "queuedMs": 3,
+            "firstByteMs": 662,
+            "at": 4871
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 3392,
+            "queuedMs": 2008,
+            "firstByteMs": 3388,
+            "at": 4876
+          },
+          {
+            "route": "/api/tts/backend",
+            "files": false,
+            "status": 200,
+            "ms": 1231,
+            "queuedMs": 133,
+            "firstByteMs": 1224,
+            "at": 4990
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 1896,
+            "queuedMs": 366,
+            "firstByteMs": 1891,
+            "at": 4992
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 1778,
+            "queuedMs": 442,
+            "firstByteMs": 1733,
+            "at": 5205
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 8573,
+            "queuedMs": 313,
+            "firstByteMs": 8564,
+            "at": 5257
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1674,
+            "queuedMs": 787,
+            "firstByteMs": 1669,
+            "at": 5428
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 2657,
+            "queuedMs": 1126,
+            "firstByteMs": 2656,
+            "at": 5813
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 2146,
+            "queuedMs": 607,
+            "firstByteMs": 2143,
+            "at": 6337
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 4235,
+            "queuedMs": 3,
+            "firstByteMs": 4230,
+            "at": 8061
+          },
+          {
+            "route": "/api/log/provenance",
+            "files": false,
+            "status": 200,
+            "ms": 2538,
+            "queuedMs": 196,
+            "firstByteMs": 2532,
+            "at": 8068
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 2423,
+            "queuedMs": 0,
+            "firstByteMs": 2421,
+            "at": 8995
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5245,
+            "queuedMs": 0,
+            "firstByteMs": 5244,
+            "at": 9406
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 4596,
+            "queuedMs": 988,
+            "firstByteMs": 4590,
+            "at": 9613
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 5488,
+            "queuedMs": 4908,
+            "firstByteMs": 5482,
+            "at": 9613
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 4124,
+            "queuedMs": 1237,
+            "firstByteMs": 4123,
+            "at": 10180
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 2601,
+            "queuedMs": 371,
+            "firstByteMs": 2598,
+            "at": 11919
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 1752,
+            "queuedMs": 751,
+            "firstByteMs": 1751,
+            "at": 13071
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1908,
+            "queuedMs": 1242,
+            "firstByteMs": 1904,
+            "at": 13408
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1995,
+            "queuedMs": 1487,
+            "firstByteMs": 1992,
+            "at": 13609
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 4237,
+            "queuedMs": 1988,
+            "firstByteMs": 4229,
+            "at": 13619
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 4427,
+            "queuedMs": 378,
+            "firstByteMs": 4426,
+            "at": 13826
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 764,
+            "queuedMs": 118,
+            "firstByteMs": 763,
+            "at": 14186
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 1294,
+            "queuedMs": 3,
+            "firstByteMs": 1285,
+            "at": 16187
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 1496,
+            "queuedMs": 0,
+            "firstByteMs": 1494,
+            "at": 16387
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1053,
+            "queuedMs": 5,
+            "firstByteMs": 1051,
+            "at": 17029
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1183,
+            "queuedMs": 69,
+            "firstByteMs": 1178,
+            "at": 17405
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1258,
+            "queuedMs": 234,
+            "firstByteMs": 1254,
+            "at": 17610
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1678,
+            "queuedMs": 1258,
+            "firstByteMs": 1674,
+            "at": 17611
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 1691,
+            "queuedMs": 0,
+            "firstByteMs": 1690,
+            "at": 18253
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 384,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 19189,
+            "error": "net::ERR_ABORTED"
+          }
+        ],
+        "unfinished": [
+          {
+            "route": "/api/files",
+            "at": 37489,
+            "ageMs": 411
+          },
+          {
+            "route": "/api/accounts",
+            "at": 37608,
+            "ageMs": 292
+          },
+          {
+            "route": "/api/accounts",
+            "at": 37608,
+            "ageMs": 292
+          }
+        ],
+        "failures": [],
+        "document": {
+          "responseStartMs": 41,
+          "responseEndMs": 95,
+          "domContentLoadedMs": 380,
+          "loadMs": 1145
+        },
+        "assets": {
+          "count": 12,
+          "bytes": 1261155,
+          "lastEndMs": 850,
+          "slowest": [
+            {
+              "name": "page-e397641131242dd0.js",
+              "startMs": 108,
+              "ms": 742,
+              "sentMs": 388,
+              "firstByteMs": 408,
+              "endMs": 742
+            },
+            {
+              "name": "7900-3a1d9b4cc5223a5e.js",
+              "startMs": 108,
+              "ms": 557,
+              "sentMs": 279,
+              "firstByteMs": 330,
+              "endMs": 557
+            },
+            {
+              "name": "2045-101ceb843ee652f2.js",
+              "startMs": 108,
+              "ms": 426,
+              "sentMs": 375,
+              "firstByteMs": 397,
+              "endMs": 426
+            },
+            {
+              "name": "7984-13d2335eed51b7c1.js",
+              "startMs": 108,
+              "ms": 409,
+              "sentMs": 387,
+              "firstByteMs": 405,
+              "endMs": 409
+            }
+          ]
+        }
+      }
+    },
+    {
+      "view": 4,
+      "readyMs": 4676,
+      "cards": 1,
+      "selection": {
+        "stillSelected": true,
+        "checksLost": 0,
+        "staleNoticeSeen": 0
+      },
+      "files": {
+        "answered": 9,
+        "answeredDuringWrites": 8,
+        "errors": 0,
+        "p95Ms": 2331,
+        "maxMs": 2331,
+        "queuedMaxMs": 965
+      },
+      "api": {
+        "requests": 101,
+        "maxMs": 8586,
+        "slowestRoute": "/api/tmux/targets",
+        "errors": 0,
+        "firstError": null,
+        "unfinished": 1
+      },
+      "lag": {
+        "bootMaxMs": 469,
+        "samples": 647,
+        "p95Ms": 4,
+        "maxMs": 87
+      },
+      "inputMs": [
+        17,
+        17
+      ],
+      "diagnostics": {
+        "view": 4,
+        "hash": "#c=<selected>",
+        "slowest": [
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 8586,
+            "queuedMs": 4531,
+            "firstByteMs": 8584,
+            "at": 9564
+          },
+          {
+            "route": "/api/log/provenance",
+            "files": false,
+            "status": 200,
+            "ms": 5640,
+            "queuedMs": 1,
+            "firstByteMs": 5620,
+            "at": 8031
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 5532,
+            "queuedMs": 1333,
+            "firstByteMs": 5530,
+            "at": 8563
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5154,
+            "queuedMs": 0,
+            "firstByteMs": 5152,
+            "at": 9474
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 4398,
+            "queuedMs": 2183,
+            "firstByteMs": 4394,
+            "at": 10041
+          }
+        ],
+        "opening": [
+          {
+            "route": "/api/team",
+            "files": false,
+            "status": 200,
+            "ms": 412,
+            "queuedMs": 0,
+            "firstByteMs": 407,
+            "at": 1344
+          },
+          {
+            "route": "/api/accounts/copilot",
+            "files": false,
+            "status": 200,
+            "ms": 505,
+            "queuedMs": 13,
+            "firstByteMs": 491,
+            "at": 1443
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1426,
+            "queuedMs": 1197,
+            "firstByteMs": 1411,
+            "at": 1443
+          },
+          {
+            "route": "/api/telegram",
+            "files": false,
+            "status": 200,
+            "ms": 511,
+            "queuedMs": 13,
+            "firstByteMs": 497,
+            "at": 1444
+          },
+          {
+            "route": "/api/limits",
+            "files": false,
+            "status": 200,
+            "ms": 1544,
+            "queuedMs": 13,
+            "firstByteMs": 1517,
+            "at": 1444
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 502,
+            "queuedMs": 15,
+            "firstByteMs": 483,
+            "at": 1446
+          },
+          {
+            "route": "/api/onboarding",
+            "files": false,
+            "status": 200,
+            "ms": 761,
+            "queuedMs": 480,
+            "firstByteMs": 754,
+            "at": 1446
+          },
+          {
+            "route": "/api/telemetry",
+            "files": false,
+            "status": 200,
+            "ms": 765,
+            "queuedMs": 489,
+            "firstByteMs": 758,
+            "at": 1446
+          },
+          {
+            "route": "/api/runtime/snapshot",
+            "files": false,
+            "status": 200,
+            "ms": 1553,
+            "queuedMs": 310,
+            "firstByteMs": 1524,
+            "at": 1446
+          },
+          {
+            "route": "/api/staging",
+            "files": false,
+            "status": 200,
+            "ms": 768,
+            "queuedMs": 495,
+            "firstByteMs": 766,
+            "at": 1447
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 989,
+            "queuedMs": 749,
+            "firstByteMs": 979,
+            "at": 1452
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 993,
+            "queuedMs": 761,
+            "firstByteMs": 989,
+            "at": 1452
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1068,
+            "queuedMs": 841,
+            "firstByteMs": 1065,
+            "at": 1476
+          },
+          {
+            "route": "/api/voice-companion/settings",
+            "files": false,
+            "status": 200,
+            "ms": 1166,
+            "queuedMs": 965,
+            "firstByteMs": 1163,
+            "at": 1476
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 2331,
+            "queuedMs": 965,
+            "firstByteMs": 2295,
+            "at": 1477
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 965,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 1491,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1256,
+            "queuedMs": 940,
+            "firstByteMs": 1234,
+            "at": 1503
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 410,
+            "queuedMs": 288,
+            "firstByteMs": 407,
+            "at": 2454
+          },
+          {
+            "route": "/api/resources",
+            "files": false,
+            "status": 200,
+            "ms": 792,
+            "queuedMs": 0,
+            "firstByteMs": 785,
+            "at": 2918
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 0,
+            "ms": 83,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 4024,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/links/agents",
+            "files": false,
+            "status": 200,
+            "ms": 158,
+            "queuedMs": 22,
+            "firstByteMs": 117,
+            "at": 4036
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 151,
+            "queuedMs": 3,
+            "firstByteMs": 133,
+            "at": 4055
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 155,
+            "queuedMs": 3,
+            "firstByteMs": 136,
+            "at": 4056
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 162,
+            "queuedMs": 3,
+            "firstByteMs": 148,
+            "at": 4056
+          },
+          {
+            "route": "/api/task-icons",
+            "files": false,
+            "status": 200,
+            "ms": 376,
+            "queuedMs": 93,
+            "firstByteMs": 374,
+            "at": 4065
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 468,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 4091,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 343,
+            "queuedMs": 1,
+            "firstByteMs": 337,
+            "at": 4222
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 653,
+            "queuedMs": 10,
+            "firstByteMs": 643,
+            "at": 4366
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 133,
+            "queuedMs": 16,
+            "firstByteMs": 122,
+            "at": 4367
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 897,
+            "queuedMs": 119,
+            "firstByteMs": 884,
+            "at": 4371
+          },
+          {
+            "route": "/api/tts/backend",
+            "files": false,
+            "status": 200,
+            "ms": 758,
+            "queuedMs": 4,
+            "firstByteMs": 703,
+            "at": 4440
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 777,
+            "queuedMs": 14,
+            "firstByteMs": 772,
+            "at": 4440
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 768,
+            "queuedMs": 60,
+            "firstByteMs": 764,
+            "at": 4501
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 4387,
+            "queuedMs": 441,
+            "firstByteMs": 4386,
+            "at": 4569
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 2142,
+            "queuedMs": 618,
+            "firstByteMs": 2138,
+            "at": 4579
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1644,
+            "queuedMs": 123,
+            "firstByteMs": 1601,
+            "at": 5133
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1270,
+            "queuedMs": 10,
+            "firstByteMs": 1246,
+            "at": 5497
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 807,
+            "queuedMs": 0,
+            "firstByteMs": 803,
+            "at": 7261
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 4236,
+            "queuedMs": 1,
+            "firstByteMs": 4226,
+            "at": 7996
+          },
+          {
+            "route": "/api/log/provenance",
+            "files": false,
+            "status": 200,
+            "ms": 5640,
+            "queuedMs": 1,
+            "firstByteMs": 5620,
+            "at": 8031
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1331,
+            "queuedMs": 0,
+            "firstByteMs": 1329,
+            "at": 8563
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 5532,
+            "queuedMs": 1333,
+            "firstByteMs": 5530,
+            "at": 8563
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5154,
+            "queuedMs": 0,
+            "firstByteMs": 5152,
+            "at": 9474
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 8586,
+            "queuedMs": 4531,
+            "firstByteMs": 8584,
+            "at": 9564
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 4398,
+            "queuedMs": 2183,
+            "firstByteMs": 4394,
+            "at": 10041
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 3027,
+            "queuedMs": 2204,
+            "firstByteMs": 3023,
+            "at": 11448
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 2530,
+            "queuedMs": 1912,
+            "firstByteMs": 2528,
+            "at": 12563
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 3750,
+            "queuedMs": 2529,
+            "firstByteMs": 3748,
+            "at": 12564
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1879,
+            "queuedMs": 1153,
+            "firstByteMs": 1877,
+            "at": 13475
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 1300,
+            "queuedMs": 517,
+            "firstByteMs": 1298,
+            "at": 13485
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 935,
+            "queuedMs": 394,
+            "firstByteMs": 934,
+            "at": 14045
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 1762,
+            "queuedMs": 1,
+            "firstByteMs": 1751,
+            "at": 16050
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 1096,
+            "queuedMs": 0,
+            "firstByteMs": 1094,
+            "at": 16451
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1448,
+            "queuedMs": 1,
+            "firstByteMs": 1447,
+            "at": 16563
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 2323,
+            "queuedMs": 1448,
+            "firstByteMs": 2321,
+            "at": 16563
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1070,
+            "queuedMs": 0,
+            "firstByteMs": 1057,
+            "at": 16978
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1143,
+            "queuedMs": 73,
+            "firstByteMs": 1141,
+            "at": 17473
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 1861,
+            "queuedMs": 0,
+            "firstByteMs": 1860,
+            "at": 18150
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 668,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 19048,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 618,
+            "queuedMs": 0,
+            "firstByteMs": 616,
+            "at": 20013
+          }
+        ],
+        "unfinished": [
+          {
+            "route": "/api/files",
+            "at": 37428,
+            "ageMs": 577
+          }
+        ],
+        "failures": [],
+        "document": {
+          "responseStartMs": 69,
+          "responseEndMs": 136,
+          "domContentLoadedMs": 826,
+          "loadMs": 1192
+        },
+        "assets": {
+          "count": 12,
+          "bytes": 1261155,
+          "lastEndMs": 902,
+          "slowest": [
+            {
+              "name": "page-e397641131242dd0.js",
+              "startMs": 134,
+              "ms": 768,
+              "sentMs": 389,
+              "firstByteMs": 407,
+              "endMs": 768
+            },
+            {
+              "name": "7900-3a1d9b4cc5223a5e.js",
+              "startMs": 134,
+              "ms": 517,
+              "sentMs": 311,
+              "firstByteMs": 341,
+              "endMs": 517
+            },
+            {
+              "name": "2045-101ceb843ee652f2.js",
+              "startMs": 134,
+              "ms": 438,
+              "sentMs": 385,
+              "firstByteMs": 409,
+              "endMs": 438
+            },
+            {
+              "name": "951-6ec701cdc4bb4495.js",
+              "startMs": 134,
+              "ms": 423,
+              "sentMs": 384,
+              "firstByteMs": 402,
+              "endMs": 423
+            }
+          ]
+        }
+      }
+    },
+    {
+      "view": 5,
+      "readyMs": 4828,
+      "cards": 1,
+      "selection": {
+        "stillSelected": true,
+        "checksLost": 0,
+        "staleNoticeSeen": 0
+      },
+      "files": {
+        "answered": 10,
+        "answeredDuringWrites": 9,
+        "errors": 0,
+        "p95Ms": 2218,
+        "maxMs": 2218,
+        "queuedMaxMs": 1089
+      },
+      "api": {
+        "requests": 100,
+        "maxMs": 9261,
+        "slowestRoute": "/api/tmux/targets",
+        "errors": 0,
+        "firstError": null,
+        "unfinished": 0
+      },
+      "lag": {
+        "bootMaxMs": 552,
+        "samples": 646,
+        "p95Ms": 5,
+        "maxMs": 82
+      },
+      "inputMs": [
+        17,
+        14
+      ],
+      "diagnostics": {
+        "view": 5,
+        "hash": "#c=<selected>",
+        "slowest": [
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 9261,
+            "queuedMs": 1423,
+            "firstByteMs": 9256,
+            "at": 4740
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 5660,
+            "queuedMs": 1,
+            "firstByteMs": 5624,
+            "at": 8064
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 5363,
+            "queuedMs": 0,
+            "firstByteMs": 5361,
+            "at": 9223
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5083,
+            "queuedMs": 2,
+            "firstByteMs": 5080,
+            "at": 9598
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 4602,
+            "queuedMs": 3974,
+            "firstByteMs": 4601,
+            "at": 10613
+          }
+        ],
+        "opening": [
+          {
+            "route": "/api/team",
+            "files": false,
+            "status": 200,
+            "ms": 531,
+            "queuedMs": 8,
+            "firstByteMs": 512,
+            "at": 1528
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1405,
+            "queuedMs": 1185,
+            "firstByteMs": 1404,
+            "at": 1566
+          },
+          {
+            "route": "/api/accounts/copilot",
+            "files": false,
+            "status": 200,
+            "ms": 505,
+            "queuedMs": 0,
+            "firstByteMs": 502,
+            "at": 1568
+          },
+          {
+            "route": "/api/telegram",
+            "files": false,
+            "status": 200,
+            "ms": 510,
+            "queuedMs": 0,
+            "firstByteMs": 508,
+            "at": 1568
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 506,
+            "queuedMs": 0,
+            "firstByteMs": 500,
+            "at": 1569
+          },
+          {
+            "route": "/api/limits",
+            "files": false,
+            "status": 200,
+            "ms": 1432,
+            "queuedMs": 1,
+            "firstByteMs": 1412,
+            "at": 1569
+          },
+          {
+            "route": "/api/runtime/snapshot",
+            "files": false,
+            "status": 200,
+            "ms": 1441,
+            "queuedMs": 469,
+            "firstByteMs": 1419,
+            "at": 1571
+          },
+          {
+            "route": "/api/onboarding",
+            "files": false,
+            "status": 200,
+            "ms": 695,
+            "queuedMs": 494,
+            "firstByteMs": 694,
+            "at": 1572
+          },
+          {
+            "route": "/api/telemetry",
+            "files": false,
+            "status": 200,
+            "ms": 698,
+            "queuedMs": 499,
+            "firstByteMs": 697,
+            "at": 1573
+          },
+          {
+            "route": "/api/staging",
+            "files": false,
+            "status": 200,
+            "ms": 702,
+            "queuedMs": 505,
+            "firstByteMs": 700,
+            "at": 1576
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 918,
+            "queuedMs": 691,
+            "firstByteMs": 916,
+            "at": 1577
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 923,
+            "queuedMs": 698,
+            "firstByteMs": 922,
+            "at": 1579
+          },
+          {
+            "route": "/api/voice-companion/settings",
+            "files": false,
+            "status": 200,
+            "ms": 1103,
+            "queuedMs": 896,
+            "firstByteMs": 1101,
+            "at": 1597
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1155,
+            "queuedMs": 745,
+            "firstByteMs": 1153,
+            "at": 1597
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 906,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 1602,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1158,
+            "queuedMs": 894,
+            "firstByteMs": 1154,
+            "at": 1604
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 2218,
+            "queuedMs": 1089,
+            "firstByteMs": 2189,
+            "at": 1611
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 391,
+            "queuedMs": 255,
+            "firstByteMs": 390,
+            "at": 2506
+          },
+          {
+            "route": "/api/resources",
+            "files": false,
+            "status": 200,
+            "ms": 674,
+            "queuedMs": 0,
+            "firstByteMs": 665,
+            "at": 3060
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 0,
+            "ms": 75,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 4074,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/links/agents",
+            "files": false,
+            "status": 200,
+            "ms": 129,
+            "queuedMs": 4,
+            "firstByteMs": 100,
+            "at": 4074
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 277,
+            "queuedMs": 0,
+            "firstByteMs": 276,
+            "at": 4095
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 298,
+            "queuedMs": 0,
+            "firstByteMs": 284,
+            "at": 4096
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 297,
+            "queuedMs": 1,
+            "firstByteMs": 290,
+            "at": 4100
+          },
+          {
+            "route": "/api/task-icons",
+            "files": false,
+            "status": 200,
+            "ms": 348,
+            "queuedMs": 60,
+            "firstByteMs": 347,
+            "at": 4118
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 186,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 4139,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 1896,
+            "queuedMs": 0,
+            "firstByteMs": 1893,
+            "at": 4413
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 736,
+            "queuedMs": 1,
+            "firstByteMs": 721,
+            "at": 4481
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 2100,
+            "queuedMs": 1,
+            "firstByteMs": 2094,
+            "at": 4482
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 4219,
+            "queuedMs": 2591,
+            "firstByteMs": 4217,
+            "at": 4482
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 1597,
+            "queuedMs": 512,
+            "firstByteMs": 1595,
+            "at": 4568
+          },
+          {
+            "route": "/api/tts/backend",
+            "files": false,
+            "status": 200,
+            "ms": 2036,
+            "queuedMs": 0,
+            "firstByteMs": 2024,
+            "at": 4568
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 2124,
+            "queuedMs": 589,
+            "firstByteMs": 2110,
+            "at": 4628
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 9261,
+            "queuedMs": 1423,
+            "firstByteMs": 9256,
+            "at": 4740
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1961,
+            "queuedMs": 1421,
+            "firstByteMs": 1933,
+            "at": 5170
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1521,
+            "queuedMs": 1015,
+            "firstByteMs": 1518,
+            "at": 5599
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 1761,
+            "queuedMs": 444,
+            "firstByteMs": 1758,
+            "at": 6313
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1110,
+            "queuedMs": 0,
+            "firstByteMs": 1108,
+            "at": 7609
+          },
+          {
+            "route": "/api/log/provenance",
+            "files": false,
+            "status": 200,
+            "ms": 1803,
+            "queuedMs": 23,
+            "firstByteMs": 1784,
+            "at": 8050
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 5660,
+            "queuedMs": 1,
+            "firstByteMs": 5624,
+            "at": 8064
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 5363,
+            "queuedMs": 0,
+            "firstByteMs": 5361,
+            "at": 9223
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5083,
+            "queuedMs": 2,
+            "firstByteMs": 5080,
+            "at": 9598
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 3935,
+            "queuedMs": 0,
+            "firstByteMs": 3932,
+            "at": 10097
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 3936,
+            "queuedMs": 3065,
+            "firstByteMs": 3930,
+            "at": 10612
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 4602,
+            "queuedMs": 3974,
+            "firstByteMs": 4601,
+            "at": 10613
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 1282,
+            "queuedMs": 479,
+            "firstByteMs": 1277,
+            "at": 13519
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1849,
+            "queuedMs": 1082,
+            "firstByteMs": 1847,
+            "at": 13598
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 4119,
+            "queuedMs": 32,
+            "firstByteMs": 4117,
+            "at": 14000
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 1015,
+            "queuedMs": 455,
+            "firstByteMs": 1014,
+            "at": 14100
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1843,
+            "queuedMs": 608,
+            "firstByteMs": 1841,
+            "at": 14607
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 3358,
+            "queuedMs": 1842,
+            "firstByteMs": 3356,
+            "at": 14607
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 2258,
+            "queuedMs": 0,
+            "firstByteMs": 2257,
+            "at": 15088
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 1732,
+            "queuedMs": 5,
+            "firstByteMs": 1726,
+            "at": 16101
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 999,
+            "queuedMs": 0,
+            "firstByteMs": 998,
+            "at": 16579
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1064,
+            "queuedMs": 0,
+            "firstByteMs": 1063,
+            "at": 17596
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 981,
+            "queuedMs": 0,
+            "firstByteMs": 972,
+            "at": 17856
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 2039,
+            "queuedMs": 1,
+            "firstByteMs": 2037,
+            "at": 18121
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 523,
+            "queuedMs": 0,
+            "firstByteMs": 521,
+            "at": 18609
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 912,
+            "queuedMs": 521,
+            "firstByteMs": 909,
+            "at": 18611
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 369,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 19103,
+            "error": "net::ERR_ABORTED"
+          }
+        ],
+        "unfinished": [],
+        "failures": [],
+        "document": {
+          "responseStartMs": 77,
+          "responseEndMs": 144,
+          "domContentLoadedMs": 1089,
+          "loadMs": 1382
+        },
+        "assets": {
+          "count": 12,
+          "bytes": 1261155,
+          "lastEndMs": 874,
+          "slowest": [
+            {
+              "name": "page-e397641131242dd0.js",
+              "startMs": 151,
+              "ms": 723,
+              "sentMs": 333,
+              "firstByteMs": 351,
+              "endMs": 723
+            },
+            {
+              "name": "7900-3a1d9b4cc5223a5e.js",
+              "startMs": 148,
+              "ms": 508,
+              "sentMs": 216,
+              "firstByteMs": 267,
+              "endMs": 508
+            },
+            {
+              "name": "2045-101ceb843ee652f2.js",
+              "startMs": 148,
+              "ms": 378,
+              "sentMs": 325,
+              "firstByteMs": 348,
+              "endMs": 378
+            },
+            {
+              "name": "4bd1b696-8a4ab4fdf0ae305a.js",
+              "startMs": 148,
+              "ms": 362,
+              "sentMs": 200,
+              "firstByteMs": 279,
+              "endMs": 362
+            }
+          ]
+        }
+      }
+    },
+    {
+      "view": 6,
+      "readyMs": 4827,
+      "cards": 1,
+      "selection": {
+        "stillSelected": true,
+        "checksLost": 0,
+        "staleNoticeSeen": 0
+      },
+      "files": {
+        "answered": 10,
+        "answeredDuringWrites": 9,
+        "errors": 0,
+        "p95Ms": 2274,
+        "maxMs": 2274,
+        "queuedMaxMs": 936
+      },
+      "api": {
+        "requests": 102,
+        "maxMs": 9191,
+        "slowestRoute": "/api/tmux/targets",
+        "errors": 0,
+        "firstError": null,
+        "unfinished": 2
+      },
+      "lag": {
+        "bootMaxMs": 491,
+        "samples": 654,
+        "p95Ms": 4,
+        "maxMs": 91
+      },
+      "inputMs": [
+        18,
+        17
+      ],
+      "diagnostics": {
+        "view": 6,
+        "hash": "#c=<selected>",
+        "slowest": [
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 9191,
+            "queuedMs": 645,
+            "firstByteMs": 9169,
+            "at": 4713
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5138,
+            "queuedMs": 0,
+            "firstByteMs": 5136,
+            "at": 9504
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 4981,
+            "queuedMs": 4203,
+            "firstByteMs": 4980,
+            "at": 10439
+          },
+          {
+            "route": "/api/log/provenance",
+            "files": false,
+            "status": 200,
+            "ms": 4889,
+            "queuedMs": 8,
+            "firstByteMs": 4878,
+            "at": 8002
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 4626,
+            "queuedMs": 0,
+            "firstByteMs": 4624,
+            "at": 10040
+          }
+        ],
+        "opening": [
+          {
+            "route": "/api/team",
+            "files": false,
+            "status": 200,
+            "ms": 442,
+            "queuedMs": 2,
+            "firstByteMs": 435,
+            "at": 1391
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1353,
+            "queuedMs": 1143,
+            "firstByteMs": 1346,
+            "at": 1479
+          },
+          {
+            "route": "/api/accounts/copilot",
+            "files": false,
+            "status": 200,
+            "ms": 523,
+            "queuedMs": 34,
+            "firstByteMs": 517,
+            "at": 1480
+          },
+          {
+            "route": "/api/telegram",
+            "files": false,
+            "status": 200,
+            "ms": 528,
+            "queuedMs": 41,
+            "firstByteMs": 523,
+            "at": 1480
+          },
+          {
+            "route": "/api/onboarding",
+            "files": false,
+            "status": 200,
+            "ms": 704,
+            "queuedMs": 346,
+            "firstByteMs": 701,
+            "at": 1480
+          },
+          {
+            "route": "/api/telemetry",
+            "files": false,
+            "status": 200,
+            "ms": 751,
+            "queuedMs": 510,
+            "firstByteMs": 749,
+            "at": 1480
+          },
+          {
+            "route": "/api/runtime/snapshot",
+            "files": false,
+            "status": 200,
+            "ms": 1297,
+            "queuedMs": 41,
+            "firstByteMs": 1293,
+            "at": 1480
+          },
+          {
+            "route": "/api/limits",
+            "files": false,
+            "status": 200,
+            "ms": 1506,
+            "queuedMs": 41,
+            "firstByteMs": 1487,
+            "at": 1480
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 520,
+            "queuedMs": 7,
+            "firstByteMs": 510,
+            "at": 1482
+          },
+          {
+            "route": "/api/staging",
+            "files": false,
+            "status": 200,
+            "ms": 757,
+            "queuedMs": 516,
+            "firstByteMs": 755,
+            "at": 1482
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 758,
+            "queuedMs": 517,
+            "firstByteMs": 753,
+            "at": 1487
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 979,
+            "queuedMs": 724,
+            "firstByteMs": 957,
+            "at": 1507
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 968,
+            "queuedMs": 730,
+            "firstByteMs": 964,
+            "at": 1507
+          },
+          {
+            "route": "/api/voice-companion/settings",
+            "files": false,
+            "status": 200,
+            "ms": 971,
+            "queuedMs": 734,
+            "firstByteMs": 968,
+            "at": 1507
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 909,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 1517,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1221,
+            "queuedMs": 937,
+            "firstByteMs": 1216,
+            "at": 1528
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 2274,
+            "queuedMs": 936,
+            "firstByteMs": 2239,
+            "at": 1540
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 614,
+            "queuedMs": 485,
+            "firstByteMs": 613,
+            "at": 2263
+          },
+          {
+            "route": "/api/resources",
+            "files": false,
+            "status": 200,
+            "ms": 750,
+            "queuedMs": 22,
+            "firstByteMs": 738,
+            "at": 2972
+          },
+          {
+            "route": "/api/links/agents",
+            "files": false,
+            "status": 200,
+            "ms": 114,
+            "queuedMs": 2,
+            "firstByteMs": 111,
+            "at": 3998
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 0,
+            "ms": 79,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 4016,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 243,
+            "queuedMs": 3,
+            "firstByteMs": 213,
+            "at": 4062
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 240,
+            "queuedMs": 3,
+            "firstByteMs": 214,
+            "at": 4062
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 237,
+            "queuedMs": 3,
+            "firstByteMs": 215,
+            "at": 4062
+          },
+          {
+            "route": "/api/task-icons",
+            "files": false,
+            "status": 200,
+            "ms": 673,
+            "queuedMs": 46,
+            "firstByteMs": 637,
+            "at": 4064
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 239,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 4095,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 294,
+            "queuedMs": 0,
+            "firstByteMs": 290,
+            "at": 4343
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 1943,
+            "queuedMs": 0,
+            "firstByteMs": 1941,
+            "at": 4411
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 2004,
+            "queuedMs": 0,
+            "firstByteMs": 2002,
+            "at": 4412
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 3724,
+            "queuedMs": 2412,
+            "firstByteMs": 3722,
+            "at": 4413
+          },
+          {
+            "route": "/api/tts/backend",
+            "files": false,
+            "status": 200,
+            "ms": 769,
+            "queuedMs": 114,
+            "firstByteMs": 765,
+            "at": 4523
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 836,
+            "queuedMs": 225,
+            "firstByteMs": 833,
+            "at": 4523
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 1421,
+            "queuedMs": 354,
+            "firstByteMs": 1419,
+            "at": 4586
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 2135,
+            "queuedMs": 581,
+            "firstByteMs": 2116,
+            "at": 4708
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 9191,
+            "queuedMs": 645,
+            "firstByteMs": 9169,
+            "at": 4713
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1855,
+            "queuedMs": 1129,
+            "firstByteMs": 1845,
+            "at": 5227
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1574,
+            "queuedMs": 904,
+            "firstByteMs": 1566,
+            "at": 5511
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1124,
+            "queuedMs": 0,
+            "firstByteMs": 1121,
+            "at": 7575
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 4243,
+            "queuedMs": 1,
+            "firstByteMs": 4227,
+            "at": 7997
+          },
+          {
+            "route": "/api/log/provenance",
+            "files": false,
+            "status": 200,
+            "ms": 4889,
+            "queuedMs": 8,
+            "firstByteMs": 4878,
+            "at": 8002
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5138,
+            "queuedMs": 0,
+            "firstByteMs": 5136,
+            "at": 9504
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 4626,
+            "queuedMs": 0,
+            "firstByteMs": 4624,
+            "at": 10040
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 3992,
+            "queuedMs": 1787,
+            "firstByteMs": 3986,
+            "at": 10438
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 4981,
+            "queuedMs": 4203,
+            "firstByteMs": 4980,
+            "at": 10439
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 2989,
+            "queuedMs": 1398,
+            "firstByteMs": 2984,
+            "at": 11483
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1939,
+            "queuedMs": 1159,
+            "firstByteMs": 1934,
+            "at": 13507
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 1258,
+            "queuedMs": 366,
+            "firstByteMs": 1257,
+            "at": 13518
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 4456,
+            "queuedMs": 546,
+            "firstByteMs": 4455,
+            "at": 13885
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 997,
+            "queuedMs": 428,
+            "firstByteMs": 995,
+            "at": 14047
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1942,
+            "queuedMs": 982,
+            "firstByteMs": 1939,
+            "at": 14439
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 3448,
+            "queuedMs": 1940,
+            "firstByteMs": 3445,
+            "at": 14439
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 1760,
+            "queuedMs": 2,
+            "firstByteMs": 1756,
+            "at": 16043
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 1070,
+            "queuedMs": 0,
+            "firstByteMs": 1068,
+            "at": 16486
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1058,
+            "queuedMs": 0,
+            "firstByteMs": 1053,
+            "at": 16977
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1130,
+            "queuedMs": 52,
+            "firstByteMs": 1128,
+            "at": 17504
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 1879,
+            "queuedMs": 1,
+            "firstByteMs": 1877,
+            "at": 18342
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 584,
+            "queuedMs": 1,
+            "firstByteMs": 582,
+            "at": 18437
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 934,
+            "queuedMs": 583,
+            "firstByteMs": 932,
+            "at": 18437
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 653,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 19050,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/runtime/snapshot",
+            "files": false,
+            "status": 200,
+            "ms": 711,
+            "queuedMs": 1,
+            "firstByteMs": 707,
+            "at": 20157
+          }
+        ],
+        "unfinished": [
+          {
+            "route": "/api/accounts",
+            "at": 38444,
+            "ageMs": 21
+          },
+          {
+            "route": "/api/accounts",
+            "at": 38444,
+            "ageMs": 21
+          }
+        ],
+        "failures": [],
+        "document": {
+          "responseStartMs": 77,
+          "responseEndMs": 147,
+          "domContentLoadedMs": 863,
+          "loadMs": 1275
+        },
+        "assets": {
+          "count": 12,
+          "bytes": 1261155,
+          "lastEndMs": 902,
+          "slowest": [
+            {
+              "name": "page-e397641131242dd0.js",
+              "startMs": 151,
+              "ms": 751,
+              "sentMs": 375,
+              "firstByteMs": 394,
+              "endMs": 751
+            },
+            {
+              "name": "7900-3a1d9b4cc5223a5e.js",
+              "startMs": 151,
+              "ms": 509,
+              "sentMs": 194,
+              "firstByteMs": 272,
+              "endMs": 509
+            },
+            {
+              "name": "2045-101ceb843ee652f2.js",
+              "startMs": 151,
+              "ms": 378,
+              "sentMs": 313,
+              "firstByteMs": 326,
+              "endMs": 378
+            },
+            {
+              "name": "7984-13d2335eed51b7c1.js",
+              "startMs": 151,
+              "ms": 363,
+              "sentMs": 323,
+              "firstByteMs": 354,
+              "endMs": 363
+            }
+          ]
+        }
+      }
+    },
+    {
+      "view": 7,
+      "readyMs": 5655,
+      "cards": 1,
+      "selection": {
+        "stillSelected": true,
+        "checksLost": 0,
+        "staleNoticeSeen": 0
+      },
+      "files": {
+        "answered": 10,
+        "answeredDuringWrites": 9,
+        "errors": 0,
+        "p95Ms": 2380,
+        "maxMs": 2380,
+        "queuedMaxMs": 1169
+      },
+      "api": {
+        "requests": 100,
+        "maxMs": 9080,
+        "slowestRoute": "/api/tmux/targets",
+        "errors": 0,
+        "firstError": null,
+        "unfinished": 0
+      },
+      "lag": {
+        "bootMaxMs": 529,
+        "samples": 641,
+        "p95Ms": 4,
+        "maxMs": 112
+      },
+      "inputMs": [
+        17,
+        13
+      ],
+      "diagnostics": {
+        "view": 7,
+        "hash": "#c=<selected>",
+        "slowest": [
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 9080,
+            "queuedMs": 1310,
+            "firstByteMs": 9078,
+            "at": 5633
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 6206,
+            "queuedMs": 3238,
+            "firstByteMs": 6203,
+            "at": 5216
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 5219,
+            "queuedMs": 0,
+            "firstByteMs": 5218,
+            "at": 9387
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5204,
+            "queuedMs": 0,
+            "firstByteMs": 5202,
+            "at": 9409
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 4441,
+            "queuedMs": 1,
+            "firstByteMs": 4438,
+            "at": 10223
+          }
+        ],
+        "opening": [
+          {
+            "route": "/api/team",
+            "files": false,
+            "status": 200,
+            "ms": 350,
+            "queuedMs": 0,
+            "firstByteMs": 348,
+            "at": 1310
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1530,
+            "queuedMs": 1341,
+            "firstByteMs": 1529,
+            "at": 1366
+          },
+          {
+            "route": "/api/accounts/copilot",
+            "files": false,
+            "status": 200,
+            "ms": 437,
+            "queuedMs": 0,
+            "firstByteMs": 436,
+            "at": 1367
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 470,
+            "queuedMs": 0,
+            "firstByteMs": 463,
+            "at": 1369
+          },
+          {
+            "route": "/api/telegram",
+            "files": false,
+            "status": 200,
+            "ms": 441,
+            "queuedMs": 9,
+            "firstByteMs": 434,
+            "at": 1375
+          },
+          {
+            "route": "/api/limits",
+            "files": false,
+            "status": 200,
+            "ms": 1595,
+            "queuedMs": 13,
+            "firstByteMs": 1586,
+            "at": 1375
+          },
+          {
+            "route": "/api/runtime/snapshot",
+            "files": false,
+            "status": 200,
+            "ms": 1395,
+            "queuedMs": 284,
+            "firstByteMs": 1393,
+            "at": 1376
+          },
+          {
+            "route": "/api/staging",
+            "files": false,
+            "status": 200,
+            "ms": 785,
+            "queuedMs": 447,
+            "firstByteMs": 778,
+            "at": 1385
+          },
+          {
+            "route": "/api/onboarding",
+            "files": false,
+            "status": 200,
+            "ms": 793,
+            "queuedMs": 419,
+            "firstByteMs": 783,
+            "at": 1385
+          },
+          {
+            "route": "/api/telemetry",
+            "files": false,
+            "status": 200,
+            "ms": 797,
+            "queuedMs": 424,
+            "firstByteMs": 788,
+            "at": 1385
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 1013,
+            "queuedMs": 779,
+            "firstByteMs": 1008,
+            "at": 1386
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 1021,
+            "queuedMs": 788,
+            "firstByteMs": 1017,
+            "at": 1387
+          },
+          {
+            "route": "/api/voice-companion/settings",
+            "files": false,
+            "status": 200,
+            "ms": 1195,
+            "queuedMs": 976,
+            "firstByteMs": 1186,
+            "at": 1418
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1299,
+            "queuedMs": 905,
+            "firstByteMs": 1288,
+            "at": 1418
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1323,
+            "queuedMs": 979,
+            "firstByteMs": 1318,
+            "at": 1419
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 996,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 1426,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 2380,
+            "queuedMs": 1169,
+            "firstByteMs": 2341,
+            "at": 1436
+          },
+          {
+            "route": "/api/operator/settings",
+            "files": false,
+            "status": 200,
+            "ms": 390,
+            "queuedMs": 334,
+            "firstByteMs": 389,
+            "at": 2409
+          },
+          {
+            "route": "/api/resources",
+            "files": false,
+            "status": 200,
+            "ms": 860,
+            "queuedMs": 1,
+            "firstByteMs": 848,
+            "at": 2862
+          },
+          {
+            "route": "/api/links/agents",
+            "files": false,
+            "status": 200,
+            "ms": 599,
+            "queuedMs": 0,
+            "firstByteMs": 598,
+            "at": 4165
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 0,
+            "ms": 113,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 4188,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 704,
+            "queuedMs": 0,
+            "firstByteMs": 694,
+            "at": 4217
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 828,
+            "queuedMs": 24,
+            "firstByteMs": 779,
+            "at": 4253
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 825,
+            "queuedMs": 24,
+            "firstByteMs": 797,
+            "at": 4253
+          },
+          {
+            "route": "/api/task-icons",
+            "files": false,
+            "status": 200,
+            "ms": 921,
+            "queuedMs": 63,
+            "firstByteMs": 834,
+            "at": 4275
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 30,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 4301,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 1260,
+            "queuedMs": 193,
+            "firstByteMs": 1254,
+            "at": 4742
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 1061,
+            "queuedMs": 0,
+            "firstByteMs": 1055,
+            "at": 5074
+          },
+          {
+            "route": "/api/account-project-bindings",
+            "files": false,
+            "status": 200,
+            "ms": 2066,
+            "queuedMs": 1,
+            "firstByteMs": 2057,
+            "at": 5215
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 2147,
+            "queuedMs": 1,
+            "firstByteMs": 2143,
+            "at": 5216
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 6206,
+            "queuedMs": 3238,
+            "firstByteMs": 6203,
+            "at": 5216
+          },
+          {
+            "route": "/api/tts/backend",
+            "files": false,
+            "status": 200,
+            "ms": 1472,
+            "queuedMs": 374,
+            "firstByteMs": 1466,
+            "at": 5437
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 1495,
+            "queuedMs": 546,
+            "firstByteMs": 1489,
+            "at": 5452
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 1456,
+            "queuedMs": 573,
+            "firstByteMs": 1454,
+            "at": 5558
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 2832,
+            "queuedMs": 1285,
+            "firstByteMs": 2830,
+            "at": 5623
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 9080,
+            "queuedMs": 1310,
+            "firstByteMs": 9078,
+            "at": 5633
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 2716,
+            "queuedMs": 1138,
+            "firstByteMs": 2715,
+            "at": 6140
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 2193,
+            "queuedMs": 686,
+            "firstByteMs": 2190,
+            "at": 6674
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 5219,
+            "queuedMs": 0,
+            "firstByteMs": 5218,
+            "at": 9387
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 5204,
+            "queuedMs": 0,
+            "firstByteMs": 5202,
+            "at": 9409
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 4441,
+            "queuedMs": 1,
+            "firstByteMs": 4438,
+            "at": 10223
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 2906,
+            "queuedMs": 34,
+            "firstByteMs": 2902,
+            "at": 11385
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 3949,
+            "queuedMs": 3228,
+            "firstByteMs": 3943,
+            "at": 11385
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 2037,
+            "queuedMs": 1252,
+            "firstByteMs": 2034,
+            "at": 13410
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 200,
+            "ms": 1332,
+            "queuedMs": 725,
+            "firstByteMs": 1330,
+            "at": 13562
+          },
+          {
+            "route": "/api/board",
+            "files": false,
+            "status": 200,
+            "ms": 1032,
+            "queuedMs": 370,
+            "firstByteMs": 1031,
+            "at": 14236
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 3677,
+            "queuedMs": 0,
+            "firstByteMs": 3675,
+            "at": 14713
+          },
+          {
+            "route": "/api/log/suggestions",
+            "files": false,
+            "status": 200,
+            "ms": 689,
+            "queuedMs": 36,
+            "firstByteMs": 684,
+            "at": 14861
+          },
+          {
+            "route": "/api/log/provenance",
+            "files": false,
+            "status": 200,
+            "ms": 2376,
+            "queuedMs": 392,
+            "firstByteMs": 2368,
+            "at": 14876
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 2143,
+            "queuedMs": 225,
+            "firstByteMs": 2142,
+            "at": 15108
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 1924,
+            "queuedMs": 63,
+            "firstByteMs": 1922,
+            "at": 15383
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 2327,
+            "queuedMs": 1923,
+            "firstByteMs": 2325,
+            "at": 15383
+          },
+          {
+            "route": "/api/orchestrator/seat",
+            "files": false,
+            "status": 200,
+            "ms": 1200,
+            "queuedMs": 0,
+            "firstByteMs": 1195,
+            "at": 16221
+          },
+          {
+            "route": "/api/external-relay/conversations",
+            "files": false,
+            "status": 200,
+            "ms": 1246,
+            "queuedMs": 860,
+            "firstByteMs": 1244,
+            "at": 16385
+          },
+          {
+            "route": "/api/attention",
+            "files": false,
+            "status": 200,
+            "ms": 1418,
+            "queuedMs": 1,
+            "firstByteMs": 1413,
+            "at": 17412
+          },
+          {
+            "route": "/api/view/presence",
+            "files": false,
+            "status": 200,
+            "ms": 987,
+            "queuedMs": 1,
+            "firstByteMs": 985,
+            "at": 17753
+          },
+          {
+            "route": "/api/tmux/targets",
+            "files": false,
+            "status": 200,
+            "ms": 1908,
+            "queuedMs": 1,
+            "firstByteMs": 1905,
+            "at": 18393
+          },
+          {
+            "route": "/api/files",
+            "files": true,
+            "status": 0,
+            "ms": 273,
+            "queuedMs": 0,
+            "firstByteMs": 0,
+            "at": 19240,
+            "error": "net::ERR_ABORTED"
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 236,
+            "queuedMs": 1,
+            "firstByteMs": 234,
+            "at": 19383
+          },
+          {
+            "route": "/api/accounts",
+            "files": false,
+            "status": 200,
+            "ms": 394,
+            "queuedMs": 236,
+            "firstByteMs": 393,
+            "at": 19384
+          }
+        ],
+        "unfinished": [],
+        "failures": [],
+        "document": {
+          "responseStartMs": 73,
+          "responseEndMs": 141,
+          "domContentLoadedMs": 319,
+          "loadMs": 1204
+        },
+        "assets": {
+          "count": 12,
+          "bytes": 1261155,
+          "lastEndMs": 854,
+          "slowest": [
+            {
+              "name": "page-e397641131242dd0.js",
+              "startMs": 158,
+              "ms": 696,
+              "sentMs": 292,
+              "firstByteMs": 313,
+              "endMs": 696
+            },
+            {
+              "name": "7900-3a1d9b4cc5223a5e.js",
+              "startMs": 158,
+              "ms": 466,
+              "sentMs": 165,
+              "firstByteMs": 218,
+              "endMs": 466
+            },
+            {
+              "name": "7984-13d2335eed51b7c1.js",
+              "startMs": 158,
+              "ms": 361,
+              "sentMs": 288,
+              "firstByteMs": 320,
+              "endMs": 361
+            },
+            {
+              "name": "3794-83acfce05009cf38.js",
+              "startMs": 158,
+              "ms": 312,
+              "sentMs": 165,
+              "firstByteMs": 219,
+              "endMs": 312
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

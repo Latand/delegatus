@@ -106,7 +106,8 @@ export function resolvePipelineRole(
   const rawRoleId = ref && typeof ref.roleId === "string" ? ref.roleId.trim() : "";
   if (ref && !rawRoleId) return { error: "stage roleId is required when role is present" };
   if (rawRoleId && !PIPELINE_ROLE_IDS.includes(rawRoleId as PipelineRoleId)) return { error: `unknown pipeline role: ${rawRoleId}` };
-  if (rawRoleId && PIPELINE_DISALLOWED_ROLE_IDS.includes(rawRoleId as PipelineRoleId)) {
+  if (rawRoleId && PIPELINE_DISALLOWED_ROLE_IDS.includes(rawRoleId as PipelineRoleId)
+    && !(rawRoleId === "deployer" && ref?.params?.mode === "release" && kind === "run")) {
     return { error: `role ${rawRoleId} is not allowed in a pipeline (it requires interactive deploy confirmation)` };
   }
   const roleParams = ref && ref.params && typeof ref.params === "object" && !Array.isArray(ref.params) ? ref.params : undefined;

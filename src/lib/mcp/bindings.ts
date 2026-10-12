@@ -1,3 +1,6 @@
+import { releaseStatus } from "@/lib/release/answer";
+import { releaseControlChange } from "@/lib/release/store";
+import { RELEASE_DEFAULTS } from "@/lib/release/settings";
 import { liveOwnerRelayConversation, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 import { peerSeatMessages } from "@/lib/links/boardLinks";
 import { recoverSeatMessage, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
@@ -4408,6 +4411,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   const current = readSettings(project);
 
   const change: SeatTickSettingsChange = {};
+  if (args.release !== undefined) change.release = args.release as SeatTickSettingsChange["release"];
   if (args.autoRotate !== undefined) change.autoRotate = args.autoRotate as SeatTickSettingsChange["autoRotate"];
   if (args.maintenance !== undefined) change.maintenance = args.maintenance as SeatTickSettingsChange["maintenance"];
   if (args.enabled !== undefined) change.enabled = args.enabled as boolean;
@@ -4449,6 +4453,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     };
     const applied = applySeatTickSettingsChange(current, change, { at: new Date().toISOString(), actor });
     if (!applied.ok) throw new Error(applied.error);
+    if (change.release) releaseControlChange(project, change.release, actor, applied.settings.updatedAt!);
     writeSettings(project, applied.settings);
     settings = applied.settings;
     maintenanceNotes = applied.notes;
@@ -4468,6 +4473,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   const { monitorPrompt: storedPrompt, reason: storedReason, ...settingsWithoutPrompt } = settings;
   delete settingsWithoutPrompt.maintenance;
   delete settingsWithoutPrompt.autoRotate;
+  delete settingsWithoutPrompt.release;
   /* #2030: a write is acknowledged, never read back. The caller holds what it
      sent; the revision and the stored length are what it needs to know the row
      took it. A change to another project's tick still says so out loud. */
@@ -4527,6 +4533,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     /* What a project that has never been configured runs on, so a caller can
        see what it is restoring before it restores it. */
     ...(verbose ? { defaults: seatTickScheduleDefaults(project) } : {}),
+    release: { ...RELEASE_DEFAULTS, ...settings.release, status: releaseStatus(project) },
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? 50,
       ...(verbose ? { setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null } : {}),
       ...autoRotationFailureAnswer(project) },
@@ -4916,6 +4923,13 @@ function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
   return redactPayload({ count: accounts.length, accounts });
 }
 
+async function relayOwnerHistory(args: McpToolArgs, control: ViewerControlDependencies, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  if (ownerRelayCaller(dependencies)) throw new McpToolRefusal("Group history cannot be read while answering in Telegram.", { code: "owner_history_refused" });
+  return redactPayload(await control.post("/api/external-relay/owner-history", {
+    op: args.action, ...Object.fromEntries(["chat", "from", "to", "limit", "cursor"].filter(key => args[key] !== undefined).map(key => [key, args[key]])),
+  }, callerCapabilityHeaders()));
+}
+
 /*
  * The Telegram bot account (docs/design/telegram-bot-account.md, Decision 6).
  * The Viewer is the only process that holds the bot token, so all three tools
@@ -5229,12 +5243,12 @@ function compactMergeFields(pipeline: Pipeline): { mergeOnReview?: true; bridgeR
 /** #2187 §4.1: whether the lane's project merges when the review passes, and
     where the lane's own merge stands when the runner took it. #2146: whether
     the project's bridge reports are on. */
-function mergeFields(pipeline: Pipeline): { mergeOnReview: boolean; bridgeReports: boolean; merge?: { state: PipelineMergeState; reason: string | null; by: "auto-merge" | "outside" | null; pr: number | null } } {
+function mergeFields(pipeline: Pipeline): { mergeOnReview: boolean; bridgeReports: boolean; merge?: { state: PipelineMergeState; reason: string | null; by: "auto-merge" | "outside" | null; pr: number | null; refresh?: string } } {
   const merge = pipeline.merge;
   return {
     mergeOnReview: mergeOnReviewEnabled(pipeline.project),
     bridgeReports: bridgeReportsEnabled(pipeline.project),
-    ...(merge ? { merge: { state: merge.state, reason: merge.reason, by: merge.by, pr: merge.prNumber } } : {}),
+    ...(merge ? { merge: { state: merge.state, reason: merge.reason, by: merge.by, pr: merge.prNumber, ...(merge.refresh?.pipelineId ? { refresh: merge.refresh.pipelineId } : {}) } } : {}),
   };
 }
 
@@ -7711,6 +7725,7 @@ export function viewerMcpBindings(
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_document: (args, context) => telegramBotSendDocument(args, viewerControlForCall(controlDependencies, context)),
+    relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
     issue_report: (args, context) => issueReportTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
   };
