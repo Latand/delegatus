@@ -26,6 +26,7 @@ import { act } from "react";
 
 import { installActEnv } from "@/test-helpers/actEnv";
 import { type TFunction, translate } from "@/lib/i18n";
+import { artifactContentUrl } from "@/components/preview/artifactResource";
 
 const translator = (locale: "en" | "uk"): TFunction => (key, params) => translate(locale, key, params);
 
@@ -356,7 +357,7 @@ test("a converted message shows its chip for Windows drive and UNC inbox paths",
     const host = await bubble({ text, state: "delivered" }, SUBMITTED_AT + 1_000);
     const chip = host.querySelector("[data-text-attachment]");
     expect(chip?.textContent).toContain("message.txt");
-    expect(chip?.getAttribute("href")).toBe(`#f=${encodeURIComponent(pointer)}`);
+    expect(chip?.getAttribute("href")).toBe(artifactContentUrl(pointer));
   }
 });
 
