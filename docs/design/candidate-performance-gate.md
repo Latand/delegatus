@@ -114,7 +114,10 @@ more than nine in ten were cold, the release was unusable:
   conversation that carries a migration or an open turn is never archived, so
   the first two read hot rows; provenance reads one conversation's deliveries
   and owners through the conversation index; the board write reads a narrow
-  projection of each conversation's paths.
+  projection of each conversation's paths. The host-badge poll
+  (`/api/conversation-host/targets`) answers from the last completed scan:
+  waiting for a rescan to take in a new transcript held every view's first
+  poll for 7-8 s.
 - The one-time identity wave decides title cleanup from one pass over the
   entries and receipts. It asked each conversation to walk both collections,
   which over this much history held a fresh registry's first boot for more
@@ -254,3 +257,11 @@ The board driver's case `BOARD_CAPTURE_CASE=registry-history` in
 keeps each view's requests, its opening sequence and a frame of it, for
 reading what holds a connection when a bound is breached. Run it with
 `CHROME_BIN` set after `bun run build`.
+
+Through `scripts/gate-slot.sh` the whole case shares one scope's CPU quota,
+300 % by default: the production server, eight Chromium renderers, two writers
+and the driver on three CPUs. The renderers' script work then delays the
+server's own answers and the board draws at about ten seconds, at its bound.
+Give the scope room for eight browsers, `LLV_WORK_SCOPE_CPU_QUOTA=1200`, to
+measure the server rather than the quota; the gate's container has no such
+quota.
