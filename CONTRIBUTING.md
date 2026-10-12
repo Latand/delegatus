@@ -225,8 +225,10 @@ On Unix the sandbox lives under `/var/tmp`, including when a pipeline inherits
 a `TMPDIR` under the operator's scratch tree. Browser tests keep their rendered
 capture drivers and are not selected by the hook.
 
-Touched tests compare one initial head sample with one initial sample of the
-merge base. The three verdicts read as follows.
+Touched tests run the branch first, up to three explicit files at once, each
+in its own owned process and isolated roots. A green branch skips the baseline
+entirely. For a red branch, only failing files run on the merge base, filtered
+to failing assertions; runner diagnostics need the whole file. The three verdicts read as follows.
 `PRE-EXISTING`: the assertion failed the initial sample on both sides. It is
 classified on those two samples, runs no further, and permits the push.
 `FLAKY`: the assertion failed the initial head sample, passed the initial base
@@ -256,7 +258,8 @@ refuses the push. A base file that did not finish while the head finished it,
 or failed to finish differently, remains a gate error. During confirmation a
 side may repeat the between-tests errors of its own initial sample; any other
 runner or between-tests error in a retry is a gate error.
-Fixed and removed/skipped tests remain listed separately.
+Fixed and removed/skipped assertions are listed within sampled failing files;
+a wholly green file produces no baseline-only informational verdicts.
 When several assertions share the same file, suite and test name, retry
 evidence and the initial base/head comparison preserve their occurrence numbers;
 a recovered occurrence is `FIXED` while a separately failing head occurrence
@@ -265,7 +268,7 @@ remains `NEW`.
 Clean head samples and failures already present in the initial base sample
 incur no reruns. The three rounds share a five-minute
 budget across all candidate files and both sides, including baseline checkout
-and dependency setup on a cache hit. Each child command is capped by the
+and dependency setup. Each child command is capped by the
 remaining budget; exhausting it blocks with a gate error. This adds at most
 five minutes of subprocess execution/setup, plus ordinary report parsing and
 sandbox cleanup. After an initially passing base sample, three independent
@@ -274,17 +277,24 @@ Four independent base samples detect it with probability `34.39%` overall;
 rare or correlated failures can still evade this bounded sampling. Head
 recovery supplies a separate opportunity to identify intermittency.
 
-The baseline cache stores only complete green initial samples, so a base with
-a failing assertion is sampled once on every push and never read from the
-cache. A parsed
-baseline retry failure evicts its green entry immediately, even when a later
-file in that retry batch errors; any aborted baseline retry also evicts the
-entry. Neither retry verdicts nor head results are cached. Even a warm green
-baseline needs fresh base retries before a candidate failure can become `NEW`.
+Baseline results are not cached. Every failure receives a fresh base sample
+and fresh filtered confirmation runs.
 
-The pre-push gate reuses the platform import closure to scope Linux tests,
-Viewer and runtime-host verification under the Dockerfile's Bun pin, and the
-supported native Codex fixtures. Scoped Linux tests use the same merge-base
+Privacy runs first without admission. The heavy pre-push phase takes one shared
+slot: types then lint run alongside touched tests then Linux checks, the runtime
+chain and native Codex. Each lane stops the others on failure, retains its own
+verdict and uses the shared execution deadline. Nested capped steps reuse the
+admitted slot while retaining their own process scope and quota. Pre-commit
+lint runs directly for up to 40 staged files and takes admission for larger
+selections.
+
+The pre-push gate reuses the platform import closure to scope Linux tests.
+Viewer/runtime-host and native Codex verification run locally only for
+`Dockerfile`, `src/runtime-host/**` or `bin/**` changes. Every PR runs both jobs
+under the Dockerfile pin; `runtime-gate` joins them into one stable context.
+After the workflow lands, the seat adds it to main branch protection; a PR
+pushed earlier needs another push or close and reopen.
+Scoped Linux tests use the same merge-base
 comparison as touched tests, so a platform test `origin/main` already fails is
 `PRE-EXISTING`. A push that changes no file against the merge base (a read-only
 stage, a branch that only trails `origin/main`) runs privacy with
@@ -304,8 +314,7 @@ survives fails the push with its PIDs. The shared native
 contracts, which the hosted `Bun runtime pin` workflow also runs, are stopped
 and named as left to that workflow; a decisive step still running is stopped
 with `no verdict within the push budget`, naming the check, which the
-publication retries as an interrupted push. Without a deadline nothing is
-stopped.
+publication retries as an interrupted push. A manual heavy phase has a fifteen-minute execution limit.
 Bun and Codex fixtures are cached under
 `${XDG_CACHE_HOME:-$HOME/.cache}/delegatus-gate`. Dependency or allowlist changes
 also run the shared supply-chain check; CI audits weekly and by dispatch.
@@ -372,7 +381,7 @@ hooks do not replace trusted CI enforcement. macOS and Windows CI keep scoped
 jobs with timeouts, and Bun verification remains available by dispatch.
 Docker PR builds are limited to image inputs, push nothing, end at the
 45-minute job timeout, and are cancelled when superseded or closed. Merge-batch branches skip image verification. App changes verify
-amd64; image recipes, installation and native runtime inputs verify both Linux
+amd64; image recipes and installation inputs verify both Linux
 architectures. One PR build and one publication can run at once in separate
 single-build slots, leaving publication independent of the PR queue.
 Main and v* tag image publishing are preserved,

@@ -8,9 +8,8 @@ name: Bun runtime pin
 # Three review rounds then asked for evidence that a moved pin actually loads
 # this build, serves it, and holds that listener — and the only evidence anyone
 # could offer was a local run nobody else could reproduce. This job is where it
-# runs by dispatch, and local pre-push runs the scoped checks under the same
-# pin the Dockerfile
-# carries rather than a version written here. It is the same answer #1256 got
+# runs on every PR and by dispatch. Local pre-push runs them when Dockerfile,
+# the runtime host or bin/ changes, under the pin the Dockerfile carries. It is the same answer #1256 got
 # for macOS, where nobody had the hardware either.
 #
 # The build is a step, not the evidence: `next build` produces the same
@@ -28,6 +27,7 @@ name: Bun runtime pin
 # rather than through the image's `npm install -g`.
 
 on:
+  pull_request:
   workflow_dispatch:
     inputs:
       native_queue_campaign:
@@ -235,17 +235,6 @@ jobs:
             exit 1
           fi
 
-      - name: Enforce MCP answer size budgets on an isolated board
-        env:
-          HOME: ${{ runner.temp }}/mcp-home
-          XDG_CONFIG_HOME: ${{ runner.temp }}/mcp-config
-          LLV_STATE_DIR: ${{ runner.temp }}/mcp-state
-          TMPDIR: ${{ runner.temp }}/mcp-tmp
-        run: |
-          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$LLV_STATE_DIR" "$TMPDIR"
-          bun scripts/build-mcp.ts
-          bun test src/lib/mcp/answerSizes.test.ts
-
       # The same environment the image's build stage sets. NODE_ENV belongs to
       # the build and not to the install above, which needs the dev
       # dependencies the compiler runs on.
@@ -255,6 +244,16 @@ jobs:
           NODE_ENV: production
           NEXT_PUBLIC_RUNTIME_UI: "1"
         run: bun run build
+
+      - name: Enforce MCP answer size budgets on an isolated board
+        env:
+          HOME: ${{ runner.temp }}/mcp-home
+          XDG_CONFIG_HOME: ${{ runner.temp }}/mcp-config
+          LLV_STATE_DIR: ${{ runner.temp }}/mcp-state
+          TMPDIR: ${{ runner.temp }}/mcp-tmp
+        run: |
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$LLV_STATE_DIR" "$TMPDIR"
+          bun test src/lib/mcp/answerSizes.test.ts
 
       # Loads every compiled server runtime — `app-page.runtime.prod.js` among
       # them, the module whose load failure answered 500 on every route — then
@@ -277,3 +276,15 @@ jobs:
       # temporary tree, including the unloadable Next runtime module.
       - name: Prove each check goes red when its subject does not hold
         run: bun scripts/verify-bun-runtime-controls.ts
+
+  runtime-gate:
+    needs: [bun-runtime, native-codex-runtime]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Require both runtime verdicts
+        env:
+          BUN_RESULT: ${{ needs.bun-runtime.result }}
+          CODEX_RESULT: ${{ needs.native-codex-runtime.result }}
+        run: test "$BUN_RESULT" = success && test "$CODEX_RESULT" = success

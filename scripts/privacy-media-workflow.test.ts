@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isolatedEnvironment } from "./local-gate";
 
 type Step = {
   name?: string;
@@ -62,6 +63,7 @@ esac
     let code = 0;
     let text = "";
     for (const entry of job.steps.slice(first)) {
+      if (entry.id === "privacy-scope") continue;
       if (entry === warning && baselineCode === 0) continue;
       // Only the wall-clock duration changes in timeout controls.
       const command = ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", entry.run!.replace("130s", budget)];
@@ -117,7 +119,7 @@ test("trusted inspection refusal blocks publication and candidate execution desp
 test("candidate self-test failure still blocks publication after a red baseline", () => {
   const candidate = step(jobs[0]!, "Verify candidate privacy gate behavior within budget");
   expect(candidate["continue-on-error"]).toBeUndefined();
-  expect(candidate.if).toBeUndefined();
+  expect(candidate.if).toBe("steps.privacy-scope.outputs.run == 'true'");
   const result = runPublication({ CANDIDATE_EXIT: "1" });
   expect(result.code).toBe(1);
   expect(result.calls).toEqual(["trusted:test", "trusted:scripts/privacy-publication-gate.ts", "candidate:test"]);
@@ -279,4 +281,39 @@ test("main pushes populate the same cache without requiring a tracker number", (
   expect(step(jobs[1]!, "Audit public tracker surfaces").if).toBe("github.event_name != 'push'");
   expect(step(jobs[0]!, "Check out candidate as inspection input").with?.ref)
     .toBe("${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}");
+});
+
+test("PR self-tests use the trusted import closure and workflow changes while inspection always runs", () => {
+  const job = jobs[0]!;
+  expect(step(job, "Verify privacy gate behavior").if).toBe("github.event_name == 'push'");
+  const scope = step(job, "Scope candidate privacy self-tests with trusted code");
+  expect(scope["working-directory"]).toBe("trusted");
+  expect(job.steps.indexOf(scope)).toBeGreaterThan(job.steps.findIndex(entry => entry.name === "Scan changed publication surfaces, commit messages and the merge boundary"));
+  expect(step(job, "Scan changed publication surfaces, commit messages and the merge boundary").if).toBeUndefined();
+  const root = mkdtempSync(join(tmpdir(), "privacy-scope-workflow-"));
+  try {
+    const env = isolatedEnvironment(join(root, "env"), process.env);
+    const git = (...args: string[]) => {
+      const result = Bun.spawnSync(["git", ...args], { cwd: join(root, "candidate"), env: { ...env, GIT_AUTHOR_NAME: "Test", GIT_COMMITTER_NAME: "Test", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_EMAIL: "noreply@example.invalid" } });
+      expect(result.exitCode, result.stderr.toString() + result.stdout.toString()).toBe(0); return result.stdout.toString().trim();
+    };
+    mkdirSync(join(root, "candidate/scripts"), { recursive: true });
+    mkdirSync(join(root, "candidate/src/components"), { recursive: true });
+    mkdirSync(join(root, "candidate/.github/workflows"), { recursive: true });
+    writeFileSync(join(root, "candidate/scripts/privacy-fixture.test.ts"), 'import "./fixture-rule";');
+    writeFileSync(join(root, "candidate/scripts/fixture-rule.ts"), "export const value = true;");
+    git("init", "-b", "main"); git("config", "core.hooksPath", "/dev/null"); git("add", "."); git("commit", "-m", "scope baseline");
+    const base = git("rev-parse", "HEAD");
+    const clone = Bun.spawnSync(["git", "clone", "--quiet", join(root, "candidate"), join(root, "trusted")], { env });
+    expect(clone.exitCode).toBe(0);
+    writeFileSync(join(root, "trusted/scripts/ci-platform-scope.ts"), readFileSync(join(import.meta.dir, "ci-platform-scope.ts")));
+    for (const [file, expected] of [["src/components/fixture.ts", false], ["scripts/fixture-rule.ts", true], ["scripts/privacy-new.test.ts", true], [".github/workflows/privacy-publication.yml", true]]) {
+      git("checkout", "--detach", base);
+      writeFileSync(join(root, "candidate", file as string), "// changed fixture\n"); git("add", "."); git("commit", "-m", "scope change");
+      const output = join(root, "output"); writeFileSync(output, "");
+      const result = Bun.spawnSync(["bash", "-e", "-c", scope.run!], { cwd: join(root, "trusted"), env: { ...env, PRIVACY_BASE_SHA: base, GITHUB_OUTPUT: output } });
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      expect(readFileSync(output, "utf8")).toBe(`run=${expected}\n`);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

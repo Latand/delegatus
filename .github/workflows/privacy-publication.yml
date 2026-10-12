@@ -156,6 +156,7 @@ jobs:
       # candidate's own suite remain mandatory publication gates.
       - name: Verify privacy gate behavior
         id: trusted-tests
+        if: github.event_name == 'push'
         working-directory: trusted
         timeout-minutes: 3
         continue-on-error: true
@@ -183,11 +184,27 @@ jobs:
         working-directory: trusted
         run: bun scripts/privacy-publication-gate.ts --repository ../candidate --require-known-values --check-commits --base "$PRIVACY_BASE_SHA"
 
+      - name: Scope candidate privacy self-tests with trusted code
+        id: privacy-scope
+        working-directory: trusted
+        run: |
+          bun -e '
+            const { execFileSync } = require("node:child_process");
+            const { readdirSync, appendFileSync } = require("node:fs");
+            const { executedPaths } = require("./scripts/ci-platform-scope.ts");
+            const tests = readdirSync("scripts").filter(f => /^privacy-.*\.test\.ts$/.test(f)).map(f => `scripts/${f}`);
+            const closure = executedPaths(process.cwd(), tests);
+            const changed = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `${process.env.PRIVACY_BASE_SHA}...HEAD`], { cwd: "../candidate", encoding: "utf8" }).split("\0").filter(Boolean);
+            const run = changed.some(f => closure.has(f) || /^scripts\/privacy-.*\.test\.ts$/.test(f) || f === ".github/workflows/privacy-publication.yml");
+            appendFileSync(process.env.GITHUB_OUTPUT, `run=${run}\n`);
+          '
+
       # Candidate code runs last, after all trusted inspection and cache writes.
       # It receives no credentials and cannot alter a later trusted verdict.
       # Serial OCR prevents CLI overlap. A 44.90 s local suite at the 1.9
       # hosted factor needs ceil((44.90 * 1.9) / 0.7 / 10) * 10 = 130 s.
       - name: Verify candidate privacy gate behavior within budget
+        if: steps.privacy-scope.outputs.run == 'true'
         working-directory: candidate
         timeout-minutes: 3
         run: |

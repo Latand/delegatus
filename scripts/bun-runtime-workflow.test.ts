@@ -135,7 +135,22 @@ test("both supported Codex CLIs run the full native contracts at the proposed co
   }
 });
 
-test("runtime CI is dispatch-only; pre-push owns the scoped local runs", () => {
+test("runtime CI runs on every PR and supports dispatch", () => {
   const triggers = Bun.YAML.parse(workflowSource) as { on: Record<string, unknown> };
-  expect(Object.keys(triggers.on)).toEqual(["workflow_dispatch"]);
+  expect(Object.keys(triggers.on)).toEqual(["pull_request", "workflow_dispatch"]);
+});
+
+test("one stable runtime context refuses every incomplete upstream verdict", () => {
+  const gate = workflow.jobs["runtime-gate"] as typeof workflow.jobs[string] & { needs: string[] };
+  expect(gate.needs).toEqual(["bun-runtime", "native-codex-runtime"]);
+  expect(gate.if).toBe("always()");
+  const check = gate.steps[0]!.run!;
+  for (const result of ["success", "failure", "cancelled", "skipped", ""]) {
+    for (const side of ["BUN_RESULT", "CODEX_RESULT"]) {
+      const run = Bun.spawnSync(["bash", "-c", check], { env: { ...process.env, BUN_RESULT: "success", CODEX_RESULT: "success", [side]: result } });
+      expect(run.exitCode === 0).toBe(result === "success");
+    }
+  }
+  expect(scripts.join("\n").match(/bun scripts\/build-mcp\.ts/g)).toBeNull();
+  expect(steps.findIndex(step => step.name === "Build the Viewer")).toBeLessThan(steps.findIndex(step => step.name?.startsWith("Enforce MCP")));
 });

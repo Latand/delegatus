@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
-import { ALWAYS_IN_SCOPE, changedSinceBase, executedPaths, platformScope, workflowEntries } from "./ci-platform-scope";
+import { changedSinceBase, platformScope, workflowEntries } from "./ci-platform-scope";
 import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
 export type Mode = "pre-commit" | "pre-push";
@@ -17,6 +17,8 @@ export interface Step {
   selection?: string;
   /** Consecutive steps with the same group run at once, under one phase marker. */
   group?: string;
+  /** Steps in one lane run in order; different lanes overlap. */
+  lane?: string;
   /** A check the hosted job also runs: stopped at a caller's deadline, it is
       named as left to that job, never failed or dropped. */
   deferrable?: boolean;
@@ -66,10 +68,10 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
     // Install the candidate graph before any later checks execute against
     // node_modules. The supply-chain script repeats a lockfile-only frozen
     // check before it audits.
-    steps.unshift({ name: "frozen install", command: ["bun", "install", "--frozen-lockfile", "--ignore-scripts"], capped: true });
+    steps.splice(1, 0, { name: "frozen install", command: ["bun", "install", "--frozen-lockfile", "--ignore-scripts"], capped: true });
   }
   const lintFiles = files.filter(lintable).map(file => `./${file}`);
-  if (lintFiles.length) steps.push({ name: "eslint", command: ["bun", "scripts/eslint-changes.ts", "--base", env.lintBase ?? env.base, ...lintFiles], capped: true });
+  if (lintFiles.length) steps.push({ name: "eslint", command: ["bun", "scripts/eslint-changes.ts", "--base", env.lintBase ?? env.base, ...lintFiles], capped: mode === "pre-push" || lintFiles.length > 40 });
   if (mode === "pre-commit") return steps;
   const touched = new Set(files.filter(isTest));
   for (const file of files.filter(lintable)) {
@@ -89,9 +91,8 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (env.runtime) {
     steps.push(
       { name: "runtime verdict tests", command: ["bun", "test", ...env.runtimeTests.map(file => `./${file}`)], capped: true, isolated: true, pinned: true },
-      { name: "build MCP", command: ["bun", "scripts/build-mcp.ts"], capped: true, isolated: true, pinned: true },
-      { name: "MCP size budgets", command: ["bun", "test", "./src/lib/mcp/answerSizes.test.ts"], capped: true, isolated: true, pinned: true },
       { name: "Viewer build", command: ["bun", "run", "build"], capped: true, isolated: true, pinned: true },
+      { name: "MCP size budgets", command: ["bun", "test", "./src/lib/mcp/answerSizes.test.ts"], capped: true, isolated: true, pinned: true },
       { name: "Viewer runtime", command: ["bun", "scripts/verify-viewer-runtime.ts"], capped: true, isolated: true, pinned: true },
       { name: "runtime host", command: ["bun", "scripts/verify-runtime-host.ts"], capped: true, isolated: true, pinned: true },
       { name: "runtime negative controls", command: ["bun", "scripts/verify-bun-runtime-controls.ts"], capped: true, isolated: true, pinned: true },
@@ -108,6 +109,14 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (supplyChainChanged) {
     steps.push({ name: "audit retry tests", command: ["bun", "test", "./scripts/audit-with-retry.test.ts", "./scripts/supply-chain-check.test.ts"], capped: true, isolated: true });
     steps.push({ name: "supply chain", command: ["bun", "scripts/supply-chain-check.ts", "--base", env.base], capped: true });
+  }
+  for (const step of steps) {
+    if (["privacy", "frozen install"].includes(step.name)) continue;
+    step.lane = step.name === "types" || step.name === "eslint" ? "types and lint"
+      : ["touched tests", "Linux backend", "Linux tests"].includes(step.name) ? "tests"
+      : step.group === NATIVE_GROUP ? step.name
+      : ["audit retry tests", "supply chain"].includes(step.name) ? "supply chain" : "runtime";
+    step.group = "push checks";
   }
   return steps;
 }
@@ -133,11 +142,6 @@ export function requiresMediaTools(file: string): boolean {
   } finally { closeSync(fd); }
 }
 
-function rootViewerInputs(): string[] {
-  // A deleted root input must still trigger the GET / proof.
-  return ["src/app/page.tsx", "src/app/layout.tsx"];
-}
-
 interface Workflow { jobs: Record<string, { steps: Array<{ name?: string; run?: string }>; strategy?: { matrix?: { codex?: string[] } } }> }
 function workflow(root: string, name: string): Workflow {
   return Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows", name), "utf8")) as Workflow;
@@ -160,21 +164,14 @@ export function discover(root: string, base: string, files: readonly string[]): 
   const platform = workflow(root, "platform-tests.yml");
   const bun = workflow(root, "bun-runtime.yml");
   const runtimeEntries = workflowEntries(jobSource(bun.jobs["bun-runtime"]!));
-  // The GET / leg of verify-viewer-runtime serves the built root route. Follow
-  // the route and its layouts/components as additional runtime inputs.
-  const viewerInputs = executedPaths(root, rootViewerInputs());
-  const nativeScript = "scripts/verify-native-codex-runtime.ts";
-  const nativeEntries = [nativeScript, ...workflowEntries(readFileSync(path.join(root, nativeScript), "utf8"))];
-  const runtimePaths = executedPaths(root, runtimeEntries);
-  const nativePaths = executedPaths(root, nativeEntries);
-  const common = files.some(file => ALWAYS_IN_SCOPE.includes(file) || file === ".github/workflows/bun-runtime.yml");
+  const runtimeChanged = files.some(file => file === "Dockerfile" || file.startsWith("src/runtime-host/") || file.startsWith("bin/"));
   return {
     base, existing, skippedMedia, tests: siblingTests(root, [...files, "scripts/local-gate.ts"]),
     // An empty diff is "run" to the CI scope, where skipping must be proven.
     // Here it is proven: nothing changed, so no platform job has a subject.
     linux: process.platform === "linux" && files.length > 0 && platformScope({ root, workflow: platformFile, prefixes: ["src/lib/proc/"], changed: files }).run,
-    runtime: common || files.some(file => runtimePaths.has(file) || viewerInputs.has(file) || ["Dockerfile", "src/instrumentation.ts"].includes(file) || /^next\.config\./.test(file) || file.startsWith("src/runtime-host/")),
-    native: common || files.some(file => nativePaths.has(file)),
+    runtime: runtimeChanged,
+    native: runtimeChanged,
     linuxTests: workflowEntries(platform.jobs["windows-platform"]!.steps.find(step => step.name === "Platform tests")!.run!).filter(isTest),
     runtimeTests: runtimeEntries.filter(isTest),
     codexVersions: bun.jobs["native-codex-runtime"]!.strategy!.matrix!.codex!,
@@ -215,6 +212,7 @@ export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv):
   // A Viewer that pushes for a lane carries its own interface language, its
   // launcher handoff and its token. Tests assert the defaults.
   for (const key of ["LLV_LANG", "LLV_LAUNCHER_REEXEC", "LLV_LAUNCHER_CHECKOUT", "LLV_TOKEN", "LLV_DEBUG", "DELEGATUS_DEBUG"]) delete env[key];
+  env.CLAUDE_CODE_TMPDIR = env.TMPDIR;
   env.NODE_ENV = "test";
   env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
   return env;
@@ -542,16 +540,31 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
       // and the group is reported once every member has settled: nothing a
       // member started may outlive the hook unreported.
       const cancel = new AbortController(), errors = new Map<number, unknown>();
-      const outcomes = await Promise.all(members.map(async ({ member, log }, at) => {
-        try {
-          const ready = await prepared(prepare, member, until, cancel.signal, budget.env);
-          return isOutcome(ready) ? ready : await execute(ready.command, root, withBudget(ready.env), until, log, cancel.signal);
-        } catch (error) { errors.set(at, error); cancel.abort(); return null; }
-      }));
+      const lanes = new Map<string, Promise<Outcome | null>>();
+      const pending = members.map(({ member, log }, at) => {
+        const predecessor = member.lane ? lanes.get(member.lane) : undefined;
+        const run = (async () => {
+          await predecessor;
+          if (cancel.signal.aborted) return { code: null, stopped: true, ranMs: null, cancelled: true };
+          const started = Date.now();
+          try {
+            const ready = await prepared(prepare, member, until, cancel.signal, budget.env);
+            const outcome = isOutcome(ready) ? ready : await execute(ready.command, root, withBudget(ready.env), until, log, cancel.signal);
+            if (!outcome.cancelled && !settle(member, outcome)) throw new Error(String(outcome.code));
+            if (!outcome.stopped && ["touched tests", "Linux tests", "eslint"].includes(member.name) && existsSync(log)) say(readFileSync(log, "utf8").trimEnd());
+            if (!outcome.stopped) say(`${mode}: ${member.name}: passed in ${seconds(Date.now() - started)}`);
+            return outcome;
+          } catch (error) { errors.set(at, error); cancel.abort(); return null; }
+        })();
+        if (member.lane) lanes.set(member.lane, run);
+        return run;
+      });
+      const outcomes = await Promise.all(pending);
       if (errors.size) {
         const [first, error] = [...errors][0]!, culprit = members[first]!.member.name;
         const reason = error instanceof Error ? error.message : String(error);
-        say(`${mode}: ${culprit}: failed (${reason})`);
+        if (!(error instanceof NoVerdict)) say(`${mode}: ${culprit}: failed (${reason})`);
+        if (existsSync(members[first]!.log)) say(readFileSync(members[first]!.log, "utf8").trimEnd());
         let leak: ContainmentFailed | undefined;
         members.forEach(({ member }, at) => {
           const outcome = outcomes[at], other = errors.get(at);
@@ -561,24 +574,9 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
         });
         if (leak) throw leak;
         if (error instanceof ContainmentFailed) throw error;
+        if (error instanceof NoVerdict) throw error;
         throw new Error(`"${culprit}" failed: ${reason}`);
       }
-      const failed: string[] = [];
-      let missing: NoVerdict | undefined;
-      members.forEach(({ member, log }, at) => {
-        const outcome = outcomes[at]!;
-        try {
-          if (settle(member, outcome)) {
-            if (!outcome.stopped) say(`${mode}: ${member.name}: passed in ${seconds(outcome.ranMs ?? 0)}`);
-            return;
-          }
-        } catch (error) { if (error instanceof NoVerdict) { missing ??= error; return; } throw error; }
-        failed.push(member.name);
-        if (existsSync(log)) say(readFileSync(log, "utf8").trimEnd());
-        say(`${mode}: ${member.name}: failed (${outcome.code}) after ${seconds(outcome.ranMs ?? 0)}`);
-      });
-      if (failed.length) throw new Error(`${failed.join(", ")} failed`);
-      if (missing) throw missing;
     }
     if (deferred.length) say(`${mode}: passed; left to the hosted job: ${deferred.join(", ")}`);
     return deferred;
@@ -593,19 +591,24 @@ export function endingOf(mode: Mode, error: unknown): { line: string; code: numb
 }
 
 /** Exits at once: a stopped step's survivor must not hold the push open. */
+class AdmittedGateFailed extends Error {
+  constructor(readonly code: number) { super(`admitted checks exited ${code}`); }
+}
+
 export function endHook(mode: Mode, error: unknown): never {
+  if (error instanceof AdmittedGateFailed) process.exit(error.code);
   const { line, code } = endingOf(mode, error);
   console.error(line);
   process.exit(code);
 }
 
-async function main(mode: Mode): Promise<void> {
+async function main(mode: Mode, admitted = false): Promise<void> {
   if (process.env.LLV_SKIP_HOOKS === "1") return;
   const deadline = pushDeadline(process.env, Date.now());
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
   let base = mode === "pre-commit" ? git(root, ["merge-base", "HEAD", "origin/main"]) : "HEAD";
   const until = deadline?.at ?? Infinity;
-  if (mode === "pre-push") {
+  if (mode === "pre-push" && !admitted) {
     const fetch = await fetchMain(root, until, deadline ?? undefined);
     if (fetch === "failed") console.warn("pre-push: fetch failed; using the last origin/main (base resolution must still succeed)");
     if (fetch === "stopped") console.warn("pre-push: fetch stopped at the push deadline; using the last origin/main");
@@ -613,6 +616,7 @@ async function main(mode: Mode): Promise<void> {
     const behind = Number(git(root, ["rev-list", "--count", "HEAD..origin/main"]));
     if (behind) console.warn(`pre-push: branch is ${behind} commit(s) behind origin/main; the hosted privacy gate may flag main-only commits. Merge origin/main before pushing.`);
   }
+  if (admitted) base = git(root, ["merge-base", "HEAD", "origin/main"]);
   const files = mode === "pre-commit"
     ? git(root, ["diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"]).split("\0").filter(Boolean)
     : [...new Set([
@@ -667,7 +671,17 @@ async function main(mode: Mode): Promise<void> {
       return { command: step.capped ? ["bash", "scripts/gate-slot.sh", ...command] : command, env };
     };
     const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();
-    await runSteps(mode, steps, { root, deadline, logDir: sandbox, prepare, ...(branch ? { ref: branch } : {}) });
+    const options = { root, deadline, logDir: sandbox, prepare, ...(branch ? { ref: branch } : {}) };
+    if (mode === "pre-push" && !admitted) {
+      await runSteps(mode, steps.filter(step => step.name === "privacy"), options);
+      if (steps.some(step => step.name !== "privacy")) {
+        const outcome = await execute(["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "pre-push", "--admitted"], root,
+          { ...process.env, ...(deadline ? { LLV_GATE_PUSH_DEADLINE: String(deadline.at + (deadline.cpuWaitMs ?? 0)) } : {}), LLV_OWNED_RUN_TIMEOUT_MS: String(deadline ? Math.max(1, deadline.at + (deadline.cpuWaitMs ?? 0) - Date.now()) : 15 * 60 * 1000) }, Infinity);
+        if (outcome.code !== 0) throw new AdmittedGateFailed(outcome.code ?? 1);
+      }
+    } else {
+      await runSteps(mode, admitted ? steps.filter(step => step.name !== "privacy") : steps, options);
+    }
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
   }
@@ -676,5 +690,5 @@ async function main(mode: Mode): Promise<void> {
 if (import.meta.main) {
   const mode = process.argv[2];
   if (mode !== "pre-commit" && mode !== "pre-push") throw new Error("usage: local-gate.ts pre-commit|pre-push");
-  try { await main(mode); } catch (error) { endHook(mode, error); }
+  try { await main(mode, process.argv[3] === "--admitted"); } catch (error) { endHook(mode, error); }
 }

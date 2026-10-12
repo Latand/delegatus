@@ -42,7 +42,7 @@ test("commit plan checks staged whitespace/privacy/lint and leaves types and tes
   expect(steps[1]!.command).toContain("--require-known-values");
   expect(steps[1]!.command.slice(-2)).toEqual(["--paths", "src/example.ts"]);
   expect(steps[2]!.command).toEqual(["bun", "scripts/eslint-changes.ts", "--base", "base", "./src/example.ts"]);
-  expect(steps[2]!.capped).toBeTrue();
+  expect(steps[2]!.capped).toBeFalse();
 });
 test("push checks commits, types and all sibling test variants, excluding browsers and deleted files", () => {
   const steps = plan("pre-push", ["src/example.ts", "src/deleted.test.ts"], context());
@@ -64,7 +64,7 @@ test("scoped heavy steps retain pin, host interpreter and both native fixture ve
 });
 test("native Codex runs its engine files once per version and its shared contracts once, as one group", () => {
   const steps = plan("pre-push", ["src/example.ts"], context({ native: true }));
-  const native = steps.filter(step => step.group === NATIVE_GROUP);
+  const native = steps.filter(step => step.name.startsWith(NATIVE_GROUP));
   expect(native.map(step => [step.name, step.codex, step.selection, step.deferrable === true])).toEqual([
     ["native Codex 0.154.0", "0.154.0", "--engine-only", false],
     ["native Codex 0.159.0", "0.159.0", "--engine-only", false],
@@ -74,7 +74,7 @@ test("native Codex runs its engine files once per version and its shared contrac
   const first = steps.indexOf(native[0]!);
   expect(steps.slice(first, first + native.length)).toEqual(native);
   for (const step of native) expect(step).toMatchObject({ command: ["bun", "scripts/verify-native-codex-runtime.ts"], capped: true, isolated: true, pinned: true });
-  expect(plan("pre-push", ["src/example.ts"], context()).some(step => step.group === NATIVE_GROUP)).toBeFalse();
+  expect(plan("pre-push", ["src/example.ts"], context()).some(step => step.name.startsWith(NATIVE_GROUP))).toBeFalse();
 });
 test("the engine and shared selections are exactly the hosted job's selection, split by who starts Codex", () => {
   const all = nativeBatches().flat(), engine = nativeBatches("--engine-only").flat(), shared = nativeBatches("--shared-only").flat();
@@ -193,9 +193,9 @@ test("a caller's deadline stops a decisive step and everything it started, with 
 test("a red verdict in a group fails the push with its log, even while the long tail is deferred", async () => {
   const runner = stepRunner(soon(2_500), () => ({ "native Codex 0.154.0": "echo '(fail) installed Codex: adapter pagination [3.00ms]'; exit 1", tail: "sleep 60" }));
   const error = await runner.run([grouped("native Codex 0.154.0"), grouped("tail", true)]);
-  expect((error as Error).message).toBe("native Codex 0.154.0 failed");
+  expect((error as Error).message).toContain("native Codex 0.154.0");
   expect(runner.lines).toContain("(fail) installed Codex: adapter pagination [3.00ms]");
-  expect(runner.lines).toContainEqual(expect.stringMatching(/^pre-push: native Codex 0\.154\.0: failed \(1\) after \d+ s$/));
+  expect(runner.lines).toContainEqual(expect.stringMatching(/^pre-push: native Codex 0\.154\.0: failed \(1\)$/));
 }, 30_000);
 test("a deadline that passed before a step starts prepares nothing, alone or in a group", async () => {
   const prepared: string[] = [];
@@ -405,32 +405,33 @@ test("a native Codex group names its unfinished or failed version, never a membe
   expect(publicationFailureCause({ step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 1_000, outputTail: failed }))
     .toBe("the repository's pre-push hook failed in its \"native Codex 0.159.0\" phase (exit 1, 1 failing test, first: installed Codex: adapter pagination)");
 }, 30_000);
-test("Viewer route and layout inputs select build and served-runtime verification", () => {
+test("Viewer sources leave runtime verification to every PR CI run", () => {
   for (const file of ["src/app/page.tsx", "src/app/layout.tsx", "src/components/Viewer.tsx"]) {
     const discovered = discover(root, "HEAD", [file]);
-    expect(discovered.runtime).toBeTrue();
+    expect(discovered.runtime).toBeFalse();
     const steps = plan("pre-push", [file], discovered);
-    expect(steps.some(step => step.name === "Viewer build")).toBeTrue();
-    expect(steps.some(step => step.name === "Viewer runtime")).toBeTrue();
+    expect(steps.some(step => step.name === "Viewer build")).toBeFalse();
+    expect(steps.some(step => step.name === "Viewer runtime")).toBeFalse();
   }
   const doc = ["CONTRIBUTING.md"] as const;
   expect(plan("pre-push", doc, discover(root, "HEAD", doc)).some(step => step.pinned)).toBeFalse();
 }, 20_000);
-test("deleting the built root route or layout still selects runtime verification", () => {
+test("deleted Viewer sources also leave runtime verification to PR CI", () => {
   const deletedRoot = mkdtempSync(path.join(tmpdir(), "deleted-viewer-input-")); roots.push(deletedRoot);
   symlinkSync(path.join(root, ".github"), path.join(deletedRoot, ".github"), "dir");
   symlinkSync(path.join(root, "scripts"), path.join(deletedRoot, "scripts"), "dir");
   for (const file of ["src/app/page.tsx", "src/app/layout.tsx"]) {
     const discovered = discover(deletedRoot, "HEAD", [file]);
     expect(discovered.existing.has(file)).toBeFalse();
-    expect(discovered.runtime).toBeTrue();
-    expect(plan("pre-push", [file], discovered).some(step => step.name === "Viewer runtime")).toBeTrue();
+    expect(discovered.runtime).toBeFalse();
+    expect(plan("pre-push", [file], discovered).some(step => step.name === "Viewer runtime")).toBeFalse();
   }
 });
 test("dependency candidate installs the frozen graph before later verification", () => {
   const steps = plan("pre-push", ["package.json"], context());
-  expect(steps[0]?.name).toBe("frozen install");
-  expect(steps[0]?.command).toEqual(["bun", "install", "--frozen-lockfile", "--ignore-scripts"]);
+  expect(steps[0]?.name).toBe("privacy");
+  expect(steps[1]?.name).toBe("frozen install");
+  expect(steps[1]?.command).toEqual(["bun", "install", "--frozen-lockfile", "--ignore-scripts"]);
 });
 test("media skipping is explicit and still checks commits when the whole diff is media", () => {
   const steps = plan("pre-push", ["image.png"], context({ skippedMedia: ["image.png"] }));
@@ -456,7 +457,7 @@ test("scope uses executed import closure and the workflow test lists", () => {
   const host = discover(root, "HEAD", ["src/runtime-host/main.ts"]);
   expect(host.runtime).toBeTrue();
   const native = discover(root, "HEAD", ["src/lib/runtime/nativeCodexQueue.ts"]);
-  expect(native.native).toBeTrue();
+  expect(native.native).toBeFalse();
   const linux = discover(root, "HEAD", ["src/lib/proc/index.ts"]);
   expect(linux.linux).toBe(process.platform === "linux");
   expect(linux.linuxTests).toContain("src/runtime-host/runtimeHostFence.test.ts");
@@ -509,13 +510,13 @@ for (const mode of ["pre-commit", "pre-push"] as const) test(`${mode} allows Kan
   const run = () => spawnSync("bash", [`.githooks/${mode}`], { cwd: f.dir, env: f.env, encoding: "utf8" });
   const accepted = run();
   expect(accepted.status).toBe(0);
-  expect(accepted.stdout).toContain("0 errors introduced by this change");
-  expect(accepted.stdout).toMatch(/[1-9]\d* errors already on the base in the changed files \(not blocking\)/);
+  expect((accepted.stdout + accepted.stderr)).toContain("0 errors introduced by this change");
+  expect((accepted.stdout + accepted.stderr)).toMatch(/[1-9]\d* errors already on the base in the changed files \(not blocking\)/);
   writeFileSync(path.join(f.dir, file), `// Harmless line shift\n${source}\nexport const addedLintError: any = 1;\n`);
   f.git("add", file);
   const refused = run();
   expect(refused.status).not.toBe(0);
-  expect(refused.stdout).toContain("1 errors introduced by this change");
+  expect((refused.stdout + refused.stderr)).toContain("1 errors introduced by this change");
   expect(refused.stderr).toMatch(/src\/components\/kanban\/KanbanBoard\.tsx:\d+:\d+ @typescript-eslint\/no-explicit-any/);
   writeFileSync(path.join(f.dir, file), `// Harmless line shift\n${source}`);
   f.git("add", file);
@@ -629,7 +630,7 @@ test("a push that changes one document keeps privacy and leaves main's types and
 test("no changed code file skips types or its tests, alone or beside a document", () => {
   for (const files of [["src/example.ts"], ["docs/design/note.md", "src/example.ts"], ["src/example.test.ts"], ["package.json"], ["src/deleted.ts"]]) {
     const names = plan("pre-push", files, context({ existing: new Set([...context().existing, "docs/design/note.md"]) })).map(step => step.name);
-    expect(names.slice(0, 2)).toEqual(files.includes("package.json") ? ["frozen install", "privacy"] : ["privacy", "types"]);
+    expect(names.slice(0, 2)).toEqual(files.includes("package.json") ? ["privacy", "frozen install"] : ["privacy", "types"]);
     expect(names).toContain("types");
     if (files.some(file => file.startsWith("src/example"))) expect(names).toContain("touched tests");
   }
@@ -666,3 +667,64 @@ test("pre-push hook on a branch behind main that changed nothing runs privacy on
   expect(calls[0]!.args).toContain("--check-commits");
   expect(execFileSync("git", ["--git-dir", remote, "rev-parse", "refs/heads/lane"], { encoding: "utf8", env: f.env }).trim()).toBe(f.git("rev-parse", "HEAD").toString().trim());
 });
+
+test("pre-commit lint admits only selections larger than forty files", () => {
+  for (const count of [40, 41]) {
+    const files = Array.from({ length: count }, (_, i) => `src/fixture-${i}.ts`);
+    const steps = plan("pre-commit", files, context({ existing: new Set(files) }));
+    expect(steps.find(step => step.name === "eslint")!.capped).toBe(count > 40);
+  }
+});
+
+test("local runtime scope is Dockerfile, runtime host and bin, including deleted inputs", () => {
+  for (const file of ["Dockerfile", "src/runtime-host/example.ts", "bin/example.mjs"]) {
+    const env = discover(root, "HEAD", [file]);
+    expect(env.runtime).toBeTrue(); expect(env.native).toBeTrue();
+  }
+  for (const file of ["src/lib/pipelines/engine.ts", "package.json", "next.config.ts"]) {
+    const env = discover(root, "HEAD", [file]);
+    expect(env.runtime).toBeFalse(); expect(env.native).toBeFalse();
+  }
+});
+
+test("push lanes overlap while preserving order within each lane", async () => {
+  const runner = stepRunner(null, dir => ({
+    a: `touch '${dir}/a'; while [ ! -f '${dir}/b' ]; do sleep 0.02; done`,
+    b: `touch '${dir}/b'; while [ ! -f '${dir}/a' ]; do sleep 0.02; done`,
+    next: `test -f '${dir}/a' && test -f '${dir}/b'`,
+  }));
+  expect(await runner.run([
+    { ...grouped("a"), lane: "types" },
+    { ...grouped("next"), lane: "types" },
+    { ...grouped("b"), lane: "tests" },
+  ])).toBeNull();
+}, 15_000);
+
+test("a red lane cancels its peer and never starts its next step", async () => {
+  const runner = stepRunner(null, dir => ({ bad: "exit 1", peer: "sleep 60", next: `touch '${dir}/next'` }));
+  const started = Date.now();
+  const error = await runner.run([
+    { ...grouped("bad"), lane: "tests" },
+    { ...grouped("peer"), lane: "types" },
+    { ...grouped("next"), lane: "types" },
+  ]);
+  expect((error as Error).message).toContain('"bad" failed');
+  expect(Date.now() - started).toBeLessThan(10_000);
+  expect(existsSync(path.join(runner.dir, "next"))).toBeFalse();
+});
+
+test.skipIf(process.platform !== "linux")("a real push takes one queue ticket and nested capped steps reuse its slot", () => {
+  const f = hookFixture();
+  const slot = path.join(f.dir, "scripts/gate-slot.sh");
+  writeFileSync(slot, readFileSync(slot, "utf8").replace('queue_key="command:$$:$RANDOM:$RANDOM"', 'queue_key="command:$$:$RANDOM:$RANDOM"\nprintf "%s\\n" "$queue_key" >> "$QUEUE_PROBE"'));
+  writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
+  const env: NodeJS.ProcessEnv = { ...f.env, DELEGATUS_CPU_PRESSURE: "off", QUEUE_PROBE: path.join(f.dir, "queue-probe") };
+  delete env.LLV_GATE_SLOT_LEASE;
+  const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env, encoding: "utf8" });
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  expect(readFileSync(env.QUEUE_PROBE!, "utf8").trim().split("\n")).toHaveLength(1);
+  const calls = f.calls();
+  expect(calls.some(call => call.args.includes("tsc"))).toBeTrue();
+  expect(calls.some(call => call.args.includes("scripts/eslint-changes.ts"))).toBeTrue();
+  expect(calls.some(call => call.args.includes("scripts/local-gate-tests.ts"))).toBeTrue();
+}, 20_000);

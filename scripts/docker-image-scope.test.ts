@@ -53,14 +53,13 @@ test("image inputs build, while prose, unrelated CI and shell tooling skip", () 
 
 test("native installation and runtime inputs verify both architectures; app changes verify amd64", () => {
   for (const file of ["Dockerfile", ".dockerignore", "Dockerfile.dockerignore", "package.json", "bun.lock", "bunfig.toml",
-    "patches/native.patch", "vendor/native/index.js", "bin/provision-telegram-connector.mjs",
-    "src/runtime-host/main.ts", "src/lib/platform/linux.ts", "scripts/whisper_transcribe.py",
+    "patches/native.patch", "vendor/native/index.js", "scripts/whisper_transcribe.py",
     "scripts/published-image-entrypoint.sh", "scripts/newcomer-install.mjs", "scripts/npm-package-smoke.mjs",
     ".github/workflows/docker-image.yml", "scripts/docker-image-scope.cjs"]) {
     expect(isMultiArchInput(file), file).toBe(true);
     expect(isImageInput(file), file).toBe(true);
   }
-  for (const file of ["src/app/page.tsx", "src/app/globals.css", "public/icon.svg", "README.md", "docs/native.md"]) {
+  for (const file of ["bin/provision-telegram-connector.mjs", "src/runtime-host/main.ts", "src/lib/platform/linux.ts", "src/app/page.tsx", "src/app/globals.css", "public/icon.svg", "README.md", "docs/native.md"]) {
     expect(isMultiArchInput(file), file).toBe(false);
   }
 });

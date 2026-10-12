@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { decodeXML } from "entities";
 import { gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
@@ -19,11 +19,6 @@ const key = (site: TestSite) => JSON.stringify([site.file, site.suite,
 const occurrenceKey = (site: TestSite) => JSON.stringify([key(site), site.occurrence ?? 0]);
 const comparisonKey = (site: TestSite) => site.kind === "test" && site.occurrence !== undefined ? occurrenceKey(site) : key(site);
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
-const MAX_CACHE_ENTRIES = 32;
-const RESULT_NAME = /^[a-f0-9]{64}\.json$/;
-const PENDING_NAME = /^[a-f0-9]{64}\.[a-f0-9-]{36}\.pending$/;
-const MAX_CACHE_BYTES = 4 * 1024 * 1024;
-const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const RUN_BUDGET_MS = 15 * 60 * 1000;
 const FILE_BUDGET_MS = 5 * 60 * 1000;
 export const FLAKY_RERUNS = 3;
@@ -40,7 +35,7 @@ const occurrenceCount = (sites: readonly TestSite[], site: TestSite) => sites.fi
  * side make a confirmed assertion non-blocking FLAKY; runner and between-tests
  * errors keep their comparison by identity. Never treat absence as a pass.
  */
-export function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "base" | "head", sites: readonly TestSite[]) => TestRun) {
+export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "base" | "head", sites: readonly TestSite[]) => TestRun | Promise<TestRun>) {
   const comparison = compareTests(base, head);
   const candidates = [...new Map(comparison.introduced.filter(site => site.kind === "test").map(site => [occurrenceKey(site), site])).values()];
   const flaky: FlakySite[] = [];
@@ -53,7 +48,7 @@ export function confirmFailures(base: TestRun, head: TestRun, rerun: (side: "bas
   }));
   for (let round = 0; round < FLAKY_RERUNS; round++) {
     for (const side of ["base", "head"] as const) {
-      const run = rerun(side, candidates);
+      const run = await rerun(side, candidates);
       // A between-tests error the same side already showed in its first sample
       // is that file's known state; only a diagnostic the first sample lacked
       // leaves the retry without usable evidence.
@@ -203,11 +198,16 @@ export function testNameFilter(sites: readonly TestSite[]): string[] {
 
 interface TestBudgets { fileMs: number; runMs: number }
 const DEFAULT_TEST_BUDGETS: TestBudgets = { fileMs: FILE_BUDGET_MS, runMs: RUN_BUDGET_MS };
-function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void; now?: () => number; budgets?: TestBudgets } = {}): TestRun {
+async function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void; now?: () => number; budgets?: TestBudgets } = {}): Promise<TestRun> {
   const started = performance.now(), failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
   const now = options.now ?? (() => performance.now());
   const budgetStart = now(), budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
-  for (const file of files) {
+  const results: TestRun[] = new Array(files.length);
+  let next = 0;
+  const workers = await Promise.allSettled(Array.from({ length: Math.min(3, files.length) }, async () => {
+  while (next < files.length) {
+    const index = next++, file = files[index]!;
+    const failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
     const remaining = Math.floor(Math.min(budgets.runMs - (now() - budgetStart), (options.deadline ?? Infinity) - now()));
     if (remaining <= 0) throw new Error(`${label}: test run exceeded its ${options.deadline ? "flaky rerun" : "15 minute"} budget`);
     const filter = options.sites ? testNameFilter(options.sites.filter(site => site.file === file)) : [];
@@ -221,28 +221,30 @@ function runFiles(root: string, files: readonly string[], sandbox: string, inher
     env.NO_COLOR = "1"; env.FORCE_COLOR = "0";
     const report = path.join(privateRoot, "junit.xml"), log = path.join(privateRoot, "output.log");
     const fd = openSync(log, "w");
-    let result: Bun.SyncSubprocess;
+    let result: Bun.Subprocess;
+    let exitCode: number;
     try {
-      result = Bun.spawnSync({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(Math.min(budgets.fileMs, remaining) + 5_000), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
+      result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(Math.min(budgets.fileMs, remaining) + 5_000), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
         // Keep the independent five-second cleanup allowance, measured as
         // execution time by the outer guard. A fixed wall timeout here would
         // kill a healthy supervisor during a nested CPU queue wait.
         cwd: root, env: { ...env, LLV_OWNED_RUN_TIMEOUT_MS: String(Math.min(budgets.fileMs, remaining)) }, stdio: ["ignore", fd, fd],
       });
+      exitCode = await result.exited;
     } finally { closeSync(fd); }
     // The owned runner ends the service cgroup. A group number after the root
     // exits is neither a bound handle nor proof against PID reuse.
     try {
-      if (result.signalCode || result.exitedDueToTimeout || ![0, 1].includes(result.exitCode)) throw new Error(`runner did not finish (${result.signalCode ?? result.exitCode}${result.exitedDueToTimeout ? "; timed out" : ""})`);
+      if (result.signalCode || ![0, 1].includes(exitCode)) throw new Error(`runner did not finish (${result.signalCode ?? exitCode})`);
       const output = readFileSync(log, "utf8");
       const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, !!options.sites);
       const survivors = output.split("\n").find(line => line.startsWith("owned runner: surviving owned processes:"));
       // A complete report still needs the service's ownership verdict.
       // Retain it so cleanup fixed on head can recover a broken baseline.
-      if (survivors && result.exitCode !== 0) {
+      if (survivors && exitCode !== 0) {
         appendOwnershipFailure(parsed.failures, file, survivors);
       }
-      if ((result.exitCode === 0) !== (parsed.failures.length === 0)) {
+      if ((exitCode === 0) !== (parsed.failures.length === 0)) {
         throw new Error(`runner exit disagrees with its report${survivors ? `; ${survivors}` : ""}`);
       }
       failures.push(...parsed.failures); passed.push(...parsed.passed); completed.push(file);
@@ -252,29 +254,13 @@ function runFiles(root: string, files: readonly string[], sandbox: string, inher
       if (options.sites) throw new Error(`${label}: ${file}: ${message}; elapsed ${(performance.now() - started).toFixed(0)}ms`);
       failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.split(root).join("<checkout>")}`, kind: "error" });
     } finally { rmSync(privateRoot, { recursive: true, force: true }); }
+    results[index] = { failures, passed, completed, elapsedMs: 0 };
   }
+  }));
+  const rejected = workers.find(worker => worker.status === "rejected");
+  if (rejected?.status === "rejected") throw rejected.reason;
+  for (const run of results) { failures.push(...run.failures); passed.push(...run.passed); completed.push(...run.completed); }
   return { failures, passed, completed, elapsedMs: performance.now() - started };
-}
-
-/** Private, disposable result cache: no checkouts, state, credentials or logs. */
-export function prepareCache(directory: string, now = Date.now()): void {
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const info = lstatSync(directory);
-  if (!info.isDirectory() || info.isSymbolicLink() || (process.getuid && info.uid !== process.getuid()) || (process.platform !== "win32" && (info.mode & 0o077))) throw new Error("baseline cache must be an owned private directory");
-  const entries = readdirSync(directory).filter(name => RESULT_NAME.test(name) || PENDING_NAME.test(name)).flatMap(name => {
-    try { return [{ name, info: lstatSync(path.join(directory, name)) }]; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
-  });
-  entries.sort((a, b) => b.info.mtimeMs - a.info.mtimeMs);
-  for (const [index, entry] of entries.entries()) if (index >= MAX_CACHE_ENTRIES || now - entry.info.mtimeMs > MAX_AGE_MS || entry.info.size > MAX_CACHE_BYTES || !entry.info.isFile()) {
-    rmSync(path.join(directory, entry.name), { force: true });
-  }
-}
-function validRun(value: unknown): value is TestRun {
-  if (!value || typeof value !== "object") return false;
-  const run = value as TestRun;
-  const sites = (list: unknown) => Array.isArray(list) && list.every(s => s && typeof s.file === "string" && typeof s.suite === "string" && typeof s.name === "string" && ["test", "error"].includes(s.kind));
-  return Array.isArray(run.completed) && run.completed.every(file => typeof file === "string") && sites(run.failures) && sites(run.passed) && Number.isFinite(run.elapsedMs) && run.elapsedMs >= 0;
 }
 
 function dependencyGraph(root: string) {
@@ -301,7 +287,7 @@ function dependencyGraph(root: string) {
   return { fingerprint, shareable };
 }
 
-export function touchedTests(root: string, baseRef: string, selected: readonly string[], options: { cache?: string; env?: NodeJS.ProcessEnv; log?: (line: string) => void; budgets?: TestBudgets } = {}) {
+export async function touchedTests(root: string, baseRef: string, selected: readonly string[], options: { env?: NodeJS.ProcessEnv; log?: (line: string) => void; budgets?: TestBudgets } = {}) {
   const sandbox = mkdtempSync(path.join(gateTemporaryRoot(), "delegatus-test-comparison-"));
   const log = options.log ?? console.log;
   const budget = cpuWaitBudget(options.env ?? process.env);
@@ -319,27 +305,18 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
     const files = [...new Set(selected.map(file => path.relative(root, path.resolve(root, file))))].sort();
     if (!files.length) throw new Error("refusing an empty test list");
     for (const file of files) if (file.startsWith("../") || path.isAbsolute(file) || !/\.test\.[cm]?[jt]sx?$/.test(file) || file.includes(".browser.test.") || !statSync(path.join(root, file)).isFile()) throw new Error(`missing or invalid test path: ${file}`);
+    const head = await runFiles(root, files, sandbox, inherited, "head", runOptions);
+    log(`touched-tests: head ${head.elapsedMs.toFixed(0)}ms`);
+    if (!head.failures.length) {
+      log("touched-tests: green head; no baseline checkout or sample needed");
+      return { ...compareTests({ failures: [], passed: [], completed: [], elapsedMs: 0 }, head), flaky: [] as FlakySite[] };
+    }
     const baseFiles = new Set(git("ls-tree", "-r", "--name-only", "-z", base, "--", ...files).split("\0"));
-    const oldFiles = files.filter(file => baseFiles.has(file));
+    const failingFiles = files.filter(file => head.failures.some(site => site.file === file));
+    const oldFiles = failingFiles.filter(file => baseFiles.has(file));
     const graph = dependencyGraph(root);
     const remote = oldFiles.length ? git("config", "--get", "remote.origin.url").trim() : "";
-    // Scope ids and journal descriptors change on each gate-slot invocation;
-    // they do not change the test inputs. Keep semantic environment in the key.
-    const environment = Object.entries(env).filter(([k]) => !["PWD", "OLDPWD", "_", "SHLVL", "LLV_GATE_LOCK_DIR", "LLV_GATE_SLOT_LEASE", "LLV_CPU_WAIT_ROOTS", "INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM", "LLV_OWNED_TEST_RUNNER_PID", "LLV_OWNED_TEST_RUN_CGROUP", "LLV_OWNED_RUN_PARENT_IDENTITY", "LLV_FIXTURE_PARENT_IDENTITY"].includes(k)).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, v?.split(sandbox).join("<sandbox>")]);
-    const identity = digest(JSON.stringify(["per-file-junit-v10-private-test-cpu-queue", base, files, remote, Bun.version, process.execPath, process.platform, process.arch, graph, environment, budgets]));
-    const cache = options.cache ?? path.join(gateTemporaryRoot(), `delegatus-test-baselines-${process.getuid?.() ?? "user"}`);
-    prepareCache(cache);
-    const entry = path.join(cache, `${identity}.json`);
-    let baseline: TestRun | undefined;
     const baselineStarted = performance.now();
-    if (existsSync(entry)) {
-      try {
-        const value = JSON.parse(readFileSync(entry, "utf8"));
-        if (value.identity !== identity || !validRun(value.run) || value.run.failures.length || value.integrity !== digest(JSON.stringify({ identity, run: value.run })) || JSON.stringify(value.run.completed) !== JSON.stringify(oldFiles) || ![...value.run.failures, ...value.run.passed].every((site: TestSite) => baseFiles.has(site.file))) throw new Error("invalid baseline cache payload");
-        baseline = value.run;
-      } catch { log("touched-tests: invalid baseline cache; rebuilding"); }
-    }
-    const cached = !!baseline;
     let checkout: string | undefined;
     const prepareBaseline = (deadline = Infinity) => {
       if (checkout) return checkout;
@@ -361,23 +338,16 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
       checkout = target;
       return target;
     };
-    if (!baseline) {
-      baseline = oldFiles.length ? runFiles(prepareBaseline(), oldFiles, sandbox, inherited, "baseline", runOptions)
-        : { failures: [], passed: [], completed: [], elapsedMs: 0 };
-      const payload = { identity, run: baseline };
-      const serialized = JSON.stringify({ ...payload, integrity: digest(JSON.stringify(payload)) });
-      if (!baseline.failures.length && Buffer.byteLength(serialized) <= MAX_CACHE_BYTES) {
-        const pending = path.join(cache, `${identity}.${randomUUID()}.pending`);
-        try { writeFileSync(pending, serialized, { mode: 0o600, flag: "wx" }); renameSync(pending, entry); }
-        catch { log("touched-tests: could not save baseline cache; comparison still runs"); }
-        finally { rmSync(pending, { force: true }); }
-        prepareCache(cache);
-      }
-    }
-    log(`touched-tests: baseline ${cached ? "cache hit" : "run"} ${(performance.now() - baselineStarted).toFixed(0)}ms (tests ${baseline.elapsedMs.toFixed(0)}ms)`);
-    log(`touched-tests: ${files.length - oldFiles.length} new file(s), judged on head alone`);
-    const head = runFiles(root, files, sandbox, inherited, "head", runOptions);
-    log(`touched-tests: head ${head.elapsedMs.toFixed(0)}ms`);
+    // Runner diagnostics require the whole file; assertions need only their
+    // names. A missing base assertion remains absent during confirmation.
+    const wholeFiles = oldFiles.filter(file => head.failures.some(site => site.file === file && site.kind === "error"));
+    const assertionFiles = oldFiles.filter(file => !wholeFiles.includes(file));
+    const empty: TestRun = { failures: [], passed: [], completed: [], elapsedMs: 0 };
+    const whole = wholeFiles.length ? await runFiles(prepareBaseline(), wholeFiles, sandbox, inherited, "baseline", runOptions) : empty;
+    const assertions = assertionFiles.length ? await runFiles(prepareBaseline(), assertionFiles, sandbox, inherited, "baseline", { ...runOptions, sites: head.failures }) : empty;
+    const baseline = { failures: [...whole.failures, ...assertions.failures], passed: [...whole.passed, ...assertions.passed], completed: [...whole.completed, ...assertions.completed], elapsedMs: whole.elapsedMs + assertions.elapsedMs };
+    log(`touched-tests: baseline run ${(performance.now() - baselineStarted).toFixed(0)}ms (tests ${baseline.elapsedMs.toFixed(0)}ms; ${oldFiles.length} failing file(s))`);
+    log(`touched-tests: ${files.filter(file => !baseFiles.has(file)).length} new file(s), judged on head alone`);
     // A base file that did not finish certifies nothing, unless the head fails
     // to finish the same file with the same diagnostic: then the push changed
     // nothing there and the comparison below lists it as PRE-EXISTING.
@@ -385,22 +355,11 @@ export function touchedTests(root: string, baseRef: string, selected: readonly s
     for (const site of baseline.failures) if (site.kind === "error" && site.name.startsWith(RUNNER_ERROR) && !headErrors.has(key(site))) throw new Error(`baseline: ${site.file}: ${diagnosticName(site).slice(RUNNER_ERROR.length)}`);
     const retryStarted = performance.now(), deadline = retryStarted - budget.elapsed() + FLAKY_BUDGET_MS;
     let reruns = 0;
-    const comparison = confirmFailures(baseline, head, (side, sites) => {
+    const comparison = await confirmFailures(baseline, head, async (side, sites) => {
       reruns++;
       const retryFiles = [...new Set(sites.map(site => site.file))].filter(file => side === "head" || baseFiles.has(file));
       if (!retryFiles.length) return { failures: [], passed: [], completed: [], elapsedMs: 0 };
-      try {
-        return runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, {
-          ...runOptions, sites, deadline,
-          // Evict on the first parsed base failure, before a later file can
-          // abort this retry batch and discard its partial result.
-          onFailure: side === "base" ? () => rmSync(entry, { force: true }) : undefined,
-        });
-      } catch (error) {
-        // An aborted base retry cannot certify the cached green sample either.
-        if (side === "base") rmSync(entry, { force: true });
-        throw error;
-      }
+      return await runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, { ...runOptions, sites, deadline });
     });
     if (reruns) log(`touched-tests: flaky confirmation ${FLAKY_RERUNS} reruns per side, ${(performance.now() - retryStarted).toFixed(0)}ms (shared budget ${FLAKY_BUDGET_MS}ms)`);
     for (const site of comparison.flaky) log(`FLAKY ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)} (base ${site.base.pass} pass/${site.base.fail} fail; head ${site.head.pass} pass/${site.head.fail} fail)`);
@@ -416,7 +375,7 @@ if (import.meta.main) {
   try {
     const [, , flag, base, ...files] = process.argv;
     if (flag !== "--base" || !base) throw new Error("usage: local-gate-tests.ts --base <merge-base> <files...>");
-    if (touchedTests(process.cwd(), base, files).introduced.length) process.exitCode = 1;
+    if ((await touchedTests(process.cwd(), base, files)).introduced.length) process.exitCode = 1;
   } catch (error) {
     console.error(`touched-tests: ${error instanceof Error ? error.message : error}; gate error (blocking)`);
     process.exitCode = 1;

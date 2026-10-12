@@ -93,22 +93,18 @@ whitespace, privacy with the committed fingerprints, and eslint. Pre-push checks
 commit publication, types, changed-file lint, touched tests, and scoped Linux,
 pinned Bun runtime, native Codex and supply-chain gates. Tests and builds use
 isolated state roots; heavy commands go through `scripts/gate-slot.sh`.
-Touched tests run one file per process on head and on the merge base with
-`origin/main`, each with fresh state, HOME and TMPDIR under the OS temp root.
-Only new failures block; output lists pre-existing and fixed failures by file,
-describe ancestry and test name, and retains between-tests errors. An incomplete
-baseline blocks as a gate error and an incomplete head names its file and blocks,
-unless both are broken the same way, which lists as pre-existing.
-Baseline results are cached by commit, sorted file set, origin URL, Bun version, dependency
-graph and execution environment under the private temp directory
-`delegatus-test-baselines-<uid>` (32 entries, 4 MiB each, seven days). A SHA-256
-digest covers each cached baseline payload; missing or mismatched integrity
-rebuilds the baseline. Local dependencies, including relative directory paths
-and Bun lockfile directory resolutions, install independently in the baseline.
-Cache versions invalidate results from earlier dependency isolation rules.
-Deleting that cache is safe. Both runs report elapsed
-time; a warm baseline needs no checkout or test rerun. Budgets are five minutes per file and fifteen minutes
-per baseline/head test run. Privacy, types and ESLint retain their own checks.
+Touched tests run the branch first, up to three explicit files at once, each
+with fresh state, HOME and TMPDIR under the OS temp root. Only files failing on
+the branch are sampled on the merge base with `origin/main`, filtered to the
+failing assertions; runner errors require the full file. A green branch needs
+no baseline checkout. No baseline results are cached. Only new failures block;
+output retains pre-existing failures, describe ancestry, test names and
+between-tests errors. An incomplete baseline for a red branch blocks unless
+both sides are broken the same way, which lists as pre-existing.
+Samples report elapsed time. Budgets are five minutes per file and fifteen
+minutes per baseline/head test run. Privacy runs first; pre-push takes one admission for independent types/lint,
+test, runtime and native lanes. Pre-commit lint on up to 40 files needs no
+admission. Privacy, types and ESLint retain their own checks.
 A push with no changed file against the merge base runs privacy with
 `--check-commits` and nothing else; a prose-only push (`.md`, `.mdx`, `.txt`)
 skips types; scoped Linux tests are compared against the merge base like touched
@@ -203,8 +199,12 @@ during `verify-candidate`, so a candidate whose host cannot boot, cannot take
 the fence, or cannot hold what it took is refused before promotion rather than
 after.
 
-**Both halves run on scoped pre-push and by CI dispatch** under the pin read
-from the Dockerfile. `scripts/verify-viewer-runtime.ts` loads every compiled
+**Both halves run on every PR and by CI dispatch** under the pin read
+from the Dockerfile, with the stable `runtime-gate` context joining both runtime
+and native Codex verdicts. Locally they run when `Dockerfile`,
+`src/runtime-host/**` or `bin/**` changes. After this workflow lands, the seat
+adds `runtime-gate` to main branch protection; older PRs need a new push or reopen.
+`scripts/verify-viewer-runtime.ts` loads every compiled
 server runtime, then serves the build and requires `GET /` to answer 200.
 `scripts/verify-runtime-host.ts` drives two runtime-host generations through
 succession and holds both endpoints. Held verdict tests cover their red paths;
