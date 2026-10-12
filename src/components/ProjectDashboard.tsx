@@ -18,7 +18,6 @@ import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import type { Flow } from "@/lib/flows/types";
 import { useLocale } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
-import { boardConversationKeys } from "@/lib/tasks/boardVisibility";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry, ProjectCatalogEntry } from "@/lib/types";
 import { MAX_VISIBLE_PATHS } from "@/lib/view/types";
@@ -51,7 +50,6 @@ import { isPlacedTask } from "./scheme/taskGeometry";
 import { loadExpandedTasks, partitionTaskStacks, persistExpandedTasks } from "./scheme/taskStacks";
 import { clearWorkflowDraftStorage } from "./workflows/WorkflowDraftPane";
 import { dropLegacyWorkflowDrafts, isWorkflowDraftId } from "./workflows/workflowModel";
-import { TaskPanel } from "./tasks/TaskPanel";
 import { pushTaskToast, TaskToastHost } from "./tasks/taskToast";
 import { MobileBoardDock, mobileBoardOf } from "./mobile/MobileBoard";
 import { MobileKanban } from "./mobile/MobileKanban";
@@ -413,10 +411,9 @@ function ProjectDashboardView({
   const seatState = deriveOrchestratorPanelState({ status: seatRead.status, statusFailed: seatRead.failed,
     submitting: false, submitFailure: null, file: seatFile, surface: null });
   /* The DESKTOP's read of the seat (#1841). The phone's read above is gated on
-     its board leaf; this one is not gated on a face, because the Tasks panel
-     and its `Tasks N` count leave the seat's own tasks out wherever the panel
-     is open — and on the Conversations face the board, which used to do this
-     reading, is not mounted at all. The board below is handed this answer
+     its board leaf; this one is not gated on a face, because on the
+     Conversations face the board, which used to do this reading, is not
+     mounted at all. The board below is handed this answer
      (`seatRefs` and `seatRead`) and polls nothing itself; the dock beside it,
      which is a sibling of this dashboard and reads for itself, shares this
      one poll, because the poll belongs to the project and cwd rather than to
@@ -469,10 +466,9 @@ function ProjectDashboardView({
     () => ({ manual: board.prefs.manual, hidden: board.prefs.hidden, expanded: board.prefs.expanded }),
     [board.prefs],
   );
-  const taskPanelOpen = board.prefs.taskPanelOpen;
   /* Crown favorites (issue #185): the durable id set, an API handed to every
      card through context, and the resolved rows (one live file per favorited
-     id, freshest generation) the docked panel lists. */
+     id, freshest generation). */
   const favoriteIds = board.prefs.favorites;
   /* The crowned identities as a membership set: the scheme layout lifts these
      roots into the pinned top band (issue #224), and the set identity only moves
@@ -489,7 +485,7 @@ function ProjectDashboardView({
   );
   /* One row per favorited id that still has a scanned transcript, keeping the
      freshest generation so a resumed conversation lists once under its current
-     file. Sorted freshest-first for the panel. */
+     file. */
   const favoriteRows = useMemo(() => resolveFavoriteRows(files, favoriteIds), [files, favoriteIds]);
   /* Conversation auto-collapse (#112/#1158): genuine user placements, manual
      expansions, and favorites pin a card against collapse. */
@@ -701,7 +697,6 @@ function ProjectDashboardView({
      retries independently and `initialDraftCwd` carries ordinary root changes. */
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, openNonce, loaded, initialDraftCwd, initialDraftCwdVerified]);
-  const toggleTaskPanel = () => board.setTaskPanelOpen(!taskPanelOpen);
   useEffect(
     () => () => {
       if (highlightTimer.current) window.clearTimeout(highlightTimer.current);
@@ -932,14 +927,14 @@ function ProjectDashboardView({
      the board after ‹. */
   const phoneTaskMutations = useTaskMutations(isMobile ? projectTasks : EMPTY_TASKS);
   /* Tasks that exist only for the orchestrator seat are the seat panel's to
-     list (#1841): every task list leaves them out — the desktop Tasks panel
-     and its count, the phone's task screens and their count — while the task
+     list (#1841): every task list leaves them out — the boards, the phone's
+     task screens and their count — while the task
      rows themselves stay in the store, where the seat keeps its notes.
 
      The seat is read once per face: the phone's read above is gated on its
-     board leaf, the desktop's is not gated on a face at all, because the Tasks
-     panel is open on the Conversations face too, where the board that used to
-     do this reading is not mounted. The board is handed the same answer
+     board leaf, the desktop's is not gated on a face at all, because the
+     Conversations face does not mount the board that used to do this
+     reading. The board is handed the same answer
      instead of polling the route a second time, and every other surface
      reading the same project shares the one poll behind it. */
   const faceSeatRead = isMobile ? seatRead : desktopSeatRead;
@@ -949,10 +944,9 @@ function ProjectDashboardView({
     () => (seatKey ? (JSON.parse(seatKey) as SeatRefs) : null),
     [seatKey],
   );
-  /* The same read also carries every OTHER project's seats. The panel's «all»
-     scope lists those projects' tasks, and a seat of another project is no
-     more a task than this one's; a failed read drops them, as it drops this
-     project's retired seats. */
+  /* The same read also carries every OTHER project's seats: a seat of another
+     project is no more a task than this one's; a failed read drops them, as it
+     drops this project's retired seats. */
   const allSeatKey = !faceSeatRead.failed && faceSeatRead.status?.all ? JSON.stringify(faceSeatRead.status.all) : "";
   const allSeatRefs = useMemo<SeatRefs | null>(
     () => (allSeatKey ? (JSON.parse(allSeatKey) as SeatRefs) : null),
@@ -971,8 +965,7 @@ function ProjectDashboardView({
     () => (seatTaskIds.size ? projectTasks.filter((task) => !seatTaskIds.has(task.id)) : projectTasks),
     [projectTasks, seatTaskIds],
   );
-  /** Open tasks as every count of them says: `Tasks N` on the desktop bar, the
-      phone menu's Tasks row. */
+  /** Open tasks as the phone menu's Tasks row counts them. */
   const openTaskCount = faceTasks.filter((task) => task.status !== "done").length;
   /* Compact default Kanban/status stacks: quiet placed cards fold off the
      canvas (layout, edges, minimap) into the status strip; active, attention,
@@ -1129,8 +1122,7 @@ function ProjectDashboardView({
   }, [project]);
 
   /* A task chip in the orchestrator's composer or on a sent message was
-     clicked: open or frame that task on this board, the way a task-panel row
-     does. A task of another project is not this board's to open. */
+     clicked: open or frame that task on this board. A task of another project is not this board's to open. */
   const openChipTask = useRef(openTaskOnBoard);
   const projectTaskIds = useRef<ReadonlySet<string>>(new Set());
   useEffect(() => { projectTaskIds.current = new Set(projectTasks.map((task) => task.id)); }, [projectTasks]);
@@ -1217,7 +1209,7 @@ function ProjectDashboardView({
     flashNode(target);
   });
 
-  /* A task-panel row from another project switches the dashboard first; the
+  /* A task link from another project switches the dashboard first; the
      glide target waits in sessionStorage until this project has the task. */
   useEffect(() => {
     const pending = sessionStorage.getItem("llvTaskFocus");
@@ -1898,10 +1890,6 @@ function ProjectDashboardView({
      conversation sits on top of the stack; the footer and the presence slice
      both hang off that one answer. */
   const mobileBoardLeaf = isMobile && projectView === "scheme" && schemeAvailable && mobileConversationKey === null;
-  /* What the open project's board carries, by path and by conversation id.
-     «Remove from board» is judged against this, so the task panel offers it
-     only where the flag takes effect (#1614). */
-  const boardMemberKeys = useMemo(() => boardConversationKeys(files), [files]);
   /* The desktop leaf that is the board itself — the one leaf that owns chrome in
      the top-left corner, so it is handed the view switch instead of having one
      floated over it (#1614). */
@@ -2102,7 +2090,6 @@ function ProjectDashboardView({
      holds message search (on the Board, whose find field filters cards), the board's own rows
      (Hidden), sound, archive, delete and, once the row gave them up, one row per account switch.
      Undo and redo left the header (#1801; a kanban undo is #1856). */
-  const panelTasks = useMemo(() => (seatTaskIds.size ? tasks.filter((task) => !seatTaskIds.has(task.id)) : tasks), [seatTaskIds, tasks]);
   const barLead = () => (
     <>
       <h1 className="min-w-12 truncate text-[13.5px] font-bold" title={knownProjectName ?? undefined}>{projectTitleNode}</h1>
@@ -2118,7 +2105,6 @@ function ProjectDashboardView({
           onToggle: kanbanLeaf ? kanbanSeat.toggle : onToggleOrchestratorPanel,
           dot: kanbanLeaf && kanbanSeat.collapsed && seatSignal ? { tone: seatSignal.tone, label: seatSignal.label } : null,
         } : null}
-        tasks={{ open: taskPanelOpen, count: openTaskCount, onToggle: toggleTaskPanel }}
       />
       <BarMoreMenu
         rows={(close) => (
@@ -2169,22 +2155,6 @@ function ProjectDashboardView({
       />
     </>
   );
-
-  /* The Tasks panel. The Board draws it under its bar, so the bar spans it and the attention
-     island sits over the bar, clear of the panel's header (#1801); the other leaves' bar already
-     spans the row the panel sits in. */
-  const taskPanel = taskPanelOpen ? (
-    <TaskPanel
-      tasks={panelTasks}
-      project={project}
-      boardMembers={boardMemberKeys}
-      favorites={favoriteRows}
-      onOpenFavorite={openSwitchboardFile}
-      onToggleFavorite={(id) => board.setFavorite(id, false)}
-      onOpenTask={openTask}
-      onClose={toggleTaskPanel}
-    />
-  ) : null;
 
   const renderMobileSheet = (name: MobileSheetName, close: () => void) => {
     if (name === "menu") return <HeaderMenuSheet title={projectName} project={project} nav={mobileNav} {...mobileMenuEntries()} onClose={close} />;
@@ -2547,7 +2517,6 @@ function ProjectDashboardView({
                 recentAgents={(close, countSlot) => (
                   <DesktopConversations project={project} enabled={loaded} countSlot={countSlot} onOpen={(file) => { close(); openFullCatalogFile(file); }} />
                 )}
-                aside={taskPanel}
               />
             ) : (
               <EmptyProjectLeaf
@@ -2558,7 +2527,6 @@ function ProjectDashboardView({
               />
             )}
           </div>
-          {boardReady && kanbanLeaf ? null : taskPanel}
         </div>
       )}
 

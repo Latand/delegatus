@@ -194,7 +194,7 @@ test("mutationKeys names every key a mutation contends on", () => {
   expect(mutationKeys({ kind: "remap-paths", pairs: [{ from: "/a", to: "/b" }] })).toEqual(["path:/a", "path:/b"]);
   expect(mutationKeys({ kind: "set-engine-child-fold", id: "c1", path: "/a", folded: true })).toEqual(["fold:c1", "path:/a"]);
   /* A presentation mutation contends only on the fields it actually carries, so
-     setting the task panel never fences a queued view-mode switch. */
+     setting the stored task-panel flag never fences a queued view-mode switch. */
   expect(mutationKeys({ kind: "set-presentation", taskPanelOpen: true })).toEqual(["taskPanelOpen"]);
   expect(mutationKeys({ kind: "set-presentation", viewMode: null })).toEqual(["viewMode"]);
   expect(mutationKeys({ kind: "set-presentation", idleCollapseMinutes: null })).toEqual([IDLE_COLLAPSE_KEY]);

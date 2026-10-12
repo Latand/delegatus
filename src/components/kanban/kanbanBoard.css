@@ -64,9 +64,9 @@
 /* The board's own controls start from nothing. The conversations and the
    orchestrator mounted inside it are the Viewer's components, styled by their
    own utilities, so none of these element rules reach into them. */
-.kb :where(button, input):not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *, .kb-aside *)) { font: inherit; color: inherit; }
-.kb button:not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *, .kb-aside *)) { background: none; border: 0; padding: 0; }
-.kb :focus-visible:not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *, .kb-aside *)) { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 4px; }
+.kb :where(button, input):not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *)) { font: inherit; color: inherit; }
+.kb button:not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *)) { background: none; border: 0; padding: 0; }
+.kb :focus-visible:not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *)) { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 4px; }
 .kb :where(.seat-head, .conv-head) :where(.icon-btn), .kb :where(.rlatest) { font: inherit; color: inherit; background: none; border: 0; padding: 0; }
 .kb .num { font-variant-numeric: tabular-nums; }
 
@@ -149,7 +149,7 @@
    (`[data-project-bar]`) takes the first two from its width. */
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="accounts"] [data-bar-group="where"] > :not(h1) { display: none; }
 :is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="labels"] [data-fit-label] { display: none; }
-:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="labels"] :is([data-orchestrator-toggle], [data-task-panel-toggle]) { padding-left: 8px; padding-right: 8px; }
+:is(.kb .bar[data-bar="project"], [data-project-bar])[data-fit~="labels"] [data-orchestrator-toggle] { padding-left: 8px; padding-right: 8px; }
 .kb .bar[data-bar="project"][data-fit~="chip"] [data-attention-chip-label] { display: none; }
 .kb .bar[data-bar="project"][data-fit~="tight"], .kb .bar[data-bar="project"][data-fit~="tight"] .bar-trail { gap: 8px; }
 /* The last step, on a window narrower than the board is made for: the field may go under its placeholder. */
@@ -895,9 +895,8 @@
 /* The seat keeps its height and the board keeps a full page below it; the
    page scrolls between the two instead of squeezing the columns (prototype
    `#app > .board`). */
-/* The board's page and, beside it, the project's Tasks panel: both under the one bar (#1801). */
+/* The board's page, under the one bar (#1801). */
 .kb .kb-body { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; }
-.kb .kb-aside { display: flex; min-height: 0; flex-shrink: 0; }
 .kb .kb-pane { position: relative; display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; }
 .kb .kb-page { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; container-type: inline-size; }
 /* The frame is the page's own height, 440px at the least. It was sized in

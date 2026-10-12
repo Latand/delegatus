@@ -673,7 +673,7 @@ export interface SeatConversations {
  * the record.
  *
  * The per-project answer above is what a board needs; a surface that spans
- * projects — the Overview's board, the Tasks panel in its «all» scope — needs
+ * projects — the Overview's board — needs
  * this one, because a seat of ANOTHER project is just as much a seat and has
  * just as little to do with a task list. Read whole rather than per project:
  * the file is one document, so asking it once per project would re-read and

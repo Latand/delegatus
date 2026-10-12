@@ -11,6 +11,7 @@ import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
  */
 import { useEffect, useState } from "react";
 import { LogFeed } from "@/components/LogFeed";
+import { MobileSheet } from "@/components/mobile/MobileSheet";
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
 import type { LogTailState } from "@/hooks/useLogTail";
 import { createRoot } from "react-dom/client";
@@ -20,6 +21,10 @@ import { writeProfile } from "@/components/runtimeProfile";
 import { ReceiptChip } from "@/components/runtime/ReceiptChip";
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { Viewer } from "@/components/Viewer";
+import { setVoiceCompanionAdapterForTests } from "@/components/voiceCompanion/VoiceCompanionHost";
+import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
+import { scenarioScript } from "@/lib/voiceCompanion/scenarios";
+import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -159,6 +164,46 @@ const CHROME_PIN = CHROME !== null && !new URLSearchParams(location.search).has(
    held for an account switch, and a compact the host cannot take (no context meter, so the refusal fills the row). */
 const MENU_STATE = new URLSearchParams(location.search).get("menu-state");
 
+/* `?voice=sim|product` (docs/design/phone-voice-head-build.md): the companion is on in the settings, so the
+   shell's own host mounts the phone's voice head. `product` keeps the real voice, whose session route is never to
+   be asked; `sim` hands the host a simulator that speaks the long scenario and records each start, each project it
+   is told and each close on `window.phoneVoice`. `&voice-long=1` fills the seat's conversation past the screen, so
+   what the head and its words cover is measured over real rows. */
+const VOICE_SCENE = new URLSearchParams(location.search).get("voice");
+const VOICE_LONG = new URLSearchParams(location.search).has("voice-long");
+const phoneVoice = { starts: [] as string[], projects: [] as Array<string | null>, closes: 0, sessionRequests: 0 };
+Object.assign(window, { phoneVoice });
+if (VOICE_SCENE === "sim") {
+  const uk = localStorage.getItem("llv_lang") === "uk";
+  setVoiceCompanionAdapterForTests((): VoiceCompanionAdapter => {
+    const simulated = createSimulatedCompanion({
+      clock: realClock(), script: scenarioScript("long", uk ? "uk" : "en"),
+      recipient: { project: "atlas", conversationId: "conversation_orchestrator", seatEpoch: 1, engine: "claude" },
+    });
+    return {
+      mode: simulated.mode,
+      start: (options) => { phoneVoice.starts.push(options.project); return simulated.start(options); },
+      setProject: async (project) => { phoneVoice.projects.push(project); },
+      subscribe: (emit) => simulated.subscribe(emit),
+      command: (command) => simulated.command(command),
+      close: () => { phoneVoice.closes += 1; return simulated.close(); },
+    };
+  });
+}
+function voiceFeed(feed: string): string {
+  if (!VOICE_LONG) return feed;
+  const asked = ["Where does the search fix stand?", "And the phone board review?", "What is waiting on me?"];
+  const said = [
+    "The search fix is through its verifier on the second attempt. The first attempt failed on a stale index, which the lane rebuilt by itself before it ran the check again. Nothing in it needs a decision from you.",
+    "The phone board review is on its second round. The reviewer asked for the column pager to keep its place after a card moves, and the builder has that change in its worktree. I expect the round to close within the hour.",
+    "Two things wait on you. The release note for the weekly build needs your wording, and the account that ran out of its window yesterday needs you to sign in again before its lanes can continue.",
+  ];
+  const rows = asked.flatMap((text, index) => [
+    JSON.stringify({ type: "user", uuid: `voice-user-${index}`, promptSource: "sdk", timestamp: iso(400 - index * 60), message: { role: "user", content: text } }),
+    JSON.stringify({ type: "assistant", timestamp: iso(380 - index * 60), message: { role: "assistant", content: [{ type: "text", text: said[index] }] } }),
+  ]);
+  return `${feed}${rows.join("\n")}\n`;
+}
 const files: FileEntry[] = [
   ...(new URLSearchParams(location.search).has("true-activity") ? (["working", "checking", "idle"] as const).map((state, index) => {
     const age = [20, 300, 840][index]!;
@@ -1251,6 +1296,14 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   if (RUNTIME_PERF && url.pathname === "/api/runtime/snapshot") return serverFetch(input, init);
   const method = (init?.method ?? "GET").toUpperCase();
+  /* The voice head's scenes: the companion on in the settings, and no session route at all. */
+  if (VOICE_SCENE && url.pathname === "/api/voice-companion/settings") {
+    return json({ enabled: true, backend: "api", monthlyCapUsd: 20, keySource: "file", keyEnvironment: "OPENAI_API_KEY", month: "2026-10", usageUsd: 0.4, reservedUsd: 0, incomplete: false, uncertainSession: false });
+  }
+  if (VOICE_SCENE && url.pathname === "/api/voice-companion/session") {
+    phoneVoice.sessionRequests += 1;
+    return json({ code: "COMPANION_UNAVAILABLE" }, 503);
+  }
   if (url.pathname === "/api/view/presence" && method === "POST" && SELF_UPDATE_RELOAD) {
     evidence.presenceReplies += 1;
     return json({ ok: true, serving: ++presenceAnswers === 1 ? "aaaaaaa" : "bbbbbbb" });
@@ -1666,7 +1719,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const asked = JSON.parse(String(init?.body ?? "{}")) as { reqs?: Array<{ id: string; path: string; offset: number }> };
     const chunks: Record<string, { offset: number; start: number; size: number; data: string }> = {};
     (asked.reqs ?? []).forEach((request, index) => {
-      const body = request.path.startsWith(RELAY_CHAT_ROOT) ? RELAY_CHAT_FEED : FAST_TTS ? FAST_TTS_FEED : FIRST_MESSAGE !== null ? (fmTarget && request.path === (fmTarget as { path: string }).path && !request.path.startsWith("spawn:") ? fmTranscript() : "") : SEAT_NOISE !== null ? (request.path === files[0]!.path && !files[0]!.spawn ? (files[0]!.engine === "codex" ? SEAT_CODEX_FEED : SEAT_FEED) : "") : request.path === RUNNING_PATH ? evidenceFeed : "";
+      const body = request.path.startsWith(RELAY_CHAT_ROOT) ? RELAY_CHAT_FEED : FAST_TTS ? FAST_TTS_FEED : FIRST_MESSAGE !== null ? (fmTarget && request.path === (fmTarget as { path: string }).path && !request.path.startsWith("spawn:") ? fmTranscript() : "") : SEAT_NOISE !== null ? (request.path === files[0]!.path && !files[0]!.spawn ? (files[0]!.engine === "codex" ? SEAT_CODEX_FEED : voiceFeed(SEAT_FEED)) : "") : request.path === RUNNING_PATH ? evidenceFeed : "";
       const from = Math.min(Math.max(request.offset, 0), body.length);
       chunks[String(index)] = { offset: body.length, start: from, size: body.length, data: body.slice(from) };
     });
@@ -1822,6 +1875,21 @@ function SwitchReceiptFixture() {
       </section>))}
   </main>;
 }
+/* With `?voice=…`, a sheet as tall as the screen with a footer, as the prototype review opens on the phone, opened by
+   `phoneVoice.openFull()`: the voice head has no strip above it and stands above the footer. */
+function VoiceFullSheet() {
+  const [open, setOpen] = useState(false);
+  useEffect(() => { Object.assign(phoneVoice, { openFull: () => setOpen(true) }); }, []);
+  if (!open) return null;
+  return (
+    <MobileSheet name="prototype-review" title="Prototype review" full onClose={() => setOpen(false)} footer={<>
+      <button type="button" className="h-11 flex-1 rounded-control border border-border text-body font-semibold text-primary">Comment</button>
+      <button type="button" className="h-11 flex-1 rounded-control bg-primary text-body font-semibold text-raised">Choose variant 1</button>
+    </>}>
+      {Array.from({ length: 14 }, (_, index) => <p key={index} className="px-4 py-2 text-body text-primary">Frame {index + 1}: the head above the composer, its words beside it, at 390 and 375 px.</p>)}
+    </MobileSheet>
+  );
+}
 createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("switch-receipts")
   ? <SwitchReceiptFixture /> : new URLSearchParams(location.search).has("scroll-history")
-  ? <ScrollHistoryFixture /> : <Viewer />);
+  ? <ScrollHistoryFixture /> : VOICE_SCENE ? <><Viewer /><VoiceFullSheet /></> : <Viewer />);

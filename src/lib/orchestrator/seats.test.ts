@@ -640,7 +640,7 @@ test("a seat task whose notes are empty or blank answers hasNotes false (#1841)"
   expect(seatTaskOf(tasks, "proj-a", { conversationId: "conversation_2", path: null })).toEqual({ taskId: "blank", title: "Seat, blank notes", hasNotes: false });
 });
 
-/* A board that spans projects — the Overview, the Tasks panel's «all» scope —
+/* A board that spans projects — the Overview —
    keeps every project's seats out of its rows, so it asks for them all at once. */
 test("the cross-project read names every project's seat conversations, held and retired (#1841)", () => {
   const seat = (project: string, n: number, path: string | null, at: string) => {
