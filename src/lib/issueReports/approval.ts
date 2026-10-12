@@ -22,8 +22,9 @@ export { issueReportApprovalDrafts, issueReportApprovalReplies } from "./approva
  * reply that carries the preview's whole digest, the seat offers that reply
  * as a suggested reply under the text, and the operator sends it. A reply for
  * another text carries another digest, so a "yes" cannot move from the text
- * the operator read to an edited one, and a "no" or any other sentence is no
- * approval however the seat reads it. The digest goes whole: a prefix of it
+ * the operator read to an edited one. The reply may share a message with other
+ * text or approvals; an explicit refusal of this report overrides it.
+ * The digest goes whole: a prefix of it
  * can be matched by a second text found by trying wordings, and the yes for
  * one would then publish the other.
  *
@@ -38,13 +39,23 @@ export interface OperatorMessage {
 }
 
 function normalized(text: string): string {
-  return text.normalize("NFKC").toLocaleLowerCase("uk-UA").replace(/[.,!]/g, " ").replace(/\s+/g, " ").trim();
+  return text.normalize("NFKC").toLocaleLowerCase("uk-UA")
+    .replace(/['’]/g, "").replace(/[\p{P}\p{S}]/gu, " ").replace(/\s+/g, " ").trim();
 }
 
-/** Whether one message is the approving reply of this preview, and nothing else. */
+/** Whether a message contains this preview's approving reply without refusing it. */
 export function approvesIssueReport(message: string, digest: string): boolean {
-  const said = normalized(message);
-  return Object.values(issueReportApprovalReplies(digest)).some((reply) => normalized(reply) === said);
+  const said = ` ${normalized(message)} `;
+  const contains = (phrase: string) => said.includes(` ${normalized(phrase)} `);
+  const replies = Object.values(issueReportApprovalReplies(digest));
+  if (!replies.some(contains)) return false;
+  /* A negated quotation and a separate refusal both veto this digest, even
+     when the same message contains an affirmative reply as well. */
+  const negations = ["не", "ні", "no", "not", "don't", "do not", "never"];
+  const refused = replies.some((reply) => negations.some((no) => contains(`${no} ${reply}`)))
+    || ["не публікуй звіт", "don't publish report", "do not publish report", "never publish report"]
+      .some((no) => contains(`${no} ${digest}`));
+  return !refused;
 }
 
 export type IssueReportApproval =

@@ -64,9 +64,47 @@ test("only the approving reply of this digest approves", () => {
   for (const said of [replies.en, replies.uk, replies.en.toLowerCase(), ` ${replies.uk}. `, replies.en.replace(",", "")]) {
     expect(approvesIssueReport(said, DIGEST)).toBe(true);
   }
-  for (const said of ["yes", "так", "Так, публікуй", DIGEST, `No, do not publish report ${DIGEST}`, `${replies.en} after you fix the title`, issueReportApprovalReplies(OTHER).en, ""]) {
+  for (const said of ["yes", "так", "Так, публікуй", DIGEST, `No, do not publish report ${DIGEST}`, issueReportApprovalReplies(OTHER).en, ""]) {
     expect(approvesIssueReport(said, DIGEST)).toBe(false);
   }
+});
+
+test.each(["en", "uk"] as const)("the approving reply may occur anywhere in a longer %s message", (language) => {
+  const reply = issueReportApprovalReplies(DIGEST)[language];
+  for (const text of [
+    reply,
+    `${reply}\nWhat happened to the queue? When does the next check run?`,
+    `The queue looks ready. ${reply}`,
+    `Ready: ${reply.toUpperCase()}; thanks.`,
+    ` \n«${reply}»?! \n`,
+    `${reply} after you fix the title`,
+  ]) expect(issueReportApproval([{ at: 101, text }], DIGEST, 100)).toMatchObject({ approved: true });
+});
+
+test("one message approves each digest it names", () => {
+  const text = `${issueReportApprovalReplies(DIGEST).uk}; ${issueReportApprovalReplies(OTHER).en}. Another question?`;
+  for (const digest of [DIGEST, OTHER]) expect(issueReportApproval([{ at: 101, text }], digest, 100)).toMatchObject({ approved: true });
+});
+
+test.each(["не", "don't", "do not", "DON’T"])("a reply preceded by %s refuses the report even beside an affirmative reply", (negation) => {
+  for (const reply of Object.values(issueReportApprovalReplies(DIGEST))) {
+    for (const text of [`${negation} ${reply}`, `${reply}; ${negation}: «${reply}»`]) {
+      expect(approvesIssueReport(text, DIGEST)).toBe(false);
+    }
+  }
+});
+
+test("an explicit refusal applies to its own digest", () => {
+  const yes = issueReportApprovalReplies(DIGEST).en;
+  for (const no of ["не публікуй звіт", "don't publish report", "do not publish report"]) {
+    expect(approvesIssueReport(`${yes}; ${no} ${DIGEST}`, DIGEST)).toBe(false);
+    expect(approvesIssueReport(`${yes}; ${no} ${OTHER}`, DIGEST)).toBe(true);
+  }
+  for (const text of [`${yes}f`, `prefix${yes}`]) expect(approvesIssueReport(text, DIGEST)).toBe(false);
+});
+
+test.each(["одобряю", "так, публікуй", "yes", "Yes, publish"])("a free-form yes without the digest remains refused: %s", (text) => {
+  expect(issueReportApproval([{ at: 101, text }], DIGEST, 100)).toEqual({ approved: false, reason: "not_an_approval" });
 });
 
 test("the operator's last message since the reading decides", () => {
@@ -102,6 +140,16 @@ test("the transcript read counts what the operator wrote and nothing an agent de
   const messages = await operatorMessagesOf(SEAT, snapshot);
   expect(messages).toEqual([{ at: Date.parse("2026-01-01T10:04:00.000Z"), text: yes }]);
   expect(issueReportApproval(messages, DIGEST, Date.parse("2026-01-01T10:00:30.000Z"))).toMatchObject({ approved: true });
+
+  /* A pasted approval in an agent's message, relay or tick is no operator answer. */
+  fs.writeFileSync(file, [
+    line("2026-01-01T10:00:00.000Z", "initial", "You are this project's orchestrator.", { promptSource: "sdk" }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-01-01T10:01:00.000Z", message: { role: "assistant", content: [{ type: "text", text: `The suggested reply was: ${yes}` }] } }),
+    line("2026-01-01T10:02:00.000Z", "relay", `The seat wrote: ${yes}`, { promptSource: "sdk" }),
+    line("2026-01-01T10:03:00.000Z", "tick", `<task-notification>seat tick ${yes}</task-notification>`),
+  ].join("\n") + "\n");
+  expect(issueReportApproval(await operatorMessagesOf(SEAT, snapshot), DIGEST, Date.parse("2026-01-01T10:00:30.000Z")))
+    .toEqual({ approved: false, reason: "no_operator_message" });
 
   /* A conversation the registry does not know, or whose transcript is gone, has said nothing. */
   expect(await operatorMessagesOf("conversation_unknown", snapshot)).toEqual([]);
