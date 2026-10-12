@@ -836,16 +836,16 @@ describe("release install and build admission", () => {
       const done = realPorts(() => {}, { pressure: () => gate, pollMs: 5 }).run(argv, { cwd: base, env, onLine: (line) => lines.push(line), work: "update-build" });
       await Bun.sleep(60);
       expect(existsSync(marker)).toBe(false);
-      expect(lines).toEqual(["update-build held for CPU pressure since 1970-01-01T00:00:00.000Z (avg10 80% ≥ 20%)"]);
+      expect(lines).toEqual(["update-build held for CPU pressure since 1970-01-01T00:00:00.000Z (avg10 80% ≥ 30%)"]);
       clock = 120_000;
       await Bun.sleep(60);
       expect(existsSync(marker)).toBe(false);
       expect(lines[1]).toStartWith("update-build deferred by CPU pressure: held since 1970-01-01T00:00:00.000Z");
-      pressure = 15; clock = 200_000; // between the thresholds the hold stays
+      pressure = 25; clock = 200_000; // between the thresholds the hold stays
       await Bun.sleep(60);
       pressure = 5; clock = 201_000;
       await Bun.sleep(60);
-      expect(existsSync(marker)).toBe(false); // below 10% for less than ten seconds
+      expect(existsSync(marker)).toBe(false); // below 20% for less than ten seconds
       clock = 212_000;
       expect(await done).toBe(0);
       expect(readFileSync(marker, "utf8")).toBe("run\n");

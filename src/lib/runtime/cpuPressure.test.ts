@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 
 import { CpuPressureGate, cpuPressureHoldDetail, cpuPressurePolicy, DEFAULT_CPU_PRESSURE_POLICY, isCpuPressureDetail, parseCpuPressure, waitForCpuPressure } from "./cpuPressure";
 
@@ -17,19 +18,27 @@ test("reads some avg10 from the kernel's pressure file", () => {
   expect(parseCpuPressure("")).toBeNull();
 });
 
-test("holds at 20%, releases only after ten seconds below 10%, and defers visibly after 120 s", () => {
-  const { at } = gate([5, 25, 15, 9, 12, 9, 9, 9, 30]);
+test("shell and engine defaults agree on pressure thresholds and stabilisation", () => {
+  const shell = readFileSync(new URL("../../../scripts/gate-slot.sh", import.meta.url), "utf8");
+  expect(Number(/LLV_CPU_PRESSURE_HOLD:-([\d.]+)/.exec(shell)?.[1])).toBe(DEFAULT_CPU_PRESSURE_POLICY.holdAt);
+  expect(Number(/LLV_CPU_PRESSURE_RELEASE:-([\d.]+)/.exec(shell)?.[1])).toBe(DEFAULT_CPU_PRESSURE_POLICY.releaseBelow);
+  expect(Number(/LLV_GATE_PSI_RELEASE_SECONDS:-([\d.]+)/.exec(shell)?.[1]) * 1000).toBe(DEFAULT_CPU_PRESSURE_POLICY.releaseAfterMs);
+});
+
+test("holds at 30%, admits at 29%, and releases only after ten seconds below 20%", () => {
+  const { at } = gate([29, 30, 29, 19, 20, 20, 19, 19, 19, 30]);
   expect(at(0)).toBeNull();
-  expect(at(1_000)).toMatchObject({ since: 1_000, avg10: 25, deferred: false });
-  expect(at(2_000)).not.toBeNull(); // 15%: between the thresholds keeps the hold
-  expect(at(3_000)).not.toBeNull(); // 9%: the release window starts
-  expect(at(8_000)).not.toBeNull(); // 12%: the window restarts
-  expect(at(9_000)).not.toBeNull();
-  expect(at(18_000)).not.toBeNull(); // nine seconds below
-  expect(at(19_000)).toBeNull(); // ten seconds below
+  expect(at(1_000)).toMatchObject({ since: 1_000, avg10: 30, deferred: false });
+  expect(at(2_000)).not.toBeNull(); // 29%: between the thresholds keeps the hold
+  expect(at(3_000)).not.toBeNull(); // 19%: the release window starts
+  expect(at(8_000)).not.toBeNull(); // 20%: the window resets
+  expect(at(19_000)).not.toBeNull(); // eleven seconds at 20% never releases
+  expect(at(20_000)).not.toBeNull();
+  expect(at(29_000)).not.toBeNull(); // nine seconds below
+  expect(at(30_000)).toBeNull(); // ten seconds at 19%
   const held = at(200_000)!;
   expect(held).toMatchObject({ since: 200_000, deferred: false });
-  expect(cpuPressureHoldDetail(held)).toBe("stage start held for CPU pressure since 1970-01-01T00:03:20.000Z (avg10 30% ≥ 20%)");
+  expect(cpuPressureHoldDetail(held)).toBe("stage start held for CPU pressure since 1970-01-01T00:03:20.000Z (avg10 30% ≥ 30%)");
 });
 
 test("the deferred reason appears after the admission budget and stays stable", () => {
@@ -39,7 +48,7 @@ test("the deferred reason appears after the admission budget and stays stable", 
   const deferred = at(120_000)!;
   expect(deferred.deferred).toBe(true);
   expect(cpuPressureHoldDetail(deferred)).toBe(cpuPressureHoldDetail({ ...first, deferred: true }));
-  expect(cpuPressureHoldDetail(deferred)).toStartWith("stage start deferred by CPU pressure: held since 1970-01-01T00:00:00.000Z (avg10 40% ≥ 20%)");
+  expect(cpuPressureHoldDetail(deferred)).toBe("stage start deferred by CPU pressure: held since 1970-01-01T00:00:00.000Z (avg10 40% ≥ 30%); it starts once pressure stays below 20% for 10 s");
 });
 
 test("a failed sample admits: the scope quotas still bound the work", () => {
@@ -56,7 +65,7 @@ test("operator settings tune or turn off the thresholds", () => {
   expect(cpuPressurePolicy({ LLV_CPU_PRESSURE: "off" })).toBeNull();
   expect(cpuPressurePolicy({ LLV_CPU_PRESSURE_HOLD: "35" })).toMatchObject({ holdAt: 35 });
   expect(cpuPressurePolicy({ DELEGATUS_CPU_PRESSURE_HOLD: "40", DELEGATUS_CPU_PRESSURE_RELEASE: "60" })).toMatchObject({ holdAt: 40, releaseBelow: 40 });
-  expect(cpuPressurePolicy({ DELEGATUS_CPU_PRESSURE_HOLD: "x" })).toMatchObject({ holdAt: 20 });
+  expect(cpuPressurePolicy({ DELEGATUS_CPU_PRESSURE_HOLD: "x" })).toMatchObject({ holdAt: 30 });
 });
 
 test("a waiting start reports each reason once, names its subject and resolves on admission", async () => {
