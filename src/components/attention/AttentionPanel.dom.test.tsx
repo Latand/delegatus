@@ -215,7 +215,11 @@ test("each open question in the report log is its own row, the question its titl
   const host = await mount();
   const rows = ["ask-limit", "ask-digest"].map((id) => host.querySelector(`[data-needs-you-row="${id}"]`)!);
   expect(rows.map((row) => row.querySelector("[data-needs-you-title-line]")!.textContent)).toEqual(["Raise the attachment limit to 100 MB or keep 25?", "Ship the digest on weekends too?"]);
-  expect(rows.map((row) => row.querySelector("[data-attention-decision]")!.textContent)).toEqual(["Question", "Question"]);
+  /* The question is the title; the line says what to do and what happens next. */
+  expect(rows.map((row) => row.querySelector("[data-attention-decision]")!.textContent)).toEqual([
+    "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+    "Answer the orchestrator's question in its conversation; it carries on with your answer.",
+  ]);
   await click(host.querySelector('[data-needs-you-dismiss="ask-limit"]')!);
   expect(posted).toEqual([{ target: { kind: "subjects", subjects: [{ kind: "report", seq: 11 }] }, undo: false, surface: "desktop" }]);
   expect(rowIds(host)).not.toContain("ask-limit");
@@ -305,7 +309,7 @@ test("a row whose cause is gone leaves by itself: the question answered, the per
 test("a permission prompt answers Allow once or Deny from its row", async () => {
   const host = await mount();
   const row = host.querySelector('[data-needs-you-row="/reviewer:permission:request-1"]')!;
-  expect(row.querySelector("[data-attention-decision]")!.textContent).toBe("permission: Bash: rm -rf .next");
+  expect(row.querySelector("[data-attention-decision]")!.textContent).toBe("Allow Bash: rm -rf .next once or deny it; the agent runs it once or changes its approach.");
   expect(row.querySelector("[data-permission-allow]")!.textContent).toBe("Allow once");
   expect(row.querySelector("[data-permission-deny]")).not.toBeNull();
 });
@@ -324,7 +328,7 @@ test("an agent that asked the operator in prose is a row with its role, the agen
   const tag = row.querySelector("[data-role-tag]")!;
   expect([tag.getAttribute("data-role"), tag.textContent, Boolean(tag.querySelector(".role-tag-emblem svg"))]).toEqual(["architect", "Architect", true]);
   expect(row.querySelector("[data-needs-you-title-line]")!.textContent).toBe("Export formats");
-  expect(row.querySelector("[data-attention-decision]")!.textContent).toBe("asks you: Keep the per-format presets, or fold them into one «Export» button?");
+  expect(row.querySelector("[data-attention-decision]")!.textContent).toBe("The agent asks «Keep the per-format presets, or fold them into one «Export» button?»; reply in its conversation and it continues with your answer.");
   expect(title(host)).toBe("Waiting for you · 7");
   await click(host.querySelector(`[data-needs-you-dismiss="${askId}"]`)!);
   expect(posted).toEqual([{
@@ -383,7 +387,7 @@ test("a questionnaire waiting row asks for an answer", async () => {
   const host = document.createElement("div"); document.body.appendChild(host);
   await act(async () => { root = createRoot(host); root.render(<AttentionPanel queue={[{ kind: "prototype", id: notice.id, notice }]} current={ALPHA} projectNames={{ [ALPHA]: "alpha" }} pipelines={[]} placement="docked" canDock onPlacement={() => {}} onClose={() => {}} onOpen={() => {}} />); });
   expect(host.textContent).toContain("Questions for you");
-  expect(host.querySelector("[data-attention-decision]")?.textContent).toBe("Answer");
+  expect(host.querySelector("[data-attention-decision]")?.textContent).toBe("Answer the questions in the form; the project orchestrator receives your answers and carries them on.");
   expect(host.querySelector("[data-attention-prototype]")?.getAttribute("aria-label")).toBe("Answer the questions for «Before work»");
 });
 

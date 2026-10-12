@@ -24,6 +24,7 @@ import {
   needsYouRowText,
   needsYouSections,
 } from "./needsYouPanel";
+import { NeedsYouAskText } from "./NeedsYouAskText";
 import { PermissionActions } from "./PermissionActions";
 
 /*
@@ -286,10 +287,11 @@ export function AttentionPanel({
 
 /**
  * One row: the agent's role and how long it has waited on the first line,
- * with «Dismiss»; the title on the second; the wait on the third, two lines
- * at most, since a list that stays open has room for an ask's whole sentence.
- * An orchestrator's question is its own title, the question itself, and the
- * line under it says it is a question. A permission prompt answers under it.
+ * with «Dismiss»; the title on the second; then what it asks, whole: the
+ * question in its author's words, its choices, and the sentence saying what to
+ * choose and what happens next (docs/design/attention-auto-resolve.md). A list
+ * that stays open has room for all of it. An orchestrator's question is its
+ * own title. A permission prompt answers under it.
  */
 function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
   entry: MobileAttentionEntry;
@@ -303,7 +305,8 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
   if (entry.kind === "prototype") return <PrototypeRow entry={entry} onOpen={onOpen} />;
   const role = needsYouEntryRole(entry, pipelines);
   const since = needsYouEntrySince(entry);
-  const { title, line } = needsYouRowText(t, entry);
+  const { title, line, question, options, recommended } = needsYouRowText(t, entry);
+  const asksInTitle = entry.kind === "conversation" && Boolean(entry.item.reason.report?.body);
   const permission = entry.kind === "conversation" && entry.item.reason.kind === "permission" && entry.item.file.pendingPermission ? entry.item.file : null;
   return (
     <div
@@ -325,8 +328,15 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
             <RoleTag role={role} />
             {since !== null ? <span data-attention-age className="shrink-0 text-[10.5px] text-muted">· {fmtAge(since)}</span> : null}
           </span>
-          <span className="line-clamp-2 w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]" data-needs-you-title-line="">{title}</span>
-          <span data-attention-decision className={entry.kind === "conversation" && entry.item.reason.kind === "memory" ? "w-full text-[11px] text-muted [overflow-wrap:anywhere]" : "line-clamp-2 w-full text-[11px] text-muted [overflow-wrap:anywhere]"}>{line}</span>
+          {/* An orchestrator's question is its own title, so it is shown whole. */}
+          <span
+            className={`${asksInTitle ? "" : "line-clamp-2 "}w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]`}
+            data-needs-you-title-line=""
+            data-needs-you-question-title={asksInTitle ? "" : undefined}
+          >
+            {title}
+          </span>
+          <NeedsYouAskText ask={{ question, options, recommended, sentence: line }} />
         </button>
         <button
           type="button"
@@ -352,6 +362,7 @@ function PrototypeRow({ entry, onOpen }: { entry: Extract<MobileAttentionEntry, 
   const undelivered = entry.notice.undelivered === true;
   const Mark = undelivered ? TriangleAlert : entry.notice.asks === "questions" ? MessageCircleQuestionMark : GalleryHorizontalEnd;
   const since = needsYouEntrySince(entry);
+  const { question, options, recommended, line } = needsYouRowText(t, entry);
   return (
     <div className="rounded-[8px]" data-needs-you-row={entry.id} data-needs-you-kind={entry.kind} data-needs-you-since={since ?? undefined}>
       <button
@@ -367,7 +378,7 @@ function PrototypeRow({ entry, onOpen }: { entry: Extract<MobileAttentionEntry, 
           {since !== null ? <span data-attention-age className="shrink-0 font-normal text-muted">· {fmtAge(since)}</span> : null}
         </span>
         <span className="line-clamp-2 w-full text-[12px] font-semibold text-primary [overflow-wrap:anywhere]" data-needs-you-title-line="">{entry.notice.title}</span>
-        <span data-attention-decision className="w-full text-[11px] text-muted">{t(entry.notice.asks === "questions" && !undelivered ? "proto.notice.answer" : "proto.notice.open")}</span>
+        <NeedsYouAskText ask={{ question, options, recommended, sentence: undelivered ? t("proto.notice.open") : line }} />
       </button>
     </div>
   );

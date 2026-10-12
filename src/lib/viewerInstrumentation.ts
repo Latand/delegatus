@@ -104,6 +104,8 @@ interface CurrentReleaseControllerLoaders {
   loadWorktreeSweep?: () => Promise<{ startWorktreeSweep: () => void }>;
   /** Optional for the same reason. */
   loadAsksClassifier?: () => Promise<{ startAsksClassifier: () => void }>;
+  /** Optional for the same reason. */
+  loadAttentionReconcile?: () => Promise<{ startAttentionReconcile: () => void }>;
   loadLinkedBoardSync?: () => Promise<{ startLinkedBoardSync: () => void }>;
   /** Optional for the same reason. */
   loadDoneSweep?: () => Promise<{ startDoneSweep: () => void }>;
@@ -380,6 +382,7 @@ export async function startCurrentReleaseControllers(
     loadDeputySweep: () => import("@/lib/orchestrator/deputySweep"),
     loadRoleMappingRetirements: () => import("@/lib/roles/retirements"),
     loadAsksClassifier: () => import("@/lib/asks/controller"),
+    loadAttentionReconcile: () => import("@/lib/attention/reconcileController"),
     loadLinkedBoardSync: () => import("@/lib/links/schedule"),
     loadDoneSweep: () => import("@/lib/done/sweep"),
     loadPrototypeDelivery: () => import("@/lib/prototypeReview/deliveryWorker"),
@@ -507,6 +510,14 @@ export async function startCurrentReleaseControllers(
     asks?.startAsksClassifier();
   } catch (error) {
     console.error("[asks you] start failed", error instanceof Error ? error.name : "unknown");
+  }
+  /* Waits that no longer ask anyone leave «Waiting for you» on their own
+     (docs/design/attention-auto-resolve.md), on the same clock. */
+  try {
+    const reconcile = await loaders.loadAttentionReconcile?.();
+    reconcile?.startAttentionReconcile();
+  } catch (error) {
+    console.error("[attention reconcile] start failed", error instanceof Error ? error.name : "unknown");
   }
   /* A seat's deputy that was running when the Viewer stopped still has to end
      and tell its seat (docs/design/ghost-seat.md §5). The sweep stops itself

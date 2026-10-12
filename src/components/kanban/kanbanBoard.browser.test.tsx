@@ -14440,7 +14440,7 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
             };
           });
           readings[`${lang}/desktop-ask-row`] = relative(askRow);
-          const askLine = translate(lang, "attention.decisionAskNamed", { ask: askRow.gist });
+          const askLine = translate(lang, "needs.ask.askNamed", { ask: askRow.gist });
           check(`${lang}/desktop-ask-row`, askRow.role === "architect" && askRow.emblem && askRow.tag === translate(lang, "roleCopy.architect.name" as never) && askRow.line === askLine, `the ask row reads ${JSON.stringify(askRow)}`);
           await shot(opened.page, lang, "1440x900-open-docked");
           /* Every section open, to show every role. */
@@ -14496,7 +14496,7 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
             check(`${lang}/phone-sheet`, row.ellipsis, `${row.id}: a cut wait without an ellipsis`);
           }
           const phoneAsk = geometry.rows.find((row) => row.id?.startsWith("ask:"));
-          check(`${lang}/phone-sheet`, Boolean(phoneAsk && phoneAsk.decision?.startsWith(translate(lang, "needs.ask"))), `the phone's ask row reads ${JSON.stringify(phoneAsk)}`);
+          check(`${lang}/phone-sheet`, Boolean(phoneAsk && phoneAsk.decision === translate(lang, "needs.ask.askNamed", { ask: (await opened.page.evaluate(() => (window as unknown as { __needsYouFixtureAsk?: { gist: string } }).__needsYouFixtureAsk?.gist ?? "")) })), `the phone's ask row reads ${JSON.stringify(phoneAsk)}`);
           await shot(opened.page, lang, "390x844-sheet");
         } finally { await opened.context.close(); }
 
@@ -14613,6 +14613,202 @@ describe("needs-you panel: renders and readings over the real Viewer", () => {
     fs.writeFileSync(evidence, `${JSON.stringify({ readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 600_000);
+});
+
+describe("attention auto resolve", () => {
+  /*
+   * docs/design/attention-auto-resolve.md, over `needsYouPanel.fixture.tsx`
+   * with `?scenario=auto-resolve`: three asks from seats since handed on, a
+   * deployer's question its seat answers, a worker's question the seat
+   * escalated to a decision form (a prototype-review round, the one question
+   * store), and a stage's own question in a project with no seat. «After» is
+   * the fixture running the server's pure rules
+   * (`attentionSystemClears`, `stampAttentionRoutes`) over the same board.
+   *
+   * Gated on readings at 1440×900, 1000×900 and 390×844, light and dark, in en
+   * and uk: the count before and after, which rows left and why, the escalated
+   * wait answered on its form's row alone, the stage row's question and
+   * sentence, the old seat's card
+   * saying who cleared it with Undo, no horizontal overflow, no clipped
+   * sentence, option or button, and phone rows at least 44 px tall. Frames go
+   * to AUTO_RESOLVE_OUT (default /var/tmp/llv-attention-auto-resolve); readings
+   * to `evidence/attention-auto-resolve/readings.json`.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "attention auto resolve"
+   */
+  const OUT = process.env.AUTO_RESOLVE_OUT?.trim() || "/var/tmp/llv-attention-auto-resolve";
+  const SIZES = [{ width: 1440, height: 900 }, { width: 1000, height: 900 }, { width: 390, height: 844 }] as const;
+
+  browserTest("routed, cleared and escalated waits, with the question and the sentence on every remaining row", async () => {
+    const work = path.resolve(".artifacts/attention-auto-resolve");
+    fs.mkdirSync(work, { recursive: true });
+    const server = await serveEvidenceFixture(work, "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const check = (frame: string, ok: boolean, what: string) => { if (!ok) failures.push(`${frame}: ${what}`); };
+    const open = async (query: string, size: { width: number; height: number }, scheme: Scheme, lang: "uk" | "en") => {
+      const phone = size.width < 768;
+      /* The phone's sheet lists the project behind it; its Overview lists every project, as the desktop panel does. */
+      const opened = await openFixture(browser, `${server.base}?lang=${lang}&scenario=auto-resolve${phone ? "&overview=1" : ""}${query}`, size, scheme, lang, "reduce", phone);
+      await opened.page.waitForSelector(phone ? "[data-mobile2-bar]" : "[data-attention-count]", { timeout: 20_000 });
+      await opened.page.waitForTimeout(700);
+      const toast = opened.page.locator("[data-attention-toast-dismiss]");
+      if (await toast.count()) await toast.first().click();
+      return { ...opened, phone };
+    };
+    /* Every row of the open panel or sheet: what it asks, and whether any of
+       its words or controls are cut, overflow or fall off the screen. */
+    const rowsReading = (page: Page, phone: boolean) => page.evaluate((isPhone) => {
+      const root = document.querySelector(isPhone ? '[data-mobile2-sheet="attention"]' : "[data-needs-you-panel]");
+      const width = document.documentElement.clientWidth;
+      const cut = (element: Element | null) => {
+        if (!element) return false;
+        const box = element as HTMLElement;
+        return box.scrollWidth > box.clientWidth + 1 || box.scrollHeight > box.clientHeight + 1 || getComputedStyle(box).textOverflow === "ellipsis" && box.scrollWidth > box.clientWidth;
+      };
+      const rows = [...(root?.querySelectorAll("[data-needs-you-row]") ?? [])].map((row) => {
+        const box = row.getBoundingClientRect();
+        /* A phone form row is its own button. */
+        const opener = (row.matches("button") ? row : row.querySelector("button")) as HTMLElement | null;
+        const sentence = row.querySelector("[data-needs-you-sentence]");
+        const question = row.querySelector("[data-needs-you-question]");
+        const asking = row.querySelector("[data-needs-you-question-title]");
+        const options = [...row.querySelectorAll("[data-needs-you-option]")];
+        const buttons = [...(row.matches("button") ? [row] : []), ...row.querySelectorAll("button")].map((button) => button.getBoundingClientRect());
+        return {
+          id: row.getAttribute("data-needs-you-row"),
+          kind: row.getAttribute("data-needs-you-kind"),
+          sentence: sentence?.textContent ?? null,
+          question: question?.textContent ?? asking?.textContent ?? null,
+          options: options.map((option) => option.textContent),
+          recommended: options.findIndex((option) => option.hasAttribute("data-recommended")),
+          cut: [sentence, question, asking, ...options].some(cut),
+          inside: box.left >= -0.5 && box.right <= width + 0.5,
+          buttonsVisible: buttons.every((button) => button.width > 0 && button.height > 0 && button.left >= -0.5 && button.right <= width + 0.5),
+          openerHeight: opener ? opener.getBoundingClientRect().height : 0,
+        };
+      });
+      return {
+        title: (root?.querySelector("[data-needs-you-title]") ?? root?.querySelector("h2"))?.textContent ?? null,
+        count: Number((document.querySelector("[data-attention-count]")?.textContent ?? "").replace(/\D+/g, "")) || null,
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        rootOverflow: root ? (root as HTMLElement).scrollWidth - (root as HTMLElement).clientWidth : null,
+        rows,
+      };
+    }, phone);
+    const shot = async (page: Page, name: string) => {
+      const file = path.join(OUT, `${name}.png`);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      await page.waitForTimeout(400);
+      await page.screenshot({ path: file });
+    };
+    const openList = async (page: Page, phone: boolean) => {
+      if (phone) {
+        await page.locator('[data-mobile2-open="attention"]').click();
+        await page.waitForSelector('[data-mobile2-sheet="attention"]', { timeout: 10_000 });
+      } else {
+        if (!(await page.locator("[data-needs-you-panel]").count())) await page.locator("[data-attention-count]").click();
+        await page.waitForSelector("[data-needs-you-panel]", { timeout: 10_000 });
+      }
+      /* Every project's section open, so every row is read. An opened
+         section stops matching, so the first folded one is opened each time. */
+      const folded = page.locator(`${phone ? '[data-mobile2-sheet="attention"]' : "[data-needs-you-panel]"} [data-needs-you-section][data-folded] [data-needs-you-fold]`);
+      for (let guard = 0; guard < 8 && await folded.count(); guard += 1) {
+        await folded.first().click();
+        await page.waitForTimeout(150);
+      }
+      await page.waitForTimeout(300);
+    };
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        /* Before: every wait is the operator's, as on the 11:18Z panel. */
+        let opened = await open("&state=before", SIZES[0], "light", lang);
+        let before: Awaited<ReturnType<typeof rowsReading>>;
+        try {
+          await openList(opened.page, false);
+          before = await rowsReading(opened.page, false);
+          readings[`${lang}/before`] = before;
+          check(`${lang}/before`, before.count === 17, `the control counts ${before.count} before, expected 17`);
+          await shot(opened.page, `${lang}/1440x900-light-before`);
+        } finally { await opened.context.close(); }
+
+        for (const size of SIZES) {
+          for (const scheme of ["light", "dark"] as const) {
+            const frame = `${lang}/${size.width}x${size.height}-${scheme}`;
+            opened = await open("", size, scheme, lang);
+            try {
+              const page = opened.page;
+              const ids = await page.evaluate(() => (window as unknown as { __needsYouAutoResolve?: Record<string, string> }).__needsYouAutoResolve ?? {});
+              await openList(page, opened.phone);
+              const after = await rowsReading(page, opened.phone);
+              readings[frame] = { ids, ...after };
+              const rowIds = after.rows.map((row) => row.id);
+              if (!opened.phone) check(frame, after.count === 11, `the control counts ${after.count} after, expected 11`);
+              check(frame, after.rows.length === 11, `${after.rows.length} rows after, expected 11: ${JSON.stringify(rowIds)}`);
+              /* Cleared on evidence, and routed to the seat: none of them asks the operator. */
+              for (const gone of ["ask:retired-1", "ask:retired-2", "ask:retired-3", "ask:analyst-september", ids.deployer, "lane-limit"]) check(frame, !rowIds.includes(gone ?? ""), `${gone} still asks the operator`);
+              /* The seat's escalation: the wait draws no row; its decision form's row asks. */
+              check(frame, !rowIds.includes(ids.escalated ?? ""), "the escalated wait still draws a row of its own");
+              const form = after.rows.find((row) => row.id === `prototype:${ids.escalationRound}`);
+              check(frame, Boolean(form && form.sentence === translate(lang, "needs.ask.prototypeQuestions")),
+                `the escalated wait's form row reads ${JSON.stringify(form)}`);
+              /* What is being decided: the waiting round's title is the row's question, uncut. */
+              const decided = lang === "en" ? "Instalment provider: the partner bank or the faster service?" : "Провайдер розстрочки: банк-партнер чи швидший сервіс?";
+              check(frame, form?.question === decided && !form.cut, `the form row's question reads ${JSON.stringify(form?.question)}, expected the round title`);
+              /* The stage's own question, in a project with no seat. */
+              const diagnose = after.rows.find((row) => row.id === "lane-diagnose");
+              check(frame, Boolean(diagnose && diagnose.question?.includes(lang === "en" ? "only mark them?" : "лише позначати їх?") && diagnose.sentence && !diagnose.sentence.includes("diagnose ·")),
+                `the stage row reads ${JSON.stringify(diagnose)}`);
+              /* Every remaining row says what to do in a sentence, whole, on screen. */
+              for (const row of after.rows) {
+                check(frame, Boolean(row.sentence && row.sentence.length > 30), `${row.id}: no sentence (${row.sentence})`);
+                check(frame, !row.cut, `${row.id}: its words are cut`);
+                check(frame, row.inside && row.buttonsVisible, `${row.id}: a row or button leaves the screen`);
+                if (opened.phone) check(frame, row.openerHeight >= 44, `${row.id}: a ${row.openerHeight}px target`);
+              }
+              check(frame, after.overflow <= 1 && (after.rootOverflow ?? 0) <= 1, `overflow ${after.overflow}px, list ${after.rootOverflow}px`);
+              await shot(page, frame);
+              /* The stage's own question, scrolled into the list's view. */
+              await page.locator('[data-needs-you-row="lane-diagnose"]').scrollIntoViewIfNeeded();
+              await shot(page, `${frame}-stage-question`);
+              /* The escalated wait's form row, with the round title as its question. */
+              await page.locator(`[data-needs-you-row="prototype:${ids.escalationRound}"]`).scrollIntoViewIfNeeded();
+              await shot(page, `${frame}-form-row`);
+            } finally { await opened.context.close(); }
+          }
+        }
+
+        /* The answered ask's card says Delegatus cleared it and why, with
+           Undo. Seats handed on draw no tile (#1841); their clears are in the
+           project read's cleared list. */
+        opened = await open("", SIZES[0], "light", lang);
+        try {
+          const page = opened.page;
+          const card = page.locator('[data-kanban-board] .card[data-id="task:t-september"]');
+          await card.waitFor({ timeout: 10_000 });
+          await card.scrollIntoViewIfNeeded();
+          const foot = await card.evaluate((element) => {
+            const cleared = element.querySelector("[data-foot-cleared]");
+            const undo = element.querySelector("[data-undo-dismiss]") as HTMLElement | null;
+            const box = undo?.getBoundingClientRect();
+            return { kind: cleared?.getAttribute("data-foot-cleared") ?? null, text: cleared?.textContent ?? null, undo: Boolean(box && box.width > 0 && box.height > 0) };
+          });
+          readings[`${lang}/card-cleared`] = foot;
+          check(`${lang}/card-cleared`, foot.kind === "system" && foot.undo && Boolean(foot.text?.includes(translate(lang, "needs.clearedRule.operator-replied"))), `the card's foot reads ${JSON.stringify(foot)}`);
+          await shot(page, `${lang}/1440x900-light-cleared-card`);
+        } finally { await opened.context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    const evidence = path.resolve("evidence/attention-auto-resolve/readings.json");
+    fs.mkdirSync(path.dirname(evidence), { recursive: true });
+    fs.writeFileSync(evidence, `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 900_000);
 });
 
 describe("readable pipeline graph: loops fold into their sources, nodes say what they are, one attempt caption", () => {
