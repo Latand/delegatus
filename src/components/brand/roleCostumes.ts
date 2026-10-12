@@ -62,17 +62,21 @@ interface Costume {
 const JACKET = "#5A6479";
 const JACKET_EDGE = "M4 43.5C12 46.5 19 46.8 23.5 45.4L32 61 40.5 45.4C45 46.8 52 46.5 60 43.5";
 
+/* The agent with no role: black sunglasses and a tuxedo — black jacket,
+   white shirt front and a black bow tie at the bottom of the circle. */
+const NEUTRAL_COSTUME: Costume = {
+  hair: "trimmed",
+  glasses: "sunglasses",
+  belly: `<path clip-path="url(#b)" fill="${JACKET}" d="${JACKET_EDGE}V66H4Z"/>`
+    + `<path clip-path="url(#b)" fill="none" ${OUT} d="${JACKET_EDGE}"/>`
+    + `<path clip-path="url(#b)" fill="#FFFFFF" d="M23.5 45.4H40.5L32 61Z"/>`
+    + `<path fill="${INK}" d="M25.2 44.2 31 47.2 25.2 50.4Z"/><path fill="${INK}" d="M38.8 44.2 33 47.2 38.8 50.4Z"/><rect x="29.6" y="45.2" width="4.8" height="4.2" rx="1.2" fill="${INK}"/>`,
+};
+
 const COSTUMES: Record<FrameRole, Costume> = {
-  /* The agent with no role: black sunglasses and a tuxedo — black jacket,
-     white shirt front and a black bow tie at the bottom of the circle. */
-  neutral: {
-    hair: "trimmed",
-    glasses: "sunglasses",
-    belly: `<path clip-path="url(#b)" fill="${JACKET}" d="${JACKET_EDGE}V66H4Z"/>`
-      + `<path clip-path="url(#b)" fill="none" ${OUT} d="${JACKET_EDGE}"/>`
-      + `<path clip-path="url(#b)" fill="#FFFFFF" d="M23.5 45.4H40.5L32 61Z"/>`
-      + `<path fill="${INK}" d="M25.2 44.2 31 47.2 25.2 50.4Z"/><path fill="${INK}" d="M38.8 44.2 33 47.2 38.8 50.4Z"/><rect x="29.6" y="45.2" width="4.8" height="4.2" rx="1.2" fill="${INK}"/>`,
-  },
+  neutral: NEUTRAL_COSTUME,
+  /* Until a curator costume is chosen, it wears the neutral drawing. */
+  curator: NEUTRAL_COSTUME,
   /* A dispatcher's headset: a lighter indigo band holding the hair, cups that
      hold on the dark accent card, a boom ending in a capsule at the mouth corner. */
   orchestrator: {
@@ -161,8 +165,8 @@ const COSTUMES: Record<FrameRole, Costume> = {
 };
 
 /** One role's costume as a standalone SVG document on the mark's 64 grid. */
-export function costumeSvg(role: FrameRole): string {
-  const costume = COSTUMES[role];
+export function costumeSvg(role: string): string {
+  const costume = Object.hasOwn(COSTUMES, role) ? COSTUMES[role as FrameRole] : NEUTRAL_COSTUME;
   const hair = costume.hair === "none" ? "" : costume.hair === "under-band" ? HAIR_UNDER_BAND : costume.hair === "trimmed" ? HAIR_TRIMMED : HAIR;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">${KEYLINE}<g filter="url(#k)">${BODY_CLIP}${BODY}${costume.belly ?? BELLY}${hair}${glasses(costume.glasses ?? "clear")}${costume.front ?? ""}</g></svg>`;
 }

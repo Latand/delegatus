@@ -8,21 +8,32 @@ import { costumeSvg } from "./roleCostumes";
 
 /*
  * The costumes of docs/design/role-avatars.md (round 2, §9) and the agent with
- * no role in sunglasses and a tuxedo: one drawing per role, each the shipped
+ * no role in sunglasses and a tuxedo: each the shipped
  * mark with its own layer, every one inside the canvas the keyline needs.
  */
 
 describe("role costumes", () => {
-  test("every registry role and the agent with no role has its own drawing", () => {
+  test("every id in ROLE_IDS and the agent with no role resolves to a drawing", () => {
     expect([...FRAME_ROLES]).toEqual([...ROLE_IDS, "neutral"]);
     const drawings = FRAME_ROLES.map((role) => costumeSvg(role));
-    expect(new Set(drawings).size).toBe(FRAME_ROLES.length);
     for (const svg of drawings) {
       expect(svg.startsWith('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">')).toBe(true);
       expect(svg.endsWith("</svg>")).toBe(true);
       /* The shipped mark's red body and the pale keyline round the silhouette. */
       expect(svg).toContain('fill="#E0392B" d="M32 7C18 7');
       expect(svg).toContain('<g filter="url(#k)">');
+    }
+  });
+
+  test("the twelve approved role costumes and the neutral drawing stay distinct", () => {
+    const approved = ROLE_IDS.filter((role) => role !== "curator");
+    expect(approved).toHaveLength(12);
+    expect(new Set([...approved, "neutral"].map(costumeSvg)).size).toBe(13);
+  });
+
+  test("curator and unknown or future roles wear the neutral costume", () => {
+    for (const role of ["curator", "future-role", "", "toString", "constructor", "__proto__"]) {
+      expect(costumeSvg(role)).toBe(costumeSvg("neutral"));
     }
   });
 
@@ -39,7 +50,7 @@ describe("role costumes", () => {
     expect(agent).toContain('fill="#FFFFFF" d="M23.5 45.4H40.5L32 61Z"');
     expect(agent).toContain('M25.2 44.2 31 47.2 25.2 50.4Z');
     /* Every costumed role keeps the clear glasses (the reviewer's loupe replaces its right lens). */
-    for (const role of ROLE_IDS) expect(costumeSvg(role)).toContain('<g fill="#FBEBDD" stroke="#231B1C" stroke-width="3.6"');
+    for (const role of ROLE_IDS.filter((role) => role !== "curator")) expect(costumeSvg(role)).toContain('<g fill="#FBEBDD" stroke="#231B1C" stroke-width="3.6"');
   });
 
   test("all ink sits inside x 3–61, y 2–62 of the 64 grid, so the keyline never meets the edge", async () => {

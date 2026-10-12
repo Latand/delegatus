@@ -7,7 +7,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { MOBILE_LAYOUT_QUERY, mobileLayoutViewport } from "@/lib/attention/eligibility";
 import { setLocale, translate } from "@/lib/i18n";
 
-import { ConversationRoleScope } from "@/components/brand/RoleAvatar";
+import { ConversationRoleScope, roleAvatarUri } from "@/components/brand/RoleAvatar";
+import type { FrameRole } from "@/lib/roleFrames";
 import { ROLE_IDS } from "@/lib/roles/types";
 
 import { cardAvatarRole, FeedItem } from "./FeedItem";
@@ -123,6 +124,18 @@ describe("the sender's costume on an internal card", () => {
 });
 
 describe("the conversation's costume on its answers", () => {
+  test("curator and unknown roles render the neutral drawing and retain the engine", () => {
+    const roles = ["curator", "future-role", "toString", "constructor", "__proto__"];
+    const host = mount(<>{roles.map((role) => (
+      <ConversationRoleScope key={role} value={role as FrameRole}><FeedItem item={prose()} /></ConversationRoleScope>
+    ))}</>);
+    const avatars = [...host.querySelectorAll("[data-role-avatar]")];
+    expect(avatars).toHaveLength(roles.length);
+    for (const avatar of avatars) expect(avatar.getAttribute("src")).toBe(roleAvatarUri("neutral"));
+    for (const role of roles) expect(roleAvatarUri(role)).toBe(roleAvatarUri("neutral"));
+    expect(host.querySelectorAll('[data-engine-mark="claude"]')).toHaveLength(roles.length);
+  });
+
   test("desktop: without a resolved role the answer keeps today's engine circle", () => {
     const host = mount(<FeedItem item={prose()} />);
     expect(host.querySelector("[data-role-avatar]")).toBeNull();
