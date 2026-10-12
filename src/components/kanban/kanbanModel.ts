@@ -10,7 +10,7 @@ import { deriveTaskSteps, type TaskStepsSummary } from "@/lib/tasks/steps";
 import { priorityRank } from "@/lib/tasks/priority";
 import type { FileEntry } from "@/lib/types";
 import { byNeedAge, conversationNeed, laneNeed, type ClearedNeed, type NeedReason } from "@/components/attention/needReason";
-import { mobileRowState, nowFragment, type MobileRowStateKey } from "@/components/mobile/mobileBoardModel";
+import { mobileRowState, nowFragment, type MobileRowState, type MobileRowStateKey } from "@/components/mobile/mobileBoardModel";
 import { latestAttempt, stageAttempts, type StageChipState } from "@/components/pipelines/pipelineModel";
 import { deckKey } from "@/components/scheme/agentLinks";
 import type { TaskBand } from "@/components/scheme/taskBands";
@@ -49,6 +49,8 @@ export interface KanbanMember {
   key: string;
   file: FileEntry;
   state: MobileRowStateKey;
+  /** What the scan knows the agent is doing, when it carries that. */
+  activity?: MobileRowState["activity"];
   /** A conversation that is owed an answer: its reason is flagged. */
   needsYou: boolean;
   /** Why it needs the operator, flagged or cleared; null when it asks nothing. */
@@ -346,6 +348,7 @@ function memberOf(key: string, file: FileEntry, stageByPath: ReadonlyMap<string,
     key,
     file,
     state: row.key,
+    activity: row.activity,
     needsYou: NEEDS_STATES.has(row.key),
     need: conversationNeed(file, now)?.need ?? null,
     working: isWorkingAgent(file, now),

@@ -36,7 +36,7 @@ function reaches(to: string, from: string) {
     || isCrossProjectRoleScope(to) && scopeKind(from) === "role" && scopeRole(to) === scopeRole(from);
 }
 function noRoleReader(role: string | null) {
-  return role && (!(ROLE_IDS as readonly string[]).includes(role) || roleIsClean(role) || role === "orchestrator" || role === "maintainer");
+  return role && (!(ROLE_IDS as readonly string[]).includes(role) || roleIsClean(role));
 }
 function evidence(repo: string | null, where: string | undefined) {
   if (!repo || !where) return refuse("CURATE_EVIDENCE", "in-code and in-instructions require a repository file, optionally with a line");

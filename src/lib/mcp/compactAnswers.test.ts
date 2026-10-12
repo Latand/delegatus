@@ -355,6 +355,7 @@ test("agent_activity compact rows drop paths, host detail and the reports (#1845
     reason: "host_alive_turn_active",
     silentForMs: 1_200,
     stalledForMs: null,
+    verified: true,
     pipeline: { pipelineId: "pipeline_1", stageId: "build", attempt: 2, reportedState: "running", reportedPipelineState: "running", paneId: null },
     evidenceSource: "transcript",
   };
@@ -374,6 +375,7 @@ test("agent_activity compact rows drop paths, host detail and the reports (#1845
     title: "Builder: compact MCP answers",
     turnState: "busy",
     lifecycle: "running",
+    verified: true,
     silentForMs: 1_200,
     stalledForMs: null,
     pipeline: { pipelineId: "pipeline_1", stageId: "build", attempt: 2 },

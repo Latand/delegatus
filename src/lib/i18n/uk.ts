@@ -483,6 +483,10 @@ export const uk: Record<keyof typeof en, Message> = {
   // уваги/квитанцій/ходу, одне слово на картку.
   "cardStatus.needsYou": "потребує вас",
   "cardStatus.held": "притримано",
+  "cardStatus.checking": "чекає перевірку",
+  "cardStatus.idleMinutes": "{n} хв",
+  "cardStatus.lastAction": "остання дія {time}",
+  "cardStatus.idle": "стоїть",
   "cardStatus.running": "працює",
   "cardStatus.queued": "у черзі",
 
