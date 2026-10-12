@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { statePath } from "@/lib/configDir";
+import { installedCodexVersion } from "@/lib/accounts/codexPinnedProtocol";
 import { endLeasedHelper, leasedHelperInput, spawnLeasedHelper } from "@/lib/helperLease";
 import { CODEX_VIEWER_SPAWN_FEATURES } from "@/lib/agent/spawnPolicy";
 import { agentRegistry } from "@/lib/agent/registry";
@@ -97,6 +98,7 @@ export class CodexLiveProvider implements LiveProvider {
     try {
       const environment = codexVoiceEnvironment(account.home, this.options.environment ?? process.env);
       client = await CodexAppServerClient.start({ home: account.home, args: CODEX_VOICE_ARGS, requestTimeoutMs: this.options.startTimeoutMs ?? 20_000,
+        protocolProfile: "voice", readProtocolVersion: () => installedCodexVersion(codexAccountBinary(environment), environment),
         // The guardian owns group signalling and its bounded TERM escalation.
         // The generic client's KILL fallback must never kill that guardian.
         signalProcess: () => { throw new Error("lease owns signals"); },
@@ -240,7 +242,11 @@ export class CodexLiveProvider implements LiveProvider {
       if (command.type === "session.close") void this.hangup(id, "").then(() => event({ type: "session.closed" }), lost);
       else if (["session.commentary.append", "session.instructions.append"].includes(command.type) && typeof command.content === "string") {
         const text = command.content;
-        if (command.type === "session.commentary.append") this.queueSpeech(call, text);
+        if (command.type === "session.commentary.append") {
+          // A call that has failed or is stopping cannot voice it: refuse, so the caller keeps it owed.
+          if (call.stopping || call.failed) throw new CodexVoiceError("PROVIDER_ERROR");
+          this.queueSpeech(call, text);
+        }
         else call.writing = call.writing.then(async () => {
           if (call.stopping || call.failed) return;
           await call.client.request("thread/inject_items", codexVoiceContext(id, text));
