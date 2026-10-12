@@ -449,51 +449,53 @@ export class RuntimeJournal {
           if (fs.existsSync(candidate)) fs.chmodSync(candidate, 0o600);
         }
       }
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS journal_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS events (
+      /* One statement per exec, as above: a table creation refused for a
+         peer's lock must not be replaced by a later statement's outcome. */
+      for (const statement of [
+        `CREATE TABLE IF NOT EXISTS journal_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+        `CREATE TABLE IF NOT EXISTS events (
           seq INTEGER PRIMARY KEY, event_id TEXT NOT NULL, scope TEXT NOT NULL, revision INTEGER NOT NULL,
           kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL,
           occurred_at TEXT NOT NULL, recorded_at TEXT NOT NULL, producer_kind TEXT NOT NULL,
           producer_account_id TEXT, producer_key TEXT, producer_host_epoch INTEGER,
           operation_id TEXT, causation_id TEXT, correlation_id TEXT,
           prev_hash TEXT NOT NULL, hash TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS scope_revisions (scope TEXT PRIMARY KEY, revision INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS projections (scope TEXT PRIMARY KEY, revision INTEGER NOT NULL, state_json TEXT NOT NULL, checkpoint_seq INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS entities (
+        )`,
+        `CREATE TABLE IF NOT EXISTS scope_revisions (scope TEXT PRIMARY KEY, revision INTEGER NOT NULL)`,
+        `CREATE TABLE IF NOT EXISTS projections (scope TEXT PRIMARY KEY, revision INTEGER NOT NULL, state_json TEXT NOT NULL, checkpoint_seq INTEGER NOT NULL)`,
+        `CREATE TABLE IF NOT EXISTS entities (
           kind TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL,
           state_json TEXT NOT NULL, checkpoint_seq INTEGER NOT NULL, updated_at INTEGER,
           PRIMARY KEY(kind, id)
-        );
-        CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, event_seq INTEGER NOT NULL, state TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS producer_receipts (producer_kind TEXT NOT NULL, producer_key TEXT NOT NULL, event_json TEXT NOT NULL, PRIMARY KEY(producer_kind, producer_key));
-        CREATE TABLE IF NOT EXISTS operations (
+        )`,
+        `CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, event_seq INTEGER NOT NULL, state TEXT NOT NULL)`,
+        `CREATE TABLE IF NOT EXISTS producer_receipts (producer_kind TEXT NOT NULL, producer_key TEXT NOT NULL, event_json TEXT NOT NULL, PRIMARY KEY(producer_kind, producer_key))`,
+        `CREATE TABLE IF NOT EXISTS operations (
           operation_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, idempotency_key TEXT NOT NULL,
           request_hash TEXT NOT NULL, request_json TEXT NOT NULL,
           receipt_json TEXT NOT NULL, event_seq INTEGER NOT NULL, orphaned_since INTEGER,
           UNIQUE(conversation_id, idempotency_key)
-        );
-        CREATE TABLE IF NOT EXISTS delivery_operation_actions (
+        )`,
+        `CREATE TABLE IF NOT EXISTS delivery_operation_actions (
           operation_id TEXT PRIMARY KEY,
           winner TEXT NOT NULL CHECK(winner IN ('discard', 'retry')),
           claimed_at INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS consumer_cursors (
+        )`,
+        `CREATE TABLE IF NOT EXISTS consumer_cursors (
           consumer TEXT PRIMARY KEY, completed_seq INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS consumer_checkpoints (
+        )`,
+        `CREATE TABLE IF NOT EXISTS consumer_checkpoints (
           event_id TEXT NOT NULL, consumer TEXT NOT NULL, completed_at INTEGER NOT NULL,
           PRIMARY KEY(event_id, consumer)
-        );
-        CREATE TABLE IF NOT EXISTS viewer_deployments (
+        )`,
+        `CREATE TABLE IF NOT EXISTS viewer_deployments (
           deployment_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE,
           request_hash TEXT NOT NULL, status_json TEXT NOT NULL,
           active INTEGER NOT NULL, updated_at INTEGER NOT NULL
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS viewer_deployments_one_active
-          ON viewer_deployments(active) WHERE active = 1;
-      `);
+        )`,
+        `CREATE UNIQUE INDEX IF NOT EXISTS viewer_deployments_one_active
+          ON viewer_deployments(active) WHERE active = 1`,
+      ]) this.db.exec(statement);
       this.migrateOperationIdempotencyScope();
       this.migrateOperationOrphanedSince();
       this.migrateOperationProjectionPending();
@@ -501,7 +503,9 @@ export class RuntimeJournal {
       this.migrateEntityUpdatedAt();
       this.retainLegacyStopAdmissions();
       this.db.exec(`CREATE INDEX IF NOT EXISTS deployment_list_recent ON entities(${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC) WHERE kind = 'deployment'`);
-      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS events_event_id ON events(event_id); CREATE UNIQUE INDEX IF NOT EXISTS events_scope_revision ON events(scope, revision); CREATE UNIQUE INDEX IF NOT EXISTS events_producer_key ON events(producer_kind, producer_key) WHERE producer_key IS NOT NULL;");
+      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS events_event_id ON events(event_id)");
+      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS events_scope_revision ON events(scope, revision)");
+      this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS events_producer_key ON events(producer_kind, producer_key) WHERE producer_key IS NOT NULL");
       this.metaSetDefault("schema_version", String(RUNTIME_SCHEMA_VERSION));
       this.metaSetDefault("seq", "0");
       this.metaSetDefault("published_seq", this.metaOr("seq", "0"));
@@ -3343,13 +3347,13 @@ export class RuntimeJournal {
     for (const [name, type] of additions) {
       if (!columns.has(name)) this.db.exec(`ALTER TABLE events ADD COLUMN ${name} ${type}`);
     }
-    this.db.exec(`
-      UPDATE events SET event_id = 'evt_legacy_' || seq WHERE event_id IS NULL;
-      UPDATE events SET occurred_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at / 1000.0, 'unixepoch') WHERE occurred_at IS NULL;
-      UPDATE events SET recorded_at = occurred_at WHERE recorded_at IS NULL;
-      UPDATE events SET producer_kind = 'viewer-compat' WHERE producer_kind IS NULL;
-      UPDATE events SET causation_id = operation_id WHERE causation_id IS NULL AND operation_id IS NOT NULL;
-    `);
+    for (const backfill of [
+      "event_id = 'evt_legacy_' || seq WHERE event_id IS NULL",
+      "occurred_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at / 1000.0, 'unixepoch') WHERE occurred_at IS NULL",
+      "recorded_at = occurred_at WHERE recorded_at IS NULL",
+      "producer_kind = 'viewer-compat' WHERE producer_kind IS NULL",
+      "causation_id = operation_id WHERE causation_id IS NULL AND operation_id IS NOT NULL",
+    ]) this.db.exec(`UPDATE events SET ${backfill}`);
   }
 
   private migrateEntityUpdatedAt(): void {

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 import { afterAll, expect, test } from "bun:test";
 import { RUNTIME_JOURNAL_BUSY_TIMEOUT_MS, RuntimeJournal } from "./journal";
 
@@ -94,6 +95,35 @@ test("an open refuses by name after the bound when a write transaction is never 
   } finally { await holder.stop(); }
   const journal = await RuntimeJournal.open(filename);
   try { expect(journal.isWritable()).toBe(true); } finally { journal.close(); }
+}, 60_000);
+
+test("a schema upgrade refuses by name after the bound when a write transaction is never released", async () => {
+  // A journal written before the queue's operation holds existed: the open has
+  // to create the table, which is the first statement that needs the write lock.
+  const filename = existingJournal("writer-upgrade.sqlite");
+  const legacy = new Database(filename);
+  legacy.exec("DROP TABLE native_queue_operation_holds");
+  legacy.close();
+  const holder = await writing(filename);
+  try {
+    const started = performance.now();
+    let refusal: (Error & { code?: string; cause?: { code?: string } }) | undefined;
+    try { (await RuntimeJournal.open(filename)).close(); } catch (error) { refusal = error as typeof refusal; }
+    const waitedMs = performance.now() - started;
+    expect(refusal?.message).toBe(`runtime journal is still locked by another process after waiting ${RUNTIME_JOURNAL_BUSY_TIMEOUT_MS} ms (SQLITE_BUSY)`);
+    expect(refusal?.code).toBe("SQLITE_BUSY");
+    expect(refusal?.cause?.code).toBe("SQLITE_BUSY");
+    expect(waitedMs).toBeGreaterThanOrEqual(RUNTIME_JOURNAL_BUSY_TIMEOUT_MS - 500);
+    expect(waitedMs).toBeLessThan(RUNTIME_JOURNAL_BUSY_TIMEOUT_MS + 2_000);
+  } finally { await holder.stop(); }
+  // Once the writer is gone the same open performs the upgrade.
+  const journal = await RuntimeJournal.open(filename);
+  try { expect(journal.isWritable()).toBe(true); } finally { journal.close(); }
+  const upgraded = new Database(filename, { readonly: true });
+  try {
+    expect(upgraded.query("SELECT name FROM sqlite_master WHERE name IN ('native_queue_operation_holds', 'native_queue_operation_holds_entry') ORDER BY name").all())
+      .toEqual([{ name: "native_queue_operation_holds" }, { name: "native_queue_operation_holds_entry" }]);
+  } finally { upgraded.close(); }
 }, 60_000);
 
 test("an uncontended open does not wait", async () => {
