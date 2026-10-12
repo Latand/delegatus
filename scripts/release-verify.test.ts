@@ -47,7 +47,8 @@ test("a green checkout-triggered macOS run cannot replace the install run linked
     command: async (file, args) => {
       if (file === "git" && args[0] === "show") return JSON.stringify({ name: "package-example", version: "1.2.0" });
       if (file === "git" && args[0] === "rev-parse") return sha;
-      if (file === "git" && args[0] === "cat-file") return "tag";
+      if (file === "git" && args[0] === "cat-file") return args[1] === "-p"
+        ? `object ${sha}\ntype commit\ntag v1.2.0\ntagger Tester <test@example.invalid> 0 +0000\n\nDelegatus 1.2.0` : "tag";
       if (file === "git" && args[0] === "ls-remote") return `${sha}\trefs/tags/v1.2.0\n${sha}\trefs/tags/v1.2.0^{}`;
       if (file === "gh" && args[0] === "repo") return "example/project";
       if (file === "gh" && args[0] === "run" && args[1] === "list") {
