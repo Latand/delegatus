@@ -221,8 +221,9 @@ export interface StateBoundedTransaction<T> {
   hasUnfinishedPipeline(query: {
     repository: string;
     branch: string;
+    pullRequestRepository?: string;
     prNumber?: number;
-    pullRequestOf?: (pipeline: T) => { repository: string; number: number } | null;
+    pullRequestMatches?: (pipeline: T, repository: string, number: number) => boolean;
   }): boolean;
   put(record: T): void;
   delete(key: string): void;
@@ -1048,10 +1049,8 @@ export class SqliteStateCollection<T> {
                 const value = pipeline as { delivery?: { target?: { repository?: string; branch?: string; pr?: number } } };
                 if (value.delivery?.target?.repository === query.repository && value.delivery.target.branch === query.branch) return true;
                 if (query.prNumber && value.delivery?.target?.repository === query.repository && value.delivery.target.pr === query.prNumber) return true;
-                if (query.prNumber && query.pullRequestOf) {
-                  const pr = query.pullRequestOf(pipeline);
-                  if (pr?.repository === query.repository && pr.number === query.prNumber) return true;
-                }
+                if (query.prNumber && query.pullRequestRepository && query.pullRequestMatches
+                  && query.pullRequestMatches(pipeline, query.pullRequestRepository, query.prNumber)) return true;
               }
               return false;
             },

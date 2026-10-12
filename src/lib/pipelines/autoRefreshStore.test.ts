@@ -3,7 +3,7 @@ import { buildPipeline, createPipelineWithDelivery, loadPipelines, savePipelines
 
 beforeEach(() => savePipelines([]));
 
-const target = { repository: "repo-refresh-fixture", remote: "", branch: "refs/heads/topic", pr: 11 };
+const target = { repository: "repo-refresh-project-key", remote: "https://github.com/acme/widgets.git", branch: "refs/heads/topic", pr: 11 };
 function fixture(id: string) {
   return buildPipeline({ id, task: "Refresh fixture", project: "fixture", repoDir: "/fixture/repository",
     stages: [{ id: "refresh", kind: "run", prompt: "Merge main", next: null, effectiveRole: {
@@ -51,11 +51,25 @@ test("refresh admission refuses unfinished work linked to the same PR on another
   expect(loadPipelines().some((lane) => lane.id === "refresh")).toBe(false);
 });
 
-test("refresh admission refuses a manually linked PR resolved without delivery metadata", async () => {
+test("refresh admission matches a realistic forge PR identity on another branch", async () => {
   const otherBranch = { ...target, branch: "refs/heads/other", pr: undefined };
   const linked = await createPipelineWithDelivery(fixture("manual-link"), otherBranch);
   linked.state = "running";
-  linked.workLinks = [{ repository: target.repository, number: 11, kind: "pr", addedAt: "2026-10-12T00:00:00.000Z", addedBy: "operator" }];
+  linked.workLinks = [{ repository: "acme/widgets", number: 11, kind: "pr", addedAt: "2026-10-12T00:00:00.000Z", addedBy: "operator" }];
+  savePipelines([linked]);
+
+  await expect(createPipelineWithDelivery(fixture("refresh"), target, false, { requireOwner: true }))
+    .rejects.toThrow("unfinished PR work");
+  expect(loadPipelines().some((lane) => lane.id === "refresh")).toBe(false);
+});
+
+test.each(["comparison", "multiple PRs"] as const)("refresh admission sees a linked %s association", async (association) => {
+  const otherBranch = { ...target, branch: "refs/heads/other", pr: undefined };
+  const linked = await createPipelineWithDelivery(fixture(`linked-${association}`), otherBranch, association === "comparison");
+  linked.state = "running";
+  linked.workLinks = [11, ...(association === "multiple PRs" ? [12] : [])].map((number) => ({
+    repository: "acme/widgets", number, kind: "pr" as const, addedAt: "2026-10-12T00:00:00.000Z", addedBy: "operator" as const,
+  }));
   savePipelines([linked]);
 
   await expect(createPipelineWithDelivery(fixture("refresh"), target, false, { requireOwner: true }))
@@ -89,7 +103,7 @@ test("an idempotent refresh replay attaches before checking newly appeared unfin
   const created = await createPipelineWithDelivery(make("refresh"), target, false, { requireOwner: true });
   const rival = await createPipelineWithDelivery(fixture("comparison-after-create"), { ...target, branch: "refs/heads/other", pr: undefined }, true);
   rival.state = "running";
-  rival.workLinks = [{ repository: target.repository, number: 11, kind: "pr", addedAt: "2026-10-12T00:00:00.000Z", addedBy: "operator" }];
+  rival.workLinks = [{ repository: "acme/widgets", number: 11, kind: "pr", addedAt: "2026-10-12T00:00:00.000Z", addedBy: "operator" }];
   savePipelines([created, rival]);
 
   const replay = await createPipelineWithDelivery(make("retry"), target, false, { requireOwner: true });

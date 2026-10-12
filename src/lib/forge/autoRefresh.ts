@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import type { CreatePipelineRequest, Pipeline, PipelineRefresh } from "@/lib/pipelines/types";
 import type { MergeOnReviewSetting } from "@/lib/projects/settings";
-import { lanePullRequest, mergeEligible } from "./autoMerge";
+import { mergeEligible } from "./autoMerge";
+import { pipelineHasPullRequest } from "./resolve";
 
 export type RefreshLineage = { srcPath: string | null; srcConversationId: string | null; srcDeputyConversationId?: string };
 export type RefreshOptions = {
@@ -18,9 +19,8 @@ export function refreshAdmission(lane: Pipeline, pipelines: readonly Pipeline[],
   return !pipelines.some((other) => {
     if (other.id === lane.id || other.hiddenAt || other.state === "completed" || other.state === "closed") return false;
     const target = other.delivery?.target;
-    const pr = lanePullRequest(other);
     return (target?.repository === delivery.target.repository && target.branch === delivery.target.branch)
-      || (pr?.repository === merge.repository && pr.number === merge.prNumber);
+      || pipelineHasPullRequest(other, merge.repository, merge.prNumber!);
   });
 }
 

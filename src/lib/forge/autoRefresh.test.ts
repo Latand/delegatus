@@ -367,6 +367,25 @@ test.each(["target", "pr"])("an open lane joined by %s prevents a refresh", asyn
   expect(h.merge("finished")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.conflict });
 });
 
+test.each(["comparison", "multiple PRs"] as const)("a linked %s lane on another branch prevents refresh", async (association) => {
+  const h = harness({ lanes: [finished()], prs: [conflicting()] });
+  const open = lane("linked-work");
+  open.state = "running";
+  open.delivery = {
+    ...structuredClone(optionsLaneDelivery),
+    disposition: association === "comparison" ? "comparison" : "owner",
+    active: association !== "comparison",
+    target: { ...optionsLaneDelivery.target, branch: "refs/heads/other", pr: undefined },
+  };
+  open.workLinks = [11, ...(association === "multiple PRs" ? [12] : [])].map((number) => ({
+    repository: REPO, number, kind: "pr" as const, addedAt: iso(T0), addedBy: "operator" as const,
+  }));
+  h.add(open);
+  await h.sweep();
+  expect(h.creates).toHaveLength(0);
+  expect(h.merge("finished")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.conflict });
+});
+
 test.each(["throw", "lost"] as const)("restart after %s replays one reserved refresh", async (mode) => {
   const h = harness({ lanes: [finished()], prs: [conflicting()] });
   h.setCreateMode(mode);

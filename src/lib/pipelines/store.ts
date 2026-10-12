@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { isDismissedBy } from "@/lib/attention/dismissalTypes";
-import { lanePullRequest } from "@/lib/forge/resolve";
+import { pipelineHasPullRequest } from "@/lib/forge/resolve";
+import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { effortScale } from "@/lib/agent/efforts";
@@ -1533,8 +1534,13 @@ export async function createPipelineWithDelivery(pipeline: Pipeline, target: Pip
         return replay;
       }
     }
+    const pullRequestRepository = target.pr ? githubRepositoryOfRemote(target.remote) : null;
     if (options.requireOwner && (comparison || tx.pipelineLookup({ ...target, active: true })
-      || tx.hasUnfinishedPipeline({ repository: target.repository, branch: target.branch, prNumber: target.pr, pullRequestOf: lanePullRequest }))) {
+      || tx.hasUnfinishedPipeline({ repository: target.repository, branch: target.branch,
+        ...(target.pr && pullRequestRepository ? { pullRequestRepository, prNumber: target.pr,
+          pullRequestMatches: (candidate, repository, number) => pipelineHasPullRequest(candidate as Pipeline, repository, number),
+        } : {}),
+      }))) {
       throw new Error("target already owned or has unfinished PR work; Delegatus could not claim the refresh delivery branch");
     }
     assignPipelineDelivery(pipeline, target, comparison, tx.pipelineLookup);

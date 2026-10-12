@@ -59,6 +59,16 @@ export function pipelineWorkLinks(
   return resolvePipelineLinks(pipeline, pipelineRepository(pipeline, recorded), cache);
 }
 
+/** Whether a pipeline is associated with a specific PR, including every
+    manual, delivery, provenance and cached association it carries. */
+export function pipelineHasPullRequest(pipeline: Pipeline, repository: string, number: number): boolean {
+  const cache = forgeCacheView();
+  const canonical = canonicalRepository(cache);
+  const target = canonical(repository);
+  return pipelineWorkLinks(pipeline, cache).links.some((link) => link.kind === "pr"
+    && link.number === number && canonical(link.repository) === target);
+}
+
 /** The single PR identity used by refresh admission and durable creation. */
 export function lanePullRequest(pipeline: Pipeline): { repository: string; number: number } | null {
   if (pipeline.delivery?.disposition === "comparison") return null;
