@@ -172,7 +172,7 @@ export function MobileConversationMenu({
             the model and its reasoning tier, and the context that remains. The
             worktree, the account and the pipeline live one row down, in
             «Details & host». */}
-        <div className="flex min-h-9 items-center gap-2 px-4 pb-1 text-label font-medium text-secondary" data-mobile2-chat-identity>
+        <div className="flex min-h-9 flex-wrap items-center gap-x-2 gap-y-1 px-4 pb-1 text-label font-medium text-secondary" data-mobile2-chat-identity>
           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${bits.tone === "success" ? "bg-success" : bits.tone === "warning" ? "bg-warning" : bits.tone === "danger" ? "bg-danger" : bits.tone === "accent" ? "bg-accent" : "bg-strong"}`} aria-hidden />
           <span className="shrink-0">{bits.phrase}</span>
           <span aria-hidden className="text-muted">·</span>

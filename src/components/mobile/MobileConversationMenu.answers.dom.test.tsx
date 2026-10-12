@@ -214,3 +214,18 @@ test("an accepted Compact answers on the same line: one tap, no arming step, and
   expect(status?.getAttribute("data-mobile2-menu-status")).toBe("ok");
   expect(status?.textContent).toBe(translate("en", "composer.compactSent"));
 });
+
+/* The identity row holds a state phrase that never truncates (an account's name
+   can be 17 characters long). It wraps to a second line instead of widening the
+   sheet, and the sheet's body does not scroll sideways whatever a row holds.
+   The browser case in issue1671Evidence.browser.test.tsx reads the widths. */
+test("the menu's state phrase wraps instead of truncating, inside a body that cannot scroll sideways", () => {
+  const host = open();
+  const identity = host.querySelector("[data-mobile2-chat-identity]") as unknown as HTMLElement;
+  expect(identity.className.split(/\s+/)).toContain("flex-wrap");
+  const phrase = identity.children[1] as unknown as HTMLElement;
+  expect(phrase.className).toContain("shrink-0");
+  expect(phrase.className).not.toContain("truncate");
+  const body = host.querySelector("[data-mobile2-sheet-body]") as unknown as HTMLElement;
+  expect(body.className.split(/\s+/)).toContain("overflow-x-hidden");
+});
