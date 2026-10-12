@@ -4,6 +4,7 @@ import type { SeatCommandResult } from "@/lib/orchestrator/seatCommand";
 import { seatHostRecoveryKey, seatHostRecoveryCard, type SeatHostRecovery, type SeatHostRecoveryPorts } from "./seatHostRecovery";
 import { recoverSeatAuthentication, type SeatAuthRecoveryPorts } from "./seatAuthRecovery";
 import { openSeatAuthIncident } from "./seatAuthIncident";
+import { productionCurationController, type CurationController } from "@/lib/memory/curation/run";
 import { productionBoardMaintenanceController, type BoardMaintenanceController } from "@/lib/boardMaintenance/run";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -125,6 +126,7 @@ export interface SeatTickControllerDependencies {
   seatAuth?: SeatAuthRecoveryPorts;
   seatAutoRotation?: SeatAutoRotationPorts;
   maintenance?: BoardMaintenanceController | null;
+  curation?: CurationController | null;
   sources?: SeatTickSources;
   /** Records the identity successions seated projects owe (#1874); the sweep
       runs it before it lists the projects to check. */
@@ -1638,6 +1640,8 @@ async function check(
 
   await yieldToRuntime();
   const maintenanceDetails: string[] = [];
+  try { const detail = await dependencies.curation?.reconcile(canonical); if (detail) maintenanceDetails.push(detail); }
+  catch (error) { maintenanceDetails.push(`curation reconcile: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
   try { const detail = await dependencies.maintenance?.reconcile(canonical); if (detail) maintenanceDetails.push(detail); }
   catch (error) { maintenanceDetails.push(`maintenance reconcile: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
   const gathered = await gatherSeatTickInput(canonical, settled, policy, sources);
@@ -1914,6 +1918,8 @@ async function check(
       console.error("[seat tick] card write failed", error instanceof Error ? error.name : "unknown");
     }
   }
+  try { const detail = !activeDrain() && await dependencies.curation?.launchIfDue(input); if (detail) maintenanceDetails.push(detail); }
+  catch (error) { maintenanceDetails.push(`curation launch: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
   try { const detail = !activeDrain() && await dependencies.maintenance?.launchIfDue(input); if (detail) maintenanceDetails.push(detail); }
   catch (error) { maintenanceDetails.push(`maintenance launch: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
   const record: SeatTickRunRecord = {
@@ -2142,7 +2148,7 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
     if (!first) await yieldToRuntime();
     first = false;
     try {
-      const record = await runSeatTickCheck(project, { ...dependencies, sources, maintenance: dependencies.maintenance === undefined ? productionBoardMaintenanceController(sources) : dependencies.maintenance });
+      const record = await runSeatTickCheck(project, { ...dependencies, sources, curation: dependencies.curation === undefined ? productionCurationController(sources) : dependencies.curation, maintenance: dependencies.maintenance === undefined ? productionBoardMaintenanceController(sources) : dependencies.maintenance });
       if (record) records.push(record);
     } catch (error) {
       /* Only an unwritable journal reaches here; the check itself records its

@@ -1,0 +1,62 @@
+[
+  {
+    "lease_id": "leaseprogressownerfixture",
+    "seq": 1,
+    "progress": {
+      "kind": "step",
+      "label": "accepted",
+      "tool": null,
+      "status": null,
+      "at": "2026-10-11T21:05:19.856Z"
+    }
+  },
+  {
+    "lease_id": "leaseprogressownerfixture",
+    "seq": 2,
+    "progress": {
+      "kind": "step",
+      "label": "thinking",
+      "tool": null,
+      "status": null,
+      "at": "2026-10-11T21:05:22.874Z"
+    }
+  },
+  {
+    "lease_id": "leaseprogressownerfixture",
+    "seq": 3,
+    "progress": {
+      "kind": "step",
+      "label": "reading_board",
+      "tool": null,
+      "status": null,
+      "at": "2026-10-11T21:05:25.878Z"
+    }
+  },
+  {
+    "lease_id": "leaseprogressownerfixture",
+    "seq": 4,
+    "progress": {
+      "kind": "step",
+      "label": "working",
+      "tool": null,
+      "status": null,
+      "at": "2026-10-11T21:05:28.878Z"
+    }
+  },
+  {
+    "lease_id": "leaseprogressownerfixture",
+    "seq": 5,
+    "progress": {
+      "kind": "step",
+      "label": "writing_answer",
+      "tool": null,
+      "status": null,
+      "at": "2026-10-11T21:05:31.878Z"
+    }
+  },
+  {
+    "lease_id": "leaseprogressownerfixture",
+    "seq": 6,
+    "progress": null
+  }
+]
