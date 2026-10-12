@@ -3433,7 +3433,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         const composed = [taskLines, prelude, requestedText].filter(Boolean).join("\n");
         const wireText = bridge?.text ? `${bridge.text}\n\n${composed}` : composed;
         const content = {
-          text: deliveryRoute ? wireText.trim() : wireText,
+          text: wireText,
           images: requestedImages.map(({ base64, mime }) => ({ base64, mime })),
           ...(requestedFiles.length ? { files: requestedFiles.map(({ name, base64 }) => ({ name, base64 })) } : {}),
           idempotencyKey: clientMessageId,
@@ -3973,7 +3973,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           ? { ok: false, structured: true, error: structuredImagesReason }
           : runtimeDependencies.sendRuntimeMessage((durable?.envelope?.body ?? {
               conversationId: deliveryRoute!.session.conversationId,
-              text: payloadText.trim(),
+              text: payloadText,
               images: sentImages.map((image) => ({ base64: image.base64, mime: image.mime })),
               /* #1224: the bytes ride the request and the SERVER writes them to
                  the conversation's inbox, then names the path in the delivered

@@ -134,3 +134,43 @@ test("the production delivery queue durably admits the converted message under i
   expect(fs.readFileSync(body.textAttachment.path, "utf8")).toBe(text);
   expect(registry.deliveryAdmissionForKey(conversation.id, key).outcome).toBe("admitted");
 });
+
+test("operationId-only retries reuse the original generated file and delivery receipt", async () => {
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "operation-id-long-text-registry.json"));
+  const transcript = path.join(process.env.HOME!, "sessions", "operation-id-long-text.jsonl");
+  registry.reconcileConversations([{ engine: "codex", path: transcript, accountId: "default",
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", project: "repo" }),
+    turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: new Date().toISOString() }]);
+  const conversation = registry.conversationForPath(transcript)!;
+  const generation = conversation.generations.at(-1)!;
+  registry.upsert({ key: { engine: "codex", sessionId: generation.id }, artifactPath: transcript,
+    cwd: "/repo", accountId: "default", launchProfile: generation.launchProfile, status: "idle", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:fixture", process: { pid: process.pid, startIdentity: "fixture" },
+      eventCursor: 1, protocolVersion: "v2", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 1, claimOwner: "structured-host:fixture", pendingAction: null });
+  const text = "ж".repeat(30_000);
+  const operationId = "stable-operation-id";
+  const enqueueDependencies = { registry: () => registry, client: () => null, requestMigrationTick: () => {} };
+  const send = () => handleRuntimeCommand(new NextRequest("http://127.0.0.1/api/runtime/send", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ conversationId: conversation.id, text, operationId }),
+  }), "send", { ...dependencies, registry: () => registry,
+    enqueue: input => enqueueStructuredMessage(input, enqueueDependencies) });
+
+  const first = await send();
+  expect(first.status).toBe(202);
+  const firstBody = await first.json();
+  const firstPath = firstBody.textAttachment.path;
+  expect(fs.readFileSync(firstPath, "utf8")).toBe(text);
+
+  const retry = await send();
+  expect(retry.status).toBe(202);
+  const retryBody = await retry.json();
+  expect(retryBody.receipt).toMatchObject({
+    operationId: firstBody.receipt.operationId,
+    idempotencyKey: operationId,
+    status: firstBody.receipt.status,
+  });
+  expect(retryBody.textAttachment.path).toBe(firstPath);
+  expect(registry.deliveryAdmissionForKey(conversation.id, operationId).outcome).toBe("admitted");
+});

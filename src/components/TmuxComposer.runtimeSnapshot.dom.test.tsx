@@ -252,6 +252,27 @@ test("text-only unhosted structured composer sends through durable recovery admi
   await act(async () => root.unmount());
 });
 
+test("long structured drafts keep every byte on send and same-key retry", async () => {
+  const sends: SendBody[] = [];
+  mockWire(sends, [
+    () => ({ status: 413, json: { error: "structured message text exceeds the 32000-byte envelope bound" } }),
+    delivered,
+    delivered,
+  ]);
+  const { host, root } = await renderInto(<TmuxComposer file={file} />);
+  const { type, submit } = composerControls(host);
+  const original = "  " + "я".repeat(30_000) + "\n\t ";
+
+  await settle(() => type(original));
+  await settle(() => submit());
+  expect(sends[0]?.text).toBe(original);
+
+  await settle(() => retryFailed());
+  expect(sends[1]?.text).toBe(original);
+  expect(sends[1]?.idempotencyKey).toBe(sends[0]?.idempotencyKey);
+  await act(async () => root.unmount());
+});
+
 test("dead structured image input stays removable and is offered, not withheld", async () => {
   const sends: SendBody[] = [];
   mockWire(sends, [() => ({ status: 503, json: { error: "recovery failed before image admission" } })]);

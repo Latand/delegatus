@@ -253,7 +253,8 @@ async function dispatchRuntimeCommand(
       }
       const parsed: Record<string, unknown> = { ...(parseValue as Record<string, unknown>) };
       delete parsed.files;
-      attachments.batch = inboxFileBatchToken(typeof body.idempotencyKey === "string" ? body.idempotencyKey : null);
+      const clientMessageKey = body.idempotencyKey ?? body.operationId;
+      attachments.batch = inboxFileBatchToken(typeof clientMessageKey === "string" ? clientMessageKey : null);
       const text = typeof parsed.text === "string" ? parsed.text : "";
       const prepared = kind === "inject"
         ? { files: admittedFiles.files, payload: inboxFileText(text, inboxFilePaths(admittedFiles.files, attachments.batch)), textAttachment: undefined }

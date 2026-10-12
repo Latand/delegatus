@@ -7,6 +7,9 @@ import type { SelectedContextPreview } from "@/lib/selection/selectedContext";
 import type { MessageSender } from "@/lib/team/contract";
 import { SenderLine } from "@/components/team/SenderLine";
 import { messageTextAttachmentFromText } from "@/lib/messageTextAttachment";
+import { resolveLink } from "@/lib/artifact/linkTarget";
+import { artifactContentUrl } from "@/components/preview/artifactResource";
+import { openArtifactPreview } from "@/components/preview/previewBus";
 
 import { ChevronUp, Layers } from "../icons";
 import { stripTaskReferencePrelude, taskReferencesFromText } from "@/lib/selection/selectedContext";
@@ -79,6 +82,7 @@ export function UserMessageRow({
   const tasks = selectedContext?.tasks ?? taskReferencesFromText(rawText);
   const body = tasks?.length ? stripTaskReferencePrelude(rawText, tasks).replace(/^\n+/, "") : rawText;
   const attachment = messageTextAttachmentFromText(body);
+  const attachmentTarget = attachment ? resolveLink(attachment.path) : null;
   const text = attachment ? tr("composer.attachmentsCount", { count: attachmentCount ?? (body.split("\n").length - 1) }) : body;
   const long = text.length > LONG_MESSAGE;
   const gutter = action ?? <CopyButton text={copyText ?? body} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />;
@@ -127,7 +131,13 @@ export function UserMessageRow({
           )}
           {bubbleFooter}
           {attachment ? (
-            <a data-text-attachment href={`#f=${encodeURIComponent(attachment.path)}`}
+            <a data-text-attachment href={artifactContentUrl(attachment.path)}
+              onClick={(event) => {
+                if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey
+                  || attachmentTarget?.kind !== "file") return;
+                event.preventDefault();
+                openArtifactPreview(attachment.path, attachmentTarget);
+              }}
               className="mt-1 inline-flex items-center gap-1 rounded bg-surface px-2 py-1 text-caption font-semibold text-muted">
               📎 {attachment.name}
             </a>

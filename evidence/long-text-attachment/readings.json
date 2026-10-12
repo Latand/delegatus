@@ -1,7 +1,7 @@
 {
   "1280-send": {
     "label": "📎 message.txt",
-    "href": "#f=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
     "left": 1040.921875,
     "right": 1130,
     "top": 152.5,
@@ -13,7 +13,7 @@
   },
   "1280-retry": {
     "label": "📎 message.txt",
-    "href": "#f=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
     "left": 1040.921875,
     "right": 1130,
     "top": 152.5,
@@ -25,7 +25,7 @@
   },
   "390-send": {
     "label": "📎 message.txt",
-    "href": "#f=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
     "left": 264.921875,
     "right": 354,
     "top": 185,
@@ -37,7 +37,7 @@
   },
   "390-retry": {
     "label": "📎 message.txt",
-    "href": "#f=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
+    "href": "/api/artifact?path=%2Finbox%2Ffiles%2Fevidence%2Fmessage.txt",
     "left": 264.921875,
     "right": 354,
     "top": 185,
