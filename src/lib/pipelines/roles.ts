@@ -34,12 +34,12 @@ export type PipelineRoleDefaults = {
 /** Adapter seam for #35. The role registry can register its resolver at startup.
     Optional operator-chosen parameter values override registry defaults when the
     role's prompt scaffold is substituted. */
-export type PipelineRoleLookup = (roleId: string, params?: Record<string, string | number>) => PipelineRoleDefaults | null;
+export type PipelineRoleLookup = (roleId: string, params?: Record<string, string | number>, project?: string) => PipelineRoleDefaults | null;
 
 let installedLookup: PipelineRoleLookup | null = null;
 
 /** Production adapter for the shared issue-35 registry. */
-export const pipelineRoleLookup: PipelineRoleLookup = (roleId, params) => {
+export const pipelineRoleLookup: PipelineRoleLookup = (roleId, params, project = "") => {
   const definition = listRoles().find((candidate) => candidate.id === roleId);
   if (!definition) return null;
   const parameters = Object.fromEntries(
@@ -59,8 +59,8 @@ export const pipelineRoleLookup: PipelineRoleLookup = (roleId, params) => {
   /* A pipeline stage never carries the seat mandate, so an orchestrator stage
      gets the shared rules its scaffold leaves to the mandate. */
   const body = definition.id === "orchestrator"
-    ? `${roleScaffoldBody(definition, parameters)}\n\n${ORCHESTRATOR_WITHOUT_MANDATE_RULES}`
-    : roleScaffoldBody(definition, parameters);
+    ? `${roleScaffoldBody(definition, parameters, project)}\n\n${ORCHESTRATOR_WITHOUT_MANDATE_RULES}`
+    : roleScaffoldBody(definition, parameters, project);
   const fences = roleFenceBlock(definition);
   return {
     /* Parameter-aware runtime: Builder domain=frontend → its frontend row, a
@@ -98,6 +98,7 @@ export function resolvePipelineRole(
   stage: Pick<PipelineStage, "role" | "engine" | "model" | "effort" | "serviceTier" | "access">,
   kind: PipelineStageKind,
   lookup?: PipelineRoleLookup | null,
+  project = "",
 ): { role?: EffectivePipelineRole; error?: string; field?: "model" | "serviceTier" } {
   const ref = stage.role;
   if (ref !== undefined && (!ref || typeof ref !== "object" || Array.isArray(ref))) {
@@ -126,7 +127,7 @@ export function resolvePipelineRole(
   const builder = registry?.("builder") ?? null;
   if (!builder) return { error: "Builder role is unavailable in the role registry" };
   const roleId = rawRoleId ? rawRoleId as PipelineRoleId : null;
-  const registered = roleId ? registry?.(roleId, roleParams) ?? null : null;
+  const registered = roleId ? registry?.(roleId, roleParams, project) ?? null : null;
   const value = (override: unknown, fallback: string | null | undefined): string | null => {
     if (override === null) return null;
     if (typeof override === "string") return override.trim() || null;

@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { resolveRole } from "@/lib/roles/registry";
 import { MAX_SCAFFOLD_LENGTH, saveRoleOverrides } from "@/lib/roles/store";
+import { setMachineWorkerLimit, setProjectWorkerLimit } from "@/lib/operator/workerLimit";
 
 import { pipelineRoleLookup, resolvePipelineRole, validatePipelineRoleParams } from "./roles";
 
@@ -66,6 +67,24 @@ test("production role lookup reads the current Sol Builder preset", () => {
     access: "read-write",
     promptScaffold: null,
   });
+});
+
+test("legacy orchestrator scaffold templates use the project effective limit during pipeline resolution", () => {
+  const previous = process.env.LLV_STATE_DIR;
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-worker-limit-"));
+  process.env.LLV_STATE_DIR = sandbox;
+  try {
+    saveRoleOverrides({ orchestrator: { promptScaffold: "In every mode, keep at most {{maxWorkers}} workers running at once." } });
+    setMachineWorkerLimit(8, { kind: "operator", via: "test" }, null);
+    setProjectWorkerLimit("one", 10, { kind: "operator", via: "test" }, null);
+    const stage = resolvePipelineRole({ role: { roleId: "orchestrator", params: { maxWorkers: 2 } } }, "run", pipelineRoleLookup, "one");
+    expect(stage.role?.promptScaffold).toContain("at most 10 workers");
+    expect(pipelineRoleLookup("orchestrator", { maxWorkers: 2 }, "two")?.promptScaffold).toContain("at most 8 workers");
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 test("stage runtime fields override registry and global defaults", () => {

@@ -67,6 +67,7 @@ function LimitField({ project, value, machine = false, placeholder, wide = false
 export function WorkerLimitChip({ project, workers, phone = false }: { project: string; workers: WorkerReading | null | undefined; phone?: boolean }) {
   const { t } = useLocale();
   const [openFor, setOpenFor] = useState<string | null>(null);
+  const [preferAbove, setPreferAbove] = useState(false);
   const [saved, setSaved] = useState<{ project: string; workers: WorkerReading; observed: WorkerReading | null | undefined } | null>(null);
   const anchorRef = useRef<HTMLButtonElement>(null);
   const reading = saved?.project === project && saved.observed === workers ? saved.workers : workers;
@@ -83,17 +84,20 @@ export function WorkerLimitChip({ project, workers, phone = false }: { project: 
   return <>
     <button ref={anchorRef} type="button" data-worker-limit-chip={project} aria-label={label} title={label} aria-expanded={openFor === project}
       className={`${phone ? "flex h-11 w-full items-center px-3 text-body" : "inline-flex h-6 shrink-0 items-center px-1 text-caption"} gap-1 rounded-control tabular-nums ${reading.running > reading.limit ? "text-warning" : "text-secondary"} hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
-      onClick={() => setOpenFor(previous => previous === project ? null : project)}>
+      onClick={event => {
+        setPreferAbove(Boolean(event.currentTarget.closest("[data-kanban-seat].side")));
+        setOpenFor(previous => previous === project ? null : project);
+      }}>
       {t(phone ? "workers.phoneFace" : "workers.face", { running: reading.running, limit: reading.limit })}
       {reading.source === "project" ? <span data-worker-limit-own aria-hidden className="mb-2 h-1 w-1 shrink-0 rounded-full bg-accent" /> : null}
     </button>
-    {openFor === project ? <WorkerLimitPopover project={project} workers={reading} anchorRef={anchorRef} onClose={close} onSaved={onSaved} /> : null}
+    {openFor === project ? <WorkerLimitPopover project={project} workers={reading} anchorRef={anchorRef} onClose={close} onSaved={onSaved} preferAbove={preferAbove} /> : null}
   </>;
 }
 
-function WorkerLimitPopover({ project, workers, anchorRef, onClose, onSaved }: {
+function WorkerLimitPopover({ project, workers, anchorRef, onClose, onSaved, preferAbove }: {
   project: string; workers: WorkerReading; anchorRef: React.RefObject<HTMLElement | null>;
-  onClose: () => void; onSaved: (answer: WorkerLimitAnswer) => void;
+  onClose: () => void; onSaved: (answer: WorkerLimitAnswer) => void; preferAbove: boolean;
 }) {
   const { t } = useLocale();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -101,7 +105,7 @@ function WorkerLimitPopover({ project, workers, anchorRef, onClose, onSaved }: {
   const [saving, setSaving] = useState(false);
   const resetInFlight = useRef(false);
   const [failed, setFailed] = useState(false);
-  const { style, onScreen } = useAnchoredBox(anchorRef, rootRef, 256);
+  const { style, onScreen } = useAnchoredBox(anchorRef, rootRef, 256, preferAbove);
   useModalLayer({ containerRef: rootRef, onClose, lockScroll: false });
   useEffect(() => {
     const away = (event: Event) => {

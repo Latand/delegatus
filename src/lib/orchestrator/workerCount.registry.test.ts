@@ -50,3 +50,42 @@ test("a large SQLite registry reads only live host rows and their keyed lineage,
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }, 30_000);
+
+test("live children stay counted through seat rotation in JSON and SQLite registries", () => {
+  for (const sqliteMode of ["off", "sqlite"] as const) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "worker-rotation-"));
+    const previousState = process.env.LLV_STATE_DIR;
+    process.env.LLV_STATE_DIR = directory;
+    const file = path.join(directory, "agent-registry.json");
+    const conversations = Object.fromEntries(["seat_old", "seat_new", "child_live"].map(id => [
+      `conversation_${id}`, { id: `conversation_${id}`, engine: "codex", generations: [{ id: `session_${id}`, path: `/sessions/${id}.jsonl`, accountId: null, launchProfile: { cwd: directory } }], agentRole: id === "child_live" ? "builder" : "orchestrator" },
+    ]));
+    const childId = "conversation_child_live";
+    const childSession = "session_child_live";
+    fs.writeFileSync(file, JSON.stringify({ version: 2,
+      entries: { [`codex:${childSession}`]: { key: { engine: "codex", sessionId: childSession }, artifactPath: `/sessions/child_live.jsonl`, cwd: directory, accountId: null, status: "idle", host: null,
+        structuredHost: { kind: "codex-app-server", endpoint: "/host", process: null, eventCursor: 0, protocolVersion: "v2", writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [] }, claimEpoch: 0, claimOwner: null, pendingAction: null, updatedAt: "2026-10-12T00:00:00Z" } },
+      receipts: {}, conversations,
+      lineageEdges: { [childId]: { childConversationId: childId, parentConversationId: "conversation_seat_old", childSessionKey: { engine: "codex", sessionId: childSession }, parentSessionKey: null, childArtifactPath: "/sessions/child_live.jsonl", parentArtifactPath: null, kind: "spawn", role: "builder", reviewsConversationId: null, source: "viewer-spawn", evidence: { launchId: null, clientAttemptId: null }, createdAt: "2026-10-12T00:00:00Z" } },
+      memberships: {}, conversationAliases: {} }), "utf8");
+    let registry: AgentRegistry | undefined;
+    try {
+      registry = new AgentRegistry(file, () => true, undefined, { sqliteMode });
+      setAgentRegistryForTests(registry);
+      beginOrchestratorSeatIntent({ project: "one", mandate: "Coordinate work", clientRequestId: `old-${sqliteMode}`, mode: "spawn" });
+      completeOrchestratorSeatIntent({ project: "one", clientRequestId: `old-${sqliteMode}`, conversationId: "conversation_seat_old", path: null });
+      expect(projectWorkerCounts({ pipelines: () => [] }).byProject.get("one")).toBe(1);
+      beginOrchestratorSeatIntent({ project: "one", mandate: "Coordinate work", clientRequestId: `new-${sqliteMode}`, mode: "spawn" });
+      completeOrchestratorSeatIntent({ project: "one", clientRequestId: `new-${sqliteMode}`, conversationId: "conversation_seat_new", path: null });
+      expect(projectWorkerCounts({ pipelines: () => [] }).byProject.get("one")).toBe(1);
+      const entry = registry.readOnlySnapshot().entries[`codex:${childSession}`]!;
+      registry.upsert({ ...entry, status: "dead" });
+      expect(projectWorkerCounts({ pipelines: () => [] }).machine).toBe(0);
+    } finally {
+      registry?.close(); setAgentRegistryForTests(null);
+      if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+      else process.env.LLV_STATE_DIR = previousState;
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }
+}, 30_000);

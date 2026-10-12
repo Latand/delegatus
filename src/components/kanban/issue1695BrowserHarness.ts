@@ -191,7 +191,7 @@ export async function openFixture(
 export async function captureWorkerLimitFrames(browser: Browser, base: string, out: string, phone: boolean) {
   const readings: unknown[] = [];
   const failures: string[] = [];
-  async function frame(page: Page, selector: string, name: string, budget?: number) {
+  async function frame(page: Page, selector: string, name: string, budget?: number, expectedHostWidth?: number) {
     const target = page.locator(selector).first();
     await target.waitFor();
     await target.scrollIntoViewIfNeeded();
@@ -209,20 +209,57 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
       }
       const input = element.querySelector("input");
       const dot = element.querySelector("[data-worker-limit-own]")?.getBoundingClientRect();
+      const overlappingText: { text: string; rect: number[] }[] = [];
+      if (element.matches("[data-worker-limit-popover]")) {
+        const scroller = document.querySelector<HTMLElement>("[data-kanban-seat].side [data-log-feed-scroller]");
+        if (scroller) {
+          const scroll = scroller.getBoundingClientRect();
+          const readable = { left: scroll.left, right: scroll.right, top: scroll.top + 8, bottom: scroll.bottom - 8 };
+          const popup = box;
+          const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+          let textNode: Node | null;
+          while ((textNode = walker.nextNode())) {
+            if (!textNode.textContent?.trim() || !textNode.parentElement) continue;
+            let visible = true;
+            for (let parent: HTMLElement | null = textNode.parentElement; parent && parent !== scroller; parent = parent.parentElement) {
+              const style = getComputedStyle(parent);
+              if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) { visible = false; break; }
+            }
+            if (!visible) continue;
+            const range = document.createRange(); range.selectNodeContents(textNode);
+            for (const rect of range.getClientRects()) if (rect.right > popup.left && rect.left < popup.right
+              && rect.bottom > popup.top && rect.top < popup.bottom
+              && rect.bottom > readable.top && rect.top < readable.bottom
+              && rect.right > readable.left && rect.left < readable.right) {
+              overlappingText.push({ text: textNode.textContent.trim(), rect: [rect.left, rect.top, rect.right, rect.bottom] });
+            }
+          }
+        }
+      }
       let left = 0, right = innerWidth, top = 0, bottom = innerHeight;
       for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
         const style = getComputedStyle(ancestor); const rect = ancestor.getBoundingClientRect();
         if (/hidden|clip|auto|scroll/.test(style.overflowX)) { left = Math.max(left, rect.left); right = Math.min(right, rect.right); }
         if (/hidden|clip|auto|scroll/.test(style.overflowY)) { top = Math.max(top, rect.top); bottom = Math.min(bottom, rect.bottom); }
       }
-      return { rect: [box.x, box.y, box.width, box.height], clipped, clippedControl: box.left < left - .5 || box.right > right + .5 || box.top < top - .5 || box.bottom > bottom + .5, inputWidth: input?.getBoundingClientRect().width ?? null, dot: dot ? [dot.width, dot.height] : null, text: element.textContent, overflow: document.documentElement.scrollWidth > innerWidth };
+      return { rect: [box.x, box.y, box.width, box.height], clipped, clippedControl: box.left < left - .5 || box.right > right + .5 || box.top < top - .5 || box.bottom > bottom + .5, overlappingText, inputWidth: input?.getBoundingClientRect().width ?? null, dot: dot ? [dot.width, dot.height] : null, text: element.textContent, overflow: document.documentElement.scrollWidth > innerWidth };
     });
-    const picture = selector === "[data-worker-limit-chip]" ? page.locator(phone ? "[data-mobile2-sheet='seat']" : "[data-orchestrator-incumbent]").first() : target;
-    readings.push({ name, ...measurement, frameRect: await picture.boundingBox() });
+    const dock = page.locator("[data-kanban-seat].side").first();
+    const picture = expectedHostWidth !== undefined && selector.includes("popover")
+      ? target
+      : expectedHostWidth !== undefined
+        ? dock
+      : selector === "[data-worker-limit-chip]" ? page.locator(phone ? "[data-mobile2-sheet='seat']" : "[data-orchestrator-incumbent]").first() : target;
+    const hostRect = expectedHostWidth !== undefined
+      ? await dock.boundingBox()
+      : await picture.boundingBox();
+    readings.push({ name, ...measurement, frameRect: hostRect });
     if (measurement.clipped.length) failures.push(`${name}: clipped labels ${measurement.clipped.join(" | ")}`);
     if (measurement.overflow) failures.push(`${name}: horizontal page overflow`);
     if (measurement.clippedControl) failures.push(`${name}: control is sliced by its visible band`);
+    if (measurement.overlappingText.length) failures.push(`${name}: popover overlaps transcript text ${measurement.overlappingText.map(item => item.text).join(" | ")}`);
     if (budget && measurement.rect[3]! > budget + 1) failures.push(`${name}: height ${measurement.rect[3]} exceeds ${budget}`);
+    if (expectedHostWidth !== undefined && Math.abs((hostRect?.width ?? 0) - expectedHostWidth) > 1) failures.push(`${name}: dock width ${hostRect?.width ?? "missing"} does not match ${expectedHostWidth}px`);
     if (selector === "[data-header-menu-workers]" && Math.abs((measurement.inputWidth ?? 0) - (phone ? 80 : 48)) > .5) failures.push(`${name}: wrong field width ${measurement.inputWidth}`);
     if (selector.includes("popover")) {
       const viewport = page.viewportSize()!;
@@ -236,10 +273,11 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
   for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const scene of ["machine", "own", "over"] as const) {
     const name = `${phone ? 390 : 1440}-${lang}-${theme}-${scene}`;
     const { page, context, pageErrors } = await openFixture(browser, `${base}?scenario=seat-head&workers=${scene}&lang=${lang}`, { width: phone ? 390 : 1440, height: phone ? 844 : 900 }, theme, lang, "reduce", phone);
+    let step = "initial render";
     try {
       await page.waitForTimeout(350);
       await page.evaluate(() => { for (const button of document.querySelectorAll<HTMLElement>("[data-attention-toast] button")) button.click(); });
-      if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+      if (phone) { step = "open phone seat"; await page.locator("[data-mobile2-open=seat]").first().click(); }
       const chip = page.locator("[data-worker-limit-chip]").first(); await chip.waitFor();
       const closed = await frame(page, "[data-worker-limit-chip]", `${name}-closed`, phone ? 44 : undefined);
       if (phone && Math.abs(closed.rect[3]! - 44) > .5) failures.push(`${name}: phone row is not 44 px`);
@@ -247,13 +285,30 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
       if (closed.dot && (closed.dot[0] !== 4 || closed.dot[1] !== 4)) failures.push(`${name}: dot is not 4 px`);
       const warning = await chip.evaluate(element => element.classList.contains("text-warning"));
       if (warning !== (scene === "over")) failures.push(`${name}: wrong warning tone`);
+      step = "open worker-limit popover";
       await chip.click();
       await frame(page, "[data-worker-limit-popover]", `${name}-popover`);
       await page.keyboard.press("Escape");
+      await page.locator("[data-worker-limit-popover]").waitFor({ state: "detached" });
       if (!phone && scene === "machine") {
-        // The same production incumbent row in the dock's 360 px budget.
-        await page.locator("[data-orchestrator-incumbent]").first().evaluate(element => { (element as HTMLElement).style.width = "360px"; });
-        await frame(page, "[data-worker-limit-chip]", `${name}-floor360`);
+        // Exercise the production side dock, whose width owns the incumbent
+        // header's flex budget. Styling the header itself leaves its flex slot
+        // at the board width and does not test the dock's minimum width.
+        const seat = page.locator("[data-kanban-seat]").first();
+        await seat.locator("[data-seat-placement]").waitFor({ state: "visible" });
+        step = "switch seat to dock";
+        await seat.locator("[data-seat-placement]").click({ force: true });
+        await seat.evaluate(element => (element as HTMLElement).style.setProperty("--seat-w", "360px"));
+        await page.waitForFunction(() => {
+          const dock = document.querySelector<HTMLElement>("[data-kanban-seat].side");
+          return dock && Math.abs(dock.getBoundingClientRect().width - 360) <= 1;
+        });
+        const dockChip = seat.locator("[data-worker-limit-chip]").first();
+        await frame(page, "[data-worker-limit-chip]", `${name}-floor360`, undefined, 360);
+        step = "open dock worker-limit popover";
+        await dockChip.click();
+        await frame(page, "[data-worker-limit-popover]", `${name}-floor360-popover`, undefined, 360);
+        await page.keyboard.press("Escape");
       }
       if (phone) {
         // Escape closes the seat's layer before opening the board menu.
@@ -286,7 +341,7 @@ export async function captureWorkerLimitFrames(browser: Browser, base: string, o
         if (overview.text?.includes(lang === "en" ? " here" : " тут")) failures.push(`${name}: overview names a project's running count`);
       }
       if (pageErrors.length) failures.push(`${name}: ${pageErrors.join(" | ")}`);
-    } catch (error) { failures.push(`${name}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`); }
+    } catch (error) { failures.push(`${name}: ${step}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`); }
     finally { await context.close(); }
   }
   return { readings, failures };
