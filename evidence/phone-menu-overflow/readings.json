@@ -1,0 +1,5849 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "scenes": [
+    "board-menu",
+    "overview-menu",
+    "conversation-menu",
+    "seat-conversation-menu",
+    "stage-conversation-menu",
+    "task-menu",
+    "task-status",
+    "lane-menu",
+    "pipeline-menu",
+    "stage-sheet",
+    "seat-sheet",
+    "card-sheet",
+    "background-sheet",
+    "pinned-sheet",
+    "limit-menu",
+    "held-menu",
+    "compact-refused-menu"
+  ],
+  "readings": [
+    {
+      "key": "390-en-light-board-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "board-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"settings\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"memory\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"key\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"help\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"rules\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 71,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-dark-board-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "board-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"settings\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"memory\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"key\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"help\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"rules\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 77,
+        "closing": 77,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-light-board-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "board-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"settings\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"memory\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"key\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"help\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"rules\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 77,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-dark-board-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "board-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"settings\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"memory\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"key\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"help\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"rules\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-light-board-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "board-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"settings\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"memory\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"key\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"help\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"rules\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 70,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-dark-board-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "board-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"settings\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"memory\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"key\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"help\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"rules\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 76,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-light-board-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "board-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"settings\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"memory\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"key\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"help\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"rules\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 74,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-dark-board-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "board-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"settings\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"memory\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"key\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"help\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"rules\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-sheet=\"menu\"] [data-mobile2-menu-row=\"back\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 77,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-light-overview-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "overview-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-dark-overview-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "overview-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-light-overview-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "overview-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-dark-overview-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "overview-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-light-overview-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "overview-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-dark-overview-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "overview-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-light-overview-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "overview-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-dark-overview-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "overview-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-light-conversation-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-dark-conversation-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-light-conversation-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 77,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-dark-conversation-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 79,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-light-conversation-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-dark-conversation-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 79,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-light-conversation-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 79,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-dark-conversation-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-light-seat-conversation-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "seat-conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-dark-seat-conversation-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "seat-conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 79,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-light-seat-conversation-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "seat-conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-dark-seat-conversation-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "seat-conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 79,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-light-seat-conversation-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "seat-conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 79,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-dark-seat-conversation-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "seat-conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 79,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-light-seat-conversation-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "seat-conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 79,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-dark-seat-conversation-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "seat-conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 79,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-light-stage-conversation-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "stage-conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 80,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-dark-stage-conversation-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "stage-conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 80,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-light-stage-conversation-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "stage-conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-dark-stage-conversation-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "stage-conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 80,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-light-stage-conversation-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "stage-conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-dark-stage-conversation-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "stage-conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-light-stage-conversation-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "stage-conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-dark-stage-conversation-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "stage-conversation-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"manage\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"end\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [
+        "[data-mobile2-menu-section=\"subagents\"]"
+      ],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-light-task-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "task-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-phone-task-menu=\"priority\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-phone-task-menu=\"colour\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-dark-task-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "task-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-phone-task-menu=\"priority\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-phone-task-menu=\"colour\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-light-task-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "task-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-phone-task-menu=\"priority\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-phone-task-menu=\"colour\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-dark-task-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "task-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-phone-task-menu=\"priority\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-phone-task-menu=\"colour\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-light-task-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "task-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-phone-task-menu=\"priority\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-phone-task-menu=\"colour\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-dark-task-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "task-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-phone-task-menu=\"priority\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-phone-task-menu=\"colour\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-light-task-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "task-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-phone-task-menu=\"priority\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-phone-task-menu=\"colour\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-dark-task-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "task-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-phone-task-menu=\"priority\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-phone-task-menu=\"colour\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-light-task-status",
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "task-status",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-dark-task-status",
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "task-status",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-light-task-status",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "task-status",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-dark-task-status",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "task-status",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-light-task-status",
+      "width": 360,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "task-status",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-dark-task-status",
+      "width": 360,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "task-status",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-light-task-status",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "task-status",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-dark-task-status",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "task-status",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-light-lane-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "lane-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-dark-lane-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "lane-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-light-lane-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "lane-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-dark-lane-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "lane-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-light-lane-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "lane-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-dark-lane-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "lane-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-light-lane-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "lane-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-dark-lane-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "lane-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-light-pipeline-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "pipeline-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-dark-pipeline-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "pipeline-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-light-pipeline-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "pipeline-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-dark-pipeline-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "pipeline-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-light-pipeline-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "pipeline-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-dark-pipeline-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "pipeline-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-light-pipeline-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "pipeline-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-dark-pipeline-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "pipeline-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-light-stage-sheet",
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "stage-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-dark-stage-sheet",
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "stage-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-light-stage-sheet",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "stage-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-dark-stage-sheet",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "stage-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-light-stage-sheet",
+      "width": 360,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "stage-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-dark-stage-sheet",
+      "width": 360,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "stage-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-light-stage-sheet",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "stage-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-dark-stage-sheet",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "stage-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-light-seat-sheet",
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "seat-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-dark-seat-sheet",
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "seat-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-light-seat-sheet",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "seat-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-dark-seat-sheet",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "seat-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-light-seat-sheet",
+      "width": 360,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "seat-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-dark-seat-sheet",
+      "width": 360,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "seat-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-light-seat-sheet",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "seat-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-dark-seat-sheet",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "seat-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-light-card-sheet",
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "card-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-dark-card-sheet",
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "card-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-light-card-sheet",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "card-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-dark-card-sheet",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "card-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-light-card-sheet",
+      "width": 360,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "card-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-dark-card-sheet",
+      "width": 360,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "card-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-light-card-sheet",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "card-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-dark-card-sheet",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "card-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-light-background-sheet",
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "background-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-task-menu]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 77,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-dark-background-sheet",
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "background-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-task-menu]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-light-background-sheet",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "background-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-task-menu]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-dark-background-sheet",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "background-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-task-menu]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-light-background-sheet",
+      "width": 360,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "background-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-task-menu]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-dark-background-sheet",
+      "width": 360,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "background-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-task-menu]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-light-background-sheet",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "background-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-task-menu]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-dark-background-sheet",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "background-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-task-menu]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-light-pinned-sheet",
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "pinned-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-dark-pinned-sheet",
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "pinned-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-light-pinned-sheet",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "pinned-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-dark-pinned-sheet",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "pinned-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-light-pinned-sheet",
+      "width": 360,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "pinned-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-dark-pinned-sheet",
+      "width": 360,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "pinned-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-light-pinned-sheet",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "pinned-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-dark-pinned-sheet",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "pinned-sheet",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-light-limit-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "limit-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 77,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-dark-limit-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "limit-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 77,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-light-limit-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "limit-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-dark-limit-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "limit-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 76,
+        "closing": 78,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-light-limit-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "limit-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-dark-limit-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "limit-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 74,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-light-limit-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "limit-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-dark-limit-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "limit-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-light-held-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "held-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-dark-held-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "held-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-light-held-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "held-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-dark-held-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "held-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-light-held-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "held-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-dark-held-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "held-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-light-held-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "held-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-dark-held-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "held-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 80,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-light-compact-refused-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "compact-refused-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-en-dark-compact-refused-menu",
+      "width": 390,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "compact-refused-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-light-compact-refused-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "compact-refused-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "390-uk-dark-compact-refused-menu",
+      "width": 390,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "compact-refused-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 390,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-light-compact-refused-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "light",
+      "scene": "compact-refused-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 78,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-en-dark-compact-refused-menu",
+      "width": 360,
+      "lang": "en",
+      "scheme": "dark",
+      "scene": "compact-refused-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 77,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-light-compact-refused-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "light",
+      "scene": "compact-refused-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 79,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    },
+    {
+      "key": "360-uk-dark-compact-refused-menu",
+      "width": 360,
+      "lang": "uk",
+      "scheme": "dark",
+      "scene": "compact-refused-menu",
+      "reads": [
+        {
+          "step": "rest",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        },
+        {
+          "step": "[data-mobile2-menu-section=\"turn\"]",
+          "sheet": true,
+          "doc": 0,
+          "scrollX": 0,
+          "inner": 360,
+          "bodyOver": 0,
+          "phraseOver": 0,
+          "labelCut": 0,
+          "retryOffset": 0,
+          "offenders": []
+        }
+      ],
+      "skipped": [],
+      "frames": {
+        "opening": 79,
+        "closing": 80,
+        "worstDocument": 0,
+        "worstBody": 0
+      }
+    }
+  ],
+  "failures": []
+}
