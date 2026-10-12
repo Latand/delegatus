@@ -3701,7 +3701,7 @@ async function claudeLoginMain(): Promise<void> {
       const measureCard = () => page.evaluate(({ selector, retryText }) => {
         const card = document.querySelector(selector);
         const panel = card?.closest('[role="dialog"]') ?? card?.closest("[data-mobile2-accounts]");
-        const footer = document.querySelector('[data-engine-limits="claude"]');
+        const footer = document.querySelector(`[data-engine-limits="claude"] [data-footer-account="${card?.getAttribute("data-account-row") ?? card?.getAttribute("data-mobile2-account")}"]`);
         const box = (element: Element | null | undefined) => { const r = element?.getBoundingClientRect(); return r ? { x: r.x, y: r.y, w: r.width, h: r.height } : null; };
         return { text: card?.textContent?.replace(/\s+/g, " ").trim() ?? "", badgeText: [...(card?.querySelectorAll("span.rounded-full") ?? [])].map((badge) => badge.textContent?.trim() ?? ""),
           limitRows: card?.querySelectorAll("[data-limit-row]").length ?? 0,
@@ -3719,7 +3719,8 @@ async function claudeLoginMain(): Promise<void> {
       const limitsBeforeSuccess = limitsReads;
       phase = "authenticated";
       await page.waitForFunction((selector) => document.querySelector(selector)?.querySelectorAll("[data-limit-row]").length === 2, cardSelector, { timeout: 5_000 });
-      if (!phone) await page.waitForFunction(() => document.querySelector('[data-engine-limits="claude"] [data-meter-value]')?.textContent?.includes("69%"), undefined, { timeout: 5_000 });
+      if (!phone) await page.waitForFunction((id) => document.querySelector(`[data-engine-limits="claude"] [data-footer-account="${id}"] [data-meter-value]`)?.textContent?.includes("69%"), accountId, { timeout: 5_000 });
+      await page.locator(cardSelector).scrollIntoViewIfNeeded();
       const after = await measureCard();
       must(after.limitRows === 2 && !after.retry, `${tag}: success did not replace Retry with both windows`);
       must(!after.text.includes(translate(lang, "limits.noDataYet")), `${tag}: success still says no data`);
