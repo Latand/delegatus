@@ -98,3 +98,33 @@ test("other spawn errors retain immediate terminal behavior", async () => {
   expect(calls).toBe(1);
   expect(orchestratorSeatFor("atlas").history.at(-1)?.seat.intent.error).toBe("spawn transport failed");
 });
+
+
+for (const automatic of [false, true]) test(`a failed receipt after SQLite busy stays pending through ${automatic ? "automatic recovery" : "designation"} replay`, async () => {
+  let failedReceipt = false;
+  let calls = 0;
+  const id = conversationId();
+  const deps = dependencies(async () => {
+    calls += 1;
+    if (calls === 1) {
+      failedReceipt = true;
+      return { status: 500, body: { error: "database is locked" } };
+    }
+    expect(orchestratorSeatFor("atlas").history).toEqual([]);
+    return { status: 200, body: { ok: true, conversationId: id, path: null } };
+  });
+  deps.launchSettlement = ({ clientRequestId }) => failedReceipt && clientRequestId === request.clientRequestId
+    ? { kind: "failed", error: "spawn failed before pane binding" } : { kind: "unknown" };
+  let result;
+  if (automatic) {
+    const incumbent = conversationId();
+    beginOrchestratorSeatIntent({ project: "atlas", mandate: "Run the board.", clientRequestId: "seed_designation", mode: "existing", engine: "claude", model: "opus", now: AT });
+    const activated = completeOrchestratorSeatIntent({ project: "atlas", clientRequestId: "seed_designation", conversationId: incumbent, path: null, now: AT });
+    if (activated.kind !== "activated") throw new Error("fixture seat did not activate");
+    result = await executeOrchestratorRotation({ project: "atlas", clientRequestId: request.clientRequestId, cwd: "/tmp", expectedIncumbentSeatEpoch: activated.seat.seatEpoch }, deps, null,
+      { autonomous: true, automaticReplacement: { conversationId: incumbent, seatEpoch: activated.seat.seatEpoch }, replacementHold: () => null });
+  } else result = await executeOrchestratorSeatRequest(request, deps);
+  expect(result.status).toBe(200);
+  expect(calls).toBe(2);
+  expect(orchestratorSeatFor("atlas").history).toEqual([]);
+});

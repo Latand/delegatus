@@ -799,7 +799,7 @@ export const READ_FAILURE_GRACE_MS = 15_000;
  * progresses synchronously to its durable begin before yielding, which is what
  * keeps two concurrent requests serialized by the pending-intent write.
  */
-function reconcilePendingSeatIntent(project: string, dependencies: SeatCommandDependencies, failureGraceMs = 0): Promise<unknown> | null {
+function reconcilePendingSeatIntent(project: string, dependencies: SeatCommandDependencies, failureGraceMs = 0, retryingSqliteRequestId?: string): Promise<unknown> | null {
   const pending = orchestratorSeatFor(project).pending;
   if (!pending || pending.intent.mode !== "spawn" || pending.intent.error !== null) return null;
   const settlement = dependencies.launchSettlement({
@@ -818,6 +818,10 @@ function reconcilePendingSeatIntent(project: string, dependencies: SeatCommandDe
     }, dependencies);
   }
   if (settlement.kind === "failed") {
+    // This invocation still owes its bounded SQLite replay. The spawn layer
+    // can reclaim a failed receipt under the same key; recording terminal
+    // history here would end the intent before that replay gets its chance.
+    if (pending.intent.clientRequestId === retryingSqliteRequestId) return null;
     const age = Date.parse(dependencies.now()) - Date.parse(pending.designatedAt);
     if (failureGraceMs > 0 && Number.isFinite(age) && age < failureGraceMs) return null;
     failOrchestratorSeatIntent(project, pending.intent.clientRequestId, settlement.error, dependencies.now());
@@ -900,20 +904,24 @@ async function seatStoreReleased(deadline: number, attempt: number): Promise<boo
 async function guardedSeatTransition(
   rawBody: Record<string, unknown>,
   code: "seat_transition_failed" | "rotation_failed",
-  run: () => Promise<SeatCommandResult>,
+  run: (retryingSqliteRequestId?: string) => Promise<SeatCommandResult>,
   busy: { replay: boolean; waitMs?: number; launchAccepted?: (clientRequestId: string) => boolean } = { replay: false },
 ): Promise<SeatCommandResult> {
   const deadline = performance.now() + (busy.waitMs ?? SEAT_STORE_WAIT_MS);
+  let retryingSqliteRequestId: string | undefined;
   for (let attempt = 1; ; attempt += 1) {
     try {
-      return await run();
+      return await run(retryingSqliteRequestId);
     } catch (thrown) {
       const sqliteBusy = isSqliteBusy(thrown);
       const storeBusy = sqliteBusy || isAccountAdmissionRetryable(thrown);
       if (storeBusy && busy.replay && attempt <= SEAT_STORE_BUSY_REPLAYS) {
         if (sqliteBusy) {
           await delay(Math.min(25 * attempt, Math.max(0, deadline - performance.now())));
-          if (performance.now() < deadline) continue;
+          if (performance.now() < deadline) {
+            retryingSqliteRequestId = text(rawBody.clientRequestId);
+            continue;
+          }
         } else if (await seatStoreReleased(deadline, attempt)) continue;
       }
       const admissionChanged = thrown instanceof AccountAdmissionChangedError;
@@ -976,7 +984,7 @@ export function executeOrchestratorSeatRequest(
   triggeredBy: OrchestratorSeatTrigger | null = null,
   admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
-  return guardedSeatTransition(rawBody, "seat_transition_failed", () => runOrchestratorSeatRequest(rawBody, dependencies, triggeredBy, admission), {
+  return guardedSeatTransition(rawBody, "seat_transition_failed", (retryingSqliteRequestId) => runOrchestratorSeatRequest(rawBody, dependencies, triggeredBy, admission, retryingSqliteRequestId), {
     replay: true,
     waitMs: dependencies.seatStoreWaitMs,
     launchAccepted: (clientRequestId) => dependencies.launchSettlement({ launchId: null, clientRequestId }).kind === "settled",
@@ -988,6 +996,7 @@ async function runOrchestratorSeatRequest(
   dependencies: SeatCommandDependencies,
   triggeredBy: OrchestratorSeatTrigger | null,
   admission?: SeatLaunchAdmission,
+  retryingSqliteRequestId?: string,
 ): Promise<SeatCommandResult> {
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
   if (!namedProject) return { status: 400, body: { error: "project must be a valid project key", admission: "refused" } };
@@ -1023,7 +1032,7 @@ async function runOrchestratorSeatRequest(
      died is not an incumbent, and rolling it back here is what puts the
      predecessor back in front of this request (#1757). */
   reconcileActiveSeatLaunch(project, dependencies);
-  const reconciliation = reconcilePendingSeatIntent(project, dependencies);
+  const reconciliation = reconcilePendingSeatIntent(project, dependencies, 0, retryingSqliteRequestId);
   if (reconciliation) await reconciliation;
 
   const completedReplay = reconcileCompletedSeatReplay(project, clientRequestId, dependencies);
@@ -1496,7 +1505,7 @@ export function executeOrchestratorRotation(
   actor: ViewerActor | null = null,
   admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
-  return guardedSeatTransition(rawBody, "rotation_failed", () => runOrchestratorRotation(rawBody, dependencies, actor, admission), {
+  return guardedSeatTransition(rawBody, "rotation_failed", (retryingSqliteRequestId) => runOrchestratorRotation(rawBody, dependencies, actor, admission, retryingSqliteRequestId), {
     replay: true,
     waitMs: dependencies.seatStoreWaitMs,
     launchAccepted: (clientRequestId) => dependencies.launchSettlement({ launchId: null, clientRequestId }).kind === "settled",
@@ -1508,6 +1517,7 @@ async function runOrchestratorRotation(
   dependencies: SeatCommandDependencies,
   actor: ViewerActor | null,
   admission?: SeatLaunchAdmission,
+  retryingSqliteRequestId?: string,
 ): Promise<SeatCommandResult> {
   const triggeredBy = actor ? rotationTrigger(actor) : null;
   const namedProject = typeof rawBody.project === "string" ? validExplicitProject(rawBody.project) : null;
@@ -1539,7 +1549,7 @@ async function runOrchestratorRotation(
       },
     }
     : {};
-  const reconciliation = reconcilePendingSeatIntent(project, dependencies);
+  const reconciliation = reconcilePendingSeatIntent(project, dependencies, 0, retryingSqliteRequestId);
   if (reconciliation) await reconciliation;
   const incumbent = orchestratorSeatFor(project).active;
   if (!incumbent?.conversationId) {
