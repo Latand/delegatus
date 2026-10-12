@@ -1,6 +1,7 @@
 import { memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemoryState";
 import type { EffectivePipelineRole, Pipeline, PipelineDecisionAnswer, PipelineStage } from "./types";
 import { pipelineStageSandbox } from "./stageSandbox";
+import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
 
 const RELAY_PLACEHOLDER = "{{prev.output}}";
 
@@ -38,6 +39,11 @@ export function renderStagePrompt(
   let body = replaceAll(stage.prompt, "{{task}}", pipeline.task);
   body = replaceAll(body, RELAY_PLACEHOLDER, previousOutput);
   let roleScaffold = role.promptScaffold ? replaceAll(role.promptScaffold, "{{task}}", pipeline.task) : null;
+  if (roleScaffold && role.roleId === "orchestrator") {
+    const workerLimit = effectiveWorkerLimit(pipeline.project).value;
+    roleScaffold = replaceAll(roleScaffold, "{{maxWorkers}}", String(workerLimit));
+    roleScaffold = roleScaffold.replace(/\bat most \d+ workers\b/gu, `at most ${workerLimit} workers`);
+  }
   if (roleScaffold) roleScaffold = replaceAll(roleScaffold, RELAY_PLACEHOLDER, previousOutput);
   /* The controller persists the predecessor's output on the attempt whether or
      not the author placed the placeholder (#1678): a prompt that never names it

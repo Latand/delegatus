@@ -91,8 +91,11 @@ function withoutLines(text: string, labels: readonly string[], emptyOnly: boolea
   return text.replace(new RegExp(`^(?:${labels.join("|")}):${value}(?:\\n|$)`, "gm"), "");
 }
 
-function renderScaffold(definition: RoleDefinition, params: RoleParamValues, project = ""): string {
-  const rendered = definition.promptScaffold.replace(/\{\{([A-Za-z][A-Za-z0-9]*)\}\}/g, (_match, key: string) => String(definition.id === "orchestrator" && key === "maxWorkers" ? effectiveWorkerLimit(project).value : params[key] ?? ""));
+function renderScaffold(definition: RoleDefinition, params: RoleParamValues, project = "", deferWorkerLimit = false): string {
+  const rendered = definition.promptScaffold.replace(/\{\{([A-Za-z][A-Za-z0-9]*)\}\}/g, (_match, key: string) => {
+    if (definition.id === "orchestrator" && key === "maxWorkers") return deferWorkerLimit ? "{{maxWorkers}}" : String(effectiveWorkerLimit(project).value);
+    return String(params[key] ?? "");
+  });
   const scoped = definition.id === "orchestrator" && params.mode !== "backlog-campaign"
     ? withoutLines(rendered, BACKLOG_CAMPAIGN_LINES, false)
     : rendered;
@@ -109,16 +112,16 @@ export const APPLY_FIXES_GUIDANCE = "Apply-fixes guidance: Fix every handed find
  * body without ever cutting a fence. This is the single source of the frontend
  * guidance; the pipeline reuses it, so a re-render can't drop it.
  */
-export function roleScaffoldBody(definition: RoleDefinition, params: RoleParamValues, project = ""): string {
+export function roleScaffoldBody(definition: RoleDefinition, params: RoleParamValues, project = "", deferWorkerLimit = false): string {
   const frontendGuidance = definition.id === "builder" && params.domain === "frontend"
     ? "\n\nUI/frontend implementation guidance: follow the approved interaction and visual contract, preserve accessible semantics and responsive behaviour, and keep every language the project ships in step. Reuse the colours, type, spacing and components the surrounding UI already uses; add no new colour, font, pill or card shape, or decorative label the brief does not ask for."
     : "";
   const fixRound = definition.id === "builder" && params.mode === "apply-fixes";
   /* A fix round has one finish line, scoped to its findings. */
-  const rendered = fixRound ? renderScaffold(definition, params, project)
+  const rendered = fixRound ? renderScaffold(definition, params, project, deferWorkerLimit)
     .replace(BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE)
     .replace("Review your own diff before you finish and report the verification evidence.", "Report the verification evidence; fix any issue you notice within the specification before finishing.")
-    : renderScaffold(definition, params, project);
+    : renderScaffold(definition, params, project, deferWorkerLimit);
   return rendered + frontendGuidance + (fixRound ? `\n\n${APPLY_FIXES_GUIDANCE}` : "");
 }
 

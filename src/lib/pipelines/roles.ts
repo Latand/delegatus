@@ -59,7 +59,7 @@ export const pipelineRoleLookup: PipelineRoleLookup = (roleId, params, project =
   /* A pipeline stage never carries the seat mandate, so an orchestrator stage
      gets the shared rules its scaffold leaves to the mandate. */
   const body = definition.id === "orchestrator"
-    ? `${roleScaffoldBody(definition, parameters, project)}\n\n${ORCHESTRATOR_WITHOUT_MANDATE_RULES}`
+    ? `${roleScaffoldBody(definition, parameters, project, true)}\n\n${ORCHESTRATOR_WITHOUT_MANDATE_RULES}`
     : roleScaffoldBody(definition, parameters, project);
   const fences = roleFenceBlock(definition);
   return {

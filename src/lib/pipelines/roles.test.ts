@@ -69,7 +69,7 @@ test("production role lookup reads the current Sol Builder preset", () => {
   });
 });
 
-test("legacy orchestrator scaffold templates use the project effective limit during pipeline resolution", () => {
+test("pipeline role resolution defers legacy worker placeholders until stage launch", () => {
   const previous = process.env.LLV_STATE_DIR;
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-worker-limit-"));
   process.env.LLV_STATE_DIR = sandbox;
@@ -78,8 +78,8 @@ test("legacy orchestrator scaffold templates use the project effective limit dur
     setMachineWorkerLimit(8, { kind: "operator", via: "test" }, null);
     setProjectWorkerLimit("one", 10, { kind: "operator", via: "test" }, null);
     const stage = resolvePipelineRole({ role: { roleId: "orchestrator", params: { maxWorkers: 2 } } }, "run", pipelineRoleLookup, "one");
-    expect(stage.role?.promptScaffold).toContain("at most 10 workers");
-    expect(pipelineRoleLookup("orchestrator", { maxWorkers: 2 }, "two")?.promptScaffold).toContain("at most 8 workers");
+    expect(stage.role?.promptScaffold).toContain("at most {{maxWorkers}} workers");
+    expect(pipelineRoleLookup("orchestrator", { maxWorkers: 2 }, "two")?.promptScaffold).toContain("at most {{maxWorkers}} workers");
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previous;

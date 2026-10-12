@@ -67,13 +67,13 @@ test("live children stay counted through seat rotation in JSON and SQLite regist
         structuredHost: { kind: "codex-app-server", endpoint: "/host", process: null, eventCursor: 0, protocolVersion: "v2", writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [] }, claimEpoch: 0, claimOwner: null, pendingAction: null, updatedAt: "2026-10-12T00:00:00Z" } },
       receipts: {}, conversations,
       lineageEdges: { [childId]: { childConversationId: childId, parentConversationId: "conversation_seat_old", childSessionKey: { engine: "codex", sessionId: childSession }, parentSessionKey: null, childArtifactPath: "/sessions/child_live.jsonl", parentArtifactPath: null, kind: "spawn", role: "builder", reviewsConversationId: null, source: "viewer-spawn", evidence: { launchId: null, clientAttemptId: null }, createdAt: "2026-10-12T00:00:00Z" } },
-      memberships: {}, conversationAliases: {} }), "utf8");
+      memberships: {}, conversationAliases: { conversation_previous: "conversation_seat_old" } }), "utf8");
     let registry: AgentRegistry | undefined;
     try {
       registry = new AgentRegistry(file, () => true, undefined, { sqliteMode });
       setAgentRegistryForTests(registry);
       beginOrchestratorSeatIntent({ project: "one", mandate: "Coordinate work", clientRequestId: `old-${sqliteMode}`, mode: "spawn" });
-      completeOrchestratorSeatIntent({ project: "one", clientRequestId: `old-${sqliteMode}`, conversationId: "conversation_seat_old", path: null });
+      completeOrchestratorSeatIntent({ project: "one", clientRequestId: `old-${sqliteMode}`, conversationId: "conversation_previous", path: null });
       expect(projectWorkerCounts({ pipelines: () => [] }).byProject.get("one")).toBe(1);
       beginOrchestratorSeatIntent({ project: "one", mandate: "Coordinate work", clientRequestId: `new-${sqliteMode}`, mode: "spawn" });
       completeOrchestratorSeatIntent({ project: "one", clientRequestId: `new-${sqliteMode}`, conversationId: "conversation_seat_new", path: null });

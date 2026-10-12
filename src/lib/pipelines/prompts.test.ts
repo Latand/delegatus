@@ -1,9 +1,13 @@
 import { expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 
 import { convertNewLegacyReviewStages } from "./legacyReviewDefinition";
 import { buildPipeline } from "./store";
+import { setMachineWorkerLimit, setProjectWorkerLimit } from "@/lib/operator/workerLimit";
 import { renderDecisionInput, renderStagePrompt } from "./prompts";
 import { parseStageVerdict } from "./verdict";
 import { pipelineRoleLookup, resolvePipelineRole } from "./roles";
@@ -22,6 +26,32 @@ test("comparison guidance names the owner while preserving full host capabilitie
   expect(prompt).toContain("This instruction is guidance");
   expect(prompt).toContain("Host access: full");
   expect(stage.sandbox).toBe("full");
+});
+
+test("persisted orchestrator scaffolds use the project's worker limit when each stage launches", () => {
+  const previous = process.env.LLV_STATE_DIR;
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-prompt-worker-limit-"));
+  process.env.LLV_STATE_DIR = sandbox;
+  try {
+    setMachineWorkerLimit(8, { kind: "operator", via: "test" }, null);
+    setProjectWorkerLimit("one", 10, { kind: "operator", via: "test" }, null);
+    const role = { roleId: "orchestrator" as const, engine: "codex" as const, model: "gpt-6-luna", effort: "high", access: "read-write" as const,
+      promptScaffold: "Keep at most 10 workers running. Legacy template: {{maxWorkers}}." };
+    const stage: PipelineStage = { id: "coordinate", kind: "run", prompt: "Coordinate", next: null, effectiveRole: role };
+    const pipeline = buildPipeline({ id: "worker-limit", task: "Coordinate", project: "one", repoDir: "/repo", stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
+    const persisted = JSON.parse(JSON.stringify(pipeline));
+    expect(persisted.stages[0].effectiveRole.promptScaffold).toContain("at most 10 workers");
+
+    setProjectWorkerLimit("one", 12, { kind: "operator", via: "test" }, null);
+    const prompt = renderStagePrompt(persisted, persisted.stages[0], persisted.stages[0].effectiveRole, "");
+    expect(prompt).toContain("Keep at most 12 workers running.");
+    expect(prompt).toContain("Legacy template: 12.");
+    expect(prompt).not.toContain("at most 10 workers");
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 test("every run scaffold overrides conflicting branch instructions and names the lane branch", () => {

@@ -1,4 +1,5 @@
 import { agentRegistry } from "@/lib/agent/registry";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import fs from "node:fs";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { seatProjectNow } from "./seatProjectIdentity";
@@ -16,7 +17,9 @@ function workerSeats(parentIds: ReadonlySet<string>) {
   const registry = agentRegistry();
   const parentContexts = parentIds.size ? registry.workerSeatContexts([...parentIds]) : new Map<string, { conversationId: string; directories: string[] }>();
   const resolvedParents = new Set([...parentIds, ...[...parentContexts.values()].map(context => context.conversationId)]);
-  const historical = orchestratorRevocations().filter(seat => resolvedParents.has(seat.conversationId));
+  const historical = orchestratorRevocations().filter(seat => resolvedParents.has(
+    registry.canonicalConversationId(seat.conversationId as ViewerConversationId),
+  ));
   const ids = [...new Set([...active.flatMap(seat => seat.conversationId ? [seat.conversationId] : []), ...historical.map(seat => seat.conversationId)])];
   const contexts = ids.length ? registry.workerSeatContexts(ids) : new Map<string, { conversationId: string; directories: string[] }>();
   const cwdOf = (id: string) => contexts.get(id)?.directories.find(directory => {
