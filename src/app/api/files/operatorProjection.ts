@@ -17,6 +17,7 @@ import { markBoardViewed } from "@/lib/links/boardPresence";
 import { buildFilesResponse } from "./response";
 import { cachedFileScan } from "@/lib/scanner/scanCache";
 import { buildFilesResponseInWorker, filesResponseWorkerEnabled } from "@/lib/scanner/filesResponseWorker";
+import { createFilesProjectionQueue, FilesProjectionQueueError, type FilesProjectionBuildSample, type FilesProjectionQueue, type FilesProjectionQueueDiagnostics } from "./projectionQueue";
 
 
 function generationHeader(request: Request, name: string): number | undefined {
@@ -88,12 +89,13 @@ const projectionCacheStore = globalThis as typeof globalThis & {
   __llvFilesDeltaLinks?: Map<string, Map<string, DeltaLink>>;
   __llvFilesGzipBodies?: WeakMap<ProjectionRepresentation, Promise<Uint8Array>>;
   __llvFilesProjectionInflight?: Map<string, Promise<ProjectionRepresentation>>;
-  __llvFilesProjectionWorkerTail?: Promise<void>;
   __llvFilesProjectionPersistenceTail?: Promise<void>;
   __llvFilesPersistedProjectionChecked?: boolean;
   __llvFilesProjectionSequence?: number;
   __llvFilesWriteRecovery?: { directory: string; since: string; revisions: Map<string, number | null> };
   __llvFilesWorkerWriteFailedSince?: string | null;
+  __llvFilesProjectionWorkerTail?: Promise<void>;
+  __llvFilesProjectionQueue?: FilesProjectionQueue;
 };
 
 /** The next build in this process's order, taken when a build reads the
@@ -282,13 +284,51 @@ function projectionKey(baseKey: string): string {
   return `${baseKey}:${registryDiagnostics.revision ?? "json"}:${registryDiagnostics.transactionCount}`;
 }
 
+/* Bounded and measured; see projectionQueue.ts. One queue per process, shared
+   by every bundle that loads this module. */
+export const FILES_PROJECTION_QUEUE_MAX_DEPTH = 16;
+export const FILES_PROJECTION_QUEUE_MAX_WAIT_MS = 30_000;
+
+function projectionQueue(): FilesProjectionQueue {
+  projectionCacheStore.__llvFilesProjectionQueue ??= createFilesProjectionQueue({
+    maxDepth: FILES_PROJECTION_QUEUE_MAX_DEPTH,
+    maxWaitMs: FILES_PROJECTION_QUEUE_MAX_WAIT_MS,
+    tail: {
+      get: () => projectionCacheStore.__llvFilesProjectionWorkerTail,
+      set: (tail) => { projectionCacheStore.__llvFilesProjectionWorkerTail = tail; },
+    },
+  });
+  return projectionCacheStore.__llvFilesProjectionQueue;
+}
+
+export function filesProjectionQueueDiagnostics(): FilesProjectionQueueDiagnostics {
+  return projectionQueue().diagnostics();
+}
+
+/** Every build this process finishes from now on, for the candidate gate. */
+export function observeFilesProjectionBuilds(observer: (sample: FilesProjectionBuildSample) => void): () => void {
+  return projectionQueue().observe(observer);
+}
+
+/** Resolves once every build queued so far, and any queued behind it while
+    waiting, has finished, or after `timeoutMs`. */
+export async function filesProjectionsSettled(timeoutMs = 30_000): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  for (;;) {
+    const tail = projectionCacheStore.__llvFilesProjectionWorkerTail;
+    const remaining = deadline - performance.now();
+    if (!tail || remaining <= 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([tail, new Promise<void>((resolve) => { timer = setTimeout(resolve, remaining); })]);
+    if (timer) clearTimeout(timer);
+    if (projectionCacheStore.__llvFilesProjectionWorkerTail === tail) return;
+  }
+}
+
 function queueProjectionWorker(
   build: () => Promise<ProjectionRepresentation>,
 ): Promise<ProjectionRepresentation> {
-  const previous = projectionCacheStore.__llvFilesProjectionWorkerTail ?? Promise.resolve();
-  const current = previous.catch(() => undefined).then(build);
-  projectionCacheStore.__llvFilesProjectionWorkerTail = current.then(() => undefined, () => undefined);
-  return current;
+  return projectionQueue().run(build);
 }
 
 async function projectionWithinBudget(
@@ -440,6 +480,10 @@ async function projectionFor(
     if (filesResponseWorkerEnabled() && !filesystemExhausted()) {
       try {
         representation = await queueProjectionWorker(async () => {
+          /* Superseded while it waited: the scope already holds a body built
+             for this very input, so the queued build is discarded. */
+          const settled = projectionCache().get(scopeKey);
+          if (settled?.key === key && settled.representation !== cached?.representation) return settled.representation;
           /* The build order is taken as the build starts, where it reads the
              stores. The persisted snapshot is read by the worker when its turn
              comes, and a later scan may have replaced it by then: the file
@@ -463,6 +507,10 @@ async function projectionFor(
           return { ...projected, built: { epoch, generation, sequence } };
         });
       } catch (error) {
+        if (error instanceof FilesProjectionQueueError && cached) {
+          /* The last representation stands until a build gets its turn. */
+          return cached.representation;
+        }
         if (!isDiskFullError(error)) throw error;
         // Classified state-store failures belong to state-data health. A raw
         // ENOSPC from result-file transport has its own recovery signal.

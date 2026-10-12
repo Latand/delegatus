@@ -24,8 +24,10 @@ import {
   agentRegistry,
   readOnlyConversationLookupFromSnapshot,
   type AgentRegistryEntry,
+  type RegistryFile,
 } from "@/lib/agent/registry";
 import { projectLaunchConversations } from "@/lib/agent/spawnProjection";
+import { registryRowProjection, registryRowsMatching, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
 import { readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
 import { orchestratorMandateDeliveries, SPAWN_CLIENT_MESSAGE_PREFIX } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { MandateDelivery } from "@/lib/runtime/messageOrigin";
@@ -238,6 +240,50 @@ export function consolidateProjectCatalogByRepository(
   return { projectCatalog, projectRemap };
 }
 
+/* Whole-history passes read these narrow projections. Over a SQLite registry an
+   archived version is projected once and kept, so a warm build no longer
+   parses, normalizes and freezes every historical row on each pass (#2761). */
+const RECEIPT_OWNERSHIP: RegistryRowProjector<"receipts", Pick<RegistryFile["receipts"][string], "conversationId" | "clientAttemptId">> = {
+  id: "files-response.receipt-ownership.v1",
+  collection: "receipts",
+  project: (receipt) => ({ conversationId: receipt.conversationId, clientAttemptId: receipt.clientAttemptId }),
+};
+const CONVERSATION_SUPERSEDENCE: RegistryRowProjector<"conversations", { id: RegistryFile["conversations"][string]["id"]; supersededBy: RegistryFile["conversations"][string]["id"] | null }> = {
+  id: "files-response.conversation-supersedence.v1",
+  collection: "conversations",
+  project: (conversation) => ({ id: conversation.id, supersededBy: conversation.supersededBy?.conversationId ?? null }),
+};
+const CONVERSATION_PATHS: RegistryRowProjector<"conversations", { generationPaths: string[]; continuityPaths: string[] }> = {
+  id: "files-response.conversation-paths.v1",
+  collection: "conversations",
+  project: (conversation) => ({
+    generationPaths: conversation.generations.map((generation) => generation.path),
+    continuityPaths: [...conversation.continuityPaths],
+  }),
+};
+/** Whether a delivery can still be owed; only those rows are read in full. */
+const DELIVERY_OWED: RegistryRowProjector<"heldDeliveries", boolean> = {
+  id: "files-response.delivery-owed.v1",
+  collection: "heldDeliveries",
+  project: (delivery) => delivery.state === "held" || delivery.state === "assigned" || delivery.state === "delivery-uncertain",
+};
+
+const CONVERSATION_ACCOUNT_HOSTS: RegistryRowProjector<"conversations", Pick<RegistryFile["conversations"][string], "id" | "engine"> & { generations: Array<{ path: string; accountId: string | null }> }> = {
+  id: "files-response.conversation-account-hosts.v1",
+  collection: "conversations",
+  project: (conversation) => ({
+    id: conversation.id,
+    engine: conversation.engine,
+    generations: conversation.generations.map((generation) => ({ path: generation.path, accountId: generation.accountId })),
+  }),
+};
+/** An entry the rate-limit read model could count as a live host. */
+const ENTRY_HOST_CANDIDATE: RegistryRowProjector<"entries", boolean> = {
+  id: "files-response.entry-host-candidate.v1",
+  collection: "entries",
+  project: (entry) => Boolean(entry.accountId) && ["starting", "live", "idle", "handoff"].includes(entry.status),
+};
+
 export async function buildFilesResponse(request: Request, dependencies: FilesRouteDependencies): Promise<NextResponse> {
   const routeDependencies = filesResponseDependencies();
   const timings: string[] = [];
@@ -389,7 +435,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
      receipts: the attempt id spells the run id, so a report run is recognisable
      from registry storage alone — no Daily Reports history file involved. */
   const telegramReportRuns = new Map<string, string>();
-  for (const receipt of Object.values(registrySnapshot.receipts)) {
+  for (const [, receipt] of registryRowProjection(registrySnapshot, RECEIPT_OWNERSHIP)) {
     const conversationId = conversationLookup.canonicalConversationId(receipt.conversationId);
     receiptOwnedConversationIds.add(conversationId);
     const reportRunId = reportRunIdFromAttemptId(receipt.clientAttemptId);
@@ -400,9 +446,9 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
      tail its immediate predecessor and its round number (chain depth + 1),
      bounded so a malformed chain can never hang the scan. */
   const supersedencePredecessors = new Map<string, string>();
-  for (const candidate of Object.values(registrySnapshot.conversations)) {
+  for (const [, candidate] of registryRowProjection(registrySnapshot, CONVERSATION_SUPERSEDENCE)) {
     if (!candidate.supersededBy) continue;
-    const successorId = conversationLookup.canonicalConversationId(candidate.supersededBy.conversationId);
+    const successorId = conversationLookup.canonicalConversationId(candidate.supersededBy);
     if (successorId !== candidate.id && !supersedencePredecessors.has(successorId)) {
       supersedencePredecessors.set(successorId, candidate.id);
     }
@@ -420,7 +466,9 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     return round;
   };
   const owedDeliveries = new Map<string, StuckDelivery>();
-  for (const delivery of Object.values(registrySnapshot.heldDeliveries)) {
+  for (const [key, owed] of registryRowProjection(registrySnapshot, DELIVERY_OWED)) {
+    if (!owed) continue;
+    const delivery = registrySnapshot.heldDeliveries[key]!;
     if (delivery.command.origin?.kind === "agent") continue;
     if (delivery.state !== "held" && delivery.state !== "assigned" && delivery.state !== "delivery-uncertain") continue;
     const conversationId = conversationLookup.canonicalConversationId(delivery.conversationId);
@@ -616,7 +664,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
         targetAccountId: conversation.migration.targetId,
         targetLabel: conversation.migration.targetId,
         sourceLabel: source?.accountId ?? undefined,
-        heldDeliveries: Object.values(registrySnapshot.heldDeliveries).filter((delivery) =>
+        heldDeliveries: registryRowsMatching(registrySnapshot, "heldDeliveries", "conversationId", conversation.id).filter((delivery) =>
           delivery.conversationId === conversation.id && delivery.state !== "delivered").length,
         failure: conversation.migration.error,
         revision: conversation.migration.revision,
@@ -674,9 +722,9 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
      a worker that exited before the reaper ever reached it would be falsely
      certified clean. A generation with no stamp stays unverified; an archived
      (out-of-scan) generation is immutable, so any stamp certifies it. */
-  const conversationByPath = new Map<string, (typeof registrySnapshot.conversations)[keyof typeof registrySnapshot.conversations]>();
-  for (const conversation of Object.values(registrySnapshot.conversations)) {
-    for (const generation of conversation.generations) conversationByPath.set(generation.path, conversation);
+  const conversationByPath = new Map<string, ReturnType<typeof CONVERSATION_PATHS.project>>();
+  for (const [, conversation] of registryRowProjection(registrySnapshot, CONVERSATION_PATHS)) {
+    for (const generationPath of conversation.generationPaths) conversationByPath.set(generationPath, conversation);
     for (const continuityPath of conversation.continuityPaths) conversationByPath.set(continuityPath, conversation);
   }
   const { userAuthoredPaths, scannedAt } = readAuthorshipEvidence();
@@ -710,7 +758,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     const lineage = new Set<string>([file.path]);
     if (file.predecessorPath) lineage.add(file.predecessorPath);
     if (conversation) {
-      for (const generation of conversation.generations) lineage.add(generation.path);
+      for (const generationPath of conversation.generationPaths) lineage.add(generationPath);
       for (const continuityPath of conversation.continuityPaths) lineage.add(continuityPath);
     }
     if ([...lineage].some((pathname) => userAuthoredPaths.has(pathname))) {
@@ -787,10 +835,19 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   markTiming("files-stores");
   const projectsStartedAt = performance.now();
   const hostProbe = livenessProbe();
+  /* The read model walks every conversation and entry. It reads their hosting
+     identity through projections, and full rows only for entries that can
+     hold a live host (#2761). */
+  const rateLimitSnapshot = {
+    conversations: Object.fromEntries(registryRowProjection(registrySnapshot, CONVERSATION_ACCOUNT_HOSTS)),
+    entries: Object.fromEntries(registryRowProjection(registrySnapshot, ENTRY_HOST_CANDIDATE)
+      .flatMap(([key, candidate]) => candidate ? [[key, registrySnapshot.entries[key]!]] : [])),
+    quotaObservations: registrySnapshot.quotaObservations,
+  };
   const projected = projectRateLimitReadModel(
     files,
     flows,
-    registrySnapshot,
+    rateLimitSnapshot,
     Date.now(),
     (entry) => {
       const fullEntry = entry as AgentRegistryEntry;

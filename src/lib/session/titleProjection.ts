@@ -1,5 +1,6 @@
 import { agentRegistry, RegistryReadError, type SnapshotTitleConversationProjection } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { registryRowProjection, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { projectResolutionStateKey } from "@/lib/scanner/projectState";
 import type { FileEntry } from "@/lib/types";
@@ -45,6 +46,31 @@ function canonicalConversationId(snapshot: RegistrySnapshot, alias: string): str
   return current;
 }
 
+/* Title and project attribution read these identity fields of every
+   conversation; over a SQLite snapshot an archived version is projected once
+   (#2761). */
+type TitleConversation = RegistrySnapshot["conversations"][string];
+const TITLE_CONVERSATION: RegistryRowProjector<"conversations", {
+  id: TitleConversation["id"];
+  generationPaths: string[];
+  continuityPaths: string[];
+  projectOwnership: TitleConversation["projectOwnership"];
+  latest: { path: string; cwd: TitleConversation["generations"][number]["launchProfile"]["cwd"]; project: TitleConversation["generations"][number]["launchProfile"]["project"] } | null;
+}> = {
+  id: "title-projection.conversation.v1",
+  collection: "conversations",
+  project: (conversation) => {
+    const latest = conversation.generations.at(-1);
+    return {
+      id: conversation.id,
+      generationPaths: conversation.generations.map((generation) => generation.path),
+      continuityPaths: [...conversation.continuityPaths],
+      projectOwnership: conversation.projectOwnership,
+      latest: latest ? { path: latest.path, cwd: latest.launchProfile.cwd, project: latest.launchProfile.project } : null,
+    };
+  },
+};
+
 function projectRegistrySnapshot(
   snapshot: RegistrySnapshot,
   signature: string,
@@ -70,27 +96,27 @@ function projectRegistrySnapshot(
     projectInfoByCwd.set(cwd, info);
     return info;
   };
-  for (const conversation of Object.values(snapshot.conversations)) {
-    const owned = [...conversation.generations.map((generation) => generation.path), ...conversation.continuityPaths];
+  for (const [, conversation] of registryRowProjection(snapshot, TITLE_CONVERSATION)) {
+    const owned = [...conversation.generationPaths, ...conversation.continuityPaths];
     ownedPathsByConversation.set(conversation.id, owned);
     for (const pathname of owned) if (!conversationByPath.has(pathname)) conversationByPath.set(pathname, conversation.id);
-    const latest = conversation.generations.at(-1);
+    const latest = conversation.latest;
     if (!latest) continue;
     if (includeProjects) {
-      const cwd = latest.launchProfile.cwd?.trim();
+      const cwd = latest.cwd?.trim();
       const { project } = resolveProjectAttribution({
         projectOwnership: conversation.projectOwnership,
-        cwd: latest.launchProfile.cwd,
+        cwd: latest.cwd,
         cwdInfo: cwd ? cwdInfo(cwd) : null,
-        launchProfileProject: latest.launchProfile.project,
+        launchProfileProject: latest.project,
       });
       if (project) {
         projectByPath.set(latest.path, project);
-        if (latest.launchProfile.cwd) projectCwdByPath.set(latest.path, latest.launchProfile.cwd);
+        if (latest.cwd) projectCwdByPath.set(latest.path, latest.cwd);
       }
     }
-    for (const generation of conversation.generations) {
-      if (generation.path !== latest.path) archivedPaths.add(generation.path);
+    for (const generationPath of conversation.generationPaths) {
+      if (generationPath !== latest.path) archivedPaths.add(generationPath);
     }
     for (const pathname of conversation.continuityPaths) {
       if (pathname !== latest.path) archivedPaths.add(pathname);

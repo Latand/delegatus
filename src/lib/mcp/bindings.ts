@@ -4916,6 +4916,13 @@ function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
   return redactPayload({ count: accounts.length, accounts });
 }
 
+async function relayOwnerHistory(args: McpToolArgs, control: ViewerControlDependencies, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  if (ownerRelayCaller(dependencies)) throw new McpToolRefusal("Group history cannot be read while answering in Telegram.", { code: "owner_history_refused" });
+  return redactPayload(await control.post("/api/external-relay/owner-history", {
+    op: args.action, ...Object.fromEntries(["chat", "from", "to", "limit", "cursor"].filter(key => args[key] !== undefined).map(key => [key, args[key]])),
+  }, callerCapabilityHeaders()));
+}
+
 /*
  * The Telegram bot account (docs/design/telegram-bot-account.md, Decision 6).
  * The Viewer is the only process that holds the bot token, so all three tools
@@ -7711,6 +7718,7 @@ export function viewerMcpBindings(
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_document: (args, context) => telegramBotSendDocument(args, viewerControlForCall(controlDependencies, context)),
+    relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
     issue_report: (args, context) => issueReportTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
   };

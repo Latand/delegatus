@@ -36,7 +36,10 @@ RUN --mount=type=cache,target=/app/.next/cache \
 # worktree: dirs 755, files 644, anything already executable 755.
 RUN chmod -R u=rwX,go=rX /app
 
-FROM node:22.16.0-bookworm-slim AS runtime
+# The runtime's system half: packages, the in-container bun and the host shims.
+# It is its own stage so the candidate gate below can add a browser to it
+# without the serving image ever carrying one.
+FROM node:22.16.0-bookworm-slim AS runtime-system
 ARG LLV_RUNTIME_HOME=/home/user
 WORKDIR /app
 # Every first-party process in this stage is the serving Viewer, the runtime
@@ -227,6 +230,7 @@ WRAPPER
 chmod +x /usr/local/bin/tmux
 EOF
 
+FROM runtime-system AS runtime
 COPY --from=build /app/.next ./.next
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/public ./public
@@ -268,6 +272,25 @@ CMD ["sh", "-c", "exec bun-container --bun node_modules/.bin/next start --port $
 
 # The registry image resolves the runtime UID and HOME through NSS. The default
 # target below stays the original runtime image used by exact-revision deploys.
+# The candidate performance gate's image (#2761, docs/design/candidate-performance-gate.md):
+# the runtime image plus Debian's Chromium, so `verify-candidate` opens the
+# board of the candidate's own production build in real browser views before
+# promotion. Chromium is installed over the system stage, which no source
+# change touches, so BuildKit keeps that layer across revisions and a deploy
+# only copies the application on top. Built by the deploy adapter beside the
+# candidate and removed with it; never served.
+FROM runtime-system AS candidate-gate-system
+RUN <<'EOF'
+set -eu
+apt-get update
+apt-get install -y --no-install-recommends chromium
+rm -rf /var/lib/apt/lists/*
+test -x /usr/bin/chromium
+EOF
+
+FROM candidate-gate-system AS candidate-gate
+COPY --from=runtime /app /app
+
 FROM runtime AS published
 RUN <<'EOF'
 set -eu

@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 
 import { extractLineImages, inlineImageAt, lineMayHoldImage, lineTimestamp, type AlbumVia, type PendingReads } from "./extract";
@@ -15,6 +16,12 @@ import { extractLineImages, inlineImageAt, lineMayHoldImage, lineTimestamp, type
  * bounded number of transcripts, least recently used first out. Only the
  * pictures' identities are kept — never their bytes; an inline picture is read
  * back from its line when it is shown.
+ *
+ * A pass calls the file system without awaiting it and yields to the event
+ * loop only once it has worked for a slice. With eight board views opening at
+ * once, every await queued behind all the other requests the server was
+ * answering: five transcripts of four lines each, about twenty awaits, took
+ * ten seconds to index under the candidate performance gate (#2761).
  */
 
 export interface IndexedImage {
@@ -42,6 +49,19 @@ interface TranscriptState {
 const MAX_TRANSCRIPTS = 4000;
 const MAX_IMAGES_PER_TRANSCRIPT = 2000;
 const CHUNK_BYTES = 1024 * 1024;
+/** How long one index call reads and indexes before it lets other work run. */
+const SLICE_MS = 25;
+
+/** When the work since the call's last yield began; shared by its passes. */
+interface Slice {
+  start: number;
+}
+
+async function yieldIfDue(slice: Slice): Promise<void> {
+  if (performance.now() - slice.start < SLICE_MS) return;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  slice.start = performance.now();
+}
 /** A line longer than this is skipped unread; no picture record is that large. */
 const MAX_LINE_BYTES = 48 * 1024 * 1024;
 
@@ -92,8 +112,8 @@ function indexLine(state: TranscriptState, text: string, offset: number): void {
  * under another key. A caller that arrives mid-pass waits for it and then
  * continues from where it stopped.
  */
-function advance(path: string, budget: number): Promise<{ read: number; complete: boolean }> {
-  const run = (passes.get(path) ?? Promise.resolve()).then(() => advanceNow(path, budget));
+function advance(path: string, budget: number, slice: Slice): Promise<{ read: number; complete: boolean }> {
+  const run = (passes.get(path) ?? Promise.resolve()).then(() => advanceNow(path, budget, slice));
   const settled = run.catch(() => {});
   passes.set(path, settled);
   void settled.then(() => {
@@ -102,10 +122,11 @@ function advance(path: string, budget: number): Promise<{ read: number; complete
   return run;
 }
 
-async function advanceNow(path: string, budget: number): Promise<{ read: number; complete: boolean }> {
+async function advanceNow(path: string, budget: number, slice: Slice): Promise<{ read: number; complete: boolean }> {
+  await yieldIfDue(slice);
   let stat;
   try {
-    stat = await fs.stat(path);
+    stat = fsSync.statSync(path);
   } catch {
     states.delete(path);
     return { read: 0, complete: true };
@@ -117,9 +138,9 @@ async function advanceNow(path: string, budget: number): Promise<{ read: number;
   if (state.offset >= stat.size) return { read: 0, complete: true };
   if (budget <= 0) return { read: 0, complete: false };
 
-  let handle;
+  let descriptor;
   try {
-    handle = await fs.open(path, "r");
+    descriptor = fsSync.openSync(path, "r");
   } catch {
     return { read: 0, complete: true };
   }
@@ -136,8 +157,9 @@ async function advanceNow(path: string, budget: number): Promise<{ read: number;
     let stopped = false;
     while (!stopped && position < stat.size && (read < budget || pendingBytes > 0 || skipping)) {
       const want = Math.min(CHUNK_BYTES, stat.size - position, read < budget ? budget - read : CHUNK_BYTES);
+      await yieldIfDue(slice);
       const chunk = Buffer.alloc(want);
-      const { bytesRead } = await handle.read(chunk, 0, want, position);
+      const bytesRead = fsSync.readSync(descriptor, chunk, 0, want, position);
       if (bytesRead <= 0) break;
       read += bytesRead;
       let cursor = 0;
@@ -174,7 +196,7 @@ async function advanceNow(path: string, budget: number): Promise<{ read: number;
        offset stays before it and the next read takes it whole. */
     reachedEnd = state.offset >= stat.size || (!stopped && position >= stat.size);
   } finally {
-    await handle.close();
+    fsSync.closeSync(descriptor);
   }
   return { read, complete: reachedEnd };
 }
@@ -189,8 +211,9 @@ export interface IndexProgress {
 export async function indexTranscripts(paths: readonly string[], budget: number): Promise<IndexProgress> {
   let left = budget;
   let complete = true;
+  const slice = { start: performance.now() };
   for (const path of paths) {
-    const { read, complete: done } = await advance(path, left);
+    const { read, complete: done } = await advance(path, left, slice);
     left -= read;
     if (!done) complete = false;
   }

@@ -1,10 +1,25 @@
 import { readOnlyConversationLookupFromSnapshot, type AgentRegistry, type RegistryFile } from "@/lib/agent/registry";
+import { registryRowProjection, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
 import { registeredHostForPath } from "@/lib/conversation/registeredHost";
 import type { FileEntry } from "@/lib/types";
 
 import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liveness";
 
 const RECENT_TRANSCRIPT_SECONDS = 15 * 60;
+
+const ENTRY_STRUCTURED_HOSTED: RegistryRowProjector<"entries", boolean> = {
+  id: "liveness-projection.entry-structured-hosted.v1",
+  collection: "entries",
+  project: (entry) => !entry.host && Boolean(entry.structuredHost) && entry.status !== "dead" && entry.status !== "unhosted",
+};
+const CONVERSATION_CURRENT_GENERATION: RegistryRowProjector<"conversations", { entryKey: string; path: string } | null> = {
+  id: "liveness-projection.conversation-current-generation.v1",
+  collection: "conversations",
+  project: (conversation) => {
+    const generation = conversation.generations.at(-1);
+    return generation && !conversation.supersededBy ? { entryKey: `${conversation.engine}:${generation.id}`, path: generation.path } : null;
+  },
+};
 const LIVENESS_PROJECTION_CONCURRENCY = 16;
 
 function quietActivity(file: FileEntry, now: number): "recent" | "idle" {
@@ -23,14 +38,14 @@ export async function projectStructuredFileLiveness(
 ): Promise<void> {
   const now = (dependencies.now ?? Date.now)();
   const stableDependencies = { ...dependencies, now: () => now };
-  const conversationByCurrentPath = new Map(Object.values(snapshot.conversations).flatMap((conversation) => {
-    const generation = conversation.generations.at(-1);
-    if (!generation || conversation.supersededBy) return [];
-    const entry = snapshot.entries[`${conversation.engine}:${generation.id}`];
-    return !entry?.host && entry?.structuredHost && entry.status !== "dead" && entry.status !== "unhosted"
-      ? [[generation.path, conversation] as const]
-      : [];
-  }));
+  /* Narrow projections over the whole history; only the conversations whose
+     current generation a live structured host owns are read in full (#2761). */
+  const structuredHosted = new Set(registryRowProjection(snapshot, ENTRY_STRUCTURED_HOSTED)
+    .flatMap(([key, hosted]) => hosted ? [key] : []));
+  const conversationByCurrentPath = new Map(registryRowProjection(snapshot, CONVERSATION_CURRENT_GENERATION)
+    .flatMap(([key, current]) => current && structuredHosted.has(current.entryKey)
+      ? [[current.path, snapshot.conversations[key as keyof typeof snapshot.conversations]!] as const]
+      : []));
 
   // The scanner and journal can arrive in either order after host succession.
   // Expose the current registry transport without copying a PID into authority.

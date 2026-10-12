@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { readOnlyConversationLookupFromSnapshot, type ConversationLookup, type RegistryFile, type SpawnReceipt } from "./registry";
+import { registryRowProjection, registryRowsMatching, type RegistryRowProjector } from "./sqliteRegistryStore";
 import { projectRootForCwd } from "@/lib/scanner/describe";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import type { FileEntry, StructuredSpawnCardState } from "@/lib/types";
@@ -51,7 +52,7 @@ export function durableHandoffProvenanceForConversation(
   return "operator-handoff";
 }
 
-function retiredTerminalReceipt(receipt: SpawnReceipt, nowMs: number): boolean {
+function retiredTerminalReceipt(receipt: Pick<SpawnReceipt, "state" | "createdAt">, nowMs: number): boolean {
   const terminal = receipt.state === "completed" || receipt.state === "failed" || receipt.state === "conflicted";
   if (!terminal) return false;
   const createdMs = Date.parse(receipt.createdAt);
@@ -79,7 +80,9 @@ function launchIdentity(snapshot: RegistryFile, receipt: SpawnReceipt): { conver
 function initialDelivery(snapshot: RegistryFile, receipt: SpawnReceipt) {
   const launch = launchIdentity(snapshot, receipt);
   const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
-  return Object.values(snapshot.heldDeliveries).find((delivery) =>
+  /* The operation id selects through its index; enumerating every retained
+     delivery once per launch read the whole cold history per card (#2761). */
+  return registryRowsMatching(snapshot, "heldDeliveries", "command.operationId", `spawn_message_${receipt.launchId}`).find((delivery) =>
     lookup.canonicalConversationId(delivery.conversationId) === launch.conversationId
       && delivery.clientMessageId === `spawn_${receipt.launchId}`
       && delivery.command.operationId === `spawn_message_${receipt.launchId}`) ?? null;
@@ -329,11 +332,24 @@ export function isSpawnPlaceholderPath(pathname: string): boolean {
   return pathname.startsWith("spawn:");
 }
 
-/** Every structured launch receipt still retained in the registry. */
-function allLaunchReceipts(snapshot: RegistryFile): SpawnReceipt[] {
-  return Object.values(snapshot.receipts).filter(
-    (receipt) => receipt.transport === "structured" && receipt.purpose === "launch",
-  );
+/* The identity of every retained receipt, kept per archived version: routes
+   and the newest-per-conversation choice read only these, and only the chosen
+   receipts are read in full (#2761). */
+const LAUNCH_RECEIPT_IDENTITY: RegistryRowProjector<"receipts", Pick<SpawnReceipt, "launchId" | "conversationId" | "createdAt" | "state"> & { structuredLaunch: boolean }> = {
+  id: "spawn-projection.launch-receipt-identity.v1",
+  collection: "receipts",
+  project: (receipt) => ({
+    launchId: receipt.launchId,
+    conversationId: receipt.conversationId,
+    createdAt: receipt.createdAt,
+    state: receipt.state,
+    structuredLaunch: receipt.transport === "structured" && receipt.purpose === "launch",
+  }),
+};
+
+/** Every structured launch receipt still retained in the registry, by identity. */
+function allLaunchReceipts(snapshot: RegistryFile) {
+  return registryRowProjection(snapshot, LAUNCH_RECEIPT_IDENTITY).filter(([, receipt]) => receipt.structuredLaunch);
 }
 
 /**
@@ -347,7 +363,7 @@ function allLaunchReceipts(snapshot: RegistryFile): SpawnReceipt[] {
 function allLaunchRoutes(snapshot: RegistryFile): Record<string, string> {
   const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
   const routes: Record<string, string> = {};
-  for (const receipt of allLaunchReceipts(snapshot)) {
+  for (const [, receipt] of allLaunchReceipts(snapshot)) {
     routes[`spawn:${receipt.launchId}`] = lookup.canonicalConversationId(receipt.conversationId);
   }
   return routes;
@@ -361,13 +377,15 @@ function allLaunchRoutes(snapshot: RegistryFile): Record<string, string> {
     {@link allLaunchRoutes}. */
 function newestLaunchReceipts(snapshot: RegistryFile, nowMs: number): SpawnReceipt[] {
   const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
-  const byConversation = new Map<string, SpawnReceipt>();
-  for (const receipt of allLaunchReceipts(snapshot)) {
+  const byConversation = new Map<string, [string, ReturnType<typeof LAUNCH_RECEIPT_IDENTITY.project>]>();
+  for (const [key, receipt] of allLaunchReceipts(snapshot)) {
     const conversationId = lookup.canonicalConversationId(receipt.conversationId);
     const current = byConversation.get(conversationId);
-    if (!current || current.createdAt < receipt.createdAt) byConversation.set(conversationId, receipt);
+    if (!current || current[1].createdAt < receipt.createdAt) byConversation.set(conversationId, [key, receipt]);
   }
-  return [...byConversation.values()].filter((receipt) => !retiredTerminalReceipt(receipt, nowMs));
+  return [...byConversation.values()]
+    .filter(([, receipt]) => !retiredTerminalReceipt(receipt, nowMs))
+    .map(([key]) => snapshot.receipts[key]!);
 }
 
 function projectedActivity(spawn: StructuredSpawnCardState, createdAt: string, nowMs: number): FileEntry["activity"] {

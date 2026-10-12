@@ -39,8 +39,9 @@ import os from "node:os";
 import path from "node:path";
 import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { captureProcessIdentity } from "../src/lib/processIdentity";
+import { candidatePerformanceDetail, parseCandidatePerformanceReport } from "../src/runtime-host/candidatePerformance";
 
-const USAGE = "usage: bun scripts/verify-viewer-runtime.ts [--load-modules]";
+const USAGE = "usage: bun scripts/verify-viewer-runtime.ts [--load-modules | --performance [--scale <0..1>]]";
 
 /** The module whose load failure answered 500 on every route (#1248). */
 export const REQUIRED_SERVER_RUNTIME = "app-page.runtime.prod.js";
@@ -390,6 +391,26 @@ if (import.meta.main) {
       runner.once("error", () => resolve(1));
     });
     process.exit(code);
+  }
+
+  if (argv.includes("--performance")) {
+    /* #2761: the Viewer's registry and projection performance against retained
+       history, the gate `verify-candidate` runs inside the candidate image.
+       Same runner, same bounds, this checkout's code and interpreter. */
+    const scale = argv[argv.indexOf("--scale") + 1];
+    const gate = spawn(process.execPath, [
+      "run", path.join("src", "runtime-host", "candidatePerformanceRun.ts"),
+      ...(argv.includes("--scale") && scale ? ["--scale", scale] : []),
+    ], { cwd: process.cwd(), stdio: ["ignore", "pipe", "inherit"] });
+    let output = "";
+    gate.stdout?.on("data", (chunk) => { output += String(chunk); });
+    await new Promise((resolve) => gate.once("exit", resolve));
+    const performance = parseCandidatePerformanceReport(output);
+    console.log(JSON.stringify(performance, null, 2));
+    console.error(performance.ok
+      ? `viewer performance verified under ${performance.runtime} against ${performance.measurements?.dataset.rows} registry rows`
+      : `viewer performance failed under ${performance.runtime}: ${candidatePerformanceDetail(performance)}`);
+    process.exit(performance.ok ? 0 : 1);
   }
 
   const report = await verifyViewerRuntime(process.cwd());
