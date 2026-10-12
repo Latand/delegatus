@@ -16,6 +16,7 @@ export type Selection = (typeof SELECTIONS)[number];
    do inside the main batch below. */
 export const engineFiles = [
   "src/lib/agent/processCleanupPolicy.native.test.ts",
+  "src/lib/agent/operatorQuestionPolicy.native.test.ts",
   "src/lib/runtime/nativeCodexQueue.test.ts",
   "src/lib/runtime/codexHistoryReader.test.ts",
   "src/lib/runtime/nativeQueueCompaction.integration.test.ts",
@@ -31,6 +32,7 @@ export const engineInjectionFiles = [
 
 export const files = [
   "src/lib/agent/processCleanupPolicy.native.test.ts",
+  "src/lib/agent/operatorQuestionPolicy.native.test.ts",
   "src/lib/runtime/nativeCodexQueue.test.ts",
   "src/lib/runtime/codexHistoryReader.test.ts",
   "src/lib/runtime/nativeQueueRuntime.test.ts",

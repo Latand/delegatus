@@ -532,7 +532,11 @@ for (const locale of ["en", "uk"] as const) {
     const agent = render({ origin: "agent", senderRole: "orchestrator" });
     expect(agent).toContain("data-agent-role=\"orchestrator\"");
     expect(agent).toContain(en ? ">internal<" : ">внутрішнє<");
-    expect(agent).toContain("Agent · Orchestrator");
+    /* An internal card from a known role wears that role's costume and names
+       the role alone; the generic "Agent ·" prefix stays for roles without one. */
+    expect(agent).toContain("data-role-avatar=\"orchestrator\"");
+    expect(agent).toMatch(/data-agent-author[^>]*>Orchestrator</);
+    expect(agent).not.toContain("Agent · Orchestrator");
     const seat = render({ origin: "agent", senderRole: "seat-tick" });
     expect(seat).toContain("data-agent-role=\"seat-tick\"");
     expect(seat).toContain("Agent · Delegatus");

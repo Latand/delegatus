@@ -25,12 +25,17 @@ Object.assign(globalThis, {
   document: dom.document,
   navigator: dom.navigator,
   Node: dom.Node,
+  Element: dom.Element,
   HTMLElement: dom.HTMLElement,
   MouseEvent: dom.MouseEvent,
   KeyboardEvent: dom.KeyboardEvent,
   Event: dom.Event,
   CustomEvent: dom.CustomEvent,
+  MutationObserver: dom.MutationObserver,
   localStorage: dom.localStorage,
+  getComputedStyle: dom.getComputedStyle.bind(dom),
+  requestAnimationFrame: (run: FrameRequestCallback) => setTimeout(() => run(0), 0),
+  cancelAnimationFrame: (id: number) => clearTimeout(id),
 });
 
 const { AttentionPanel } = await import("./AttentionPanel");
@@ -384,4 +389,317 @@ test("a questionnaire waiting row asks for an answer", async () => {
   expect(host.textContent).toContain("Questions for you");
   expect(host.querySelector("[data-attention-decision]")?.textContent).toBe("Answer the questions in the form; the project orchestrator receives your answers and carries them on.");
   expect(host.querySelector("[data-attention-prototype]")?.getAttribute("aria-label")).toBe("Answer the questions for «Before work»");
+});
+
+/*
+ * «Готово» (docs/design/done-section.md §4.3, §5): finished work waits in the
+ * same panel, below the decisions, until the operator accepts it. The read
+ * and the acknowledgement go through the real client store against a route
+ * double that records them the way the server does.
+ */
+
+const { refreshDoneItems, resetDoneItemsForTests, useDoneItems } = await import("./doneItems");
+type DoneItemV1 = import("@/lib/done/types").DoneItemV1;
+
+function doneItem(key: string, over: Partial<DoneItemV1> = {}): DoneItemV1 {
+  return {
+    key, kind: "pr", look: "technical", project: ALPHA, at: iso(600), createdAt: iso(600), title: `Item ${key}`, icon: null, refs: {},
+    frame: null, frameCheckedAt: iso(600), acknowledgedAt: null, acknowledgedBy: null, ...over,
+  };
+}
+
+const pr = (number: number) => ({ repository: "acme/widgets", number, url: `https://github.com/acme/widgets/pull/${number}` });
+
+function doneWorld(): DoneItemV1[] {
+  return [
+    doneItem("pr:acme/widgets#2691", { look: "visible", at: iso(900), title: "Landing cards no longer show through each other", refs: { pr: pr(2691), pipelineId: "lane-landing" },
+      frame: { src: "/api/image?taskId=t&prototype=r&media=after", before: "/api/image?taskId=t&prototype=r&media=before", caption: "Landing" } }),
+    doneItem("deploy:d1", { kind: "deploy", look: "deploy", project: null, at: iso(300), title: "", refs: { deploymentId: "d1", sha: "1c41d361".padEnd(40, "0"), phase: "succeeded" } }),
+    doneItem("pr:acme/widgets#2698", { at: iso(700), title: "Account removal checks the file on disk first", icon: "user-x", refs: { pr: pr(2698) } }),
+    doneItem("pr:acme/widgets#2699", { at: iso(650), title: "Agent messages arrive during cleanup", icon: "send", refs: { pr: pr(2699) } }),
+    doneItem("task:t-closed", { kind: "task", look: "closed", at: iso(500), title: "Removed the empty hidden tray", project: BETA }),
+    doneItem("limit:codex:acct-b:session:1", { kind: "limit", look: "limit", project: null, at: iso(1_200), title: "",
+      refs: { account: { engine: "codex", accountId: "acct-b", window: "session", label: "B" }, limit: { from: iso(1_200), to: iso(400), lanes: 3 } } }),
+  ];
+}
+
+interface Acknowledged { keys: string[]; undo: boolean; surface: string }
+let doneServer: DoneItemV1[] = [];
+let acknowledged: Acknowledged[] = [];
+
+function serveDone(): void {
+  const dismissals = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input).startsWith("/api/attention/done")) {
+      if ((init?.method ?? "GET") === "GET") return new Response(JSON.stringify({ ok: true, items: doneServer.filter((item) => !item.acknowledgedAt), revision: 1 }));
+      const body = JSON.parse(String(init!.body)) as Acknowledged;
+      acknowledged.push(body);
+      const changed = doneServer.filter((item) => body.keys.includes(item.key) && Boolean(item.acknowledgedAt) === body.undo);
+      for (const item of changed) item.acknowledgedAt = body.undo ? null : new Date().toISOString();
+      return new Response(JSON.stringify({ ok: true, changed }));
+    }
+    return dismissals(input, init);
+  }) as typeof fetch;
+}
+
+function DoneHarness({ files, pipelines, current = ALPHA }: { files: FileEntry[]; pipelines: Pipeline[]; current?: string | null }) {
+  const layered = useDismissalOverlay(files, pipelines);
+  const queue = buildNeedsYouQueue(layered.files, layered.pipelines, NOW, []);
+  const done = useDoneItems();
+  return (
+    <AttentionPanel queue={queue} current={current} projectNames={{ [ALPHA]: "alpha", [BETA]: "beta" }} pipelines={layered.pipelines}
+      placement="docked" canDock onPlacement={() => {}} onClose={() => {}} onOpen={() => {}} done={done} />
+  );
+}
+
+async function mountDone(state = world(), current: string | null = ALPHA): Promise<HTMLElement> {
+  resetDoneItemsForTests();
+  acknowledged = [];
+  serveDone();
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<DoneHarness files={state.files} pipelines={state.pipelines} current={current} />);
+  });
+  await act(async () => { await Bun.sleep(10); });
+  return host;
+}
+
+const doneRows = (host: HTMLElement) => [...host.querySelectorAll("[data-done-row], [data-done-group], [data-done-receipt], [data-done-group-receipt]")].map((row) => {
+  if (row.hasAttribute("data-done-row")) return row.getAttribute("data-done-row");
+  if (row.hasAttribute("data-done-receipt")) return `receipt:${row.getAttribute("data-done-receipt")}`;
+  return `group:${row.getAttribute("data-done-group") ?? row.getAttribute("data-done-group-receipt")}`;
+});
+
+test("«Готово» is pinned above the decisions, newest first, and the panel's title counts both", async () => {
+  doneServer = doneWorld();
+  const host = await mountDone();
+  const body = host.querySelector("[data-needs-you-body]")!;
+  const section = host.querySelector("[data-done-section]")!;
+  /* Under the head and outside the decisions' scroller, so it never scrolls away. */
+  expect(body.contains(section)).toBe(false);
+  expect(section.nextElementSibling).toBe(body);
+  expect(section.getAttribute("data-done-place")).toBe("needs-you");
+  expect(section.querySelector("[data-done-list]")!.className).toContain("overflow-y-auto");
+  expect(title(host)).toBe("Waiting for you · 12");
+  expect(section.querySelector("[data-done-count]")!.textContent).toBe("6");
+  expect(section.querySelector("[data-done-accept-all]")!.textContent).toBe("Seen all");
+  /* «Dismiss all» still counts the decisions it clears. */
+  expect(host.querySelector("[data-needs-you-dismiss-all]")!.textContent).toBe("Dismiss all 6");
+  /* Newest first: a row at its own time, a group at its newest member's. */
+  expect([...section.querySelectorAll("[data-done-row], [data-done-group]")].map((row) => row.getAttribute("data-done-row") ?? row.getAttribute("data-done-group")))
+    .toEqual(["deploy:d1", "closed", "technical", "pr:acme/widgets#2691", "limit:codex:acct-b:session:1"]);
+  const deploy = section.querySelector('[data-done-row="deploy:d1"]')!;
+  expect(deploy.querySelector("[data-done-sentence]")!.textContent).toBe("Delegatus was updated");
+  expect(deploy.querySelector("[data-done-meta]")!.textContent).toMatch(/^deploy · \d/);
+  /* A row's check ends its first line: no row keeps a line for a button. */
+  expect(deploy.lastElementChild).toBe(deploy.querySelector("[data-done-accept]"));
+  expect(deploy.querySelector("[data-done-accept]")!.textContent).toBe("");
+  const limit = section.querySelector('[data-done-row="limit:codex:acct-b:session:1"]')!;
+  expect(limit.querySelector("[data-done-sentence]")!.textContent).toBe("Codex B limit · 5h window");
+  expect(limit.querySelector("[data-done-meta]")!.textContent).toContain("3 lanes waited.");
+  const visible = section.querySelector('[data-done-row="pr:acme/widgets#2691"]')!;
+  expect(visible.querySelector("[data-done-pr]")!.getAttribute("href")).toBe("https://github.com/acme/widgets/pull/2691");
+  expect(visible.querySelector("[data-done-meta]")!.textContent).toMatch(/^#2691 · merged /);
+  /* A row of another project names it first. */
+  await click(section.querySelector('[data-done-group-toggle="closed"]')!);
+  expect(section.querySelector('[data-done-member="task:t-closed"]')!.textContent).toContain("beta · Removed the empty hidden tray");
+});
+
+test("«Accept» takes a row out of every count at once and leaves «… · accepted» with Undo, which takes it back", async () => {
+  doneServer = doneWorld();
+  const host = await mountDone();
+  await click(host.querySelector('[data-done-accept="deploy:d1"]')!);
+  expect(acknowledged).toEqual([{ keys: ["deploy:d1"], undo: false, surface: "desktop" }]);
+  expect(title(host)).toBe("Waiting for you · 11");
+  expect(host.querySelector("[data-done-count]")!.textContent).toBe("5");
+  const receipt = host.querySelector('[data-done-receipt="deploy:d1"]')!;
+  expect(receipt.textContent!.replace(/\u00a0/g, " ")).toContain("Delegatus was updated · accepted");
+  /* The mark is its own run that never breaks. */
+  /* The «·» is bound to the name, so a wrapped receipt never starts a line with it. */
+  expect(receipt.querySelector("[data-done-receipt-text]")!.lastElementChild!.textContent).toBe("accepted");
+  expect(receipt.querySelector("[data-done-receipt-text]")!.textContent).toBe("Delegatus was updated\u00a0· accepted");
+  /* In its place: the row it replaced was the newest, first. */
+  expect(doneRows(host)).toEqual(["receipt:deploy:d1", "group:closed", "group:technical", "pr:acme/widgets#2691", "limit:codex:acct-b:session:1"]);
+  await click(receipt.querySelector("[data-done-undo]")!);
+  expect(acknowledged[1]).toEqual({ keys: ["deploy:d1"], undo: true, surface: "desktop" });
+  expect(title(host)).toBe("Waiting for you · 12");
+  expect(host.querySelector('[data-done-row="deploy:d1"]')).not.toBeNull();
+});
+
+test("a group accepts whole with one button, opens to its members, and a member accepted alone keeps its line with a filled check", async () => {
+  doneServer = doneWorld();
+  const host = await mountDone();
+  const group = () => host.querySelector('[data-done-group="technical"]')!;
+  expect(group().querySelector("[data-done-group-title]")!.textContent).toBe("Technical fixes · 2");
+  expect(group().querySelector("[data-done-group-line]")!.textContent).toBe("Agent messages arrive, account removal checks");
+  await click(group().querySelector('[data-done-group-toggle="technical"]')!);
+  /* Open, the members say it themselves: the head repeats none of them. */
+  expect(group().querySelector("[data-done-group-line]")).toBeNull();
+  const member = () => group().querySelector('[data-done-member="pr:acme/widgets#2698"]')!;
+  expect(member().querySelector("[data-done-pr]")!.textContent).toBe("#2698");
+  await click(member().querySelector("[data-done-member-check]")!);
+  expect(acknowledged).toEqual([{ keys: ["pr:acme/widgets#2698"], undo: false, surface: "desktop" }]);
+  expect(group().querySelector("[data-done-group-title]")!.textContent).toBe("Technical fixes · 1 of 2");
+  expect(group().querySelector("[data-done-group-line]")!.textContent).toBe("1 accepted");
+  expect(member().hasAttribute("data-done-accepted")).toBe(true);
+  expect(member().querySelector("[data-done-member-check]")!.getAttribute("aria-pressed")).toBe("true");
+  expect(group().querySelector('[data-done-accept-group="technical"]')!.textContent).toBe("1");
+  expect(group().querySelector('[data-done-accept-group="technical"]')!.getAttribute("aria-label")).toBe("Technical fixes: Accept 1");
+  await click(group().querySelector('[data-done-accept-group="technical"]')!);
+  expect(acknowledged[1]).toEqual({ keys: ["pr:acme/widgets#2699"], undo: false, surface: "desktop" });
+  expect(host.querySelector('[data-done-group-receipt="technical"]')!.textContent!.replace(/\u00a0/g, " ")).toContain("Technical fixes: 2 accepted");
+  expect(title(host)).toBe("Waiting for you · 10");
+});
+
+test("a collapsed group lists short topics while they fit and ends in «and N more», never a cut word", async () => {
+  doneServer = [
+    doneItem("pr:acme/widgets#1", { at: iso(100), title: "Automerge waits only for the required checks on main." }),
+    doneItem("pr:acme/widgets#2", { at: iso(110), title: "HTTP MCP keeps its identity after a migration; a cancelled client touches no other." }),
+    doneItem("pr:acme/widgets#3", { at: iso(120), title: "The merger accepts test contracts the review agreed." }),
+    doneItem("pr:acme/widgets#4", { at: iso(130), title: "Account settings are read for the project they belong to." }),
+    doneItem("pr:acme/widgets#5", { at: iso(140), title: "Backend tests run in isolated state." }),
+  ];
+  const host = await mountDone();
+  const line = host.querySelector('[data-done-group="technical"] [data-done-group-line]')!;
+  expect(line.textContent).toBe("Automerge waits, HTTP MCP keeps and 3 more");
+  expect(line.lastElementChild!.textContent).toBe("and 3 more");
+  expect(line.textContent).not.toContain("…");
+});
+
+test("a Ukrainian topic never ends on an adjective without its noun", async () => {
+  const { groupTopics } = await import("./DoneSection");
+  const uk = ((key, params) => translate("uk", key, params)) as Parameters<typeof groupTopics>[0];
+  const { topics, more } = groupTopics(uk, "uk", [
+    doneItem("task:one", { kind: "task", look: "closed", title: "Прибрано порожній лоток прихованих" }),
+    doneItem("pr:acme/widgets#2", { title: "Мерджер приймає тестові контракти, які погодило рев’ю." }),
+    doneItem("pr:acme/widgets#3", { title: "Аналіз моделей для голосового режиму" }),
+  ]);
+  expect(topics).toBe("Прибрано порожній лоток, мерджер приймає");
+  expect(more).toBe("і ще 1");
+});
+
+test("a new outcome arrives at the top of the list, a technical one with its group", async () => {
+  doneServer = doneWorld();
+  const host = await mountDone();
+  const order = () => [...host.querySelectorAll("[data-done-section] [data-done-row], [data-done-section] [data-done-group]")].map((row) => row.getAttribute("data-done-row") ?? row.getAttribute("data-done-group"));
+  expect(order()[0]).toBe("deploy:d1");
+  doneServer.push(doneItem("report:r-new", { kind: "report", look: "incident", at: iso(60), title: "A lane stalled and was restarted" }));
+  await act(async () => { await refreshDoneItems(); });
+  expect(order()[0]).toBe("report:r-new");
+  doneServer.push(doneItem("pr:acme/widgets#2750", { at: iso(30), title: "Retries wait for the lock", refs: { pr: pr(2750) } }));
+  await act(async () => { await refreshDoneItems(); });
+  expect(order().slice(0, 2)).toEqual(["technical", "report:r-new"]);
+  expect(host.querySelector('[data-done-group="technical"] [data-done-group-line]')!.textContent).toMatch(/^Retries wait/);
+});
+
+test("the head folds the list to «Done · N» and remembers it; «Seen all» still works folded", async () => {
+  doneServer = doneWorld();
+  let host = await mountDone();
+  const fold = () => host.querySelector<HTMLElement>("[data-done-fold]")!;
+  expect(fold().getAttribute("aria-expanded")).toBe("true");
+  await click(fold());
+  expect(fold().getAttribute("data-done-fold")).toBe("folded");
+  expect(host.querySelector("[data-done-list]")).toBeNull();
+  expect(host.querySelector("[data-done-count]")!.textContent).toBe("6");
+  expect(dom.localStorage.getItem("llvDoneFolded:needs-you:desktop")).toBe("1");
+  /* Another mount on this device opens folded. */
+  await act(async () => { root?.unmount(); });
+  root = null;
+  host = await mountDone();
+  expect(fold().getAttribute("data-done-fold")).toBe("folded");
+  await click(host.querySelector("[data-done-accept-all]")!);
+  expect(acknowledged[0]!.keys).toHaveLength(6);
+  expect(title(host)).toBe("Waiting for you · 6");
+  await click(fold());
+  expect(host.querySelector("[data-done-all-accepted]")).not.toBeNull();
+});
+
+test("«Accept all» leaves only the decisions in the count, and one receipt takes the whole batch back", async () => {
+  doneServer = doneWorld();
+  const host = await mountDone();
+  await click(host.querySelector("[data-done-accept-all]")!);
+  expect(acknowledged[0]!.keys.sort()).toEqual(doneWorld().map((item) => item.key).sort());
+  expect(title(host)).toBe("Waiting for you · 6");
+  expect(host.querySelector("[data-done-accept-all]")).toBeNull();
+  const all = host.querySelector("[data-done-all-accepted]")!;
+  expect(all.textContent).toContain("All accepted · 6 items");
+  await click(all.querySelector("[data-done-undo]")!);
+  expect(acknowledged[1]!.undo).toBe(true);
+  expect(title(host)).toBe("Waiting for you · 12");
+});
+
+test("a thumbnail opens the image viewer with the before and after of its frame", async () => {
+  doneServer = doneWorld();
+  const host = await mountDone();
+  await click(host.querySelector('[data-done-thumb="pr:acme/widgets#2691"]')!);
+  const lightbox = document.querySelector('[role="dialog"][aria-modal="true"]')!;
+  expect(lightbox).not.toBeNull();
+  expect([...lightbox.querySelectorAll("img[data-lightbox-side]")].map((image) => image.getAttribute("src")).sort())
+    .toEqual(["/api/image?taskId=t&prototype=r&media=after", "/api/image?taskId=t&prototype=r&media=before"]);
+  expect(lightbox.querySelector('[data-lightbox-compare-side="before"]')!.textContent).toBe("Original");
+  await act(async () => { lightbox.querySelector<HTMLElement>('button[aria-label="Close"]')!.click(); });
+  expect(document.querySelector('[role="dialog"][aria-modal="true"]')).toBeNull();
+});
+
+test("an empty «Готово» draws nothing, and «Nothing is waiting» shows only when both are empty", async () => {
+  doneServer = [];
+  const host = await mountDone({ files: [], pipelines: [] });
+  expect(host.querySelector("[data-done-section]")).toBeNull();
+  expect(host.querySelector("[data-needs-you-empty]")).not.toBeNull();
+  await act(async () => { root?.unmount(); });
+  doneServer = [doneItem("task:t-only", { kind: "task", look: "closed" })];
+  const other = await mountDone({ files: [], pipelines: [] });
+  expect(other.querySelector("[data-needs-you-empty]")).toBeNull();
+  expect(title(other)).toBe("Waiting for you · 1");
+});
+
+test("a read that left before an acceptance never brings the row back, nor one that left before its Undo", async () => {
+  resetDoneItemsForTests();
+  const { acknowledgeDone, refreshDoneItems } = await import("./doneItems");
+  const item = doneItem("task:one", { kind: "task", look: "closed" });
+  let waiting: DoneItemV1[] = [item];
+  let revision = 1;
+  /* Each read answers what the server held when it arrived, and is let go by hand. */
+  const held: Array<() => void> = [];
+  globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    if ((init?.method ?? "GET") === "POST") {
+      const body = JSON.parse(String(init!.body)) as Acknowledged;
+      waiting = body.undo ? [item] : [];
+      revision += 1;
+      return new Response(JSON.stringify({ ok: true, changed: [item] }));
+    }
+    const answer = JSON.stringify({ ok: true, items: waiting, revision });
+    return new Promise<Response>((resolve) => { held.push(() => resolve(new Response(answer))); });
+  }) as typeof fetch;
+  function Probe() {
+    const items = useDoneItems(false);
+    return <span data-probe>{items.map((entry) => entry.key).join(",")}</span>;
+  }
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  await act(async () => { root = createRoot(host); root.render(<Probe />); });
+  const shown = () => host.querySelector("[data-probe]")!.textContent;
+  const release = async (index: number) => { await act(async () => { held[index]!(); await Bun.sleep(5); }); };
+
+  void refreshDoneItems();
+  await release(0);
+  expect(shown()).toBe("task:one");
+  /* A poll leaves at revision 1, the operator accepts, the confirming read lands first. */
+  void refreshDoneItems();
+  await act(async () => { await acknowledgeDone([item], { surface: "desktop" }); });
+  expect(shown()).toBe("");
+  await release(2);
+  expect(shown()).toBe("");
+  await release(1);
+  expect(shown()).toBe("");
+  /* The same ordering around Undo. */
+  void refreshDoneItems();
+  await act(async () => { await acknowledgeDone([item], { undo: true, surface: "desktop" }); });
+  expect(shown()).toBe("task:one");
+  await release(4);
+  expect(shown()).toBe("task:one");
+  await release(3);
+  expect(shown()).toBe("task:one");
 });

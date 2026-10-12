@@ -7881,7 +7881,7 @@ describe("the orchestrator seat's header keeps every element readable and clicka
     const all = [...root.querySelectorAll("*")].filter(rendered);
     const atoms = all.filter(el =>
       interactive(el)
-      || el.matches(".role-mark, .av")
+      || el.matches(".role-mark, .av, [data-role-avatar]")
       || (ownText(el) && !el.parentElement.closest("button, a[href]")));
     const runsOf = el => {
       const out = [];
@@ -11078,7 +11078,7 @@ describe("#2179 #2185 agent replies wider than the operator's bubble, a seat dra
     const strong = w.__ink(title?.querySelector("strong") ?? null);
     const proj = w.__ink(title?.querySelector(".proj") ?? null);
     const state = w.__box(title?.querySelector(".state i") ?? null) ?? w.__ink(title?.querySelector(".state") ?? null);
-    const av = w.__box(root.querySelector(".seat-head .av"));
+    const av = w.__box(root.querySelector(".seat-head [data-role-avatar]"));
     const fold = w.__box(root.querySelector("[data-seat-collapse]"));
     const strip = root.querySelector("[data-agent-control-strip]");
     const field = root.querySelector("[data-orchestrator-conversation] form textarea")?.parentElement ?? null;
@@ -11977,7 +11977,7 @@ describe("#2166 the desktop leads with the orchestrator", () => {
     const footer = form.lastElementChild as HTMLElement;
     const bodyBox = body.getBoundingClientRect();
     const footerBox = footer.getBoundingClientRect();
-    const avatar = seat.querySelector(".seat-head .av")?.getBoundingClientRect() ?? null;
+    const avatar = seat.querySelector(".seat-head [data-role-avatar]")?.getBoundingClientRect() ?? null;
     const fold = seat.querySelector(".seat-fold")?.getBoundingClientRect() ?? null;
     const heading = ink(form.querySelector("h2"));
     const intro = ink(form.querySelector("[data-orchestrator-intro]"));
@@ -19018,6 +19018,236 @@ describe("agent memory isolation", () => {
       fs.writeFileSync("evidence/agent-memory/desktop.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 90000);
+});
+
+/*
+ * «Готово» in «Чекають на вас» (docs/design/done-section.md §4.3, §5): the
+ * finished work pinned above the decisions at 1440 in Ukrainian, newest first,
+ * over the needs-you fixture with `&done=1`, read against variant 2's frames:
+ * the morning panel with its thumbnail, the frame's before and after in the
+ * existing viewer, a visible change accepted and four technical fixes accepted
+ * one by one, then «Бачив усе» with only the decisions left in the count.
+ * Then the same list pinned above the orchestrator's report log (`&seat=beside`)
+ * in uk and en: folded to its head, and a row accepted there leaving the
+ * header's count too.
+ */
+describe("«Готово» in «Чекають на вас»", () => {
+  browserTest("the desktop panel ends in «Готово»: thumbnail, groups, acceptance and the counter at 1440 in uk", async () => {
+    const out = path.resolve(".artifacts/done-section/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const scheme of ["dark", "light"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?lang=uk&open=1&done=1`, VIEWPORT, scheme, "uk", "reduce");
+        try {
+          const panel = page.locator("[data-needs-you-panel]");
+          const section = panel.locator("[data-done-section]");
+          await section.waitFor({ timeout: 15_000 });
+          /* The decisions arrive with the files poll; all three boards' sections. */
+          await page.waitForFunction(() => document.querySelectorAll("[data-needs-you-panel] [data-needs-you-section]").length === 3, undefined, { timeout: 15_000 });
+          const doneCount = await page.evaluate(() => (window as unknown as { __doneFixture: { count: number } }).__doneFixture.count);
+          const island = async () => Number((await page.locator("[data-attention-count]").innerText()).match(/\d+/g)!.at(-1));
+          const decisions = (await panel.locator("[data-needs-you-section-count]").allInnerTexts()).reduce((sum, text) => sum + Number(text), 0);
+          expect(decisions).toBeGreaterThan(0);
+          expect(await island()).toBe(decisions + doneCount);
+          expect(await panel.locator("[data-needs-you-title]").innerText()).toBe(`Чекають на вас · ${decisions + doneCount}`);
+          expect(await page.title()).toBe(`(${decisions + doneCount}) Delegatus`);
+          expect(await section.locator("[data-done-accept-all]").innerText()).toBe("Бачив усе");
+          expect(await panel.locator("[data-needs-you-dismiss-all]").innerText()).toBe(`Зняти всі ${decisions}`);
+          const order = await section.locator("[data-done-row], [data-done-group]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-done-row") ?? `group:${row.getAttribute("data-done-group")}`));
+          /* Newest first: a row at its own time, a group at its newest member's. */
+          expect(order).toEqual(["group:closed", "deploy:fixture-deploy", "group:technical", "report:fixture-publication", "limit:codex:acct-b:session:1", "pr:example/delegatus#2691", "report:fixture-incident"]);
+          const layout = await panel.evaluate((element) => {
+            const body = element.querySelector("[data-needs-you-body]")!;
+            const done = element.querySelector("[data-done-section]")!;
+            const box = element.getBoundingClientRect();
+            const wide = [...done.querySelectorAll<HTMLElement>("*")].filter((node) => node.getBoundingClientRect().right > box.right + 0.5 || node.getBoundingClientRect().left < box.left - 0.5).length;
+            /* Pinned: right under the head, outside the decisions' scroller. */
+            return { pinned: done.nextElementSibling === body && !body.contains(done), top: Math.round(done.getBoundingClientRect().top - box.top), wide, overflow: document.documentElement.scrollWidth > innerWidth, panelWidth: box.width };
+          });
+          expect(layout).toMatchObject({ pinned: true, wide: 0, overflow: false });
+          /* Scrolling the decisions leaves the list where it is. */
+          const pinnedTop = await section.evaluate((element) => element.getBoundingClientRect().top);
+          await panel.locator("[data-needs-you-body]").evaluate((element) => { element.scrollTop = element.scrollHeight; });
+          expect(await section.evaluate((element) => element.getBoundingClientRect().top)).toBe(pinnedTop);
+          await panel.locator("[data-needs-you-body]").evaluate((element) => { element.scrollTop = 0; });
+          const read = () => section.evaluate((element) => {
+            const text = (node: Element | null) => (node as HTMLElement | null)?.innerText.trim() ?? "";
+            const rows = [...element.querySelectorAll<HTMLElement>("[data-done-row]")].map((row) => {
+              const check = row.querySelector<HTMLElement>("[data-done-accept]")!.getBoundingClientRect();
+              const sentence = row.querySelector<HTMLElement>("[data-done-sentence]")!.getBoundingClientRect();
+              const meta = row.querySelector<HTMLElement>("[data-done-meta]")!.getBoundingClientRect();
+              return { key: row.getAttribute("data-done-row"), checkRight: Math.round(element.getBoundingClientRect().right - check.right), ownLine: check.top >= Math.max(sentence.bottom, meta.bottom) - 1 };
+            });
+            const lines = [...element.querySelectorAll<HTMLElement>("[data-done-group-line]")].map((node) => ({ text: text(node), count: Number(node.closest("[data-done-group]")!.getAttribute("data-done-group-count")) }));
+            const receipts = [...element.querySelectorAll<HTMLElement>("[data-done-receipt-text]")].map((node) => {
+              const mark = node.lastElementChild!.getBoundingClientRect();
+              return { text: node.textContent!.replace(/\u00a0/g, " ").trim(), markClipped: mark.right > node.getBoundingClientRect().right + 0.5 || mark.width < 1 };
+            });
+            const heads = [...element.querySelectorAll<HTMLElement>("[data-done-group-title]")].map((node) => {
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              const tops = [...new Set([...range.getClientRects()].map((rect) => Math.round(rect.top)))];
+              return { text: text(node), lines: tops.length };
+            });
+            return { rows, lines, receipts, heads, hash: /\b[0-9a-f]{7,40}\b/.test(text(element)) };
+          });
+          const morning = await read();
+          expect(morning.rows.every((row) => !row.ownLine), "no row keeps a line for its check").toBe(true);
+          expect(morning.hash, "no commit hash in «Готово»").toBe(false);
+          for (const { text, count } of morning.lines) {
+            /* Short topics, no cut word, lower case after the first, and «і ще N» for the rest. */
+            expect(text).not.toContain("…");
+            const [listed, rest] = text.split(" і ще ");
+            const topics = listed!.split(", ");
+            expect(topics.slice(1).every((topic) => !/^[А-ЯІЇЄҐ]/.test(topic)), text).toBe(true);
+            expect(Number(rest ?? 0), text).toBe(count - topics.length);
+          }
+          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-1-morning.png`) });
+
+          /* The thumbnail opens the existing viewer with the frame's pair. */
+          await section.locator('[data-done-thumb="pr:example/delegatus#2691"]').click();
+          const viewer = page.locator('[role="dialog"][aria-modal="true"]');
+          await viewer.waitFor();
+          expect(await viewer.locator("[data-lightbox-compare-side]").count()).toBe(2);
+          await page.screenshot({ path: path.join(out, `${scheme}-2-frame-after.png`) });
+          await viewer.locator('[data-lightbox-compare-side="before"]').click();
+          await page.screenshot({ path: path.join(out, `${scheme}-2-frame-before.png`) });
+          await page.keyboard.press("Escape");
+          await viewer.waitFor({ state: "detached" });
+          expect(await panel.isVisible()).toBe(true);
+
+          /* A visible change accepted, then four technical fixes one by one. */
+          await section.locator('[data-done-accept="pr:example/delegatus#2691"]').click();
+          await section.locator('[data-done-receipt="pr:example/delegatus#2691"]').waitFor();
+          expect(await island()).toBe(decisions + doneCount - 1);
+          await section.locator('[data-done-group-toggle="technical"]').click();
+          /* Open with nothing accepted: the head repeats no member. */
+          expect(await section.locator('[data-done-group="technical"] [data-done-group-line]').count()).toBe(0);
+          await section.locator('[data-done-group="technical"]').evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-3-expanded.png`) });
+          const checks = section.locator('[data-done-group="technical"] [data-done-member-check]');
+          for (let index = 0; index < 4; index += 1) await checks.nth(index).click();
+          await page.waitForFunction(() => document.querySelector('[data-done-group="technical"] [data-done-group-title]')?.textContent?.includes("6 з 10"));
+          expect(await section.locator('[data-done-group="technical"] [data-done-group-line]').innerText()).toBe("4 прийнято");
+          expect(await island()).toBe(decisions + doneCount - 5);
+          let after = await read();
+          for (const receipt of after.receipts) {
+            expect(receipt.text).toMatch(/прийнято$/);
+            expect(receipt.markClipped, receipt.text).toBe(false);
+          }
+          expect(after.heads.every((head) => head.lines === 1), JSON.stringify(after.heads)).toBe(true);
+          expect(after.receipts.map((receipt) => receipt.text)).toContain("Лендінг #2691 · прийнято");
+          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-4-partial.png`) });
+
+          /* The rest of the group through its own button; «Без PR» opened. */
+          await section.locator('[data-done-accept-group="technical"]').click();
+          await section.locator('[data-done-group-receipt="technical"]').waitFor();
+          expect(await island()).toBe(decisions + doneCount - 11);
+          await section.locator('[data-done-group-toggle="closed"]').click();
+          after = await read();
+          for (const receipt of after.receipts) {
+            expect(receipt.text).toMatch(/прийнято$/);
+            expect(receipt.markClipped, receipt.text).toBe(false);
+          }
+          expect(after.receipts.map((receipt) => receipt.text)).toContain("Технічні виправлення: 10 прийнято");
+          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-5-group-accepted.png`) });
+
+          /* Everything accepted: the count is the decisions again. */
+          await section.locator("[data-done-accept-all]").click();
+          await section.locator("[data-done-all-accepted]").waitFor();
+          expect(await island()).toBe(decisions);
+          expect(await page.title()).toBe(`(${decisions}) Delegatus`);
+          await section.evaluate((element) => element.scrollIntoView({ block: "end" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-6-all-accepted.png`) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ scheme, decisions, done: doneCount, order, ...layout, rows: morning.rows, groupLines: morning.lines, receipts: after.receipts.map((receipt) => receipt.text), afterAll: decisions });
+        } finally { await context.close(); }
+      }
+
+      /* The same list pinned above the orchestrator's report log, this board's
+         slice and no board's, in uk and en. */
+      const reports: Record<string, unknown>[] = [];
+      for (const lang of ["uk", "en"] as const) {
+        for (const scheme of ["dark", "light"] as const) {
+          const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params);
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?lang=${lang}&done=1&seat=beside`, VIEWPORT, scheme, lang, "reduce");
+          try {
+            const toggle = page.locator("[data-report-log-toggle]").first();
+            await toggle.waitFor({ timeout: 15_000 });
+            if (await toggle.getAttribute("data-report-log-toggle") === "closed") await toggle.click();
+            const log = page.locator("[data-report-log]");
+            await log.locator("[data-report-entry]").first().waitFor({ timeout: 15_000 });
+            const section = log.locator('[data-done-section][data-done-place="reports"]');
+            await section.waitFor({ timeout: 15_000 });
+            await page.waitForFunction(() => document.querySelectorAll("[data-needs-you-section]").length > 0 || Number(document.querySelector("[data-attention-count]")?.textContent?.match(/\d+/)?.[0] ?? 0) > 0, undefined, { timeout: 15_000 });
+            await page.locator("[data-attention-toast-dismiss]").click({ timeout: 1_000 }).catch(() => {});
+            await page.mouse.move(0, 0);
+            const doneCount = await page.evaluate(() => (window as unknown as { __doneFixture: { count: number } }).__doneFixture.count);
+            const island = async () => Number((await page.locator("[data-attention-count]").innerText()).match(/\d+/g)!.at(-1));
+            const before = await island();
+            /* The shop-web task is another board's; the log shows the rest. */
+            expect(Number(await section.locator("[data-done-count]").innerText())).toBe(doneCount - 1);
+            expect(await section.locator("[data-done-accept-all]").innerText()).toBe(t("done.acceptAll"));
+            const order = await section.locator("[data-done-row], [data-done-group]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-done-row") ?? `group:${row.getAttribute("data-done-group")}`));
+            expect(order).toEqual(["group:closed", "deploy:fixture-deploy", "group:technical", "report:fixture-publication", "limit:codex:acct-b:session:1", "pr:example/delegatus#2691", "report:fixture-incident"]);
+            const layout = await log.evaluate((element) => {
+              const done = element.querySelector("[data-done-section]")!;
+              const scroller = element.querySelector("[data-report-log-entries]")!.parentElement!;
+              const box = element.getBoundingClientRect();
+              const band = done.querySelector("[data-done-list]")!.getBoundingClientRect();
+              const wide = [...done.querySelectorAll<HTMLElement>("*")].filter((node) => node.getBoundingClientRect().right > box.right + 0.5 || node.getBoundingClientRect().left < box.left - 0.5).length;
+              return {
+                pinned: !scroller.contains(done) && Boolean(done.compareDocumentPosition(scroller) & Node.DOCUMENT_POSITION_FOLLOWING),
+                headingAbove: element.querySelector("h2")!.getBoundingClientRect().bottom <= done.getBoundingClientRect().top + 0.5,
+                bandHeight: Math.round(band.height), logHeight: Math.round(box.height), logWidth: Math.round(box.width),
+                /* At most 45% of the log, so the entries keep their room. */
+                bounded: done.getBoundingClientRect().height <= box.height * 0.45 + 1,
+                entriesVisible: scroller.getBoundingClientRect().height > 80, wide,
+              };
+            });
+            expect(layout).toMatchObject({ pinned: true, headingAbove: true, bounded: true, entriesVisible: true, wide: 0 });
+            /* Scrolling the log leaves the list where it is. */
+            const top = await section.evaluate((element) => element.getBoundingClientRect().top);
+            await log.locator("[data-report-log-entries]").evaluate((element) => { element.parentElement!.scrollTop = element.parentElement!.scrollHeight; });
+            expect(await section.evaluate((element) => element.getBoundingClientRect().top)).toBe(top);
+            const key = `${lang}-${scheme}`;
+            await page.screenshot({ path: path.join(out, `reports-${key}-1-pinned.png`) });
+            await page.locator("[data-kanban-seat]").screenshot({ path: path.join(out, `reports-${key}-1-seat.png`) });
+
+            /* Accepted here, gone from the header's count too: one store. */
+            await section.locator('[data-done-accept="deploy:fixture-deploy"]').click();
+            await section.locator('[data-done-receipt="deploy:fixture-deploy"]').waitFor();
+            expect(await island()).toBe(before - 1);
+
+            /* Folded to its head with the count; the log takes the room. */
+            await section.locator("[data-done-fold]").click();
+            expect(await section.locator("[data-done-list]").count()).toBe(0);
+            expect(Number(await section.locator("[data-done-count]").innerText())).toBe(doneCount - 2);
+            const foldedHeight = Math.round((await section.boundingBox())!.height);
+            expect(foldedHeight).toBeLessThanOrEqual(40);
+            await page.locator("[data-kanban-seat]").screenshot({ path: path.join(out, `reports-${key}-2-folded.png`) });
+
+            /* The panel opens on the same list, the accepted row already gone. */
+            await page.locator("[data-attention-count]").click();
+            const panelSection = page.locator("[data-needs-you-panel] [data-done-section]");
+            await panelSection.waitFor({ timeout: 10_000 });
+            expect(await panelSection.locator('[data-done-row="deploy:fixture-deploy"]').count()).toBe(0);
+            await page.screenshot({ path: path.join(out, `reports-${key}-3-panel.png`) });
+            expect(pageErrors).toEqual([]);
+            reports.push({ lang, scheme, order, ...layout, foldedHeight, islandBefore: before, islandAfter: before - 1 });
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/done-section", { recursive: true });
+      fs.writeFileSync("evidence/done-section/desktop.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", viewport: VIEWPORT, lang: "uk", readings, reports }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 420_000);
 });
 
 // The focused common-path case shares its assertions with the phone driver.
@@ -28303,7 +28533,7 @@ describe("orchestrator wire routing across the board's layouts", () => {
     }).filter(shown);
     const seatNode = document.querySelector<HTMLElement>("[data-kanban-seat], [data-mobile2-seat-card]");
     /* Folded on top with no frame, the seat the operator sees is its avatar and title; the strip's other controls are text. */
-    const avatar = seatNode?.querySelector(".seat-head .av")?.parentElement ?? null;
+    const avatar = seatNode?.querySelector(".seat-head [data-role-avatar]")?.parentElement ?? null;
     const title = seatNode?.querySelector(".seat-head .seat-title") ?? null;
     const quiet = !!seatNode && seatNode.dataset.collapsed === "1" && seatNode.dataset.placement !== "side" && !!avatar && !!title
       && getComputedStyle(seatNode.querySelector("[data-orchestrator-panel]") ?? seatNode).borderTopColor === "rgba(0, 0, 0, 0)";
@@ -29170,6 +29400,147 @@ describe("account chips with the weekly limit left: the launch chooser and the r
   }, 300_000);
 });
 
+describe("role avatars: Delegatus in each role's costume on answers, internal cards and the conversation header", () => {
+  /*
+   * Rendered evidence for docs/design/role-avatars.md (§10, the build): the real
+   * Viewer over `issue1695Evidence.fixture.tsx?scenario=role-avatars`, in
+   * Chromium, at 1440 and 1000 and on a 390 px phone, light and dark, English
+   * and Ukrainian:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "role avatars"
+   *
+   * The seat's feed holds the orchestrator's answers and one internal message
+   * from each of the other eleven roles and from an agent that names no role
+   * (the tuxedo); a builder's stage conversation and one started by hand, with
+   * no role, open in the agent window (on the phone, in the conversation screen). Per frame: every
+   * avatar is the expected costume at its size (26 px answers and cards, 20 px
+   * in the phone's answer header), the role and the engine stay two separate
+   * things (the engine's glyph and name beside the time, the model chip in the
+   * header), each card names the role alone and none is cut, every card header
+   * has one height, the phone's card clock has no seconds, nothing scrolls
+   * sideways.
+   *
+   * Readings go to `evidence/role-avatars/rendered.json`; frames to
+   * `.artifacts/role-avatars/`, which is not committed.
+   */
+  const OUT = path.resolve(".artifacts/role-avatars");
+  const EVIDENCE = path.resolve("evidence/role-avatars");
+  const SENDERS = ["architect", "builder", "reviewer", "visual-critic", "verifier", "cleaner", "merger", "deployer", "prod-auditor", "maintainer", "issue-reporter", "neutral"];
+  const SHAPES = [
+    { name: "1440", viewport: { width: 1440, height: 900 }, phone: false },
+    { name: "1000", viewport: { width: 1000, height: 800 }, phone: false },
+    { name: "390", viewport: { width: 390, height: 844 }, phone: true },
+  ] as const;
+
+  /** Everything the frame shows inside `scope`: avatars by role and size, the answers' engine labels, the cards. */
+  const read = (page: Page, scope: string) => page.evaluate((scope) => {
+    const root = document.querySelector(scope);
+    const size = (element: Element) => { const box = element.getBoundingClientRect(); return `${Math.round(box.width)}x${Math.round(box.height)}`; };
+    const answers = [...(root?.querySelectorAll("[data-tts-message]") ?? [])].map((answer) => {
+      const row = answer.closest(".group\\/msg") ?? answer;
+      const avatar = row.querySelector("[data-role-avatar]");
+      const header = row.querySelector("[data-mobile-message-header]") ?? answer.firstElementChild;
+      const engine = row.querySelector("[data-message-engine], [data-mobile-message-speaker]");
+      const headerBox = header?.getBoundingClientRect() ?? null;
+      const avatarBox = avatar?.getBoundingClientRect() ?? null;
+      return {
+        avatar: avatar ? `${avatar.getAttribute("data-role-avatar")}:${size(avatar)}` : null,
+        engine: engine?.textContent?.trim() ?? null,
+        engineInsideAvatar: Boolean(avatar && engine && avatar.contains(engine)),
+        /* On the phone the avatar sits inside its 20 px header row. */
+        overflow: avatarBox && headerBox && row.querySelector("[data-mobile-message-header]")
+          ? Math.max(0, headerBox.top - avatarBox.top, avatarBox.bottom - headerBox.bottom) : 0,
+      };
+    });
+    const cards = [...(root?.querySelectorAll("[data-agent-author]") ?? [])].map((label) => {
+      const head = label.parentElement!;
+      const avatar = head.querySelector("[data-role-avatar]");
+      const range = document.createRange(); range.selectNodeContents(label);
+      return {
+        avatar: avatar ? `${avatar.getAttribute("data-role-avatar")}:${size(avatar)}` : null,
+        label: label.textContent?.trim() ?? "",
+        cut: Math.round((range.getBoundingClientRect().width - label.getBoundingClientRect().width) * 10) / 10,
+        head: Math.round(head.getBoundingClientRect().height),
+        clock: head.querySelector("[data-card-clock]")?.textContent?.trim() ?? null,
+      };
+    });
+    return {
+      answers, cards,
+      header: [...document.querySelectorAll(".conv-head [data-role-avatar], .seat-head [data-role-avatar], [data-mobile2-bar] [data-role-avatar]")].map((avatar) => `${avatar.getAttribute("data-role-avatar")}:${size(avatar)}`),
+      models: [...document.querySelectorAll(".conv-head .ch-model, .seat-head [data-orchestrator-model]")].map((chip) => chip.textContent?.trim() ?? ""),
+      /* The phone bar: its role pictures (the costume stands where the frame's emblem ribbon stood) and its state line, which carries the model. */
+      phoneBar: (() => {
+        const bar = document.querySelector("[data-mobile2-bar]");
+        const line = bar?.querySelector("[data-mobile2-chat-state]")?.parentElement ?? null;
+        return bar ? { marks: bar.querySelectorAll(".role-mark").length, avatars: bar.querySelectorAll("[data-role-avatar]").length, line: line?.textContent ?? null, lineOver: line ? line.scrollWidth - line.clientWidth : null } : null;
+      })(),
+      sideways: document.documentElement.scrollWidth - innerWidth,
+      broken: [...document.images].filter((image) => image.hasAttribute("data-role-avatar") && !(image.complete && image.naturalWidth > 0)).length,
+    };
+  }, scope);
+
+  browserTest("every costume at its size beside the engine, light and dark, en and uk, desktop and phone", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/role-avatars-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const frames: Record<string, unknown> = {};
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const shape of SHAPES) {
+        const name = (role: string) => role === "neutral" ? translate(lang, "roleFrame.neutral") : translate(lang, `roleCopy.${role}.name` as Parameters<typeof translate>[1]);
+        const answerSize = shape.phone ? "20x20" : "26x26";
+        for (const [view, conversation, role] of [["seat", "conversation_orchestrator", "orchestrator"], ["builder", "conversation_search-impl-2", "builder"], ["agent", "conversation_ra-agent", "neutral"]] as const) {
+          /* On the desktop the seat sits above the board; every other conversation opens in the agent window. */
+          if (view === "seat" && !shape.phone && shape.name === "1000") continue;
+          const label = `${view}-${shape.name}-${scheme}-${lang}`;
+          const hash = view === "seat" && !shape.phone ? "" : `#c=${conversation}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=role-avatars${hash}`, shape.viewport, scheme, lang, "reduce", shape.phone, shape.phone ? 2 : 1);
+          try {
+            await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+            /* The frame variant production draws by default (the layout's boot script, which the fixture does not run). */
+            await page.evaluate((frame) => document.documentElement.setAttribute("data-role-frame", frame), DEFAULT_ROLE_FRAME);
+            const scope = shape.phone ? "[data-testid='mobile-focused-pane']" : view === "seat" ? "[data-kanban-seat]" : "[data-agent-window] .reader-slot:not([data-incoming])";
+            await page.waitForSelector(`${scope} [data-tts-message] [data-tts-body]`, { timeout: 30_000 }).catch(() => undefined);
+            if (view === "seat") await page.waitForFunction((scope) => document.querySelectorAll(`${scope} [data-agent-author]`).length >= 12, scope, { timeout: 20_000 }).catch(() => undefined);
+            await page.waitForFunction(() => [...document.images].every((image) => image.complete), undefined, { timeout: 10_000 }).catch(() => undefined);
+            await page.waitForTimeout(400);
+            const reading = await read(page, scope);
+            frames[label] = { ...reading, pageErrors };
+            await page.screenshot({ path: path.join(OUT, `${label}.png`), fullPage: !shape.phone });
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join("; ")}`);
+            if (reading.sideways > 0) failures.push(`${label}: scrolls ${reading.sideways}px sideways`);
+            if (reading.broken) failures.push(`${label}: ${reading.broken} avatars did not load`);
+            if (!reading.answers.length) failures.push(`${label}: no answer rendered`);
+            for (const answer of reading.answers) {
+              if (answer.avatar !== `${role}:${answerSize}`) failures.push(`${label}: an answer draws ${answer.avatar}, not ${role}:${answerSize}`);
+              if (answer.engine !== "Claude" || answer.engineInsideAvatar) failures.push(`${label}: an answer's engine reads ${JSON.stringify(answer.engine)} apart from the avatar: ${!answer.engineInsideAvatar}`);
+              if (answer.overflow > 0.5) failures.push(`${label}: an answer avatar leaves its header row by ${answer.overflow}px`);
+            }
+            if (!reading.header.some((avatar) => avatar.startsWith(`${role}:`))) failures.push(`${label}: the conversation header draws ${JSON.stringify(reading.header)}, not ${role}`);
+            if (!shape.phone && view !== "seat" && !reading.models.some((model) => model.length > 0)) failures.push(`${label}: the header lost its model chip`);
+            if (shape.phone && (reading.phoneBar?.avatars !== 1 || reading.phoneBar.marks !== 0 || !reading.phoneBar.line?.includes("Opus"))) failures.push(`${label}: the phone bar ${JSON.stringify(reading.phoneBar)}`);
+            if (view === "seat") {
+              const expected = SENDERS.map((sender) => `${sender}:26x26`);
+              if (JSON.stringify(reading.cards.map((card) => card.avatar)) !== JSON.stringify(expected)) failures.push(`${label}: cards draw ${JSON.stringify(reading.cards.map((card) => card.avatar))}`);
+              const labels = reading.cards.map((card) => card.label);
+              if (JSON.stringify(labels) !== JSON.stringify(SENDERS.map(name))) failures.push(`${label}: card labels ${JSON.stringify(labels)}`);
+              const cut = reading.cards.filter((card) => card.cut > 0.5);
+              if (cut.length) failures.push(`${label}: cut labels ${JSON.stringify(cut)}`);
+              if (new Set(reading.cards.map((card) => card.head)).size !== 1) failures.push(`${label}: card headers of heights ${JSON.stringify(reading.cards.map((card) => card.head))}`);
+              const clocks = reading.cards.map((card) => card.clock ?? "");
+              if (!clocks.every((clock) => (shape.phone ? /^\d{2}:\d{2}$/ : /^\d{1,2}:\d{2}:\d{2}$/).test(clock))) failures.push(`${label}: card clocks ${JSON.stringify(clocks)}`);
+            }
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(EVIDENCE, "rendered.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "?scenario=role-avatars", frames, failures }, null, 2)}\n`);
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
 /*
  * «Створити клона» in the Celestia card (docs/research/celestia-clone-creation.md,
  * variant 1), in the real relay settings dialog: with no clones, with clones,
@@ -29429,7 +29800,7 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
           } finally { await context.close(); }
         }
 
-        /* The phone: its account lines are the accounts screen behind the menu; each corner names the week. */
+        /* The phone: its account lines are the accounts screen behind the menu; each collapsed card's corner names the week, and the active card, which lists its windows, repeats none. */
         {
           const name = `accounts-390-${lang}`;
           const { context, page, pageErrors } = await openFixture(browser, `${server.base}?accountpicker=1&sidebarweekly=1`, { width: 390, height: 844 }, "dark", lang, "reduce", true);
@@ -29437,7 +29808,7 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
             await page.waitForSelector('[data-mobile2-screen="board"]', { timeout: 40_000 });
             await page.click('[data-mobile2-open="menu"]');
             await page.click('[data-mobile2-go="accounts"]');
-            await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account-corner]').nth(4).waitFor({ timeout: 15_000 });
+            await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account-corner]').nth(2).waitFor({ timeout: 15_000 });
             await page.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
             const cards = await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account]').evaluateAll((elements) => elements.map((card) => {
               const corner = card.querySelector<HTMLElement>("[data-mobile2-account-corner]");
@@ -29448,7 +29819,7 @@ describe("the sidebar names each account's weekly limit left, Claude as Codex", 
               };
             }));
             const week = (percent: number) => `${tr("mobile2.meter.left", { left: percent })} ${tr("limits.week")}`;
-            expect(cards.map((card) => card.corner), `${name} corners`).toEqual([week(77), week(41), tr("limits.noWeekly"), week(78), week(23)]);
+            expect(cards.map((card) => card.corner), `${name} corners`).toEqual([null, week(41), tr("limits.noWeekly"), null, week(23)]);
             expect(cards.every((card) => card.inside !== false), `${name} corners inside the screen`).toBe(true);
             expect(await page.evaluate(() => Math.max(0, document.documentElement.scrollWidth - innerWidth)), `${name} no sideways scroll`).toBe(0);
             await page.screenshot({ path: path.join(out, `${name}.png`) });
