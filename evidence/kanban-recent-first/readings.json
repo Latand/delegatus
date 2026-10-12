@@ -1,0 +1,155 @@
+{
+  "readings": {
+    "desktop-1440-en": {
+      "assigned": [
+        "t-rf-running",
+        "t-rf-finished",
+        "t-rf-decision",
+        "t-rf-paused",
+        "t-rf-old",
+        "t-rf-notes"
+      ],
+      "inbox": [
+        "t-rf-inbox-working",
+        "t-rf-yesterday",
+        "t-rf-hidden-recent",
+        "t-rf-high",
+        "t-rf-normal",
+        "t-rf-low"
+      ],
+      "done": [
+        "t-rf-done-fresh",
+        "t-rf-done-blocked"
+      ],
+      "hiddenCount": 3,
+      "foot": {
+        "finished": null,
+        "old": {
+          "text": "6d ago",
+          "title": "Last worked 6d ago",
+          "inside": true,
+          "overlaps": false
+        },
+        "notes": {
+          "text": "edited just now",
+          "title": "Updated just now",
+          "inside": true,
+          "overlaps": false
+        }
+      },
+      "stoppedHeader": 2,
+      "stoppedDivider": "2",
+      "belowDivider": [
+        "t-rf-old",
+        "t-rf-notes"
+      ],
+      "doubleDated": [],
+      "tileCards": 2,
+      "stateLines": {
+        "t-rf-finished": "",
+        "t-rf-decision": "Needs you",
+        "t-rf-paused": "Waiting: paused · 3d ago",
+        "t-rf-old": "Stopped, no reason given"
+      }
+    },
+    "phone-390-en": {
+      "assigned": [
+        "t-rf-decision",
+        "t-rf-running",
+        "t-rf-finished",
+        "t-rf-paused",
+        "t-rf-old",
+        "t-rf-notes"
+      ],
+      "inbox": [
+        "t-rf-inbox-working",
+        "t-rf-yesterday",
+        "t-rf-hidden-recent",
+        "t-rf-high",
+        "t-rf-normal",
+        "t-rf-low"
+      ],
+      "overflowX": 0,
+      "edits": {
+        "t-rf-notes": "no agents yet·edited 1m",
+        "t-rf-old": "1 agent·6d"
+      }
+    },
+    "desktop-1440-uk": {
+      "assigned": [
+        "t-rf-running",
+        "t-rf-finished",
+        "t-rf-decision",
+        "t-rf-paused",
+        "t-rf-old",
+        "t-rf-notes"
+      ],
+      "inbox": [
+        "t-rf-inbox-working",
+        "t-rf-yesterday",
+        "t-rf-hidden-recent",
+        "t-rf-high",
+        "t-rf-normal",
+        "t-rf-low"
+      ],
+      "done": [
+        "t-rf-done-fresh",
+        "t-rf-done-blocked"
+      ],
+      "hiddenCount": 3,
+      "foot": {
+        "finished": null,
+        "old": {
+          "text": "6 д тому",
+          "title": "Остання робота 6 д тому",
+          "inside": true,
+          "overlaps": false
+        },
+        "notes": {
+          "text": "змінено щойно",
+          "title": "Оновлено щойно",
+          "inside": true,
+          "overlaps": false
+        }
+      },
+      "stoppedHeader": 2,
+      "stoppedDivider": "2",
+      "belowDivider": [
+        "t-rf-old",
+        "t-rf-notes"
+      ],
+      "doubleDated": [],
+      "tileCards": 2,
+      "stateLines": {
+        "t-rf-finished": "",
+        "t-rf-decision": "Потрібні ви",
+        "t-rf-paused": "Очікує: призупинено · 3 д тому",
+        "t-rf-old": "Без руху, причину не вказано"
+      }
+    },
+    "phone-390-uk": {
+      "assigned": [
+        "t-rf-decision",
+        "t-rf-running",
+        "t-rf-finished",
+        "t-rf-paused",
+        "t-rf-old",
+        "t-rf-notes"
+      ],
+      "inbox": [
+        "t-rf-inbox-working",
+        "t-rf-yesterday",
+        "t-rf-hidden-recent",
+        "t-rf-high",
+        "t-rf-normal",
+        "t-rf-low"
+      ],
+      "overflowX": 0,
+      "edits": {
+        "t-rf-notes": "ще без агентів·змінено 1 хв",
+        "t-rf-old": "1 агент·6 д"
+      }
+    }
+  },
+  "failures": []
+}

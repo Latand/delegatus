@@ -449,3 +449,40 @@ test("escalation refuses a round the operator dismissed, and takes it again once
   expect(await as.callTool("dismiss_attention", { clientRequestId: "p-undo", target, undo: true })).toMatchObject({ ok: true });
   expect(await as.callTool("dismiss_attention", { clientRequestId: "e-restored", target: { kind: "pipeline", pipelineId: "lane-1" }, escalate: { reviewId: "round-a" } })).toMatchObject({ ok: true, changed: true });
 });
+
+test("a taskless seat form persists its escalation and returns the wait after its answer, even while delivery is uncertain", async () => {
+  const { publishPrototype } = await import("@/lib/prototypeReview/store");
+  const { mutateSeatRound } = await import("@/lib/prototypeReview/seatRounds");
+  const { overlayAttentionRoutes, storedWaitingRoundIds } = await import("@/lib/attention/routeOverlay");
+  const { attentionEscalationIndex } = await import("@/lib/attention/dismissals");
+  const round = await publishPrototype({ clientRequestId: "seat-escalation", title: "Which runner?", questions: [
+    { id: "runner", text: "Retry the build?", options: [{ label: "Retry", recommended: true }, { label: "Close" }] },
+  ] }, null, { conversationId: SEAT }, PROJECT);
+  const state = world();
+  const as = serviceAs(MANAGER, state, undefined, { loadTasks: () => [] });
+  const target = { kind: "pipeline", pipelineId: "lane-1" };
+  const elsewhere = await publishPrototype({ clientRequestId: "seat-escalation-other", title: "Another project", questions: round.questions },
+    null, { conversationId: SEAT }, "elsewhere");
+  expect(await as.callTool("dismiss_attention", { clientRequestId: "seat-escalation-refused", target, escalate: { reviewId: elsewhere.id } }))
+    .toMatchObject({ ok: false, details: { code: "ROUND_NOT_FOUND" } });
+  expect(readAttentionDismissals().records).toHaveLength(0);
+  const escalated = await as.callTool("dismiss_attention", { clientRequestId: "seat-escalation-write", target, escalate: { reviewId: round.id } });
+  expect(escalated).toMatchObject({ ok: true, changed: true, escalated: { taskId: null, reviewId: round.id, seat: SEAT } });
+  const persisted = [...attentionEscalationIndex(readAttentionDismissals()).values()];
+  expect(persisted).toHaveLength(1);
+  expect(persisted[0]!.taskId).toBeNull();
+  expect(storedWaitingRoundIds([]).has(round.id)).toBe(true);
+  const lane = state.lanes.get("lane-1")!;
+  const sources = { seats: () => null, tickEnabled: () => false, escalations: () => attentionEscalationIndex(readAttentionDismissals()), canonicalConversationId: (id: string) => id };
+  overlayAttentionRoutes([], [lane], storedWaitingRoundIds([]), Date.now() / 1000, sources);
+  expect(lane.attentionRoute).toMatchObject({ owner: "form", form: { taskId: null, reviewId: round.id } });
+  mutateSeatRound(round.id, held => {
+    held.decision = { chosen: [], answers: [{ questionId: "runner", options: [0] }], comment: "", at: new Date().toISOString(),
+      delivery: { state: "uncertain", conversationId: SEAT, clientMessageId: "seat-escalation-answer", text: "Retry the build." } };
+  });
+  expect(storedWaitingRoundIds([]).has(round.id)).toBe(false);
+  overlayAttentionRoutes([], [lane], storedWaitingRoundIds([]), Date.now() / 1000, sources);
+  expect(lane.attentionRoute).toBeUndefined();
+  expect(await as.callTool("dismiss_attention", { clientRequestId: "seat-escalation-settled", target, escalate: { reviewId: round.id } }))
+    .toMatchObject({ ok: false, details: { code: "ROUND_NOT_WAITING" } });
+});

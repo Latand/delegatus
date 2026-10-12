@@ -1,6 +1,6 @@
 import { stateWriteHealth } from "@/lib/state/diskFull";
 import { filesReadSummary } from "@/lib/filesReadSummary";
-import { withPrototypeReviewSummaries, withoutPrototypeReviews, prototypeReviewNotices } from "@/lib/prototypeReview/read";
+import { withPrototypeReviewSummaries, withoutPrototypeReviews, prototypeReviewNotices, seatDecisionNotices } from "@/lib/prototypeReview/read";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -873,7 +873,8 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
      the seat escalated stays on its decision form while the form waits, as
      the board draws it: undecided, undismissed, the task's newest round. */
   const summarizedTasks = withPrototypeReviewSummaries(boardTasks);
-  overlayAttentionRoutes(projected.files, pipelines, waitingRoundIds(summarizedTasks), Date.now() / 1000,
+  const seatDecisions = seatDecisionNotices();
+  overlayAttentionRoutes(projected.files, pipelines, waitingRoundIds(summarizedTasks, seatDecisions), Date.now() / 1000,
     productionRoutingSources(seatIdentityResolver(conversationLookup.canonicalConversationId)));
   markTiming("files-attention-routes");
   const visibleProjects = [
@@ -959,7 +960,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
        without them; the route keeps that answer in a scope of its own. */
     ...(agentRead
       ? { tasks: withoutPrototypeReviews(boardTasks) }
-      : { tasks: summarizedTasks, prototypeReviewNotices: prototypeReviewNotices(boardTasks) }),
+      : { tasks: summarizedTasks, prototypeReviewNotices: prototypeReviewNotices(boardTasks, seatDecisions), ...(seatDecisions.length ? { seatDecisions } : {}) }),
     /* #2059: map lookups against the forge cache only; the sweep, not this
        request, talks to GitHub. */
     workLinks: workLinksForBoard(pipelines, boardTasks),

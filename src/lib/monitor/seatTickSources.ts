@@ -1137,6 +1137,10 @@ function activityOf(record: AgentLivenessRecord | undefined): SeatTickActivity |
      turn. */
   if (!record) return null;
   return {
+    verified: record.verified,
+    conversationId: record.conversationId,
+    lastRecordAt: record.lastRecordAt,
+    activity: record.activity,
     lifecycle: record.lifecycle,
     reason: record.reason,
     turnState: record.turnState,

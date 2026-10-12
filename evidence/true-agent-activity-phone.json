@@ -1,0 +1,398 @@
+[
+  {
+    "theme": "dark",
+    "lang": "uk",
+    "state": "working",
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgb(79, 195, 111)",
+      "ring": null,
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 329.125,
+      "right": 382,
+      "top": 432.375,
+      "bottom": 456.125,
+      "portalled": true,
+      "lines": 1,
+      "text": "працює",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
+  },
+  {
+    "theme": "dark",
+    "lang": "uk",
+    "state": "checking",
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgba(0, 0, 0, 0)",
+      "ring": "rgb(79, 195, 111)",
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 262.96875,
+      "right": 382,
+      "top": 365.625,
+      "bottom": 389.375,
+      "portalled": true,
+      "lines": 1,
+      "text": "чекає перевірку · 5 хв",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
+  },
+  {
+    "theme": "dark",
+    "lang": "uk",
+    "state": "idle",
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgb(240, 113, 113)",
+      "ring": null,
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 282.890625,
+      "right": 382,
+      "top": 485.375,
+      "bottom": 522.875,
+      "portalled": true,
+      "lines": 2,
+      "text": "стоїть 14 хвостання дія 19:14",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
+  },
+  {
+    "theme": "dark",
+    "lang": "en",
+    "state": "working",
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgb(79, 195, 111)",
+      "ring": null,
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 329.53125,
+      "right": 382,
+      "top": 431.875,
+      "bottom": 455.625,
+      "portalled": true,
+      "lines": 1,
+      "text": "working",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
+  },
+  {
+    "theme": "dark",
+    "lang": "en",
+    "state": "checking",
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgba(0, 0, 0, 0)",
+      "ring": "rgb(79, 195, 111)",
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 258.9375,
+      "right": 382,
+      "top": 365.125,
+      "bottom": 388.875,
+      "portalled": true,
+      "lines": 1,
+      "text": "waiting on a check · 5m",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
+  },
+  {
+    "theme": "dark",
+    "lang": "en",
+    "state": "idle",
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgb(240, 113, 113)",
+      "ring": null,
+      "success": "rgb(79, 195, 111)",
+      "warning": "rgb(224, 174, 69)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 291.171875,
+      "right": 382,
+      "top": 484.875,
+      "bottom": 522.375,
+      "portalled": true,
+      "lines": 2,
+      "text": "idle 14mlast action 19:14",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
+  },
+  {
+    "theme": "light",
+    "lang": "uk",
+    "state": "working",
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgb(23, 122, 55)",
+      "ring": null,
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 329.125,
+      "right": 382,
+      "top": 432.375,
+      "bottom": 456.125,
+      "portalled": true,
+      "lines": 1,
+      "text": "працює",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
+  },
+  {
+    "theme": "light",
+    "lang": "uk",
+    "state": "checking",
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgba(0, 0, 0, 0)",
+      "ring": "rgb(23, 122, 55)",
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 262.96875,
+      "right": 382,
+      "top": 365.625,
+      "bottom": 389.375,
+      "portalled": true,
+      "lines": 1,
+      "text": "чекає перевірку · 5 хв",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
+  },
+  {
+    "theme": "light",
+    "lang": "uk",
+    "state": "idle",
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgb(198, 40, 40)",
+      "ring": null,
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 282.890625,
+      "right": 382,
+      "top": 485.375,
+      "bottom": 522.875,
+      "portalled": true,
+      "lines": 2,
+      "text": "стоїть 14 хвостання дія 19:14",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
+  },
+  {
+    "theme": "light",
+    "lang": "en",
+    "state": "working",
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgb(23, 122, 55)",
+      "ring": null,
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 329.53125,
+      "right": 382,
+      "top": 431.875,
+      "bottom": 455.625,
+      "portalled": true,
+      "lines": 1,
+      "text": "working",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
+  },
+  {
+    "theme": "light",
+    "lang": "en",
+    "state": "checking",
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgba(0, 0, 0, 0)",
+      "ring": "rgb(23, 122, 55)",
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 258.9375,
+      "right": 382,
+      "top": 365.125,
+      "bottom": 388.875,
+      "portalled": true,
+      "lines": 1,
+      "text": "waiting on a check · 5m",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
+  },
+  {
+    "theme": "light",
+    "lang": "en",
+    "state": "idle",
+    "dot": {
+      "width": 8,
+      "height": 8,
+      "rowHeight": 58.75,
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "colour": "rgb(198, 40, 40)",
+      "ring": null,
+      "success": "rgb(23, 122, 55)",
+      "warning": "rgb(138, 95, 0)",
+      "hit": [
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    "popup": {
+      "left": 291.171875,
+      "right": 382,
+      "top": 484.875,
+      "bottom": 522.375,
+      "portalled": true,
+      "lines": 2,
+      "text": "idle 14mlast action 19:14",
+      "scrollWidth": 390,
+      "scrollHeight": 844
+    }
+  }
+]

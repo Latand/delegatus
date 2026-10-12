@@ -1,8 +1,10 @@
 /**
  * The #771 publication contract, driven through the real ProjectDashboard: the
- * canonical selection is one set that survives a view switch, and every view
- * publishes it: the desktop Board (the kanban, #1695), Conversations, and the
- * phone.
+ * canonical selection is one set that survives a change of surface, and every
+ * surface publishes it: the desktop Board (the kanban, #1695), which is the
+ * desktop's one view, and the phone. The desktop's Conversations view left with
+ * the header's view switch; its list opens over the Board from the header and
+ * publishes nothing of its own.
  *
  * The desktop Board has no select mode yet, so the set is made through the
  * selection store's own seam (`seedSelectionSessionForTest`) instead of the
@@ -235,11 +237,11 @@ const boardShown = (host: HTMLElement) => host.querySelector("[data-kanban-board
 /** Conversations' own order for these rows: freshest first by mtime. */
 const listOrder = [alpha.path, beta.path];
 
-/** The view tab an operator actually clicks. */
-function clickViewTab(host: HTMLElement, view: "kanban" | "list") {
-  const tab = host.querySelector(`button[data-view-tab="${view}"]`) as HTMLButtonElement | null;
-  expect(tab).toBeTruthy();
-  flushSync(() => tab!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
+/** The header's recent-agents icon, which opens the project's every conversation over the Board. */
+function toggleRecentAgents(host: HTMLElement) {
+  const toggle = host.querySelector("header.bar [data-bar-recent-toggle]") as HTMLButtonElement | null;
+  expect(toggle).toBeTruthy();
+  flushSync(() => toggle!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
 }
 
 /** Re-render the same dashboard root with a different scan. */
@@ -266,7 +268,7 @@ function rescan(files: FileEntry[]) {
   );
 }
 
-test("a selection published on the Board is still published after switching to Conversations, and survives the round trip", async () => {
+test("a selection published on the Board stays published, as the Board's, while the recent agents' list is open over it", async () => {
   const host = mount();
   expect(await waitFor(() => boardShown(host))).toBe(true);
   await settle();
@@ -274,49 +276,21 @@ test("a selection published on the Board is still published after switching to C
   await settle();
   expect(slice().mode).toBe("scheme");
   expect(slice().selectedPaths).toEqual(["/beta"]);
+  const visible = slice().visiblePaths;
 
-  clickViewTab(host, "list");
-  expect(await waitFor(() => slice().mode === "list")).toBe(true);
+  /* The list is a popover of the header, never a view: the Board stays the surface that publishes. */
+  toggleRecentAgents(host);
   await settle();
-  expect(boardShown(host)).toBe(false);
+  expect(host.querySelector("[data-bar-recent-list]")).not.toBeNull();
+  expect(boardShown(host)).toBe(true);
+  expect(slice().mode).toBe("scheme");
   expect(slice().selectedPaths).toEqual(["/beta"]);
-  expect(slice().visiblePaths).toEqual(listOrder);
+  expect(slice().visiblePaths).toEqual(visible);
 
-  clickViewTab(host, "kanban");
-  expect(await waitFor(() => boardShown(host) && slice().mode === "scheme")).toBe(true);
+  toggleRecentAgents(host);
   await settle();
+  expect(slice().mode).toBe("scheme");
   expect(slice().selectedPaths).toEqual(["/beta"]);
-});
-
-test("a selected board conversation that Conversations has no row for is still published", async () => {
-  /* Conversations lists root conversations, so a selected child appears in no row; it is published anyway. */
-  const leaf = { ...file("/alpha-child", "Child", 3), parent: "/alpha" };
-  const host = mount([alphaOf(), leaf], ["/alpha", leaf.path]);
-  expect(await waitFor(() => boardShown(host))).toBe(true);
-  await settle();
-  select(leaf.path);
-  await settle();
-  expect(slice().selectedPaths).toEqual([leaf.path]);
-
-  clickViewTab(host, "list");
-  expect(await waitFor(() => slice().mode === "list")).toBe(true);
-  await settle();
-  expect(slice().visiblePaths).not.toContain(leaf.path);
-  expect(slice().selectedPaths).toEqual([leaf.path]);
-});
-
-test("Conversations publishes a multi-conversation selection in its own row order", async () => {
-  const host = mount();
-  expect(await waitFor(() => boardShown(host))).toBe(true);
-  await settle();
-  select("/beta", "/alpha");
-  await settle();
-  expect([...slice().selectedPaths].sort()).toEqual(["/alpha", "/beta"]);
-
-  clickViewTab(host, "list");
-  expect(await waitFor(() => slice().mode === "list")).toBe(true);
-  await settle();
-  expect(slice().selectedPaths).toEqual(listOrder);
 });
 
 test("the phone's focus mode publishes the selection the desktop Board held", async () => {
@@ -389,9 +363,8 @@ test("a selected conversation the board does not place stays in the set — prun
 
   rescan([alphaOf(), betaOf()]);
   await settle();
-  clickViewTab(host, "list");
-  expect(await waitFor(() => slice().mode === "list")).toBe(true);
-  await settle();
+  expect(slice().mode).toBe("scheme");
+  expect(slice().visiblePaths).not.toContain("/beta");
   expect(slice().selectedPaths).toEqual(["/beta"]);
 });
 

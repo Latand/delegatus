@@ -334,7 +334,10 @@ test("the Overview says who is working once, on its top line; the project board'
   /* The project's own board keeps only who is working: the waiting signal and the
      task count live elsewhere on its bar and its columns. */
   const project = mountProjectBoard();
-  expect(summary(project)).toBe(translate("en", "kanban.summaryWorking", { count: 0 }));
+  /* A dot and the number in the row; the sentence is the tooltip's and the accessible name. */
+  expect(summary(project)).toBe("0");
+  expect(project.querySelector(".bar .summary")?.getAttribute("title")).toBe(translate("en", "kanban.summaryWorking", { count: 0 }));
+  expect(project.querySelector(".bar .summary [data-bar-working]")?.getAttribute("aria-label")).toBe(translate("en", "kanban.summaryWorking", { count: 0 }));
 });
 
 test("an archived project's working agent is not on the Overview's top line", () => {
