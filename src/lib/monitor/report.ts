@@ -334,7 +334,8 @@ export function seatTickWakePayload(input: Parameters<typeof seatTickWakeMessage
   const first = input.items[0];
   if (!first || (input.monitorPrompt && !input.monitorPromptUnchanged)
     || `\n${text}\n`.includes(`\n${redactMonitorText(seatTickBullet(first))}\n`)) return { text, items: input.items };
-  const source = first.kind === "maintenance" ? "seat_tick_settings verbose:true" : first.kind === "child"
+  const source = first.kind === "signal" && first.id.startsWith("memory-problem:") ? `seat_tick_settings verbose:true problemId=${first.id}`
+    : first.kind === "maintenance" ? "seat_tick_settings verbose:true" : first.kind === "child"
     ? `get_conversation ${first.id}` : first.kind === "pipeline" || first.kind === "provisioning"
       ? `get_pipeline ${first.id}` : first.kind === "pull-request" ? `pull request ${first.id}` : "the board and current source";
   const suffix = `… [summary; ${source} holds the full item]`;

@@ -108,6 +108,7 @@ interface CurrentReleaseControllerLoaders {
   loadAttentionReconcile?: () => Promise<{ startAttentionReconcile: () => void }>;
   loadLinkedBoardSync?: () => Promise<{ startLinkedBoardSync: () => void }>;
   /** Optional for the same reason. */
+  loadDoneSweep?: () => Promise<{ startDoneSweep: () => void }>;
   loadPrototypeDelivery?: () => Promise<{ startPrototypeDeliveryWorker: () => void }>;
   loadSelfUpdateAuto?: () => Promise<{ startSelfUpdateAuto: () => Promise<void> | void }>;
 }
@@ -383,6 +384,7 @@ export async function startCurrentReleaseControllers(
     loadAsksClassifier: () => import("@/lib/asks/controller"),
     loadAttentionReconcile: () => import("@/lib/attention/reconcileController"),
     loadLinkedBoardSync: () => import("@/lib/links/schedule"),
+    loadDoneSweep: () => import("@/lib/done/sweep"),
     loadPrototypeDelivery: () => import("@/lib/prototypeReview/deliveryWorker"),
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
   },
@@ -535,6 +537,15 @@ export async function startCurrentReleaseControllers(
     linkedBoards?.startLinkedBoardSync();
   } catch (error) {
     console.error("[linked boards] sync start failed", error instanceof Error ? error.name : "unknown");
+  }
+  /* «Готово» (docs/design/done-section.md §3): finished work is taken into
+     its store on this clock, so an outcome no tab was open for is still there
+     when the operator looks, after its own source has rolled over. */
+  try {
+    const done = await loaders.loadDoneSweep?.();
+    done?.startDoneSweep();
+  } catch (error) {
+    console.error("[done] sweep start failed", error instanceof Error ? error.name : "unknown");
   }
   /* The operator's prototype decisions answer as soon as they are saved, and
      their messages go to the seat from here (docs/design/prototype-review-server.md).

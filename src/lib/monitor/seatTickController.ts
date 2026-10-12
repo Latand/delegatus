@@ -1579,6 +1579,8 @@ async function check(
      carries for them; written once, after the send, from the final row. */
   const unresolved: UnresolvedAttempt[] = [];
   const openingRow = readState(canonical);
+  // Credit delivered problem rows before a successor resets the generic agenda history.
+  sources.memoryProblems?.(canonical, openingRow.itemsShown ?? []);
   const opened = seatTickStateForEpoch(openingRow, openingSeat?.seatEpoch ?? null);
   /* Whether the project came into this check with anything its card could be
      describing — so a check that finds it all gone closes the card, and a

@@ -297,7 +297,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   },
   {
     id: "maintainer", name: "Maintainer",
-    description: "Maintains the board and inbox on the seat tick.",
+    description: "Maintains board and inbox on the seat tick.",
     config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "medium" },
     parameters: [], promptScaffold: `${MAINTAINER_BODY} ${SHARED_RULES}`,
     safetyFences: ["Files stay untouched: no edits, staging, commits or pushes in any repository; git and gh are for reading.", "Write the board only through create_task and update_task. Never delete or overwrite details, or mark done a task with an open pipeline or live agent. Hide only a confirmed retired orchestrator seat card as done history; preserve its transcript and details."],

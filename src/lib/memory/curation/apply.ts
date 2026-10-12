@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
 import { ROLE_IDS } from "@/lib/roles/types";
 import { roleIsClean } from "../eligibility";
 import { lettersAndDigits, scopeChars } from "../roleConsolidate";
 import { taskIdentifier } from "../roleStage";
-import { canonicalScope, joinMovedScopes, newRuleId, refreshLessonKnownValues, roleMemoryCollection, RoleMemoryRefusal, versionedRule } from "../roleStore";
+import { assertGenericRule, problemInput } from "../roleProblems";
+import { canonicalScope, joinMovedScopes, newRuleId, refreshLessonKnownValues, roleMemoryCollection, RoleMemoryRefusal, versionedRule, rulePrivacyHints } from "../roleStore";
 import { scopeKind, scopeProject, scopeRole, isCrossProjectRoleScope } from "../roleScopes";
-import { lessonText, lessonTextLength, ROLE_MEMORY_BOUND, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type CuratorReason, type RoleMemoryRule, type RoleMemoryRow, type RoleMemoryScopeRow } from "../roleTypes";
+import { lessonText, lessonTextLength, ROLE_MEMORY_BOUND, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type CuratorReason, type RoleMemoryRule, type RoleMemoryRow, type RoleMemoryScopeRow, type ProblemInput } from "../roleTypes";
 import { patchPass, readPass, passIsLive, type CuratorPass } from "./store";
 
 export interface CurationApply {
@@ -18,6 +18,7 @@ export interface CurationApply {
   split?: { id: string; parts: { to: string; rule: string; why?: string }[]; note: string }[];
   archive?: { id: string; reason: CuratorReason; against?: string; where?: string; note: string }[];
   restore?: string[];
+  problem?: (ProblemInput & { id: string; note: string })[];
 }
 function refuse(code: string, message: string): never { throw new RoleMemoryRefusal(code, message); }
 function note(value: unknown): string {
@@ -28,7 +29,7 @@ function text(rule: string, why: string) {
   const r = lessonText(rule), w = lessonText(why);
   if (lessonTextLength(r) < RULE_MIN_CHARS || lessonTextLength(r) > RULE_MAX_CHARS || lessonTextLength(w) > WHY_MAX_CHARS || lettersAndDigits(r) < 16 || lettersAndDigits(w) < 16) refuse("CURATE_INVALID", "rule or why is outside the lesson limits");
   if (taskIdentifier(r)) refuse("LESSON_ABOUT_ONE_TASK", "curator text must hold across tasks without a task identifier");
-  return { rule: r, why: w, hints: [...staticSensitiveClasses(`${r}\n${w}`.normalize("NFKC"))].sort() };
+  return { rule: r, why: w, hints: rulePrivacyHints(`${r}\n${w}`) };
 }
 function reaches(to: string, from: string) {
   return to === from || to === "machine" || scopeKind(to) === "project" && scopeProject(to) === scopeProject(from)
@@ -92,7 +93,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       if (work.has(id)) refuse("CURATE_PARTITION", "restore ids must be distinct archived rules");
       const row = tx.get(`r:${id}`);
       if (row?.kind !== "rule" || row.versionOf || row.state !== "archived" || row.reason === "deleted" || !scopes.has(canonicalScope(row.scope))) refuse("CURATE_RESTORE", "restore must name an archived non-version rule in a named scope, except operator removals");
-      before.set(id, row); work.set(id, { ...row, scope: canonicalScope(row.scope), state: "active", reason: undefined, mergedInto: undefined, against: undefined, where: undefined }); touched.add(id);
+      before.set(id, row); work.set(id, { ...row, scope: canonicalScope(row.scope), state: "active", reason: undefined, mergedInto: undefined, mergedAt: undefined, against: undefined, where: undefined }); touched.add(id);
     }
     for (const item of input.rewrite ?? []) {
       const rule = get(item.id); note(item.note);
@@ -115,7 +116,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
         if (!index) work.set(item.id, { ...rule, ...fields, scope: part.to, note: item.note, movedFrom: rule.scope });
         else {
           const id = newRuleId({ get: key => created.has(key.slice(2)) ? created.get(key.slice(2))! : tx.get(key) });
-          const row: RoleMemoryRule = { ...rule, ...fields, id, scope: part.to, createdAt: now, changedAt: now, versions: [], splitFrom: rule.id, note: item.note };
+          const row: RoleMemoryRule = { ...rule, ...fields, id, scope: part.to, createdAt: now, changedAt: now, versions: [], splitFrom: rule.id, splitAt: now, note: item.note };
           delete row.keptByOperatorAt; delete row.versionOf;
           created.set(id, row); work.set(id, row); placeholders[`split:${item.id}:${index}`] = id;
         }
@@ -131,7 +132,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
         const from = dispose(id, true);
         if (!reaches(into.scope, from.scope)) refuse("CURATE_NARROWS", "merge must preserve the reach of every source");
         if (scopeKind(from.scope) === "role" && scopeKind(into.scope) !== "role") note(item.note);
-        work.set(id, { ...from, state: "merged", reason: "duplicate", mergedInto: item.into, note: item.note });
+        work.set(id, { ...from, state: "merged", reason: "duplicate", mergedInto: item.into, mergedAt: now, note: item.note });
       }
       work.set(item.into, { ...into, ...text(item.rule, item.why ?? into.why), note: item.note, mergedFrom: [...(into.mergedFrom ?? []), ...item.from] }); touched.add(item.into);
     }
@@ -143,6 +144,11 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       if (item.reason === "in-code" || item.reason === "in-instructions" || item.where) evidence(pass.repoDir, item.where);
       if ((item.reason === "contradicted" || item.reason === "duplicate") && !item.against) refuse("CURATE_INVALID", "contradiction or duplicate needs an active counterpart");
       work.set(item.id, { ...rule, state: "archived", reason: item.reason, note: item.note, where: item.where, against: item.against });
+    }
+    for (const item of input.problem ?? []) {
+      const rule = dispose(item.id, true);
+      if (moved.has(item.id) || mergedTargets.has(item.id) || (input.rewrite ?? []).some(edit => edit.id === item.id)) refuse("CURATE_PARTITION", "problem needs one source disposition");
+      work.set(item.id, { ...rule, state: "archived", reason: "problem", problem: problemInput(item), problemEpisode: `${pass.id}:${now}`, problemDeliveredAt: undefined, note: note(item.note), where: undefined, against: undefined });
     }
     const orders = new Map<string, string[]>();
     const ordered = new Set<string>();
@@ -160,6 +166,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
     }
     for (const [id, rule] of work) {
       if (rule.state === "active" && !ordered.has(id)) refuse("CURATE_PARTITION", "every active rule needs an order or disposition");
+      if (rule.state === "active" && (touched.has(id) || created.has(id))) assertGenericRule(rule.rule, scopeKind(rule.scope));
       if (rule.against) {
         const against = work.get(rule.against) ?? tx.get(`r:${rule.against}`);
         if (rule.against === id || against?.kind !== "rule" || against.versionOf || against.state !== "active" || !allowedScopes.has(canonicalScope(against.scope))) refuse("CURATE_INVALID", "against must name a rule active after this call");
@@ -177,14 +184,14 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       prior.set(id, { id, version: saved?.version ?? null, fields });
     }
     for (const row of created.values()) tx.put({ ...row, curatedAt: now, changedAt: now });
-    const counts = { calls: 1, changed: touched.size + created.size, rewritten: input.rewrite?.length ?? 0, merged: input.merge?.reduce((n, m) => n + m.from.length, 0) ?? 0, moved: input.move?.length ?? 0, split: input.split?.length ?? 0, archived: input.archive?.length ?? 0, restored: input.restore?.length ?? 0 };
+    const counts = { calls: 1, changed: touched.size + created.size, rewritten: input.rewrite?.length ?? 0, merged: input.merge?.reduce((n, m) => n + m.from.length, 0) ?? 0, moved: input.move?.length ?? 0, split: input.split?.length ?? 0, archived: (input.archive?.length ?? 0) + (input.problem?.length ?? 0), restored: input.restore?.length ?? 0 };
     for (const [scope, row] of scopes) {
       const revision = row.revision + 1;
       tx.put({ ...row, active: orders.get(scope)!, curatedAt: now, revision, history: [...row.history, { revision, revisionScope: row.revisionScope ?? scope, at: now, by: "curator", pass: pass.id, ...(scope === input.scopes[0].scope ? { counts } : {}), before: row.active, prior: [...prior.values()].filter(p => canonicalScope(p.fields.scope) === scope), created: [...created.values()].filter(r => r.scope === scope).map(r => r.id), added: [],
         rewritten: [...prior.values()].flatMap(p => p.version && canonicalScope(p.fields.scope) === scope ? [{ id: p.id, version: p.version }] : []),
         moved: (input.move ?? []).filter(m => get(m.id).scope === scope).map(m => ({ id: m.id, from: scope, to: m.to })),
         split: (input.split ?? []).filter(s => get(s.id).scope === scope).map(s => ({ id: s.id, parts: [s.id, ...s.parts.slice(1).map((_, index) => placeholders[`split:${s.id}:${index + 1}`])] })),
-        merged: (input.merge ?? []).flatMap(m => m.from.map(from => ({ from, into: m.into }))), archived: (input.archive ?? []).map(a => a.id), restored: input.restore ?? [] }] });
+        merged: (input.merge ?? []).flatMap(m => m.from.map(from => ({ from, into: m.into }))), archived: [...(input.archive ?? []).map(a => a.id), ...(input.problem ?? []).map(p => p.id)], restored: input.restore ?? [] }] });
     }
     return { placeholders, counts };
   });

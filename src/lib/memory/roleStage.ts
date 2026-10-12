@@ -4,9 +4,11 @@ import { ROLE_IDS } from "@/lib/roles/types";
 import { automaticMemoryExcluded, roleIsClean } from "./eligibility";
 import { LESSON_MATCH_MIN_CHARS, lettersAndDigits } from "./roleConsolidate";
 import { lessonRequestLines, type HandedFindings } from "./roleRender";
-import { leaveLessons, lessonRequest, recordLessonRequest, RoleMemoryRefusal, type LeftLesson } from "./roleStore";
+import { leaveLessons, lessonRequest, recordLessonRequest, roleMemoryCollection, RoleMemoryRefusal, type LeftLesson } from "./roleStore";
+import { assertGenericRule, problemInput } from "./roleProblems";
+import { scopeKind } from "./roleScopes";
 import { roleMemoryEnabled } from "./settings";
-import { lessonText, lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type LessonInput, type ScopeKind, type RewriteInput } from "./roleTypes";
+import { lessonText, lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type LessonInput, type ScopeKind, type RewriteInput, type ProblemInput } from "./roleTypes";
 
 /* The three points where role memory meets a pipeline stage: the selector at
    spawn, the request in the answer to an accepted stage_report, and the
@@ -34,8 +36,9 @@ function handedFindings(pipeline: Pipeline, attempt: PipelineStageAttempt): Hand
   const edge = attempt.activatedBy;
   if (!edge || edge.edge !== "fail") return null;
   const source = attemptOf(pipeline, edge.stageId, edge.attempt);
-  const findings = source?.verdict?.rankedFindings ?? source?.report?.verdict.rankedFindings ?? [];
-  return { stageId: edge.stageId, severities: findings.map((finding) => finding.severity) };
+  const verdict = source?.verdict ?? source?.report?.verdict;
+  const ranked = verdict?.rankedFindings ?? [];
+  return { stageId: edge.stageId, findings: ranked.length ? ranked.map(finding => ({ severity: finding.severity ?? "unranked", text: finding.text })) : (verdict?.findings ?? []).map(text => ({ severity: "unranked", text })) };
 }
 
 /** The lesson request for an accepted stage_report, once per attempt; null for a clean stage, the kill switch set, or a repeat. */
@@ -45,7 +48,7 @@ export function lessonRequestForReport(pipeline: Pipeline, stageId: string, n: n
   if (!stage || !attempt) return null;
   const roleId = attempt.effectiveRole.roleId ?? null;
   if (stageMemoryExcluded(stage, roleId) || !roleMemoryEnabled()) return null;
-  const created = recordLessonRequest({ pipelineId: pipeline.id, stageId, attempt: n, project: pipeline.project, roleId, conversationId, at: now });
+  const created = recordLessonRequest({ pipelineId: pipeline.id, taskId: pipeline.taskIds?.[0], stageId, attempt: n, project: pipeline.project, roleId, conversationId, at: now });
   return created ? lessonRequestLines(handedFindings(pipeline, attempt)) : null;
 }
 
@@ -65,7 +68,7 @@ function recognisable(value: string, field: string): string {
   return value;
 }
 
-export interface LessonAnswerArgs { lesson?: unknown; rewrite?: unknown; none?: unknown; lessons?: unknown }
+export interface LessonAnswerArgs { lesson?: unknown; rewrite?: unknown; none?: unknown; lessons?: unknown; problem?: unknown }
 
 /** Fixed identifiers of a single change/run; semantic generality belongs to the agent and curator. */
 export function taskIdentifier(rule: string): string | null {
@@ -82,19 +85,24 @@ function ruleText(value: unknown, field: string): string {
 }
 
 /** Exactly one answer, validated before the request can be consumed. */
-export function parseLessons(args: LessonAnswerArgs, writerRole: string | null): { lessons: LessonInput[]; none: string | null; rewrite?: RewriteInput } {
-  if (args.lessons !== undefined || [args.none, args.rewrite, args.lesson].filter(value => value !== undefined).length !== 1) {
-    throw new RoleMemoryRefusal("LESSON_INVALID", "give exactly one of none, rewrite or lesson");
+export function parseLessons(args: LessonAnswerArgs, writerRole: string | null): { lessons: LessonInput[]; none: string | null; rewrite?: RewriteInput; problem?: ProblemInput } {
+  if (args.lessons !== undefined || [args.none, args.rewrite, args.lesson, args.problem].filter(value => value !== undefined).length !== 1) {
+    throw new RoleMemoryRefusal("LESSON_INVALID", "give exactly one of none, rewrite, lesson or problem");
   }
   if (args.none !== undefined) return { lessons: [], none: text(args.none, "none", 1, WHY_MAX_CHARS) };
+  if (args.problem !== undefined) return { lessons: [], none: null, problem: problemInput(args.problem) };
   const value = args.rewrite ?? args.lesson;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new RoleMemoryRefusal("LESSON_INVALID", "answer must be an object");
   const item = value as Record<string, unknown>;
   const rule = ruleText(item.rule, "rule");
   const why = recognisable(text(item.why, "why", 1, WHY_MAX_CHARS), "why");
-  if (args.rewrite !== undefined) return { lessons: [], none: null, rewrite: { id: text(item.id, "id", 1, 128), rule, why } };
+  if (args.rewrite !== undefined) {
+    assertGenericRule(rule, "role");
+    return { lessons: [], none: null, rewrite: { id: text(item.id, "id", 1, 128), rule, why } };
+  }
   const scope = item.scope as ScopeKind;
   if (!["role", "project", "machine"].includes(scope)) throw new RoleMemoryRefusal("LESSON_INVALID", "lesson.scope must be role, project or machine");
+  assertGenericRule(rule, scope);
   let role: string | undefined;
   if (item.role !== undefined) {
     if (scope !== "role") throw new RoleMemoryRefusal("LESSON_INVALID", "lesson.role goes only with scope role");
@@ -112,6 +120,7 @@ export interface LeaveLessonResult {
   attempt: number;
   left: LeftLesson[];
   none: string | null;
+  problem?: ProblemInput;
 }
 
 /** leave_lesson: the calling conversation's attempt that was asked for a lesson, resolved by the server. */
@@ -130,13 +139,17 @@ export function leaveLessonForConversation(pipelines: readonly Pipeline[], conve
   if (!roleMemoryEnabled()) throw new RoleMemoryRefusal("LESSON_SWITCHED_OFF", "learned rules are switched off on this installation");
   if (!target) throw new RoleMemoryRefusal("LESSON_NOT_REQUESTED", "report the stage with stage_report first; its answer asks for the lesson");
   const parsed = parseLessons(args, roleId);
+  if (parsed.rewrite) {
+    const row = roleMemoryCollection()?.get(`r:${parsed.rewrite.id}`);
+    if (row?.kind === "rule") assertGenericRule(parsed.rewrite.rule, scopeKind(row.scope));
+  }
   const result = leaveLessons({
     request: { pipelineId: target.pipeline.id, stageId: target.stageId, attempt: target.attempt.n },
     source: {
       project: target.pipeline.project, pipelineId: target.pipeline.id, stageId: target.stageId, attempt: target.attempt.n,
       roleId, fixRound: target.attempt.activatedBy?.edge === "fail", conversationId,
     },
-    lessons: parsed.lessons, none: parsed.none, rewrite: parsed.rewrite, now,
+    lessons: parsed.lessons, none: parsed.none, rewrite: parsed.rewrite, problem: parsed.problem, now,
   });
   return { pipelineId: target.pipeline.id, stageId: target.stageId, attempt: target.attempt.n, ...result };
 }
