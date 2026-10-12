@@ -49,7 +49,7 @@ export const CANDIDATE_BROWSER_MINIMUMS = Object.freeze({ views: 8, inputsPerVie
 export interface CandidateBrowserServerLoop {
   /** Samples while the views operated. */
   samples: number;
-  /** The longest delay from the first navigation to the last board drawn. */
+  /** The longest delay from the first navigation until the views' opening requests settled. */
   bootMaxMs: number;
   p95Ms: number;
   maxMs: number;

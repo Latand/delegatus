@@ -246,7 +246,10 @@ process, with nothing of the caller's environment but its `PATH`:
   releases whose event loop the gate bounds have stopped by then, and nothing
   the page measures shows a server held by one route or one background tick.
   The gate checks that the probe's process is the one it started, and reads
-  the samples for two spans, the views opening and the views operating.
+  the samples for two spans: the views opening, which runs until five
+  seconds after the last board drew because the slowest of a view's two
+  dozen opening requests arrive after its board is on screen, and the views
+  operating after that.
   Every `/api/` request is an ordinary request except the
   page's declared event streams (`/api/streams`, `/api/runtime/stream`,
   `/api/logs/stream`): a failed one counts the time until it failed, one

@@ -12,7 +12,8 @@
    streams (`CANDIDATE_BROWSER_STREAM_ROUTES`) stay open by design.
    Main-thread delay is bounded apart for the boot (navigation to a drawn
    board) and for operation after it. The server's own event loop is read
-   from the probe preloaded into it, over the same two spans. */
+   from the probe preloaded into it, for the views opening (until their
+   opening requests have settled) and for their operation after that. */
 
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -24,6 +25,11 @@ import type { ServerLoopWindow } from "./candidateServerLoopProbe";
 
 export const CANDIDATE_BROWSER_VIEWS = 8;
 export const CANDIDATE_BROWSER_WINDOW_MS = 30_000;
+/** How long after its last board drew the server is still answering the views'
+    opening requests. A view issues two dozen of them, and the slowest arrive
+    for seconds after the board is on screen: that tail belongs to the opening,
+    which the server's loop is bounded for apart from its operation. */
+export const CANDIDATE_BROWSER_SETTLE_MS = 5_000;
 
 /** Where a browser can be found: an explicit path, else the image's own Chromium. */
 export function candidateBrowserExecutable(env: NodeJS.ProcessEnv = process.env): string | null {
@@ -191,8 +197,8 @@ export async function measureBoardInBrowser(options: {
   writers: BrowserWriters;
   /** The probe of the server at `baseUrl`. Without its reading the run is refused. */
   server: Pick<ServerLoopProbe, "read"> | null;
-  /** Called once every view has drawn and the writers have started. */
-  onOperating?: () => void;
+  /** Called once the views' opening has settled, with the window still to run. */
+  onOperating?: (remainingMs: number) => void;
   windowMs?: number;
   screenshotDir?: string;
 }): Promise<BrowserRunResult> {
@@ -203,6 +209,7 @@ export async function measureBoardInBrowser(options: {
     ...(options.executablePath ? { executablePath: options.executablePath } : {}),
   });
   let writers: ReturnType<typeof startWriters> | null = null;
+  let operating: ReturnType<typeof setTimeout> | undefined;
   try {
     const openedAt = Date.now();
     const views = await Promise.all(options.pins.map(async (pin, index) => {
@@ -272,8 +279,10 @@ export async function measureBoardInBrowser(options: {
       return { index, context, page, pin, requests, failed, open, readyMs, drawnAt, staleSeen: 0, lostSeen: 0, inputs: [] as number[] };
     }));
     writers = startWriters(options.writers, process.pid);
-    const operatingAt = Date.now();
-    options.onOperating?.();
+    /* The server's operation is read from here on; its opening until here. */
+    const settleMs = Math.min(CANDIDATE_BROWSER_SETTLE_MS, windowMs / 3);
+    const operatingAt = Date.now() + settleMs;
+    operating = setTimeout(() => options.onOperating?.(windowMs - settleMs), settleMs);
     const input = async (view: (typeof views)[number]) => {
       const inputStarted = performance.now();
       await view.page.mouse.wheel(0, 240);
@@ -302,10 +311,10 @@ export async function measureBoardInBrowser(options: {
     writers = null;
     /* The server's own account of the two spans, asked once the load is over. */
     const closedLoopAt = Date.now();
-    const booting = await options.server?.read(openedAt, operatingAt) ?? null;
-    const operating = await options.server?.read(operatingAt, closedLoopAt) ?? null;
-    const server: CandidateBrowserServerLoop | null = booting && operating
-      ? { samples: operating.samples, bootMaxMs: booting.maxMs, p95Ms: operating.p95Ms, maxMs: operating.maxMs } : null;
+    const opened = await options.server?.read(openedAt, operatingAt) ?? null;
+    const operated = await options.server?.read(operatingAt, closedLoopAt) ?? null;
+    const server: CandidateBrowserServerLoop | null = opened && operated
+      ? { samples: operated.samples, bootMaxMs: opened.maxMs, p95Ms: operated.p95Ms, maxMs: operated.maxMs } : null;
     const readings: CandidateBrowserView[] = [];
     const diagnostics: BrowserViewDiagnostics[] = [];
     for (const view of views) {
@@ -403,8 +412,9 @@ export async function measureBoardInBrowser(options: {
       maxMs: Math.round(Math.max(0, ...written.latencies)),
       failures: written.failures,
     };
-    return { views: readings, diagnostics, serverStalls: [...booting?.stalls ?? [], ...operating?.stalls ?? []], measurements: summarizeBrowserViews(readings, writes, server) };
+    return { views: readings, diagnostics, serverStalls: [...opened?.stalls ?? [], ...operated?.stalls ?? []], measurements: summarizeBrowserViews(readings, writes, server) };
   } finally {
+    clearTimeout(operating);
     if (writers) await writers.stop().catch(() => undefined);
     await browser.close().catch(() => undefined);
   }

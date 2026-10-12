@@ -885,9 +885,9 @@ async function browserPhase(input: {
       baseUrl,
       executablePath,
       server: probe,
-      onOperating: () => {
+      onOperating: (remainingMs) => {
         if (!input.inducedStallMs) return;
-        setTimeout(() => { probe.stall(input.inducedStallMs!); input.note(`induced: held the production server's event loop for ${input.inducedStallMs}ms`); }, 3_000);
+        setTimeout(() => { probe.stall(input.inducedStallMs!); input.note(`induced: held the production server's event loop for ${input.inducedStallMs}ms`); }, remainingMs / 3);
       },
       pins: browserViewPins(input.conversations),
       writers: {

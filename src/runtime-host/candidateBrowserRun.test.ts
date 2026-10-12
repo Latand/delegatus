@@ -95,7 +95,7 @@ async function measure(fault: Fault, probed = true) {
       baseUrl: board.url,
       executablePath: browser,
       server: probed ? board.probe : null,
-      onOperating: () => { if (fault === "held-server") setTimeout(() => board.probe.stall(HELD_MS), 2_000); },
+      onOperating: (remainingMs) => { if (fault === "held-server") setTimeout(() => board.probe.stall(HELD_MS), remainingMs / 3); },
       pins: Array.from({ length: 8 }, () => ({ path: "/sessions/1.jsonl", conversationId: "one", title: "Synthetic conversation 1" })),
       writers: {
         runtime: process.execPath, entry: writer, cwd: directory, env: { ...process.env },
@@ -151,7 +151,7 @@ test.skipIf(!browser)("a board fast in every way passes the browser bounds", asy
   expect(candidateBrowserBreaches(result.measurements)).toEqual([]);
   expect(result.measurements).toMatchObject({ apiErrors: 0, apiFirstError: null, apiUnfinished: 0 });
   /* The server's own loop was read over the views' window, a sample every 10 ms. */
-  expect(result.measurements.server!.samples).toBeGreaterThan(WINDOW_MS / 20);
+  expect(result.measurements.server!.samples).toBeGreaterThan(WINDOW_MS / 40);
   expect(result.measurements.server!.maxMs).toBeLessThan(500);
 }, 120_000);
 
