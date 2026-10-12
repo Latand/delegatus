@@ -9,6 +9,7 @@ import {
   readStableTailRecords,
   recordTranscriptComposerRelease,
   tailRecords,
+  tailRecordsResult,
   transcriptTurnResult,
   turnStateFromRecords,
 } from "./activity";
@@ -17,6 +18,23 @@ import { OAUTH_FAILURE_AT, oauthFailureWithRecoveryTail } from "@/lib/accounts/m
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-activity-test-"));
 
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+
+test("activity tail rejects an unterminated or malformed newest JSONL row", () => {
+  for (const [name, content] of [["partial", '{"type":"user","timestamp":"2026-10-12T05:45:29Z","payload":'], ["malformed", '{broken}\n']] as const) {
+    const pathname = path.join(sandbox, `${name}-activity.jsonl`);
+    fs.writeFileSync(pathname, content);
+    const stat = fs.statSync(pathname);
+    expect(tailRecordsResult(pathname, stat.size, stat.mtimeMs)).toMatchObject({ complete: false, records: [] });
+  }
+});
+
+test("activity tail accepts a complete final JSON object without a line ending", () => {
+  const pathname = path.join(sandbox, "complete-no-lf-activity.jsonl");
+  const record = { type: "user", timestamp: "2026-10-12T05:45:29Z" };
+  fs.writeFileSync(pathname, JSON.stringify(record));
+  const stat = fs.statSync(pathname);
+  expect(tailRecordsResult(pathname, stat.size, stat.mtimeMs)).toMatchObject({ complete: true, records: [record] });
+});
 
 const assistant = (stop: string | null, ...kinds: string[]) => ({
   type: "assistant",
@@ -279,8 +297,8 @@ describe("readStableTailRecords", () => {
     const transcript = path.join(directory, "transcript.jsonl");
     const terminal = { payload: { type: "task_complete" } };
     const active = { payload: { type: "task_started_" } };
-    const terminalText = JSON.stringify(terminal);
-    const activeText = JSON.stringify(active);
+    const terminalText = `${JSON.stringify(terminal)}\n`;
+    const activeText = `${JSON.stringify(active)}\n`;
     expect(activeText.length).toBe(terminalText.length);
     fs.writeFileSync(transcript, terminalText);
     const cachedMtimeMs = fs.statSync(transcript).mtimeMs;

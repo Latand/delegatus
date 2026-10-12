@@ -376,6 +376,8 @@ function readTail(pathname: string, size: number, nbytes: number): TailRecordsRe
   try {
     const fd = fs.openSync(pathname, "r");
     try {
+      const before = fs.fstatSync(fd);
+      if (!before.isFile() || before.size !== size) return { records: [], complete: false, prefixTruncated: false };
       seek = Math.max(0, size - nbytes);
       const buf = Buffer.alloc(Math.max(0, size - seek));
       let read = 0;
@@ -385,7 +387,14 @@ function readTail(pathname: string, size: number, nbytes: number): TailRecordsRe
         read += chunk;
       }
       complete = read === buf.length;
-      data = buf.toString("utf8", 0, read);
+      data = new TextDecoder("utf-8", { fatal: true }).decode(buf.subarray(0, read));
+      const after = fs.fstatSync(fd);
+      const pathAfter = fs.statSync(pathname);
+      if (after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size
+        || after.mtimeMs !== before.mtimeMs || pathAfter.dev !== after.dev || pathAfter.ino !== after.ino
+        || pathAfter.size !== after.size || pathAfter.mtimeMs !== after.mtimeMs) {
+        return { records: [], complete: false, prefixTruncated: false };
+      }
     } finally {
       fs.closeSync(fd);
     }
@@ -398,12 +407,14 @@ function readTail(pathname: string, size: number, nbytes: number): TailRecordsRe
   for (const line of lines) {
     const text = line.trim();
     if (!text) continue;
+    let parsed: unknown;
     try {
-      const obj = JSON.parse(text);
-      if (obj && typeof obj === "object" && !Array.isArray(obj)) out.push(obj);
+      parsed = JSON.parse(text);
     } catch {
-      /* skip malformed tail rows */
+      return { records: [], complete: false, prefixTruncated: seek > 0 };
     }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { records: [], complete: false, prefixTruncated: seek > 0 };
+    out.push(parsed as Record<string, unknown>);
   }
   return { records: out, complete, prefixTruncated: seek > 0 };
 }

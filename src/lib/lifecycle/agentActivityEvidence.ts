@@ -1,13 +1,15 @@
 import { emptyBackgroundTaskLedger, foldBackgroundTaskRecords, pendingBackgroundTasks } from "@/lib/pipelines/backgroundTasks";
 import { recordValue, recordsValue } from "@/lib/scanner/json";
 import { lastTurnFromRecords } from "@/lib/scanner/turnDuration";
+import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import { checkCommand, waitShapedCall, type AgentActivityFacts } from "./agentActivity";
 
 /** Native tool identities keep concurrent calls and their results separate. */
 export function activityFactsFromRecords(records: Record<string, unknown>[], nowMs = Date.now()): AgentActivityFacts {
   const calls = new Map<string, { call: NonNullable<AgentActivityFacts["openCall"]>; at: number }>();
   const taskLabels = new Map<string, string>();
-  let lastRecordAt: number | null = null;
+  const recordTimes = records.map(record => Date.parse(String(record.timestamp ?? ""))).filter(Number.isFinite);
+  const lastRecordAt = recordTimes.reduce<number | null>((latest, at) => Math.max(latest ?? 0, at), null);
   const codex = records.some(record => record.type === "response_item" || record.type === "event_msg");
   const opening = records.find(record => {
     const payload = recordValue(record.payload);
@@ -17,7 +19,36 @@ export function activityFactsFromRecords(records: Record<string, unknown>[], now
   const openingAt = Date.parse(String(opening?.timestamp ?? ""));
   // A retained call predates the process it launched, even when the prompt
   // that opened the turn has scrolled out of the bounded tail.
-  const turnStartedAt = lastTurnFromRecords(records, codex)?.startedAt ?? (Number.isFinite(openingAt) ? openingAt : null);
+  const lastTurn = lastTurnFromRecords(records, codex);
+  let turnStartedAt = lastTurn?.endedAt === null
+    ? lastTurn.startedAt
+    : !lastTurn && Number.isFinite(openingAt) ? openingAt : null;
+  const initialTurnStartedAt = turnStartedAt;
+  let currentRecords = lastTurn?.endedAt !== null
+    ? lastTurn ? [] : records
+    : initialTurnStartedAt === null ? records : records.filter(record => Date.parse(String(record.timestamp ?? "")) >= initialTurnStartedAt);
+  let turnBoundaryFound = !!lastTurn && lastTurn.endedAt === null;
+  if (codex) {
+    let latestStart = -1;
+    for (let index = 0; index < records.length; index += 1) {
+      const record = records[index]!;
+      const type = recordValue(record.payload)?.type;
+      if (["task_started", "turn_started", "user_message"].includes(String(type))) {
+        latestStart = index;
+      }
+    }
+    const lifecycle = turnStateFromRecords(records, "codex");
+    if (lifecycle.state === "terminal") {
+      turnBoundaryFound = true;
+      currentRecords = [];
+      turnStartedAt = null;
+    } else if (latestStart >= 0) {
+      turnBoundaryFound = true;
+      currentRecords = records.slice(latestStart);
+      const startedAt = Date.parse(String(records[latestStart]?.timestamp ?? ""));
+      turnStartedAt = Number.isFinite(startedAt) ? startedAt : null;
+    }
+  }
   let recentWait: AgentActivityFacts["recentWait"] = null;
   const complete = (id: unknown, at: number) => {
     if (typeof id !== "string") return;
@@ -29,9 +60,8 @@ export function activityFactsFromRecords(records: Record<string, unknown>[], now
     }
     calls.delete(id);
   };
-  for (const record of records) {
+  for (const record of currentRecords) {
     const at = Date.parse(String(record.timestamp ?? ""));
-    if (Number.isFinite(at)) lastRecordAt = Math.max(lastRecordAt ?? 0, at);
     const payload = recordValue(record.payload);
     if (payload?.type === "function_call" || payload?.type === "custom_tool_call") {
       let input: Record<string, unknown> = {};
@@ -50,6 +80,6 @@ export function activityFactsFromRecords(records: Record<string, unknown>[], now
     }
   }
   const openCall = [...calls.values()].sort((a,b) => b.at - a.at).find(p => waitShapedCall(p.call))?.call ?? [...calls.values()].at(-1)?.call ?? null;
-  const background = pendingBackgroundTasks(foldBackgroundTaskRecords(emptyBackgroundTaskLedger(), records), nowMs).filter(t => t.kind !== "wakeup").map(task => ({ id: task.id, description: taskLabels.get(task.id) ?? null }));
-  return { lastRecordAt, turnStartedAt, openCall, recentWait, background };
+  const background = pendingBackgroundTasks(foldBackgroundTaskRecords(emptyBackgroundTaskLedger(), currentRecords), nowMs).filter(t => t.kind !== "wakeup").map(task => ({ id: task.id, description: taskLabels.get(task.id) ?? null }));
+  return { lastRecordAt, turnStartedAt, turnBoundaryFound, openCall, recentWait, background };
 }

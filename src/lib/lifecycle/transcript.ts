@@ -150,6 +150,7 @@ export async function readLivenessTranscriptEvidence(
   if (read.integrity !== "complete" || identity === null || identity !== await transcriptFileIdentity(transcriptPath)) return null;
   const turn = turnStateFromRecords(read.records, engine);
   const activityFacts = activityFactsFromRecords(read.records);
+  activityFacts.turnBoundaryVerified = !read.prefixTruncated || activityFacts.turnBoundaryFound === true;
   if (engine === "claude") {
     const ledger = await readBackgroundTaskLedger(transcriptPath, { maxBytes: 768 * 1024 });
     activityFacts.backgroundVerified = ledger !== null;

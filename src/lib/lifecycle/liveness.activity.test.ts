@@ -93,6 +93,11 @@ for (const engine of ["codex", "claude"] as const) {
       const registry = injected.registrySnapshot(); registry.entries.one.artifactPath = file;
       const checked = await agentLivenessSnapshot({}, { ...injected, registrySnapshot: () => registry });
       expect(checked.conversations[0]).toMatchObject({ verified: true, lifecycle: "running", activity: { state: "checking" } });
+      const activeChild = await agentLivenessSnapshot({}, { ...injected,
+        workProcesses: () => [{ startedAt: now - 10_000, command: "bun test check.test.ts" }],
+        registrySnapshot: () => registry,
+      });
+      expect(activeChild.conversations[0]).toMatchObject({ lifecycle: "running", activity: { state: "checking", check: "bun test check.test.ts" } });
       fs.writeFileSync(file, JSON.stringify(records[0])+"\n");
       const idle = await agentLivenessSnapshot({}, { ...injected, registrySnapshot: () => registry });
       expect(idle.conversations[0]).toMatchObject({ verified: true, lifecycle: "stalled", activity: { state: "idle", idleForMs: 900_000 } });

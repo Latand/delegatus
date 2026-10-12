@@ -33,6 +33,12 @@ test("real idle uses record age on both surfaces and leaves the working count", 
   expect(isWorkingAgent(f, now/1000)).toBe(false);
 });
 
+test("an incomplete native tail cannot give the card an idle or stalled verdict", () => {
+  const uncertain = { ...file(false, 900_000), agentActivity: { lastRecordAt: null, turnBoundaryVerified: false } } as FileEntry;
+  expect(cardStatus(uncertain, now)).toMatchObject({ kind: "running", activity: { state: "working", idleForMs: null } });
+  expect(mobileRowState(uncertain, now / 1000).key).toBe("working");
+});
+
 
 test("a provider retry keeps its existing limit row and never gains an idle badge", () => {
   const limited = { ...file(false, 660_000), rateLimit: { resetAt: now / 1000 + 60 } } as FileEntry;

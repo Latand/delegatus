@@ -111,7 +111,11 @@ async function runObservation(signal?: AbortSignal): Promise<FileEntry[]> {
     entry.lastTurn = lastTurnFor(entry);
     if (entry.engine === "claude" || entry.engine === "codex") {
       const tail = tailRecordsResult(entry.path, entry.size, entry.mtime * 1000);
-      if (tail.complete) entry.agentActivity = activityFactsFromRecords(tail.records);
+      if (tail.complete) {
+        const facts = activityFactsFromRecords(tail.records);
+        facts.turnBoundaryVerified = !tail.prefixTruncated || facts.turnBoundaryFound === true;
+        entry.agentActivity = facts;
+      } else entry.agentActivity = { lastRecordAt: null, turnBoundaryVerified: false };
     }
     entry.lastAssistantMessageAt = lastAssistantMessageAtFor(entry);
     entry.lastAgentWorkAt = lastAgentWorkAtFor(entry);

@@ -9,6 +9,10 @@ export interface AgentActivityFacts {
   workProcesses?: { startedAt: number; command: string }[];
   checking?: boolean;
   check?: string | null;
+  /** True when the supplied records contain the active turn's opening boundary. */
+  turnBoundaryFound?: boolean;
+  /** False when the bounded tail cannot prove which turn owns its activity. */
+  turnBoundaryVerified?: boolean;
 }
 export interface AgentActivity {
   state: "working" | "checking" | "idle";
@@ -43,7 +47,8 @@ export function checkCommand(command: string): string | null {
   return [binary, words[1] && !words[1].startsWith("-") ? base(words[1]) : ""].filter(Boolean).join(" ").slice(0, 40);
 }
 export function classifyAgentActivity(facts: AgentActivityFacts, nowMs: number, idleAfterMs = AGENT_IDLE_AFTER_MS): AgentActivity {
-  const process = facts.workProcesses?.filter(p => facts.turnStartedAt != null && p.startedAt >= facts.turnStartedAt && nowMs - p.startedAt >= 30_000).sort((a,b) => a.startedAt - b.startedAt)[0];
+  const processes = facts.workProcesses?.filter(p => facts.turnStartedAt == null || p.startedAt >= facts.turnStartedAt).sort((a,b) => a.startedAt - b.startedAt) ?? [];
+  const process = processes[0];
   const waiting = facts.openCall && waitShapedCall(facts.openCall);
   const recent = facts.recentWait && nowMs - facts.recentWait.finishedAt < 180_000;
   const executing = facts.openCall?.name.split(/__|\./).at(-1) === "exec"
@@ -55,7 +60,7 @@ export function classifyAgentActivity(facts: AgentActivityFacts, nowMs: number, 
     return { state: "checking", check, idleForMs: null };
   }
   const silent = facts.lastRecordAt === null ? null : Math.max(0, nowMs - facts.lastRecordAt);
-  return facts.backgroundVerified !== false && silent !== null && silent >= idleAfterMs
+  return facts.backgroundVerified !== false && facts.turnBoundaryVerified !== false && silent !== null && silent >= idleAfterMs
     ? { state: "idle", check: null, idleForMs: silent }
     : { state: "working", check: null, idleForMs: null };
 }

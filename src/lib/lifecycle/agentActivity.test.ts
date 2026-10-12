@@ -20,8 +20,31 @@ test("real idle at ten minutes; pre-turn MCP and short children are excluded; a 
   const facts = { lastRecordAt: now - 660_000, turnStartedAt: now - 900_000, workProcesses: [{ startedAt: now - 1_000_000, command: "bun bin/mcp-server.mjs" }] };
   expect(classifyAgentActivity(facts, now)).toEqual({ state: "idle", check: null, idleForMs: 660_000 });
   expect(classifyAgentActivity({ ...facts, lastRecordAt: now - 540_000 }, now).state).toBe("working");
-  expect(classifyAgentActivity({ ...facts, workProcesses: [{ startedAt: now - 29_000, command: "rg foo" }] }, now).state).toBe("idle");
+  expect(classifyAgentActivity({ ...facts, workProcesses: [{ startedAt: now - 1_000_000, command: "bun bin/mcp-server.mjs" }] }, now).state).toBe("idle");
+  expect(classifyAgentActivity({ ...facts, workProcesses: [{ startedAt: now - 10_000, command: "bun test check.test.ts" }] }, now)).toMatchObject({ state: "checking", check: "bun test check.test.ts" });
+  expect(classifyAgentActivity({ ...facts, turnStartedAt: null, workProcesses: [{ startedAt: now - 900_000, command: "bun test check.test.ts" }] }, now).state).not.toBe("idle");
   expect(classifyAgentActivity({ ...facts, workProcesses: [{ startedAt: now - 60_000, command: "bun scripts/privacy-publication-gate.ts --base main" }] }, now)).toEqual({ state: "checking", check: "privacy-publication-gate", idleForMs: null });
+});
+
+test("aborted Codex and Claude waits do not leak into the resumed idle turn", () => {
+  const codex = [
+    { type: "event_msg", timestamp: stamp(900_000), payload: { type: "task_started", turn_id: "turn-old" } },
+    { type: "response_item", timestamp: stamp(800_000), payload: { type: "function_call", name: "sleep", call_id: "sleep-old", arguments: "{}" } },
+    { type: "event_msg", timestamp: stamp(700_000), payload: { type: "turn_aborted", turn_id: "turn-old" } },
+    { type: "event_msg", timestamp: stamp(660_000), payload: { type: "user_message", message: "continue" } },
+  ];
+  const claude = [
+    { type: "user", timestamp: stamp(900_000), message: { content: "Run the check" } },
+    { type: "assistant", timestamp: stamp(800_000), message: { content: [{ type: "tool_use", id: "wait-old", name: "Bash", input: { command: "sleep 55" } }] } },
+    { type: "user", timestamp: stamp(700_000), message: { content: "[Request interrupted by user for tool use]" } },
+    { type: "user", timestamp: stamp(660_000), message: { content: "Continue" } },
+  ];
+  for (const records of [codex, claude]) {
+    const facts = activityFactsFromRecords(records, now);
+    expect(facts.openCall).toBeNull();
+    expect(facts.recentWait).toBeNull();
+    expect(classifyAgentActivity(facts, now).state).toBe("idle");
+  }
 });
 test("pending background command holds checking until its completion", () => {
   const records = [{ type: "user", timestamp: stamp(700_000), toolUseResult: { backgroundTaskId: "background-one" }, message: { content: [{ type: "tool_result", tool_use_id: "shell-one", content: "background running" }] } }];

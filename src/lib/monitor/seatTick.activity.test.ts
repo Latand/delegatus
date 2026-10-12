@@ -17,6 +17,11 @@ test("verified ten-minute idle wakes on first sighting, once per record, and a l
   const committed = seatTickWakeCommit(decision.state, seatTickWakeCommitPlan(decision.verdict, { fingerprint: "one", eventsThrough: 0 })!, now);
   const next = seatTickDecision({ ...first, now: now + 300_000, state: committed });
   expect((next.verdict.kind === "wake" ? next.verdict.items : []).filter(item => item.stallToken)).toHaveLength(0);
+  const renamed = input();
+  renamed.pipelines[0]!.title = "renamed build check";
+  renamed.pipelines[0]!.updatedAt = new Date(now + 240_000).toISOString();
+  const metadataMove = seatTickDecision({ ...renamed, now: now + 300_000, state: committed });
+  expect((metadataMove.verdict.kind === "wake" ? metadataMove.verdict.items : []).filter(item => item.stallToken)).toHaveLength(0);
   const moved = input();
   moved.pipelines[0].stageActivity!.lastRecordAt = new Date(now + 60_000).toISOString();
   const later = seatTickDecision({ ...moved, now: now + 660_000, state: committed });

@@ -2249,6 +2249,9 @@ export function seatTickSignalVersion(signal: SeatTickSignalInput): string {
 
 function agendaVersion(item: SeatTickItem, input: SeatTickCheckInput): string | undefined {
   if (item.mergeEventSeq !== undefined) return mergeEventVersion(item.mergeEventSeq);
+  /* A delivered idle alert belongs to the measured transcript episode. Lane
+     title and update metadata can move while that episode stays unchanged. */
+  if (item.stallToken) return `stall:${createHash("sha256").update(item.stallToken).digest("hex")}`;
   /* A routed wait is shown once per wait and per seat: a successor seat was
      never shown what its predecessor was. */
   if (item.kind === "ask") {
