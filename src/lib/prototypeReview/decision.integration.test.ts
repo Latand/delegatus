@@ -7,8 +7,9 @@ import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentSto
 import { saveTasks, loadTasks, TASKS_FILE } from "@/lib/tasks/store";
 import { setConversationHostDependenciesForTests } from "@/app/api/conversation-host/dependencies";
 import { publishPOST, reviewGET, reviewPOST } from "./http";
-import { prototypeDelivery, prototypeDeliveryResponse, type PrototypeDelivery, type PrototypeDeliveryPorts } from "./decision";
-import { resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests, sweepPrototypeDeliveries } from "./deliveryWorker";
+import { decidePrototype, prototypeDecisionText, prototypeDelivery, prototypeDeliveryResponse, type PrototypeDelivery, type PrototypeDeliveryPorts } from "./decision";
+import { prototypeCopyLine, parsePrototypeAnswer } from "./telegramAnswer";
+import { deliverPrototypeDecision, resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests, sweepPrototypeDeliveries } from "./deliveryWorker";
 import { prototypeWorld, type PrototypeWorld } from "./world";
 import { stateDir } from "@/lib/configDir";
 import { questions } from "./questionnaire.fixture";
@@ -155,6 +156,33 @@ test("questionnaire answers use the production runtime delivery and persist acro
   expect(runtime.delivered.at(-1)!.text).toContain("Existing review (recommended)");
   expect(runtime.delivered.at(-1)!.text).toContain(`Comment:\n${comment}\n\n`);
   expect((await reviewPOST(request(answer), "task-prototype", world, delivery)).status).toBe(200);
+  await settlePrototypeDeliveriesForTests();
+  expect(runtime.delivered).toHaveLength(before + 1);
+});
+
+test("in-process owner decisions use the web text and client key through the production runtime", async () => {
+  const published = await publishPOST(new NextRequest("http://localhost/api/prototype-reviews", { method: "POST", headers: { host: "localhost" }, body: JSON.stringify({
+    clientRequestId: "relay-questions", taskId: "task-prototype", title: "Owner review", questions }) }), world);
+  expect(published.status).toBe(200);
+  const id = (await published.json()).reviewId;
+  const task = loadTasks()[0]!;
+  const round = task.prototypeReviews!.find(r => r.id === id)!;
+  const match = parsePrototypeAnswer(round, `${prototypeCopyLine(round)}\nKeep this layout.`);
+  if (!match.input) throw new Error("fixture answer did not parse");
+  const before = runtime.delivered.length;
+  let authorizations = 0;
+  const context = { kind: "operator-in-process" as const, authorize: () => { authorizations++; } };
+  if (decidePrototype(context, task.id, match.input, world)) deliverPrototypeDecision(task.id, id, ports());
+  await settlePrototypeDeliveriesForTests();
+  await until(() => runtime.delivered.length === before + 1);
+  const decision = loadTasks()[0]!.prototypeReviews!.find(r => r.id === id)!.decision!;
+  expect(decision.delivery.clientMessageId).toBe(`prototype-decision:${id}`);
+  expect(decision.delivery.text).toBe(prototypeDecisionText(task, round, decision));
+  expect(runtime.delivered.at(-1)!.text).toBe(decision.delivery.text);
+  expect(authorizations).toBeGreaterThan(1);
+  const operation = runtime.journal.operationResult(decision.delivery.operationId!)!;
+  expect(operation.receipt.status).toBe("delivered");
+  if (decidePrototype(context, task.id, match.input, world)) deliverPrototypeDecision(task.id, id, ports());
   await settlePrototypeDeliveriesForTests();
   expect(runtime.delivered).toHaveLength(before + 1);
 });
