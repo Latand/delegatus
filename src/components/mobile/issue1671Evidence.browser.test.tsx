@@ -7594,6 +7594,254 @@ describe("agent memory isolation", () => {
     } finally { await browser.close(); server.stop(); }
   }, 90000);
 });
+/*
+ * «Готово» in the phone's «Чекають на вас» sheet (docs/design/done-section.md
+ * §4.3, §5) at 390 in Ukrainian, over the needs-you fixture with `&done=1`,
+ * read against variant 2's phone frames: the list pinned at the top of the
+ * sheet above its scroller (scrolling the decisions leaves it in place; it
+ * folds to its head), newest first, with the thumbnail and the square check, the frame's
+ * pair in the existing viewer, technical fixes accepted one by one with the
+ * group head counting what is left, then «Бачив усе» with the badge back to
+ * the decisions. Then the same list pinned above the orchestrator's report
+ * log screen in uk and en, folded to its head.
+ */
+describe("«Готово» in the phone sheet", () => {
+  browserTest("the sheet opens on «Готово»: square checks, groups, the viewer and the badge at 390 in uk; the report log pins it too", async () => {
+    const out = path.resolve(".artifacts/done-section/phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await launchChromium();
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const scheme of ["dark", "light"] as const) {
+        const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: scheme, reducedMotion: "reduce" });
+        try {
+          await context.addInitScript(() => localStorage.setItem("llv_lang", "uk"));
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(`${server.base}?lang=uk&done=1`);
+          const badge = page.locator("[data-mobile2-attention-count]");
+          await page.waitForFunction(() => Number(document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") ?? 0) > 18, undefined, { timeout: 15_000 });
+          const doneCount = await page.evaluate(() => (window as unknown as { __doneFixture: { count: number } }).__doneFixture.count);
+          const badgeCount = async () => Number(await badge.getAttribute("data-mobile2-attention-count"));
+          await page.locator('[data-mobile2-open="attention"]').click();
+          const sheet = page.locator('[data-mobile2-sheet="attention"]');
+          const section = sheet.locator('[data-done-section="phone"]');
+          await section.waitFor({ timeout: 15_000 });
+          /* The badge counts the board's decisions and the slice's «Готово»: the
+             shop-web task is another board's, so this board shows one fewer. */
+          const shown = await section.locator("[data-done-count]").innerText();
+          const decisions = await sheet.locator("[data-needs-you-row]").count();
+          expect(Number(shown)).toBe(doneCount - 1);
+          expect(await badgeCount()).toBe(decisions + doneCount - 1);
+          expect(await sheet.locator("h2").first().innerText()).toBe(`Чекають на вас · ${decisions + doneCount - 1}`);
+          expect(await section.locator("[data-done-accept-all]").innerText()).toBe("Бачив усе");
+          /* Pinned first: the decisions follow it. */
+          expect(await section.evaluate((element) => Boolean(element.compareDocumentPosition(document.querySelector("[data-mobile2-attention-list]")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+          const order = await section.locator("[data-done-row], [data-done-group]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-done-row") ?? `group:${row.getAttribute("data-done-group")}`));
+          expect(order).toEqual(["group:closed", "deploy:fixture-deploy", "group:technical", "report:fixture-publication", "limit:codex:acct-b:session:1", "pr:example/delegatus#2691", "report:fixture-incident"]);
+          /* Pinned above the sheet's one scroller: the decisions scroll under
+             it, its rows scroll in their own band, and the decisions keep room. */
+          const body = sheet.locator("[data-mobile2-sheet-body]");
+          const pin = () => sheet.evaluate((element) => {
+            const done = element.querySelector('[data-done-section="phone"]')!;
+            const scroller = element.querySelector("[data-mobile2-sheet-body]")!;
+            const band = done.querySelector("[data-done-list]");
+            return {
+              pinned: !scroller.contains(done) && Boolean(done.compareDocumentPosition(scroller) & Node.DOCUMENT_POSITION_FOLLOWING),
+              top: done.getBoundingClientRect().top,
+              sectionHeight: Math.round(done.getBoundingClientRect().height),
+              bandHeight: band ? Math.round(band.getBoundingClientRect().height) : 0,
+              bandScrolls: band ? band.scrollHeight > band.clientHeight : false,
+              bodyHeight: Math.round(scroller.getBoundingClientRect().height),
+              bodyScrolls: scroller.scrollHeight > scroller.clientHeight,
+              sheetHeight: Math.round(element.getBoundingClientRect().height),
+            };
+          });
+          const pinned = await pin();
+          expect(pinned.pinned).toBe(true);
+          expect(pinned.bandScrolls).toBe(true);
+          expect(pinned.bodyScrolls).toBe(true);
+          expect(pinned.sectionHeight).toBeLessThanOrEqual(Math.ceil(844 * 0.4) + 1);
+          expect(pinned.bodyHeight).toBeGreaterThanOrEqual(150);
+          await body.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+          expect(await body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+          expect((await pin()).top).toBe(pinned.top);
+          await page.screenshot({ path: path.join(out, `${scheme}-1-sheet-scrolled.png`) });
+          await body.evaluate((element) => { element.scrollTop = 0; });
+          const check = section.locator('[data-done-accept="pr:example/delegatus#2691"]');
+          const box = (await check.boundingBox())!;
+          expect(box.width).toBeGreaterThanOrEqual(44);
+          expect(box.height).toBeGreaterThanOrEqual(44);
+          expect(await check.innerText()).toBe("");
+          const geometry = await section.evaluate((element) => ({
+            right: Math.max(...[...element.querySelectorAll<HTMLElement>("*")].map((node) => node.getBoundingClientRect().right)),
+            overflow: document.documentElement.scrollWidth > innerWidth,
+          }));
+          expect(geometry.right).toBeLessThanOrEqual(390);
+          expect(geometry.overflow).toBe(false);
+          const read = () => section.evaluate((element) => {
+            const text = (node: Element | null) => (node as HTMLElement | null)?.innerText.trim() ?? "";
+            const rows = [...element.querySelectorAll<HTMLElement>("[data-done-row]")].map((row) => {
+              const check = row.querySelector<HTMLElement>("[data-done-accept]")!.getBoundingClientRect();
+              const sentence = row.querySelector<HTMLElement>("[data-done-sentence]")!.getBoundingClientRect();
+              const meta = row.querySelector<HTMLElement>("[data-done-meta]")!.getBoundingClientRect();
+              return { key: row.getAttribute("data-done-row"), checkRight: Math.round(element.getBoundingClientRect().right - check.right), ownLine: check.top >= Math.max(sentence.bottom, meta.bottom) - 1 };
+            });
+            const lines = [...element.querySelectorAll<HTMLElement>("[data-done-group-line]")].map((node) => ({ text: text(node), count: Number(node.closest("[data-done-group]")!.getAttribute("data-done-group-count")) }));
+            const receipts = [...element.querySelectorAll<HTMLElement>("[data-done-receipt-text]")].map((node) => {
+              const mark = node.lastElementChild!.getBoundingClientRect();
+              return { text: node.textContent!.replace(/\u00a0/g, " ").trim(), markClipped: mark.right > node.getBoundingClientRect().right + 0.5 || mark.width < 1 };
+            });
+            const heads = [...element.querySelectorAll<HTMLElement>("[data-done-group-title]")].map((node) => {
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              const tops = [...new Set([...range.getClientRects()].map((rect) => Math.round(rect.top)))];
+              return { text: text(node), lines: tops.length };
+            });
+            return { rows, lines, receipts, heads, hash: /\b[0-9a-f]{7,40}\b/.test(text(element)) };
+          });
+          const morning = await read();
+          expect(morning.rows.every((row) => !row.ownLine), "no row keeps a line for its check").toBe(true);
+          expect(morning.hash, "no commit hash in «Готово»").toBe(false);
+          for (const { text, count } of morning.lines) {
+            /* Short topics, no cut word, lower case after the first, and «і ще N» for the rest. */
+            expect(text).not.toContain("…");
+            const [listed, rest] = text.split(" і ще ");
+            const topics = listed!.split(", ");
+            expect(topics.slice(1).every((topic) => !/^[А-ЯІЇЄҐ]/.test(topic)), text).toBe(true);
+            expect(Number(rest ?? 0), text).toBe(count - topics.length);
+          }
+          expect(morning.heads.every((head) => head.lines === 1), JSON.stringify(morning.heads)).toBe(true);
+          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-1-sheet.png`) });
+          /* Folded to its head the section gives the decisions the sheet, and
+             «Бачив усе» stays on the head; unfolded, the rows come back. */
+          await section.locator("[data-done-fold]").click();
+          expect(await section.locator("[data-done-list]").count()).toBe(0);
+          const folded = await pin();
+          expect(folded.sectionHeight).toBeLessThanOrEqual(48);
+          expect(folded.bodyHeight).toBeGreaterThan(pinned.bodyHeight);
+          expect(await section.locator("[data-done-accept-all]").isVisible()).toBe(true);
+          await page.screenshot({ path: path.join(out, `${scheme}-1-sheet-folded.png`) });
+          await section.locator("[data-done-fold]").click();
+          await section.locator("[data-done-list]").waitFor();
+
+          await section.locator('[data-done-thumb="pr:example/delegatus#2691"]').click();
+          const viewer = page.locator('[role="dialog"][aria-modal="true"]').filter({ has: page.locator("[data-lightbox-compare]") });
+          await viewer.waitFor();
+          await page.screenshot({ path: path.join(out, `${scheme}-2-frame.png`) });
+          await viewer.locator('[data-lightbox-compare-side="before"]').click();
+          await page.screenshot({ path: path.join(out, `${scheme}-2-frame-before.png`) });
+          await page.keyboard.press("Escape");
+          await viewer.waitFor({ state: "detached" });
+          await section.waitFor();
+
+          await check.click();
+          await section.locator('[data-done-receipt="pr:example/delegatus#2691"]').waitFor();
+          expect(await badgeCount()).toBe(decisions + doneCount - 2);
+          await section.locator('[data-done-group-toggle="technical"]').click();
+          expect(await section.locator('[data-done-group="technical"] [data-done-group-line]').count()).toBe(0);
+          await section.locator('[data-done-group="technical"]').evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-3-expanded.png`) });
+          const checks = section.locator('[data-done-group="technical"] [data-done-member-check]');
+          for (let index = 0; index < 4; index += 1) await checks.nth(index).click();
+          /* The phone moves a partial count onto the line under the name. */
+          await page.waitForFunction(() => document.querySelector('[data-done-group="technical"] [data-done-group-line]')?.textContent === "6 з 10 · 4 прийнято");
+          let after = await read();
+          for (const receipt of after.receipts) {
+            expect(receipt.text).toMatch(/прийнято$/);
+            expect(receipt.markClipped, receipt.text).toBe(false);
+          }
+          expect(after.heads.every((head) => head.lines === 1), JSON.stringify(after.heads)).toBe(true);
+          expect(after.receipts.map((receipt) => receipt.text)).toContain("Лендінг #2691 · прийнято");
+          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-4-partial.png`) });
+
+          await section.locator('[data-done-accept-group="technical"]').click();
+          await section.locator('[data-done-group-receipt="technical"]').waitFor();
+          expect(await badgeCount()).toBe(decisions + doneCount - 12);
+          await section.locator('[data-done-group-toggle="closed"]').click();
+          after = await read();
+          for (const receipt of after.receipts) {
+            expect(receipt.text).toMatch(/прийнято$/);
+            expect(receipt.markClipped, receipt.text).toBe(false);
+          }
+          expect(after.receipts.map((receipt) => receipt.text)).toContain("Технічні виправлення: 10 прийнято");
+          await section.evaluate((element) => element.scrollIntoView({ block: "start" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-5-group-accepted.png`) });
+
+          await section.locator("[data-done-accept-all]").click();
+          await section.locator("[data-done-all-accepted]").waitFor();
+          expect(await badgeCount()).toBe(decisions);
+          await section.evaluate((element) => element.scrollIntoView({ block: "end" }));
+          await page.screenshot({ path: path.join(out, `${scheme}-6-all-accepted.png`) });
+          expect(errors).toEqual([]);
+          readings.push({ scheme, decisions, done: doneCount - 1, order, pin: { pinned: pinned.pinned, sheetHeight: pinned.sheetHeight, sectionHeight: pinned.sectionHeight, bandHeight: pinned.bandHeight, bodyHeight: pinned.bodyHeight, foldedSectionHeight: folded.sectionHeight, foldedBodyHeight: folded.bodyHeight }, check: { width: box.width, height: box.height }, ...geometry, rows: morning.rows, groupLines: morning.lines, heads: morning.heads, receipts: after.receipts.map((receipt) => receipt.text) });
+        } finally { await context.close(); }
+      }
+
+      /* The same list pinned above the report log screen, this board's slice. */
+      const reports: Record<string, unknown>[] = [];
+      for (const lang of ["uk", "en"] as const) {
+        for (const scheme of ["dark", "light"] as const) {
+          const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: scheme, reducedMotion: "reduce" });
+          try {
+            await context.addInitScript((language) => localStorage.setItem("llv_lang", language), lang);
+            const page = await context.newPage();
+            const errors: string[] = [];
+            page.on("pageerror", (error) => errors.push(error.message));
+            await page.goto(`${server.base}?lang=${lang}&done=1`);
+            await page.locator("[data-mobile2-seat-open]").waitFor({ timeout: 20_000 });
+            await page.locator("[data-mobile2-seat-open]").click();
+            await page.locator('[data-mobile2-open="reports"]').waitFor({ timeout: 10_000 });
+            await page.locator('[data-mobile2-open="reports"]').click();
+            const log = page.locator('[data-report-log][data-report-log-variant="screen"]');
+            await log.locator("[data-report-entry]").first().waitFor({ timeout: 10_000 });
+            const section = log.locator('[data-done-section="phone"][data-done-place="reports"]');
+            await section.waitFor({ timeout: 10_000 });
+            const doneCount = await page.evaluate(() => (window as unknown as { __doneFixture: { count: number } }).__doneFixture.count);
+            expect(Number(await section.locator("[data-done-count]").innerText())).toBe(doneCount - 1);
+            expect(await section.locator("[data-done-accept-all]").innerText()).toBe(translate(lang, "done.acceptAll"));
+            const layout = await log.evaluate((element) => {
+              const done = element.querySelector("[data-done-section]")!;
+              const scroller = element.querySelector("[data-report-log-entries]")!.parentElement!;
+              const band = done.querySelector("[data-done-list]")!.getBoundingClientRect();
+              return {
+                pinned: !scroller.contains(done) && Boolean(done.compareDocumentPosition(scroller) & Node.DOCUMENT_POSITION_FOLLOWING),
+                bandHeight: Math.round(band.height), entriesHeight: Math.round(scroller.getBoundingClientRect().height),
+                bounded: done.getBoundingClientRect().height <= element.getBoundingClientRect().height * 0.45 + 1,
+                right: Math.max(...[...done.querySelectorAll<HTMLElement>("*")].map((node) => node.getBoundingClientRect().right)),
+                overflow: document.documentElement.scrollWidth > innerWidth,
+              };
+            });
+            expect(layout.pinned).toBe(true);
+            expect(layout.bounded).toBe(true);
+            expect(layout.entriesHeight).toBeGreaterThan(150);
+            expect(layout.right).toBeLessThanOrEqual(390);
+            expect(layout.overflow).toBe(false);
+            const top = await section.evaluate((element) => element.getBoundingClientRect().top);
+            await log.locator("[data-report-log-entries]").evaluate((element) => { element.parentElement!.scrollTop = element.parentElement!.scrollHeight; });
+            expect(await section.evaluate((element) => element.getBoundingClientRect().top)).toBe(top);
+            const key = `${lang}-${scheme}`;
+            await page.screenshot({ path: path.join(out, `reports-${key}-1-pinned.png`) });
+            await section.locator("[data-done-fold]").click();
+            expect(await section.locator("[data-done-list]").count()).toBe(0);
+            const foldedHeight = Math.round((await section.boundingBox())!.height);
+            expect(foldedHeight).toBeLessThanOrEqual(48);
+            await page.screenshot({ path: path.join(out, `reports-${key}-2-folded.png`) });
+            expect(errors).toEqual([]);
+            reports.push({ lang, scheme, ...layout, foldedHeight });
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/done-section", { recursive: true });
+      fs.writeFileSync("evidence/done-section/phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", viewport: { width: 390, height: 844 }, lang: "uk", readings, reports }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 420_000);
+});
+
 browserTest("stage agent row: conversations, parked questions and earlier attempts at phone and desktop widths", async () => {
   const { base, stop } = await serveFixture();
   const browser = await launchChromium().catch((error) => { stop(); throw error; });
@@ -8952,8 +9200,8 @@ describe("role memory curation: reversible window", () => {
     try {
       browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 
-      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
-        process.env.LLV_STATE_DIR = path.join(root, `${lang}-${width}`);
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) for (const scheme of ["light", "dark"] as const) {
+        process.env.LLV_STATE_DIR = path.join(root, `${lang}-${width}-${scheme}`);
         const role = store.roleScope("atlas", "builder"), every = "role:*:builder", project = store.projectScope("atlas");
         const stamp = new Date().toISOString();
         const source = { project: "atlas", pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: ["conversation", "fixture"].join("_") };
@@ -8970,13 +9218,39 @@ describe("role memory curation: reversible window", () => {
         curation.patchPass(pass.id, { state: "succeeded", endedAt: new Date().toISOString() });
         store.recordLessonRequest({ ...source, attempt: 2, at: new Date().toISOString() });
         const candidate = store.leaveLessons({ request: { ...source, attempt: 2 }, source: { ...source, attempt: 2 }, lessons: [{ scope: "role", rule: "Read the current scope revision before proposing a stored rewrite.", why: "A stale write had changed the record underneath the reader." }], none: null }).left[0].id;
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=pipeline-block&header=1&rolememory=1`, { width, height: width === 390 ? 844 : 900 }, "light", lang, "reduce", width === 390);
+        for (const taskId of ["task-two", "task-three"]) {
+          const repeat = { ...source, pipelineId: taskId, attempt: 1 };
+          store.recordLessonRequest({ ...repeat, taskId, at: new Date().toISOString() });
+          store.leaveLessons({ request: repeat, source: repeat, lessons: [{ scope: "role", rule: "Read the current scope revision before proposing a stored rewrite.", why: "Another task encountered the same class of stale scope." }], none: null });
+        }
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=pipeline-block&header=1&rolememory=1`, { width, height: width === 390 ? 844 : 900 }, scheme, lang, "reduce", width === 390);
         try {
           await page.evaluate(() => globalThis.dispatchEvent(new CustomEvent("delegatus:open-learned-rules", { detail: { project: "atlas" } })));
           const window = page.locator("[data-rules-window]"); await window.waitFor();
           await page.locator(`[data-learned-rule="${candidate}"]`).waitFor();
           await page.locator(`[data-learned-rule="${candidate}"] button`).first().click();
           await page.getByText(translate(lang, "roleMemory.unreviewed"), { exact: false }).waitFor();
+          const candidateRow = page.locator(`[data-learned-rule="${candidate}"]`);
+          await candidateRow.scrollIntoViewIfNeeded();
+          expect(await candidateRow.innerText()).toContain(translate(lang, "roleMemory.tasks", { count: 3 }));
+          const provenance = await candidateRow.evaluate(node => {
+            const meta = node.querySelector<HTMLElement>("[data-rule-provenance]")!;
+            const body = meta.closest("button")!.getBoundingClientRect();
+            const remove = node.querySelector<HTMLElement>("[data-learned-rule-delete]")!.getBoundingClientRect();
+            const range = document.createRange(); range.selectNodeContents(meta);
+            return { overflow: meta.parentElement!.scrollWidth - meta.parentElement!.clientWidth,
+              textRects: [...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom })),
+              body: { left: body.left, right: body.right, top: body.top, bottom: body.bottom }, removeLeft: remove.left };
+          });
+          expect(provenance.overflow).toBeLessThanOrEqual(1);
+          expect(provenance.textRects.length).toBeGreaterThan(0);
+          for (const rect of provenance.textRects) {
+            expect(rect.left).toBeGreaterThanOrEqual(provenance.body.left - 1);
+            expect(rect.right).toBeLessThanOrEqual(provenance.body.right + 1);
+            expect(rect.right).toBeLessThanOrEqual(provenance.removeLeft);
+            expect(rect.top).toBeGreaterThanOrEqual(provenance.body.top - 1);
+            expect(rect.bottom).toBeLessThanOrEqual(provenance.body.bottom + 1);
+          }
           await page.locator(`[data-learned-rule="${ids[0]}"] button`).first().click();
           await page.locator(`[data-rule-versions="${ids[0]}"] summary`).click();
           const version = page.locator("[data-rule-revert]").first(); await version.waitFor();
@@ -8986,10 +9260,10 @@ describe("role memory curation: reversible window", () => {
           await page.locator(`[data-curation-undo="${pass.id}"]`).waitFor();
           const geometry = await window.evaluate(node => ({ width: node.getBoundingClientRect().width, overflow: node.scrollWidth - node.clientWidth, sections: [...node.querySelectorAll('[data-rules-section]')].map(section => ({ kind: section.getAttribute('data-rules-section'), overflow: section.scrollWidth - section.clientWidth })) }));
           expect(geometry.overflow).toBeLessThanOrEqual(1); for (const section of geometry.sections) expect(section.overflow).toBeLessThanOrEqual(1);
-          const frame = `variant-1-${width}-${lang}-history.png`; await page.screenshot({ path: path.join(out, frame) });
+          const frame = `variant-1-${width}-${lang}-${scheme}-history.png`; await page.screenshot({ path: path.join(out, frame) });
           await page.locator(`[data-rule-versions="${ids[0]}"] summary`).click();
           await page.locator(`[data-left-rule-restore="${ids[1]}"]`).scrollIntoViewIfNeeded();
-          const archiveFrame = `variant-1-${width}-${lang}-archive.png`; await page.screenshot({ path: path.join(out, archiveFrame) });
+          const archiveFrame = `variant-1-${width}-${lang}-${scheme}-archive.png`; await page.screenshot({ path: path.join(out, archiveFrame) });
           await page.locator(`[data-rule-versions="${ids[0]}"] summary`).click();
           await version.click(); await page.waitForFunction(({ id, text }) => document.querySelector(`[data-learned-rule="${id}"]`)?.textContent?.includes(text), { id: ids[0], text: texts[0] });
           await page.locator(`[data-left-rule-restore="${ids[1]}"]`).click(); await page.locator(`[data-learned-rule="${ids[1]}"]`).waitFor();
@@ -9012,9 +9286,9 @@ describe("role memory curation: reversible window", () => {
             return { kind: section.getAttribute("data-rules-section"), cardScrolls: section.scrollHeight - section.clientHeight, bodyScrolls: body.scrollHeight - body.clientHeight };
           }));
           if (width === 390) for (const card of cards) { expect(card.cardScrolls).toBeLessThanOrEqual(1); expect(card.bodyScrolls).toBeLessThanOrEqual(1); }
-          const undoneFrame = `variant-1-${width}-${lang}-undone.png`; await page.screenshot({ path: path.join(out, undoneFrame) });
+          const undoneFrame = `variant-1-${width}-${lang}-${scheme}-undone.png`; await page.screenshot({ path: path.join(out, undoneFrame) });
           expect(pageErrors).toEqual([]);
-          cases.push({ lang, width, frame, archiveFrame, undoneFrame, geometry, cards, revertedVersion: true, returnedRule: true, undoSkippedLaterWrites: true });
+          cases.push({ lang, width, scheme, frame, archiveFrame, undoneFrame, geometry, provenance, cards, recurringTasks: 3, revertedVersion: true, returnedRule: true, undoSkippedLaterWrites: true });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/role-memory-curation", { recursive: true });

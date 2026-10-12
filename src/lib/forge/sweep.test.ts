@@ -100,6 +100,35 @@ describe("the sweep", () => {
     expect(entry().canonical).toBe(REPO);
   });
 
+  /* docs/design/done-section.md §2.1: a merge batch's title names the PRs it
+     landed, and every landed PR is dated by its own or its batch's merge. */
+  test("title and mergedAt are asked for and kept, on the current and the legacy field set", async () => {
+    for (const legacy of [false, true]) {
+      resetForgeCacheForTests();
+      fs.rmSync(file, { force: true });
+      const rows = () => [
+        { ...row({ number: 9, state: "MERGED", headRefName: "merge-batch/b1" }), title: "Merge batch: #7, #8", mergedAt: "2026-09-23T02:21:00Z" },
+        { ...row({ number: 7, state: "CLOSED" }), title: "Lane seven", mergedAt: null },
+        { ...row({ number: 6, state: "MERGED" }), title: "Lane six", mergedAt: "2026-09-23T01:10:00Z" },
+        { ...row({ number: 5, state: "OPEN" }), title: "Lane five", mergedAt: "0001-01-01T00:00:00Z" },
+      ];
+      const h = harness((args) => {
+        if (args[0] === "api") return { data: { repository: Object.fromEntries([0, 1, 2, 3].map((index) => [`p${index}`, { closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: false } } }])) } };
+        if (legacy && args.at(-1)?.includes("closingIssuesReferences")) return Object.assign(new Error("Unknown JSON field"), { stderr: 'Unknown JSON field: "closingIssuesReferences"' });
+        return rows();
+      });
+      await h.sweep();
+      const asked = h.calls.filter((args) => args[1] === "list").map((args) => args.at(-1)!);
+      for (const fields of asked) expect(fields.split(",")).toEqual(expect.arrayContaining(["title", "mergedAt"]));
+      expect(asked).toHaveLength(legacy ? 2 : 1);
+      expect(entry().prs["9"]).toMatchObject({ title: "Merge batch: #7, #8", mergedAt: "2026-09-23T02:21:00Z", headRefName: "merge-batch/b1" });
+      expect(entry().prs["7"]).toMatchObject({ title: "Lane seven", state: "closed" });
+      expect(entry().prs["7"]!.mergedAt).toBeUndefined();
+      expect(entry().prs["6"]).toMatchObject({ title: "Lane six", mergedAt: "2026-09-23T01:10:00Z" });
+      expect(entry().prs["5"]!.mergedAt).toBeUndefined();
+    }
+  });
+
   test("old gh keeps the cache incomplete when closing references cannot be read in full", async () => {
     const h = harness((args) => {
       if (args[0] === "api") return { data: { repository: { p0: { closingIssuesReferences: { nodes: [], pageInfo: { hasNextPage: true } } } } } };

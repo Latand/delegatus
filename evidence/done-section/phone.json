@@ -1,0 +1,216 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "lang": "uk",
+  "readings": [
+    {
+      "scheme": "dark",
+      "decisions": 6,
+      "done": 17,
+      "order": [
+        "group:closed",
+        "deploy:fixture-deploy",
+        "group:technical",
+        "report:fixture-publication",
+        "limit:codex:acct-b:session:1",
+        "pr:example/delegatus#2691",
+        "report:fixture-incident"
+      ],
+      "pin": {
+        "pinned": true,
+        "sheetHeight": 743,
+        "sectionHeight": 338,
+        "bandHeight": 293,
+        "bodyHeight": 337,
+        "foldedSectionHeight": 45,
+        "foldedBodyHeight": 494
+      },
+      "check": {
+        "width": 44,
+        "height": 44
+      },
+      "right": 390,
+      "overflow": false,
+      "rows": [
+        {
+          "key": "deploy:fixture-deploy",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
+          "key": "report:fixture-publication",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
+          "key": "limit:codex:acct-b:session:1",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
+          "key": "pr:example/delegatus#2691",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
+          "key": "report:fixture-incident",
+          "checkRight": 16,
+          "ownLine": false
+        }
+      ],
+      "groupLines": [
+        {
+          "text": "Аналіз моделей, порядок об’єднання",
+          "count": 2
+        },
+        {
+          "text": "Автомердж чекає, мерджер приймає і ще 8",
+          "count": 10
+        }
+      ],
+      "heads": [
+        {
+          "text": "Без PR · 2",
+          "lines": 1
+        },
+        {
+          "text": "Технічні виправлення · 10",
+          "lines": 1
+        }
+      ],
+      "receipts": [
+        "Технічні виправлення: 10 прийнято",
+        "Лендінг #2691 · прийнято"
+      ]
+    },
+    {
+      "scheme": "light",
+      "decisions": 6,
+      "done": 17,
+      "order": [
+        "group:closed",
+        "deploy:fixture-deploy",
+        "group:technical",
+        "report:fixture-publication",
+        "limit:codex:acct-b:session:1",
+        "pr:example/delegatus#2691",
+        "report:fixture-incident"
+      ],
+      "pin": {
+        "pinned": true,
+        "sheetHeight": 743,
+        "sectionHeight": 338,
+        "bandHeight": 293,
+        "bodyHeight": 337,
+        "foldedSectionHeight": 45,
+        "foldedBodyHeight": 494
+      },
+      "check": {
+        "width": 44,
+        "height": 44
+      },
+      "right": 390,
+      "overflow": false,
+      "rows": [
+        {
+          "key": "deploy:fixture-deploy",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
+          "key": "report:fixture-publication",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
+          "key": "limit:codex:acct-b:session:1",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
+          "key": "pr:example/delegatus#2691",
+          "checkRight": 16,
+          "ownLine": false
+        },
+        {
+          "key": "report:fixture-incident",
+          "checkRight": 16,
+          "ownLine": false
+        }
+      ],
+      "groupLines": [
+        {
+          "text": "Аналіз моделей, порядок об’єднання",
+          "count": 2
+        },
+        {
+          "text": "Автомердж чекає, мерджер приймає і ще 8",
+          "count": 10
+        }
+      ],
+      "heads": [
+        {
+          "text": "Без PR · 2",
+          "lines": 1
+        },
+        {
+          "text": "Технічні виправлення · 10",
+          "lines": 1
+        }
+      ],
+      "receipts": [
+        "Технічні виправлення: 10 прийнято",
+        "Лендінг #2691 · прийнято"
+      ]
+    }
+  ],
+  "reports": [
+    {
+      "lang": "uk",
+      "scheme": "dark",
+      "pinned": true,
+      "bandHeight": 291,
+      "entriesHeight": 358,
+      "bounded": true,
+      "right": 390,
+      "overflow": false,
+      "foldedHeight": 45
+    },
+    {
+      "lang": "uk",
+      "scheme": "light",
+      "pinned": true,
+      "bandHeight": 291,
+      "entriesHeight": 358,
+      "bounded": true,
+      "right": 390,
+      "overflow": false,
+      "foldedHeight": 45
+    },
+    {
+      "lang": "en",
+      "scheme": "dark",
+      "pinned": true,
+      "bandHeight": 291,
+      "entriesHeight": 358,
+      "bounded": true,
+      "right": 390,
+      "overflow": false,
+      "foldedHeight": 45
+    },
+    {
+      "lang": "en",
+      "scheme": "light",
+      "pinned": true,
+      "bandHeight": 291,
+      "entriesHeight": 358,
+      "bounded": true,
+      "right": 390,
+      "overflow": false,
+      "foldedHeight": 45
+    }
+  ]
+}
