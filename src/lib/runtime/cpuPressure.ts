@@ -20,7 +20,7 @@ import { delegatusSetting } from "./cpuPlacement";
  */
 
 export interface CpuPressurePolicy { holdAt: number; releaseBelow: number; releaseAfterMs: number; deferAfterMs: number }
-export const DEFAULT_CPU_PRESSURE_POLICY: CpuPressurePolicy = { holdAt: 20, releaseBelow: 10, releaseAfterMs: 10_000, deferAfterMs: 120_000 };
+export const DEFAULT_CPU_PRESSURE_POLICY: CpuPressurePolicy = { holdAt: 30, releaseBelow: 20, releaseAfterMs: 10_000, deferAfterMs: 120_000 };
 
 export type CpuPressureHold = { since: number; avg10: number; deferred: boolean; policy: CpuPressurePolicy; queue?: CpuQueueWait };
 export type CpuStartGate = { check(key?: string): CpuPressureHold | null; cancel?(key: string): void };

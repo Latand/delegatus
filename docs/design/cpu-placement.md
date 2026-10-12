@@ -137,8 +137,8 @@ Pipeline stage starts and heavy commands share one durable FIFO queue
 (`src/lib/runtime/cpuAdmission.ts`, `scripts/cpu-admission.ts`). The head starts
 when pressure allows it, or once its own queue wait reaches ten minutes.
 Admissions are separated by two seconds, including when pressure never drops.
-The pressure sensor holds at `some avg10` of 20% and releases after ten seconds
-below 10%; a failed sample permits the head. CPU quotas still bound admitted work.
+The pressure sensor holds at `some avg10` of 30% and releases after ten seconds
+below 20%; a failed sample permits the head. CPU quotas still bound admitted work.
 The displayed time is a worst-case bound from the durable queue clock, including
 spacing; a permissive sample does not make that bound jump when pressure rises.
 
@@ -237,11 +237,26 @@ CPUQuotaPeriodSec=20ms
 ```sh
 node bin/install-cpu-placement.mjs            # --unit NAME.service if the service has another name
 systemctl --user daemon-reload
-# Moving the service into delegatus.slice takes a restart; run it after hosted agents finish:
-systemctl --user restart delegatus.service
+# Moving the service into delegatus.slice takes a stop and a start after hosted agents
+# finish. A restart is not enough: while any process the stop spared stays in the old
+# cgroup, systemd reuses that path and the service never moves (2026-10-10, 2026-10-11).
+# A checkout installation runs scripts/deploy-checkout.py (docs/deploy-checkout.md),
+# which also retires proven leftovers. By hand, exit cleanup submits start on
+# success, stop/wait errors (including under errexit), and HUP/INT/TERM:
+(
+  trap 'status=$?; trap - EXIT HUP INT TERM; systemctl --user start "delegatus.service" || exit $?; exit "$status"' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  systemctl --user stop delegatus.service || exit $?
+  for _ in $(seq 60); do
+    group=$(systemctl --user show delegatus.service -p ControlGroup --value) || exit $?
+    [ -z "$group" ] && break
+    sleep 1 || exit $?
+  done
+)
 # ControlGroup must end in delegatus.slice/delegatus.service. Slice alone reads the
-# configuration: while any process the restart spared stays in the old cgroup,
-# systemd reuses that path and the service never moves (2026-10-10).
+# configuration.
 systemctl --user show delegatus.service -p Slice -p ControlGroup -p CPUWeight
 systemctl --user show delegatus-agents-work.slice -p CPUWeight -p CPUQuotaPerSecUSec -p CPUQuotaPeriodUSec
 systemd-cgls --user-unit delegatus.slice
@@ -389,7 +404,7 @@ The affinity regressions pin to the first CPU in the test's own
   it in its scope, and closing the lane ends the wait with no install or push.
 - `src/lib/pipelines/engine.test.ts`: CPU pressure holds a stage start with a
   visible reason, defers after 120 s, releases one launch after ten seconds
-  below 10%, never holds a launched stage, and admits on a failed sample.
+  below 20%, never holds a launched stage, and admits on a failed sample.
 - `scripts/gate-slot.test.ts`: work slice and quotas, the explicit refusals
   (a scope or a work slice the kernel shows no quota for included),
   the hold, deferral and single start, admission on a failed sample, and

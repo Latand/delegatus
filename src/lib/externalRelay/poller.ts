@@ -146,6 +146,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
    already on the wire is joined rather than repeated. */
 export const TARGETS_REFRESH_ON_READ_MS = 30_000;
 export const TARGETS_REFRESH_IN_LOOP_MS = 300_000;
+export const DESCRIPTOR_REFRESH_ON_READ_MS = 300_000;
 export type TargetRefreshOutcome =
   | "changed"
   | "unchanged"
@@ -174,9 +175,12 @@ export async function refreshTargetsForRead(waitMs = 2_000): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([
     Promise.all(
-      readRelayStore().relays.map((relay) =>
+      readRelayStore().relays.flatMap((relay) => [
         refreshRelayTargets(relay.id, TARGETS_REFRESH_ON_READ_MS),
-      ),
+        // A feature the service ships after pairing («clone_create») shows
+        // without a new pairing; a failed read here is not a request outcome.
+        refreshRelayDescriptorFeatures(relay.id, DESCRIPTOR_REFRESH_ON_READ_MS, { quiet: true }),
+      ]),
     ),
     new Promise((resolve) => {
       timer = setTimeout(resolve, waitMs);
@@ -248,9 +252,16 @@ export function relayClaimCapabilities(relay?: Pick<PairedRelay, "features">) {
     features: switches.owner_tools && relay?.features?.includes(RELAY_OWNER_TOOLS)
       ? [...features, RELAY_OWNER_TOOLS] : features };
 }
-/** Dark installs make no extra descriptor request. Enabled installs refresh before
- * their first claim, then with the existing five-minute target cadence. */
-export function refreshRelayDescriptorFeatures(id: string, minIntervalMs = 0): Promise<TargetRefreshOutcome> {
+/** The same request builder is used by polling and install wire captures. */
+export function relayClaimBody(relay: PairedRelay) {
+  return { wait_s: Math.min(25, relay.limits.max_wait_s),
+    ...relayClaimCapabilities(readRelayStore().relays.find(item => item.id === relay.id)),
+    slots: advertisedSlots(relay) };
+}
+/** The claim loop of a dark install makes no extra descriptor request. Enabled
+ * installs refresh before their first claim, then with the existing five-minute
+ * target cadence; the settings page reads it at most every five minutes too. */
+export function refreshRelayDescriptorFeatures(id: string, minIntervalMs = 0, options: { quiet?: boolean } = {}): Promise<TargetRefreshOutcome> {
   const prior = descriptorRefreshes.get(id);
   if (prior?.running) return prior.running;
   if (prior && Date.now() - prior.at < minIntervalMs) return Promise.resolve("skipped");
@@ -270,7 +281,7 @@ export function refreshRelayDescriptorFeatures(id: string, minIntervalMs = 0): P
       }) }));
       return changed ? "changed" : "unchanged";
     } catch {
-      noteRelayOutcome(id, "descriptor:unreachable");
+      if (!options.quiet) noteRelayOutcome(id, "descriptor:unreachable");
       return "failed";
     }
   })().finally(() => { entry.running = null; });
@@ -296,11 +307,7 @@ async function poll(
         relay.api_base,
         "/requests/claim",
         "POST",
-        {
-          wait_s: Math.min(25, relay.limits.max_wait_s),
-          ...relayClaimCapabilities(readRelayStore().relays.find((item) => item.id === relay.id)),
-          slots: advertisedSlots(relay),
-        },
+        relayClaimBody(relay),
         relay.credential,
         {
           timeoutMs: (Math.min(25, relay.limits.max_wait_s) + 15) * 1000,

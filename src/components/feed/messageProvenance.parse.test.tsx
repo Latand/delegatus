@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { setLocale } from "@/lib/i18n";
@@ -503,3 +505,50 @@ test("a channel never rides an agent's relay, and an operator delivery without o
   expect(agent).not.toContain("data-voice-relay");
   expect(renderWithProvenance(DELIVERED_ROW, { messages: { [ENGINE_MESSAGE_ID]: { origin: "operator" } } })).not.toContain("data-voice-relay");
 });
+
+/* A message delivered while a Claude turn ran is journaled as a
+   `queued_command` attachment. Its row joins the ledger by the attachment's
+   `source_uuid` as an idle delivery's row joins by its own uuid, so each
+   provenance class labels it the way it labels a settled delivery. */
+const QUEUED_COMMAND = readFileSync(path.join(import.meta.dir, "fixtures", "claude-queued-command.jsonl"), "utf8").trim().split("\n");
+const QUEUED_TEXT = "Fixture follow-up sent while the turn ran.";
+
+for (const locale of ["en", "uk"] as const) {
+  test(`a mid-turn delivery takes the provenance label of a settled delivery in ${locale}`, () => {
+    setLocale(locale);
+    const rows = claudeItems(QUEUED_COMMAND).filter((item) => item.kind === "sysmsg");
+    expect(rows).toHaveLength(1);
+    const render = (provenance?: DeliveredMessageProvenance) =>
+      renderWithProvenance(rows[0]!, provenance ? { messages: { "queued-one": provenance } } : {});
+    const en = locale === "en";
+
+    const operator = render({ origin: "operator" });
+    expect(operator).toContain("bg-user");
+    const voice = render({ origin: "operator", channel: "voice-delegatus" });
+    expect(voice).toContain("data-voice-relay");
+    expect(voice).toContain(en ? "From voice Delegatus · requested by you" : "Від голосового Delegatus · на ваше прохання");
+    /* The role label reads the hook's language, which static markup takes
+       from the server; the tag beside it follows the locale. */
+    const agent = render({ origin: "agent", senderRole: "orchestrator" });
+    expect(agent).toContain("data-agent-role=\"orchestrator\"");
+    expect(agent).toContain(en ? ">internal<" : ">внутрішнє<");
+    /* An internal card from a known role wears that role's costume and names
+       the role alone; the generic "Agent ·" prefix stays for roles without one. */
+    expect(agent).toContain("data-role-avatar=\"orchestrator\"");
+    expect(agent).toMatch(/data-agent-author[^>]*>Orchestrator</);
+    expect(agent).not.toContain("Agent · Orchestrator");
+    const seat = render({ origin: "agent", senderRole: "seat-tick" });
+    expect(seat).toContain("data-agent-role=\"seat-tick\"");
+    expect(seat).toContain("Agent · Delegatus");
+    /* Before the ledger answers, the row is the system row a settled
+       delivery shows, never missing. */
+    const unresolved = render();
+    expect(unresolved).not.toContain("bg-user");
+    expect(unresolved).not.toContain("data-agent-author");
+    for (const html of [operator, voice, agent, seat, unresolved]) {
+      expect(html).toContain(QUEUED_TEXT);
+      expect(html).not.toContain("sent a new message while you were working");
+    }
+    setLocale("en");
+  });
+}

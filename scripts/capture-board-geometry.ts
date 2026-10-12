@@ -11,20 +11,23 @@
  * the record names the commit it measured.
  *
  * With BOARD_CAPTURE_CASE=header it measures the project board's one header
- * bar instead (#1801) on a home seeded the way production looks: three Claude
- * accounts and one Codex account with usage readings, bound to the project;
- * three questions waiting behind live processes; agents working; tasks off the
- * board; a quiet second project. One 48 px bar, 32 px controls on an 8 / 16 px
- * rhythm, nothing overlapping, the island inside the bar and non-zero, the
- * pressed view segment painted differently, the switch in the same place on
- * both views, hover that never takes the accent, no undo or redo anywhere, and
- * ⋯ rules only between groups that drew a row, the last control 16 px clear of
- * the island, and the same bar spanning the Tasks panel when it is open, with
- * the panel's header clear of the island, a real Tab from ⋯ landing on the
- * island, and the open ⋯ menu and accounts panel painted above the island and
- * its toast — at 2540, 1850 and 1280 px in en and
- * uk, light and dark, under a 21-character project name — and the phone's 52 px
- * bar in the same four.
+ * bar instead (#1801, and the one-row header of 2026-10-12) on a home seeded
+ * the way production looks: three Claude accounts and one Codex account with
+ * usage readings, bound to the project; three questions waiting behind live
+ * processes; agents working; tasks off the board; a quiet second project. At
+ * 2254, 1960, 1440 and 1000 px, in en and uk, light and dark, with the
+ * needs-you panel closed and (from 1300 px) docked, under a 21-character
+ * project name: exactly one 48 px row of 32 px controls; no two controls
+ * overlapping; no text, placeholder or control truncated or past the row;
+ * no control covered at its centre; every icon with a tooltip and a name; no
+ * view switch, Hidden pill, create pair, funnel or reason chip in the row; the
+ * needs-you chip the row's last item in the flow (a real Tab from ⋯ lands on
+ * it) and gone while the panel is docked; and every action still reachable:
+ * the accounts in the row or in ⋯ as the row's steps say, Hidden in ⋯ opening
+ * its tray, the two creators under +, the reasons and «Needs you» in the one
+ * filter, the recent agents' list under its icon over the board, and the same
+ * row spanning the Tasks panel. The phone's 52 px bar is measured in the same
+ * four. HEADER_WIDTHS runs a part of the matrix and the record merges.
  *
  * With BOARD_CAPTURE_CASE=seats, seat-placement or columns-wide it measures
  * the orchestrator seat's own place (#1841) on a home with two projects, a
@@ -2394,7 +2397,9 @@ async function main(): Promise<void> {
 /* ------------------------------------------------------------------------- */
 
 /* The quiet second project: nothing runs there, so its ⋯ menu shows Archive and Delete too. */
-const QUIET_NAME = "quay";
+/* Its name is longer than the bar's 220 px cap for a name, so the header case can see that a name cut
+   by its own cap asks the row for nothing. */
+const QUIET_NAME = process.env.BOARD_CAPTURE_CASE === "header" ? "quay-harbour-master-scheduling-console" : "quay";
 const QUIET_DIR = path.join(HOME, "Projects", QUIET_NAME);
 const CODEX_STUB = path.join(BASE, "bin", "codex");
 /* Composed rather than written out: a literal UUID in a published source is what the privacy gate's rule catches. */
@@ -2457,6 +2462,22 @@ function addOffBoardTasks(project: string): void {
 }
 
 /**
+ * One task holding the three waiting conversations, so the board shows the
+ * reason «Needs you» beside the others and the filter has what production has.
+ */
+function addWaitingTask(project: string): void {
+  const file = path.join(STATE_DIR, "tasks.json");
+  const store = JSON.parse(fs.readFileSync(file, "utf8")) as { tasks: Record<string, unknown>[] };
+  const folder = path.join(HOME, ".claude/projects", projectSlug(REPO_DIR));
+  store.tasks.push({
+    id: "task-1801-waiting", project, status: "assigned", text: "Pick the release channel\nInvented fixture task whose agents wait on a question.", placement: "unplaced",
+    assignments: [0, 1, 2].map((index) => ({ path: path.join(folder, `${headerSession(90 + index)}.jsonl`), conversationId: null, panePid: null, state: "delivered", error: null, at: "2100-01-02T10:00:09.000Z" })),
+    createdAt: "2100-01-01T00:00:09.000Z", updatedAt: "2100-01-01T00:00:09.000Z",
+  });
+  fs.writeFileSync(file, JSON.stringify(store, null, 2) + "\n", "utf8");
+}
+
+/**
  * Accounts as production has them, all invented: Claude «Main» (the home's
  * own login) plus «Account B» and «Account C», Codex «Main», each with usage
  * readings, written through the Viewer's own modules into the synthetic home
@@ -2513,82 +2534,139 @@ async function seedAccounts(project: string): Promise<void> {
   }
 }
 
-interface HeaderReading {
-  bars: number;
-  bar: Rect | null;
-  controls: { name: string; rect: Rect }[];
-  island: Rect | null;
-  islandText: string;
-  toast: Rect | null;
-  pressedFill: string | null;
-  otherFill: string | null;
-  switchRect: Rect | null;
-  hit: Record<string, boolean>;
-  texts: string;
-  /** How far the bar's content runs past its box; 0 when everything fits in one row. */
-  overflow: number;
-  tier: string | null;
-  /** The `+` of the create controls: an icon in the control's own colour. */
-  plus: { svg: boolean; iconColor: string | null; textColor: string | null }[];
-  hidden: string | null;
-  /** The project name's box, visible or not. */
-  name: Rect | null;
-  /** Whether the bar is in its wrapping face (a bar under 768 px). */
-  wrap: boolean;
-}
+interface HeaderControl { name: string; rect: Rect; covered: boolean; iconOnly: boolean; label: string | null; title: string | null }
 
-/** Runs inside the page: the header bar, its visible controls and the island, in viewport pixels. */
-function readHeader(): HeaderReading {
+/**
+ * Runs inside the page: the board's header row, every visible control in it,
+ * and what is wrong with it. `overlaps` are pairs of boxes drawn over each
+ * other (a group and the button inside it are not a pair); `truncated` is
+ * text that runs past its own box (a Range over the contents and the scroll
+ * size), a placeholder longer than its field, and a control drawn past the
+ * row or the window; `covered` are controls whose centre another element
+ * takes.
+ */
+function readHeader() {
   const rect = (element: Element): Rect => { const r = element.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; };
-  const visible = (element: Element) => { const r = element.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(element).visibility !== "hidden"; };
+  const visible = (element: Element) => {
+    const r = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return r.width > 0 && r.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+  };
+  const named = (element: Element) => (element.getAttribute("aria-label") || element.getAttribute("placeholder") || element.textContent?.replace(/\s+/g, " ").trim() || element.tagName).slice(0, 60);
   const bars = [...document.querySelectorAll("header.bar, [data-project-bar]")].filter(visible);
-  const bar = bars[0] ?? null;
-  const controls: { name: string; rect: Rect }[] = [];
-  if (bar) {
-    const named = (element: Element) => element.getAttribute("aria-label") || element.getAttribute("placeholder") || element.textContent?.trim() || element.tagName;
-    const selector = "[data-bar-control], .btn, input[type=search], [data-account-switch-engine] > button, h1, .summary, [data-bar-group=status]";
-    for (const element of bar.querySelectorAll(selector)) if (visible(element) && !element.closest("[data-bar-more-menu]")) controls.push({ name: named(element)!, rect: rect(element) });
+  const bar = (bars[0] as HTMLElement | undefined) ?? null;
+  /* A row under the bar would be the header's second row: none may be drawn. */
+  const extraRows = [...document.querySelectorAll(".kb > .reason-filter-row")].filter(visible).length;
+  const open = "[data-bar-more-menu], [data-bar-filter-menu], [data-bar-recent-list], [data-needs-you-panel]";
+  const selector = "[data-bar-control], .btn, input[type=search], [data-account-switch-engine] > button, h1, [data-bar-group=status], [data-attention-count], [data-attention-filter]";
+  const elements: Element[] = [];
+  if (bar) for (const element of bar.querySelectorAll(selector)) {
+    if (!visible(element) || element.closest(open)) continue;
+    if (!elements.includes(element)) elements.push(element);
   }
-  controls.sort((a, b) => a.rect.x - b.rect.x);
-  const islandElement = document.querySelector("[data-attention-island]");
-  const toastElement = document.querySelector("[data-attention-toast]");
-  const tabs = [...document.querySelectorAll("button[data-view-tab]")];
-  const pressed = tabs.find((tab) => tab.getAttribute("aria-pressed") === "true");
-  const other = tabs.find((tab) => tab.getAttribute("aria-pressed") !== "true");
-  const hit: Record<string, boolean> = {};
-  for (const selector of ["[data-new-task]", "[data-new-agent]", "[data-bar-create]", "[data-bar-more]", "[data-kanban-search]", "[data-orchestrator-toggle]", "[data-task-panel-toggle]", "[data-hidden-pill]", "[data-account-switch-engine] > button"]) {
-    const element = document.querySelector(selector);
-    if (!element || !visible(element)) continue;
+  const controls: (HeaderControl & { element?: Element })[] = elements.map((element) => {
     const r = element.getBoundingClientRect();
     const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
-    hit[selector] = Boolean(top && (top === element || element.contains(top)));
+    const words = [...element.childNodes].some((node) => node.nodeType === 3 ? Boolean(node.textContent?.trim()) : node instanceof HTMLElement && node.tagName !== "SVG" && visible(node) && Boolean(node.textContent?.trim()));
+    return {
+      name: named(element), rect: rect(element), element,
+      covered: !(top && (top === element || element.contains(top) || top.contains(element))),
+      iconOnly: element instanceof HTMLButtonElement && !words,
+      label: element.getAttribute("aria-label"), title: element.getAttribute("title"),
+    };
+  }).sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
+  const overlaps: string[] = [];
+  for (const [index, a] of controls.entries()) for (const b of controls.slice(index + 1)) {
+    if (a.element?.contains(b.element!) || b.element?.contains(a.element!)) continue;
+    const x = Math.min(a.rect.x + a.rect.w, b.rect.x + b.rect.w) - Math.max(a.rect.x, b.rect.x);
+    const y = Math.min(a.rect.y + a.rect.h, b.rect.y + b.rect.h) - Math.max(a.rect.y, b.rect.y);
+    if (x > 0.5 && y > 0.5) overlaps.push(`«${a.name}» × «${b.name}» ${x.toFixed(1)}×${y.toFixed(1)}px`);
   }
-  const plus = [...document.querySelectorAll("[data-new-task], [data-new-agent], [data-bar-create]")].filter(visible).map((button) => {
-    const svg = button.querySelector("svg");
-    return { svg: svg !== null, iconColor: svg ? getComputedStyle(svg).color : null, textColor: getComputedStyle(button).color };
-  });
-  const hiddenPill = document.querySelector("[data-hidden-pill]");
-  const switchElement = document.querySelector("[data-project-view-tabs]");
-  return {
-    bars: bars.length,
-    bar: bar ? rect(bar) : null,
-    controls,
-    island: islandElement ? rect(islandElement) : null,
-    islandText: islandElement?.textContent?.replace(/\s+/g, " ").trim() ?? "",
-    toast: toastElement && visible(toastElement) ? rect(toastElement) : null,
-    pressedFill: pressed ? getComputedStyle(pressed).backgroundColor : null,
-    otherFill: other ? getComputedStyle(other).backgroundColor : null,
-    switchRect: switchElement ? rect(switchElement) : null,
-    hit,
-    texts: bar?.textContent?.replace(/\s+/g, " ").trim() ?? "",
-    overflow: bar ? Math.max(0, bar.scrollWidth - bar.clientWidth) : 0,
-    tier: bar?.getAttribute("data-bar-tier") ?? null,
-    plus,
-    hidden: hiddenPill && visible(hiddenPill) ? hiddenPill.textContent?.replace(/\s+/g, " ").trim() ?? "" : null,
-    name: bar?.querySelector("h1") ? rect(bar.querySelector("h1")!) : null,
-    wrap: bar?.hasAttribute("data-bar-wrap") ?? false,
+  const truncated: string[] = [];
+  /* A placeholder is measured as the browser lays it out: a hidden span in the field's own font. */
+  const textWidth = (text: string, style: CSSStyleDeclaration) => {
+    const span = document.createElement("span");
+    span.textContent = text;
+    span.style.cssText = `position:fixed;visibility:hidden;white-space:pre;left:0;top:0;font:${style.font};letter-spacing:${style.letterSpacing};font-feature-settings:${style.fontFeatureSettings}`;
+    document.body.appendChild(span);
+    const width = span.getBoundingClientRect().width;
+    span.remove();
+    return width;
   };
+  const row = bar?.getBoundingClientRect() ?? null;
+  for (const element of elements) {
+    const box = element.getBoundingClientRect();
+    if (element instanceof HTMLInputElement) {
+      const style = getComputedStyle(element);
+      const room = element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const need = textWidth(element.placeholder, getComputedStyle(element, "::placeholder"));
+      /* Chrome keeps room for the search field's clear button: 16 px of margin. */
+      if (!element.value && need > room - 16) truncated.push(`placeholder «${element.placeholder}» needs ${need.toFixed(1)}px of ${room.toFixed(1)}`);
+    } else {
+      const html = element as HTMLElement;
+      if (html.scrollWidth > html.clientWidth + 0.5) truncated.push(`«${named(element)}» scroll ${html.scrollWidth} > ${html.clientWidth}`);
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const text = range.getBoundingClientRect();
+      if (text.width > 0 && (text.left < box.left - 0.5 || text.right > box.right + 0.5)) truncated.push(`«${named(element)}» text ${text.left.toFixed(1)}–${text.right.toFixed(1)} outside ${box.left.toFixed(1)}–${box.right.toFixed(1)}`);
+    }
+    if (row && (box.right > row.right + 0.5 || box.left < row.left - 0.5 || box.top < row.top - 0.5 || box.bottom > row.bottom + 0.5)) truncated.push(`«${named(element)}» past its row`);
+    if (box.right > innerWidth + 0.5) truncated.push(`«${named(element)}» past the window`);
+  }
+  const shown = (query: string) => [...(bar?.querySelectorAll(query) ?? [])].some(visible);
+  const chip = bar?.querySelector("[data-attention-count]") ?? null;
+  const toast = document.querySelector("[data-attention-toast]");
+  const panel = document.querySelector("[data-needs-you-panel]");
+  const last = controls.reduce<HeaderControl | null>((best, control) => (!best || control.rect.x + control.rect.w > best.rect.x + best.rect.w ? control : best), null);
+  /* Whether a label of the panel toggles is drawn: the words stand while the row has room. */
+  const labels = [...(bar?.querySelectorAll("[data-fit-label]") ?? [])].map(visible);
+  const out = {
+    bars: bars.length,
+    extraRows,
+    bar: bar ? rect(bar) : null,
+    overflow: bar ? Math.max(0, bar.scrollWidth - bar.clientWidth) : 0,
+    fit: bar?.getAttribute("data-fit") ?? null,
+    controls: controls.map(({ element: _element, ...control }) => control),
+    gaps: (() => {
+      const across = [...controls].sort((a, b) => a.rect.x - b.rect.x);
+      return across.slice(1).map((control, index) => Math.round((control.rect.x - (across[index]!.rect.x + across[index]!.rect.w)) * 2) / 2);
+    })(),
+    overlaps,
+    truncated,
+    covered: controls.filter((control) => control.covered).map((control) => control.name),
+    /* An icon with no words in the row says its name to a pointer and to assistive technology. */
+    unnamed: controls.filter((control) => control.iconOnly && (!control.label || !control.title)).map((control) => control.name),
+    name: bar?.querySelector("h1") ? rect(bar.querySelector("h1")!) : null,
+    chip: chip && visible(chip) ? { rect: rect(chip), text: (chip as HTMLElement).innerText.replace(/\s+/g, " ").trim(), last: last?.name === named(chip), fill: getComputedStyle(chip).backgroundColor } : null,
+    toast: toast && visible(toast) ? rect(toast) : null,
+    panel: panel && visible(panel) ? rect(panel) : null,
+    labelsShown: labels.length > 0 && labels.every(Boolean),
+    labelsHidden: labels.length > 0 && labels.every((label) => !label),
+    texts: bar?.textContent?.replace(/\s+/g, " ").trim() ?? "",
+    /* What the row itself holds; ⋯, the filter and the recent agents are read when they open. */
+    inRow: {
+      accounts: [...(bar?.querySelectorAll("[data-account-switch-engine] > button") ?? [])].filter(visible).length,
+      status: shown("[data-bar-group=status]"),
+      search: shown("[data-kanban-search]"),
+      filter: shown("[data-bar-filter-toggle]"),
+      create: shown("[data-bar-create]"),
+      orchestrator: shown("[data-orchestrator-toggle]"),
+      tasks: shown("[data-task-panel-toggle]"),
+      recentAgents: shown("[data-bar-recent-toggle]"),
+      more: shown("[data-bar-more]"),
+      needsYou: Boolean(chip && visible(chip)),
+      /* What the row no longer holds. */
+      viewSwitch: shown("[data-project-view-tabs], [data-view-tab]"),
+      hiddenPill: shown("[data-hidden-pill]"),
+      createButtons: shown("[data-new-task], [data-new-agent]"),
+      funnel: shown("[data-attention-filter]"),
+      reasonChips: shown(".reason-filter"),
+    },
+  };
+  return out;
 }
+
+type HeaderReading = ReturnType<typeof readHeader>;
 
 /** Runs inside the page: the open Tasks panel's box and whether its header's controls take a click at their centres. */
 function readTaskPanel() {
@@ -2604,18 +2682,6 @@ function readTaskPanel() {
   return { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, hit };
 }
 
-/** The bar's last control ends before the island, with the 16 px between groups to spare. */
-function lastControlClear(tag: string, reading: HeaderReading, must: (ok: boolean, message: string) => void): number | null {
-  const last = reading.controls.reduce<{ name: string; rect: Rect } | null>((best, control) => (!best || control.rect.x + control.rect.w > best.rect.x + best.rect.w ? control : best), null);
-  if (!last || !reading.island) {
-    must(false, `${tag}: no last control or no island to measure against`);
-    return null;
-  }
-  const clearance = reading.island.x - (last.rect.x + last.rect.w);
-  must(clearance >= 16 - 0.5, `${tag}: «${last.name}» ends ${clearance.toFixed(1)}px before the island`);
-  return clearance;
-}
-
 /** Runs inside the page: the open ⋯ menu's rows, groups and rules. */
 function readMenu() {
   const element = document.querySelector("[data-bar-more-menu]")!;
@@ -2625,28 +2691,30 @@ function readMenu() {
   const groups = [...element.querySelectorAll(":scope > [data-bar-menu-group]")].filter(shown).map((group) => ({ name: group.getAttribute("data-bar-menu-group"), ruled: parseFloat(getComputedStyle(group).borderTopWidth) > 0 }));
   /* What is not used daily sits behind named sections; one whose rows all stood down draws nothing. */
   const sections = [...element.querySelectorAll("[data-bar-menu-section]")].filter(shown).map((section) => section.getAttribute("data-bar-menu-section"));
-  return { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, rows, groups, sections, text: element.textContent ?? "" };
+  const hidden = element.querySelector("[data-bar-more-hidden]");
+  return { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, rows, groups, sections, hidden: hidden ? hidden.textContent?.replace(/\s+/g, " ").trim() ?? "" : null, text: element.textContent ?? "" };
 }
 
 type MenuReading = ReturnType<typeof readMenu>;
 
 /**
- * Runs inside the page: whether an open surface (the ⋯ menu, or the Claude accounts panel) is
- * the topmost paint at every point of a grid over it, and whether the attention island (or its
- * toast) overlaps it at all — the island sat later in the same stacking context and once
- * painted over the menu's right end.
+ * Runs inside the page: whether an open surface (the ⋯ menu, the filter menu, the recent agents'
+ * list, or the Claude accounts panel) is the topmost paint at every point of a grid over it, lies
+ * inside the window, and whether the attention chip or its toast overlaps it at all.
  */
 function readOnTop(which: string) {
-  const element = which === "menu"
-    ? document.querySelector("[data-bar-more-menu]")
-    : [...document.querySelectorAll('[role="dialog"]')].find((node) => /Claude/.test(node.getAttribute("aria-label") ?? "")) ?? null;
-  if (!element) return { found: false, points: 0, covered: [] as string[], overlapsIsland: false };
+  const element = which === "menu" ? document.querySelector("[data-bar-more-menu]")
+    : which === "accounts" ? [...document.querySelectorAll('[role="dialog"]')].find((node) => /Claude/.test(node.getAttribute("aria-label") ?? "")) ?? null
+    : document.querySelector(which);
+  if (!element) return { found: false, points: 0, covered: [] as string[], overlapsIsland: false, inWindow: false, rect: null as Rect | null };
   const r = element.getBoundingClientRect();
   const covered: string[] = [];
   let points = 0;
+  /* The grid starts inside the surface's rounded corners: a point in a corner's cut belongs to what lies under it. */
+  const inset = Math.max(3, parseFloat(getComputedStyle(element).borderTopLeftRadius) || 0);
   for (let i = 0; i < 8; i += 1) for (let j = 0; j < 8; j += 1) {
-    const x = r.x + 3 + ((r.width - 6) * i) / 7;
-    const y = r.y + 3 + ((r.height - 6) * j) / 7;
+    const x = r.x + inset + ((r.width - 2 * inset) * i) / 7;
+    const y = r.y + inset + ((r.height - 2 * inset) * j) / 7;
     if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
     points += 1;
     const top = document.elementFromPoint(x, y);
@@ -2656,20 +2724,40 @@ function readOnTop(which: string) {
   const boxes = [...document.querySelectorAll("[data-attention-island], [data-attention-island] *, [data-attention-toast], [data-attention-toast] *")]
     .map((node) => node.getBoundingClientRect()).filter((box) => box.width > 0 && box.height > 0);
   const overlapsIsland = boxes.some((box) => box.x < r.x + r.width && box.x + box.width > r.x && box.y < r.y + r.height && box.y + box.height > r.y);
-  return { found: true, points, covered, overlapsIsland };
+  return { found: true, points, covered, overlapsIsland, inWindow: r.x >= -0.5 && r.y >= -0.5 && r.x + r.width <= innerWidth + 0.5 && r.y + r.height <= innerHeight + 0.5, rect: { x: r.x, y: r.y, w: r.width, h: r.height } };
 }
 
+/* The widths the operator works at. The rail is open (248 px), so the bar is 2 006, 1 712, 1 192 and
+   752 px wide, and 320 px less with the needs-you panel docked beside the board. */
+const HEADER_WIDTHS = [2254, 1960, 1440, 1000] as const;
+/* Below this the needs-you panel has no room to dock beside the board, so the frame has no docked state. */
+const HEADER_DOCK_MIN = 1300;
+
+/**
+ * BOARD_CAPTURE_CASE=header. The matrix is long, so `HEADER_WIDTHS=2254,1960`
+ * runs a part of it and the record merges each part's frames into the one
+ * `header.json`; `HEADER_FRAME_DIR` names where the frames go. Run against a
+ * build from before the one-row header, with `HEADER_ROW_ONLY=1` (the row's
+ * frame and reading, its menus not driven), it records what that header did
+ * and fails, which is the "before" of a before/after pair.
+ */
 async function headerMain(): Promise<void> {
+  const widths = (process.env.HEADER_WIDTHS?.split(",").map(Number).filter(Boolean) ?? [...HEADER_WIDTHS]);
+  const withPhone = process.env.HEADER_PHONE !== "0";
+  /* The row's frame and reading alone, without driving its menus: what a build from before this row can answer. */
+  const rowOnly = process.env.HEADER_ROW_ONLY === "1";
+  const frames = process.env.HEADER_FRAME_DIR?.trim() || OUT_DIR;
+  fs.mkdirSync(frames, { recursive: true });
   const { tasks, reviewers } = seedHome();
   writeQuietProject();
   const failures: string[] = [];
   const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
-  const port = 3_000 + (process.pid % 900);
+  const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
   const holders: ChildProcess[] = [];
-  const report: Record<string, unknown> = { commit: captureCommit() };
+  const report: Record<string, unknown> = {};
   try {
     server = startServer(port);
     await waitForServer(baseUrl, server);
@@ -2695,254 +2783,384 @@ async function headerMain(): Promise<void> {
     addOffBoardTasks(project);
     await seedAccounts(project);
     holders.push(...writeWaitingConversations());
+    addWaitingTask(project);
     server = startServer(port);
     await waitForServer(baseUrl, server);
     await waitForBoard(baseUrl, true);
     await Bun.sleep(4_000);
     browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 
-    /* The labelled tier starts at 1700 px of bar (a 1948 px viewport with the rail): 2540 is wide,
-       and 1850 (1602 px of bar), where the uk labels did not fit, and 1280 are narrow. */
-    const cases = [2540, 1850, 1280].flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ width, lang, colorScheme }))));
-    for (const { width, lang, colorScheme } of cases) {
-      const tag = `${width}-${lang}-${colorScheme}`;
-      const wide = width >= 1948;
+    const barSelector = "[data-kanban-board] header.bar";
+    const cases = widths.flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).flatMap((colorScheme) =>
+      (width >= HEADER_DOCK_MIN ? (["closed", "docked"] as const) : (["closed"] as const)).map((panel) => ({ width, lang, colorScheme, panel })))));
+    for (const { width, lang, colorScheme, panel } of cases) {
+      const tag = `${width}-${lang}-${colorScheme}${panel === "docked" ? "-docked" : ""}`;
+      const shot = (state: string) => path.join(frames, `header-${tag}${state}.png`);
       const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme, reducedMotion: "reduce" });
-      await context.addInitScript(seedInit);
-      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
-      const page = await context.newPage();
-      await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
-      await page.waitForSelector("[data-kanban-board] header.bar", { timeout: 120_000 });
-      await page.waitForFunction(() => /[1-9]/.test(document.querySelector("[data-attention-island]")?.textContent ?? ""), undefined, { timeout: 60_000 }).catch(() => {});
-      await page.waitForTimeout(2_500);
-      const reading = await page.evaluate(readHeader);
-      await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}.png`), clip: { x: 0, y: 0, width, height: 120 } });
-      must(reading.bars === 1, `${tag}: ${reading.bars} header bars`);
-      must(reading.bar !== null && near(reading.bar.h, 48, 0.5), `${tag}: the bar is ${reading.bar?.h}px tall`);
-      must(reading.overflow <= 0.5, `${tag}: the bar's content runs ${reading.overflow}px past its box`);
-      must(reading.name !== null && reading.name.w >= 40, `${tag}: the project name is ${reading.name?.w ?? 0}px wide`);
-      must(reading.tier === (wide ? "wide" : "narrow"), `${tag}: the bar is in its ${reading.tier} tier`);
-      const islandClearance = lastControlClear(tag, reading, must);
-      for (const control of reading.controls) {
-        if (control.rect.h < 24) continue;
-        must(near(control.rect.h, 32, 0.5), `${tag}: «${control.name}» is ${control.rect.h}px tall`);
-      }
-      const boxes = [...reading.controls, ...(reading.island ? [{ name: "island", rect: reading.island }] : [])];
-      for (const [index, a] of boxes.entries()) for (const b of boxes.slice(index + 1)) {
-        if (a.rect.x <= b.rect.x && a.rect.x + a.rect.w >= b.rect.x + b.rect.w && a.rect.y <= b.rect.y && a.rect.y + a.rect.h >= b.rect.y + b.rect.h) continue;
-        if (b.rect.x <= a.rect.x && b.rect.x + b.rect.w >= a.rect.x + a.rect.w && b.rect.y <= a.rect.y && b.rect.y + b.rect.h >= a.rect.y + a.rect.h) continue;
-        must(!overlaps(a.rect, b.rect, 0.5), `${tag}: «${a.name}» and «${b.name}» overlap`);
-      }
-      /* The rhythm: edge to edge, 8 px inside a group and 16 px between groups; the one spacer is the only other gap. */
-      const gaps = reading.controls.slice(1).map((control, index) => Math.round((control.rect.x - (reading.controls[index]!.rect.x + reading.controls[index]!.rect.w)) * 2) / 2);
-      const offRhythm = gaps.filter((gap) => gap !== 8 && gap !== 16);
-      must(offRhythm.length === 1 && offRhythm[0]! > 16, `${tag}: gaps ${gaps.join(", ")} are not 8 / 16 around one spacer`);
-      must(reading.island !== null && reading.bar !== null && reading.island.y >= reading.bar.y && reading.island.y + reading.island.h <= reading.bar.y + reading.bar.h, `${tag}: the island is not inside the bar`);
-      must(/[1-9]/.test(reading.islandText), `${tag}: the island reads «${reading.islandText}», nothing waiting`);
-      /* The island is drawn after ⋯, so a real Tab from ⋯ lands on it before anything in the board. */
-      await page.focus("[data-kanban-board] header.bar [data-bar-more]");
-      await page.keyboard.press("Tab");
-      const tabAfterMore = await page.evaluate(() => {
-        const active = document.activeElement;
-        return { inIsland: Boolean(active?.closest("[data-attention-island]")), label: active?.getAttribute("aria-label") ?? active?.textContent?.replace(/\s+/g, " ").trim() ?? "" };
-      });
-      must(tabAfterMore.inIsland, `${tag}: Tab from ⋯ lands on «${tabAfterMore.label}», not the island`);
-      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-      must(reading.toast === null || (reading.bar !== null && reading.toast.y >= reading.bar.y + reading.bar.h + 4), `${tag}: the toast starts at y ${reading.toast?.y}, on the bar`);
-      must(reading.hidden !== null && /[1-9]/.test(reading.hidden), `${tag}: Hidden reads «${reading.hidden}»`);
-      must(wide || (reading.hidden !== null && /^\d+$/.test(reading.hidden)), `${tag}: narrow, Hidden reads «${reading.hidden}», not its icon and count`);
-      must(reading.pressedFill !== null && reading.pressedFill !== reading.otherFill, `${tag}: the pressed view segment paints ${reading.pressedFill}, the other ${reading.otherFill}`);
-      for (const [selector, ok] of Object.entries(reading.hit)) must(ok, `${tag}: ${selector} is covered at its centre`);
-      must(reading.plus.length > 0 && reading.plus.every((item) => item.svg && item.iconColor === item.textColor), `${tag}: a + is not an icon in its control's colour`);
-      const accountsInBar = reading.controls.filter((control) => /Claude|Codex/.test(control.name)).length;
-      must(wide ? accountsInBar === 2 : accountsInBar === 0, `${tag}: ${accountsInBar} account switches in the bar`);
-      must(!/undo|redo|скасувати|повторити/i.test(reading.texts), `${tag}: the bar still names undo or redo`);
+      const entry: Record<string, unknown> = {};
+      report[tag] = entry;
+      try {
+        await context.addInitScript(seedInit);
+        await context.addInitScript(({ lang: value, panel: state }: { lang: string; panel: string }) => {
+          localStorage.setItem("llv_lang", value);
+          localStorage.setItem("llvNeedsYouPanel", state === "docked" ? "open" : "closed");
+          localStorage.setItem("llvNeedsYouPlacement", "docked");
+        }, { lang, panel });
+        const page = await context.newPage();
+        /* The language is the operator's setting on the server, which a page adopts on load: answer
+           it with this frame's language so one frame's choice never carries into the next. */
+        await page.route("**/api/operator/settings*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, locale: { value: lang, source: "chosen" }, timeZone: null }) }));
+        await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+        await page.waitForSelector(barSelector, { timeout: 120_000 });
+        await page.waitForFunction(() => /[1-9]/.test(document.querySelector("[data-attention-island]")?.textContent ?? "") || document.querySelector("[data-needs-you-panel] li, [data-needs-you-panel] button") !== null, undefined, { timeout: 60_000 }).catch(() => {});
+        await page.waitForTimeout(3_000);
+        /* The first-run telemetry notice sits over the board's foot in a fresh home; it is not the header's. */
+        await page.addStyleTag({ content: "[data-telemetry-notice] { display: none !important; }" });
+        /* The Tasks panel's open state is the board's preference on the server: a frame that failed
+           before closing it would otherwise take this frame's room. */
+        if (await page.locator("aside[data-task-panel]").isVisible().catch(() => false)) {
+          await page.click(`${barSelector} [data-task-panel-toggle]`);
+          await page.waitForTimeout(1_500);
+        }
+        await page.mouse.move(1, 880);
+        const reading: HeaderReading = await page.evaluate(readHeader);
+        entry.reading = reading;
+        await page.screenshot({ path: shot(""), clip: { x: 0, y: 0, width, height: 160 } });
 
-      /* Hover strengthens the border and leaves the label's colour alone. */
-      const tasksToggle = page.locator("[data-task-panel-toggle]");
-      const before = await tasksToggle.evaluate((element) => ({ color: getComputedStyle(element).color, border: getComputedStyle(element).borderTopColor }));
-      await tasksToggle.hover();
-      await page.waitForTimeout(250);
-      const hovered = await tasksToggle.evaluate((element) => ({ color: getComputedStyle(element).color, border: getComputedStyle(element).borderTopColor }));
-      await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-hover.png`), clip: { x: 0, y: 0, width, height: 60 } });
-      must(hovered.color === before.color && hovered.border !== before.border, `${tag}: hover turns Tasks from ${JSON.stringify(before)} to ${JSON.stringify(hovered)}`);
-      await page.mouse.move(1, 700);
+        /* One row of 48 px with nothing overlapping, truncated or covered. */
+        const clean = (label: string, row: HeaderReading) => {
+          must(row.bars === 1 && row.extraRows === 0, `${label}: ${row.bars} header bars and ${row.extraRows} rows under them`);
+          must(row.bar !== null && near(row.bar.h, 48, 0.5), `${label}: the bar is ${row.bar?.h}px tall`);
+          must(row.overflow <= 0.5, `${label}: the bar's content runs ${row.overflow}px past its box`);
+          for (const control of row.controls) {
+            if (control.rect.h < 24) continue;
+            must(near(control.rect.h, 32, 0.5), `${label}: «${control.name}» is ${control.rect.h}px tall`);
+          }
+          for (const overlap of row.overlaps) must(false, `${label}: overlap ${overlap}`);
+          for (const cut of row.truncated) must(false, `${label}: truncated ${cut}`);
+          for (const name of row.covered) must(false, `${label}: «${name}» is covered at its centre`);
+          for (const name of row.unnamed) must(false, `${label}: the icon «${name}» has no tooltip or no accessible name`);
+          must(row.gaps.every((gap) => gap >= 0), `${label}: gaps ${row.gaps.join(", ")}`);
+        };
+        clean(tag, reading);
+        must(reading.name !== null && reading.name.w >= 40, `${tag}: the project name is ${reading.name?.w ?? 0}px wide`);
+        /* What the row holds, and what left it. */
+        const row = reading.inRow;
+        must(row.status && row.search && row.filter && row.create && row.orchestrator && row.tasks && row.recentAgents && row.more, `${tag}: the row is missing a control: ${JSON.stringify(row)}`);
+        must(!row.viewSwitch, `${tag}: the Board | Conversations switch is in the row`);
+        must(!row.hiddenPill && !row.createButtons && !row.funnel && !row.reasonChips, `${tag}: the row still holds ${JSON.stringify({ hiddenPill: row.hiddenPill, createButtons: row.createButtons, funnel: row.funnel, reasonChips: row.reasonChips })}`);
+        must(!/undo|redo|скасувати|повторити/i.test(reading.texts), `${tag}: the bar still names undo or redo`);
+        const fit = (reading.fit ?? "").split(" ").filter(Boolean);
+        must(reading.fit !== null, `${tag}: the bar carries no data-fit`);
+        must(fit.includes("accounts") ? row.accounts === 0 : row.accounts === 2, `${tag}: ${row.accounts} account switches in the row at fit [${fit.join(" ")}]`);
+        must(fit.includes("labels") ? reading.labelsHidden : reading.labelsShown, `${tag}: the panel toggles' words do not follow fit [${fit.join(" ")}]`);
+        /* The needs-you chip is the row's last item, in the flow; with the panel docked it leaves the row. */
+        if (panel === "docked") {
+          must(reading.panel !== null, `${tag}: the needs-you panel is not docked`);
+          must(reading.chip === null, `${tag}: the chip stays in the row beside the docked panel`);
+        } else {
+          must(reading.chip !== null && reading.chip.last, `${tag}: the needs-you chip is not the row's last item`);
+          must(reading.chip !== null && /[1-9]/.test(reading.chip.text), `${tag}: the chip reads «${reading.chip?.text}», nothing waiting`);
+          must(fit.includes("chip") ? /^\d+$/.test(reading.chip?.text ?? "") : /\D/.test(reading.chip?.text ?? ""), `${tag}: the chip reads «${reading.chip?.text}» at fit [${fit.join(" ")}]`);
+        }
+        must(reading.toast === null || (reading.bar !== null && reading.toast.y >= reading.bar.y + reading.bar.h + 4), `${tag}: the toast starts at y ${reading.toast?.y}, on the bar`);
+        console.log(`${tag}: fit=[${fit.join(" ")}] bar=${reading.bar?.w.toFixed(0)}×${reading.bar?.h.toFixed(0)} overlaps=${reading.overlaps.length} truncated=${reading.truncated.length} covered=${reading.covered.length}`);
+        /* A control another one covers takes no click: the frame is recorded and the menus are not driven. */
+        if (rowOnly || reading.covered.length || !row.more) continue;
 
-      /* The accounts: in the bar when wide, as ⋯ rows when narrow; either opens the panel listing all three Claude accounts. */
-      let menu: MenuReading;
-      if (wide) {
-        await page.click('[data-account-switch-engine="claude"] > button');
-      } else {
-        await page.click("[data-bar-more]");
+        /* The chip is drawn after ⋯, so a real Tab from ⋯ lands on it before anything in the board. */
+        if (panel === "closed") {
+          await page.focus(`${barSelector} [data-bar-more]`);
+          await page.keyboard.press("Tab");
+          const tabAfterMore = await page.evaluate(() => {
+            const active = document.activeElement;
+            return { inIsland: Boolean(active?.closest("[data-attention-island]")), label: active?.getAttribute("aria-label") ?? active?.textContent?.replace(/\s+/g, " ").trim() ?? "" };
+          });
+          must(tabAfterMore.inIsland, `${tag}: Tab from ⋯ lands on «${tabAfterMore.label}», not the needs-you chip`);
+          entry.tabAfterMore = tabAfterMore;
+          await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+        }
+
+        /* Hover strengthens the border and leaves the label's colour alone. */
+        const tasksToggle = page.locator(`${barSelector} [data-task-panel-toggle]`);
+        const before = await tasksToggle.evaluate((element) => ({ color: getComputedStyle(element).color, border: getComputedStyle(element).borderTopColor }));
+        await tasksToggle.hover();
+        await page.waitForTimeout(250);
+        const hovered = await tasksToggle.evaluate((element) => ({ color: getComputedStyle(element).color, border: getComputedStyle(element).borderTopColor }));
+        must(hovered.color === before.color && hovered.border !== before.border, `${tag}: hover turns Tasks from ${JSON.stringify(before)} to ${JSON.stringify(hovered)}`);
+        entry.hover = { before, hovered };
+        await page.mouse.move(1, 880);
+
+        const surface = async (label: string, selector: string, inWindow = true) => {
+          const onTop = await page.evaluate(readOnTop, selector);
+          must(onTop.found && onTop.covered.length === 0, `${tag}: ${label} is painted over at ${onTop.covered.slice(0, 3).join("; ")}`);
+          if (inWindow) must(onTop.inWindow, `${tag}: ${label} runs out of the window (${JSON.stringify(onTop.rect)})`);
+          return onTop;
+        };
+        /* A menu opened from the row owns the space under it: no part of the «Needs you» toast is
+           drawn beside it (it is not drawn at all until the menu closes, and then it returns). */
+        const toastDrawn = () => page.evaluate(() => {
+          const toast = document.querySelector("[data-attention-toast]");
+          return toast !== null && getComputedStyle(toast).visibility !== "hidden" && toast.getBoundingClientRect().width > 0;
+        });
+        const noToastBeside = async (label: string) => must(!(await toastDrawn()), `${tag}: the toast is drawn beside ${label}`);
+        /* A press outside whatever is open, on the project's name: it is in the row and does nothing. */
+        const pressOutside = async () => {
+          await page.keyboard.press("Escape");
+          await page.click(`${barSelector} h1`);
+          await page.waitForTimeout(200);
+        };
+        const clipTo = (box: Rect | null, pad = 280) => {
+          const x = Math.max(0, (box?.x ?? 0) - pad);
+          return { x, y: 0, width: Math.min(width - x, (box?.w ?? width) + 2 * pad), height: Math.min(900, (box?.y ?? 0) + (box?.h ?? 160) + 16) };
+        };
+
+        /* ⋯: the accounts once the row gave them up, and Hidden with its count. */
+        await page.click(`${barSelector} [data-bar-more]`);
         await page.waitForSelector("[data-bar-more-menu]");
-        menu = await page.evaluate(readMenu);
-        /* Narrow, the accounts are a section of ⋯ that opens in place. */
-        await page.click('[data-bar-more-menu] [data-bar-menu-head="accounts"]');
-        await page.click('[data-bar-more-menu] [data-account-switch-engine="claude"] > button');
+        if (fit.includes("accounts")) await page.waitForSelector('[data-bar-more-menu] [data-bar-menu-head="accounts"]', { timeout: 15_000 }).catch(() => {});
+        const menu: MenuReading = await page.evaluate(readMenu);
+        const menuOnTop = await surface("the ⋯ menu", "menu");
+        await noToastBeside("the ⋯ menu");
+        await page.screenshot({ path: shot("-more"), clip: clipTo(menu.rect) });
+        must(menu.groups.length > 0 && !menu.groups[0]!.ruled && menu.groups.slice(1).every((group) => group.ruled), `${tag}: ⋯ rules ${JSON.stringify(menu.groups)}`);
+        must(!/undo|redo|скасувати|повторити/i.test(menu.text), `${tag}: ⋯ still offers undo or redo`);
+        must(menu.rows.every((item) => near(item.h, 32, 0.5)), `${tag}: a ⋯ row is not 32 px`);
+        must(fit.includes("accounts") ? menu.sections.includes("accounts") : !menu.sections.includes("accounts"), `${tag}: the accounts rows are ${fit.includes("accounts") ? "missing from" : "repeated in"} ⋯`);
+        must(menu.hidden !== null && /[1-9]/.test(menu.hidden), `${tag}: ⋯ shows Hidden as «${menu.hidden}»`);
+        entry.menu = { rows: menu.rows.map((item) => item.label), groups: menu.groups, sections: menu.sections, hidden: menu.hidden, onTop: menuOnTop };
+        /* The accounts panel opens from wherever the switches are and lists all three Claude accounts. */
+        if (fit.includes("accounts")) {
+          await page.click('[data-bar-more-menu] [data-bar-menu-head="accounts"]');
+          await page.click('[data-bar-more-menu] [data-account-switch-engine="claude"] > button');
+        } else {
+          await page.keyboard.press("Escape");
+          await page.click(`${barSelector} [data-account-switch-engine="claude"] > button`);
+        }
+        await page.waitForTimeout(800);
+        const accounts = await page.evaluate(() => {
+          const dialog = [...document.querySelectorAll('[role="dialog"]')].find((element) => /Claude/.test(element.getAttribute("aria-label") ?? ""));
+          return dialog ? dialog.textContent?.replace(/\s+/g, " ").trim() ?? "" : null;
+        });
+        must(accounts !== null && ["Main", "Account B", "Account C"].every((label) => accounts.includes(label)) && /\d+\s?%/.test(accounts), `${tag}: the Claude accounts panel does not list three accounts with usage`);
+        /* The panel is as tall as its accounts and may run past a 900 px window's foot, as it did before. */
+        entry.accountsOnTop = await surface("the accounts panel", "accounts", false);
+        await pressOutside();
+        /* Hidden opens its tray under ⋯. */
+        await page.click(`${barSelector} [data-bar-more]`);
+        await page.waitForSelector("[data-bar-more-hidden]");
+        await page.click("[data-bar-more-hidden]");
+        const tray = await page.waitForSelector(".hidden-tray", { timeout: 10_000 }).then(() => true, () => false);
+        must(tray, `${tag}: the Hidden row of ⋯ does not open the tray`);
+        if (tray) {
+          await page.waitForTimeout(400);
+          await page.mouse.move(1, 880);
+          entry.tray = await surface("the Hidden tray", ".hidden-tray");
+          await noToastBeside("the Hidden tray");
+          await page.screenshot({ path: shot("-hidden"), clip: clipTo((entry.tray as { rect: Rect | null }).rect) });
+        }
+        await pressOutside();
+
+        /* +: one control, the two-row menu. */
+        await page.click(`${barSelector} [data-bar-create]`);
+        const create = await page.evaluate(() => [...document.querySelectorAll('.menu[role="menu"] [role="menuitem"]')].map((item) => ({ text: item.textContent?.trim() ?? "", icon: item.querySelector("svg") !== null })));
+        await page.screenshot({ path: shot("-create"), clip: { x: 0, y: 0, width, height: 200 } });
+        must(create.length === 2 && create.every((item) => item.icon && item.text.length > 0), `${tag}: the + menu offers ${JSON.stringify(create)}`);
+        entry.create = create.map((item) => item.text);
+        await noToastBeside("the + menu");
+        await pressOutside();
+        /* The toast comes back when the menu closes: a menu must not take it for good. */
+        must(reading.toast === null || await toastDrawn(), `${tag}: the toast did not return after the + menu closed`);
+
+        /* The one filter: «Needs you» with its key, every task, and each other reason with its count. */
+        await page.click(`${barSelector} [data-bar-filter-toggle]`);
+        await page.waitForSelector("[data-bar-filter-menu]");
+        const filter = await page.evaluate(() => ({
+          needs: document.querySelector("[data-bar-filter-needs]")?.textContent?.replace(/\s+/g, " ").trim() ?? null,
+          needsEnabled: !(document.querySelector("[data-bar-filter-needs]") as HTMLButtonElement | null)?.disabled,
+          reasons: [...document.querySelectorAll("[data-bar-filter-reason]")].map((item) => ({ id: item.getAttribute("data-bar-filter-reason"), text: item.textContent?.replace(/\s+/g, " ").trim() ?? "" })),
+        }));
+        const filterOnTop = await surface("the filter menu", "[data-bar-filter-menu]");
+        await noToastBeside("the filter menu");
+        await page.screenshot({ path: shot("-filter"), clip: clipTo(filterOnTop.rect) });
+        must(filter.needs !== null && /F$/.test(filter.needs) && filter.needsEnabled, `${tag}: the filter's «Needs you» row reads «${filter.needs}»`);
+        must(filter.reasons[0]?.id === "" && filter.reasons.length >= 2 && !filter.reasons.some((item) => item.id === "needs-you"), `${tag}: the filter's reasons are ${JSON.stringify(filter.reasons)}`);
+        /* The row is the funnel: it narrows the board to who waits, and the icon says so. */
+        await page.click("[data-bar-filter-needs]");
+        await page.waitForTimeout(250);
+        const narrowed = await page.evaluate(() => ({ main: document.querySelector("main")?.hasAttribute("data-needs-only") ?? false, dot: document.querySelector("[data-bar-filter-dot]") !== null }));
+        must(narrowed.main && narrowed.dot, `${tag}: the «Needs you» row did not narrow the board (${JSON.stringify(narrowed)})`);
+        await page.click("[data-bar-filter-needs]");
+        await page.waitForTimeout(250);
+        const cleared = await page.evaluate(() => ({ main: document.querySelector("main")?.hasAttribute("data-needs-only") ?? false, dot: document.querySelector("[data-bar-filter-dot]") !== null }));
+        must(!cleared.main && !cleared.dot, `${tag}: the «Needs you» row did not let the board go (${JSON.stringify(cleared)})`);
+        entry.filter = { ...filter, onTop: filterOnTop };
+        await pressOutside();
+
+        /* The recent agents: the list under its icon, over the board, the row unchanged under it. */
+        await page.click(`${barSelector} [data-bar-recent-toggle]`);
+        await page.waitForSelector("[data-bar-recent-list]", { timeout: 15_000 });
+        await page.waitForSelector("[data-bar-recent-list] [data-desktop-conversations-row]", { timeout: 30_000 }).catch(() => {});
+        await page.waitForTimeout(500);
+        await page.mouse.move(1, 880);
+        const recent = await page.evaluate(() => ({
+          rows: document.querySelectorAll("[data-bar-recent-list] [data-desktop-conversations-row]").length,
+          count: document.querySelector("[data-bar-recent-list] [data-desktop-conversations-count]")?.textContent ?? null,
+          board: document.querySelector("[data-kanban-board] .board-frame") !== null,
+        }));
+        const recentOnTop = await surface("the recent agents' list", "[data-bar-recent-list]");
+        await noToastBeside("the recent agents' list");
+        await page.screenshot({ path: shot("-recent"), clip: { x: 0, y: 0, width, height: Math.min(900, Math.max(420, (recentOnTop.rect?.y ?? 0) + (recentOnTop.rect?.h ?? 0) + 16)) } });
+        must(recent.rows > 0 && recent.board, `${tag}: the recent agents' list shows ${recent.rows} rows${recent.board ? "" : ", and the board is gone"}`);
+        clean(`${tag} recent agents open`, await page.evaluate(readHeader));
+        entry.recentAgents = { ...recent, onTop: recentOnTop };
+        await page.click(`${barSelector} h1`);
+        await page.waitForTimeout(200);
+        must(await page.locator("[data-bar-recent-list]").count() === 0, `${tag}: the recent agents' list stays open after a press outside it`);
+
+        /* Where the needs-you panel has no room to dock it hangs from the chip, over the board: the chip
+           is in the row's flow, so its panel must still be the topmost paint and inside the window. */
+        if (width < HEADER_DOCK_MIN) {
+          await page.click(`${barSelector} [data-attention-count]`);
+          await page.waitForSelector("[data-needs-you-panel]", { timeout: 10_000 });
+          await page.waitForTimeout(400);
+          await page.mouse.move(1, 880);
+          entry.floatingPanel = await surface("the floating needs-you panel", "[data-needs-you-panel]");
+          clean(`${tag} needs-you panel floating`, await page.evaluate(readHeader));
+          await page.screenshot({ path: shot("-needs-you"), clip: { x: 0, y: 0, width, height: 520 } });
+          await page.click(`${barSelector} [data-attention-count]`);
+          await page.waitForSelector("[data-needs-you-panel]", { state: "detached", timeout: 10_000 }).catch(() => {});
+        }
+
+        /* The Tasks panel open on the Board: the bar spans it and stays one 48 px row. */
+        if (panel === "closed") {
+          await page.click(`${barSelector} [data-task-panel-toggle]`);
+          await page.waitForSelector("aside[data-task-panel]", { timeout: 30_000 });
+          await page.waitForTimeout(1_000);
+          if (await page.locator("[data-attention-toast-dismiss]").count()) {
+            await page.click("[data-attention-toast-dismiss]");
+            await page.waitForTimeout(300);
+          }
+          await page.mouse.move(1, 880);
+          const open: HeaderReading = await page.evaluate(readHeader);
+          const taskPanel = await page.evaluate(readTaskPanel);
+          await page.screenshot({ path: shot("-tasks-open"), clip: { x: 0, y: 0, width, height: 160 } });
+          clean(`${tag} tasks open`, open);
+          must(open.bar !== null && near(open.bar.x + open.bar.w, width, 0.5), `${tag} tasks open: the bar ends at x ${open.bar ? open.bar.x + open.bar.w : null}, short of the panel's edge`);
+          must(taskPanel !== null && open.bar !== null && taskPanel.rect.y >= open.bar.y + open.bar.h - 0.5, `${tag} tasks open: the panel starts at y ${taskPanel?.rect.y}, beside the bar`);
+          for (const item of taskPanel?.hit ?? []) must(item.ok, `${tag} tasks open: the panel's «${item.label}» is covered at its centre`);
+          entry.tasksOpen = { bar: open.bar, fit: open.fit, overlaps: open.overlaps, truncated: open.truncated, panel: taskPanel };
+          await page.click(`${barSelector} [data-task-panel-toggle]`);
+          await page.waitForSelector("aside[data-task-panel]", { state: "detached", timeout: 15_000 }).catch(() => {});
+        }
+      } catch (error) {
+        entry.error = String(error);
+        must(false, `${tag}: ${String(error)}`);
+      } finally {
+        await context.close().catch(() => {});
       }
-      await page.waitForTimeout(800);
-      const panel = await page.evaluate(() => {
-        const dialog = [...document.querySelectorAll('[role="dialog"]')].find((element) => /Claude/.test(element.getAttribute("aria-label") ?? ""));
-        if (!dialog) return null;
-        const r = dialog.getBoundingClientRect();
-        return { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, text: dialog.textContent?.replace(/\s+/g, " ").trim() ?? "" };
-      });
-      if (panel) await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-accounts.png`), clip: { x: Math.max(0, panel.rect.x - 24), y: 0, width: Math.min(width - Math.max(0, panel.rect.x - 24), panel.rect.w + 48), height: Math.min(900, panel.rect.y + panel.rect.h + 16) } });
-      must(panel !== null && ["Main", "Account B", "Account C"].every((label) => panel.text.includes(label)) && /\d+\s?%/.test(panel.text), `${tag}: the Claude accounts panel does not list three accounts with usage`);
-      const accountsOnTop = await page.evaluate(readOnTop, "accounts");
-      must(accountsOnTop.found && accountsOnTop.covered.length === 0, `${tag}: the accounts panel is painted over at ${accountsOnTop.covered.slice(0, 3).join("; ")}`);
-      report[`${tag}:accountsOnTop`] = accountsOnTop;
-      await page.keyboard.press("Escape");
-      await page.mouse.click(width / 2, 600);
-      await page.waitForTimeout(200);
+    }
 
-      /* The ⋯ menu on this busy project: Archive and Delete stand down while agents run, and no rule dangles. */
-      await page.click("[data-bar-more]");
-      await page.waitForSelector("[data-bar-more-menu]");
-      /* Narrow, the account rows arrive with their own read of the project's bindings. */
-      if (!wide) await page.waitForSelector('[data-bar-more-menu] [data-account-switch-engine="codex"]', { timeout: 15_000 }).catch(() => {});
-      menu = await page.evaluate(readMenu);
-      const menuOnTop = await page.evaluate(readOnTop, "menu");
-      must(menuOnTop.found && menuOnTop.covered.length === 0, `${tag}: the ⋯ menu is painted over at ${menuOnTop.covered.slice(0, 3).join("; ")}`);
-      report[`${tag}:menuOnTop`] = menuOnTop;
-      await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-more.png`), clip: { x: Math.max(0, menu.rect.x - 40), y: 0, width: Math.min(width - Math.max(0, menu.rect.x - 40), menu.rect.w + 80), height: menu.rect.y + menu.rect.h + 16 } });
-      const checkMenu = (label: string, reading: MenuReading) => {
-        must(reading.rect.x + reading.rect.w <= width, `${label}: the ⋯ menu runs off the right edge`);
-        must(reading.groups.length > 0 && !reading.groups[0]!.ruled && reading.groups.slice(1).every((group) => group.ruled), `${label}: ⋯ rules ${JSON.stringify(reading.groups)}`);
-        must(!/undo|redo|скасувати|повторити/i.test(reading.text), `${label}: ⋯ still offers undo or redo`);
-        must(reading.rows.every((row) => near(row.h, 32, 0.5)), `${label}: a ⋯ row is not 32 px`);
-      };
-      checkMenu(tag, menu);
-      must(menu.rows.length >= (wide ? 3 : 5), `${tag}: the ⋯ menu holds ${menu.rows.length} rows`);
-      must(wide ? !menu.sections.includes("accounts") : menu.sections.includes("accounts"), `${tag}: the accounts rows are ${wide ? "repeated in" : "missing from"} ⋯`);
-      await page.keyboard.press("Escape");
-      await page.mouse.click(width / 2, 600);
-
-      if (!wide) {
-        await page.click("[data-bar-create]");
-        const createIcons = await page.evaluate(() => [...document.querySelectorAll('.menu[role="menu"] [role="menuitem"]')].every((item) => item.querySelector("svg") !== null));
-        must(createIcons, `${tag}: a + menu row has no icon`);
-        const create = await page.evaluate(() => [...document.querySelectorAll('.menu[role="menu"] [role="menuitem"]')].map((item) => item.textContent?.trim() ?? ""));
-        await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-create.png`), clip: { x: 0, y: 0, width, height: 200 } });
-        must(create.length === 2, `${tag}: the + menu offers ${create.length} rows`);
-        report[`${tag}:create`] = create;
-        await page.keyboard.press("Escape");
-        await page.mouse.click(width / 2, 600);
+    /* The quiet project: nothing runs there, so Archive and Delete show in ⋯ beside the rest; and its
+       name is the longest the row meets: it shows whole while the row has room (it is the bar's last
+       step to cut it, after the search sits at its 144 px floor). */
+    if (widths.includes(2254) && !rowOnly) {
+      const quiet = await browser.newContext({ viewport: { width: 2254, height: 900 }, reducedMotion: "reduce" });
+      try {
+        await quiet.addInitScript(seedInit);
+        const quietPage = await quiet.newPage();
+        await quietPage.goto(`${baseUrl}/#p=${encodeURIComponent(projects.quiet)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+        await quietPage.waitForSelector("[data-bar-more]", { timeout: 120_000 });
+        await quietPage.waitForTimeout(2_500);
+        const readLong = () => quietPage.evaluate(() => {
+          const bar = document.querySelector("header.bar, [data-project-bar]");
+          const name = bar?.querySelector("h1");
+          return { fit: bar?.getAttribute("data-fit") ?? null, height: bar?.getBoundingClientRect().height ?? 0, nameWidth: name?.getBoundingClientRect().width ?? 0, nameText: name?.textContent ?? "", nameCut: Boolean(name && name.scrollWidth > name.clientWidth), overflow: bar ? Math.max(0, bar.scrollWidth - bar.clientWidth) : 0 };
+        });
+        const long = await readLong();
+        await quietPage.screenshot({ path: path.join(frames, "header-2254-long-name.png"), clip: { x: 0, y: 0, width: 2254, height: 120 } });
+        must(!long.nameCut && long.nameWidth > 220, `quiet: the long name «${long.nameText}» is ${long.nameWidth}px wide${long.nameCut ? " and cut" : ""} with the row's room free`);
+        must(long.fit === "" && near(long.height, 48, 0.5) && long.overflow <= 0.5, `quiet: the long name took steps [${long.fit}] of a ${long.height}px bar at 2254`);
+        /* Narrower windows take steps for it, and cut it only once every step is taken. */
+        const narrower: Record<string, unknown> = {};
+        for (const narrow of HEADER_WIDTHS.filter((value) => value < 2254)) {
+          await quietPage.setViewportSize({ width: narrow, height: 900 });
+          await quietPage.waitForTimeout(600);
+          const at = await readLong();
+          const steps = (at.fit ?? "").split(" ").filter(Boolean).length;
+          must(near(at.height, 48, 0.5) && at.overflow <= 0.5, `quiet ${narrow}: the bar is ${at.height}px with ${at.overflow}px past its box`);
+          must(!at.nameCut || steps === 5, `quiet ${narrow}: the long name is cut with ${5 - steps} steps left [${at.fit}]`);
+          narrower[String(narrow)] = at;
+        }
+        await quietPage.setViewportSize({ width: 2254, height: 900 });
+        await quietPage.waitForTimeout(400);
+        await quietPage.click("[data-bar-more]");
+        await quietPage.waitForSelector("[data-bar-more-menu]");
+        const quietMenu = await quietPage.evaluate(readMenu);
+        await quietPage.screenshot({ path: path.join(frames, "header-2254-quiet-more.png"), clip: { x: Math.max(0, quietMenu.rect.x - 40), y: 0, width: Math.min(2254 - Math.max(0, quietMenu.rect.x - 40), quietMenu.rect.w + 80), height: quietMenu.rect.y + quietMenu.rect.h + 16 } });
+        must(quietMenu.sections.includes("project") && quietMenu.rows.length >= 4, `quiet: ⋯ holds ${quietMenu.rows.length} rows without Archive and Delete`);
+        report["2254:quiet"] = { long, narrower, menu: { rows: quietMenu.rows.map((item) => item.label), sections: quietMenu.sections } };
+      } catch (error) {
+        must(false, `quiet: ${String(error)}`);
+      } finally {
+        await quiet.close().catch(() => {});
       }
-
-      /* The view switch keeps its place on Conversations, whose bar has the message search in the find slot. */
-      await page.click('button[data-view-tab="list"]');
-      await page.waitForSelector("[data-project-bar]", { timeout: 60_000 });
-      await page.waitForTimeout(1_500);
-      const list = await page.evaluate(readHeader);
-      await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-conversations.png`), clip: { x: 0, y: 0, width, height: 120 } });
-      must(list.bars === 1 && list.bar !== null && near(list.bar.h, 48, 0.5), `${tag}: the Conversations bar is ${list.bar?.h}px tall`);
-      /* Narrow, only the project name may truncate on Conversations: a short search label, the live count alone. */
-      const listTexts = await page.evaluate(() => {
-        const truncated = (element: Element | null) => Boolean(element && element.scrollWidth > element.clientWidth + 0.5);
-        const find = document.querySelector('[data-project-bar] [data-testid="dash-search"] span');
-        const status = document.querySelector('[data-project-bar] [data-bar-group="status"]');
-        return { find: find?.textContent ?? "", findTruncated: truncated(find), status: status?.textContent ?? "", statusTruncated: truncated(status) };
-      });
-      if (!wide) {
-        must(!listTexts.findTruncated && !listTexts.statusTruncated, `${tag}: Conversations truncates ${JSON.stringify(listTexts)}`);
-        must(!/\(\/\)/.test(listTexts.find), `${tag}: the narrow search label is the full «${listTexts.find}»`);
-      }
-      must(reading.switchRect !== null && list.switchRect !== null && near(reading.switchRect.x, list.switchRect.x, 0.5), `${tag}: the view switch moves from x ${reading.switchRect?.x} to ${list.switchRect?.x}`);
-      const listClearance = lastControlClear(`${tag} conversations`, list, must);
-      await page.click('button[data-view-tab="kanban"]');
-
-      /* The Tasks panel open on the Board: the bar spans it and stays one 48 px row, the island
-         lands on the bar, and the panel's own header takes clicks at every control. */
-      await page.waitForSelector("[data-kanban-board] header.bar", { timeout: 60_000 });
-      await page.click("[data-task-panel-toggle]");
-      await page.waitForSelector("aside[data-task-panel]", { timeout: 30_000 });
-      await page.waitForTimeout(1_000);
-      const open = await page.evaluate(readHeader);
-      /* The island's toast is a floating card, 360 px wide, that stays until dismissed; it lies over
-         whatever sits under the island, and a 280 px panel cannot avoid it. The island itself must
-         not cover the panel; with the toast dismissed, the panel's header takes every click. */
-      const underToast = await page.evaluate(readTaskPanel);
-      if (await page.locator("[data-attention-toast-dismiss]").count()) {
-        await page.click("[data-attention-toast-dismiss]");
-        await page.waitForTimeout(300);
-      }
-      const taskPanel = await page.evaluate(readTaskPanel);
-      await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-tasks-open.png`), clip: { x: 0, y: 0, width, height: 160 } });
-      must(open.bars === 1 && open.bar !== null && near(open.bar.h, 48, 0.5) && !open.wrap, `${tag} tasks open: the bar is ${open.bar?.h}px tall${open.wrap ? ", wrapping" : ""}`);
-      must(open.bar !== null && near(open.bar.x + open.bar.w, width, 0.5), `${tag} tasks open: the bar ends at x ${open.bar ? open.bar.x + open.bar.w : null}, short of the panel's edge`);
-      must(open.overflow <= 0.5, `${tag} tasks open: the bar's content runs ${open.overflow}px past its box`);
-      const openClearance = lastControlClear(`${tag} tasks open`, open, must);
-      must(taskPanel !== null && open.bar !== null && taskPanel.rect.y >= open.bar.y + open.bar.h - 0.5, `${tag} tasks open: the panel starts at y ${taskPanel?.rect.y}, beside the bar`);
-      for (const item of taskPanel?.hit ?? []) must(item.ok, `${tag} tasks open: the panel's «${item.label}» is covered at its centre`);
-      must((taskPanel?.hit.length ?? 0) >= 3, `${tag} tasks open: the panel header shows ${taskPanel?.hit.length ?? 0} controls`);
-      for (const [selector, ok] of Object.entries(open.hit)) must(ok, `${tag} tasks open: ${selector} is covered at its centre`);
-      await page.click("[data-task-panel-toggle]");
-      report[tag] = { ...reading, gaps, islandClearance, tabAfterMore, hover: { before, hovered }, menu, accountsPanel: panel ? { rect: panel.rect } : null, conversations: { switchRect: list.switchRect, texts: list.texts, name: list.name, find: listTexts, islandClearance: listClearance }, tasksOpen: { bar: open.bar, wrap: open.wrap, overflow: open.overflow, islandClearance: openClearance, toast: open.toast, panelUnderToast: underToast, panel: taskPanel } };
-      await context.close();
-
-      /* The quiet project's ⋯: nothing runs there, so Archive and Delete show beside the rest. */
-      const quiet = await browser.newContext({ viewport: { width, height: 900 }, colorScheme, reducedMotion: "reduce" });
-      await quiet.addInitScript(seedInit);
-      await quiet.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
-      const quietPage = await quiet.newPage();
-      await quietPage.goto(`${baseUrl}/#p=${encodeURIComponent(projects.quiet)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
-      await quietPage.waitForSelector("[data-bar-more]", { timeout: 120_000 });
-      await quietPage.waitForTimeout(2_000);
-      await quietPage.click("[data-bar-more]");
-      await quietPage.waitForSelector("[data-bar-more-menu]");
-      const quietMenu = await quietPage.evaluate(readMenu);
-      await quietPage.screenshot({ path: path.join(OUT_DIR, `header-${tag}-quiet-more.png`), clip: { x: Math.max(0, quietMenu.rect.x - 40), y: 0, width: Math.min(width - Math.max(0, quietMenu.rect.x - 40), quietMenu.rect.w + 80), height: quietMenu.rect.y + quietMenu.rect.h + 16 } });
-      checkMenu(`${tag} quiet`, quietMenu);
-      /* Sound (two rows) and the rows of the sections; Archive and Delete sit behind theirs. This leaf's message search sits in the bar's find slot. */
-      must(quietMenu.sections.includes("project") && quietMenu.rows.length >= 4, `${tag} quiet: ⋯ holds ${quietMenu.rows.length} rows without Archive and Delete`);
-      report[`${tag}:quiet`] = { menu: quietMenu };
-      await quiet.close();
     }
 
     /* The phone keeps its own 52 px bar, with the waiting count, and its menu has no undo or redo. */
-    for (const lang of ["en", "uk"] as const) for (const colorScheme of ["light", "dark"] as const) {
+    if (withPhone) for (const lang of ["en", "uk"] as const) for (const colorScheme of ["light", "dark"] as const) {
       const tag = `390-${lang}-${colorScheme}`;
       const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme, reducedMotion: "reduce" });
-      await phone.addInitScript(seedInit);
-      await phone.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
-      const page = await phone.newPage();
-      await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
-      await page.waitForSelector("[data-mobile2-bar]", { timeout: 120_000 });
-      await page.waitForTimeout(2_500);
-      const phoneBar = await page.evaluate(() => {
-        const bar = document.querySelector("[data-mobile2-bar]")!;
-        const box = bar.getBoundingClientRect();
-        const targets = [...bar.querySelectorAll("button")].map((button) => { const r = button.getBoundingClientRect(); return { w: r.width, h: r.height }; }).filter((r) => r.w > 0);
-        return { h: box.height, w: box.width, text: bar.textContent?.replace(/\s+/g, " ").trim() ?? "", targets, desktopBars: document.querySelectorAll("header.bar, [data-project-bar]").length };
-      });
-      await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}.png`), clip: { x: 0, y: 0, width: 390, height: 120 } });
-      must(near(phoneBar.h, 52, 0.5), `${tag}: the phone bar is ${phoneBar.h}px tall`);
-      must(phoneBar.desktopBars === 0, `${tag}: ${phoneBar.desktopBars} desktop bars render on the phone`);
-      must(/[1-9]/.test(phoneBar.text), `${tag}: the phone bar shows no waiting count («${phoneBar.text}»)`);
-      must(phoneBar.targets.every((target) => target.h >= 44 && target.w >= 44), `${tag}: a phone bar target is under 44 px`);
-      await page.click('[data-mobile2-bar] [data-mobile2-open="menu"]');
-      await page.waitForSelector('[data-mobile2-sheet="menu"]');
-      await page.waitForTimeout(400);
-      const rows = await page.evaluate(() => [...document.querySelectorAll("[data-mobile2-menu-row]")].map((row) => row.getAttribute("data-mobile2-menu-row")));
-      await page.screenshot({ path: path.join(OUT_DIR, `header-${tag}-menu.png`), fullPage: false });
-      must(!rows.includes("undo") && !rows.includes("redo"), `${tag}: the phone menu still has ${rows.join(", ")}`);
-      report[tag] = { ...phoneBar, menuRows: rows };
-      await phone.close();
+      try {
+        await phone.addInitScript(seedInit);
+        await phone.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
+        const page = await phone.newPage();
+        await page.route("**/api/operator/settings*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, locale: { value: lang, source: "chosen" }, timeZone: null }) }));
+        await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+        await page.waitForSelector("[data-mobile2-bar]", { timeout: 120_000 });
+        await page.waitForTimeout(2_500);
+        const phoneBar = await page.evaluate(() => {
+          const bar = document.querySelector("[data-mobile2-bar]")!;
+          const box = bar.getBoundingClientRect();
+          const targets = [...bar.querySelectorAll("button")].map((button) => { const r = button.getBoundingClientRect(); return { x: r.x, w: r.width, h: r.height }; }).filter((r) => r.w > 0);
+          return { h: box.height, w: box.width, text: bar.textContent?.replace(/\s+/g, " ").trim() ?? "", targets, desktopBars: document.querySelectorAll("header.bar, [data-project-bar]").length };
+        });
+        await page.screenshot({ path: path.join(frames, `header-${tag}.png`), clip: { x: 0, y: 0, width: 390, height: 120 } });
+        must(near(phoneBar.h, 52, 0.5), `${tag}: the phone bar is ${phoneBar.h}px tall`);
+        must(phoneBar.desktopBars === 0, `${tag}: ${phoneBar.desktopBars} desktop bars render on the phone`);
+        must(/[1-9]/.test(phoneBar.text), `${tag}: the phone bar shows no waiting count («${phoneBar.text}»)`);
+        must(phoneBar.targets.every((target) => target.h >= 44 && target.w >= 44), `${tag}: a phone bar target is under 44 px`);
+        await page.click('[data-mobile2-bar] [data-mobile2-open="menu"]');
+        await page.waitForSelector('[data-mobile2-sheet="menu"]');
+        await page.waitForTimeout(400);
+        const rows = await page.evaluate(() => [...document.querySelectorAll("[data-mobile2-menu-row]")].map((item) => item.getAttribute("data-mobile2-menu-row")));
+        await page.screenshot({ path: path.join(frames, `header-${tag}-menu.png`), fullPage: false });
+        must(!rows.includes("undo") && !rows.includes("redo"), `${tag}: the phone menu still has ${rows.join(", ")}`);
+        report[tag] = { ...phoneBar, menuRows: rows };
+      } catch (error) {
+        must(false, `${tag}: ${String(error)}`);
+      } finally {
+        await phone.close().catch(() => {});
+      }
     }
   } finally {
     if (browser) await browser.close().catch(() => {});
     await stop(server);
     for (const holder of holders) holder.kill("SIGTERM");
   }
-  report.failures = failures;
-  fs.writeFileSync(path.join(OUT_DIR, "header.json"), JSON.stringify(report, null, 2) + "\n", "utf8");
-  console.log(`header measurements: ${path.join(OUT_DIR, "header.json")}`);
+  /* A part of the matrix adds its frames to the record the other parts wrote. */
+  const file = path.join(frames, "header.json");
+  const earlier = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as { commit?: string; frames?: Record<string, unknown>; failures?: string[] } : {};
+  const same = earlier.commit === captureCommit();
+  const kept = same ? (earlier.failures ?? []).filter((failure) => !Object.keys(report).some((tag) => failure.startsWith(`${tag}:`) || failure.startsWith(`${tag} `))) : [];
+  const record = { commit: captureCommit(), frames: { ...(same ? earlier.frames : {}), ...report }, failures: [...kept, ...failures] };
+  fs.writeFileSync(file, JSON.stringify(record, null, 2) + "\n", "utf8");
+  console.log(`header measurements: ${file}`);
   if (failures.length) {
     process.exitCode = 1;
     console.error(`board header acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
   } else {
-    console.log("board header acceptance passed at 2540, 1850 and 1280 (en, uk; light, dark; Tasks closed and open; a 21-character project name) and 390 (en, uk; light, dark).");
+    console.log(`board header acceptance passed at ${widths.join(", ")} (en, uk; light, dark; the needs-you panel closed and docked; Tasks closed and open; a 21-character project name)${withPhone ? " and 390 (en, uk; light, dark)" : ""}.`);
   }
 }
 
@@ -3532,6 +3750,7 @@ async function accountRemovalMain(): Promise<void> {
  * 1440 × 900 and 390 × 844, en and uk, light and dark.
  */
 async function claudeLoginMain(): Promise<void> {
+  process.env.CLAUDE_CODE_TMPDIR = process.env.TMPDIR;
   const { tasks, reviewers } = seedHome();
   const failures: string[] = [];
   const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
@@ -3566,33 +3785,51 @@ async function claudeLoginMain(): Promise<void> {
       const context = await browser.newContext({ viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 900 }, hasTouch: phone, colorScheme, reducedMotion: "reduce" });
       await context.addInitScript(seedInit);
       await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), lang);
-      let phase: "awaiting_code" | "timed_out" = "awaiting_code";
+      let phase: "awaiting_code" | "timed_out" | "verifying" | "authenticated" = "awaiting_code";
+      let accountId = "";
+      let limitsReads = 0;
+      let successfulReads = 0;
       let polls = 0;
       /* A poll still in flight when the context closes is dropped, not raised. */
       await context.route("**/api/accounts", async (route) => {
         try {
           const response = await route.fetch();
-          const body = await response.json() as { claude?: { accounts?: { label?: string; login?: unknown; loginPending?: boolean; authPresent?: boolean; authHealth?: string }[] } };
+          const body = await response.json() as { claude?: { active?: string; accounts?: { id: string; label?: string; login?: unknown; loginPending?: boolean; authPresent?: boolean; authHealth?: string; auth?: unknown; limits?: unknown }[] } };
           const row = body.claude?.accounts?.find((account) => account.label === "Account B");
           if (row) {
             polls += 1;
             /* Signed out, as an account is when the operator signs it in. */
-            row.authPresent = false;
-            row.authHealth = "signed_out";
-            row.loginPending = phase === "awaiting_code";
+            accountId = row.id;
+            body.claude!.active = row.id;
+            const signedIn = phase === "authenticated";
+            if (signedIn) successfulReads += 1;
+            row.authPresent = phase === "verifying" || signedIn;
+            row.authHealth = signedIn ? "authenticated" : phase === "verifying" ? "error" : "signed_out";
+            row.auth = { state: row.authHealth, plan: signedIn ? "max" : null };
+            row.limits = signedIn ? { state: "fresh", session: { usedPercent: 7, observedAt: Math.floor(Date.now() / 1000) }, weekly: { usedPercent: 31, observedAt: Math.floor(Date.now() / 1000) }, checkedAt: new Date().toISOString() } : null;
+            row.loginPending = phase === "awaiting_code" || phase === "verifying";
             row.login = {
-              operationId: "fixture-claude-login",
+              operationId: phase === "verifying" || phase === "authenticated" ? "fixture-claude-retry" : "fixture-claude-login",
               phase,
               loginUrl: phase === "awaiting_code" ? "https://claude.ai/oauth/authorize?state=fixture" : null,
               acceptsCode: phase === "awaiting_code",
               deadlineAt: new Date(Date.now() + 9 * 60_000).toISOString(),
-              result: phase === "timed_out" ? { status: "failure", code: "timed_out", message: "Claude login timed out" } : null,
+              result: phase === "timed_out" ? { status: "failure", code: "timed_out", message: "Claude login timed out" } : phase === "authenticated" ? { status: "success", code: "authenticated", message: "Claude authentication completed" } : null,
             };
           }
           await route.fulfill({ response, json: body });
         } catch {
           /* the context is gone */
         }
+      });
+      await context.route("**/api/accounts/claude", async (route) => {
+        phase = "verifying";
+        await route.fulfill({ status: 202, json: { login: { operationId: "fixture-claude-retry", phase: "verifying", loginUrl: null, acceptsCode: false, deadlineAt: new Date(Date.now() + 60_000).toISOString(), result: null } } });
+      });
+      await context.route("**/api/limits", async (route) => {
+        limitsReads += 1;
+        await route.fulfill({ json: { claudeAccountId: accountId, claude: phase === "authenticated" ? { plan: "max", session: { usedPercent: 7 }, weekly: { usedPercent: 31 } } : null,
+          codex: null, provenance: { claude: { source: "live", reason: null, staleSince: null } } } });
       });
       const page = await context.newPage();
       await page.goto(`${baseUrl}/#p=${encodeURIComponent(project)}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
@@ -3676,7 +3913,72 @@ async function claudeLoginMain(): Promise<void> {
       must(expired.shown, `${tag}: the timed-out row does not say «${expiredText}»`);
       must(expired.retry === translate(lang, "accounts.retry"), `${tag}: the timed-out row offers ${JSON.stringify(expired.retry)}`);
       await shoot("expired");
-      report[tag] = { polls: polls - pollsBefore, held, expired };
+      const cardSelector = phone ? `[data-mobile2-account="${accountId}"]` : `[data-account-row="${accountId}"]`;
+      await page.locator(cardSelector).getByRole("button", { name: translate(lang, "accounts.retry"), exact: true }).click();
+      await page.waitForFunction(({ selector, text }) => document.querySelector(selector)?.textContent?.includes(text), { selector: cardSelector, text: translate(lang, "accounts.claudeLogin.verifying") });
+      const measureCard = () => page.evaluate(({ selector, retryText }) => {
+        const card = document.querySelector(selector);
+        const panel = card?.closest('[role="dialog"]') ?? card?.closest("[data-mobile2-accounts]");
+        const footer = document.querySelector(`[data-engine-limits="claude"] [data-footer-account="${card?.getAttribute("data-account-row") ?? card?.getAttribute("data-mobile2-account")}"]`);
+        const box = (element: Element | null | undefined) => { const r = element?.getBoundingClientRect(); return r ? { x: r.x, y: r.y, w: r.width, h: r.height } : null; };
+        return { text: card?.textContent?.replace(/\s+/g, " ").trim() ?? "", badgeText: [...(card?.querySelectorAll("span.rounded-full") ?? [])].map((badge) => badge.textContent?.trim() ?? ""),
+          limitRows: card?.querySelectorAll("[data-limit-row]").length ?? 0,
+          rowFit: [...(card?.querySelectorAll("[data-limit-row]") ?? [])].map((row) => {
+            const label = row.querySelector("dt");
+            const bar = row.querySelector('span[aria-hidden="true"], [role="meter"]');
+            const range = document.createRange();
+            if (label) range.selectNodeContents(label);
+            return { label: label?.textContent?.trim() ?? "", labelOverflow: label ? label.scrollWidth > label.clientWidth + 1 : false,
+              gap: label && bar ? bar.getBoundingClientRect().left - range.getBoundingClientRect().right : null,
+              clipped: [...row.querySelectorAll("*")].filter((element) => element.scrollWidth > element.clientWidth + 1 && getComputedStyle(element).overflowX !== "visible").map((element) => element.textContent?.trim() ?? ""),
+              text: row.textContent?.replace(/\s+/g, " ").trim() ?? "" };
+          }),
+          weeklyFigures: (card?.textContent?.match(/69%/g) ?? []).length,
+          retry: [...(card?.querySelectorAll("button") ?? [])].some((button) => button.textContent?.trim() === retryText),
+          targets: [...(card?.querySelectorAll("button, a[href]") ?? [])].map((element) => ({ text: element.textContent?.trim(), box: box(element)! })),
+          card: box(card), panel: box(panel), footer: box(footer), footerText: footer?.textContent?.replace(/\s+/g, " ").trim() ?? null,
+          overflow: card ? card.scrollWidth > card.clientWidth + 1 : true };
+      }, { selector: cardSelector, retryText: translate(lang, "accounts.retry") });
+      await page.locator(cardSelector).scrollIntoViewIfNeeded();
+      const before = await measureCard();
+      must(!before.text.includes(translate(lang, "accounts.auth.error")), `${tag}: verifying still shows the old auth error`);
+      must(!before.text.includes(translate(lang, "limits.noDataYet")), `${tag}: verifying still says no data next to a running verification`);
+      must(before.text.includes(translate(lang, "accounts.claudeLogin.verifying")), `${tag}: verifying line absent`);
+      await shoot("verifying");
+      const readsBeforeSuccess = polls;
+      const limitsBeforeSuccess = limitsReads;
+      phase = "authenticated";
+      await page.waitForFunction((selector) => document.querySelector(selector)?.querySelectorAll("[data-limit-row]").length === 2, cardSelector, { timeout: 5_000 });
+      if (!phone) await page.waitForFunction((id) => document.querySelector(`[data-engine-limits="claude"] [data-footer-account="${id}"] [data-meter-value]`)?.textContent?.includes("69%"), accountId, { timeout: 5_000 });
+      await page.locator(cardSelector).scrollIntoViewIfNeeded();
+      const after = await measureCard();
+      must(after.limitRows === 2 && !after.retry, `${tag}: success did not replace Retry with both windows`);
+      must(!after.text.includes(translate(lang, "limits.noDataYet")), `${tag}: success still says no data`);
+      must(!after.text.includes(translate(lang, "accounts.auth.error")), `${tag}: success still carries auth error`);
+      must(after.text.includes(translate(lang, phone ? "accounts.active" : "accounts.auth.authenticated")), `${tag}: success badge absent`);
+      must(polls - readsBeforeSuccess >= 1 && successfulReads >= 1, `${tag}: success arrived without an accounts poll`);
+      if (!phone) must(limitsReads > limitsBeforeSuccess, `${tag}: footer did not re-read limits at success`);
+      must(!phone || after.weeklyFigures === 1, `${tag}: the weekly figure is stated ${after.weeklyFigures} times on the card`);
+      for (const [name, measured] of [["before", before], ["after", after]] as const) {
+        must(!measured.overflow, `${tag} ${name}: card overflows horizontally`);
+        for (const row of measured.rowFit) {
+          must(!row.labelOverflow, `${tag} ${name}: «${row.label}» overflows its label column`);
+          must(phone || row.gap === null || row.gap >= 4, `${tag} ${name}: «${row.label}» touches its bar (gap ${row.gap})`);
+          must(row.clipped.length === 0, `${tag} ${name}: «${row.label}» row cuts ${JSON.stringify(row.clipped)}`);
+        }
+        if (measured.card && measured.panel) must(measured.card.x >= measured.panel.x - 1 && measured.card.x + measured.card.w <= measured.panel.x + measured.panel.w + 1 && measured.card.y >= measured.panel.y - 1 && measured.card.y + measured.card.h <= measured.panel.y + measured.panel.h + 1, `${tag} ${name}: card clipped by panel`);
+        for (const target of measured.targets) {
+          must(target.box.w > 0 && target.box.h > 0, `${tag} ${name}: zero-sized control`);
+          if (measured.panel) must(target.box.x >= measured.panel.x - 1 && target.box.x + target.box.w <= measured.panel.x + measured.panel.w + 1
+            && target.box.y >= Math.max(0, measured.panel.y) - 1 && target.box.y + target.box.h <= Math.min(phone ? 844 : 900, measured.panel.y + measured.panel.h) + 1, `${tag} ${name}: control clipped by the visible panel`);
+          if (phone) must(target.box.h >= 44, `${tag} ${name}: phone target under 44 px`);
+        }
+      }
+      await shoot("authenticated");
+      if (!phone) await page.screenshot({ path: path.join(OUT_DIR, `claude-login-${tag}-authenticated-footer.png`), fullPage: false });
+      report[tag] = { polls: polls - pollsBefore, held, expired, before, after,
+        successAccountReads: polls - readsBeforeSuccess, successLimitsReads: limitsReads - limitsBeforeSuccess,
+        phoneFooter: phone ? "The phone has no sidebar footer; the active card carries its weekly summary." : null };
       await context.close();
     }
   } finally {

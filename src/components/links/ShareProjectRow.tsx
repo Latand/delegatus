@@ -38,5 +38,5 @@ export function ShareProjectRow({ project, variant }: { project: string; variant
   return <><ProjectSettingRow label={t("links.shareProject")} hint={failed ? t("links.shareFailed") : eligible ? t(enabled ? "links.shareOn" : "links.shareOff") : t("links.cannotShare")}
     enabled={enabled} disabled={!view || !eligible || saving || view.shared.all} failed={failed} variant={variant}
     rowProps={{ "data-share-project": enabled ? "on" : "off" }} switchProps={{ "data-share-project-switch": "", onClick: () => void toggle() }} />
-    {failed && !view ? <button type="button" className="px-2 text-left text-ui text-accent" onClick={() => setRetry((value) => value + 1)}>{t("links.retryShare")}</button> : null}</>;
+    {failed && !view ? <button type="button" className={`${variant === "sheet" ? "px-4" : "px-2"} text-left text-ui text-accent`} onClick={() => setRetry((value) => value + 1)}>{t("links.retryShare")}</button> : null}</>;
 }

@@ -60,6 +60,17 @@ export const BRIDGE_ANSWERED_REF_CAPACITY = 500;
 export const BRIDGE_ASK_TTL_SECONDS = 2 * 3600;
 /** §3: report bodies are bounded. Measured in UTF-8 bytes, not code units. */
 export const BRIDGE_REPORT_BODY_MAX_BYTES = 2_048;
+/** The whole report the voice relays, summary and items together, in UTF-8 bytes. */
+export const BRIDGE_REPORT_COMPLETE_MAX_BYTES = 8_192;
+
+/** Every item the seat filed, scrubbed of private information but not cut for
+    display. Kept only when the displayed body left something out, so the voice
+    can relay the report whole. A report past its bound is refused, never
+    shortened. */
+export interface BridgeReportCompleteV1 {
+  summary: string;
+  sections: Array<{ heading: string; items: string[] }>;
+}
 
 /**
  * The fixed, small set of things the manager may tell the gateway. Deliberately
@@ -179,8 +190,14 @@ export interface BridgeReportV1 {
   targetSeatConversationId?: string | null;
   /** `clientRequestId` of the directive this answers, when it answers one. */
   correlatesDirective?: string;
+  /** The seat's own word on the correlated directive: true when this report
+      answers it in full, false for progress, a partial answer or a question
+      back. Absent, the class decides. */
+  answersDirective?: boolean;
   /** Bounded and secret-redacted at write. Transcript payloads never reach it. */
   body: string;
+  /** The uncut report, present only when `body` shows less than the seat filed. */
+  complete?: BridgeReportCompleteV1;
   /** Set on the gap notice the drain synthesizes when the log outran a cursor
       (§7.12). Synthetic rows are never stored — they exist for one batch. */
   synthetic?: true;
@@ -194,6 +211,23 @@ export interface BridgeReportV1 {
   /** The Telegram copy of a manager report, rendered once beside the body
       from the same cut report, and what became of posting it (§5.5). */
   telegram?: BridgeReportTelegram;
+  /** A manager report that tells of a finished outcome the operator
+      acknowledges in «Готово» (docs/design/done-section.md §2.3), with the
+      report's own summary as it was stored. Only the designated orchestrator's
+      rows carry it; the body and the Telegram copy are unchanged by it. */
+  outcome?: BridgeReportOutcome;
+}
+
+export const BRIDGE_REPORT_OUTCOME_KINDS = ["incident", "publication"] as const;
+export type BridgeReportOutcomeKind = typeof BRIDGE_REPORT_OUTCOME_KINDS[number];
+
+export interface BridgeReportOutcome {
+  kind: BridgeReportOutcomeKind;
+  summary: string;
+}
+
+export function isBridgeReportOutcomeKind(value: unknown): value is BridgeReportOutcomeKind {
+  return typeof value === "string" && (BRIDGE_REPORT_OUTCOME_KINDS as readonly string[]).includes(value);
 }
 
 export type BridgeReportTelegramState = "pending" | "sent" | "failed" | "uncertain";
@@ -225,8 +259,11 @@ export interface BridgeReportInput {
   project?: string | null;
   targetSeatConversationId?: string | null;
   correlatesDirective?: string | null;
+  answersDirective?: boolean | null;
   /** Raw candidate text; bounded and redacted before it is stored. */
   body?: string | null;
+  /** The uncut report beside a body that left items out; redacted before it is stored. */
+  complete?: BridgeReportCompleteV1 | null;
   /** Keys of further outcomes this report speaks for, scoped by `project`
       before they are stored. */
   covers?: readonly string[] | null;
@@ -234,6 +271,8 @@ export interface BridgeReportInput {
   coversOwed?: boolean;
   /** The Telegram copy to keep beside the row, when the project has a chat. */
   telegram?: { chat: string; html: string; topicId?: number } | null;
+  /** Kept only beside a manager row; the binding drops it for every other origin. */
+  outcome?: BridgeReportOutcome | null;
 }
 
 export interface BridgeReportLogV1 {

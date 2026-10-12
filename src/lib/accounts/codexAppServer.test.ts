@@ -81,6 +81,11 @@ function requestId(message: Record<string, unknown>): number {
   return message.id as number;
 }
 
+function signalFakeGroup(): never {
+  // Route lifecycle signals to FakeChild.kill.
+  throw new Error("fake process group is absent");
+}
+
 function clientWith(handler: (child: FakeChild, message: Record<string, unknown>) => void): {
   child: FakeChild;
   start: (options?: Partial<CodexAppServerOptions>) => Promise<CodexAppServerClient>;
@@ -89,9 +94,20 @@ function clientWith(handler: (child: FakeChild, message: Record<string, unknown>
   child.onWrite = (message) => handler(child, message);
   return {
     child,
-    start: (options = {}) => CodexAppServerClient.start({ ...options, home: "/fake/home", spawn: () => child as never }),
+    start: (options = {}) => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", signalProcess: signalFakeGroup, ...options, home: "/fake/home", spawn: () => child as never }),
   };
 }
+
+test("an unsupported executable is refused before spawning an account app-server", async () => {
+  let spawned = false;
+  await expect(CodexAppServerClient.start({
+    home: "/fake/home",
+    readProtocolVersion: () => "0.999.0",
+    signalProcess: signalFakeGroup,
+    spawn: () => { spawned = true; return new FakeChild() as never; },
+  })).rejects.toThrow("has no pinned schema");
+  expect(spawned).toBe(false);
+});
 
 test("account-management app-server retains zero-MCP process isolation", async () => {
   const child = new FakeChild();
@@ -100,7 +116,9 @@ test("account-management app-server retains zero-MCP process isolation", async (
   };
   let spawnArgs: unknown;
   const client = await CodexAppServerClient.start({
+    readProtocolVersion: () => "0.162.1",
     home: "/managed/home",
+    signalProcess: signalFakeGroup,
     spawn: (...args: unknown[]) => {
       spawnArgs = args[1];
       return child as never;
@@ -114,17 +132,20 @@ test("account-management app-server retains zero-MCP process isolation", async (
     "mcp_servers={}",
     "app-server",
   ]);
+  expect(JSON.parse(child.writes[0]!).params.capabilities).toEqual({ experimentalApi: false });
   client.close();
 });
 
-test("a caller can choose app-server arguments and send experimental requests", async () => {
+test.each(["0.154.0", "0.159.0", "0.162.1"])("a voice caller can choose app-server arguments and send experimental requests (%s)", async version => {
   const child = new FakeChild();
   child.onWrite = message => { if (message.id) child.respond(requestId(message), {}); };
   let args: readonly string[] = [];
   const client = await CodexAppServerClient.start({ home: "/managed/home", args: ["--enable", "realtime_conversation", "app-server"],
+    protocolProfile: "voice", readProtocolVersion: () => version, signalProcess: signalFakeGroup,
     spawn: (_home, passed) => { args = passed; return child as never; } });
   try {
     expect(args).toEqual(["--enable", "realtime_conversation", "app-server"]);
+    expect(JSON.parse(child.writes[0]!).params.capabilities).toEqual({ experimentalApi: true });
     expect(await client.request("thread/realtime/stop", { threadId: "fixture" })).toEqual({});
   } finally { client.close(); }
 });
@@ -162,13 +183,13 @@ test("headerless app-server responses, notifications, and requests keep the clie
   const client = await start();
   const notifications: string[] = [];
   client.onNotification((message) => notifications.push(message.method));
-  client.onRequest(() => ({ accepted: true }));
+  client.onRequest(() => ({ answers: {} }));
   child.output('{"method":"account/rateLimits/updated","params":{}}\n');
   child.output('{"id":"request-1","method":"item/tool/requestUserInput","params":{}}\n');
   await expect(client.readAccount()).resolves.toEqual({ account: { type: "chatgpt" }, requiresOpenaiAuth: true });
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(notifications).toEqual(["account/rateLimits/updated"]);
-  expect(JSON.parse(child.writes.at(-1)!)).toEqual({ jsonrpc: "2.0", id: "request-1", result: { accepted: true } });
+  expect(JSON.parse(child.writes.at(-1)!)).toEqual({ jsonrpc: "2.0", id: "request-1", result: { answers: {} } });
   client.close();
 });
 
@@ -192,14 +213,18 @@ test("out-of-order responses stay attached to their request ids", async () => {
   client.close();
 });
 
-test("response ids require an exact numeric correlation and duplicate replies fail the transport", async () => {
+test("response ids require exact correlation while unknown and duplicate replies are quarantined", async () => {
   const mismatched = clientWith((fake, message) => {
     if (message.method === "initialize") fake.respond(requestId(message), {});
-    if (message.method === "account/read") fake.output(JSON.stringify({ id: String(requestId(message)), result: {} }) + "\n");
+    if (message.method === "account/read") {
+      fake.output(JSON.stringify({ id: String(requestId(message)), result: { account: { type: "wrong-id" }, requiresOpenaiAuth: false } }) + "\n");
+      fake.respond(requestId(message), { account: null, requiresOpenaiAuth: true });
+    }
   });
   const first = await mismatched.start();
-  await expect(first.readAccount()).rejects.toThrow("response has an invalid id");
-  expect(mismatched.child.signals).toContain("SIGTERM");
+  await expect(first.readAccount()).resolves.toEqual({ account: null, requiresOpenaiAuth: true });
+  expect(mismatched.child.signals).toEqual([]);
+  first.close();
 
   const duplicate = clientWith((fake, message) => {
     if (message.method === "initialize") fake.respond(requestId(message), {});
@@ -211,7 +236,9 @@ test("response ids require an exact numeric correlation and duplicate replies fa
   });
   const second = await duplicate.start();
   await expect(second.readAccount()).resolves.toEqual({ account: null, requiresOpenaiAuth: true });
-  expect(duplicate.child.signals).toContain("SIGTERM");
+  expect(duplicate.child.signals).toEqual([]);
+  await expect(second.readAccount()).resolves.toEqual({ account: null, requiresOpenaiAuth: true });
+  second.close();
 });
 
 test("device-code login validates official challenge fields and forwards completion notifications safely", async () => {
@@ -241,7 +268,7 @@ test("successor thread methods use the structured fork, resume, read, name, and 
     else if (message.method === "thread/read") fake.respond(requestId(message), { thread: { id: "fork-1", path: "/target/fork-1.jsonl" } });
     else fake.respond(requestId(message), {});
   });
-  const client = await start();
+  const client = await start({ protocolProfile: "thread-control" });
   await expect(client.forkThread("source-1")).resolves.toEqual({ id: "fork-1", path: "/source/fork-1.jsonl" });
   await expect(client.resumeThread("fork-1", { path: "/target/fork-1.jsonl", cwd: "/repo", model: "gpt-5.6-terra", effort: "high", fast: true, serviceTier: "ultrafast", approvalPolicy: "never", sandbox: "read-only" }))
     .resolves.toEqual({ id: "fork-1", path: null });
@@ -312,6 +339,7 @@ test("a child exit rejects an in-flight request and reaps the child", async () =
   const clock = new FakeClock();
   const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
   const client = await CodexAppServerClient.start({
+    readProtocolVersion: () => "0.162.1",
     home: "/fake/home",
     spawn: () => child as never,
     clock,
@@ -367,11 +395,11 @@ test("structured server requests receive a response and leave the app-server tra
   const client = await start();
   client.onRequest((request) => {
     expect(request.method).toBe("item/tool/requestUserInput");
-    return { answers: { size: "small" } };
+    return { answers: { size: { answers: ["small"] } } };
   });
   child.output('{"jsonrpc":"2.0","id":77,"method":"item/tool/requestUserInput","params":{"questions":[]}}\n');
   await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(JSON.parse(child.writes.at(-1)!)).toEqual({ jsonrpc: "2.0", id: 77, result: { answers: { size: "small" } } });
+  expect(JSON.parse(child.writes.at(-1)!)).toEqual({ jsonrpc: "2.0", id: 77, result: { answers: { size: { answers: ["small"] } } } });
   await expect(client.readAccount()).resolves.toEqual({ account: null, requiresOpenaiAuth: true });
   client.close();
 });
@@ -382,7 +410,7 @@ test("an ambiguous request timeout closes the transport and ignores later bytes"
   child.onWrite = (message) => {
     if (message.method === "initialize") child.respond(requestId(message), {});
   };
-  const client = await CodexAppServerClient.start({ home: "/fake/home", spawn: () => child as never, clock, requestTimeoutMs: 1, shutdownGraceMs: 1 });
+  const client = await CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", signalProcess: signalFakeGroup, home: "/fake/home", spawn: () => child as never, clock, requestTimeoutMs: 1, shutdownGraceMs: 1 });
   const seen: string[] = [];
   client.onNotification((notification) => seen.push(notification.method));
   const pending = client.readAccount();
@@ -466,7 +494,7 @@ test("SIGTERM acknowledgement and escalation both end in a reaped child", async 
   const unacknowledged = new FakeChild();
   unacknowledged.onWrite = (message) => { if (message.method === "initialize") unacknowledged.respond(requestId(message), {}); };
   const reaped: string[] = [];
-  const escalating = await CodexAppServerClient.start({ home: "/fake/home", spawn: () => unacknowledged as never, clock, shutdownGraceMs: 1 });
+  const escalating = await CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", signalProcess: signalFakeGroup, home: "/fake/home", spawn: () => unacknowledged as never, clock, shutdownGraceMs: 1 });
   escalating.onLifecycle((event) => { if (event.type === "reaped") reaped.push(event.type); });
   escalating.close();
   clock.runAll();
@@ -483,6 +511,7 @@ test("shutdown escalates the detached process group after its leader exits durin
   const clock = new FakeClock();
   const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
   const client = await CodexAppServerClient.start({
+    readProtocolVersion: () => "0.162.1",
     home: "/fake/home",
     spawn: () => child as never,
     clock,
@@ -512,6 +541,7 @@ test("unexpected leader exit still cleans its detached process group", async () 
   const clock = new FakeClock();
   const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
   await CodexAppServerClient.start({
+    readProtocolVersion: () => "0.162.1",
     home: "/fake/home",
     spawn: () => child as never,
     clock,
@@ -560,6 +590,22 @@ test("account/rateLimits/read carries the reset-credit summary when the app-serv
       ],
     },
   });
+  client.close();
+});
+
+test("account/rateLimits/read says whether the limit is reached even when every window has room", async () => {
+  let reachedType: unknown = "workspace_member_usage_limit_reached";
+  const { start } = clientWith((fake, message) => {
+    if (message.method === "initialize") fake.respond(requestId(message), {});
+    if (message.method === "account/rateLimits/read") fake.respond(requestId(message), { rateLimits: { primary: { usedPercent: 10 }, ...(reachedType === undefined ? {} : { rateLimitReachedType: reachedType }) } });
+  });
+  const client = await start();
+  await expect(client.readRateLimits()).resolves.toMatchObject({ rateLimits: { primary: { usedPercent: 10 } }, limitReached: true });
+  reachedType = null;
+  await expect(client.readRateLimits()).resolves.toMatchObject({ limitReached: false });
+  // An app-server that does not report the marker leaves the question open.
+  reachedType = undefined;
+  expect(await client.readRateLimits()).not.toHaveProperty("limitReached");
   client.close();
 });
 

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { seatComposerBudget } from "@/lib/composerScroll";
+import { cardComposerBudget, seatComposerBudget } from "@/lib/composerScroll";
 
 /** The box a composer's budget is a share of: the conversation it is laid out
     in. The card composer's own `max-height` is written as a percentage, so the
@@ -19,22 +19,45 @@ function conversationBox(node: HTMLElement): HTMLElement | null {
   return parent;
 }
 
-/** The seat's own budget (#1734), for a box inside a surface that grows with
-    its composer. `data-composer-grows` marks that surface and its `max-height`
-    is the height it stops at; `data-composer-yields` marks the transcript that
-    gives room up first. The rows between them that never yield are whatever
-    the box holds besides those two. Growing the surface adds the same px to
+/** The scrollport of the feed inside a transcript, when it is a feed. */
+function readableFeed(transcript: HTMLElement): HTMLElement | null {
+  return transcript.querySelector<HTMLElement>("[data-log-feed-scroller]");
+}
+
+/** The form's budget, from what the box holds (2026-10-11). The transcript —
+    `data-composer-yields` — keeps its floor in the part of the box it shares
+    with the composer: the box below whatever sits above the transcript (a
+    pane's header, a banner), which is chrome of its own. The rows between the
+    transcript and the form, and any after it, never yield, so they come out of
+    the composer's share rather than out of the transcript.
+
+    In a surface that grows with its composer (the orchestrator seat, #1734),
+    `data-composer-grows` marks that surface and its `max-height` is the height
+    it stops at: the budget is what that height leaves, so the seat grows to
+    its stop and keeps the floor there. Growing the surface adds the same px to
     the box and takes them from the room, so the budget stands still while the
-    draft is typed and moves only when the window or the seat's own height do. */
-function growingBudget(box: HTMLElement, form: HTMLElement): number | null {
+    draft is typed and moves only when the window or the seat's own height do.
+
+    What keeps the floor is what the operator reads: the feed's own
+    scrollport. A row the feed holds under it (the turn's status line) never
+    yields either, so it comes out of the composer's share with the others.
+
+    Null where the box holds no transcript to keep a floor for: the card's
+    share of the whole box applies there, from its height alone. */
+function composerBudget(box: HTMLElement, form: HTMLElement, transcript: HTMLElement | null): number | null {
+  if (!transcript) return null;
+  const top = box.getBoundingClientRect().top;
+  const feed = transcript.getBoundingClientRect();
+  const body = box.clientHeight - Math.max(0, feed.top - top);
+  const readable = readableFeed(transcript)?.getBoundingClientRect().height ?? feed.height;
+  const rows = body - readable - form.getBoundingClientRect().height;
   const surface = box.closest<HTMLElement>("[data-composer-grows]");
-  const transcript = surface ? box.querySelector<HTMLElement>("[data-composer-yields]") : null;
-  if (!surface || !transcript) return null;
+  if (!surface) return Math.floor(cardComposerBudget(body, rows));
   const limit = parseFloat(getComputedStyle(surface).maxHeight);
-  return Math.round(seatComposerBudget({
-    boxHeight: box.clientHeight,
+  return Math.floor(seatComposerBudget({
+    boxHeight: body,
     room: Number.isFinite(limit) ? limit - surface.getBoundingClientRect().height : 0,
-    rows: box.clientHeight - form.getBoundingClientRect().height - transcript.getBoundingClientRect().height,
+    rows,
   }));
 }
 
@@ -47,10 +70,11 @@ function growingBudget(box: HTMLElement, form: HTMLElement): number | null {
     reshuffles, a dock hand-over, a dormant view coming back — re-measures the
     box it landed in.
 
-    `budget` is what the form may take where the box is one that grows (the
-    orchestrator seat), and null in a card, whose budget is a share of
-    `height`. The window is read again on resize there, because the room a
-    seat of a fixed height may grow into is a share of the window. */
+    `budget` is what the form may take so the transcript keeps its floor:
+    measured from the box's own rows, and null where the box holds no
+    transcript, whose budget is then a share of `height`. The window is read
+    again on resize, because the room a seat of a fixed height may grow into
+    is a share of the window. */
 export function useComposerBox(active: boolean): { ref: (node: HTMLFormElement | null) => void; height: number; budget: number | null } {
   const [form, setForm] = useState<HTMLElement | null>(null);
   const [measured, setMeasured] = useState<{ height: number; budget: number | null }>({ height: 0, budget: null });
@@ -59,14 +83,27 @@ export function useComposerBox(active: boolean): { ref: (node: HTMLFormElement |
     if (!active || !form || typeof ResizeObserver === "undefined") return;
     const box = conversationBox(form);
     if (!box) return;
+    /* A row that comes or goes beside the composer leaves the box as tall as
+       it was: the transcript is what changed height, so it is observed too —
+       whichever transcript the box holds at the time of the read — and so is
+       its feed, which gives up the room for a row of its own. */
+    let watched: HTMLElement[] = [];
+    const observer = new ResizeObserver(() => read());
     const read = () => {
+      const transcript = box.querySelector<HTMLElement>("[data-composer-yields]");
+      const feed = transcript ? readableFeed(transcript) : null;
+      const next = [transcript, feed].filter((element): element is HTMLElement => element !== null);
+      if (next.length !== watched.length || next.some((element, index) => element !== watched[index])) {
+        for (const element of watched) observer.unobserve(element);
+        for (const element of next) observer.observe(element);
+        watched = next;
+      }
       const height = box.clientHeight;
-      const budget = growingBudget(box, form);
+      const budget = composerBudget(box, form, transcript);
       setMeasured((previous) => (previous.height === height && previous.budget === budget ? previous : { height, budget }));
     };
-    read();
-    const observer = new ResizeObserver(read);
     observer.observe(box);
+    read();
     window.addEventListener("resize", read);
     return () => {
       observer.disconnect();

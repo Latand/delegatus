@@ -3,13 +3,17 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { configFilePath, statePath } from "@/lib/configDir";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
-import type { CompanionEvent, CompanionUsage, Delivery, Locale, Proposal } from "./contract";
+import type { CompanionEvent, CompanionPlan, CompanionUsage, Delivery, Locale, Proposal } from "./contract";
 import type { BackendTokens } from "./usage";
 import type { DelegationCode } from "./delegationOutcome";
 import type { OperatorInput } from "./gate";
 
+/** How a call talks: the OpenAI API, paid by its key, or Codex V3 on a managed
+ * account's subscription. The API is the default. */
+export type CompanionBackend = "api" | "codex";
 export interface CompanionSettings {
   enabled: boolean;
+  backend: CompanionBackend;
   monthlyCapUsd: number;
   keySource: "env" | "file" | "missing";
   keyEnvironment: "OPENAI_API_KEY";
@@ -21,6 +25,8 @@ export interface CompanionSettings {
    * can name; no new voice session starts until the operator releases it. */
   uncertainSession: boolean;
   lastSession?: { usd: number; seconds: number; endedAt: number; incomplete: boolean };
+  /** The latest Codex call that ended: its length and the plan window it left. */
+  lastCodexSession?: { seconds: number; endedAt: number; plan: CompanionPlan | null };
 }
 export interface StoredProposal {
   proposal: Proposal;
@@ -36,23 +42,37 @@ export interface StoredProposal {
   sourceTurn?: number;
   /** The model judged that the operator asked again for a request raised earlier in the call. */
   renewed?: boolean;
+  /** The earlier request, still waiting or answered, that the operator explicitly asked to send once more. */
+  renews?: string;
   /** Why a waiting confirmation ended with nothing sent. */
   cancelCode?: DelegationCode;
   failureCode?: string;
   /** What admitted the send: no confirmation asked, a tap, or the operator's spoken answer. */
   via?: "auto" | "tap" | "speech";
   reports: string[];
+  /** The correlated report that answered this request; until then it awaits its report. */
+  answered?: string;
+  /** The latest correlated report that asked back or named a blocker without answering. */
+  askedBack?: string;
   retargetCount?: number;
   /** Receipt publication survives the bounded event ring. */
   publishedReceipt?: { clientMessageId: string; operationId: string };
 }
 export type SessionStarter = { memberId: string } | { operator: true };
+/** A report owed to the voice. Kept until every part is handed to the provider,
+ * committed with the scan position that found it, so a failed hand-off resumes
+ * at the first part not handed and never repeats one that was. */
+export interface ReportSpeech { reportId: string; project: string; status: string; text: string; parts?: string[]; handed: number;
+  /** The operator asked to hear a report this call already relayed once more. */
+  reread?: boolean }
 export interface StoredSession {
   backend?: "codex";
   startedBy?: SessionStarter;
   currentProject?: string | null;
   reportWatermarks?: Record<string, number>;
   spokenReports?: string[];
+  /** Reports owed to the voice, oldest first. */
+  reportSpeech?: ReportSpeech[];
   endedAt?: number;
   authority?: "live-model";
   providerId?: string;
@@ -68,7 +88,11 @@ export interface StoredSession {
   mintRequestId?: string;
   mintDigest?: string;
   answerSdp?: string;
-  usage?: { seconds: number; codexTokens?: Record<string, number>; responses: Record<string, { usd: number | null; complete: boolean; tokens?: BackendTokens; responseId?: string }> };
+  usage?: { seconds: number; codexTokens?: Record<string, number>; responses: Record<string, { usd: number | null; complete: boolean; tokens?: BackendTokens; responseId?: string }>;
+    /** When the voice started, on this server's clock. */
+    startedAt?: number;
+    /** The paying account's plan as the call last read it, and its primary window's use at the first reading. */
+    plan?: CompanionPlan; planStart?: number };
   id: string;
   project: string;
   locale: Locale;
@@ -83,7 +107,7 @@ export interface StoredSession {
 interface Charge { month: string; usd: number; observedUsd?: number; reserved: boolean; incomplete: boolean }
 export interface CompanionDocument {
   version: 1;
-  settings: Pick<CompanionSettings, "enabled" | "monthlyCapUsd">;
+  settings: Pick<CompanionSettings, "enabled" | "monthlyCapUsd"> & { backend?: CompanionBackend };
   charges: Record<string, Charge>;
   sessions: Record<string, StoredSession>;
 }
@@ -100,6 +124,13 @@ function sessionValid(key: string, session: unknown): boolean {
     || !Array.isArray(session.events) || session.events.length > 512 || !record(session.proposals)) return false;
   if (session.authority !== undefined && session.authority !== "live-model") return false;
   if (session.backend !== undefined && session.backend !== "codex") return false;
+  const window = (row: unknown) => row === null || (record(row) && typeof row.usedPercent === "number" && row.usedPercent >= 0 && row.usedPercent <= 100
+    && (row.resetsAt === null || Number.isSafeInteger(row.resetsAt)) && (row.windowMinutes === null || Number.isSafeInteger(row.windowMinutes)));
+  if (record(session.usage) && ((session.usage.startedAt !== undefined && !Number.isFinite(session.usage.startedAt))
+    || (session.usage.planStart !== undefined && (typeof session.usage.planStart !== "number" || session.usage.planStart < 0 || session.usage.planStart > 100))
+    || (session.usage.plan !== undefined && (!record(session.usage.plan) || !(session.usage.plan.type === null || identifier(session.usage.plan.type))
+      || !window(session.usage.plan.primary) || !window(session.usage.plan.secondary) || typeof session.usage.plan.limitReached !== "boolean"
+      || !Number.isFinite(session.usage.plan.observedAt))))) return false;
   if (record(session.usage) && session.usage.codexTokens !== undefined && (!record(session.usage.codexTokens)
     || Object.values(session.usage.codexTokens).some(n => !Number.isSafeInteger(n) || (n as number) < 0))) return false;
   if (session.currentProject !== undefined && session.currentProject !== null && !identifier(session.currentProject)) return false;
@@ -132,6 +163,7 @@ function sessionValid(key: string, session: unknown): boolean {
       || !recipientValid(held.proposal.recipient)
       || typeof held.sourceText !== "string" || !Number.isFinite(held.expiresAt) || !["pending", "cancelled", "admitted"].includes(held.state as string)
       || !Array.isArray(held.reports) || !held.reports.every(identifier)
+      || (held.answered !== undefined && (!identifier(held.answered) || !held.reports.includes(held.answered)))
       || (held.renewed !== undefined && typeof held.renewed !== "boolean")
       || (held.retargetCount !== undefined && (!Number.isSafeInteger(held.retargetCount) || (held.retargetCount as number) < 0 || (held.retargetCount as number) > 1))
       || (held.publishedReceipt !== undefined && (!record(held.publishedReceipt)
@@ -174,15 +206,14 @@ export class CompanionStorage {
           || !/^\d{4}-\d{2}$/.test(charge.month) || typeof charge.reserved !== "boolean" || typeof charge.incomplete !== "boolean"
           || (charge.observedUsd !== undefined && (!Number.isFinite(charge.observedUsd) || charge.observedUsd < 0 || charge.observedUsd > charge.usd)))
         || Object.entries(value.sessions).some(([key, session]) => !sessionValid(key, session))) throw new Error("invalid state");
-      /* Earlier builds stored a backend: the real voice, or a scripted demo the product no longer has. A stored
-         demo reads as off, so turning the companion on is the operator's own choice of the real voice; the next
-         write leaves the field out. */
-      const legacy = value.settings as typeof value.settings & { backend?: unknown };
-      if (legacy.backend !== undefined) {
-        if (legacy.backend !== "official-realtime" && legacy.backend !== "demo") throw new Error("invalid state");
-        if (legacy.backend === "demo") legacy.enabled = false;
-        delete legacy.backend;
-      }
+      /* Earlier builds stored a backend: the real voice, or a scripted demo the product no longer has. The real
+         voice was the API one. A stored demo reads as off, so turning the companion on is the operator's own
+         choice of a real voice. */
+      const stored = value.settings as Omit<typeof value.settings, "backend"> & { backend?: unknown };
+      if (stored.backend === "official-realtime" || stored.backend === "demo") {
+        if (stored.backend === "demo") stored.enabled = false;
+        stored.backend = "api";
+      } else if (stored.backend !== undefined && stored.backend !== "api" && stored.backend !== "codex") throw new Error("invalid state");
       return value;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return empty();
@@ -203,26 +234,38 @@ export class CompanionStorage {
     const document = this.read();
     const month = new Date(this.now()).toISOString().slice(0, 7);
     const charges = Object.values(document.charges).filter(charge => charge.month === month);
-    const last = Object.values(document.sessions).filter(session => session.closed && document.charges[session.id])
-      .map(session => ({ session, endedAt: session.endedAt ?? (() => {
-        const closed = session.events.findLast(event => event.type === "session.closed");
-        return closed ? session.createdAt + closed.atMs : undefined;
-      })() })).filter((row): row is { session: StoredSession; endedAt: number } => row.endedAt !== undefined)
-      .sort((a, b) => b.endedAt - a.endedAt)[0];
+    const ended = (session: StoredSession) => session.endedAt ?? (() => {
+      const closed = session.events.findLast(event => event.type === "session.closed");
+      return closed ? session.createdAt + closed.atMs : undefined;
+    })();
+    const latest = (sessions: StoredSession[]) => sessions.map(session => ({ session, endedAt: ended(session) }))
+      .filter((row): row is { session: StoredSession; endedAt: number } => row.endedAt !== undefined).sort((a, b) => b.endedAt - a.endedAt)[0];
+    const last = latest(Object.values(document.sessions).filter(session => session.closed && session.backend !== "codex" && document.charges[session.id]));
+    const lastCodex = latest(Object.values(document.sessions).filter(session => session.closed && session.backend === "codex"));
     const lastCharge = last ? document.charges[last.session.id] : undefined;
-    return { ...document.settings, keySource: this.keySource(), keyEnvironment: "OPENAI_API_KEY", month,
+    return { ...document.settings, backend: document.settings.backend ?? "api", keySource: this.keySource(), keyEnvironment: "OPENAI_API_KEY", month,
       usageUsd: charges.reduce((sum, charge) => sum + (charge.reserved ? charge.observedUsd ?? 0 : charge.usd), 0),
       reservedUsd: charges.filter(charge => charge.reserved).reduce((sum, charge) => sum + charge.usd - (charge.observedUsd ?? 0), 0),
       incomplete: charges.some(charge => charge.incomplete),
       uncertainSession: Object.values(document.sessions).some(uncertainMint),
       ...(last && lastCharge ? { lastSession: { usd: lastCharge.reserved ? lastCharge.observedUsd ?? 0 : lastCharge.usd,
-        seconds: last.session.usage?.seconds ?? 0, endedAt: last.endedAt, incomplete: lastCharge.reserved || lastCharge.incomplete } } : {}) };
+        seconds: last.session.usage?.seconds ?? 0, endedAt: last.endedAt, incomplete: lastCharge.reserved || lastCharge.incomplete } } : {}),
+      ...(lastCodex ? { lastCodexSession: { seconds: lastCodex.session.usage?.seconds ?? 0, endedAt: lastCodex.endedAt, plan: lastCodex.session.usage?.plan ?? null } } : {}) };
   }
-  /** Observed spend excludes held reservations; settled incomplete spend keeps
-   * its conservative charge and never claims a final provider total. */
+  /** A Codex call: its length on this server's clock and the plan window of
+   * the account it runs on; a call that has ended keeps the length it closed
+   * with. An API call: observed spend, excluding held reservations; settled
+   * incomplete spend keeps its conservative charge and never claims a final
+   * provider total. */
   usageFor(id: string): CompanionUsage {
     const document = this.read();
-    if (!document.sessions[id]) throw new Error("SESSION_UNAVAILABLE");
+    const session = document.sessions[id];
+    if (!session) throw new Error("SESSION_UNAVAILABLE");
+    if (session.backend === "codex") {
+      const usage = session.usage;
+      const running = !session.closed && usage?.startedAt !== undefined ? (this.now() - usage.startedAt) / 1_000 : usage?.seconds ?? 0;
+      return { backend: "codex", callSeconds: Math.max(0, Math.floor(running)), callFinal: session.closed, plan: usage?.plan ?? null, planStartPercent: usage?.planStart ?? null };
+    }
     const charge = document.charges[id];
     const month = new Date(this.now()).toISOString().slice(0, 7);
     return { callUsd: charge ? charge.reserved ? charge.observedUsd ?? 0 : charge.usd : 0,
@@ -250,9 +293,10 @@ export class CompanionStorage {
     });
     return this.settings();
   }
-  updateSettings(update: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd">>): CompanionSettings {
-    if (Object.keys(update).some(key => key !== "enabled" && key !== "monthlyCapUsd")
+  updateSettings(update: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd" | "backend">>): CompanionSettings {
+    if (Object.keys(update).some(key => key !== "enabled" && key !== "monthlyCapUsd" && key !== "backend")
       || (update.enabled !== undefined && typeof update.enabled !== "boolean")
+      || (update.backend !== undefined && update.backend !== "api" && update.backend !== "codex")
       || (update.monthlyCapUsd !== undefined && (!Number.isFinite(update.monthlyCapUsd) || update.monthlyCapUsd < 0 || update.monthlyCapUsd > 10_000))) throw new Error("INVALID_SETTINGS");
     this.change(document => { Object.assign(document.settings, update); });
     return this.settings();

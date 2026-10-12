@@ -116,12 +116,12 @@ test.skipIf(process.platform !== "linux")("a missing CPU mechanism is an explici
 });
 test.skipIf(process.platform !== "linux")("CPU pressure holds a gate visibly, then starts it once after the release window", async () => {
   const f = cpuFixture({ manager: true });
-  writeFileSync(join(f.root, "pressure"), "some avg10=55.00 avg60=40.00 avg300=20.00 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n");
+  writeFileSync(join(f.root, "pressure"), "some avg10=30.00 avg60=40.00 avg300=20.00 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n");
   const child = Bun.spawn(["/bin/bash", join(import.meta.dir, "gate-slot.sh"), "/bin/bash", "-c", f.script],
     { env: { ...f.env, DELEGATUS_CPU_PRESSURE: "on", LLV_GATE_PSI_RELEASE_SECONDS: "1", LLV_GATE_PSI_DEFER_SECONDS: "1" }, stdout: "ignore", stderr: "pipe" });
   await Bun.sleep(1_500);
   expect(Bun.file(f.marker).size).toBe(0);
-  writeFileSync(join(f.root, "pressure"), "some avg10=12.00 avg60=40.00 avg300=20.00 total=1\n");
+  writeFileSync(join(f.root, "pressure"), "some avg10=20.00 avg60=40.00 avg300=20.00 total=1\n");
   await Bun.sleep(1_200);
   expect(Bun.file(f.marker).size).toBe(0); // between the thresholds the hold stays
   writeFileSync(join(f.root, "pressure"), "some avg10=2.00 avg60=30.00 avg300=20.00 total=1\n");

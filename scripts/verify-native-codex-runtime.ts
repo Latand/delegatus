@@ -15,6 +15,8 @@ export type Selection = (typeof SELECTIONS)[number];
    LLV_CODEX_HISTORY_CLI or LLV_CODEX_BINARY. They share one process, as they
    do inside the main batch below. */
 export const engineFiles = [
+  "src/lib/agent/processCleanupPolicy.native.test.ts",
+  "src/lib/agent/operatorQuestionPolicy.native.test.ts",
   "src/lib/runtime/nativeCodexQueue.test.ts",
   "src/lib/runtime/codexHistoryReader.test.ts",
   "src/lib/runtime/nativeQueueCompaction.integration.test.ts",
@@ -29,6 +31,8 @@ export const engineInjectionFiles = [
 ];
 
 export const files = [
+  "src/lib/agent/processCleanupPolicy.native.test.ts",
+  "src/lib/agent/operatorQuestionPolicy.native.test.ts",
   "src/lib/runtime/nativeCodexQueue.test.ts",
   "src/lib/runtime/codexHistoryReader.test.ts",
   "src/lib/runtime/nativeQueueRuntime.test.ts",

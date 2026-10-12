@@ -449,6 +449,53 @@ test("live and ended usage updates arrive even when no new persisted events were
 });
 
 
+test("a Codex call's usage updates carry its length and plan window, and an unchanged reading renders nothing", async () => {
+  const f = fixture();
+  let state = INITIAL_COMPANION_STATE;
+  f.adapter.subscribe(event => { state = reduceCompanion(state, event); });
+  try {
+    await f.adapter.start({ project: "fixture", locale: "en" });
+    const seen = state.seen;
+    const plan = { type: "pro", primary: { usedPercent: 23, resetsAt: 2000000100, windowMinutes: 300 }, secondary: null, limitReached: false, observedAt: 1 };
+    const usage = { backend: "codex" as const, callSeconds: 41, callFinal: false, plan, planStartPercent: 21 };
+    f.usage(usage);
+    await f.adapter.refresh();
+    expect(state.usage).toEqual(usage);
+    expect(state.seen).toBe(seen);
+    const revision = state.revision;
+    f.usage(structuredClone(usage));
+    await f.adapter.refresh();
+    expect(state.revision).toBe(revision);
+    f.usage({ ...usage, callSeconds: 96, callFinal: true });
+    await f.adapter.close();
+    expect(state.usage).toMatchObject({ callSeconds: 96, callFinal: true });
+    expect(state.phase).toBe("offline");
+    f.usage({ ...usage, callSeconds: 96, callFinal: true, plan: { ...plan, primary: { ...plan.primary, usedPercent: 24 } } });
+    await f.adapter.transcript();
+    expect(state.usage).toMatchObject({ callSeconds: 96, callFinal: true, plan: { primary: { usedPercent: 24 } } });
+  } finally { await f.adapter.dispose(); }
+});
+
+test("a start refused at the plan limit names its reset; a call the limit ended says so", async () => {
+  let state = INITIAL_COMPANION_STATE;
+  const media: CompanionMedia = { open: async () => "v=0", answer: async () => {}, mute: () => {}, interrupt: () => {}, close: async () => {} };
+  const refused = new OfficialVoiceCompanionAdapter({ pollMs: 100_000, media: () => media,
+    fetch: (async () => Response.json({ code: "CODEX_LIMIT_REACHED", resetsAt: 2000000100 }, { status: 409 })) as unknown as typeof fetch });
+  refused.subscribe(event => { state = reduceCompanion(state, event); });
+  await expect(refused.start({ project: "fixture", locale: "en" })).rejects.toThrow("CODEX_LIMIT_REACHED");
+  expect([state.error, state.errorResetsAt]).toEqual(["CODEX_LIMIT_REACHED", 2000000100]);
+  await refused.dispose();
+  const f = fixture();
+  state = INITIAL_COMPANION_STATE;
+  f.adapter.subscribe(event => { state = reduceCompanion(state, event); });
+  try {
+    await f.adapter.start({ project: "fixture", locale: "en" });
+    f.push(f.event({ type: "session.closed", reason: "limit" }));
+    await f.adapter.refresh();
+    expect([state.phase, state.error, state.closure]).toEqual(["offline", "CODEX_LIMIT_ENDED", { reason: "limit", incomplete: false }]);
+  } finally { await f.adapter.dispose(); }
+});
+
 test("failed context updates pause input and retry on the same call before another project can receive speech", async () => {
   const f = fixture();
   let state = INITIAL_COMPANION_STATE;

@@ -1454,7 +1454,7 @@ export function defaultPipelinePorts(
       /* The engine's tick is synchronous here: a non-waiting write, and a
          lock held elsewhere answers false, which the next tick asks again
          (docs/design/delivery-progress-and-drain.md, C5). */
-      const failed = registry.failSpawnNow(launchId, reason);
+      const failed = registry.failNeverStartedStageSpawnNow(launchId, conversationId, reason);
       invalidateRegistryProjection();
       return failed;
     },
@@ -4338,7 +4338,48 @@ function afterCommitRepair(attempt: PipelineStageAttempt, reason: string): strin
   for (const asked of [attempt.commitRepair?.detail, attempt.publicationRepair?.detail]) {
     if (asked && !reason.includes(asked)) reason += `\nThe stage was asked once to repair this earlier refusal:\n${asked}`;
   }
-  return reason;
+  const action = "Fix the reported commit/hook failure, then use retry-stage to commit the existing outputs without rerunning the agent.";
+  return (reason.startsWith("committing the passed stage:") || attempt.commitRepair?.outcome?.status === "rejected")
+    && !reason.includes(action) ? `${reason}\n${action}` : reason;
+}
+
+/** A passed turn parked at its commit boundary still owns its produced work.
+    An operator retry settles that work; it must not reset or launch the stage.
+    Recognize older parks too, before the retry instruction was in the error. */
+async function retryPassedStageCommit(pipeline: Pipeline, ports: PipelinePorts): Promise<PipelinePatchResult | null> {
+  const stage = currentStage(pipeline);
+  const attempt = stage && currentAttempt(pipeline, stage.id);
+  if (pipeline.state !== "needs_decision" || pipeline.cursor?.state !== "committing"
+    || !attempt || attempt.verdict?.status !== "pass"
+    || (attempt.commitRepair?.outcome?.status !== "rejected"
+      && !attempt.error?.startsWith("committing the passed stage:"))) return null;
+  if (attempt.conversationId) {
+    const boundary = attempt.commitRepair?.requestedAt ?? attempt.commitRepair?.sendingAt;
+    const durable = boundary ? await stageRepairEvidence(attempt, ports) : null;
+    const active = await ports.conversationAgentActive(attempt.conversationId);
+    const finished = durable?.turn === "terminal"
+      && (durable.message?.ts ?? 0) > (attempt.commitRepair?.messageTs ?? 0)
+      && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(boundary ?? null);
+    if (ports.conversationDeliveryOutstanding?.(attempt.conversationId) === true || active === true
+      || durable?.turn === "busy" || liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(ports.now())).length > 0
+      || (attempt.commitRepair?.sendUncertain && !finished) || (boundary && active !== false && !finished)) {
+      const pending = attempt.commitRepair ? "commit repair turn" : "stage conversation";
+      return { error: `the ${pending} may still be running or queued; wait for it to finish before retrying settlement`, status: 409 };
+    }
+  }
+  if (attempt.commitRepair) {
+    // Explicit retry renews permission for one commit after a rejected repair.
+    // Keep the original refusal/request; no second repair turn is sent.
+    attempt.commitRepair.outcome = { status: "accepted" };
+    attempt.commitRepair.settledAt = ports.now();
+    delete attempt.commitRepair.recommit;
+  }
+  attempt.state = "committing";
+  attempt.error = null;
+  pipeline.state = "running";
+  pipeline.pausedState = null;
+  pipeline.stateDetail = "passed stage commit retry pending; existing outputs preserved";
+  return { pipeline };
 }
 
 /** A publication repair's park: the refusal's cause and action first, then why
@@ -4359,7 +4400,7 @@ async function stageCommitRepairSettled(
   const worker = publication ? publicationRepairWorker(pipeline, attempt) : { stage, attempt };
   const parkRepair = (why: string) => {
     const detail = publication ? publicationRepairParkDetail(attempt.publicationRepair!, why)
-      : why.includes(repair.detail) ? why : `${repair.detail}\n${why}`;
+      : afterCommitRepair(attempt, why.includes(repair.detail) ? why : `${repair.detail}\n${why}`);
     attempt.error = detail;
     park(pipeline, detail, publication ? undefined : attempt);
   };
@@ -4422,6 +4463,10 @@ async function commitPassedStage(
   persist: () => void | Promise<void>,
 ): Promise<void> {
   if (ports.deferStageGit) return;
+  if (attempt.stageCommitWait) {
+    const remaining = unixMs(attempt.stageCommitWait.retryAt) - unixMs(ports.now());
+    if (remaining > 0) { ports.scheduleTick?.(remaining); return; }
+  }
   if (!(await stageCommitRepairSettled(pipeline, stage, attempt, ports, persist))) return;
   /* Every park after a requested repair keeps the refusal it was about. */
   const parkStage = (reason: string) => park(pipeline, afterCommitRepair(attempt, reason), attempt);
@@ -4442,6 +4487,20 @@ async function commitPassedStage(
     }, ports.stageBranchProtections?.get(pipeline.id), ports.stageCommitReceiptFile, commitControl)
     : await commitPipelineStage(pipeline, stage.id, false, ports.exec, attemptStage(stage, attempt).outputs, protectedHead, ports.stageCommitReceiptFile, commitControl);
   if (!result.ok) {
+    if (result.commitTimeout) {
+      const failures = (attempt.stageCommitWait?.failures ?? 0) + 1;
+      const delay = Math.min(5 * 60_000, 30_000 * 2 ** Math.min(failures - 1, 4));
+      const retryAt = new Date(unixMs(ports.now()) + delay).toISOString();
+      const detail = `${result.error}; controller will retry the passed stage's commit at ${retryAt}`;
+      attempt.stageCommitWait = { retryAt, detail, failures };
+      // A controller expiry did not spend the repaired commit's hook verdict.
+      // The retry revalidates the worktree and its ownership receipt.
+      if (repair) delete repair.recommit;
+      pipeline.stateDetail = detail;
+      await persist();
+      ports.scheduleTick?.(delay);
+      return;
+    }
     if (result.deferred) {
       // Keep the durable committing cursor. The next tick repeats the forge
       // observation outside the mutation lease, then retries this settlement.
@@ -4455,6 +4514,10 @@ async function commitPassedStage(
     }
     parkStage(result.error);
     return;
+  }
+  if (attempt.stageCommitWait) {
+    if (pipeline.stateDetail === attempt.stageCommitWait.detail) pipeline.stateDetail = null;
+    delete attempt.stageCommitWait;
   }
   if (stage.kind === "review-loop" && result.sha !== attempt.reviewHeadSha) {
     parkStage(`approved review flow head mismatch during settlement: reviewed ${attempt.reviewHeadSha ?? "no exact head"}, settled ${result.sha}`);
@@ -7838,13 +7901,21 @@ function clearStagedLaunchWait(pipeline: Pipeline, attempt: PipelineStageAttempt
     terminalized, with its recovery record; null when it may not. */
 function neverStartedLaunch(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, exhausted: boolean): { recovery: StagedLaunchRecovery | null } | null {
   if (attempt.report || openRuntimeSwitch(attempt)) return null;
-  if (!attempt.launchId || !attempt.conversationId || attempt.agentPath || attempt.sessionId
+  if (!attempt.launchId || !attempt.conversationId
     || attempt.paneId || attempt.verdict || (attempt.completedAt && pipeline.state !== "closed") || attempt.activation
     || pipelineSurvivorRefusal(pipeline)) return null;
   const receipt = ports.spawnReceipt(attempt.launchId);
-  if (!receipt || receipt.conversationId !== attempt.conversationId || receipt.transcript || receipt.sessionId
+  if (!receipt || receipt.conversationId !== attempt.conversationId
     || (attempt.state === "failed" && receipt.state === "failed")) return null;
   const recovery = stagedLaunchRecovery(receipt);
+  // Older controllers copied the reserved path/id into the attempt before
+  // materialization. Only that same, provably absent artifact is recoverable.
+  if (attempt.agentPath || attempt.sessionId || receipt.transcript || receipt.sessionId) {
+    const reservedPath = receipt.stagedTranscript;
+    if (recovery?.phase !== "unpublished" || !reservedPath || ports.transcriptPresent?.(reservedPath) !== false
+      || (attempt.agentPath && attempt.agentPath !== reservedPath)
+      || (receipt.transcript && receipt.transcript !== reservedPath)) return null;
+  }
   const stoppedByController = attempt.error?.startsWith(SPAWN_RECOVERY_PARK_PREFIX) === true;
   if (pipeline.state !== "closed" && !exhausted && !recovery?.stopped && !stoppedByController) return null;
   return { recovery };
@@ -9434,7 +9505,11 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) { abort.abort(); return; }
         const recorded = currentAttempt(current, candidateStage.id)!;
-        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair) return;
+        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair && !candidateAttempt.stageCommitWait) return;
+        if (candidateAttempt.stageCommitWait) {
+          recorded.stageCommitWait = structuredClone(candidateAttempt.stageCommitWait);
+          if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
+        }
         if (candidateAttempt.branchAdoption) recorded.branchAdoption = structuredClone(candidateAttempt.branchAdoption);
         if (candidateAttempt.commitRepair) {
           recorded.commitRepair = structuredClone(candidateAttempt.commitRepair);
@@ -11298,7 +11373,16 @@ function editPipelineWorkLinks(pipeline: Pipeline, req: PatchPipelineRequest, ac
 /** Decision authority follows a project's designated seat across rotations.
     Read one server-side seat snapshot for both lineage and current authority;
     caller-supplied roles confer no authority. Revocation is project-scoped. */
-function mayAnswerPipelineDecision(pipeline: Pipeline, actor: PauseResumeActor | null): actor is PauseResumeActor {
+/**
+ * Who answers what a parked lane waits on: the operator, the conversation
+ * that created it, and its project's current designated seat. The seat answers
+ * every lane of its project, because «Waiting for you» routes a worker's or an
+ * operator's lane to it first (docs/design/attention-auto-resolve.md), except
+ * the one wait the operator kept for themselves: accepting the unreviewed head
+ * of a lane they created by hand (`review`). Moving a running stage
+ * (`control`) is no wait anyone is routed, and stays with a seat-created lane.
+ */
+function mayAnswerPipelineDecision(pipeline: Pipeline, actor: PauseResumeActor | null, kind: "decision" | "review" | "control"): actor is PauseResumeActor {
   if (!actor) return false;
   if (actor.kind === "operator") return true;
   if (!actor.conversationId) return false;
@@ -11317,16 +11401,17 @@ function mayAnswerPipelineDecision(pipeline: Pipeline, actor: PauseResumeActor |
   const revokedInProject = file.revocations.some((entry) =>
     entry.project === project && entry.conversationId === actor.conversationId && entry.seatEpoch >= actorEpoch);
   if (actor.conversationId === creator) return !creatorIsSeat || !revokedInProject;
-  if (revokedInProject || !creatorIsSeat) return false;
-  return activeSeat?.conversationId === actor.conversationId;
+  if (revokedInProject || activeSeat?.conversationId !== actor.conversationId) return false;
+  if (creatorIsSeat) return true;
+  return kind === "decision" || (kind === "review" && Boolean(creator));
 }
 
 /** Also checked before MCP receipt access; authorization refusals must never spend an answer's key. */
 export function decisionAnswerActorRefusal(
   pipeline: Pipeline, actor: PauseResumeActor | null, clientRequestId: unknown,
 ): PipelinePatchResult | null {
-  if (!mayAnswerPipelineDecision(pipeline, actor)) {
-    return { error: "only the pipeline creator conversation, the current designated seat for a seat-created lane, or a direct user action can answer this decision", status: 403 };
+  if (!mayAnswerPipelineDecision(pipeline, actor, "decision")) {
+    return { error: "only the pipeline creator conversation, the project's current designated seat, or a direct user action can answer this decision", status: 403 };
   }
   const prior = pipeline.decisionAnswers?.find((entry) => entry.clientRequestId === clientRequestId);
   if (prior && (prior.actor.kind !== actor.kind || (prior.actor.kind === "agent" && actor.kind === "agent"
@@ -11403,8 +11488,8 @@ function resolveDecision(
 /** Who may continue a needs_review lane (#1938): the creator, its project's
     current seat, or the operator. Also checked before MCP receipt access. */
 export function continueReviewActorRefusal(pipeline: Pipeline, actor: PauseResumeActor | null): PipelinePatchResult | null {
-  if (!mayAnswerPipelineDecision(pipeline, actor)) {
-    return { error: "only the pipeline creator conversation, the current designated seat for a seat-created lane, or a direct user action can continue this review", status: 403 };
+  if (!mayAnswerPipelineDecision(pipeline, actor, "review")) {
+    return { error: "only the pipeline creator conversation, the project's current designated seat for a lane an agent created, or a direct user action can continue this review", status: 403 };
   }
   return null;
 }
@@ -11447,7 +11532,7 @@ function acceptHead(
   pipeline: Pipeline, req: PatchPipelineRequest, actor: PauseResumeActor | null, ports: PipelinePorts,
 ): PipelinePatchResult {
   const refusal = continueReviewActorRefusal(pipeline, actor);
-  if (refusal) return { ...refusal, error: "only the pipeline creator conversation, the current designated seat for a seat-created lane, or a direct user action can accept this head" };
+  if (refusal) return { ...refusal, error: "only the pipeline creator conversation, the project's current designated seat for a lane an agent created, or a direct user action can accept this head" };
   if (!actor) return { error: "accept-head needs an actor", status: 403 };
   if (typeof req.clientRequestId !== "string" || !req.clientRequestId.trim() || req.clientRequestId.length > 200
     || typeof req.expectedRevision !== "string" || !/^[0-9a-f]{64}$/.test(req.expectedRevision)) {
@@ -12284,6 +12369,11 @@ export async function patchPipeline(
         persist();
       }
       if (pipeline.state !== "needs_decision") return { error: "pipeline does not have a stage awaiting retry", status: 409 };
+      const commitRetry = await retryPassedStageCommit(pipeline, ports);
+      if (commitRetry) {
+        if (!commitRetry.error) { persist(); requestPipelineTick(); }
+        return commitRetry;
+      }
       const retryStageId = explicitReceiptRetry ? req.stageId! : stage?.id ?? null;
       const retryLaunchId = explicitReceiptRetry ? req.launchId! : attempt?.launchId ?? null;
       const receiptRetry = (explicitReceiptRetry || attempt?.paneId === null)
@@ -12439,7 +12529,7 @@ export async function patchPipeline(
       const live = currentAttempt(pipeline, target.id);
       if (req.applyNow !== undefined && typeof req.applyNow !== "boolean") return { error: "applyNow must be boolean", status: 400 };
       if (req.applyNow) {
-        if (!mayAnswerPipelineDecision(pipeline, actor)) return { error: "only the operator or project seat may move a running stage", status: 403 };
+        if (!mayAnswerPipelineDecision(pipeline, actor, "control")) return { error: "only the operator or project seat may move a running stage", status: 403 };
         /* The choice was made on one attempt and one conversation. A retry
            since then runs another agent, which this request must never cut;
            a switch still open keeps answering the conversation it started on. */

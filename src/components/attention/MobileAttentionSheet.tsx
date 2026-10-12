@@ -1,6 +1,6 @@
 "use client";
 
-import { Filter, MessageCircleQuestionMark, GalleryHorizontalEnd } from "lucide-react";
+import { Filter, MessageCircleQuestionMark, GalleryHorizontalEnd, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ChevronDown, ChevronRight, X } from "@/components/icons";
@@ -12,6 +12,7 @@ import { MobileSheet, MobileSheetSection } from "@/components/mobile/MobileSheet
 import { BAR_PRESSED } from "@/components/ProjectBar";
 import type { AttentionNotice } from "@/lib/attention/types";
 import { projectTitle } from "@/lib/displayNames";
+import type { DoneItemV1 } from "@/lib/done/types";
 import { useLocale } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FrameRole } from "@/lib/roleFrames";
@@ -24,9 +25,12 @@ import { openSelfUpdate } from "../selfUpdate/openSelfUpdate";
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 
 import type { MobileAttentionEntry } from "./attentionQueue";
-import { decisionLine, reasonLine } from "./decision";
 import { sendDismissal } from "./dismissalOverlay";
-import { needsYouDismissal, needsYouDismissibleCount, needsYouEntryRole, needsYouEntrySince, needsYouLaneLine, needsYouSections } from "./needsYouPanel";
+import { DoneSection } from "./DoneSection";
+import type { acknowledgeDone } from "./doneItems";
+import { needsYouDismissal, needsYouDismissibleCount, needsYouEntryRole, needsYouEntrySince, needsYouSections, prototypeNoticeAsk } from "./needsYouPanel";
+import { NeedsYouAskText } from "./NeedsYouAskText";
+import { conversationOperatorAsk, laneOperatorAsk } from "./operatorAsk";
 import { PermissionActions } from "./PermissionActions";
 
 /*
@@ -41,13 +45,17 @@ import { PermissionActions } from "./PermissionActions";
  * nothing walks the operator.
  *
  * Rows are the sheet-row anatomy (`.mrow`): the role of the agent behind it
- * (the needs-you panel's role tag), the title, one meta
- * line, a chevron. The meta line of a conversation is its wait in the words
- * the desktop panel uses (`reasonLine`), then how long it has waited, the
- * engine glyph and the model; a lane's is the panel's lane line
- * (`needsYouLaneLine`, the card's `needLabel`) and its age, so one item reads
- * the same on both surfaces. The wait gives way to an ellipsis before the age
- * does: the age is the one fact on the line that must stay whole.
+ * (the needs-you panel's role tag), the title, what it asks, one meta line and
+ * a chevron. What it asks is the desktop panel's text
+ * (`NeedsYouAskText`, docs/design/attention-auto-resolve.md): the question in
+ * its author's words, its choices and the sentence saying what to choose and
+ * what happens next, wrapped rather than cut, so one item reads the same on
+ * both surfaces. The meta line keeps the age, the engine glyph and the model.
+ *
+ * Pinned at the top of the sheet, above its scroller, «Готово» (docs/design/done-section.md) lists the
+ * finished work of the same slice still waiting to be accepted, newest first,
+ * the same list the desktop panel and the report log pin at their tops; the header's count holds both until it is
+ * accepted, and «Dismiss all» counts only the decisions it clears.
  *
  * A row is the phone's OPEN gesture (#1244): the conversation screen it pushes
  * stamps the card seen. Pipelines have a destination once lane 7 lands the
@@ -107,6 +115,10 @@ export interface MobileAttentionSheetProps {
   /** Absent while nothing on the board waits, so no funnel is drawn (the
       island's contract). */
   onToggleFilter?: () => void;
+  /** «Готово» of the slice the badge counts: finished work still waiting. */
+  done?: readonly DoneItemV1[];
+  /** Test seam. */
+  acknowledgeDone?: typeof acknowledgeDone;
 }
 
 const ROW = "flex min-h-11 w-full items-center gap-3 px-4 py-1.5 text-left active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40";
@@ -116,8 +128,9 @@ const SEP = <span aria-hidden className="shrink-0 opacity-60">·</span>;
 const NO_NOTICES: readonly MobileNoticeRow[] = [];
 const NO_PIPELINES: readonly Pipeline[] = [];
 const NO_NAMES: Readonly<Record<string, string>> = {};
+const NO_DONE: readonly DoneItemV1[] = [];
 
-export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenPipeline, onOpenPrototype, onClose, pipelines = NO_PIPELINES, projectNames = NO_NAMES, current = null, order, screen, dismiss = sendDismissal, notices = NO_NOTICES, onOpenNotice, onClearNotice, onNoticesSeen, filterActive = false, onToggleFilter }: MobileAttentionSheetProps) {
+export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenPipeline, onOpenPrototype, onClose, pipelines = NO_PIPELINES, projectNames = NO_NAMES, current = null, order, screen, dismiss = sendDismissal, notices = NO_NOTICES, onOpenNotice, onClearNotice, onNoticesSeen, filterActive = false, onToggleFilter, done = NO_DONE, acknowledgeDone }: MobileAttentionSheetProps) {
   const { t } = useLocale();
   const [folded, setFolded] = useState<ReadonlySet<string>>(() => new Set());
   const shownNotices = notices.map((row) => row.notice.id).join("\n");
@@ -150,7 +163,8 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
   const sections = needsYouSections(entries, current, order);
   const titled = sections.length > 1;
   const dismissible = needsYouDismissibleCount(entries);
-  const title = entries.length ? t("attention.panelTitle", { count: entries.length }) : t("attention.panelAria");
+  const waiting = entries.length + done.length;
+  const title = waiting ? t("attention.panelTitle", { count: waiting }) : t("attention.panelAria");
   const row = (entry: MobileAttentionEntry) => {
     // The card keeps the sheet's content gutter; a bare card ran edge to edge.
     if (entry.kind === "update") return <div key={entry.id} className="px-4 py-1"><AutoDrainDecision key={entry.decision.id} decision={entry.decision} /></div>;
@@ -189,6 +203,10 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
       name="attention"
       title={title}
       onClose={onClose}
+      /* Pinned above the sheet's scroller, its rows in their own band: the
+         sheet is at most 88 % of the screen, so a 40 dvh band leaves the
+         decisions under it about half of a full sheet. */
+      pinned={<DoneSection items={done} current={current} projectNames={projectNames} surface="phone" place="needs-you" band="max-h-[40dvh]" {...(acknowledgeDone ? { acknowledge: acknowledgeDone } : {})} />}
       extra={dismissible || onToggleFilter ? (
         <>
           {onToggleFilter ? (
@@ -276,7 +294,7 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
             );
           }) : sections.flatMap((section) => section.entries.map(row))}
         </div>
-      ) : notices.length ? null : (
+      ) : notices.length || done.length ? null : (
         <div className="px-4 py-4 text-center text-ui text-muted" data-mobile2-attention-empty>{t("mobile2.attention.empty")}</div>
       )}
     </MobileSheet>
@@ -325,10 +343,12 @@ function NoticeRow({ row, now, onOpen, onClear }: { row: MobileNoticeRow; now: n
 function ConversationRow({ item, now, current, onOpen, role }: { item: AttentionItem; now: number; current: boolean; onOpen: () => void; role?: FrameRole }) {
   const { t } = useLocale();
   /* An orchestrator's question in the report log is its own title. */
+  const asksInTitle = Boolean(role && item.reason.report?.body);
   const title = (role && item.reason.report?.body) || cleanTitle(item.file.title, 90);
-  /* With the role on its own mark, the line is the wait alone. */
-  const decision = role ? reasonLine(t, item.reason) : decisionLine(t, item.file, now) ?? t("attention.decisionQuestion");
-  const headline = item.reason.kind === "memory" || (item.reason.kind === "permission" && Boolean(item.file.pendingPermission)) || (item.reason.kind === "ask" && Boolean(item.reason.header));
+  /* What it asks, whole, in the desktop panel's words
+     (docs/design/attention-auto-resolve.md): the question, its choices and
+     the sentence saying what to choose and what happens next. */
+  const ask = conversationOperatorAsk(t, item.reason, item.file);
   const row = (
     <button
       type="button"
@@ -344,20 +364,15 @@ function ConversationRow({ item, now, current, onOpen, role }: { item: Attention
       {role ? null : <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-warning" />}
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         {role ? <RoleTag role={role} /> : null}
-        <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{title}</span>
-        {/* A permission headline (tool, command, reason) runs to hundreds of
-            characters, so it gets a line of its own that ends in an ellipsis
-            and the meta line keeps the age in view: the request is denied
-            at ten minutes (#2215). An agent's own sentence that asks the
-            operator gets the same line. */}
-        {headline ? <span data-attention-decision className={item.reason.kind === "memory" ? "min-w-0 whitespace-normal text-label font-medium text-muted [overflow-wrap:anywhere]" : "min-w-0 truncate text-label font-medium text-muted"}>{decision}</span> : null}
+        {/* An orchestrator's question is its own title, so it wraps whole. */}
+        <span
+          className={`min-w-0 ${asksInTitle ? "[overflow-wrap:anywhere]" : "truncate"} text-body font-semibold leading-[1.25] text-primary`}
+          data-needs-you-question-title={asksInTitle ? "" : undefined}
+        >
+          {title}
+        </span>
+        <NeedsYouAskText ask={ask} size="touch" />
         <span className={META}>
-          {headline ? null : (
-            <>
-              <span data-attention-decision className="min-w-0 truncate">{decision}</span>
-              {SEP}
-            </>
-          )}
           <span data-attention-age className="shrink-0">{fmtAgeSeconds(Math.max(0, now - item.since))}</span>
           {item.file.model ? (
             <>
@@ -384,11 +399,13 @@ function ConversationRow({ item, now, current, onOpen, role }: { item: Attention
 
 function PrototypeRow({ notice, age, onOpen }: { notice: PrototypeReviewNotice; age: number | null; onOpen?: () => void }) {
   const { t } = useLocale();
-  const Mark = notice.asks === "questions" ? MessageCircleQuestionMark : GalleryHorizontalEnd;
+  /* A decision whose message keeps failing reads as a warning, in the same row. */
+  const undelivered = notice.undelivered === true;
+  const Mark = undelivered ? TriangleAlert : notice.asks === "questions" ? MessageCircleQuestionMark : GalleryHorizontalEnd;
   const Tag = onOpen ? "button" : "div";
   return (
     <Tag
-      {...(onOpen ? { type: "button" as const, onClick: onOpen, "aria-label": t(notice.asks === "questions" ? "proto.notice.answerAria" : "proto.notice.openAria", { title: notice.title }) } : {})}
+      {...(onOpen ? { type: "button" as const, onClick: onOpen, "aria-label": t(undelivered ? "proto.notice.undeliveredAria" : notice.asks === "questions" ? "proto.notice.answerAria" : "proto.notice.openAria", { title: notice.title }) } : {})}
       data-needs-you-row={notice.id}
       data-attention-row={notice.id}
       data-mobile2-row="prototype"
@@ -397,13 +414,14 @@ function PrototypeRow({ notice, age, onOpen }: { notice: PrototypeReviewNotice; 
     >
       {/* Built as a role row: the mark and its word over the title. */}
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span data-attention-decision className="inline-flex min-w-0 items-center gap-[5px] whitespace-nowrap text-caption font-bold uppercase leading-none tracking-[0.06em] text-accent">
-          <span aria-hidden className="inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] bg-accent text-white">
+        <span data-attention-decision className={`inline-flex min-w-0 items-center gap-[5px] whitespace-nowrap text-caption font-bold uppercase leading-none tracking-[0.06em] ${undelivered ? "text-warning" : "text-accent"}`}>
+          <span aria-hidden className={`inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] text-white ${undelivered ? "bg-warning" : "bg-accent"}`}>
             <Mark className="h-[11px] w-[11px]" />
           </span>
-          <span className="min-w-0 truncate">{t(notice.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready")}</span>
+          <span className="min-w-0 truncate">{t(undelivered ? "proto.notice.undelivered" : notice.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready")}</span>
         </span>
         <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{notice.title}</span>
+        <NeedsYouAskText ask={prototypeNoticeAsk(t, notice)} size="touch" />
         {age === null ? null : (
           <span className={META}>
             <span data-attention-age className="shrink-0">{fmtAgeSeconds(age)}</span>
@@ -431,15 +449,12 @@ function PipelineRow({ row, age, current, onOpen, role }: { row: MobileBoardPipe
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         {role ? <RoleTag role={role} /> : null}
         <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{row.task}</span>
-        <span className={META}>
-          <span data-attention-decision className="min-w-0 truncate">{needsYouLaneLine(t, row.pipeline)}</span>
-          {age === null ? null : (
-            <>
-              {SEP}
-              <span data-attention-age className="shrink-0">{fmtAgeSeconds(age)}</span>
-            </>
-          )}
-        </span>
+        <NeedsYouAskText ask={laneOperatorAsk(t, row.pipeline)} size="touch" />
+        {age === null ? null : (
+          <span className={META}>
+            <span data-attention-age className="shrink-0">{fmtAgeSeconds(age)}</span>
+          </span>
+        )}
       </span>
       {onOpen ? <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden /> : null}
     </Tag>

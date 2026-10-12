@@ -4,11 +4,12 @@ import { useEffect, useId, useState, type ChangeEvent, type FormEvent } from "re
 import { createPortal } from "react-dom";
 
 import { Z } from "@/components/layers";
+import { useNowSeconds } from "@/hooks/useNowSeconds";
 import { useVoiceCompanionSettings } from "@/hooks/useVoiceCompanionSettings";
 import { useLocale } from "@/lib/i18n";
-import { companionErrorMessage } from "@/lib/voiceCompanion/errors";
+import { companionErrorMessage, limitResetText } from "@/lib/voiceCompanion/errors";
 
-import { spendTone, voiceMoney, voiceMonth } from "./CompanionSpend";
+import { callDuration, planName, planTone, planWindows, spendTone, voiceMoney, voiceMonth, windowName, windowTone } from "./CompanionSpend";
 import { COMPANION_SETTINGS_EVENT } from "./hostSurfaces";
 
 export const OPEN_VOICE_COMPANION_SETTINGS_EVENT = "delegatus:open-voice-companion-settings";
@@ -47,9 +48,11 @@ export function VoiceCompanionSettingsHost() {
 }
 
 /**
- * The voice companion's rows in its settings dialog (#2519 D): the switch, the
- * OpenAI key, and the monthly cap with the month's usage. On is the real voice;
- * there is no other backend to choose.
+ * The voice companion's rows in its settings dialog (#2519 D): the switch and,
+ * while it is on, how the voice talks. Through the API it needs the OpenAI key
+ * and keeps the monthly cap with the month's usage; on Codex V3 it runs on a
+ * managed account's subscription, and the rows show the last call with that
+ * account's plan window and ask for no key. The API is the default.
  *
  * The key field is write-only. What is typed goes to the Viewer once and is
  * cleared here; nothing ever comes back but where a key is taken from (a saved
@@ -62,7 +65,7 @@ export function VoiceCompanionSetting() {
   const [keySaved, setKeySaved] = useState(false);
   /* What is being typed into the cap; null shows the saved one. */
   const [capDraft, setCapDraft] = useState<string | null>(null);
-  const ids = { key: useId(), keyHint: useId(), cap: useId(), capHint: useId() };
+  const ids = { key: useId(), keyHint: useId(), cap: useId(), capHint: useId(), backend: useId() };
   const speech = locale === "uk" ? "uk" as const : "en" as const;
   const announce = () => window.dispatchEvent(new Event(COMPANION_SETTINGS_EVENT));
   const change = async (value: Parameters<typeof update>[0]) => { if (await update(value)) announce(); };
@@ -87,6 +90,13 @@ export function VoiceCompanionSetting() {
   const lastCallDuration = lastCall ? `${Math.floor(lastCall.seconds / 60)}:${String(Math.floor(lastCall.seconds % 60)).padStart(2, "0")}` : "";
   const lastCallDate = lastCall ? new Intl.DateTimeFormat(locale, { day: "numeric", month: speech === "uk" ? "long" : "short", timeZone: "UTC" }).format(new Date(lastCall.endedAt)) : "";
   const fromEnvironment = settings?.keySource === "env";
+  const codexCall = settings?.lastCodexSession;
+  const plan = codexCall?.plan ?? null;
+  const clock = useNowSeconds(60_000);
+  const now = clock ? clock * 1000 : plan?.observedAt ?? 0;
+  const codexCallDate = codexCall ? new Intl.DateTimeFormat(locale, { day: "numeric", month: speech === "uk" ? "long" : "short" }).format(new Date(codexCall.endedAt)) : "";
+  const readAt = plan ? new Intl.DateTimeFormat(locale, now - plan.observedAt < 86_400_000 ? { hour: "2-digit", minute: "2-digit", hourCycle: "h23" } : { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(plan.observedAt)) : "";
+  const tone = planTone(plan);
   /* The masked field holds what is being typed and nothing else: no saved key is ever put into it. */
   const typed = { type: "password", value: key, onChange: (event: ChangeEvent<HTMLInputElement>) => { setKey(event.target.value); setKeySaved(false); } } as const;
   const field = "min-h-9 w-full min-w-0 rounded-[8px] border border-border bg-well px-2.5 text-[13px] text-primary placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-55";
@@ -98,44 +108,86 @@ export function VoiceCompanionSetting() {
       </label>
       <p className="text-[13px] leading-relaxed text-muted">{t("voiceCompanion.settings.explanation")}</p>
       {settings?.enabled ? (
-        <div className="mt-3 flex flex-col gap-4">
-          <form className="min-w-0" onSubmit={(event) => void submitKey(event)} data-voice-companion-key data-key-source={settings.keySource}>
-            <label htmlFor={ids.key} className="text-[13px] font-semibold text-primary">{t("voiceCompanion.settings.key")}</label>
-            <div className="mt-1.5 flex gap-2">
-              <input id={ids.key} {...typed} disabled={busy || fromEnvironment}
-                autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false} data-1p-ignore="" data-lpignore="true" aria-describedby={ids.keyHint}
-                placeholder={t(settings.keySource === "file" ? "voiceCompanion.settings.key.replace" : "voiceCompanion.settings.key.placeholder")} className={field} />
-              <button type="submit" disabled={busy || fromEnvironment || !key.trim()} className="min-h-9 shrink-0 rounded-[8px] border border-border px-3 text-[13px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45">{t("voiceCompanion.settings.key.save")}</button>
-            </div>
-            <p id={ids.keyHint} role="status" className="mt-1.5 text-[12px] leading-snug text-muted" data-voice-companion-key-status>
-              <span className={settings.keySource === "missing" ? "" : "font-semibold text-primary"}>{keySaved ? t("voiceCompanion.settings.key.saved") : t(`voiceCompanion.settings.key.${settings.keySource}`)}</span>{" "}
-              {fromEnvironment ? null : t("voiceCompanion.settings.key.kept")}
-            </p>
-          </form>
-          <div className="min-w-0" data-voice-companion-cap>
-            <label htmlFor={ids.cap} className="text-[13px] font-semibold text-primary">{t("voiceCompanion.settings.cap")}</label>
-            <div className="mt-1.5 flex items-center gap-2">
-              <span aria-hidden className="text-[13px] text-muted">$</span>
-              <input id={ids.cap} type="text" inputMode="decimal" value={capDraft ?? String(settings.monthlyCapUsd)} disabled={busy} aria-describedby={ids.capHint}
-                onChange={(event) => setCapDraft(event.target.value)} onBlur={() => void commitCap()} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void commitCap(); } }}
-                className={`${field} max-w-28 tabular-nums`} />
-            </div>
-            <p id={ids.capHint} role="status" className="mt-1.5 text-[12px] leading-snug text-muted tabular-nums" data-voice-companion-usage style={{ color: spendTone(settings.usageUsd, settings.monthlyCapUsd) ? `var(--color-${spendTone(settings.usageUsd, settings.monthlyCapUsd)})` : undefined }}>
-              {t("voiceCompanion.settings.usage", { month: voiceMonth(locale, settings.month), spent: money(settings.usageUsd), cap: money(settings.monthlyCapUsd) })}
-              {settings.reservedUsd > 0 ? ` ${t("voiceCompanion.settings.reserved", { held: money(settings.reservedUsd) })}` : ""}
-            </p>
-            {lastCall ? <p className="mt-1 text-[12px] leading-snug text-muted tabular-nums" data-voice-companion-last-call title={lastCall.incomplete ? t("voiceCompanion.spend.incomplete") : undefined}>
-              {t(lastCall.incomplete ? "voiceCompanion.settings.lastCallIncomplete" : "voiceCompanion.settings.lastCall", { usd: money(lastCall.usd), duration: lastCallDuration, date: lastCallDate })}
-            </p> : null}
-            {settings.incomplete ? <p className="mt-1 text-[12px] leading-snug text-muted">{companionErrorMessage("FINALIZATION_INCOMPLETE", speech)}</p> : null}
-            {settings.uncertainSession ? (
-              <div className="mt-2 flex flex-col items-start gap-1.5" data-voice-companion-uncertain>
-                <p role="alert" className="text-[12px] leading-snug text-danger">{companionErrorMessage("MINT_UNCERTAIN", speech)}</p>
-                <button type="button" disabled={busy} onClick={() => void change({ releaseUncertainSession: true })} className="min-h-9 rounded-[8px] border border-border px-3 text-[13px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45">{t("voiceCompanion.settings.uncertain.release")}</button>
-              </div>
-            ) : null}
-            {settings.usageUsd + settings.reservedUsd >= settings.monthlyCapUsd ? <p className="mt-1 text-[12px] leading-snug text-danger">{companionErrorMessage("CAP_REACHED", speech)}</p> : null}
+        <div className="mt-3 flex flex-col gap-3">
+          {/* The two ways a call can talk, as the voice step of onboarding chooses a dictation backend: what the
+              choice needs opens under the option chosen, so the key and the cap show only for the API. */}
+          <div role="radiogroup" aria-label={t("voiceCompanion.settings.backend")} data-voice-companion-backend={settings.backend} className="flex flex-col overflow-hidden rounded-[12px] border border-border">
+            {(["api", "codex"] as const).map((backend) => {
+              const selected = settings.backend === backend;
+              return (
+                <div key={backend} data-voice-backend={backend} data-selected={selected ? "" : undefined} className={`flex min-w-0 flex-col gap-3 border-b border-border px-3 py-2.5 last:border-b-0 ${selected ? "bg-accent-soft/40" : "bg-card"}`}>
+                  <label className="flex min-h-6 cursor-pointer items-center gap-2.5 max-sm:min-h-9">
+                    <input type="radio" name={ids.backend} value={backend} checked={selected} disabled={busy} onChange={() => void change({ backend })} className="h-4 w-4 shrink-0 accent-[var(--color-accent)] max-sm:h-5 max-sm:w-5" />
+                    <span className="text-[13px] font-semibold text-primary">{t(backend === "api" ? "voiceCompanion.settings.backend.api" : "voiceCompanion.settings.backend.codex")}</span>
+                  </label>
+                  {selected && backend === "api" ? (
+                    <div className="flex min-w-0 flex-col gap-4 pl-[26px] max-sm:pl-0">
+                      <form className="min-w-0" onSubmit={(event) => void submitKey(event)} data-voice-companion-key data-key-source={settings.keySource}>
+                        <label htmlFor={ids.key} className="text-[13px] font-semibold text-primary">{t("voiceCompanion.settings.key")}</label>
+                        <div className="mt-1.5 flex gap-2">
+                          <input id={ids.key} {...typed} disabled={busy || fromEnvironment}
+                            autoComplete="off" autoCapitalize="off" autoCorrect="off" spellCheck={false} data-1p-ignore="" data-lpignore="true" aria-describedby={ids.keyHint}
+                            placeholder={t(settings.keySource === "file" ? "voiceCompanion.settings.key.replace" : "voiceCompanion.settings.key.placeholder")} className={field} />
+                          <button type="submit" disabled={busy || fromEnvironment || !key.trim()} className="min-h-9 shrink-0 rounded-[8px] border border-border px-3 text-[13px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45">{t("voiceCompanion.settings.key.save")}</button>
+                        </div>
+                        <p id={ids.keyHint} role="status" className="mt-1.5 text-[12px] leading-snug text-muted" data-voice-companion-key-status>
+                          <span className={settings.keySource === "missing" ? "" : "font-semibold text-primary"}>{keySaved ? t("voiceCompanion.settings.key.saved") : t(`voiceCompanion.settings.key.${settings.keySource}`)}</span>{" "}
+                          {fromEnvironment ? null : t("voiceCompanion.settings.key.kept")}
+                        </p>
+                      </form>
+                      <div className="min-w-0" data-voice-companion-cap>
+                        <label htmlFor={ids.cap} className="text-[13px] font-semibold text-primary">{t("voiceCompanion.settings.cap")}</label>
+                        <div className="mt-1.5 flex items-center gap-2">
+                          <span aria-hidden className="text-[13px] text-muted">$</span>
+                          <input id={ids.cap} type="text" inputMode="decimal" value={capDraft ?? String(settings.monthlyCapUsd)} disabled={busy} aria-describedby={ids.capHint}
+                            onChange={(event) => setCapDraft(event.target.value)} onBlur={() => void commitCap()} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void commitCap(); } }}
+                            className={`${field} max-w-28 tabular-nums`} />
+                        </div>
+                        <p id={ids.capHint} role="status" className="mt-1.5 text-[12px] leading-snug text-muted tabular-nums" data-voice-companion-usage style={{ color: spendTone(settings.usageUsd, settings.monthlyCapUsd) ? `var(--color-${spendTone(settings.usageUsd, settings.monthlyCapUsd)})` : undefined }}>
+                          {t("voiceCompanion.settings.usage", { month: voiceMonth(locale, settings.month), spent: money(settings.usageUsd), cap: money(settings.monthlyCapUsd) })}
+                          {settings.reservedUsd > 0 ? ` ${t("voiceCompanion.settings.reserved", { held: money(settings.reservedUsd) })}` : ""}
+                        </p>
+                        {lastCall ? <p className="mt-1 text-[12px] leading-snug text-muted tabular-nums" data-voice-companion-last-call title={lastCall.incomplete ? t("voiceCompanion.spend.incomplete") : undefined}>
+                          {t(lastCall.incomplete ? "voiceCompanion.settings.lastCallIncomplete" : "voiceCompanion.settings.lastCall", { usd: money(lastCall.usd), duration: lastCallDuration, date: lastCallDate })}
+                        </p> : null}
+                        {settings.incomplete ? <p className="mt-1 text-[12px] leading-snug text-muted">{companionErrorMessage("FINALIZATION_INCOMPLETE", speech)}</p> : null}
+                        {settings.usageUsd + settings.reservedUsd >= settings.monthlyCapUsd ? <p className="mt-1 text-[12px] leading-snug text-danger">{companionErrorMessage("CAP_REACHED", speech)}</p> : null}
+                      </div>
+                    </div>
+                  ) : null}
+                  {selected && backend === "codex" ? (
+                    <div className="flex min-w-0 flex-col gap-1 pl-[26px] max-sm:pl-0" data-voice-companion-codex>
+                      <p className="text-[12px] leading-snug text-muted tabular-nums" data-voice-companion-last-call>
+                        {codexCall ? t("voiceCompanion.settings.lastCodexCall", { duration: callDuration(codexCall.seconds), date: codexCallDate }) : t("voiceCompanion.settings.noCall")}
+                      </p>
+                      {/* The plan as the footer sets it: one short line a window with its figure emphasised, the
+                          whole-account note once above them and the reading time muted below. */}
+                      {plan ? <div className="mt-1 flex flex-col gap-0.5 tabular-nums" data-voice-companion-plan data-tone={tone}>
+                        <p className="text-[12px] leading-snug text-muted">{t("voiceCompanion.settings.planHead", { plan: planName(plan) })}</p>
+                        {planWindows(plan).map((window, index) => {
+                          const used = `${Math.round(window.usedPercent)}%`;
+                          const figureTone = windowTone(window, plan);
+                          const text = window.resetsAt === null
+                            ? t("voiceCompanion.usage.windowFigure", { window: windowName(window, t), used: "\u0001" })
+                            : t("voiceCompanion.usage.windowFigureReset", { window: windowName(window, t), used: "\u0001", reset: limitResetText(window.resetsAt, speech, now) });
+                          return <p key={index} className="text-[13px] leading-snug text-secondary" data-plan-window>
+                            {text.split("\u0001").map((part, at) => at === 0 ? part : [<span key="figure" className="font-semibold text-primary" data-plan-figure data-tone={figureTone} style={{ color: figureTone ? `var(--color-${figureTone})` : undefined }}>{used}</span>, part])}
+                          </p>;
+                        })}
+                        <p className="text-[12px] leading-snug text-muted">{t("voiceCompanion.settings.asOf", { time: readAt })}</p>
+                      </div> : null}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
+          {settings.uncertainSession ? (
+            <div className="mt-2 flex flex-col items-start gap-1.5" data-voice-companion-uncertain>
+              <p role="alert" className="text-[12px] leading-snug text-danger">{companionErrorMessage("MINT_UNCERTAIN", speech)}</p>
+              <button type="button" disabled={busy} onClick={() => void change({ releaseUncertainSession: true })} className="min-h-9 rounded-[8px] border border-border px-3 text-[13px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45">{t("voiceCompanion.settings.uncertain.release")}</button>
+            </div>
+          ) : null}
         </div>
       ) : null}
       {error ? <p role="alert" className="mt-3 text-[13px] text-danger" data-voice-companion-setting-error={error}>{companionErrorMessage(error, speech)}</p> : null}

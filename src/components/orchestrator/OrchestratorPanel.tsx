@@ -29,6 +29,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { decisionLine } from "../attention/decision";
 import { FeedSkeleton } from "../skeletons";
+import { RoleAvatar } from "../brand/RoleAvatar";
 import { RoleFrameMark } from "../RoleFrameMark";
 import { ProcessStatusControls } from "../TaskHeader";
 import { seatDraftReadiness, useOrchestratorDraftPrefill, useOrchestratorDraftReveal, usePendingSeatConfirm } from "./draftPrefill";
@@ -546,11 +547,11 @@ export function OrchestratorPanel({
           <RoleFrameMark role="orchestrator" />
           {/* docs/design/ghost-seat.md §6.5: while the seat's parallel self
               runs, the avatar gains its outline twin and a chip beside the
-              state points at the block in the feed. */}
+              state points at the block in the feed. The avatar is Delegatus
+              in the orchestrator's headset (docs/design/role-avatars.md); the
+              engine and model keep their chips in the incumbent row. */}
           <span className="relative inline-flex shrink-0">
-            <span className={`av ${seatEngine === "codex" ? "codex" : "claude"}`} aria-hidden>
-              <Bot />
-            </span>
+            <RoleAvatar role="orchestrator" size={26} />
             {liveDeputy ? <DeputyTwin engine={seatEngine ?? "claude"} avatarPx={26} /> : null}
           </span>
           <span className="seat-title">
@@ -647,9 +648,7 @@ export function OrchestratorPanel({
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3" data-seat-head="dock">
         <RoleFrameMark role="orchestrator" />
         <span className="relative inline-flex shrink-0">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control bg-accent-soft text-accent" aria-hidden>
-            <Bot className="h-4 w-4" />
-          </span>
+          <RoleAvatar role="orchestrator" size={28} />
           {liveDeputy ? <DeputyTwin engine={seatEngine ?? "claude"} avatarPx={28} /> : null}
         </span>
         <span className="flex min-w-0 flex-1 flex-col">

@@ -10,6 +10,7 @@ import { frameUrl, mintFrameScope } from "@/lib/artifact/frameScope";
 import { stateDir } from "@/lib/configDir";
 import { loadTasks, saveTasks } from "@/lib/tasks/store";
 import type { PrototypeDelivery } from "./decision";
+import { settlePrototypeDeliveriesForTests } from "./deliveryWorker";
 import { publishPOST, reviewGET, reviewPOST } from "./http";
 import { admittedSource, PROTOTYPE_LIMITS } from "./input";
 import { prototypeMediaGET } from "./media";
@@ -22,7 +23,7 @@ const WEBM = Buffer.concat([Buffer.from([0x1a,0x45,0xdf,0xa3,0x42,0x82,0x84]),Bu
 const TASK = "task-prototype";
 function task(id = TASK,project = "project-a") { return { id, project, status: "inbox" as const, placement: "unplaced" as const, text: "Review layout", assignments: [], sources: [], createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z" }; }
 beforeEach(() => saveTasks([task()]));
-afterEach(async () => { for (const root of roots.splice(0)) await fs.rm(root,{ recursive: true, force: true }); });
+afterEach(async () => { await settlePrototypeDeliveriesForTests(); for (const root of roots.splice(0)) await fs.rm(root,{ recursive: true, force: true }); });
 function request(url: string,body?: unknown) {
   return new NextRequest(`http://localhost${url}`,{ headers: { host: "localhost", "sec-fetch-site": "same-origin" }, ...(body ? { method: "POST", body: JSON.stringify(body) } : {}) });
 }
@@ -359,7 +360,7 @@ const lockLeftovers = async () => (await fs.readdir(path.join(stateDir(),"protot
 
 test("the lock queues of rounds no task holds leave with the next publication; a held round keeps its own, pictures retired or not", async () => {
   const body = await input("locks");
-  const decide = async (id: string) => expect((await reviewPOST(request("/review",{ reviewId: id, chosen: [1], comment: "Chosen." }),TASK)).status).toBe(200);
+  const decide = async (id: string) => { expect((await reviewPOST(request("/review",{ reviewId: id, chosen: [1], comment: "Chosen." }),TASK)).status).toBe(200); await settlePrototypeDeliveriesForTests(); };
   for (let n = 0; n < 5; n += 1) {
     saveTasks([task()]);
     await decide(await publish({ ...body, clientRequestId: `locks-${n}` }));
@@ -382,7 +383,7 @@ test("the lock queues of rounds no task holds leave with the next publication; a
   } finally { Reflect.set(PROTOTYPE_LIMITS,"storedRounds",rounds); }
 });
 
-test("a publication's cleanup during a save leaves the save its lock: a second save, a read and a retry wait and one message goes", async () => {
+test("a publication's cleanup while a delivery holds its round's lock leaves it the lock: a second save, a read and a retry answer at once and one message goes", async () => {
   saveTasks([task(),task("task-other")]);
   const body = await input("lock-held");
   const id = await publish(body);
@@ -395,18 +396,20 @@ test("a publication's cleanup during a save leaves the save its lock: a second s
   };
   const world = { caller: () => ({ conversationId: null, project: null }), stage: () => null, orchestrator: () => "conversation_seat" };
   const save = () => reviewPOST(request("/review",{ reviewId: id, chosen: [1], comment: "Chosen once." }),TASK,world,delivery);
-  const first = save();
+  expect((await save()).status).toBe(200);
   for (let n = 0; sends === 0 && n < 500; n += 1) await Bun.sleep(5);
   expect(sends).toBe(1);
-  const waiting = [save(),reviewGET(request("/review"),TASK,world,delivery),reviewPOST(request("/review",{ reviewId: id, retry: true }),TASK,world,delivery)];
-  await Bun.sleep(30);
-  // Another task's publication runs the cleanup while the lock is held and queued for.
+  // Nothing the operator does waits on the delivery that holds the lock.
+  const answers = await Promise.all([save(),reviewGET(request("/review"),TASK,world),reviewPOST(request("/review",{ reviewId: id, retry: true }),TASK,world,delivery)]);
+  for (const response of answers) expect(response.status).toBe(200);
+  expect(sends).toBe(1);
+  // Another task's publication runs the cleanup while the lock is held.
   await publish({ ...body, taskId: "task-other", clientRequestId: "lock-held-other" });
   const queue = path.join(stateDir(),"prototype-reviews",`${id}.decision.lock.write-locks`);
-  expect((await fs.readdir(queue)).length).toBe(4);
+  expect((await fs.readdir(queue)).length).toBe(1);
   expect(await lockLeftovers()).toEqual([`${id}.decision.lock.write-lock`,`${id}.decision.lock.write-locks`]);
   release();
-  for (const response of [await first,...await Promise.all(waiting)]) expect(response.status).toBe(200);
+  await settlePrototypeDeliveriesForTests();
   expect(sends).toBe(1);
   expect(loadTasks()[0]!.prototypeReviews![0]!.decision!.delivery).toMatchObject({ state: "sent", operationId: "operation-1" });
   expect(await fs.readdir(queue)).toEqual([]);
@@ -425,6 +428,7 @@ test("a task's history keeps a bounded number of rounds: superseded undecided ro
     expect((await read()).rounds).toHaveLength(3);
     const comments = ids.slice(2).map((_,n) => `  Round ${n}: keep these words.\n`);
     for (const [n,id] of ids.slice(2).entries()) expect((await reviewPOST(request("/review",{ reviewId: id, chosen: [1], comment: comments[n] }),TASK)).status).toBe(200);
+    await settlePrototypeDeliveriesForTests();
     const refused = await publishPOST(request("/api/prototype-reviews",{ ...body, clientRequestId: "history-full" }));
     expect(refused.status).toBe(409); expect((await refused.json()).error).toContain("3 decided");
     held = loadTasks()[0]!.prototypeReviews!;

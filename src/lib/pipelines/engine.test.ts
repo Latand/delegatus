@@ -2399,7 +2399,7 @@ test("CPU pressure holds a fresh stage start with a visible reason and releases 
   const held = loadPipelines()[0]!;
   expect(held.cursor?.state).toBe("pending");
   expect(held.runs[0]!.attempts[0]!.spawnCalls ?? 0).toBe(0);
-  expect(held.stateDetail).toBe("stage start held for CPU pressure since 2026-10-06T12:00:00.000Z (avg10 45% ≥ 20%)");
+  expect(held.stateDetail).toBe("stage start held for CPU pressure since 2026-10-06T12:00:00.000Z (avg10 45% ≥ 30%)");
   expect(wakes).toContain(5_000);
   clock += 120_000;
   await tickPipelines([], h.ports);
@@ -14140,7 +14140,7 @@ test.each([
   expect(box.order).toEqual(["commit", "push-rejected", `push:${box.passedSha}`]);
 });
 
-test("a pass whose commit failed still retries stage work before publishing", async () => {
+test("a pass whose commit failed retries settlement without rerunning stage work before publishing", async () => {
   const h = harness();
   const box = publishHarness(h);
   const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
@@ -14155,12 +14155,13 @@ test("a pass whose commit failed still retries stage work before publishing", as
   expect(parked).toMatchObject({ state: "needs_decision", lastPassedCommit: ORIGIN_MAIN_SHA,
     cursor: { stageId: "build", state: "committing" } });
   expect(parked.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+  expect(parked.stateDetail).toContain("retry-stage");
   h.ports.exec = exec;
   expect((await patchPipeline(pipeline.id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
   await tickPipelines([], h.ports);
-  expect(h.spawnInputs).toHaveLength(2);
-  expect(box.order).toEqual([]);
-  await tickPipelines([h.finish("/codex/stage-2.jsonl", "pass")], h.ports);
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
   expect(loadPipelines()[0]).toMatchObject({ publishedCommit: box.passedSha,
     cursor: { stageId: "review", state: "pending" } });
   expect(box.order).toEqual(["commit", `push:${box.passedSha}`]);
@@ -16507,6 +16508,10 @@ test("an unpublished launch whose host is verified alive survives the tick that 
 
     // The same launch once its host is gone terminalizes as before.
     await host.end();
+    const receipt = f.registry.readOnlySnapshot().receipts[f.launchId()]!;
+    const writer = f.registry.readOnlySnapshot().entries[`codex:${receipt.key!.sessionId}`]!;
+    expect(f.registry.setStructuredHostClaimed(receipt.key!, { ...writer.structuredHost!, process: null },
+      "dead", writer.claimOwner!, writer.claimEpoch, true)).toMatchObject({ status: "dead", claimOwner: null });
     await f.wake();
     expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("failed");
     expect(f.attempt()).toMatchObject({ state: "failed", error: expect.stringMatching(/^stage launch never started: runtime host recovery exhausted/) });
@@ -17648,6 +17653,10 @@ test.each(["path-pending", "starting", "closed", "closed-pending"] as const)("ne
     reason: "runtime host recovery exhausted after 2 checks; original launch and first-message operation inspected; last result: runtime host request timed out",
   });
   f.registry.preserveSpawnArtifactOwnership(receipt.launchId, stopped);
+  // The staged fixture's writer retires before the controller proves no agent started.
+  const writer = f.registry.readOnlySnapshot().entries[`codex:${receipt.key!.sessionId}`]!;
+  expect(f.registry.setStructuredHostClaimed(receipt.key!, { ...writer.structuredHost!, process: null },
+    "dead", writer.claimOwner!, writer.claimEpoch, true)).toMatchObject({ status: "dead", claimOwner: null });
   const records = loadPipelines();
   records[0]!.state = closed ? "closed" : "needs_decision";
   if (closed) {

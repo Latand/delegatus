@@ -209,6 +209,12 @@ export type SeatTickWakeReasonKind =
       has answered (#2215). Unattended ones are denied at once, so one standing
       here is a request the automatic answer could not settle. */
   | "permission-request"
+  /** A worker's or a stage's wait «Waiting for you» routes to this seat first
+      (docs/design/attention-auto-resolve.md): a prose ask, a memory kill, a
+      permission request, a parked lane or a stopped merge. Due on the next
+      check, once per wait and seat; the operator sees it only once the seat
+      escalates it. */
+  | "worker-ask"
   /** Free space on a volume Delegatus writes to fell below the warning
       threshold: once per pressure episode, without waiting for the interval. */
   | "disk-pressure";
@@ -224,6 +230,7 @@ export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "maintenance-settled",
   "deploy-settled",
   "permission-request",
+  "worker-ask",
   "disk-pressure",
 ];
 
@@ -267,7 +274,10 @@ export interface SeatTickItem {
       after the unstarted tasks while the record has not moved. */
   stallToken?: string;
   /** `provisioning` is the outcome of the seat's own create call (#1799). */
-  kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning" | "deploy" | "permission" | "maintenance";
+  kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning" | "deploy" | "permission" | "maintenance" | "ask";
+  /** Only on an `ask` line: the exact wait it names, so a newer ask on the
+      same conversation or a lane that parked again is offered afresh. */
+  askKey?: string;
   id: string;
   label: string;
   /** A settled child's readable transcript (#1881): the controller attaches
@@ -800,6 +810,8 @@ export interface SeatTickChildInput {
 /** A durable log line the Viewer already writes: a deploy outcome, the host
     retirement report, a seat whose own turn stopped progressing. */
 export interface SeatTickSignalInput {
+  /** A durable project obligation can supply work even on an empty board. */
+  actionable?: boolean;
   /** Stable pressure crossing; free-space changes do not create a new warning. */
   episode?: string;
   id: string;
@@ -1266,6 +1278,16 @@ export interface SeatTickRefusalRun {
   settingsUpdatedAt: string | null;
 }
 
+/** One wait routed to the seat: the conversation or lane that asked, the
+    exact wait, and one bounded line with the question and the answer path. */
+export interface SeatTickWorkerAskInput {
+  /** The route key: changes whenever the wait does. */
+  key: string;
+  /** The conversation id (or transcript path) that asked, or the lane id. */
+  id: string;
+  label: string;
+}
+
 export interface SeatTickCheckInput {
   project: string;
   now: number;
@@ -1276,6 +1298,10 @@ export interface SeatTickCheckInput {
   seatEverHeld?: boolean;
   pipelines: readonly SeatTickPipelineInput[];
   tasks: readonly SeatTickTaskInput[];
+  /** The waits «Waiting for you» routes to this project's seat first
+      (docs/design/attention-auto-resolve.md), each with the line that says
+      what was asked and how to answer it. Absent reads as none. */
+  workerAsks?: readonly SeatTickWorkerAskInput[];
   /** Events after {@link SeatTickProjectState.eventsThrough}, oldest first. */
   events: readonly SeatTickEventInput[];
   /** Pull requests that finished lanes left open (#1289). Empty whenever the

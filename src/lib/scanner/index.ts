@@ -386,6 +386,21 @@ async function listFilesInternal(
   };
 }
 
+/** Whether someone other than the operator answers an entry's question
+    first, read once per controller pass. Unreadable routing pushes as before. */
+async function questionRouteReader(entries: readonly FileEntry[]): Promise<(entry: FileEntry) => boolean> {
+  if (!entries.some((entry) => entry.pendingQuestion || entry.waitingInput)) return () => false;
+  try {
+    const [{ questionRouteReader: routeReader, productionRoutingSources }, { seatIdentityResolver }] = await Promise.all([
+      import("@/lib/attention/routeOverlay"), import("@/lib/bridge/seatIdentity"),
+    ]);
+    const registry = agentRegistry();
+    return routeReader(productionRoutingSources(seatIdentityResolver((id) => registry.canonicalConversationId(id))), Date.now() / 1000);
+  } catch {
+    return () => false;
+  }
+}
+
 /** Durable controllers run outside request handlers. Flow ordering remains
     stable: workflows observe the flow state from the same controller tick. */
 export async function reconcileFileControllers(entries: FileEntry[]): Promise<void> {
@@ -395,8 +410,12 @@ export async function reconcileFileControllers(entries: FileEntry[]): Promise<vo
   // Custom session titles (issue #33) must reach push bodies too, so overlay
   // them before notifying — a rename shows the human name in notifications.
   overlaySessionTitles(entries);
+  /* A worker's question waits on its project's seat first
+     (docs/design/attention-auto-resolve.md): it reaches the operator's phone
+     only when no seat can be woken for it. */
+  const routedToOthers = await questionRouteReader(entries);
   await forEachCooperatively(entries, (entry) => {
-    if (entry.pendingQuestion || entry.waitingInput) void notifyQuestion(entry);
+    if ((entry.pendingQuestion || entry.waitingInput) && !routedToOthers(entry)) void notifyQuestion(entry);
   });
   await tickFlows(entries);
   await yieldToRuntime();

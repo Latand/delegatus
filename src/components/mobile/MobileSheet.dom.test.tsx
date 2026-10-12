@@ -263,3 +263,29 @@ test("a row truncates its label by default and its trailing text on request", ()
   expect(inverted.trailing.className).toContain("flex-1");
   expect(inverted.trailing.className).not.toContain("shrink-0");
 });
+
+/*
+ * Every phone «…» menu opens through this sheet, so its body is where a line
+ * that will not shrink would make a menu scroll sideways. The body scrolls
+ * down and never across, for the sheet that sizes to its content and for the
+ * full one (docs/design/mobile-menu-overflow-brief.md). happy-dom has no layout:
+ * the stylesheet's rule is read off the classes, and the browser case in
+ * issue1671Evidence.browser.test.tsx reads the widths.
+ */
+test("a sheet body scrolls vertically and never sideways, sized to content or full", () => {
+  const host = mount(
+    <>
+      <MobileSheet name="menu" title="atlas" onClose={() => undefined}><span>rows</span></MobileSheet>
+      <MobileSheet name="stage" title="stage" full onClose={() => undefined}><span>rows</span></MobileSheet>
+    </>,
+  );
+  const bodies = [...host.querySelectorAll("[data-mobile2-sheet-body]")] as unknown as HTMLElement[];
+  expect(bodies).toHaveLength(2);
+  for (const body of bodies) {
+    const classes = body.className.split(/\s+/);
+    expect(classes).toContain("overflow-y-auto");
+    expect(classes).toContain("overflow-x-hidden");
+    expect(classes).not.toContain("overflow-x-auto");
+    expect(classes).not.toContain("overflow-x-scroll");
+  }
+});

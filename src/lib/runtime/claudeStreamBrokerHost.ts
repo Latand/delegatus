@@ -46,7 +46,7 @@ import {
   type RuntimeEventStore,
 } from "./eventStore";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
-import { pendingPermissionFrom, type PendingPermissionRequest } from "./permissionRequests";
+import { pendingPermissionFrom, pendingToolUseFrom, type PendingPermissionRequest } from "./permissionRequests";
 import { NATIVE_MULTI_AGENT_DENY_FLAG } from "./hostActivityFlags";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
 import { resolveTelegramLaunchGrant, TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE, type TelegramLaunchGrant } from "./telegramConnectorEnv";
@@ -243,6 +243,8 @@ export interface ClaudeStreamBrokerHostOptions {
   claudeProjectsDir?: string;
   spawnPolicyBaseSettingsPath?: string | null;
   allowSubagents?: boolean;
+  /** Seats ask operator decisions through Delegatus forms. Workers keep native tools. */
+  operatorDecisionForms?: boolean;
   /** No automatic memory: no shared-memory hook and Claude's auto memory off. */
   cleanMemory?: boolean;
   appendSystemPrompt?: string;
@@ -834,6 +836,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     const disallowedTools = [
       ...(!options.allowSubagents ? NATIVE_MULTI_AGENT_TOOLS : []),
       ...(options.readOnly ? ["Edit", "Write", "NotebookEdit"] : []),
+      ...(options.operatorDecisionForms ? ["AskUserQuestion", "ExitPlanMode"] : []),
     ];
     if (disallowedTools.length > 0) args.push("--disallowedTools", disallowedTools.join(","));
     if (options.claudeConfigDir) {
@@ -1232,11 +1235,17 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       activeTurnRef: this.activeTurnId,
       pendingAttention: [...this.attentions.keys()],
       pendingPermissions: this.pendingPermissions(),
+      ...this.pendingToolUses(),
       providerRetry: this.activeTurnId ? this.providerRetry : null,
       ...memoryField(this.memoryCell),
       activeFlags: [...this.launchFlags],
       account: this.account,
     };
+  }
+
+  private pendingToolUses(): Pick<HostState, "pendingToolUses"> {
+    const pendingToolUses = [...this.attentions].flatMap(([id, attention]) => pendingToolUseFrom(id, attention) ?? []);
+    return pendingToolUses.length ? { pendingToolUses } : {};
   }
 
   private pendingPermissions(): PendingPermissionRequest[] {

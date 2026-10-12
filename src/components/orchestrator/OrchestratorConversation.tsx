@@ -5,6 +5,7 @@ import { useState, type ReactNode } from "react";
 import { useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
+import { ConversationRoleScope } from "../brand/RoleAvatar";
 import { HintScope } from "../Hint";
 import { ProcessStatusControls } from "../TaskHeader";
 import { AgentControlStrip } from "../AgentControlStrip";
@@ -19,7 +20,7 @@ const noop = () => undefined;
 /**
  * The orchestrator's REAL conversation, in the dock column (PRD #976 decision 2:
  * `LogFeed` + `TmuxComposer`, never a bespoke chat renderer). Composed exactly
- * as `BranchPane` composes them — the same feed, the same control strip, the
+ * as `BranchPane` composes them — the same feed, the same agent controls, the
  * same dead-host recovery, the same composer — so a message typed here takes
  * the composer's ordinary delivery path and a dead conversation is RESUMED by
  * that machinery rather than replaced by a second spawn.
@@ -56,6 +57,8 @@ export function OrchestratorConversation({ file, projectName, hostControls = tru
         <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-composer-yields="">
           {transcriptSlot ?? (
             <ToolDisclosurePolicy value="collapsed">
+              {/* The seat's answers wear the orchestrator's headset (docs/design/role-avatars.md). */}
+              <ConversationRoleScope value="orchestrator">
               <LogFeed
                 file={file}
                 showSvc={false}
@@ -67,11 +70,14 @@ export function OrchestratorConversation({ file, projectName, hostControls = tru
                 compact
                 stepsMount={stepsMount}
               />
+              </ConversationRoleScope>
             </ToolDisclosurePolicy>
           )}
         </div>
         {hostControls ? <ProcessStatusControls file={file} hideChip /> : null}
-        <AgentControlStrip file={file} />
+        {/* The agent's controls sit in the composer's bottom row (2026-10-11);
+            the strip is left for a seat whose composer stands down. */}
+        {sendCap.state === "hidden" ? <AgentControlStrip file={file} /> : null}
         <div ref={setStepsMount} className="contents" />
         <TmuxComposer
           file={file}

@@ -44,6 +44,9 @@ test("fresh and resumed terminal launches deny all native agent routes and futur
     for (const spec of [freshSpecFor("codex", SANDBOX, { codexHome: home, allowSubagents: allowed }), resumeSpecFor("codex-sessions", transcript, { allowSubagents: allowed })]) {
       expect(spec?.command).toContain("--no-daemon");
       expect(spec?.command).toContain(`agents.enabled=${allowed}`);
+      expect(spec?.command).toContain("features.hooks=true");
+      expect(spec?.command).toContain("hooks.PreToolUse=");
+      expect(spec?.command).toContain("LLV_MANAGED_PROCESS_CLEANUP_DENY=1");
       expect(spec?.command.includes('approvals_reviewer="user"')).toBe(!allowed);
       for (const feature of ["multi_agent", "multi_agent_v2", "future_worker"]) {
         const normalized = spec?.command.replace(/'/g, "");
@@ -688,7 +691,7 @@ test("legacy Claude fresh and resumed commands pin the same store as browser log
   }
 });
 
-test("allowSubagents leaves a managed Claude fresh spawn without the Viewer hook", () => {
+test("allowSubagents retains process cleanup on managed Claude fresh and resumed spawns", () => {
   const account = createManagedClaudeAccount("Claude Orchestrator");
 
   const fresh = freshSpecFor("claude", "/repo", {
@@ -701,7 +704,6 @@ test("allowSubagents leaves a managed Claude fresh spawn without the Viewer hook
     hooks: { PreToolUse: unknown[] };
   };
 
-  expect(settings.hooks.PreToolUse).toEqual([]);
   fs.mkdirSync(path.dirname(fresh.transcript!), { recursive: true });
   fs.writeFileSync(fresh.transcript!, JSON.stringify({ cwd: "/repo" }) + "\n");
   resumeSpecFor("claude-projects", fresh.transcript!, { allowSubagents: true });
@@ -709,7 +711,11 @@ test("allowSubagents leaves a managed Claude fresh spawn without the Viewer hook
     path.join(account.home, ".llv", "spawn-settings", `resume-${sid}.json`),
     "utf8",
   )) as { hooks: { PreToolUse: unknown[] } };
-  expect(resumedSettings.hooks.PreToolUse).toEqual([]);
+  for (const profile of [settings, resumedSettings]) {
+    expect(profile.hooks.PreToolUse).toEqual([{ matcher: "Bash", hooks: [{
+      type: "command", command: expect.stringContaining("LLV_MANAGED_PROCESS_CLEANUP_DENY=1 "),
+    }] }]);
+  }
 });
 
 test("deferred Claude policy planning leaves disk unchanged before route admission", () => {
@@ -782,6 +788,28 @@ test("with the HTTP flag, a terminal attach/resume command keeps the stdio Viewe
     for (const [name, value] of [["LLV_MCP_TRANSPORT", previous.transport], ["LLV_SPAWN_CAPABILITY", previous.capability], ["LLV_TOKEN", previous.token]] as const) {
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
+    }
+  }
+});
+
+
+test("terminal seat launches deny native questions while worker launches stay unchanged", async () => {
+  const { resumeSpecForSession } = await import("./cli");
+  const home = path.join(SANDBOX, "seat-terminal-policy");
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, "config.toml"), "[mcp_servers]\n");
+  for (const engine of ["claude", "codex"] as const) for (const seat of [false, true]) for (const readOnly of [false, true]) {
+    const options = { operatorDecisionForms: seat, allowSubagents: true, readOnly, claudeConfigDir: home, codexHome: home };
+    const specs = [freshSpecFor(engine, SANDBOX, options), resumeSpecForSession(engine, randomUUID(), SANDBOX, home, options)!];
+    for (const spec of specs) {
+      if (engine === "claude") {
+        expect(spec.command.includes("AskUserQuestion")).toBe(seat);
+        expect(spec.command.includes("ExitPlanMode")).toBe(seat);
+        if (readOnly) expect(spec.command).toContain("Edit,Write,NotebookEdit");
+      } else {
+        expect(spec.command.includes("tools.experimental_request_user_input.enabled=false")).toBe(seat);
+        expect(spec.command.includes("request_user_input_async")).toBe(seat);
+      }
     }
   }
 });

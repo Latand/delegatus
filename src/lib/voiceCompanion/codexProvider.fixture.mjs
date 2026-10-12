@@ -2,6 +2,11 @@ import fs from "node:fs";
 import readline from "node:readline";
 import { spawn } from "node:child_process";
 
+if (process.argv.includes("--version")) {
+  console.log("codex-cli 0.162.1");
+  process.exit(0);
+}
+
 const root = process.env.VOICE_STUB_ROOT;
 const mode = process.env.VOICE_STUB_MODE;
 fs.writeFileSync(`${root}/pid`, String(process.pid));
@@ -10,13 +15,24 @@ const send = value => process.stdout.write(`${JSON.stringify(value)}\n`);
 const note = (method, params) => send({ method, params });
 const threadId = "voice_thread";
 const readArgs = { project: null, statuses: null, openOnly: true, query: null, ids: null, cursor: null, limit: null, refresh: null };
+if (mode === "replay") {
+  let consumed = 0;
+  setInterval(() => {
+    const file = `${root}/replay`;
+    if (!fs.existsSync(file)) return;
+    const rows = fs.readFileSync(file, "utf8").trim().split("\n").filter(Boolean);
+    for (const row of rows.slice(consumed)) send(JSON.parse(row));
+    consumed = rows.length;
+  }, 10);
+}
 readline.createInterface({ input: process.stdin }).on("line", line => {
   const message = JSON.parse(line);
   fs.appendFileSync(`${root}/wire`, `${line}\n`);
   if (!message.method) return;
   let result = {};
   if (message.method === "account/read") result = { account: { type: mode === "auth" ? "apiKey" : "chatgpt", planType: "pro", email: "withheld" }, requiresOpenaiAuth: true };
-  if (message.method === "account/rateLimits/read") result = { rateLimits: { primary: { usedPercent: mode === "limit" ? 100 : 10, resetsAt: 2000000000, windowDurationMins: 300 }, secondary: null, planType: "pro" } };
+  // A test that drops no-windows gets a reading with no percentage window, as a workspace member's can be.
+  if (message.method === "account/rateLimits/read") result = { rateLimits: { primary: fs.existsSync(`${root}/no-windows`) ? null : { usedPercent: mode === "limit" ? 100 : 10, resetsAt: 2000000000, windowDurationMins: 300 }, secondary: null, planType: "pro" } };
   if (message.method === "thread/start") result = { thread: { id: threadId } };
   if (message.method === "thread/realtime/stop" && mode?.startsWith("hangup-timeout")) {
     // Establish the inherited stdout before acknowledging stop: the Viewer
@@ -45,6 +61,15 @@ readline.createInterface({ input: process.stdin }).on("line", line => {
         const answer = { method: "thread/realtime/sdp", params: { threadId, sdp: "v=0\r\nanswer\r\n" } };
         if (mode === "sdp-error") process.stdout.write(`${JSON.stringify(answer)}\n${JSON.stringify({ method: "thread/realtime/error", params: { threadId, message: "connection failed" } })}\n`);
         else send(answer);
+        // Notifications a test drops as notify-<n>.json reach the call in name order, each once.
+        const relay = setInterval(() => {
+          if (!fs.existsSync(root) || process.stdin.readableEnded) { clearInterval(relay); return; }
+          for (const name of fs.readdirSync(root).filter(name => /^notify-\d+\.json$/.test(name)).sort()) {
+            const file = `${root}/${name}`;
+            send(JSON.parse(fs.readFileSync(file, "utf8")));
+            fs.renameSync(file, `${file}.sent`);
+          }
+        }, 10);
         if (mode === "hangup-timeout-closed" || mode === "hangup-timeout-overflow") {
           const trigger = setInterval(() => {
             if (!fs.existsSync(`${root}/notify-close`)) return;

@@ -7,6 +7,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { statePath } from "@/lib/configDir";
+import { stagedLaunchRecovery } from "@/lib/runtime/stagedRecovery";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
@@ -97,7 +98,7 @@ import { identityMaterializationFence } from "./identityMaterialization";
 import type { ResumePaneRecord } from "@/lib/resumePanesFile";
 import type { RuntimeDeliveryMode } from "@/lib/runtime/contracts";
 import { parseMessageOrigin, sameMessageOrigin } from "@/lib/runtime/messageOrigin";
-import { normalizePendingPermissions, type PendingPermissionRequest } from "@/lib/runtime/permissionRequests";
+import { normalizePendingPermissions, normalizePendingToolUses, type PendingPermissionRequest, type PendingToolUse } from "@/lib/runtime/permissionRequests";
 import type { ProviderRetryEvidence } from "@/lib/runtime/engineHost";
 import { assertStructuredTextEnvelope, parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "@/lib/runtime/structuredContent";
 import { admitReservedLaunch, settleFailedLaunch } from "@/lib/tasks/launchMembership";
@@ -139,6 +140,9 @@ export interface StructuredHostColumns {
   pendingAttention: string[];
   /** The pending attentions that are tool permission requests (#2215). */
   pendingPermissions?: PendingPermissionRequest[];
+  /** The pending attentions that are native questions or plans, with the
+      transcript tool use each answers. */
+  pendingToolUses?: PendingToolUse[];
   /** The provider retry the engine reported for the open turn (#2215). */
   providerRetry?: ProviderRetryEvidence | null;
   activeFlags: string[];
@@ -2115,6 +2119,9 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
       : [],
     ...(Array.isArray(host.pendingPermissions) && host.pendingPermissions.length > 0
       ? { pendingPermissions: normalizePendingPermissions(host.pendingPermissions) }
+      : {}),
+    ...(normalizePendingToolUses(host.pendingToolUses).length > 0
+      ? { pendingToolUses: normalizePendingToolUses(host.pendingToolUses) }
       : {}),
     ...(normalizeHostMemory(host.memory) ? { memory: normalizeHostMemory(host.memory)! } : {}),
     ...(normalizeProviderRetry(host.providerRetry) ? { providerRetry: normalizeProviderRetry(host.providerRetry) } : {}),
@@ -4480,7 +4487,9 @@ export class AgentRegistry {
       afterRename: storage.afterMirrorRename,
     };
     this.beforeDualWriteMutationReplace = storage.beforeDualWriteMutationReplace;
+    const mayRunStartupMaintenance = mayRunStateStartupMutation(path.dirname(this.filename));
     const openStore = () => new SqliteAgentRegistryStore(sqliteFilename, {
+      allowArchiveMigration: mayRunStartupMaintenance,
       /* Lazy: an initialised store never reads the JSON (#1870). */
       initialSnapshot: () => readFile(filename, storage.mcpGrantPolicy),
       verifyImport: (source, imported) => verifyRegistryImport(source, imported, storage.onRegistryImportVerify),
@@ -4504,7 +4513,6 @@ export class AgentRegistry {
        dual-write synchronization, or retirement of a JSON mirror. A reader
        such as MCP stands down against the operator's state until the serving
        Viewer or runtime host takes the release fence. */
-    const mayRunStartupMaintenance = mayRunStateStartupMutation(path.dirname(this.filename));
     if (this.sqliteMode === "off" && mayRunStartupMaintenance) {
       this.cleanupStaleTempFiles();
       this.compactAtStartup();
@@ -5528,17 +5536,51 @@ export class AgentRegistry {
   }
 
   spawnReceiptForClientAttempt(clientAttemptId: string): SpawnReceipt | null {
-    const receipt = Object.values(this.readOnlySnapshot().receipts)
-      .find((candidate) => candidate.clientAttemptId === clientAttemptId);
-    return receipt ? clone(receipt) : null;
+    return this.readKeyed(file => {
+      const receipt = registryRowsMatching(file,"receipts","clientAttemptId",clientAttemptId)[0];
+      return receipt ? clone(receipt) : null;
+    });
   }
 
   conversationIdForSpawnCapabilityDigest(digest: string): ViewerConversationId | null {
     if (!/^[0-9a-f]{64}$/.test(digest)) return null;
-    const file = this.readOnlySnapshot();
-    const receipt = Object.values(file.receipts).find((candidate) => candidate.spawnCapabilityDigest === digest
-      || candidate.pendingSpawnCapability?.digest === digest);
-    return receipt ? resolveConversationAlias(file, receipt.conversationId) : null;
+    return this.readKeyed(file => {
+      const receipt = registryRowsMatching(file,"receipts","spawnCapabilityDigest",digest)[0]
+        ?? registryRowsMatching(file,"receipts","pendingSpawnCapability.digest",digest)[0];
+      return receipt ? resolveConversationAlias(file,receipt.conversationId) : null;
+    });
+  }
+
+  /** Existing reaper hygiene owns these bounded storage-only moves. */
+  archiveInactiveRows(limit = 1_000): number {
+    assertStateStartupMutation(path.dirname(this.filename),"agent registry archive");
+    return this.sqliteMode === "sqlite" ? this.sqliteStore!.archiveInactive(limit) : 0;
+  }
+
+  openSpawnReceipts(): SpawnReceipt[] {
+    return this.readKeyed(file => clone(registryRowsMatching(file,"receipts","state",
+      ["starting","pane-bound","host-verified","prompt-delivered","path-pending"])));
+  }
+
+  terminalizeAbandonedSpawnEntries(options: { now: number; timeoutMs: number; limit: number }): string[] {
+    return this.mutate(file => {
+      const terminalized: string[] = [];
+      for (const entry of registryRowsMatching(file,"entries","status","starting")) {
+        if (terminalized.length >= options.limit) break;
+        const updatedAt = Date.parse(entry.updatedAt);
+        if (!Number.isFinite(updatedAt) || options.now-updatedAt < options.timeoutMs
+          || entry.pendingAction !== "spawn" || entry.host || entry.structuredHost || entry.structuredHostOperationId || entry.claimOwner
+          || entry.structuredTerminationSurvivors?.length) continue;
+        const receipts = [...registryRowsMatching(file,"receipts","artifactPath",entry.artifactPath),
+          ...registryRowsMatching(file,"receipts","key.sessionId",entry.key.sessionId).filter(receipt => receipt.key?.engine === entry.key.engine)];
+        if (receipts.length) continue;
+        entry.status = "dead";
+        entry.pendingAction = null;
+        entry.updatedAt = new Date(options.now).toISOString();
+        terminalized.push(sessionKeyId(entry.key));
+      }
+      return terminalized;
+    });
   }
 
   rotateSpawnCapabilityForReceipt(launchId: string): string {
@@ -5724,7 +5766,7 @@ export class AgentRegistry {
       }
       const requestedTitle = input.launchProfile?.title;
       const existingAttempt = input.clientAttemptId
-        ? Object.values(file.receipts).find((receipt) => receipt.clientAttemptId === input.clientAttemptId)
+        ? registryRowsMatching(file,"receipts","clientAttemptId",input.clientAttemptId)[0]
         : null;
       const requestedProfile = emptyLaunchProfile({
         cwd: input.cwd,
@@ -6237,14 +6279,16 @@ export class AgentRegistry {
     });
   }
 
-  preserveSpawnArtifactOwnership(launchId: string, error: string): void {
-    this.mutate((file) => {
+  preserveSpawnArtifactOwnership(launchId: string, error: string, recoveryFence?: (file: RegistryFile, receipt: SpawnReceipt) => boolean): boolean {
+    return this.mutate((file) => {
       const receipt = file.receipts[launchId];
-      if (!receipt || receipt.state === "completed" || receipt.state === "failed") return;
+      if (!receipt || receipt.state === "completed" || receipt.state === "failed"
+        || (recoveryFence && !recoveryFence(file, receipt))) return false;
       receipt.state = "path-pending";
       receipt.error = error;
       receipt.verifiedHost = null;
       receipt.target = null;
+      return true;
     });
   }
 
@@ -6762,6 +6806,82 @@ export class AgentRegistry {
     if (!written.acquired) return false;
     if (written.value.receipt) settleFailedLaunch(written.value.receipt);
     return written.value.result;
+  }
+
+  /** Fails an unpublished stage only while no recorded agent can still run.
+      The evidence is checked inside the failure transaction, so a new writer,
+      generation or transcript arriving before the write retains the launch. */
+  failNeverStartedStageSpawnNow(launchId: string, conversationId: string, error: string): boolean {
+    const written = this.deliveryWriteNow({ label: "spawn.fail", operationId: `spawn_message_${launchId}` },
+      () => this.failStructuredSpawnInFile(launchId, error, {
+        recoveryFence: (file, receipt) => {
+          if (receipt.conversationId !== conversationId || receipt.transport !== "structured" || receipt.purpose !== "launch"
+            || !["starting", "path-pending"].includes(receipt.state) || receipt.pane || receipt.verifiedHost
+            || (receipt.admissionOwner && this.ownerAlive(receipt.admissionOwner))) return false;
+          const recovery = stagedLaunchRecovery(receipt);
+          if (recovery && recovery.phase !== "unpublished") return false;
+          // The unpublished envelope predates an independent first-message
+          // attempt. Only a reservation that has never dispatched can end in
+          // this transaction; retained operation evidence survives compaction.
+          const messageOperation = `spawn_message_${launchId}`;
+          const messageId = `spawn_${launchId}`;
+          const canonicalId = resolveConversationAlias(file, receipt.conversationId);
+          const isFirstMessage = (row: { conversationId: ViewerConversationId; clientMessageId: string | null }) =>
+            row.clientMessageId === messageId && resolveConversationAlias(file, row.conversationId) === canonicalId;
+          const deliveries = Object.values(file.heldDeliveries).filter(delivery =>
+            delivery.command.operationId === messageOperation || isFirstMessage(delivery));
+          if (deliveries.some(delivery => initialSpawnReceiptOf(file, delivery)?.launchId !== launchId || delivery.attempts !== 0
+            || (delivery.state !== "held" && delivery.state !== "assigned"))) return false;
+          for (const [operationId, owner] of Object.entries(file.deliveryOperationOwners)) {
+            if (operationId !== messageOperation && !isFirstMessage(owner)) continue;
+            const delivery = deliveries.find(delivery => delivery.id === owner.deliveryId
+              && delivery.command.operationId === operationId && delivery.requestDigest === owner.requestDigest);
+            if (!delivery || operationId !== messageOperation || owner.command.operationId !== messageOperation
+              || !isFirstMessage(owner) || owner.terminalState !== null || owner.terminalDisposition !== null) return false;
+          }
+          const conversation = file.conversations[resolveConversationAlias(file, receipt.conversationId)];
+          const absent = (pathname: string | null) => {
+            if (!pathname) return true;
+            try { fs.statSync(pathname); return false; }
+            catch (error) { return ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? ""); }
+          };
+          const paths = [receipt.artifactPath, ...(conversation?.generations.map(generation => generation.path) ?? [])];
+          if (!paths.every(absent)) return false;
+          // A generation id can come from an older transcript filename while
+          // the receipt holds the native key. Include every owner of its paths
+          // instead of treating the filename-derived id as its only writer.
+          const keys = new Set(Object.entries(file.entries)
+            .filter(([, entry]) => paths.includes(entry.artifactPath))
+            .map(([key]) => key));
+          for (const generation of conversation?.generations ?? []) {
+            const key = sessionKeyId({ engine: conversation!.engine, sessionId: generation.id });
+            if (file.entries[key]) keys.add(key);
+            else if (![...keys].some(key => file.entries[key]!.artifactPath === generation.path)) return false;
+          }
+          if (receipt.key) keys.add(sessionKeyId(receipt.key));
+          for (const key of keys) {
+            const entry = file.entries[key];
+            if (!entry) return false;
+            if (entry.structuredHostOperationId && entry.structuredHostOperationId !== launchId) return false;
+            if (entry.host || !absent(entry.artifactPath)
+              || entry.structuredTerminationSurvivors?.some(identity => this.ownerAlive(identity))
+              || (entry.structuredHost?.process && this.ownerAlive(entry.structuredHost.process))) return false;
+            // Adoption advances the claim before binding its new process and
+            // can still retain the old native identity. Prove the writer gone
+            // independently of that old incarnation before revoking its claim.
+            if (entry.claimOwner) {
+              const owner = structuredClaimIdentity(entry.claimOwner);
+              if (!owner || this.ownerAlive(owner)) return false;
+            }
+            if (!entry.structuredHost?.process && !entry.claimOwner
+              && entry.status !== "dead" && entry.status !== "unhosted") return false;
+          }
+          return true;
+        },
+      }));
+    if (!written.acquired) return false;
+    if (written.value.claimed && written.value.receipt) settleFailedLaunch(written.value.receipt);
+    return written.value.claimed;
   }
 
   private failSpawnInFile(launchId: string, error: string): { result: boolean; receipt: SpawnReceipt | null } {

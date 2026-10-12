@@ -1,3 +1,5 @@
+import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
+import { codexOperatorQuestionPolicy } from "./operatorQuestionPolicy";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -22,6 +24,7 @@ import { normalizeClaudeLaunchModel } from "./models";
 import { applyClaudeSpawnPolicy, claudeSpawnPolicyPaths, VIEWER_SPAWN_CAPABILITY_ENV } from "./spawnPolicy";
 import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile } from "@/lib/accounts/migration/contracts";
 import { codexSubagentArgs } from "./codexSpawnPolicy";
+import { codexProcessCleanupArgs } from "./processCleanupPolicy";
 
 export { ENGINE_EFFORTS, isEngineEffort } from "./efforts";
 
@@ -195,6 +198,7 @@ export interface FreshSpecOptions {
   claudeProjectsDir?: string | null;
   /** Allow native Claude sub-agents and the Codex multi-agent feature. */
   allowSubagents?: boolean;
+  operatorDecisionForms?: boolean;
   mcpServers?: readonly string[];
   /** Route admission owns policy materialization after its durable reservation. */
   deferClaudeSpawnPolicy?: boolean;
@@ -251,6 +255,7 @@ export interface ResumeSpecOptions {
   readOnly?: boolean | null;
   permissionMode?: string | null;
   allowSubagents?: boolean;
+  operatorDecisionForms?: boolean;
   mcpServers?: readonly string[];
   /** Codex plugin grant replayed from the conversation's durable profile
       (issue #687). A resume is the controlled path by which an existing
@@ -350,9 +355,10 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
     /* Read-only rounds must not inherit the skip-permissions bypass: with it,
        denying Edit/Write still leaves Bash free to mutate the worktree. */
     const permissionMode = effectiveClaudePermissionMode(options);
-    if (options.readOnly) args.push("--permission-mode", permissionMode, "--disallowedTools", "Edit,Write,NotebookEdit");
+    if (options.readOnly) args.push("--permission-mode", permissionMode, "--disallowedTools", `Edit,Write,NotebookEdit${options.operatorDecisionForms ? ",AskUserQuestion,ExitPlanMode" : ""}`);
     else if (permissionMode === "bypassPermissions") args.push("--dangerously-skip-permissions");
     else args.push("--permission-mode", permissionMode);
+    if (options.operatorDecisionForms && !options.readOnly) args.push("--disallowedTools", "AskUserQuestion,ExitPlanMode");
     args.push("--session-id", sid);
     const launchModel = providerLaunchModel(options.claudeConfigDir ?? legacyClaudeHome(), options.model);
     if (launchModel) args.push("--model", launchModel);
@@ -452,6 +458,8 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
   else if (options.fast != null) args.push("-c", `service_tier=${options.fast ? "priority" : "standard"}`);
   if (options.readOnly) args.push("--sandbox", "read-only");
   args.push(...codexSubagentArgs(args[0], options.allowSubagents, process.env, true));
+  args.push(...codexProcessCleanupArgs(home));
+  if (options.operatorDecisionForms) args.push(...codexOperatorQuestionPolicy(home).args);
   const command = args.map(shellQuote).join(" ");
   return {
     command: telegramScopedCommand(`${codexEnvPrefix(home, mcpServers)} ${command}`, mcpServers),
@@ -532,7 +540,9 @@ export function resumeEligibility(root: string, pathname: string, options: Resum
 export function resumeSpecFor(root: string, pathname: string, options: ResumeSpecOptions = {}): ResumeSpec | null {
   const eligibility = resumeEligibility(root, pathname, options);
   if (!eligibility.ok) return null;
-  return resumeSpecForSession(eligibility.engine, eligibility.sessionId, eligibility.cwd, eligibility.home, options);
+  return resumeSpecForSession(eligibility.engine, eligibility.sessionId, eligibility.cwd, eligibility.home, {
+    ...options, operatorDecisionForms: options.operatorDecisionForms || operatorDecisionFormsRequired(null, pathname),
+  });
 }
 
 /**
@@ -565,12 +575,13 @@ export function resumeSpecForSession(
     const args = [(options.hostTerminal ? resolveHostBinary : resolveBinary)("claude")];
     const permissionMode = effectiveClaudePermissionMode(options);
     if (options.readOnly || permissionMode === "plan") {
-      args.push("--permission-mode", "plan", "--disallowedTools", "Edit,Write,NotebookEdit");
+      args.push("--permission-mode", "plan", "--disallowedTools", `Edit,Write,NotebookEdit${options.operatorDecisionForms ? ",AskUserQuestion,ExitPlanMode" : ""}`);
     } else if (permissionMode !== "bypassPermissions" && /^[a-zA-Z-]+$/.test(permissionMode)) {
       args.push("--permission-mode", permissionMode);
     } else {
       args.push("--dangerously-skip-permissions");
     }
+    if (options.operatorDecisionForms && !options.readOnly && permissionMode !== "plan") args.push("--disallowedTools", "AskUserQuestion,ExitPlanMode");
     pushClaudePolicyArgs(args, policy);
     const launchModel = providerLaunchModel(home, normalizeClaudeLaunchModel(options.model));
     if (launchModel) args.push("--model", launchModel);
@@ -604,6 +615,8 @@ export function resumeSpecForSession(
     command += ` --ask-for-approval ${shellQuote(options.permissionMode)}`;
   }
   command += ` ${codexSubagentArgs((options.hostTerminal ? resolveHostBinary : resolveBinary)("codex"), options.allowSubagents, process.env, true).join(" ")}`;
+  command += ` ${codexProcessCleanupArgs(home).map(shellQuote).join(" ")}`;
+  if (options.operatorDecisionForms) command += ` ${codexOperatorQuestionPolicy(home).args.map(shellQuote).join(" ")}`;
   // Publication must stay with the other global options before resume.
   const subcommand = ` resume ${sessionId}`;
   return {

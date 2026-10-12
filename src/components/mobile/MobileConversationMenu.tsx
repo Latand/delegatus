@@ -44,7 +44,7 @@ import { chatStateBits, type StagePosition } from "./mobileChatState";
  * slot, which lane 5 owns.
  *
  * The actions themselves are not reimplemented here: Stop, Compact, Re-check
- * and Open in terminal come from `useAgentControlActions`, and Kill from
+ * and Copy terminal command come from `useAgentControlActions`, and Kill from
  * `useProcessKill`, the same hooks the desktop strip and the pane header read.
  */
 export function MobileConversationMenu({
@@ -172,7 +172,7 @@ export function MobileConversationMenu({
             the model and its reasoning tier, and the context that remains. The
             worktree, the account and the pipeline live one row down, in
             «Details & host». */}
-        <div className="flex min-h-9 items-center gap-2 px-4 pb-1 text-label font-medium text-secondary" data-mobile2-chat-identity>
+        <div className="flex min-h-9 flex-wrap items-center gap-x-2 gap-y-1 px-4 pb-1 text-label font-medium text-secondary" data-mobile2-chat-identity>
           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${bits.tone === "success" ? "bg-success" : bits.tone === "warning" ? "bg-warning" : bits.tone === "danger" ? "bg-danger" : bits.tone === "accent" ? "bg-accent" : "bg-strong"}`} aria-hidden />
           <span className="shrink-0">{bits.phrase}</span>
           <span aria-hidden className="text-muted">·</span>
@@ -295,6 +295,8 @@ export function MobileConversationMenu({
                 label={t("mobile2.chat.menuCompact")}
                 disabled={controls.compact.state === "disabled" || actions.compactBusy}
                 trailing={ctxLeft !== null ? t("mobile2.meter.left", { left: ctxLeft }) : controls.compact.state === "disabled" ? t(controls.compact.reason) : undefined}
+                /* A refusal reason is a whole clause: the label keeps its width and the clause wraps. */
+                trailingShrinks={ctxLeft === null && controls.compact.state === "disabled"}
                 onSelect={() => actions.compact({ immediate: true })}
                 attrs={{ "data-mobile2-menu-row": "compact" }}
               />
@@ -374,7 +376,7 @@ export function MobileConversationMenu({
             {controls.terminal.state === "hidden" ? null : (
               <MobileSheetRow
                 icon={<SquareTerminal className="h-[18px] w-[18px]" aria-hidden />}
-                label={t("mobile2.chat.menuTerminal")}
+                label={t("attach.copyTerminalCommand")}
                 disabled={controls.terminal.state === "disabled"}
                 onSelect={actions.terminal}
                 attrs={{ "data-mobile2-menu-row": "terminal" }}

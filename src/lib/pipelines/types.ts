@@ -553,6 +553,8 @@ export type PipelineStageAttempt = {
       still held harness-tracked background work, named in `tasks`. Cleared
       once the work has reported. */
   backgroundWait?: BackgroundWait;
+  /** A controller commit deadline keeps the passed attempt retrying itself. */
+  stageCommitWait?: { retryAt: string; detail: string; failures: number };
   /** The one verdict the controller asked this attempt for (#1756). Written
       when a completed turn carried no verdict the reader could accept:
       `messageTs` is the turn it was asked about, and a later completed turn
@@ -1058,6 +1060,10 @@ export type Pipeline = {
       before attribution existed. */
   dismissedNote?: string;
   dismissedBy?: import("@/lib/attention/dismissalTypes").DismissedBy | null;
+  /** Projection only, never stored: who answers what the lane waits on when
+      it is not the operator (docs/design/attention-auto-resolve.md), stamped
+      by `/api/files` for the movement it names. */
+  attentionRoute?: import("@/lib/attention/routeTypes").AttentionRouteMark;
   /** PRs and issues attached by hand (#2059), at most MAX_WORK_LINKS. What the
       pipeline's own branches, `delivery.pr` and stage provenance say is joined
       at read time and never stored here. */
