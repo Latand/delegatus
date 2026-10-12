@@ -140,8 +140,8 @@ test("a review's finding becomes the fixer's abstract rule, a fresh builder star
   expect(spawned[1]!.learnedRules).toEqual({ project: PROJECT, roleId: "builder" });
   await settle(2, "pass");
   const requestLines = lessonRequestForReport(lane(first), "fix", 1, conversation(2));
-  expect(requestLines?.join("\n")).toContain("This attempt was handed 1 finding from stage review (P2 ×1).");
-  expect(requestLines?.join("\n")).toContain("abstract rule");
+  expect(requestLines).toContain('- P2: parseSize("") throws instead of returning null, and the branch has no test.');
+  expect(requestLines?.join("\n")).toContain("before the first review");
   expect(lessonRequestForReport(lane(first), "fix", 1, conversation(2))).toBeNull();
   const left = leaveLessonForConversation(loadPipelines(), conversation(2), { lesson: { scope: "role", rule: RULE, why: "Review failed on an untested empty-input path." } });
   expect(left).toMatchObject({ pipelineId: first, stageId: "fix", attempt: 1, left: [{ scope: `role:${PROJECT}:builder`, state: "active" }] });

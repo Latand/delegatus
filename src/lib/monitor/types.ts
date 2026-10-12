@@ -814,6 +814,8 @@ export interface SeatTickChildInput {
 /** A durable log line the Viewer already writes: a deploy outcome, the host
     retirement report, a seat whose own turn stopped progressing. */
 export interface SeatTickSignalInput {
+  /** A durable project obligation can supply work even on an empty board. */
+  actionable?: boolean;
   /** Stable pressure crossing; free-space changes do not create a new warning. */
   episode?: string;
   id: string;

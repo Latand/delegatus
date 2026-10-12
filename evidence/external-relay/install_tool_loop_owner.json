@@ -60,7 +60,7 @@
             "replayed": false,
             "calls_remaining": 15,
             "audience": "owner",
-            "retry_after_s": 1
+            "retry_after_s": 5
           }
         },
         {

@@ -17,7 +17,7 @@ type ClaudeLoginPorts = import("./claudeLogin").ClaudeLoginPorts;
 
 class FakeChild extends EventEmitter { pid = 4242; stdout = new EventEmitter(); stderr = new EventEmitter(); writes: string[] = []; stdin = { write: (text: string) => { this.writes.push(text); return true; }, end: () => undefined }; }
 let child: FakeChild; let signals: string[]; let inheritedChildAlive: boolean;
-function ports(): ClaudeLoginPorts { return { spawn: () => child as never, kill: (_pid, signal) => { signals.push(signal); if (signal === "SIGKILL") inheritedChildAlive = false; }, pidStartToken: () => inheritedChildAlive ? "start-1" : null, isExpectedClaude: () => true, waitForExit: async () => !inheritedChildAlive, status: async () => ({ loggedIn: true, method: "oauth", email: "a@example.com", plan: "max" }), now: () => 1_000, setTimeout: (fn, ms) => { if (ms <= 2_000) fn(); return {} as NodeJS.Timeout; }, clearTimeout: () => undefined }; }
+function ports(): ClaudeLoginPorts { return { spawn: () => child as never, kill: (_pid, signal) => { signals.push(signal); if (signal === "SIGKILL") inheritedChildAlive = false; }, pidStartToken: () => inheritedChildAlive ? "start-1" : null, isExpectedClaude: () => true, waitForExit: async () => !inheritedChildAlive, status: async () => ({ loggedIn: true, method: "oauth", email: "a@example.com", plan: "max" }), observeSignedIn: async () => {}, now: () => 1_000, setTimeout: (fn, ms) => { if (ms <= 2_000) fn(); return {} as NodeJS.Timeout; }, clearTimeout: () => undefined }; }
 beforeEach(() => { fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }); resetAccountCollectionsForTests(); child = new FakeChild(); signals = []; inheritedChildAlive = true; });
 afterAll(() => { if (OLD_STATE === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = OLD_STATE; if (OLD_HOME === undefined) delete process.env.LLV_CLAUDE_HOME; else process.env.LLV_CLAUDE_HOME = OLD_HOME; fs.rmSync(SANDBOX, { recursive: true, force: true }); });
 
@@ -726,4 +726,102 @@ test("restart recovery rechecks Keychain evidence after provider status", async 
       expect(signals).toEqual([]);
     } finally { read.mockRestore(); }
   }
+});
+
+
+test("successful login waits in verifying for the fresh account observation", async () => {
+  const account = createManagedClaudeAccount("Observation");
+  fs.writeFileSync(path.join(account.home, ".credentials.json"), "{}", { mode: 0o600 });
+  let release!: () => void;
+  const observed: string[] = [];
+  const supervisor = new ClaudeLoginSupervisor({ ...ports(), observeSignedIn: async (id: string) => {
+    observed.push(id);
+    await new Promise<void>((resolve) => { release = resolve; });
+  } });
+  const operation = supervisor.start(account.id);
+  child.emit("close", 0, null);
+  await Promise.resolve(); await Promise.resolve();
+  try {
+    expect(observed).toEqual([account.id]);
+    expect(supervisor.get(operation.operationId)?.phase).toBe("verifying");
+  } finally { release?.(); }
+  await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  expect(supervisor.get(operation.operationId)?.phase).toBe("authenticated");
+});
+
+
+test("signed-in observation failure preserves success and signed-out verification never observes", async () => {
+  for (const signedIn of [false, true]) {
+    const account = createManagedClaudeAccount(signedIn ? "Signed in" : "Signed out");
+    fs.writeFileSync(path.join(account.home, ".credentials.json"), "{}", { mode: 0o600 });
+    child = new FakeChild();
+    let calls = 0;
+    const supervisor = new ClaudeLoginSupervisor({ ...ports(),
+      status: async () => ({ loggedIn: signedIn, method: null, email: null, plan: null }),
+      observeSignedIn: async () => { calls += 1; throw new Error("fixture probe refused"); },
+    });
+    const operation = supervisor.start(account.id);
+    child.emit("close", 0, null);
+    for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
+    expect(supervisor.get(operation.operationId)?.phase).toBe(signedIn ? "authenticated" : "failed");
+    expect(calls).toBe(signedIn ? 1 : 0);
+    expect(supervisor.get(operation.operationId)?.result?.code).toBe(signedIn ? "authenticated" : "verification_failed");
+  }
+});
+
+test("a proved login clears its deadline while the observation is pending", async () => {
+  const account = createManagedClaudeAccount("Near deadline");
+  fs.writeFileSync(path.join(account.home, ".credentials.json"), "{}", { mode: 0o600 });
+  const timers = new Map<NodeJS.Timeout, () => void>();
+  let release!: () => void;
+  const supervisor = new ClaudeLoginSupervisor({ ...ports(),
+    setTimeout: (fn) => { const timer = {} as NodeJS.Timeout; timers.set(timer, fn); return timer; },
+    clearTimeout: (timer) => { timers.delete(timer); },
+    observeSignedIn: async () => { await new Promise<void>((resolve) => { release = resolve; }); },
+  });
+  const operation = supervisor.start(account.id);
+  expect(timers.size).toBe(1);
+  child.emit("close", 0, null);
+  await Promise.resolve(); await Promise.resolve();
+  try {
+    for (const callback of [...timers.values()]) callback();
+    expect(timers.size).toBe(0);
+    expect(supervisor.get(operation.operationId)?.phase).toBe("verifying");
+  } finally { release(); }
+  for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
+  expect(supervisor.get(operation.operationId)?.phase).toBe("authenticated");
+});
+
+test("cancellation during the signed-in observation remains canceled", async () => {
+  const account = createManagedClaudeAccount("Cancel observation");
+  fs.writeFileSync(path.join(account.home, ".credentials.json"), "{}", { mode: 0o600 });
+  let release!: () => void;
+  const supervisor = new ClaudeLoginSupervisor({ ...ports(), observeSignedIn: async () => {
+    await new Promise<void>((resolve) => { release = resolve; });
+  } });
+  const operation = supervisor.start(account.id);
+  child.emit("close", 0, null);
+  await Promise.resolve(); await Promise.resolve();
+  await supervisor.cancel(operation.operationId);
+  release();
+  for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
+  expect(supervisor.get(operation.operationId)?.phase).toBe("canceled");
+});
+
+
+test("a provider read that never answers times out while the verified login still succeeds", async () => {
+  const { refreshAccountLimits } = await import("./liveLimits");
+  const account = createManagedClaudeAccount("Bounded observation");
+  fs.writeFileSync(path.join(account.home, ".credentials.json"), "{}", { mode: 0o600 });
+  const supervisor = new ClaudeLoginSupervisor({ ...ports(), observeSignedIn: async (id) => {
+    await refreshAccountLimits("claude", id, { phase: "login-complete", timeoutMs: 5,
+      probe: { list: () => [account], active: () => account.id, probe: () => new Promise(() => {}) },
+    });
+  } });
+  const operation = supervisor.start(account.id);
+  child.emit("close", 0, null);
+  await Promise.resolve(); await Promise.resolve();
+  expect(supervisor.get(operation.operationId)?.phase).toBe("verifying");
+  await Bun.sleep(20);
+  expect(supervisor.get(operation.operationId)?.phase).toBe("authenticated");
 });

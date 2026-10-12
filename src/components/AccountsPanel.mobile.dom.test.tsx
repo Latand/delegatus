@@ -191,10 +191,14 @@ test("every meter on the active card fills with what remains, and the corner nam
   expect(text(card.querySelector('[data-limit-row="weekly"]'))).toContain("8% left");
   expect(text(card.querySelector('[data-limit-row="tier:opus"]'))).toContain("71% left");
 
-  const corner = card.querySelector("[data-mobile2-account-corner]")!;
-  expect(corner.getAttribute("data-mobile2-account-window")).toBe("Week");
-  expect(text(corner)).toBe("8% leftWeek");
-  expect(corner.getAttribute("aria-label")).toBe("8% left of the Week window");
+  // The card lists its windows, so its header carries no second weekly figure;
+  // the collapsed card below keeps the corner, where it is the only figure.
+  expect(card.querySelector("[data-mobile2-account-corner]")).toBeNull();
+  expect(text(card).match(/8% left/g)).toHaveLength(1);
+  const quietCorner = host.querySelector('[data-mobile2-account="cl-lab"] [data-mobile2-account-corner]')!;
+  expect(quietCorner.getAttribute("data-mobile2-account-window")).toBe("Week");
+  expect(text(quietCorner)).toBe("64% leftWeek");
+  expect(quietCorner.getAttribute("aria-label")).toBe("64% left of the Week window");
   // The number the corner shows is the weekly window's headroom, never the
   // first window's and never what was used.
   expect(mobileAccountCorner({ session: null, weekly: null, tiers: [], plan: null }, (key: string) => key)).toBeNull();
@@ -206,12 +210,30 @@ test("the corner names the week even when the 5-hour window is tighter, and says
   const fiveHourOnly = account({ id: "cl-5h", label: "Five", plan: "max", limits: { freshness: "fresh", session: window5h(64, NOW + 2 * HOUR), weekly: null, plan: "max", capturedAt: NOW - 60, checkedAt: new Date((NOW - 60) * 1000).toISOString() } } as Partial<AccountOption> & { id: string; label: string });
   const { host } = await mount([engineState("claude", [both, fiveHourOnly], "cl-both")]);
 
-  const corner = host.querySelector('[data-mobile2-account="cl-both"] [data-mobile2-account-corner]')!;
-  expect(text(corner)).toBe("77% leftWeek");
-  expect(corner.getAttribute("aria-label")).toBe("77% left of the Week window");
+  // The active card names the week once, in its rows; its header repeats nothing.
+  expect(host.querySelector('[data-mobile2-account="cl-both"] [data-mobile2-account-corner]')).toBeNull();
+  expect(text(host.querySelector('[data-mobile2-account="cl-both"] [data-limit-row="weekly"]'))).toContain("77% left");
   const bare = host.querySelector('[data-mobile2-account="cl-5h"] [data-mobile2-account-corner]')!;
   expect(text(bare)).toBe("no weekly data");
   expect(text(bare)).not.toContain("36");
+});
+
+test("a sign-in being verified shows no result of the attempt before it, and a failed one keeps its error", async () => {
+  const verifying = account({ id: "cl-verify", label: "Verify", authPresent: true, authHealth: "error", loginPending: true, loginState: "pending",
+    login: { operationId: "op-verify", phase: "verifying", loginUrl: null, acceptsCode: false, deadlineAt: "2026-10-12T12:00:00Z", result: null } } as Partial<AccountOption> & { id: string; label: string });
+  const failed = account({ id: "cl-failed", label: "Failed", authPresent: false, authHealth: "signed_out", loginPending: false, loginState: "failed",
+    login: { operationId: "op-failed", phase: "failed", loginUrl: null, acceptsCode: false, deadlineAt: "2026-10-12T12:00:00Z", result: { status: "failure", code: "timed_out", message: "fixture timed out" } } } as Partial<AccountOption> & { id: string; label: string });
+  const { host } = await mount([engineState("claude", [claudeMain, verifying, failed], "cl-main")]);
+
+  const pending = host.querySelector('[data-mobile2-account="cl-verify"]')!;
+  expect(pending.getAttribute("data-mobile2-account-state")).toBe("pending");
+  expect(text(pending)).toContain("signing in");
+  expect(text(pending)).toContain("Verifying…");
+  expect(text(pending)).not.toContain("Auth error");
+  expect(text(pending)).not.toContain("no data yet");
+  const failedCard = host.querySelector('[data-mobile2-account="cl-failed"]')!;
+  expect(text(failedCard)).toContain("Retry");
+  expect(text(failedCard)).toContain("Sign-in timed out.");
 });
 
 test("the quiet row of an authenticated account switches future launches on the tap, and the receipt carries Switch back", async () => {
