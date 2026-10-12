@@ -1429,6 +1429,31 @@ test("picking B and then the account it runs on withdraws B, and no migration is
   journal.close();
 });
 
+for (const pick of ["none", "waiting", "applying"] as const) test(`a full pipeline profile change preserves its current account selection (${pick})`, async () => {
+  const fixture = profiledConversation();
+  const { journal, client, commands } = journalClient(`full-profile-${pick}`);
+  const profile = { model: "gpt-5.6-sol", effort: "high", fast: true };
+  try {
+    if (pick !== "none") await pickAccount(fixture, client, "pick-b", { ...profile, accountId: "codex-b" });
+    if (pick === "applying") journal.transitionOperation("pick-b", "applying");
+    const result = await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId,
+      action: "reconfigure", operationId: "full-profile-change", profileChanged: true,
+      reconfiguration: { ...profile, accountId: "codex-subscription" } }, {
+      registry: fixture.registry, client, enabled: () => true, accountExists: () => true, kick: () => {},
+    });
+    if (pick === "applying") {
+      expect(result).toMatchObject({ status: 409, body: { code: "switch-applying" } });
+      expect(commands).toHaveLength(1);
+      expect(fixture.registry.reconfigureCancelled(fixture.id, "pick-b")).toBe(false);
+    } else {
+      expect(result).toMatchObject({ status: 202, body: { operationId: "full-profile-change" } });
+      expect(commands.at(-1)).toMatchObject({ kind: "reconfigure", operationId: "full-profile-change", ...profile });
+      expect(commands.at(-1)).not.toHaveProperty("accountId");
+      if (pick === "waiting") expect(fixture.registry.reconfigureCancelled(fixture.id, "pick-b")).toBe(true);
+    }
+  } finally { journal.close(); }
+});
+
 test("naming the account it runs on once the pick is applying is refused, and the move is left alone", async () => {
   const fixture = profiledConversation();
   const { journal, client, commands } = journalClient("b-applying");

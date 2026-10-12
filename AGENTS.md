@@ -118,7 +118,9 @@ reached a CLI test through the hook and parked five lanes that had changed
 nothing. A refused publication of an unchanged head retries after 1, 5 and 15
 minutes, then parks with the cause on its first line. A push that was
 interrupted before it reached the remote (a signal, its time limit, a stopped
-Viewer) is counted the same way, whatever the stage changed.
+Viewer) is counted the same way, whatever the stage changed. A refusal of a
+head that changes files, or of commits privacy refused, gets one repair turn
+from the producer that wrote them; its park keeps the cause on the first line.
 `LLV_SKIP_HOOKS=1` is the escape hatch for a false positive. Pre-push warns if
 the branch is behind `origin/main`. Missing local media tools defer named media
 files to the required CI OCR gate. See CONTRIBUTING.md for slot settings.

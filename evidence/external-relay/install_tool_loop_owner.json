@@ -74,19 +74,18 @@
               "limit": 2
             }
           },
-          "x1_sample": "owner_cursor_replayed",
+          "x1_sample": "owner_first_page",
           "response": {
             "call_id": "MtwwzoHZg9iYoxwItT4WjmUj5y0EEhaDK6jnb1zKdPc",
             "tool": "owner_list_grid_chats",
             "status": "ok",
-            "output": "[101,102]",
-            "truncated": true,
+            "output": "{\"items\":[{\"chat_id\":101,\"name\":\"Chat A\",\"username\":null,\"avatar_url\":null,\"total_participants\":2,\"synced_section_count\":0}],\"next_cursor\":\"public-next-page\"}",
+            "truncated": false,
             "effect": "read",
             "delivered": false,
             "replayed": true,
             "calls_remaining": 15,
-            "audience": "owner",
-            "cursor": "ppppppppppppppppppppppppppppppppppppppppppp"
+            "audience": "owner"
           }
         }
       ]
@@ -94,22 +93,32 @@
     {
       "body": {
         "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
-        "call_id": "Nh-I7MxxncP9Ks2cQqMx9XZQ-DDyZq2YuAEliqoi-Lg",
-        "cursor": "ppppppppppppppppppppppppppppppppppppppppppp"
+        "call_id": "cBs5mFUQuzPtNwbvN50QYv6v3l6fs-Abskbt1UKZ3i0",
+        "tool": "owner_list_grid_chats",
+        "arguments": {
+          "cursor": "public-next-page",
+          "grid_id": "00000000-0000-0000-0000-000000000000",
+          "limit": 2
+        }
       },
       "attempts": [
         {
           "request": {
             "lease_id": "llllllllllllllllllllllllllllllllllllllllllllllllllllllllllllllll",
-            "call_id": "Nh-I7MxxncP9Ks2cQqMx9XZQ-DDyZq2YuAEliqoi-Lg",
-            "cursor": "ppppppppppppppppppppppppppppppppppppppppppp"
+            "call_id": "cBs5mFUQuzPtNwbvN50QYv6v3l6fs-Abskbt1UKZ3i0",
+            "tool": "owner_list_grid_chats",
+            "arguments": {
+              "cursor": "public-next-page",
+              "grid_id": "00000000-0000-0000-0000-000000000000",
+              "limit": 2
+            }
           },
           "x1_sample": "owner_last_page",
           "response": {
-            "call_id": "Nh-I7MxxncP9Ks2cQqMx9XZQ-DDyZq2YuAEliqoi-Lg",
+            "call_id": "cBs5mFUQuzPtNwbvN50QYv6v3l6fs-Abskbt1UKZ3i0",
             "tool": "owner_list_grid_chats",
             "status": "ok",
-            "output": "[101,102]",
+            "output": "{\"items\":[{\"chat_id\":102,\"name\":\"Chat B\",\"username\":null,\"avatar_url\":null,\"total_participants\":2,\"synced_section_count\":0}],\"next_cursor\":null}",
             "truncated": false,
             "effect": "read",
             "delivered": false,
@@ -162,7 +171,7 @@
                 "call_id": "kp6OcPcS5bkFp5piqvFvR5FqOMULQK0bo8rfl4EHWzY",
                 "tool": "owner_list_grids",
                 "status": "ok",
-                "output": "[]",
+                "output": "{\"items\":[]}",
                 "truncated": false,
                 "effect": "read",
                 "delivered": false,
@@ -339,7 +348,7 @@
                 "call_id": "yTktaEyFfZWPRWRCCpDjYeHgb7d-p3Lu4XAz1fDDJLc",
                 "tool": "owner_activate_clone",
                 "status": "ok",
-                "output": "[]",
+                "output": "{\"bot_id\":42,\"status\":\"active\",\"webhook_url\":\"https://hooks.example/clone\"}",
                 "truncated": false,
                 "effect": "action",
                 "delivered": false,
@@ -545,7 +554,7 @@
                 "call_id": "SNNFnUaJCsjHDOJURxQQRvmrH8CZoDw15hBqZHYZO1o",
                 "tool": "owner_list_grids",
                 "status": "ok",
-                "output": "[]",
+                "output": "{\"items\":[]}",
                 "truncated": false,
                 "effect": "read",
                 "delivered": false,

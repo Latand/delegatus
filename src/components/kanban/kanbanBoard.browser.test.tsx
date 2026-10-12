@@ -463,7 +463,8 @@ describe("self-update reload notice", () => {
    the same once the reading landed, and the installation after a deployment
    that already serves the available target (no "commits behind" left). Each
    state is framed on the desktop and at 390 px, in en and uk, with the
-   dialog's controls measured and the Update press's confirmation read.
+   dialog's controls measured and the Update press's confirmation read
+   (its own geometry is gated in the block after this one).
    The last state arrives while a "Check now" is held: its late answer, and
    then a late refusal of a second check, both carry the old installation and
    neither brings back the old revision, its badge or the Update button. */
@@ -503,8 +504,9 @@ describe("Updates dialog first state", () => {
         const page = await context.newPage();
         const pageErrors: string[] = [];
         page.on("pageerror", (error) => pageErrors.push(error.message));
-        const confirms: string[] = [];
-        page.on("dialog", (dialog) => { confirms.push(dialog.message()); void dialog.dismiss(); });
+        /* No native dialog is ever raised: the confirmation is the app's own. */
+        const nativeDialogs: string[] = [];
+        page.on("dialog", (dialog) => { nativeDialogs.push(dialog.message()); void dialog.dismiss(); });
         try {
           await context.addInitScript(({ lang }) => {
             localStorage.setItem("llv_lang", lang);
@@ -591,17 +593,23 @@ describe("Updates dialog first state", () => {
           const loaded = await frame("loaded-work-pending", "[data-work='pending']");
           expect(loaded.work).toBe(translate(lang, "selfUpdate.work.pending"));
           expect(loaded.controls.some((control) => control.action === "update" && !control.disabled)).toBe(true);
+          const confirmation = page.locator("[data-team-dialog='self-update-confirm']");
           await dialog.locator("[data-action='update']").click();
-          await page.waitForTimeout(100);
-          expect(confirms.at(-1)).toContain(translate(lang, "selfUpdate.work.pendingConfirm"));
-          expect(confirms.at(-1)).not.toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 0 }));
+          await confirmation.locator("[data-confirm-work='pending']").waitFor();
+          expect(await confirmation.innerText()).toContain(translate(lang, "selfUpdate.confirmApply.pending"));
+          expect(await confirmation.innerText()).not.toContain(translate(lang, "selfUpdate.confirmApply.idle"));
+          await page.keyboard.press("Escape");
+          await confirmation.waitFor({ state: "detached" });
 
           await emit("state", snapshot(OLD, "ready"));
           const read = await frame("loaded-work-read", "[data-work='ready']");
           expect(read.work).toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 2 }));
           await dialog.locator("[data-action='update']").click();
-          await page.waitForTimeout(100);
-          expect(confirms.at(-1)).toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 2 }));
+          /* This reading counted the work and sent no list to name. */
+          expect(await confirmation.locator("[data-confirm-more]").innerText()).toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 2 }));
+          await page.keyboard.press("Escape");
+          await confirmation.waitFor({ state: "detached" });
+          expect(nativeDialogs).toEqual([]);
 
           /* Each "Check now" is held until the driver answers it, after the
              stream has moved on. */
@@ -642,6 +650,235 @@ describe("Updates dialog first state", () => {
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 180_000);
+});
+
+/* The update confirmation (docs/design/self-update-confirm.md, variant 1):
+   «Update» opens the app's own dialog over the Updates dialog, centred on the
+   desktop and a bottom sheet on the phone. The work is named by the fixture's
+   own cards and projects, grouped by project, with a seat, an agent working
+   for a card, an agent in a folder nobody named, a turn inside a listed stage
+   and a 120-character card title; then pending and unreadable work, and a
+   20-stage list that scrolls under the buttons. Escape takes back only the
+   confirmation, and «Update now» closes it into the Update card's progress.
+   Framed at 1440 and 390, light and dark, en and uk. */
+describe("self-update confirmation modal", () => {
+  browserTest("variant 1 on desktop and phone, light and dark, en and uk", async () => {
+    const out = path.resolve(".artifacts/self-update-confirm");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const { CHECKOUT_STEPS, idleCheck, idleUpdate, stoppedProcess } = await import("@/lib/selfUpdate/types");
+    const OLD = "36accb1".padEnd(40, "1");
+    const TARGET = "e7893bc".padEnd(40, "e");
+    const at = "2026-10-11T12:34:20.000Z";
+    const rev = (sha: string, version: string) => ({ sha, short: sha.slice(0, 7), version, date: "2026-10-11T09:00:00.000Z" });
+    const proc = (pid: number) => ({ ...stoppedProcess(), state: "healthy" as const, pid, startedAt: "2026-10-11T10:00:00.000Z", lastHealthAt: at, lastHealthOk: true, revision: OLD.slice(0, 7), tail: [] });
+    const LOOSE = `dir-${"1a".repeat(16)}`;
+    const stage = (pipelineId: string, stageId: string, task: string, project: string, roleId: string | null, taskId: string | null) =>
+      ({ pipelineId, stageId, cursor: "running", task, conversationId: `conversation_${pipelineId}`, project, roleId, taskId });
+    const STAGES = [
+      stage("lane-search", "implement", "#3553 search index swap: keep the old index live until", "atlas", "builder", "t-search"),
+      stage("lane-upload", "review", "Redesign attachment upload", "atlas", "reviewer", "t-upload"),
+      stage("lane-long", "architect", "You are the reviewer in an implement-review loop", "harbor-docs", "architect", "t-longtitle"),
+    ];
+    const TURNS = [
+      { conversationId: "conversation_lane-upload", engine: "codex", project: "atlas", stage: { pipelineId: "lane-upload", stageId: "review" }, seat: false },
+      { conversationId: "conversation_seat-fixture", engine: "claude", project: "atlas", stage: null, seat: true },
+      { conversationId: "conversation_export-impl", engine: "claude", project: "atlas", stage: null, seat: false },
+      { conversationId: "conversation_loose-fixture", engine: "claude", project: LOOSE, stage: null, seat: false },
+    ];
+    const MANY = [...STAGES, ...Array.from({ length: 17 }, (_, index) => stage(`lane-more-${index}`, "build", `Lane number ${index + 1} rebuilds part of the index`, index % 3 ? "atlas" : "harbor-docs", ["builder", "reviewer", "verifier"][index % 3]!, null))];
+    const snapshot = (work: "ready" | "pending" | "unavailable" | "many" | "running", via?: "retry" | "action") => ({
+      mode: "checkout", unsupportedReason: null, installed: rev(OLD, "1.10.4"),
+      serving: { web: rev(OLD, ""), runtimeHost: rev(OLD, "") },
+      available: rev(TARGET, "1.11.0"),
+      check: { ...idleCheck(), state: "update-available", at, nextPollAt: "2026-10-11T13:34:00.000Z", relation: "behind", behind: 5,
+        delta: { commits: [{ short: TARGET.slice(0, 7), subject: "Fix privacy self-test fixture cleanup timeout" }], summary: { commitCount: 5, entryCount: 0, counts: [], groups: [] } } },
+      update: work === "running"
+        ? { ...idleUpdate(CHECKOUT_STEPS), state: "running", trigger: "operator", target: TARGET, targetShort: TARGET.slice(0, 7), targetVersion: "1.11.0", startedAt: at,
+          steps: idleUpdate(CHECKOUT_STEPS).steps.map((step, index) => ({ ...step, state: index === 0 ? "running" : "pending", startedAt: index === 0 ? at : null })) }
+        : via === "retry"
+          ? { ...idleUpdate(CHECKOUT_STEPS), state: "failed", trigger: "operator", target: TARGET, targetShort: TARGET.slice(0, 7), targetVersion: "1.11.0", startedAt: at,
+            steps: idleUpdate(CHECKOUT_STEPS).steps.map((step, index) => ({ ...step, state: index === 0 ? "failed" : "pending" })) }
+          : idleUpdate(CHECKOUT_STEPS),
+      ...(via === "action" ? { action: { id: "restart-service", button: true, unit: "delegatus.service" } } : {}),
+      busy: work === "running" ? "update" : null,
+      processes: { web: { ...proc(4141), port: 8899 }, runtimeHost: proc(4242) },
+      meta: { branch: "main", remote: "https://github.com/example/delegatus", checkout: "/var/tmp/checkout", pollMinutes: 60, serverTime: at },
+      workEvidence: { state: work === "many" || work === "running" ? "ready" : work, since: at, at: work === "pending" ? null : at, error: work === "unavailable" ? "journal read timed out after 15 s" : null, phases: null },
+      ...(work === "pending" || work === "unavailable" ? {} : { resumeWork: work === "many"
+        ? { turns: TURNS.length, stages: MANY.length, turnList: TURNS, stageList: MANY, unreadable: null }
+        : { turns: TURNS.length, stages: STAGES.length, turnList: TURNS, stageList: STAGES, unreadable: null } }),
+    });
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["uk", "en"] as const) for (const width of [1440, 390]) for (const scheme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const viewport = { width, height: phone ? 844 : 900 };
+        const context = await browser.newContext({ viewport, colorScheme: scheme, reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const nativeDialogs: string[] = [];
+        page.on("dialog", (dialog) => { nativeDialogs.push(dialog.message()); void dialog.dismiss(); });
+        try {
+          await context.addInitScript(({ lang, running }) => {
+            localStorage.setItem("llv_lang", lang);
+            /* The dialog's own stream (no readOnly) becomes one the driver speaks through. */
+            const dialogStreams: { listeners: Record<string, ((event: { data: string }) => void)[]> }[] = [];
+            let installed = window.EventSource;
+            Object.defineProperty(window, "EventSource", { configurable: true,
+              get: () => installed,
+              set: (Source: typeof EventSource) => {
+                installed = class extends Source {
+                  constructor(url: string | URL) {
+                    super(url);
+                    if (String(url).startsWith("/api/self-update/events") && !String(url).includes("readOnly")) {
+                      const stream = { listeners: {} as Record<string, ((event: { data: string }) => void)[]> };
+                      dialogStreams.push(stream);
+                      Object.assign(this, { addEventListener: (type: string, listener: (event: { data: string }) => void) => { (stream.listeners[type] ??= []).push(listener); } });
+                    }
+                  }
+                } as typeof EventSource;
+              },
+            });
+            /* «Update now» is answered here with the update running. */
+            const updates: unknown[] = [];
+            let fetcher = window.fetch;
+            Object.defineProperty(window, "fetch", { configurable: true,
+              get: () => fetcher,
+              set: (next: typeof fetch) => {
+                fetcher = ((input: RequestInfo | URL, init?: RequestInit) => String(input).startsWith("/api/self-update/update")
+                  ? (updates.push(JSON.parse(String(init?.body ?? "null"))), Promise.resolve(new Response(JSON.stringify(running), { status: 202, headers: { "content-type": "application/json" } })))
+                  : next(input, init)) as typeof fetch;
+              },
+            });
+            Object.assign(window, { selfUpdateEmit: (type: string, data: unknown) => {
+              for (const stream of dialogStreams) for (const listener of stream.listeners[type] ?? []) listener({ data: JSON.stringify(data) });
+              return dialogStreams.length;
+            }, selfUpdatePosts: () => updates.length });
+          }, { lang, running: snapshot("running") });
+          await page.goto(server.base);
+          await page.waitForSelector(phone ? "[data-phone-card], [data-mobile2-shell], [data-mobile-shell]" : "[data-kanban-board]", { timeout: 15_000 }).catch(() => {});
+          await page.evaluate(() => window.dispatchEvent(new Event("llv:open-self-update")));
+          const dialog = page.locator("[data-self-update-dialog]");
+          await dialog.waitFor();
+          const emit = (data: unknown) => page.evaluate((data) => (window as unknown as { selfUpdateEmit(type: string, data: unknown): number }).selfUpdateEmit("state", data), data);
+          const confirmation = page.locator("[data-team-dialog='self-update-confirm']");
+          /* «Update», the failed update's «Retry» and the install action each open the same question. */
+          const ask = async (work: "ready" | "pending" | "unavailable" | "many", via?: "retry" | "action") => {
+            await emit(snapshot(work, via));
+            await dialog.locator(`[data-action='${via === "retry" ? "retry" : via === "action" ? "install-action" : "update"}']:not([disabled])`).click();
+            await confirmation.waitFor();
+            await confirmation.locator(work === "pending" ? "[data-confirm-work='pending']" : work === "unavailable" ? "[data-confirm-work='unavailable']" : "[data-confirm-row]").first().waitFor();
+            /* The names come from the Viewer's own cards a beat after the list. */
+            if (work === "ready") await confirmation.getByText("Restore search results after the index rebuild").waitFor();
+            const reading = await confirmation.evaluate((element) => {
+              const box = element.getBoundingClientRect();
+              const title = element.querySelector("h2")!;
+              const scroller = element.lastElementChild as HTMLElement;
+              const scrollerBox = scroller.getBoundingClientRect();
+              const buttons = [...element.querySelectorAll<HTMLButtonElement>("[data-confirm-buttons] button")].map((button) => {
+                const edge = button.getBoundingClientRect();
+                return { action: button.dataset.action, label: (button.textContent ?? "").trim(), disabled: button.disabled, top: Math.round(edge.top), bottom: Math.round(edge.bottom), left: Math.round(edge.left), right: Math.round(edge.right), height: Math.round(edge.height) };
+              });
+              const buttonsTop = Math.min(...buttons.map((button) => button.top));
+              const rows = [...element.querySelectorAll("[data-confirm-row]")];
+              return {
+                box: { x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height), bottom: Math.round(box.bottom) },
+                viewport: { width: window.innerWidth, height: window.innerHeight },
+                title: title.textContent,
+                titleCut: title.scrollWidth > title.clientWidth + 1,
+                sideways: element.scrollWidth > element.clientWidth + 1 || scroller.scrollWidth > scroller.clientWidth + 1,
+                buttons,
+                rows: rows.length,
+                rowsVisible: rows.filter((row) => { const edge = row.getBoundingClientRect(); return edge.top >= scrollerBox.top && edge.bottom <= buttonsTop; }).length,
+                scrolls: scroller.scrollHeight > scroller.clientHeight,
+                projects: [...element.querySelectorAll("[data-confirm-project]")].map((node) => node.textContent),
+                work: element.querySelector("[data-confirm-work]")?.getAttribute("data-confirm-work") ?? null,
+                text: (element as HTMLElement).innerText,
+              };
+            });
+            const name = `${lang}-${width}-${scheme}-${via ?? work}`;
+            await page.screenshot({ path: path.join(out, `${name}.png`) });
+            const failures: string[] = [];
+            for (const button of reading.buttons) {
+              if (button.top < 0 || button.bottom > reading.viewport.height || button.left < 0 || button.right > reading.viewport.width) failures.push(`${button.action} is not fully on screen`);
+              if (button.disabled) failures.push(`${button.action} is disabled`);
+            }
+            if (reading.titleCut) failures.push("the title is cut");
+            if (reading.sideways) failures.push("the confirmation overflows sideways");
+            if (/repo-|dir-|conversation_/.test(reading.text)) failures.push("a project key or a conversation id is shown");
+            if (phone && (reading.box.width !== width || reading.box.bottom !== reading.viewport.height)) failures.push("the phone confirmation is no bottom sheet");
+            if (!phone && reading.box.width !== 480) failures.push("the desktop confirmation is not 480 px wide");
+            if (phone && reading.buttons.some((button) => button.height < 44)) failures.push("a phone button is under 44 px");
+            readings.push({ name, ...reading, text: undefined, failures });
+            expect(failures).toEqual([]);
+            return reading;
+          };
+          const dismiss = async () => {
+            await page.keyboard.press("Escape");
+            await confirmation.waitFor({ state: "detached" });
+            /* Escape took back the confirmation only. */
+            expect(await dialog.count()).toBe(1);
+          };
+
+          const ready = await ask("ready");
+          expect(ready.title).toBe(translate(lang, "selfUpdate.confirmApply.title", { target: "e7893bc (1.11.0)" }));
+          expect(ready.projects).toEqual(["atlas", "harbor-docs", translate(lang, "dash.projectUnnamed")]);
+          expect(ready.rows).toBe(6);
+          expect(ready.rowsVisible).toBe(6);
+          for (const title of ["Restore search results after the index rebuild", "Redesign attachment upload for large files", "Simplify the export settings sheet",
+            translate(lang, "selfUpdate.auto.block.seatUnnamed"), translate(lang, "roleCopy.builder.name"), translate(lang, "roleCopy.architect.name"),
+            translate(lang, "selfUpdate.confirmApply.resumes")]) expect(ready.text).toContain(title);
+          await dismiss();
+
+          const retried = await ask("ready", "retry");
+          expect(retried.title).toBe(translate(lang, "selfUpdate.confirmApply.retryTitle"));
+          expect(retried.titleCut).toBe(false);
+          expect(retried.text).toContain(translate(lang, "selfUpdate.confirmApply.retryTarget", { target: "e7893bc (1.11.0)" }));
+          await dismiss();
+
+          const installed = await ask("ready", "action");
+          expect(installed.title).toBe(translate(lang, "selfUpdate.confirmApply.actionTitle", { action: translate(lang, "selfUpdate.actionButton.restart-service") }));
+          expect(installed.titleCut).toBe(false);
+          /* The primary button repeats the title's verb: the action restarts the launcher and updates nothing. */
+          const goes = (reading: typeof installed) => reading.buttons.find((button) => button.action === "confirm-apply")?.label;
+          expect(goes(installed)).toBe(translate(lang, "selfUpdate.actionButton.restart-service"));
+          expect(goes(retried)).toBe(translate(lang, "selfUpdate.confirmApply.go"));
+          await dismiss();
+
+          const pending = await ask("pending");
+          expect(pending.work).toBe("pending");
+          expect(pending.text).toContain(translate(lang, "selfUpdate.confirmApply.pending"));
+          await dismiss();
+
+          const unavailable = await ask("unavailable");
+          expect(unavailable.work).toBe("unavailable");
+          expect(unavailable.text).toContain("journal read timed out after 15 s");
+          await dismiss();
+
+          const many = await ask("many");
+          expect(many.rows).toBe(MANY.length + 3);
+          expect(many.scrolls).toBe(true);
+
+          /* «Update now» closes the confirmation into the card's progress. */
+          await confirmation.locator("[data-action='confirm-apply']").click();
+          await confirmation.waitFor({ state: "detached" });
+          const progress = dialog.locator("[data-section='update'][data-update='running']");
+          await progress.waitFor();
+          const progressBox = await progress.boundingBox();
+          expect(progressBox).not.toBeNull();
+          expect(progressBox!.y).toBeLessThan(viewport.height);
+          await page.screenshot({ path: path.join(out, `${lang}-${width}-${scheme}-progress.png`) });
+          expect(await page.evaluate(() => (window as unknown as { selfUpdatePosts(): number }).selfUpdatePosts())).toBe(1);
+          expect(nativeDialogs).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 600_000);
 });
 
 /* The loading leaf draws its own header bar until the Board mounts and draws
@@ -15134,9 +15371,9 @@ describe("model glyphs in place of the stage dot", () => {
   const WORD_HOSTS = new Set(["pnode", "pane-head"]);
   /* The model words a host's accessible text must carry: the catalogue's short
      label, which the identity sentence and the identity line both print. */
-  const MODEL_WORD: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku 4.5", sol: "6-Sol", astra: "6-Astra", terra: "5.6-Terra", luna: "6-Luna" };
+  const MODEL_WORD: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku 5.5", sol: "6-Sol", astra: "6-Astra", terra: "5.6-Terra", luna: "6-Luna" };
   /* The pane head's glyph names itself with the catalogue's full label. */
-  const MODEL_NAME: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku 4.5", sol: "GPT-6-Sol", astra: "GPT-6-Astra", terra: "GPT-5.6-Terra", luna: "GPT-6-Luna" };
+  const MODEL_NAME: Record<string, string> = { opus: "Opus 5.5", fable: "Fable", sonnet: "Sonnet", haiku: "Haiku 5.5", sol: "GPT-6-Sol", astra: "GPT-6-Astra", terra: "GPT-5.6-Terra", luna: "GPT-6-Luna" };
   /* The stage state a glyph reading stands for in this fixture, for the words its name must end on. */
   const STATE_OF_READING: Record<string, string> = { running: "running", waiting: "pending", passed: "passed", failed: "failed", needs: "needs_decision" };
   /* The legend: every word on the three cards hidden, so only the drawings
@@ -27431,6 +27668,168 @@ describe("prototype review: a decided round retires the earlier undecided rounds
   }, 600_000);
 });
 
+describe("prototype review: a decision answers at once and its message is delivered in the background", () => {
+  /*
+   * The operator chooses on the search task's review and saves while the
+   * server holds the write back: the review keeps the choice and the words
+   * and claims nothing until the decision is written. The written answer
+   * collapses it into the saved decision, with nothing left to wait for and
+   * nothing asked on close; the background delivery then reads on its way and
+   * delivered. The
+   * disk task's decision has kept failing: its review warns and offers to send
+   * again, its card is marked, and the needs-you list carries it. At 1440 and
+   * 390, in Ukrainian, light.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "answers at once"
+   *
+   * Frames go to PROTOTYPE_REVIEW_PNG_DIR (default `.artifacts/prototype-review/`);
+   * readings to `evidence/prototype-review/optimistic-decision.json`.
+   */
+  const SIZES = [
+    { name: "desktop-1440", viewport: { width: 1440, height: 900 }, phone: false },
+    { name: "phone-390", viewport: { width: 390, height: 844 }, phone: true },
+  ] as const;
+
+  browserTest("prototype review: saving collapses into the saved decision once the server has written it; delivery reads saved, delivering, delivered, and a failing one asks for attention", async () => {
+    const out = path.resolve(".artifacts/prototype-review");
+    const pngDir = process.env.PROTOTYPE_REVIEW_PNG_DIR ?? out;
+    fs.mkdirSync(pngDir, { recursive: true });
+    fs.mkdirSync("evidence/prototype-review", { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    const REVIEW = "[data-prototype-review]";
+    try {
+      for (const size of SIZES) {
+        const lang = "uk" as const;
+        const label = `${size.name}-${lang}-light`;
+        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) => translate(lang, key, vars);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=1`, size.viewport, "light", lang, "reduce", size.phone);
+        const shot = (name: string) => page.screenshot({ path: path.join(pngDir, `optimistic-${label}-${name}.png`) });
+        const record = (name: string, value: unknown) => { readings[`${label}-${name}`] = value; };
+        /* The phone's sheet draws the decision and the field in its own footer, outside the review's scrolling body. */
+        const scope = size.phone ? "[data-mobile2-sheet=prototype-review]" : REVIEW;
+        const open = (taskId: string, reviewId: string) => page.evaluate(({ taskId, reviewId }) => {
+          window.dispatchEvent(new CustomEvent("llv:open-prototype-review", { detail: { kind: "prototype-review", taskId, reviewId, from: "card" } }));
+        }, { taskId, reviewId });
+        const footer = () => page.evaluate((scope) => {
+          const line = document.querySelector<HTMLElement>("[data-prototype-delivery]");
+          return {
+            phase: line?.dataset.prototypeDeliveryPhase ?? null,
+            words: line?.querySelector("[data-prototype-delivery-said]")?.textContent ?? null,
+            retry: Boolean(line?.querySelector("[data-prototype-retry]")),
+            field: Boolean(document.querySelector(`${scope} [data-prototype-comment-field]`)),
+            save: Boolean(document.querySelector("[data-prototype-save]")),
+            chosen: [...document.querySelectorAll<HTMLElement>("[data-prototype-chosen]")].map((chip) => chip.dataset.prototypeChosen),
+            comment: document.querySelector("[data-prototype-comment]")?.textContent ?? null,
+          };
+        }, scope);
+        try {
+          await page.waitForSelector(size.phone ? "[data-phone-kanban]" : "[data-prototype-button]", { state: "attached", timeout: 30_000 });
+          await page.waitForTimeout(400);
+
+          /* Before: two variants chosen and a comment written. */
+          await open("t-search", "r-search");
+          await page.waitForSelector(`${scope} [data-prototype-comment-field]`, { timeout: 10_000 });
+          for (const number of [2, 3]) {
+            if (size.phone) await page.locator(`${REVIEW} button[data-prototype-variant="${number}"]`).click();
+            await page.locator(`${REVIEW} [data-prototype-choose="${number}"]`).click();
+          }
+          const comment = "Шапка з двох колонок, рядки з таблиці.";
+          await page.locator(`${scope} [data-prototype-comment-field]`).fill(comment);
+          await page.waitForTimeout(250);
+          record("before", await footer());
+          await shot("before-submit");
+
+          /* The press: the server holds the write, and the review keeps the choice and the words and claims nothing. */
+          await page.evaluate(() => {
+            const fixture = window as unknown as { protoSavePhase?: string; protoHoldSave: () => void };
+            fixture.protoSavePhase = "saved";
+            fixture.protoHoldSave();
+          });
+          await page.locator("[data-prototype-save]").click();
+          await page.waitForSelector("[data-prototype-save]:disabled", { timeout: 5_000 });
+          await page.waitForTimeout(150);
+          const saving = { ...await footer(), held: await page.evaluate(() => Boolean((window as unknown as { protoHeldSave?: unknown }).protoHeldSave)),
+            value: await page.locator(`${scope} [data-prototype-comment-field]`).inputValue().catch(() => null) };
+          record("saving", saving);
+          await shot("saving");
+          if (!saving.held) failures.push(`${label}: the server had already written the decision when the saving frame was taken`);
+          if (!saving.field || saving.phase !== null || saving.value !== comment) failures.push(`${label}: while the write is held the review reads ${JSON.stringify(saving)}, expected the choice and the words still in place`);
+
+          /* The written answer: the review collapses into the saved decision. */
+          const released = Date.now();
+          await page.evaluate(() => (window as unknown as { protoReleaseSave: () => void }).protoReleaseSave());
+          await page.waitForSelector('[data-prototype-delivery-phase="saved"]', { timeout: 5_000 });
+          const collapsedMs = Date.now() - released;
+          await page.waitForTimeout(150);
+          const after = { ...await footer(), collapsedMs };
+          record("after-submit", after);
+          await shot("after-submit");
+          if (after.field || after.save || after.words !== tr("proto.saved.saved") || after.retry) failures.push(`${label}: right after the write the review reads ${JSON.stringify(after)}, expected the saved decision alone`);
+          if (JSON.stringify(after.chosen) !== JSON.stringify(["2", "3"]) || after.comment !== comment) failures.push(`${label}: the saved decision shows ${JSON.stringify(after)}`);
+
+          /* The background delivery: on its way, then delivered. */
+          await page.evaluate(() => (window as unknown as { protoPhase: (task: string, phase: string) => void }).protoPhase("t-search", "delivering"));
+          await page.waitForSelector('[data-prototype-delivery-phase="delivering"]', { timeout: 6_000 });
+          await page.waitForTimeout(150);
+          const delivering = await footer();
+          record("delivering", delivering);
+          await shot("delivering");
+          if (delivering.words !== tr("proto.saved.delivering") || delivering.retry) failures.push(`${label}: on its way the line reads ${JSON.stringify(delivering)}`);
+          await page.evaluate(() => (window as unknown as { protoPhase: (task: string, phase: string) => void }).protoPhase("t-search", "delivered"));
+          await page.waitForSelector('[data-prototype-delivery-phase="delivered"]', { timeout: 6_000 });
+          await page.waitForTimeout(150);
+          const delivered = await footer();
+          record("delivered", delivered);
+          await shot("delivered");
+          if (delivered.words !== tr("proto.saved.delivered") || delivered.retry) failures.push(`${label}: delivered, the line reads ${JSON.stringify(delivered)}`);
+
+          /* Closing loses nothing, so nothing asks. */
+          await page.keyboard.press("Escape");
+          await page.waitForTimeout(250);
+          const closed = await page.evaluate((review) => ({ review: Boolean(document.querySelector(review)), guard: Boolean(document.querySelector("[data-prototype-guard]")) }), REVIEW);
+          record("closed", closed);
+          if (closed.review || closed.guard) failures.push(`${label}: closing the saved review left ${JSON.stringify(closed)}`);
+
+          /* A decision whose message keeps failing: the card, the needs-you list and its review. */
+          await page.evaluate(() => (window as unknown as { protoPhase: (task: string, phase: string) => void }).protoPhase("t-disk", "attention"));
+          await page.waitForTimeout(400);
+          const LIST = size.phone ? '[data-mobile2-sheet="attention"]' : "[data-needs-you-panel]";
+          await page.locator(size.phone ? "[data-mobile2-attention-count]" : "[data-attention-count]").click();
+          await page.waitForSelector(`${LIST} [data-attention-prototype="t-disk"]`, { timeout: 10_000 });
+          await page.waitForTimeout(250);
+          const row = await page.evaluate((list) => document.querySelector(`${list} [data-attention-prototype="t-disk"]`)?.textContent ?? null, LIST);
+          record("attention-row", row);
+          await shot("attention-list");
+          if (!row?.includes(tr("proto.notice.undelivered"))) failures.push(`${label}: the needs-you row of the failing decision reads ${JSON.stringify(row)}`);
+          await page.keyboard.press("Escape");
+          await page.waitForTimeout(250);
+          await open("t-disk", "r-disk");
+          await page.waitForSelector('[data-prototype-delivery-phase="attention"]', { timeout: 10_000 });
+          await page.waitForTimeout(250);
+          const attention = await footer();
+          record("attention", attention);
+          await shot("attention");
+          if (attention.words !== tr("proto.saved.attention") || !attention.retry) failures.push(`${label}: the failing decision's line reads ${JSON.stringify(attention)}`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          await shot("failed-here").catch(() => {});
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync("evidence/prototype-review/optimistic-decision.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});
+
 describe("orchestrator wire routing across the board's layouts", () => {
   /* docs/design/orchestrator-wire-routing.md: every seat/card layout the board
      produces, one seat action each, and the route the layer draws for it —
@@ -28332,6 +28731,302 @@ describe("account chips with the weekly limit left: the launch chooser and the r
         await page.screenshot({ path: path.join(out, "build-rotate-390-uk-dark-late-readings.png") });
         expect(pageErrors, "page errors").toEqual([]);
       } finally { await context.close(); }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+  }, 300_000);
+});
+
+/*
+ * «Створити клона» in the Celestia card (docs/research/celestia-clone-creation.md,
+ * variant 1), in the real relay settings dialog: with no clones, with clones,
+ * the form with Celestia's generated candidates, waiting for Telegram, and the
+ * created clone marked «Новий» — 1440 and 390, both themes, uk and en. The
+ * relay is a fake inside the page: Celestia's endpoints are not live, and the
+ * driver answers the shapes the design doc names. Each frame records overflow,
+ * clipped or off-screen controls, and on the phone every control's height.
+ */
+describe("Celestia clone creation in the relay card", () => {
+  browserTest("empty, list, form, waiting and created states on desktop and phone, light and dark, uk and en", async () => {
+    const out = path.resolve(".artifacts/celestia-clone-create");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const portrait = async (from: string, to: string) => {
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${from}"/><stop offset="1" stop-color="${to}"/></linearGradient></defs><rect width="160" height="160" fill="url(#g)"/><circle cx="80" cy="70" r="34" fill="#ffffff" fill-opacity="0.85"/><rect x="38" y="112" width="84" height="40" rx="20" fill="#ffffff" fill-opacity="0.85"/></svg>`;
+      return `data:image/jpeg;base64,${(await sharp(Buffer.from(svg)).jpeg({ quality: 80 }).toBuffer()).toString("base64")}`;
+    };
+    const candidates = await Promise.all([["#3b4a8f", "#8a6fd1"], ["#173b4f", "#3c8fb0"], ["#7a3a1c", "#e08a3c"], ["#24563a", "#7cc08a"]]
+      .map(async ([from, to], index) => ({ storage_key: `avatars/${index + 1}.png`, preview: await portrait(from!, to!) })));
+    const combos = [
+      { width: 1440, scheme: "light", lang: "uk" }, { width: 1440, scheme: "dark", lang: "en" },
+      { width: 390, scheme: "dark", lang: "uk" }, { width: 390, scheme: "light", lang: "en" },
+    ] as const;
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const { width, scheme, lang } of combos) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, colorScheme: scheme, reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        try {
+          await context.addInitScript(({ lang, candidates }) => {
+            localStorage.setItem("llv_lang", lang);
+            const names = lang === "uk" ? ["Помічник чату «Ліга»", "Модератор Бета"] : ["League chat helper", "Beta moderator"];
+            const target = (id: string, name: string, over: Record<string, unknown> = {}) => ({ id, name, answered_by: "install", fallback: "service", enabled: true,
+              engine: "claude", model: "opus", effort: "high", project: null, concurrency: 1, hardCapMinutes: 30, ...over });
+            const fake = {
+              relay: { id: "celestia", origin: "https://celestia.example", name: "Celestia", description: "", features: ["requester_context", "clone_create"],
+                owner: { namespace: "telegram", id: "owner", display_name: lang === "uk" ? "Власник" : "Owner", handle: "@owner" },
+                pairedAt: "2026-10-11T11:02:00.000Z", paused: false, targets: [] as ReturnType<typeof target>[], cloneRequest: undefined as unknown },
+              status: { status: "pending" } as Record<string, unknown>,
+              opened: [] as string[],
+              failSetup: false,
+            };
+            const json = (body: unknown, status = 200) => new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+            const relayFetch = async (url: URL, init?: RequestInit): Promise<Response | null> => {
+              const method = (init?.method ?? "GET").toUpperCase();
+              const base = "/api/external-relay/relays/celestia";
+              if (url.pathname === "/api/external-relay") return json({ relays: [fake.relay], pending: [],
+                status: [{ id: "celestia", state: { state: "polling", lastOutcome: "answered", lastOutcomeAt: "2026-10-11T11:20:00.000Z", lastProgress: null }, running: {} }] });
+              if (url.pathname === "/api/external-relay/known") return json({ known: [] });
+              if (url.pathname === "/api/accounts" && method === "GET") return json({
+                claude: { active: "main", accounts: [{ id: "main", label: "Account A", kind: "managed", authPresent: true, authHealth: "authenticated", loginPending: false, loginState: "authenticated", deviceAuth: null }] },
+                codex: { active: "", accounts: [] } });
+              if (url.pathname === `${base}/clone-avatars`) { await new Promise((resolve) => setTimeout(resolve, 150)); return json({ candidates }); }
+              if (url.pathname === `${base}/clone-requests` && method === "POST") {
+                const body = JSON.parse(String(init?.body)) as { name: string; username: string };
+                const request = { request_id: "req-1", create_url: `https://t.me/newbot/celestia_bot/${body.username}?name=${encodeURIComponent(body.name)}`,
+                  expires_at: new Date(Date.now() + 600_000).toISOString(), name: body.name, username: body.username, requestedAt: new Date().toISOString() };
+                fake.relay.cloneRequest = request;
+                return json({ request }, 201);
+              }
+              if (url.pathname === `${base}/clone-requests/req-1`) {
+                if (method === "DELETE") { fake.relay.cloneRequest = undefined; return json(null, 204); }
+                if (fake.status.status !== "pending") fake.relay.cloneRequest = undefined;
+                return json({ request: fake.status });
+              }
+              if (url.pathname === base && method === "PATCH") {
+                if (fake.failSetup) return json({ error: "unreachable" }, 502);
+                const patch = (JSON.parse(String(init?.body)) as { target: { id: string } }).target;
+                fake.relay.targets = fake.relay.targets.map((item) => item.id === patch.id ? { ...item, ...patch } : item);
+                return json({ relay: fake.relay });
+              }
+              if (url.pathname.startsWith(`${base}/targets/`) && method === "PATCH") {
+                const id = decodeURIComponent(url.pathname.split("/").at(-1)!);
+                fake.relay.targets = fake.relay.targets.map((item) => item.id === id ? { ...item, answered_by: "install" } : item);
+                return json({ target: {} });
+              }
+              return null;
+            };
+            let fetcher = window.fetch;
+            Object.defineProperty(window, "fetch", { configurable: true,
+              get: () => fetcher,
+              set: (next: typeof fetch) => {
+                fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                  const url = new URL(String(input), location.origin);
+                  const own = url.pathname.startsWith("/api/external-relay") || url.pathname === "/api/accounts" ? await relayFetch(url, init) : null;
+                  return own ?? (url.pathname.startsWith("/api/external-relay") ? json({ error: "not_found" }, 404) : next(input, init));
+                }) as typeof fetch;
+              },
+            });
+            /* The window «Створити в Telegram» opens in its click: recorded, never shown. */
+            window.open = (() => {
+              const win = { opener: null as unknown, document: { body: { textContent: "" } }, close() {},
+                location: { set href(value: string) { fake.opened.push(value); }, get href() { return fake.opened.at(-1) ?? "about:blank"; } } };
+              return win;
+            }) as unknown as typeof window.open;
+            Object.assign(window, { cloneFake: {
+              withClones: () => { fake.relay.targets = [target("league", names[0]!), target("beta", names[1]!)]; },
+              create: (name: string) => {
+                fake.relay.targets = [...fake.relay.targets, target("fresh", name, { engine: null, model: null, effort: null, answered_by: "install" })];
+                fake.status = { status: "created", target_id: "fresh", username: (fake.relay.cloneRequest as { username?: string } | undefined)?.username };
+              },
+              opened: () => fake.opened,
+              failSetup: (on: boolean) => { fake.failSetup = on; },
+              fresh: () => fake.relay.targets.find((item) => item.id === "fresh"),
+            } });
+          }, { lang, candidates });
+          await page.goto(server.base);
+          await page.waitForSelector(phone ? "[data-phone-card], [data-mobile2-shell], [data-mobile-shell]" : "[data-kanban-board]", { timeout: 15_000 }).catch(() => {});
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-external-relay-settings")));
+          const dialog = page.locator("[data-external-relay-settings]");
+          await dialog.waitFor();
+          const card = dialog.locator("[data-external-relay='celestia']");
+          type Fake = { cloneFake: { withClones(): void; create(name: string): void; opened(): string[]; failSetup(on: boolean): void; fresh(): { engine: string | null; model: string | null; answered_by: string } | undefined } };
+          const frame = async (state: string, ready: string) => {
+            await card.locator(ready).first().waitFor({ timeout: 15_000 });
+            await page.waitForTimeout(150);
+            const reading = await card.evaluate((element, phone) => {
+              const viewport = document.documentElement.clientWidth;
+              const controls = [...element.querySelectorAll<HTMLElement>("button, a, input")].filter((node) => node.getClientRects().length > 0 && !(node as HTMLInputElement).hidden).map((node) => {
+                const box = node.getBoundingClientRect();
+                return { control: node.dataset.cloneOpen !== undefined ? "open" : Object.keys(node.dataset)[0] ?? node.getAttribute("aria-label") ?? node.tagName.toLowerCase(),
+                  label: (node.textContent ?? "").trim().slice(0, 60), clipped: node.tagName !== "INPUT" && node.scrollWidth > node.clientWidth + 1,
+                  inside: box.left >= -0.5 && box.right <= viewport + 0.5, height: Math.round(box.height), width: Math.round(box.width) };
+              });
+              const texts = [...element.querySelectorAll<HTMLElement>("p, span")].filter((node) => node.childElementCount === 0 && node.getClientRects().length > 0 && getComputedStyle(node).textOverflow !== "ellipsis")
+                .filter((node) => node.scrollWidth > node.clientWidth + 1).map((node) => (node.textContent ?? "").slice(0, 60));
+              return { overflow: element.scrollWidth > element.clientWidth + 1, cutText: texts, controls,
+                shortTargets: phone ? controls.filter((control) => control.height < 44 && control.control !== "externalRelayAnsweredBy").map((control) => `${control.control}:${control.height}`) : [] };
+            }, phone);
+            expect(reading.overflow).toBe(false);
+            expect(reading.cutText).toEqual([]);
+            for (const control of reading.controls) { expect(control.clipped).toBe(false); expect(control.inside).toBe(true); }
+            expect(reading.shortTargets).toEqual([]);
+            await card.screenshot({ path: path.join(out, `${lang}-${width}-${scheme}-${state}.png`) });
+            readings.push({ lang, width, scheme, state, overflow: reading.overflow, cutText: reading.cutText, shortTargets: reading.shortTargets, controls: reading.controls.length });
+          };
+
+          await frame("empty", "[data-clone-empty]");
+          expect(await card.locator("[data-clone-empty]").textContent()).toContain(translate(lang, "externalRelay.clone.emptyLead", { name: "Celestia" }));
+
+          await page.evaluate(() => (window as unknown as Fake).cloneFake.withClones());
+          await frame("list", "[data-external-relay-target='beta']");
+          expect(await card.locator("[data-clone-open]").textContent()).toBe(translate(lang, "externalRelay.clone.create"));
+
+          await card.locator("[data-clone-open]").click();
+          const name = lang === "uk" ? "Нічна Сова" : "Night Owl";
+          await card.locator("[data-clone-name]").fill(name);
+          expect(await card.locator("[data-clone-username]").inputValue()).toBe(lang === "uk" ? "nichna_sova_bot" : "night_owl_bot");
+          await card.locator("[data-clone-generate]").click();
+          await card.locator("[data-clone-candidate='3']").waitFor();
+          expect(await card.locator("[data-clone-candidate='0']").getAttribute("aria-pressed")).toBe("true");
+          await frame("form", "[data-clone-form]");
+
+          await card.locator("[data-clone-submit]").click();
+          await frame("waiting", "[data-clone-waiting]");
+          expect(await card.locator("[data-clone-owner]").textContent()).toBe(translate(lang, "externalRelay.clone.waitingLead", { owner: `${lang === "uk" ? "Власник" : "Owner"} (@owner)` }));
+          expect(await page.evaluate(() => (window as unknown as Fake).cloneFake.opened())).toEqual([expect.stringMatching(/^https:\/\/t\.me\/newbot\/celestia_bot\//)]);
+
+          /* The engine write fails twice: the card says so with Retry setup, and the retry goes through. */
+          await page.evaluate(() => (window as unknown as Fake).cloneFake.failSetup(true));
+          await page.evaluate((name) => (window as unknown as Fake).cloneFake.create(name), name);
+          await frame("setup-failed", "[data-clone-setup-failed]");
+          expect(await card.locator("[data-clone-setup-failed] [role=alert]").textContent()).toBe(translate(lang, "externalRelay.clone.setupFailed", { error: translate(lang, "externalRelay.error.unreachable") }));
+          /* No second clone starts while this one is not set up. */
+          expect(await card.locator("[data-clone-open]").count()).toBe(0);
+          await page.evaluate(() => (window as unknown as Fake).cloneFake.failSetup(false));
+          await card.locator("[data-clone-setup-retry]").click();
+          await card.locator("[data-clone-setup-failed]").waitFor({ state: "detached", timeout: 15_000 });
+          await card.locator("[data-external-relay-target='fresh'][data-fresh] [data-external-relay-fresh]").waitFor({ timeout: 15_000 });
+          await card.locator("[data-external-relay-target='fresh'] [data-external-relay-answered-by='install']").waitFor({ timeout: 15_000 });
+          /* The new clone takes the signed-in engine with its default model, answered here. */
+          await card.locator("[data-external-relay-target='fresh'] [data-external-relay-running]", { hasText: "Opus 5.5" }).waitFor({ timeout: 15_000 });
+          expect(await page.evaluate(() => (window as unknown as Fake).cloneFake.fresh())).toMatchObject({ engine: "claude", model: "opus", answered_by: "install" });
+          expect(await card.locator("[data-external-relay-no-account], [data-external-relay-running].text-warning").count()).toBe(0);
+          await frame("created", "[data-clone-created]");
+          expect(await card.locator("[data-clone-created]").textContent()).toContain(translate(lang, "externalRelay.clone.created", { name, username: lang === "uk" ? "nichna_sova_bot" : "night_owl_bot" }));
+          expect(await card.locator("[data-clone-open]").count()).toBe(1);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      const evidence = path.resolve("evidence/celestia-clone-create/geometry.json");
+      fs.mkdirSync(path.dirname(evidence), { recursive: true });
+      fs.writeFileSync(evidence, JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+});
+
+describe("the sidebar names each account's weekly limit left, Claude as Codex", () => {
+  /*
+   * The operator's reading (2026-10-11): a Claude account with 77 % of its week and 36 % of its 5-hour window left
+   * read 36 in the sidebar. Over the board fixture with `&accountpicker=1&sidebarweekly=1`: Claude «Main» 77 % week
+   * and 36 % 5h, «Work» a week only (41 %), «Night» a 5-hour window only (70 %); Codex 78 % and 23 %, weekly only.
+   * The desktop sidebar footer at 1440 and 1000, dark and light, one line per account (each names the week), then
+   * «All windows»; the phone's accounts screen at 390, where the phone keeps its account lines. en and uk.
+   *
+   *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 SIDEBAR_WEEKLY_OUT=<dir> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "weekly limit left, Claude as Codex"
+   *
+   * The frames go to `SIDEBAR_WEEKLY_OUT`, outside the repository; the readings go to evidence/sidebar-weekly.
+   */
+  browserTest("every account line names its week, a 5-hour figure only under its own label, and a missing week says so", async () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "sidebar-weekly-"));
+    const out = process.env.SIDEBAR_WEEKLY_OUT ? path.resolve(process.env.SIDEBAR_WEEKLY_OUT) : path.join(work, "frames");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(work);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const tr = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, key, params);
+        const left = (percent: number) => `${tr("limits.weekValue")} ${percent}%`;
+
+        /* The desktop sidebar at 1440 and 1000, dark and light: one line per account, then every window behind «All windows». */
+        for (const [width, scheme] of [[1440, "dark"], [1440, "light"], [1000, "dark"], [1000, "light"]] as const) {
+          const name = `sidebar-${width}-${scheme}-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?accountpicker=1&sidebarweekly=1`, { width, height: VIEWPORT.height }, scheme, lang, "reduce");
+          try {
+            await page.locator('[data-engine-limits="claude"] [data-footer-account="night"]').waitFor({ timeout: 40_000 });
+            await page.locator('[data-engine-limits="codex"] [data-footer-account="review"] [data-meter-value]').waitFor({ timeout: 15_000 });
+            await page.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
+            const lines = () => page.locator("[data-engine-limits] [data-footer-account]").evaluateAll((rows) => rows.map((row) => ({
+              engine: row.closest("[data-engine-limits]")?.getAttribute("data-engine-limits"), id: row.getAttribute("data-footer-account"),
+              text: (row as HTMLElement).innerText.replace(/\s+/g, " ").trim(),
+              value: (row.querySelector("[data-meter-value]") ?? row.querySelector("[data-limits-reason]"))?.textContent ?? null,
+              bar: row.querySelector("[data-meter-bar]")?.getAttribute("data-meter-bar") ?? null,
+              overflow: row.scrollWidth > row.clientWidth + 0.5,
+            })));
+            const compact = await lines();
+            const value = (engine: string, id: string) => compact.find((row) => row.engine === engine && row.id === id)?.value;
+            expect([value("claude", "default"), value("claude", "work"), value("claude", "night")], `${name} Claude lines`).toEqual([left(77), left(41), tr("limits.noWeekly")]);
+            expect([value("codex", "default"), value("codex", "review")], `${name} Codex lines`).toEqual([left(78), left(23)]);
+            expect(compact.map((row) => row.bar), `${name} bars`).toEqual(["77", "41", null, "78", "23"]);
+            expect(compact.filter((row) => row.overflow).map((row) => row.text), `${name} lines hold their contents`).toEqual([]);
+            const footerText = await page.locator("[data-rail-footer]").innerText();
+            expect(footerText, `${name} no 5-hour figure on a line`).not.toMatch(/\b(36|70)%/);
+            expect(compact.filter((row) => row.value?.endsWith("%") && !row.value.startsWith(tr("limits.weekValue"))).map((row) => row.text), `${name} every percent on a line names the week`).toEqual([]);
+            await page.mouse.move(0, 0);
+            const footer = (await page.locator("[data-rail-footer]").boundingBox())!;
+            await page.screenshot({ path: path.join(out, `${name}-lines.png`), clip: { x: 0, y: Math.max(0, footer.y - 40), width: Math.ceil(footer.x + footer.width), height: Math.min(VIEWPORT.height, footer.y + footer.height + 4) - Math.max(0, footer.y - 40) } });
+
+            await page.click("[data-rail-footer-detail]");
+            await page.locator('[data-engine-limits="claude"] [data-limits-windows]').waitFor({ timeout: 10_000 });
+            const windows = await page.locator('[data-engine-limits="claude"] [data-limits-windows] [data-meter-window]').evaluateAll((rows) => rows.map((row) => (row as HTMLElement).innerText.replace(/\s+/g, " ").trim()));
+            const detailLine = await page.locator('[data-engine-limits="claude"] [data-footer-account-active="true"] [data-meter-value]').textContent();
+            expect(detailLine, `${name} the line under «All windows»`).toBe(left(77));
+            expect(windows.some((row) => row.startsWith(tr("limits.5h")) && row.includes("36%")), `${name} the 5-hour figure under its label: ${JSON.stringify(windows)}`).toBe(true);
+            expect(windows.some((row) => row.startsWith(tr("limits.week")) && row.includes("77%")), `${name} the week under its label`).toBe(true);
+            const detailBox = (await page.locator("[data-rail-footer]").boundingBox())!;
+            await page.screenshot({ path: path.join(out, `${name}-all-windows.png`), clip: { x: 0, y: Math.max(0, detailBox.y - 40), width: Math.ceil(detailBox.x + detailBox.width), height: Math.min(VIEWPORT.height, detailBox.y + detailBox.height + 4) - Math.max(0, detailBox.y - 40) } });
+            expect(pageErrors, `${name} page errors`).toEqual([]);
+            readings.push({ shot: name, lines: compact, allWindows: { line: detailLine, windows } });
+          } finally { await context.close(); }
+        }
+
+        /* The phone: its account lines are the accounts screen behind the menu; each corner names the week. */
+        {
+          const name = `accounts-390-${lang}`;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?accountpicker=1&sidebarweekly=1`, { width: 390, height: 844 }, "dark", lang, "reduce", true);
+          try {
+            await page.waitForSelector('[data-mobile2-screen="board"]', { timeout: 40_000 });
+            await page.click('[data-mobile2-open="menu"]');
+            await page.click('[data-mobile2-go="accounts"]');
+            await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account-corner]').nth(4).waitFor({ timeout: 15_000 });
+            await page.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
+            const cards = await page.locator('[data-mobile2-screen="accounts"] [data-mobile2-account]').evaluateAll((elements) => elements.map((card) => {
+              const corner = card.querySelector<HTMLElement>("[data-mobile2-account-corner]");
+              const box = corner?.getBoundingClientRect();
+              return {
+                id: card.getAttribute("data-mobile2-account"), corner: corner?.innerText.replace(/\s+/g, " ").trim() ?? null,
+                inside: box ? box.right <= innerWidth + 0.5 && box.left >= -0.5 : null,
+              };
+            }));
+            const week = (percent: number) => `${tr("mobile2.meter.left", { left: percent })} ${tr("limits.week")}`;
+            expect(cards.map((card) => card.corner), `${name} corners`).toEqual([week(77), week(41), tr("limits.noWeekly"), week(78), week(23)]);
+            expect(cards.every((card) => card.inside !== false), `${name} corners inside the screen`).toBe(true);
+            expect(await page.evaluate(() => Math.max(0, document.documentElement.scrollWidth - innerWidth)), `${name} no sideways scroll`).toBe(0);
+            await page.screenshot({ path: path.join(out, `${name}.png`) });
+            expect(pageErrors, `${name} page errors`).toEqual([]);
+            readings.push({ shot: name, cards });
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/sidebar-weekly", { recursive: true });
+      fs.writeFileSync("evidence/sidebar-weekly/readings.json", JSON.stringify(readings, null, 2) + "\n");
     } finally {
       await browser.close();
       server.stop();

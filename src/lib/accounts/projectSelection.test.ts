@@ -219,3 +219,20 @@ test("project capacity and headless selection use the requested model's bucket",
     sample.limits!.tiers![1].usedPercent = 100;
   }
 });
+
+
+test.each(["claude", "codex"] as const)("automatic %s recovery target requires current capacity without substituting another account", engine => {
+  const request = { project: ATLAS, engine, accounts: ACCOUNTS,
+    observations: [{ ...observation(RESERVED, 100, Math.floor(NOW / 1000) + 3600), engine },
+      { ...observation(SPARE, 10), engine }],
+    bindings: [binding(RESERVED), binding(SPARE)].map(item => ({ ...item, engine })),
+    requestedId: RESERVED, requireCapacity: true, now: NOW };
+  expect(selectProjectAccount(request)).toEqual({ kind: "exhausted", resetsAt: Math.floor(NOW / 1000) + 3600,
+    allowedAccountIds: [RESERVED] });
+  expect(selectProjectAccount({ ...request, bindings: [] }).kind).toBe("exhausted");
+  expect(selectProjectAccount({ ...request, requireCapacity: false })).toEqual({ kind: "available", accountId: RESERVED });
+  expect(selectProjectAccount({ ...request, observations: [{ ...observation(RESERVED, 25), engine }] }))
+    .toEqual({ kind: "available", accountId: RESERVED });
+  expect(selectProjectAccount({ ...request, unavailableIds: [RESERVED] }).kind).toBe("unavailable");
+  expect(selectProjectAccount({ ...request, bindings: [{ ...binding(SPARE), engine }] }).kind).toBe("not_allowed");
+});

@@ -160,6 +160,7 @@ export function isFocusedNeedsYouEntry(entry: MobileAttentionEntry, focus: { pat
     round's title is the question, since the form's own questions are
     answered in the form. */
 export function prototypeNoticeAsk(t: TFunction, notice: PrototypeReviewNotice): OperatorAsk {
+  if (notice.undelivered) return { question: null, options: [], recommended: null, sentence: t("proto.notice.open") };
   const questions = notice.asks === "questions";
   return { question: questions && notice.roundTitle ? notice.roundTitle : null, options: [], recommended: null, sentence: t(questions ? "needs.ask.prototypeQuestions" : "needs.ask.prototype") };
 }
@@ -187,7 +188,7 @@ export interface NeedsYouRowText extends Omit<OperatorAsk, "sentence"> {
     project read alike. */
 export function needsYouRowText(t: TFunction, entry: MobileAttentionEntry): NeedsYouRowText {
   const { sentence, ...ask } = needsYouEntryAsk(t, entry);
-  if (entry.kind === "prototype") return { title: entry.notice.title, line: sentence, label: t("proto.notice.open"), ...ask };
+  if (entry.kind === "prototype") return { title: entry.notice.title, line: entry.notice.undelivered ? t("proto.notice.undelivered") : sentence, label: t("proto.notice.open"), ...ask };
   if (entry.kind === "update") return { title: t("selfUpdate.auto.decision.title"), line: sentence, label: t("selfUpdate.auto.decision.title"), ...ask };
   return entry.kind === "conversation"
     ? { title: entry.item.reason.report?.body || cleanTitle(entry.item.file.title, 90), line: sentence, label: reasonLine(t, entry.item.reason), ...ask }

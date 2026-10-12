@@ -1,0 +1,242 @@
+[
+  {
+    "lang": "uk",
+    "width": 1440,
+    "scheme": "light",
+    "state": "empty",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 2
+  },
+  {
+    "lang": "uk",
+    "width": 1440,
+    "scheme": "light",
+    "state": "list",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 6
+  },
+  {
+    "lang": "uk",
+    "width": 1440,
+    "scheme": "light",
+    "state": "form",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 17
+  },
+  {
+    "lang": "uk",
+    "width": 1440,
+    "scheme": "light",
+    "state": "waiting",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 7
+  },
+  {
+    "lang": "uk",
+    "width": 1440,
+    "scheme": "light",
+    "state": "setup-failed",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 9
+  },
+  {
+    "lang": "uk",
+    "width": 1440,
+    "scheme": "light",
+    "state": "created",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 9
+  },
+  {
+    "lang": "en",
+    "width": 1440,
+    "scheme": "dark",
+    "state": "empty",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 2
+  },
+  {
+    "lang": "en",
+    "width": 1440,
+    "scheme": "dark",
+    "state": "list",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 6
+  },
+  {
+    "lang": "en",
+    "width": 1440,
+    "scheme": "dark",
+    "state": "form",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 17
+  },
+  {
+    "lang": "en",
+    "width": 1440,
+    "scheme": "dark",
+    "state": "waiting",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 7
+  },
+  {
+    "lang": "en",
+    "width": 1440,
+    "scheme": "dark",
+    "state": "setup-failed",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 9
+  },
+  {
+    "lang": "en",
+    "width": 1440,
+    "scheme": "dark",
+    "state": "created",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 9
+  },
+  {
+    "lang": "uk",
+    "width": 390,
+    "scheme": "dark",
+    "state": "empty",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 2
+  },
+  {
+    "lang": "uk",
+    "width": 390,
+    "scheme": "dark",
+    "state": "list",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 6
+  },
+  {
+    "lang": "uk",
+    "width": 390,
+    "scheme": "dark",
+    "state": "form",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 17
+  },
+  {
+    "lang": "uk",
+    "width": 390,
+    "scheme": "dark",
+    "state": "waiting",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 7
+  },
+  {
+    "lang": "uk",
+    "width": 390,
+    "scheme": "dark",
+    "state": "setup-failed",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 9
+  },
+  {
+    "lang": "uk",
+    "width": 390,
+    "scheme": "dark",
+    "state": "created",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 9
+  },
+  {
+    "lang": "en",
+    "width": 390,
+    "scheme": "light",
+    "state": "empty",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 2
+  },
+  {
+    "lang": "en",
+    "width": 390,
+    "scheme": "light",
+    "state": "list",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 6
+  },
+  {
+    "lang": "en",
+    "width": 390,
+    "scheme": "light",
+    "state": "form",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 17
+  },
+  {
+    "lang": "en",
+    "width": 390,
+    "scheme": "light",
+    "state": "waiting",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 7
+  },
+  {
+    "lang": "en",
+    "width": 390,
+    "scheme": "light",
+    "state": "setup-failed",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 9
+  },
+  {
+    "lang": "en",
+    "width": 390,
+    "scheme": "light",
+    "state": "created",
+    "overflow": false,
+    "cutText": [],
+    "shortTargets": [],
+    "controls": 9
+  }
+]

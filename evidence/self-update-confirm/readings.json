@@ -1,0 +1,2290 @@
+[
+  {
+    "name": "uk-1440-light-ready",
+    "box": {
+      "x": 480,
+      "y": 144,
+      "width": 480,
+      "height": 612,
+      "bottom": 756
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Оновити до e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 719,
+        "right": 815,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 823,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Проєкт без назви"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "uk-1440-light-retry",
+    "box": {
+      "x": 480,
+      "y": 134,
+      "width": 480,
+      "height": 632,
+      "bottom": 766
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Повторити оновлення?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 713,
+        "bottom": 753,
+        "left": 719,
+        "right": 815,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 713,
+        "bottom": 753,
+        "left": 823,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Проєкт без назви"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "uk-1440-light-action",
+    "box": {
+      "x": 480,
+      "y": 144,
+      "width": 480,
+      "height": 612,
+      "bottom": 756
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Перезапустити лаунчер?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 666,
+        "right": 762,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Перезапустити лаунчер",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 770,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Проєкт без назви"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "uk-1440-light-pending",
+    "box": {
+      "x": 480,
+      "y": 321,
+      "width": 480,
+      "height": 259,
+      "bottom": 580
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Оновити до e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 527,
+        "bottom": 567,
+        "left": 719,
+        "right": 815,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 527,
+        "bottom": 567,
+        "left": 823,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 0,
+    "rowsVisible": 0,
+    "scrolls": false,
+    "projects": [],
+    "work": "pending",
+    "failures": []
+  },
+  {
+    "name": "uk-1440-light-unavailable",
+    "box": {
+      "x": 480,
+      "y": 330,
+      "width": 480,
+      "height": 241,
+      "bottom": 571
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Оновити до e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 518,
+        "bottom": 558,
+        "left": 719,
+        "right": 815,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 518,
+        "bottom": 558,
+        "left": 823,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 0,
+    "rowsVisible": 0,
+    "scrolls": false,
+    "projects": [],
+    "work": "unavailable",
+    "failures": []
+  },
+  {
+    "name": "uk-1440-light-many",
+    "box": {
+      "x": 480,
+      "y": 54,
+      "width": 480,
+      "height": 792,
+      "bottom": 846
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Оновити до e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 793,
+        "bottom": 833,
+        "left": 719,
+        "right": 815,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 793,
+        "bottom": 833,
+        "left": 823,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 23,
+    "rowsVisible": 11,
+    "scrolls": true,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Проєкт без назви"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "uk-1440-dark-ready",
+    "box": {
+      "x": 480,
+      "y": 144,
+      "width": 480,
+      "height": 612,
+      "bottom": 756
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Оновити до e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 719,
+        "right": 815,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 823,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Проєкт без назви"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "uk-1440-dark-retry",
+    "box": {
+      "x": 480,
+      "y": 134,
+      "width": 480,
+      "height": 632,
+      "bottom": 766
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Повторити оновлення?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 713,
+        "bottom": 753,
+        "left": 719,
+        "right": 815,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 713,
+        "bottom": 753,
+        "left": 823,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Проєкт без назви"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "uk-1440-dark-action",
+    "box": {
+      "x": 480,
+      "y": 144,
+      "width": 480,
+      "height": 612,
+      "bottom": 756
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Перезапустити лаунчер?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 666,
+        "right": 762,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Перезапустити лаунчер",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 770,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Проєкт без назви"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "uk-1440-dark-pending",
+    "box": {
+      "x": 480,
+      "y": 321,
+      "width": 480,
+      "height": 259,
+      "bottom": 580
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Оновити до e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 527,
+        "bottom": 567,
+        "left": 719,
+        "right": 815,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 527,
+        "bottom": 567,
+        "left": 823,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 0,
+    "rowsVisible": 0,
+    "scrolls": false,
+    "projects": [],
+    "work": "pending",
+    "failures": []
+  },
+  {
+    "name": "uk-1440-dark-unavailable",
+    "box": {
+      "x": 480,
+      "y": 330,
+      "width": 480,
+      "height": 241,
+      "bottom": 571
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Оновити до e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 518,
+        "bottom": 558,
+        "left": 719,
+        "right": 815,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 518,
+        "bottom": 558,
+        "left": 823,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 0,
+    "rowsVisible": 0,
+    "scrolls": false,
+    "projects": [],
+    "work": "unavailable",
+    "failures": []
+  },
+  {
+    "name": "uk-1440-dark-many",
+    "box": {
+      "x": 480,
+      "y": 54,
+      "width": 480,
+      "height": 792,
+      "bottom": 846
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Оновити до e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 793,
+        "bottom": 833,
+        "left": 719,
+        "right": 815,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 793,
+        "bottom": 833,
+        "left": 823,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 23,
+    "rowsVisible": 11,
+    "scrolls": true,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Проєкт без назви"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "uk-390-light-ready",
+    "box": {
+      "x": 0,
+      "y": 164,
+      "width": 390,
+      "height": 680,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Оновити до e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Проєкт без назви"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "uk-390-light-retry",
+    "box": {
+      "x": 0,
+      "y": 145,
+      "width": 390,
+      "height": 700,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Повторити оновлення?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Проєкт без назви"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "uk-390-light-action",
+    "box": {
+      "x": 0,
+      "y": 164,
+      "width": 390,
+      "height": 680,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Перезапустити лаунчер?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Перезапустити лаунчер",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Проєкт без назви"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "uk-390-light-pending",
+    "box": {
+      "x": 0,
+      "y": 517,
+      "width": 390,
+      "height": 327,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Оновити до e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 0,
+    "rowsVisible": 0,
+    "scrolls": false,
+    "projects": [],
+    "work": "pending",
+    "failures": []
+  },
+  {
+    "name": "uk-390-light-unavailable",
+    "box": {
+      "x": 0,
+      "y": 517,
+      "width": 390,
+      "height": 327,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Оновити до e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 0,
+    "rowsVisible": 0,
+    "scrolls": false,
+    "projects": [],
+    "work": "unavailable",
+    "failures": []
+  },
+  {
+    "name": "uk-390-light-many",
+    "box": {
+      "x": 0,
+      "y": 101,
+      "width": 390,
+      "height": 743,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Оновити до e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 23,
+    "rowsVisible": 9,
+    "scrolls": true,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Проєкт без назви"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "uk-390-dark-ready",
+    "box": {
+      "x": 0,
+      "y": 164,
+      "width": 390,
+      "height": 680,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Оновити до e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Проєкт без назви"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "uk-390-dark-retry",
+    "box": {
+      "x": 0,
+      "y": 145,
+      "width": 390,
+      "height": 700,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Повторити оновлення?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Проєкт без назви"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "uk-390-dark-action",
+    "box": {
+      "x": 0,
+      "y": 164,
+      "width": 390,
+      "height": 680,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Перезапустити лаунчер?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Перезапустити лаунчер",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Проєкт без назви"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "uk-390-dark-pending",
+    "box": {
+      "x": 0,
+      "y": 517,
+      "width": 390,
+      "height": 327,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Оновити до e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 0,
+    "rowsVisible": 0,
+    "scrolls": false,
+    "projects": [],
+    "work": "pending",
+    "failures": []
+  },
+  {
+    "name": "uk-390-dark-unavailable",
+    "box": {
+      "x": 0,
+      "y": 517,
+      "width": 390,
+      "height": 327,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Оновити до e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 0,
+    "rowsVisible": 0,
+    "scrolls": false,
+    "projects": [],
+    "work": "unavailable",
+    "failures": []
+  },
+  {
+    "name": "uk-390-dark-many",
+    "box": {
+      "x": 0,
+      "y": 101,
+      "width": 390,
+      "height": 743,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Оновити до e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Скасувати",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Оновити зараз",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 23,
+    "rowsVisible": 9,
+    "scrolls": true,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Проєкт без назви"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "en-1440-light-ready",
+    "box": {
+      "x": 480,
+      "y": 144,
+      "width": 480,
+      "height": 612,
+      "bottom": 756
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Update to e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 762,
+        "right": 835,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 843,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Unnamed project"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "en-1440-light-retry",
+    "box": {
+      "x": 480,
+      "y": 144,
+      "width": 480,
+      "height": 612,
+      "bottom": 756
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Retry the update?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 762,
+        "right": 835,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 843,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Unnamed project"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "en-1440-light-action",
+    "box": {
+      "x": 480,
+      "y": 144,
+      "width": 480,
+      "height": 612,
+      "bottom": 756
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Restart launcher?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 735,
+        "right": 808,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Restart launcher",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 816,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Unnamed project"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "en-1440-light-pending",
+    "box": {
+      "x": 480,
+      "y": 321,
+      "width": 480,
+      "height": 259,
+      "bottom": 580
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Update to e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 527,
+        "bottom": 567,
+        "left": 762,
+        "right": 835,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 527,
+        "bottom": 567,
+        "left": 843,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 0,
+    "rowsVisible": 0,
+    "scrolls": false,
+    "projects": [],
+    "work": "pending",
+    "failures": []
+  },
+  {
+    "name": "en-1440-light-unavailable",
+    "box": {
+      "x": 480,
+      "y": 330,
+      "width": 480,
+      "height": 241,
+      "bottom": 571
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Update to e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 518,
+        "bottom": 558,
+        "left": 762,
+        "right": 835,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 518,
+        "bottom": 558,
+        "left": 843,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 0,
+    "rowsVisible": 0,
+    "scrolls": false,
+    "projects": [],
+    "work": "unavailable",
+    "failures": []
+  },
+  {
+    "name": "en-1440-light-many",
+    "box": {
+      "x": 480,
+      "y": 54,
+      "width": 480,
+      "height": 792,
+      "bottom": 846
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Update to e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 793,
+        "bottom": 833,
+        "left": 762,
+        "right": 835,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 793,
+        "bottom": 833,
+        "left": 843,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 23,
+    "rowsVisible": 11,
+    "scrolls": true,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Unnamed project"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "en-1440-dark-ready",
+    "box": {
+      "x": 480,
+      "y": 144,
+      "width": 480,
+      "height": 612,
+      "bottom": 756
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Update to e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 762,
+        "right": 835,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 843,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Unnamed project"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "en-1440-dark-retry",
+    "box": {
+      "x": 480,
+      "y": 144,
+      "width": 480,
+      "height": 612,
+      "bottom": 756
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Retry the update?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 762,
+        "right": 835,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 843,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Unnamed project"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "en-1440-dark-action",
+    "box": {
+      "x": 480,
+      "y": 144,
+      "width": 480,
+      "height": 612,
+      "bottom": 756
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Restart launcher?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 735,
+        "right": 808,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Restart launcher",
+        "disabled": false,
+        "top": 703,
+        "bottom": 743,
+        "left": 816,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Unnamed project"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "en-1440-dark-pending",
+    "box": {
+      "x": 480,
+      "y": 321,
+      "width": 480,
+      "height": 259,
+      "bottom": 580
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Update to e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 527,
+        "bottom": 567,
+        "left": 762,
+        "right": 835,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 527,
+        "bottom": 567,
+        "left": 843,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 0,
+    "rowsVisible": 0,
+    "scrolls": false,
+    "projects": [],
+    "work": "pending",
+    "failures": []
+  },
+  {
+    "name": "en-1440-dark-unavailable",
+    "box": {
+      "x": 480,
+      "y": 330,
+      "width": 480,
+      "height": 241,
+      "bottom": 571
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Update to e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 518,
+        "bottom": 558,
+        "left": 762,
+        "right": 835,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 518,
+        "bottom": 558,
+        "left": 843,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 0,
+    "rowsVisible": 0,
+    "scrolls": false,
+    "projects": [],
+    "work": "unavailable",
+    "failures": []
+  },
+  {
+    "name": "en-1440-dark-many",
+    "box": {
+      "x": 480,
+      "y": 54,
+      "width": 480,
+      "height": 792,
+      "bottom": 846
+    },
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "title": "Update to e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 793,
+        "bottom": 833,
+        "left": 762,
+        "right": 835,
+        "height": 40
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 793,
+        "bottom": 833,
+        "left": 843,
+        "right": 943,
+        "height": 40
+      }
+    ],
+    "rows": 23,
+    "rowsVisible": 11,
+    "scrolls": true,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Unnamed project"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "en-390-light-ready",
+    "box": {
+      "x": 0,
+      "y": 164,
+      "width": 390,
+      "height": 680,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Update to e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Unnamed project"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "en-390-light-retry",
+    "box": {
+      "x": 0,
+      "y": 145,
+      "width": 390,
+      "height": 700,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Retry the update?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Unnamed project"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "en-390-light-action",
+    "box": {
+      "x": 0,
+      "y": 164,
+      "width": 390,
+      "height": 680,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Restart launcher?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Restart launcher",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Unnamed project"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "en-390-light-pending",
+    "box": {
+      "x": 0,
+      "y": 517,
+      "width": 390,
+      "height": 327,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Update to e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 0,
+    "rowsVisible": 0,
+    "scrolls": false,
+    "projects": [],
+    "work": "pending",
+    "failures": []
+  },
+  {
+    "name": "en-390-light-unavailable",
+    "box": {
+      "x": 0,
+      "y": 517,
+      "width": 390,
+      "height": 327,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Update to e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 0,
+    "rowsVisible": 0,
+    "scrolls": false,
+    "projects": [],
+    "work": "unavailable",
+    "failures": []
+  },
+  {
+    "name": "en-390-light-many",
+    "box": {
+      "x": 0,
+      "y": 101,
+      "width": 390,
+      "height": 743,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Update to e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 23,
+    "rowsVisible": 9,
+    "scrolls": true,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Unnamed project"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "en-390-dark-ready",
+    "box": {
+      "x": 0,
+      "y": 164,
+      "width": 390,
+      "height": 680,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Update to e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Unnamed project"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "en-390-dark-retry",
+    "box": {
+      "x": 0,
+      "y": 145,
+      "width": 390,
+      "height": 700,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Retry the update?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Unnamed project"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "en-390-dark-action",
+    "box": {
+      "x": 0,
+      "y": 164,
+      "width": 390,
+      "height": 680,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Restart launcher?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Restart launcher",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 6,
+    "rowsVisible": 6,
+    "scrolls": false,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Unnamed project"
+    ],
+    "work": "ready",
+    "failures": []
+  },
+  {
+    "name": "en-390-dark-pending",
+    "box": {
+      "x": 0,
+      "y": 517,
+      "width": 390,
+      "height": 327,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Update to e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 0,
+    "rowsVisible": 0,
+    "scrolls": false,
+    "projects": [],
+    "work": "pending",
+    "failures": []
+  },
+  {
+    "name": "en-390-dark-unavailable",
+    "box": {
+      "x": 0,
+      "y": 517,
+      "width": 390,
+      "height": 327,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Update to e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 0,
+    "rowsVisible": 0,
+    "scrolls": false,
+    "projects": [],
+    "work": "unavailable",
+    "failures": []
+  },
+  {
+    "name": "en-390-dark-many",
+    "box": {
+      "x": 0,
+      "y": 101,
+      "width": 390,
+      "height": 743,
+      "bottom": 844
+    },
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "title": "Update to e7893bc (1.11.0)?",
+    "titleCut": false,
+    "sideways": false,
+    "buttons": [
+      {
+        "action": "cancel-apply",
+        "label": "Cancel",
+        "disabled": false,
+        "top": 783,
+        "bottom": 831,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      },
+      {
+        "action": "confirm-apply",
+        "label": "Update now",
+        "disabled": false,
+        "top": 727,
+        "bottom": 775,
+        "left": 17,
+        "right": 373,
+        "height": 48
+      }
+    ],
+    "rows": 23,
+    "rowsVisible": 9,
+    "scrolls": true,
+    "projects": [
+      "atlas",
+      "harbor-docs",
+      "Unnamed project"
+    ],
+    "work": "ready",
+    "failures": []
+  }
+]

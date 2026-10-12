@@ -8,7 +8,7 @@ import { isReviewGate } from "@/lib/roles/sizing";
 
 /** Roles that stay clean: they read no memory and leave none (operator,
     2026-10-07: «ревьюер всегда чистый»). */
-export const CLEAN_ROLE_IDS = ["reviewer", "verifier", "issue-reporter"] as const;
+export const CLEAN_ROLE_IDS = ["reviewer", "verifier", "issue-reporter", "curator"] as const;
 
 const CLEAN: ReadonlySet<string> = new Set(CLEAN_ROLE_IDS);
 

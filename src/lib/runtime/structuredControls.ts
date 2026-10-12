@@ -65,6 +65,8 @@ export interface StructuredControlRequest {
   onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
   providerRecovery?: import("./contracts").RuntimeProviderRecoveryRef;
   reconfiguration?: Partial<AgentReconfiguration>;
+  /** The caller compared a full fenced profile, including fields outside the legacy shape. */
+  profileChanged?: boolean;
   /** `permission` only (#2215): allow once or deny. */
   decision?: string;
   /** `permission`: the request to answer; the oldest pending one when absent.
@@ -466,14 +468,14 @@ export async function dispatchStructuredControl(
              in its place would supersede it while answering success. */
           if (withdrawal.kind === "claimed") return switchApplying(waiting);
           if ((withdrawal.kind === "withdrawn" || withdrawal.kind === "replayed")
-            && sameProfile(profileOnly, generation.launchProfile)) {
+            && sameProfile(profileOnly, generation.launchProfile) && request.profileChanged !== true) {
             (dependencies.kick ?? kickStructuredDeliveryQueue)();
             return {
               status: 200,
               body: { ok: true, structured: true, target: conversation.id, outcome: "withdrawn", withdrawn: waiting.operationId },
             };
           }
-        } else if (sameProfile(profileOnly, generation.launchProfile)) {
+        } else if (sameProfile(profileOnly, generation.launchProfile) && request.profileChanged !== true) {
           (dependencies.kick ?? kickStructuredDeliveryQueue)();
           return { status: 200, body: { ok: true, structured: true, target: conversation.id, outcome: "withdrawn", withdrawn: null } };
         }

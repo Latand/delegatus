@@ -52,6 +52,7 @@ import {
   conversationHostDependencies,
   type ConversationHostDependencies,
 } from "./dependencies";
+import { recordDeliveryIngress } from "@/lib/runtime/deliveryProgress";
 
 interface TargetResponse {
   target: string | null;
@@ -222,6 +223,7 @@ export function conversationHostPOST(req: NextRequest, options?: { actor: TeamAc
 // never an actor option. The explicit overload is for trusted in-process sends.
 export function conversationHostPOST(req: NextRequest): Promise<NextResponse<SendResponse | ApiError>>;
 export async function conversationHostPOST(req: NextRequest, options?: { actor: TeamActor }): Promise<NextResponse<SendResponse | ApiError>> {
+  const ingressAt = new Date().toISOString();
   const dependencies = conversationHostDependencies();
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
@@ -599,6 +601,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
       ...(origin ? { origin } : {}),
     });
     if (structured) {
+      recordDeliveryIngress(structured.operationId, ingressAt);
       await releaseAttachments(structuredAttachmentOutcome(structured));
       if (structured.ok) settleMessageAuthor(authorClaim);
       const { status, ...response } = structured.ok ? { ...structured, status: 200 } : structured;
@@ -622,6 +625,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     ...(typeof body.effort === "string" ? { resumeEffort: body.effort } : {}),
     ...(typeof body.fast === "boolean" ? { resumeFast: body.fast } : {}),
   });
+  recordDeliveryIngress(outcome.operationId, ingressAt);
   /* `started` actuation is the uncertain case the image path also keeps: the
      agent may already hold the message, so its attachments stay readable. */
   await releaseAttachments(outcome.ok

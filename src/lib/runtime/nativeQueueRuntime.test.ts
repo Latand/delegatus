@@ -1024,9 +1024,18 @@ test("a hand-off whose supplied operation id names another key's owner is refuse
     new NextRequest("http://localhost/api/runtime/queue", { method: "POST", headers: { host: "localhost", "sec-fetch-site": "same-origin" },
       body: JSON.stringify({ kind: "native-queue", conversationId: target, idempotencyKey: key, action: "add", text, operationId, binding }) });
   try {
-    const first = await handleNativeQueue(handOff("owner-a", "message A"), dependencies as never);
+    const input = handOff("owner-a", "message A");
+    const readBody = input.json.bind(input);
+    let validatedAt = 0;
+    input.json = async () => { await Bun.sleep(25); validatedAt = Date.now(); return readBody(); };
+    const enteredAt = Date.now();
+    const first = await handleNativeQueue(input, dependencies as never);
     expect(first.status).toBe(202);
     const a = (await first.json()).operationId as string;
+    const ingressAt = progress.get(a)?.ingressAt;
+    expect(ingressAt).toBeString();
+    expect(Date.parse(ingressAt!)).toBeGreaterThanOrEqual(enteredAt);
+    expect(Date.parse(ingressAt!)).toBeLessThan(validatedAt);
     const rowBefore = structuredClone(registry.snapshot().deliveryOperationOwners[a]);
     const recordBefore = structuredClone(progress.get(a));
     const before = commands;

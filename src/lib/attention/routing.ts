@@ -60,11 +60,11 @@ export function laneReservedForOperator(pipeline: Pick<Pipeline, "srcConversatio
   return kind === "lane-review" && !pipeline.srcConversationId;
 }
 
-/** The decision rounds that wait on the operator now, by round id: the same
-    rounds «Waiting for you» draws a row for. `tasks` carry the summary the
-    board reads, with a dismissed round's mark on it. */
+/** The decision rounds that still need an answer, by round id. A decided
+    round's delivery warning keeps its own row while the original wait goes
+    back to the seat. `tasks` carry the board summary and dismissal marks. */
 export function waitingRoundIds(tasks: readonly BoardTask[]): Set<string> {
-  return new Set(prototypeReviewNotices(tasks).map((notice) => notice.reviewId));
+  return new Set(prototypeReviewNotices(tasks).filter((notice) => !notice.undelivered).map((notice) => notice.reviewId));
 }
 
 export interface AttentionRoutingInputs {

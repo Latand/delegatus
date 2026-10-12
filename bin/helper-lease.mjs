@@ -7,9 +7,9 @@
 
    The Viewer holds this process's stdin and never writes to it; the kernel
    closes it when the Viewer exits, however it exits. The helper runs in a
-   process group of its own, so its descendants share its end: at end of file,
+   POSIX process group or a Windows job, so its descendants share its end: at end of file,
    when the Viewer stops owning release traffic, or when the Viewer process is
-   gone, the whole group is terminated, then killed, and this process exits.
+   gone, the owned tree is ended and this process exits.
    Otherwise this process exits with the helper's status.
 
    A helper that reads a request on its standard input (the file scanner, the
@@ -29,6 +29,7 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { windowsJobNative, windowsJobSetup } from "./helper-lease-windows.mjs";
 
 const TERM_MS = 1_500;
 const KILL_MS = 1_000;
@@ -78,6 +79,15 @@ function processGroup(pid) {
 const ownerPid = process.ppid;
 const ownerIdentity = identity(ownerPid);
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+let windowsJob = null;
+if (process.platform === "win32") {
+  try { windowsJob = windowsJobSetup(); }
+  catch (error) {
+    console.error(error.message);
+    process.exit(127); // Never launch a helper without containment.
+  }
+}
 
 const child = spawn(command, args, { cwd: process.cwd(), env, stdio: [input, "inherit", "inherit"], detached: true });
 const group = child.pid;
@@ -130,15 +140,41 @@ function signalGroup(signal) {
   try { process.kill(-group, signal); } catch { /* already gone */ }
 }
 
+/* The job's live membership remains provable after the helper's exit. Keep
+   the guardian resident until every other member except this reaper exits;
+   inherited pipes and the guardian's close event then fence replacement. */
+async function endWindowsTree() {
+  const script = `$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; ${windowsJobNative}
+    $guardian=$null;
+    try {
+      $guardian=[System.Diagnostics.Process]::GetProcessById(${process.pid}); $null=$guardian.Handle;
+      if ($guardian.HasExited -or $guardian.StartTime.ToFileTimeUtc().ToString() -ne '${windowsJob.start}') { exit 1 }
+      if ([HelperJob]::Reap($guardian, [long]${windowsJob.handle})) { exit 0 }; exit 1
+    } catch { exit 1 } finally { if ($guardian) { $guardian.Dispose() } }`;
+  return new Promise((resolve) => {
+    const reaper = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
+      { stdio: "ignore", windowsHide: true, timeout: 4_000 });
+    reaper.once("error", () => resolve(false));
+    reaper.once("close", (code) => resolve(code === 0));
+  });
+}
+
 let ending = false;
 async function end() {
   if (ending) return;
   ending = true;
   if (group) {
-    signalGroup("SIGTERM");
-    if (!await groupGone(TERM_MS)) {
-      signalGroup("SIGKILL");
-      await groupGone(KILL_MS);
+    if (process.platform === "win32") {
+      // Failed ownership/exit proof keeps the lease resident; never announce
+      // closure and let a successor overlap a helper we could not end.
+      while (!await endWindowsTree()) await wait(POLL_MS);
+      await childDone;
+    } else {
+      signalGroup("SIGTERM");
+      if (!await groupGone(TERM_MS)) {
+        signalGroup("SIGKILL");
+        await groupGone(KILL_MS);
+      }
     }
   }
   removeRecord();
@@ -187,8 +223,11 @@ await childDone;
 if (!ending) {
   clearInterval(ownerTimer);
   clearInterval(releaseTimer);
-  /* Descendants the helper left behind in its group end with it. */
-  if (groupAlive()) {
+  /* Descendants end on natural/crash exit as well as requested retirement. */
+  if (process.platform === "win32") {
+    ending = true;
+    while (!await endWindowsTree()) await wait(POLL_MS);
+  } else if (groupAlive()) {
     signalGroup("SIGTERM");
     if (!await groupGone(TERM_MS)) signalGroup("SIGKILL");
   }

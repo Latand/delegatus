@@ -107,6 +107,8 @@ interface CurrentReleaseControllerLoaders {
   /** Optional for the same reason. */
   loadAttentionReconcile?: () => Promise<{ startAttentionReconcile: () => void }>;
   loadLinkedBoardSync?: () => Promise<{ startLinkedBoardSync: () => void }>;
+  /** Optional for the same reason. */
+  loadPrototypeDelivery?: () => Promise<{ startPrototypeDeliveryWorker: () => void }>;
   loadSelfUpdateAuto?: () => Promise<{ startSelfUpdateAuto: () => Promise<void> | void }>;
 }
 
@@ -381,6 +383,7 @@ export async function startCurrentReleaseControllers(
     loadAsksClassifier: () => import("@/lib/asks/controller"),
     loadAttentionReconcile: () => import("@/lib/attention/reconcileController"),
     loadLinkedBoardSync: () => import("@/lib/links/schedule"),
+    loadPrototypeDelivery: () => import("@/lib/prototypeReview/deliveryWorker"),
     loadSelfUpdateAuto: () => import("@/lib/selfUpdate/auto"),
   },
 ): Promise<void> {
@@ -532,6 +535,16 @@ export async function startCurrentReleaseControllers(
     linkedBoards?.startLinkedBoardSync();
   } catch (error) {
     console.error("[linked boards] sync start failed", error instanceof Error ? error.name : "unknown");
+  }
+  /* The operator's prototype decisions answer as soon as they are saved, and
+     their messages go to the seat from here (docs/design/prototype-review-server.md).
+     The first sweep attempts every decision still owed, so a decision saved
+     while the Viewer restarted or a deploy ran goes out now. */
+  try {
+    const prototypeDelivery = await loaders.loadPrototypeDelivery?.();
+    prototypeDelivery?.startPrototypeDeliveryWorker();
+  } catch (error) {
+    console.error("[prototype delivery] start failed", error instanceof Error ? error.name : "unknown");
   }
   if (env.LLV_ACCOUNT_CONTROLLER_DISABLED === "1") return;
   const { startAccountMigrationController } = await loaders.loadAccountMigrationController();

@@ -6,7 +6,7 @@ import { accountEntryPointVisible, type AccountOption, type Engine, useEngineAcc
 import { consumePendingAccountPanel, onAccountPanelRequest } from "@/lib/accounts/openPanel";
 import { claudeTierDisplayName } from "@/lib/agent/models";
 import { type Locale, type TFunction, translate, useLocale } from "@/lib/i18n";
-import { effectiveQuota, LIMITS_FRESHNESS_S, quotaAsEngineLimits, quotaReadingFromAccountLimits, quotaReadingFromEngineLimits, reconcileQuotaReadings, type ReconciledQuota } from "@/lib/rateLimit";
+import { LIMITS_FRESHNESS_S, quotaAsEngineLimits, quotaReadingFromAccountLimits, quotaReadingFromEngineLimits, reconcileQuotaReadings, type ReconciledQuota, weeklyQuota } from "@/lib/rateLimit";
 import { LIMITS_RATE_LIMITED_REASON, LIMITS_REAUTH_REQUIRED_REASON, type EngineLimits, type LimitsPayload, type LimitsProvenance, type LimitWindow } from "@/lib/types";
 
 import { AccountsPanel } from "./AccountsPanel";
@@ -139,8 +139,13 @@ function quotaWindowsSummary(t: TFunction, quota: ReconciledQuota, accountLimits
   ].filter(Boolean).join(" · ");
 }
 
+/** The window whose age explains a dimmed line: the weekly one first, then any other old window. */
+function staleQuotaWindow(quota: ReconciledQuota) {
+  return [quota.weekly, quota.session, ...quota.tiers].find((window) => window?.stale) ?? null;
+}
+
 /** The compact footer's line for an account that is not the active one: its name,
-    what is left of its tightest window and the bar of that share, from the
+    what is left of its weekly window and the bar of that share, from the
     reading its own account row carries. It has no burndown chart (the history
     belongs to the active account), so the whole line opens the accounts panel
     focused on it. */
@@ -155,29 +160,30 @@ function InactiveAccountLine({ account, engine, label, now, onOpen }: {
   const tint = engineTintOf(engine);
   const quota = reconcileQuotaReadings(null, quotaReadingFromAccountLimits(account.limits), now);
   const accountLimits = quotaAsEngineLimits(quota);
-  const effective = effectiveQuota(quota);
+  const weekly = weeklyQuota(quota);
+  const staleWindow = staleQuotaWindow(quota);
   const windows = quotaWindowsSummary(t, quota, accountLimits);
   const stale = accountLimits?.capturedAt && now - accountLimits.capturedAt > LIMITS_FRESHNESS_S ? fmtAge(accountLimits.capturedAt) : null;
-  const staleReason = [fmtQuotaStaleHint(Boolean(effective?.stale), effective?.observedAt ?? null, locale), stale ? t("limits.stale", { stale }) : null].filter(Boolean).join(" · ");
+  const staleReason = [fmtQuotaStaleHint(Boolean(staleWindow), staleWindow?.observedAt ?? null, locale), stale ? t("limits.stale", { stale }) : null].filter(Boolean).join(" · ");
   const anyStale = Boolean(quota.session?.stale || quota.weekly?.stale || quota.tiers.some((tier) => tier.stale));
   const summary = [label, account.label, account.plan, windows || t("limits.noDataYet"), staleReason].filter(Boolean).join(" · ");
-  const color = effective ? barColor(effective.percent, tint.color) : tint.color;
+  const color = weekly ? barColor(weekly.percent, tint.color) : tint.color;
   return (
     <div data-meter-line="" data-footer-account={account.id} data-footer-account-active="false" className={`flex h-[26px] items-center pl-[13px] pr-1.5 ${anyStale ? "opacity-60" : ""}`} onClick={() => onOpen(account.id)}>
-      <button type="button" aria-haspopup="dialog" aria-label={t("accounts.triggerAria", { engine: `${label} · ${account.label}` })} title={summary} className={`flex h-[22px] min-w-0 items-center gap-1.5 rounded-[7px] px-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${effective ? "flex-1" : "flex-initial"}`} onClick={(event) => { event.stopPropagation(); onOpen(account.id); }}>
+      <button type="button" aria-haspopup="dialog" aria-label={t("accounts.triggerAria", { engine: `${label} · ${account.label}` })} title={summary} className={`flex h-[22px] min-w-0 items-center gap-1.5 rounded-[7px] px-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${weekly ? "flex-1" : "flex-initial"}`} onClick={(event) => { event.stopPropagation(); onOpen(account.id); }}>
         <span data-meter-name="" className="min-w-0 truncate text-[11.5px] font-medium text-secondary">{account.label}</span>
         <span className="relative flex shrink-0">
           <EngineMark engine={engine} size={12} label={label} />
           {staleReason ? <span data-limits-stale-dot="" title={staleReason} className="absolute -right-[3px] -top-[3px] h-1.5 w-1.5 rounded-full bg-warning ring-1 ring-card" /> : null}
         </span>
       </button>
-      {effective ? (
+      {weekly ? (
         <span className="flex h-[22px] shrink-0 cursor-pointer items-center gap-1.5 px-1.5">
-          <span data-meter-value="" className="text-[11px] tabular-nums text-muted">{t("limits.left")} <span className="font-bold" style={{ color: effective.percent <= 30 ? color : "var(--color-primary)" }}>{Math.round(effective.percent)}%</span></span>
-          <ReserveBar percent={effective.percent} color={color} />
+          <span data-meter-value="" className="text-[11px] tabular-nums text-muted">{t("limits.weekValue")} <span className="font-bold" style={{ color: weekly.percent <= 30 ? color : "var(--color-primary)" }}>{Math.round(weekly.percent)}%</span></span>
+          <ReserveBar percent={weekly.percent} color={color} />
         </span>
       ) : (
-        <span data-limits-reason="" title={staleReason || undefined} className="min-w-0 flex-1 cursor-pointer truncate px-1.5 text-right text-[10px] text-muted">{t("limits.noDataYet")}</span>
+        <span data-limits-reason="" title={staleReason || undefined} className="min-w-0 flex-1 cursor-pointer truncate px-1.5 text-right text-[10px] text-muted">{t(accountLimits ? "limits.noWeekly" : "limits.noDataYet")}</span>
       )}
     </div>
   );
@@ -316,8 +322,10 @@ function EngineLimitsBlock({
   const hasWindows = Boolean(accountLimits && (accountLimits.session || accountLimits.weekly || accountLimits.tiers?.length));
   const stale = accountLimits?.capturedAt && now - accountLimits.capturedAt > LIMITS_FRESHNESS_S ? fmtAge(accountLimits.capturedAt) : null;
   const activeLabel = activeAccount?.label ?? t("accounts.trigger");
-  const effective = effectiveQuota(quota);
-  const effectiveStaleHint = fmtQuotaStaleHint(Boolean(effective?.stale), effective?.observedAt ?? null, locale);
+  /* Every line names the weekly window (#2686): the session and tier windows sit in the tooltip and behind "All windows". */
+  const weekly = weeklyQuota(quota);
+  const staleWindow = staleQuotaWindow(quota);
+  const staleHint = fmtQuotaStaleHint(Boolean(staleWindow), staleWindow?.observedAt ?? null, locale);
   const anyStale = Boolean(quota.session?.stale || quota.weekly?.stale || quota.tiers.some((tier) => tier.stale));
   const draining = accounts.migration?.state === "draining";
   const failureReason = fmtLimitsFailureReason(provenance, locale);
@@ -325,11 +333,10 @@ function EngineLimitsBlock({
 
   const windows = quotaWindowsSummary(t, quota, accountLimits);
   /* Why the line is dimmed or carries the amber dot: an old reading, or a read that failed. */
-  const staleReason = [effectiveStaleHint, stale ? t("limits.stale", { stale }) : null, visibleFailureReason].filter(Boolean).join(" · ");
+  const staleReason = [staleHint, stale ? t("limits.stale", { stale }) : null, visibleFailureReason].filter(Boolean).join(" · ");
   const summary = [label, activeLabel, accountLimits?.plan, windows || (visibleFailureReason ? null : accounts.status === "loading" || identityPending ? t("limits.accountLoading") : t("limits.noDataYet")), staleReason].filter(Boolean).join(" · ");
-  /* The line says what is left of the tightest window, and the bar draws that same share. */
-  const left = effective ? effective.percent : null;
-  const color = effective ? barColor(effective.percent, tint.color) : tint.color;
+  /* The line says what is left of the weekly window, and the bar draws that same share. */
+  const color = weekly ? barColor(weekly.percent, tint.color) : tint.color;
   /* The compact footer names every account of the engine, one line each, in the order the account list
      holds them; the active one stands in its place. "All windows" keeps the active account alone. */
   const otherAccounts = density === "line" ? accounts.accounts.filter((account) => account.id !== accounts.active) : [];
@@ -338,7 +345,7 @@ function EngineLimitsBlock({
   const inactiveLine = (account: AccountOption) => <InactiveAccountLine key={account.id} account={account} engine={engine} label={label} now={now} onOpen={openOn} />;
   const activeLine = (
       <div data-meter-line="" data-footer-account={accounts.active} data-footer-account-active="true" className={`flex h-[26px] items-center pl-[13px] pr-1.5 ${anyStale ? "opacity-60" : ""}`}>
-        <button ref={triggerRef} type="button" aria-expanded={open} aria-haspopup="dialog" aria-current={several ? "true" : undefined} aria-label={t("accounts.triggerAria", { engine: label })} title={summary} className={`flex h-[22px] min-w-0 items-center gap-1.5 rounded-[7px] px-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${hasWindows && effective ? "flex-1" : "flex-initial"}`} onClick={() => { setChartOpen(false); setFocusAccountId(null); setOpen((value) => !value); }}>
+        <button ref={triggerRef} type="button" aria-expanded={open} aria-haspopup="dialog" aria-current={several ? "true" : undefined} aria-label={t("accounts.triggerAria", { engine: label })} title={summary} className={`flex h-[22px] min-w-0 items-center gap-1.5 rounded-[7px] px-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${hasWindows ? "flex-1" : "flex-initial"}`} onClick={() => { setChartOpen(false); setFocusAccountId(null); setOpen((value) => !value); }}>
           {/* The account starts on the edge every name in the sidebar starts on, and the mark that names
               the engine follows it, as an icon follows its word in the list above. The amber dot
               stands on the mark's corner, where it takes no width from the name. */}
@@ -349,10 +356,17 @@ function EngineLimitsBlock({
           </span>
           {draining ? <Loader2 className="h-3 w-3 shrink-0 animate-spin text-accent motion-reduce:animate-none" aria-hidden /> : null}
         </button>
-        {hasWindows && effective ? (
+        {hasWindows ? (
           <button ref={chartTriggerRef} type="button" aria-expanded={chartOpen} aria-haspopup="dialog" aria-label={t("burndown.openAria", { engine: label })} title={windows} className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-[7px] px-1.5 hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setOpen(false); setChartOpen((value) => !value); }}>
-            <span data-meter-value="" className="text-[11px] tabular-nums text-muted">{t("limits.left")} <span className="font-bold" style={{ color: effective.percent <= 30 ? color : "var(--color-primary)" }}>{Math.round(effective.percent)}%</span></span>
-            <ReserveBar percent={left} color={color} />
+            {weekly ? (
+              <>
+                <span data-meter-value="" className="text-[11px] tabular-nums text-muted">{t("limits.weekValue")} <span className="font-bold" style={{ color: weekly.percent <= 30 ? color : "var(--color-primary)" }}>{Math.round(weekly.percent)}%</span></span>
+                <ReserveBar percent={weekly.percent} color={color} />
+              </>
+            ) : (
+              /* A reading without a weekly window says so; its other windows stay in the tooltip and the chart. */
+              <span data-limits-reason="" className="text-[10px] text-muted">{t("limits.noWeekly")}</span>
+            )}
           </button>
         ) : (
           /* The reason takes what the account's name leaves: the name is never cut to make room for it. */
