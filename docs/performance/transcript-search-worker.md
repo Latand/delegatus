@@ -37,6 +37,17 @@ hard-kills the guardian itself. The busy
 tests emulate unhandled Windows termination on Unix, and the same file runs on the native Windows CI
 runner under Bun 1.4.0 through the owned gate runner.
 
+Windows job setup allows 15 seconds for cold PowerShell, `Add-Type` and CIM
+initialization. The former five-second subprocess timeout closed the guardian
+before it could launch the query worker: native runs 38182679998 and
+38183666079 failed their first parity query after 5130.87 and 5088.33 ms.
+The parity test already allowed 60 seconds and the request allowed 30 seconds.
+The setup receipt is still mandatory; failed setup never admits a helper.
+An isolated delayed-receipt regression failed at 5017 ms under the former
+cut, and the native regression adds six seconds before real Windows ownership
+setup to require successful containment beyond that cut. Both files run through
+the owned gate runner on Windows. Query deadlines and Unix behavior are unchanged.
+
 A trusted redactor receives the complete highlighted source through the worker
 protocol before excerpting or byte limits. Its closure remains with the caller.
 This preserves the voice companion's masking contract without transferring a
