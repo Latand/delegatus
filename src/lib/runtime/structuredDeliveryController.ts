@@ -24,6 +24,7 @@ import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, requestAccountMigrationTick } from 
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { actingOperation } from "@/lib/deliveryActuation";
 import { agentRegistry, REGISTRY_WRITER_BUSY, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
+import { registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
@@ -1947,6 +1948,12 @@ export async function bindStructuredDeliveryQueue(
   const publishedFallbacks = new Map<string, string>();
   let completion = Promise.resolve();
   const complete = (items: readonly StructuredDeliveryHost[], progress?: (phase: StructuredHostStartupPhase) => void, assertActive: () => void = () => {}) => {
+    /* Each startup phase begins on a turn of its own, so phases that settle
+       without I/O do not hold the event loop as one chain (#2761). */
+    const phase = async (name: StructuredHostStartupPhase) => {
+      progress?.(name);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    };
     completion = completion.catch(() => {}).then(async () => {
       /* A generation that has been swapped out cannot register anything, but it
          must not answer "done" either: its caller would clear its retry set and
@@ -1966,7 +1973,7 @@ export async function bindStructuredDeliveryQueue(
          registering hosts so even a registration-triggered drain sees the
          repaired durable state. */
       registry.repairCompletedStructuredSpawnMarkers();
-      progress?.("registering structured delivery hosts");
+      await phase("registering structured delivery hosts");
       for (const item of items) await register(item);
       assertActive();
       if (superseded()) {
@@ -1981,14 +1988,14 @@ export async function bindStructuredDeliveryQueue(
          below is read off the registry, never off this snapshot, so a read
          that failed costs one redundant publish and authorises nothing
          (#1131). */
-      progress?.("reading fallback runtime snapshot");
+      await phase("reading fallback runtime snapshot");
       const runtimeSnapshot = typeof client.snapshot === "function" && !client.readSession
         ? await client.snapshot().catch(() => null)
         : null;
       const runtimeSessions = new Map(
         (runtimeSnapshot?.sessions ?? []).map((session) => [session.conversationId, session]),
       );
-      progress?.("publishing historical host fallbacks");
+      await phase("publishing historical host fallbacks");
       await forEachStartupBatch(Object.values(startupSnapshot.conversations), async (conversation) => {
         assertActive();
         if (superseded()) return;
@@ -2012,9 +2019,9 @@ export async function bindStructuredDeliveryQueue(
         await successor(items, progress, assertActive);
         return;
       }
-      progress?.("reconciling terminal delivery receipts");
+      await phase("reconciling terminal delivery receipts");
       await reconcileTerminalDeliveries(registry, client, () => !stopped && state.activeQueue === queue);
-      progress?.("draining startup delivery queue");
+      await phase("draining startup delivery queue");
       assertActive();
       startupPending = false;
       await queue.drain();
@@ -2430,7 +2437,10 @@ export async function handOverHostForDemotion(
   /* A completion can arrive during the transcript or seat reads for any
      host. Re-read its health when that evidence moves before recording. */
   for (let attempt = 0; attempt < RELEASE_TAIL_READS; attempt += 1) {
-    const conversation = Object.values(registry.readOnlySnapshot().conversations).find((candidate) =>
+    /* By the generation identity index: a scan of every conversation took
+       long enough under retained history for a working engine's transcript
+       to move between these reads on every attempt (#2761). */
+    const conversation = registryConversationsForEntryKey(registry.readOnlySnapshot(), sessionKeyId(key)).find((candidate) =>
       candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
     const transcriptPath = conversation?.generations.at(-1)?.path;
     const before = transcriptPath ? idleHostEvidenceIdentity(key.sessionId, transcriptPath) : null;

@@ -70,8 +70,13 @@ export async function conversationHostTargetsPOST(req: NextRequest): Promise<Nex
 
   /* Every path in this batch projects one observation. This keeps the feed's
      target badges internally consistent while panes are being created or
-     closed. PID-only compatibility requests retain their own lookup. */
-  const files = (await completedFileScan()).snapshot.files;
+     closed. PID-only compatibility requests retain their own lookup.
+     The last completed scan answers: every open view polls this, and waiting
+     for the catalog to take in a transcript that just appeared held each
+     view's first poll behind a full scan, 7-8 s with eight views open over
+     retained history (#2761). A transcript newer than that scan gets its
+     badge on the next poll. */
+  const files = (await completedFileScan({ revalidate: false })).snapshot.files;
   const snapshot = await readTranscriptHosts(true, files);
   const pairs = await Promise.all(reqs.map(async ({ id, pid, path }) => [id, await targetForRequest(snapshot, files, pid, path)] as const));
   return NextResponse.json({ targets: Object.fromEntries(pairs) });

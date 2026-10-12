@@ -36,7 +36,8 @@ import { pipelineStateCollectionSeeds } from "../src/lib/pipelines/store";
 import { workflowStateCollectionSeed } from "../src/lib/workflows/store";
 import { initializeStateCollections } from "../src/lib/state/sqliteStateStore";
 import { VIEWER_CONTROL_TOKEN_ENV } from "../src/lib/mcp/controlEndpoint";
-import { mcpProbeEnvironment, runBootstrapRelease } from "./runtime-host-viewer-adapter";
+import { candidateRehearsalVerdict, mcpProbeEnvironment, measureCandidatePerformance, runBootstrapRelease } from "./runtime-host-viewer-adapter";
+import { CANDIDATE_PERFORMANCE_BOUNDS } from "../src/runtime-host/candidatePerformance";
 
 const root = path.resolve(import.meta.dir, "..");
 const adapter = path.join(root, "scripts", "runtime-host-viewer-adapter.ts");
@@ -1222,6 +1223,8 @@ test("candidate build stages the matching MCP package and stable dispatcher", as
     type: "module",
     scripts: { "build:mcp": "bun build-mcp.ts" },
   }));
+  /* #2761: the revision defines the performance gate's stage, so its image is built beside the candidate. */
+  fs.writeFileSync(path.join(template, "Dockerfile"), "FROM scratch AS runtime-system\nFROM runtime-system AS candidate-gate\nFROM runtime-system AS local\n");
   fs.writeFileSync(path.join(template, "build-mcp.ts"), `
     import fs from "node:fs";
     fs.mkdirSync("dist", { recursive: true });
@@ -1254,6 +1257,7 @@ set -eu
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1 $2" = "compose --project-directory" ]; then printf '%s\\n' "$FAKE_COMPOSE"; exit 0; fi
 if [ "$1 $2" = "build --pull" ]; then exit 0; fi
+if [ "$1 $2" = "build --target" ]; then exit 0; fi
 if [ "$1 $2" = "container ls" ]; then exit 0; fi
 if [ "$1 $2" = "image rm" ]; then exit 0; fi
 exit 1
@@ -1302,6 +1306,8 @@ exit 1
       .split("\n")
       .find((line) => line.startsWith("build --pull"));
     expect(buildCall).toContain(`--build-arg LLV_RUNTIME_HOME=${runtimeHome}`);
+    const gateCall = fs.readFileSync(dockerLog, "utf8").split("\n").find((line) => line.startsWith("build --target candidate-gate"));
+    expect(gateCall).toContain(`-t ${(JSON.parse(stdout) as { image: string }).image}-gate`);
   } finally {
     fs.rmSync(sandbox, { recursive: true, force: true });
   }
@@ -1928,5 +1934,79 @@ exit 1
     expect(result.authority).toMatchObject({ mode: "sqlite", releaseRevision: candidate.revision });
   } finally {
     server.stop(true);
+  }
+});
+
+/* #2761: the image rehearsal has two halves; a candidate passes only when the
+   runtime host held and the performance gate ran and passed. */
+test("the candidate verdict requires the runtime-host rehearsal and the performance gate to pass", () => {
+  const host = {
+    checkedAt: "2026-10-11T21:00:00.000Z",
+    runtime: "bun 1.4.0",
+    succession: { predecessorReadyMs: 1_400, successorTookOverMs: 2_100, completed: true },
+    listener: { windowMs: 15_000, polls: 30, answered: 30, abandoned: 15 },
+    socket: { polls: 30, answered: 30, abandoned: 15 },
+    ok: true,
+  };
+  const gate = {
+    checkedAt: "2026-10-11T21:01:00.000Z",
+    runtime: "bun 1.4.0",
+    bounds: CANDIDATE_PERFORMANCE_BOUNDS,
+    measurements: null,
+    breaches: [] as string[],
+    ok: true,
+  };
+  expect(candidateRehearsalVerdict(host, gate)).toEqual({ ok: true });
+  expect(candidateRehearsalVerdict(host, null)).toEqual({ ok: false, detail: "candidate performance gate did not run" });
+  expect(candidateRehearsalVerdict(host, { ...gate, ok: false, breaches: ["scope request max 25809.9ms exceeds 10000ms"] })).toEqual({
+    ok: false,
+    detail: "candidate performance gate refused the release: scope request max 25809.9ms exceeds 10000ms",
+  });
+  expect(candidateRehearsalVerdict({ ...host, ok: false, detail: "the stable listener stopped answering" }, gate))
+    .toEqual({ ok: false, detail: "the stable listener stopped answering" });
+});
+
+/* #2761: the gate runs in the candidate's own gate image, the one built from
+   the candidate's revision, and that image is removed once the gate ran. A
+   gate image of another revision is no gate image: the gate then runs in the
+   candidate's image, where no browser is found. */
+test("the performance gate runs in the gate image built from the candidate's revision and removes it", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-gate-image-"));
+  const bin = path.join(sandbox, "bin");
+  const dockerLog = path.join(sandbox, "docker.log");
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1 $2" = "image inspect" ]; then printf '%s\\n' "$FAKE_GATE_REVISION"; exit 0; fi
+if [ "$1 $2" = "image rm" ]; then exit 0; fi
+if [ "$1" = "run" ]; then printf 'no report\\n'; exit 1; fi
+exit 1
+`, { mode: 0o755 });
+  const candidate = { image: "viewer:deploy-candidate", container: "viewer-candidate", endpoint: "http://127.0.0.1:19312", revision: "c".repeat(40) };
+  const previous = { PATH: process.env.PATH, FAKE_DOCKER_LOG: process.env.FAKE_DOCKER_LOG, FAKE_GATE_REVISION: process.env.FAKE_GATE_REVISION };
+  process.env.PATH = `${bin}:${process.env.PATH ?? ""}`;
+  process.env.FAKE_DOCKER_LOG = dockerLog;
+  try {
+    const calls = () => fs.readFileSync(dockerLog, "utf8").trim().split("\n");
+    process.env.FAKE_GATE_REVISION = candidate.revision;
+    const refused = await measureCandidatePerformance(candidate);
+    expect(refused).toMatchObject({ ok: false, measurements: null });
+    expect(refused.detail).toStartWith("the candidate performance gate did not report");
+    const run = calls().find((line) => line.startsWith("run "));
+    expect(run?.split(" ")).toContain("viewer:deploy-candidate-gate");
+    expect(calls().at(-1)).toBe("image rm viewer:deploy-candidate-gate");
+
+    fs.rmSync(dockerLog);
+    process.env.FAKE_GATE_REVISION = "d".repeat(40);
+    await measureCandidatePerformance(candidate);
+    const stale = calls().find((line) => line.startsWith("run "))!.split(" ");
+    expect(stale).toContain("viewer:deploy-candidate");
+    expect(stale).not.toContain("viewer:deploy-candidate-gate");
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    fs.rmSync(sandbox, { recursive: true, force: true });
   }
 });

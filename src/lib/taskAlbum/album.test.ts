@@ -297,3 +297,53 @@ test("an inline picture request reads no transcript bytes the album has not inde
   expect((await readTaskAlbum("task-a", {}, world)).items.map((item) => item.id)).toEqual([id]);
   expect((await readTaskAlbumImage("task-a", id, world))?.data.equals(Buffer.from(OTHER_PNG, "base64"))).toBe(true);
 });
+
+test("a small album's summary settles without waiting behind other work on the event loop", async () => {
+  /* #2761: eight board views at once kept the server's event loop full, and
+     every await of the index queued behind it; five tiny transcripts took ten
+     seconds. A macrotask queued before the read must still be waiting when it
+     settles, so the summary never waits on anything else the server is doing. */
+  const named = png(evidence, "named.png");
+  const read = png(home, "read.png");
+  const files = [
+    transcript("one", [claudeSays(`see ${named}`, 1)]),
+    transcript("two", claudeRead("toolu_small", read, 2)),
+    transcript("three", [claudeSays("nothing", 3)]),
+    transcript("four", [claudeSays("nothing", 4)]),
+    transcript("five", [claudeSays("nothing", 5)]),
+  ];
+  const world = deps([task("task-a", files)]);
+  let other = false;
+  setImmediate(() => { other = true; });
+  const summaries = await taskAlbumSummaries(["task-a"], world);
+  expect(other).toBe(false);
+  expect(summaries["task-a"]).toMatchObject({ count: 2, newCount: 2, newestAt: Date.parse(at(2)) });
+});
+
+test("a long index pass lets other work run and still indexes a split Read once", async () => {
+  const shot = png(evidence, "long.png");
+  const [use, result] = claudeRead("toolu_long", shot, 2);
+  const chunk = 1024 * 1024;
+  const padding = claudeSays("x".repeat(chunk - use!.length - 16 - claudeSays("", 1).length), 1);
+  const file = transcript("long", [padding, use!, result!, claudeSays("y".repeat(chunk), 3)]);
+  /* Every look at the clock finds a slice used up, so the pass yields at
+     each point it may. */
+  const realNow = performance.now.bind(performance);
+  let clock = realNow();
+  performance.now = () => (clock += 30);
+  let ran = 0;
+  const tick = () => {
+    ran += 1;
+    if (ran < 1000) setImmediate(tick);
+  };
+  try {
+    setImmediate(tick);
+    const pass = await indexTranscripts([file], 64 * chunk);
+    expect(pass.complete).toBe(true);
+  } finally {
+    performance.now = realNow;
+    ran = 1000;
+  }
+  expect(ran).toBeGreaterThan(1);
+  expect(transcriptImages(file).map((image) => image.key)).toEqual([`f:${shot}`]);
+});
