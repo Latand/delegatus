@@ -335,6 +335,29 @@ test("confirmation persisted while hiding is projected into the live bubble on r
   });
 });
 
+test("saved delivery proof wins over a later admitted lookup without its receipt", async () => {
+  await scenario("attachment", async fixture => {
+    const observe = composerSubmissionPayloads.observe.bind(composerSubmissionPayloads);
+    let hidden = false;
+    composerSubmissionPayloads.observe = async (ref, receipt) => {
+      const accepted = await observe(ref, receipt);
+      if (!hidden) {
+        hidden = true;
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+        document.dispatchEvent(new dom.Event("visibilitychange") as unknown as Event);
+      }
+      return accepted;
+    };
+    try {
+      fixture.state.exposed = true; await until(() => hidden);
+    } finally { composerSubmissionPayloads.observe = observe; }
+    fixture.state.lookup = async () => ({ outcome: "admitted", operationId: fixture.state.receipt!.operationId });
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    document.dispatchEvent(new dom.Event("visibilitychange") as unknown as Event);
+    await fixture.delivered();
+  });
+});
+
 test("non-execution saved while hiding retires uncertainty on return", async () => {
   await scenario("attachment", async fixture => {
     const refuse = composerSubmissionPayloads.refuse.bind(composerSubmissionPayloads);
