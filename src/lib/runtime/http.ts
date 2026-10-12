@@ -1,3 +1,4 @@
+import type { MessageTextAttachment } from "@/lib/messageTextAttachment";
 import { createHash } from "node:crypto";
 
 import { ownedDeliveryProgressStore, readDeliveryProgress, recordDeliveryIngress, type DeliveryProgressRecord } from "./deliveryProgress";
@@ -32,6 +33,7 @@ import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { admitRuntimeImagePayload } from "./runtimeImageAdmission";
 import type { RuntimeImageUpload } from "./runtimeImageStore";
 import type { StructuredImageRef } from "./structuredContent";
+import { prepareMessageFiles } from "@/lib/longMessageFile";
 
 export interface RuntimeHttpDependencies {
   enabled(): boolean;
@@ -177,6 +179,7 @@ interface CommandAttachments {
   /** Admitted, and written only once the command they ride is valid. */
   files: InboxFileUpload[];
   batch: string;
+  textAttachment?: MessageTextAttachment;
   staged: StagedInboxFiles | null;
   /** Ends this request's turn on the batch (#1652). */
   leave: (() => void) | null;
@@ -243,30 +246,23 @@ async function dispatchRuntimeCommand(
          paths are folded into the text the agent receives, so a document needs
          no engine image capability at all. Folded BEFORE the command is parsed,
          because an attachment-only send has no text of its own to validate. */
-      if (body.files !== undefined && body.files !== null) {
-        const { admitInboxFilePayload, inboxFileBatchToken, inboxFilePaths, inboxFileText } = await import("@/lib/inboxFiles");
-        const admittedFiles = admitInboxFilePayload({ files: body.files });
-        if (admittedFiles.error) {
-          return NextResponse.json({ error: admittedFiles.error.error }, { status: admittedFiles.error.status });
-        }
-        /* The uploaded bytes never reach `parseRuntimeCommand`. Its 256 KiB
-           ceiling bounds the COMMAND — and the attachment is represented by the
-           path it will be written to, so leaving the base64 on the object would
-           refuse every document past ~190 KB with an error naming neither the
-           file nor the real limit. The images branch above reduces its own
-           payload to refs for exactly this reason. */
-        const parsed: Record<string, unknown> = { ...(parseValue as Record<string, unknown>) };
-        delete parsed.files;
-        if (admittedFiles.files.length) {
-          attachments.files = admittedFiles.files;
-          attachments.batch = inboxFileBatchToken(typeof body.idempotencyKey === "string" ? body.idempotencyKey : null);
-          parsed.text = inboxFileText(
-            typeof parsed.text === "string" ? parsed.text : "",
-            inboxFilePaths(admittedFiles.files, attachments.batch),
-          );
-        }
-        parseValue = parsed;
+      const { admitInboxFilePayload, inboxFileBatchToken, inboxFileText, inboxFilePaths } = await import("@/lib/inboxFiles");
+      const admittedFiles = admitInboxFilePayload({ files: body.files });
+      if (admittedFiles.error) {
+        return NextResponse.json({ error: admittedFiles.error.error }, { status: admittedFiles.error.status });
       }
+      const parsed: Record<string, unknown> = { ...(parseValue as Record<string, unknown>) };
+      delete parsed.files;
+      const clientMessageKey = body.idempotencyKey ?? body.operationId;
+      attachments.batch = inboxFileBatchToken(typeof clientMessageKey === "string" ? clientMessageKey : null);
+      const text = typeof parsed.text === "string" ? parsed.text : "";
+      const prepared = kind === "inject"
+        ? { files: admittedFiles.files, payload: inboxFileText(text, inboxFilePaths(admittedFiles.files, attachments.batch)), textAttachment: undefined }
+        : prepareMessageFiles(text, admittedFiles.files, attachments.batch);
+      attachments.files = [...prepared.files];
+      attachments.textAttachment = prepared.textAttachment;
+      parsed.text = prepared.payload;
+      parseValue = parsed;
     }
     command = parseRuntimeCommand(kind, parseValue);
   } catch (error) {
@@ -484,7 +480,12 @@ export async function handleRuntimeCommand(
   const ingressAt = new Date().toISOString();
   const attachments: CommandAttachments = { files: [], batch: "", staged: null, leave: null, outcome: "refused", releaseAdmission: null };
   try {
-    return await dispatchRuntimeCommand(request, kind, dependencies, attachments, ingressAt);
+    const response = await dispatchRuntimeCommand(request, kind, dependencies, attachments, ingressAt);
+    if (attachments.textAttachment && attachments.outcome !== "refused") {
+      const body = await response.json();
+      return NextResponse.json({ ...body, textAttachment: attachments.textAttachment }, { status: response.status, headers: response.headers });
+    }
+    return response;
   } finally {
     /* Only what this request created, and only while no other request has
        staged it since, is released; the turn ends after that. */
