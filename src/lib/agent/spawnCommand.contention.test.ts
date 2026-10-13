@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
 import { drainFile, writeDrain, releaseDrain } from "@/lib/selfUpdate/drain";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
@@ -146,6 +146,114 @@ test("spawn catalog resolution leaves admission available", async () => {
     if (response.status !== 202) console.info(await response.clone().json());
     expect(response.status).toBe(202);
   });
+});
+
+test("seat credential capture leaves neighboring spawn, resume and send admission available", async () => {
+  const auth = await import("@/lib/accounts/seatAuthCredentials");
+  const { executeOrchestratorSeatRequest, productionSeatCommandDependencies } = await import("@/lib/orchestrator/seatCommand");
+  const seats = await import("@/lib/orchestrator/seats");
+  const { orchestratorSeatFor } = seats;
+  const { productionSpawnCommandDependencies } = await import("./spawnCommand");
+  const { trackAccountLeases } = await import("@/lib/accounts/accountMutation.contention.fixture");
+  const cwd = statePath("seat-credential-cwd");
+  fs.mkdirSync(cwd, { recursive: true });
+  const original = { ...productionSpawnCommandDependencies };
+  Object.assign(productionSpawnCommandDependencies, structuredRouteDependencies(cwd), { defer: () => {}, engineReadiness: () => "connected" });
+  const leases = trackAccountLeases();
+  const observations: boolean[] = [];
+  const captureMs: number[] = [];
+  const commitMs: number[] = [];
+  const commitHeld: boolean[] = [];
+  const timeCommit = (commit: () => void) => {
+    const started = performance.now();
+    commitHeld.push(fs.existsSync(statePath("account-selection.lock")));
+    try { commit(); }
+    finally { commitMs.push(performance.now() - started); }
+  };
+  const prepare = seats.prepareOrchestratorSeatAuthCredentialBaseline;
+  const record = seats.recordOrchestratorSeatAuthCredentialBaseline;
+  // The retained direct facade also measures the reviewed code's inherited
+  // callback when this same case runs against the captured commit.
+  const commitSpy = typeof prepare === "function"
+    ? spyOn(seats, "prepareOrchestratorSeatAuthCredentialBaseline").mockImplementation((...args) => {
+      const commit = prepare(...args); return () => timeCommit(commit);
+    })
+    : spyOn(seats, "recordOrchestratorSeatAuthCredentialBaseline").mockImplementation((...args) => timeCommit(() => record(...args)));
+  let neighbors: { exitCode: number; results: unknown; stderr: string } | undefined;
+  const stamp = `1:file:${"a".repeat(64)}`;
+  const capture = spyOn(auth, "seatAuthCredentialStamp").mockImplementation(() => {
+    const started = performance.now();
+    observations.push(fs.existsSync(statePath("account-selection.lock")));
+    const child = Bun.spawnSync([process.execPath, "-e", `
+      await import("./src/lib/testing/fixtureLifetime.ts");
+      const { AgentRegistry } = await import("./src/lib/agent/registry");
+      const { statePath } = await import("./src/lib/configDir");
+      const { withAccountMutationLockAsync } = await import("./src/lib/accounts/accountMutation");
+      const registry = new AgentRegistry(statePath("seat-neighbor-registry.json"), undefined, undefined, { sqliteMode: "off" });
+      const conversation = registry.ensureConversation("codex", "/fixture/seat-neighbor.jsonl", "default");
+      try {
+        const results = await Promise.allSettled([
+          registry.beginSpawnRequestAsync({ engine: "codex", cwd: "/fixture", transport: "structured", accountId: "default", launchProfile: { title: "Neighbor spawn" } }),
+          registry.beginSpawnRequestAsync({ engine: "codex", cwd: "/fixture", transport: "structured", accountId: "default", purpose: "resume-successor", conversationId: conversation.id, origin: { kind: "successor" }, launchProfile: { title: "Neighbor resume" } }),
+          withAccountMutationLockAsync(() => registry.holdDelivery(conversation.id, "Neighbor send", "seat-neighbor-send"), { caller: "send" }),
+        ]);
+        console.log(JSON.stringify(results.map(result => result.status === "fulfilled" ? { status: result.status, kind: result.value.kind ?? "delivery" } : { status: result.status, error: result.reason.message })));
+      } finally { registry.close(); }
+    `], { cwd: process.cwd(), env: process.env, stdout: "pipe", stderr: "pipe", timeout: 5_000 });
+    neighbors = { exitCode: child.exitCode, results: JSON.parse(child.stdout.toString()), stderr: child.stderr.toString() };
+    captureMs.push(performance.now() - started);
+    return stamp;
+  });
+  try {
+    const result = await executeOrchestratorSeatRequest({ project: "seat-credential-contention", cwd, mandate: "Own the fixture board", engine: "claude", model: "sonnet", clientRequestId: `seat_${crypto.randomUUID()}` }, {
+      ...productionSeatCommandDependencies, engineReadiness: () => "connected", startBoardReport: () => {}, stampRegistryIdentity: () => {},
+    });
+    expect(result.status).toBe(202);
+    expect(orchestratorSeatFor("seat-credential-contention").active?.authCredentialBaseline).toMatchObject({ engine: "claude", accountId: "claude-test", stamp });
+    expect(neighbors).toEqual({ exitCode: 0, stderr: "", results: [
+      { status: "fulfilled", kind: "created" }, { status: "fulfilled", kind: "created" }, { status: "fulfilled", kind: "delivery" },
+    ] });
+    expect(observations).toEqual([false]);
+    expect(commitHeld).toEqual([true]);
+    expect(Math.max(...leases.holds)).toBeLessThan(250);
+  } finally {
+    capture.mockRestore(); commitSpy.mockRestore(); leases.stop(); Object.assign(productionSpawnCommandDependencies, original);
+    console.info(JSON.stringify({ measurement: "seat spawn credential capture", maxHoldMs: Math.max(0, ...leases.holds), holdMs: leases.holds, captureMs, commitMs, commitHeld, observations, neighbors }));
+  }
+}, 10_000);
+
+test.each(["catalog", "credentials"] as const)("seat spawn revalidates %s changed during credential capture before committing a baseline or receipt", async change => {
+  const auth = await import("@/lib/accounts/seatAuthCredentials");
+  const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+  const { executeOrchestratorSeatRequest, productionSeatCommandDependencies } = await import("@/lib/orchestrator/seatCommand");
+  const { orchestratorSeatFor } = await import("@/lib/orchestrator/seats");
+  const { productionSpawnCommandDependencies } = await import("./spawnCommand");
+  const cwd = statePath(`seat-${change}-race-cwd`);
+  fs.mkdirSync(path.join(cwd, "account"), { recursive: true });
+  const original = { ...productionSpawnCommandDependencies };
+  Object.assign(productionSpawnCommandDependencies, structuredRouteDependencies(cwd), { defer: () => {}, engineReadiness: () => "connected" });
+  const project = `seat-${change}-race`;
+  const clientRequestId = `seat_${crypto.randomUUID()}`;
+  let captures = 0;
+  const capture = spyOn(auth, "seatAuthCredentialStamp").mockImplementation(() => {
+    captures++;
+    if (change === "catalog") createManagedCodexAccount("Concurrent catalog change");
+    else fs.writeFileSync(path.join(cwd, "account", ".credentials.json"), JSON.stringify({ fixture: "x".repeat(captures) }), { mode: 0o600 });
+    return `1:file:${"a".repeat(64)}`;
+  });
+  try {
+    const result = await executeOrchestratorSeatRequest({ project, cwd, mandate: "Own the fixture board", engine: "claude", model: "sonnet", clientRequestId }, {
+      ...productionSeatCommandDependencies, engineReadiness: () => "connected", startBoardReport: () => {}, stampRegistryIdentity: () => {},
+    });
+    expect(captures).toBeGreaterThan(0);
+    expect(result.status).toBe(503);
+    expect(result.body.code).toBe("account_admission_changed");
+    expect(agentRegistry().spawnReceiptForClientAttempt(clientRequestId)).toBeNull();
+    const seat = orchestratorSeatFor(project);
+    expect(seat.active).toBeNull();
+    expect(seat.pending?.authCredentialBaseline).toBeUndefined();
+    expect(result.body.seat).toMatchObject({ authCredentialBaseline: undefined });
+  } finally { capture.mockRestore(); Object.assign(productionSpawnCommandDependencies, original); }
 });
 
 test("an oversized structured spawn launches with its full prompt in a stable readable reference", async () => {

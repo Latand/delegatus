@@ -172,6 +172,9 @@ export interface SpawnCommandDependencies {
   /** Trusted automatic target restriction, checked under the account lock
       immediately before a fresh launch receipt is reserved. */
   assertAccountAdmission?(accountId: string): void;
+  /** Collect trusted caller evidence outside the account lease, then return a
+      short guard commit. Catalog and credential identity are rechecked first. */
+  prepareAccountAdmission?(accountId: string): (() => void) | Promise<() => void>;
 }
 
 class RuntimeImageStorageError extends Error {}
@@ -1036,6 +1039,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       () => dependencies.resolveSpawnAccount(engine, account.accountId),
       { holder: "spawn catalog snapshot", caller: "spawn" },
     );
+    const commitAccountAdmission = existingAttempt ? undefined : await dependencies.prepareAccountAdmission?.(account.accountId);
     let heldForUpdate = false;
     const admissionWrite = await registry.accountMutationWrite("spawn admission", () => heldForUpdate ? null
       : registry.beginSpawnRequest(canonicalSpawnRequest(
@@ -1072,6 +1076,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
           throw new AccountAdmissionChangedError();
         }
         dependencies.assertAccountAdmission?.(account.accountId);
+        commitAccountAdmission?.();
       }
     });
     if (!admissionWrite.acquired) throw new AccountMutationBusyError();

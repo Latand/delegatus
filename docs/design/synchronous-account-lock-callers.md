@@ -58,6 +58,21 @@ split. The replacement pauses two publishers outside that lease, lets a
 conflicting payload reserve first, and checks the losing request returns 409
 while both winning reservations retain their exact image bytes.
 
+The seat credential baseline also prepares before spawn's outer account lease.
+`SeatLaunchAdmission.prepareAccount` reaches the spawn command through its
+in-process port and returns a short commit. The guard rechecks the account
+revision and credential-file identity before that commit compares the pending
+request and seat epoch. Existing account authorization still runs in the guard;
+receipt replays reuse their accepted launch and skip preparation.
+The integrated `spawnCommand.contention.test.ts` case exercises the production
+seat callback while a separate process attempts spawn, resume and send on their
+normal 2 s budgets. All three failed on the reviewed commit and succeed after
+the split. Three runs measured maximum leases of 2062 to 2080 ms before and
+13 to 17 ms after, with baseline commits of 0.686 to 1.055 ms after. These fixtures
+simulate credential capture; row 35 of the inventory retains the exact samples
+and the earlier direct-call observation. Catalog and credential-file races
+also refuse before committing a baseline or launch receipt.
+
 | Caller | File:line | Foreign holder | Why | Local holder or local waiter |
 | --- | --- | --- | --- | --- |
 | `runIdentityWaveMigrationAtStartup` | `src/lib/agent/identityWaveStartup.ts:196` | 25 ms wait | Boot needs a completed migration result; rerunning the outer startup later remains idempotent. | The Viewer startup wrapper (`src/lib/viewerInstrumentation.ts:573`) yields and retries up to three total attempts, with 5 s and 10 s pauses by default. Exhaustion logs diagnostics and leaves the migration for a later startup. The direct synchronous API raises safe AccountMutationBusyError. |

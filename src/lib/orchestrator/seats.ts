@@ -847,12 +847,12 @@ export function beginOrchestratorSeatIntent(input: {
   });
 }
 
-/** Freeze the actual account's contents before a new seat launch is admitted. */
-export function recordOrchestratorSeatAuthCredentialBaseline(projectInput: string, clientRequestId: string, seatEpoch: number, engine: string, accountId: string): void {
-  if (engine !== "claude" && engine !== "codex") return;
+/** Discover credentials before spawn admission; return only its short commit. */
+export function prepareOrchestratorSeatAuthCredentialBaseline(projectInput: string, clientRequestId: string, seatEpoch: number, engine: string, accountId: string): () => void {
+  if (engine !== "claude" && engine !== "codex") return () => {};
   const scope = `seat-auth-baseline:${canonicalOrchestratorProject(projectInput)}:${seatEpoch}`;
   const stamp = seatAuthCredentialStamp(engine, accountId, scope);
-  withAccountMutationLock(() => {
+  return () => withAccountMutationLock(() => {
     const file = readOrchestratorSeatFile();
     const project = canonicalOrchestratorProject(projectInput);
     const pending = file.pending[project];
@@ -861,6 +861,11 @@ export function recordOrchestratorSeatAuthCredentialBaseline(projectInput: strin
     pending.authCredentialBaseline = { engine, accountId, stamp, scope };
     writeSeatFile(file);
   });
+}
+
+/** Freeze the actual account's contents before a new seat launch is admitted. */
+export function recordOrchestratorSeatAuthCredentialBaseline(projectInput: string, clientRequestId: string, seatEpoch: number, engine: string, accountId: string): void {
+  prepareOrchestratorSeatAuthCredentialBaseline(projectInput, clientRequestId, seatEpoch, engine, accountId)();
 }
 
 export type CompleteSeatIntentResult =

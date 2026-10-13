@@ -1656,7 +1656,7 @@
       "id": 35,
       "body": "src/lib/orchestrator/seats.ts:recordOrchestratorSeatAuthCredentialBaseline:1",
       "baseLine": 853,
-      "observation": "Credential discovery may launch Keychain. Capture first; compare pending request and epoch in commit.",
+      "observation": "Credential discovery may launch Keychain. The seat command prepares its baseline before the outer spawn account lease, then commits after spawn revalidates the account revision and credential-file identity. The baseline commit compares the pending request and epoch.",
       "before": {
         "samples": 1,
         "heldSamples": 1,
@@ -1668,9 +1668,29 @@
         ]
       },
       "afterBodies": [
-        "src/lib/orchestrator/seats.ts:recordOrchestratorSeatAuthCredentialBaseline:1"
+        "src/lib/orchestrator/seats.ts:prepareOrchestratorSeatAuthCredentialBaseline:1"
       ],
       "after": {
+        "samples": 3,
+        "heldSamples": 3,
+        "heldMedianMs": 0.694,
+        "heldMaxMs": 1.055,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 0,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 0,
+        "tests": []
+      },
+      "previousDirectAfter": {
+        "date": "2026-10-13",
+        "note": "The earlier direct-call observation did not exercise the inherited production spawn lease. Retained as history.",
         "samples": 1,
         "heldSamples": 1,
         "heldMedianMs": 0.52,
@@ -1680,15 +1700,108 @@
           "src/lib/orchestrator/seats.test.ts"
         ]
       },
-      "originalBodyAfter": {
-        "samples": 1,
-        "heldSamples": 1,
-        "heldMedianMs": 0.52,
-        "heldMaxMs": 0.52,
-        "outsideSamples": 0,
-        "tests": [
-          "src/lib/orchestrator/seats.test.ts"
-        ]
+      "reviewCorrection": {
+        "date": "2026-10-13",
+        "reviewedCommit": "a9b4790f9fd82561eeaefe0895a10ee49fefe749",
+        "test": "src/lib/agent/spawnCommand.contention.test.ts",
+        "case": "seat credential capture leaves neighboring spawn, resume and send admission available",
+        "method": "Same machine and session, three original-code samples then three changed-code samples, with the identical test copied into an isolated review export. The real seat command uses its production in-process spawn port and executeSpawnRequest. A synchronous credential-stamp seam joins a separate process attempting spawn, resume and send with their normal 2-second account admission budgets. Each child imports the owned fixture lifetime and is joined before the seam returns. Callback timings wrap the old baseline recorder or the new prepared commit. Lease maxima measure open-to-release in the seat/spawn process and include registry reservation, activation and identity publication; they are separate from callback timings. The Keychain itself is simulated. No native credential data is read by the seam.",
+        "neighborOrder": [
+          "spawn",
+          "resume",
+          "send"
+        ],
+        "before": {
+          "samples": 3,
+          "leaseMaximaMs": [
+            2062.254,
+            2080.356,
+            2062.072
+          ],
+          "baselineCommitMs": [
+            2048.913,
+            2065.833,
+            2048.56
+          ],
+          "captureMs": [
+            2047.446,
+            2064.156,
+            2047.667
+          ],
+          "captureHeld": [
+            true,
+            true,
+            true
+          ],
+          "commitHeld": [
+            true,
+            true,
+            true
+          ],
+          "neighborOutcomes": [
+            [
+              "account_store_busy",
+              "account_store_busy",
+              "account_store_busy"
+            ],
+            [
+              "account_store_busy",
+              "account_store_busy",
+              "account_store_busy"
+            ],
+            [
+              "account_store_busy",
+              "account_store_busy",
+              "account_store_busy"
+            ]
+          ]
+        },
+        "after": {
+          "samples": 3,
+          "leaseMaximaMs": [
+            13.776,
+            13.502,
+            16.779
+          ],
+          "baselineCommitMs": [
+            0.694,
+            0.686,
+            1.055
+          ],
+          "captureMs": [
+            68.346,
+            73.102,
+            71.999
+          ],
+          "captureHeld": [
+            false,
+            false,
+            false
+          ],
+          "commitHeld": [
+            true,
+            true,
+            true
+          ],
+          "neighborOutcomes": [
+            [
+              "fulfilled",
+              "fulfilled",
+              "fulfilled"
+            ],
+            [
+              "fulfilled",
+              "fulfilled",
+              "fulfilled"
+            ],
+            [
+              "fulfilled",
+              "fulfilled",
+              "fulfilled"
+            ]
+          ]
+        },
+        "races": "Catalog and credential-file mutations during capture both fail on the reviewed commit (202 and a receipt) and pass after the split (503 account_admission_changed, no baseline or receipt). Direct pending-intent race coverage remains in src/lib/orchestrator/seats.test.ts."
       }
     },
     {

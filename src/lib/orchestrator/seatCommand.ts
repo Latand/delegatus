@@ -69,7 +69,7 @@ import {
   orchestratorRevocations,
   orchestratorSeatFor,
   repairOrchestratorSeatRuntimeIdentity,
-  recordOrchestratorSeatAuthCredentialBaseline,
+  prepareOrchestratorSeatAuthCredentialBaseline,
   type OrchestratorSeat,
   type OrchestratorSeatTerminalization,
   type StillbornSeatRollback,
@@ -114,6 +114,9 @@ export interface SeatLaunchAdmission {
   autonomous?: boolean;
   automaticReplacement?: { conversationId: string; seatEpoch: number };
   assertAccount?(accountId: string): void;
+  /** Slow evidence collection runs before the spawn lease; only the returned
+      commit runs inside its revalidated account admission guard. */
+  prepareAccount?(accountId: string): (() => void) | Promise<() => void>;
   /** Automatic rotation's fresh turn fence. Checked before handoff work and
    * after reconciliation, immediately before admitting a replacement. */
   replacementHold?(): SeatCommandResult | null | Promise<SeatCommandResult | null>;
@@ -283,7 +286,8 @@ async function postSpawnInProcess(body: Record<string, unknown>, autonomous = fa
   } as unknown as NextRequest;
   const response = await executeSpawnRequest(request, { ...productionSpawnCommandDependencies,
     autonomousAdmissionHeld: () => autonomous && !!activeDrain(),
-    assertAccountAdmission: admission?.assertAccount });
+    assertAccountAdmission: admission?.assertAccount,
+    prepareAccountAdmission: admission?.prepareAccount });
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 
@@ -1320,9 +1324,10 @@ async function runOrchestratorSeatRequest(
     title: derivedSpawnTitle("orchestrator", spawnMandate, project),
     clientAttemptId: clientRequestId,
   };
-  const spawnAdmission: SeatLaunchAdmission = { ...admission, assertAccount: (accountId) => {
-    admission?.assertAccount?.(accountId);
-    recordOrchestratorSeatAuthCredentialBaseline(project, clientRequestId, begun.seat.seatEpoch, launchEngine, accountId);
+  const spawnAdmission: SeatLaunchAdmission = { ...admission, prepareAccount: async (accountId) => {
+    const commitCaller = await admission?.prepareAccount?.(accountId);
+    const commitBaseline = prepareOrchestratorSeatAuthCredentialBaseline(project, clientRequestId, begun.seat.seatEpoch, launchEngine, accountId);
+    return () => { commitCaller?.(); commitBaseline(); };
   } };
   const spawned = await dependencies.spawn(spawnBody, admission?.autonomous || begun.seat.triggeredBy?.kind === "agent", spawnAdmission);
   if (spawned.body.code === "AUTO_UPDATE_DRAIN") {
