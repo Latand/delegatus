@@ -97,11 +97,14 @@ without one (every version up to 1.9.0) it names the version and asks for
 `bunx delegatus-cli@latest`.
 
 **Automatic updates**, off by default, waits for green checks and a quiet minute.
-On a busy machine it can apply after two minutes without new starts, using the
-supervised restart that reconnects or resumes running work. Operator activity,
-busy controllers, unreadable evidence, low memory and failing checks still block
-admission. Only verified live turns count; a host silent for ten minutes stops
-blocking. Unverified launches have a separate five-minute grace period.
+On a busy machine it holds new launches while the current work finishes. After
+two minutes without new starts it can apply as soon as all live turns and stages
+finish; otherwise it waits for a quiet minute. Operator activity, busy controllers,
+unreadable evidence, low memory and failing checks still block admission. Only
+verified live turns count. A host silent for ten minutes stops blocking unless
+its current tool or child process confirms an active check. New accepted turns
+remain protected while their first transcript record is pending. Unverified
+launches have a separate five-minute grace period.
 
 Waiting holds new launches for at most ten minutes, then admits them for ten
 minutes before retrying. The Update dialog and `auto_updates.deferred` show the

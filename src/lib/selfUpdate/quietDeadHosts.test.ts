@@ -102,8 +102,8 @@ function ended(turn: "open" | "settled") {
  * snapshot is complete, so no keyed read is needed. The whole census is
  * covered over the real journal in quietFallback and quietOwners.
  */
-function read(sources: () => AgentLivenessSources = productionLivenessSources): NonNullable<QuietPorts["owners"]> {
-  const reader = ownerCensusReader(sources, { readEvents: async () => ({ reset: false, floorSeq: 0, events: [] }), readSession: async () => null });
+function read(sources: () => AgentLivenessSources = productionLivenessSources, options: Parameters<typeof ownerCensusReader>[1] = {}): NonNullable<QuietPorts["owners"]> {
+  const reader = ownerCensusReader(sources, { readEvents: async () => ({ reset: false, floorSeq: 0, events: [] }), readSession: async () => null, ...options });
   return async (sessions, probe) => {
     const census = await reader(sessions, probe);
     const named = new Set(sessions.flatMap((session) => census.bound({ conversationId: session.conversationId,
@@ -157,6 +157,79 @@ test.each(["dead", "idle", "stalled", "unknown", "ownerless", "live"] as const)(
     expect(result.blockers).toMatchObject({ unresolved: 1, unresolvedBlocking: 1 });
     expect((await probeQuiet(snapshot, p, now + FIVE_MINUTES, true, "live")).quiet).toBe(true);
   }
+});
+
+test.each(["codex", "claude", "child"] as const)("automatic drain protects a verified long-running %s check", async (kind) => {
+  const child = Bun.spawn([process.execPath, "-e", kind === "child"
+    ? 'const child = Bun.spawn(["sleep", "900"]); process.on("SIGTERM", async () => { child.kill(); await child.exited; process.exit(0); }); console.log("ready"); setInterval(() => {}, 1000);'
+    : 'console.log("ready"); setInterval(() => {}, 1000);'], { stdout: "pipe" });
+  const reader = child.stdout.getReader();
+  await reader.read(); reader.releaseLock();
+  try {
+    const fixture = hosted("open", captureProcessIdentity(child.pid)!);
+    const now = Date.now(), at = new Date(now - 11 * 60_000).toISOString();
+    if (kind === "claude") {
+      const project = join(process.env.HOME!, ".claude", "projects", "fixture");
+      mkdirSync(project, { recursive: true });
+      const file = join(project, `${randomUUID()}.jsonl`);
+      writeFileSync(file, [
+        { timestamp: at, type: "user", message: { role: "user", content: "Run the check" } },
+        { timestamp: at, type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "check", name: "Bash", input: { command: "sleep 900" } }] } },
+      ].map(record => JSON.stringify(record)).join("\n") + "\n");
+      const conversation = registry.ensureConversation("claude", file, "fixture");
+      const key = { engine: "claude" as const, sessionId: conversation.generations[0]!.id };
+      registry.upsert({ key, artifactPath: file, cwd: directory, accountId: "fixture", status: "live", host: null,
+        claimEpoch: 0, claimOwner: null, pendingAction: null,
+        structuredHost: { kind: "claude-broker", endpoint: "stdio:fixture", process: captureProcessIdentity(child.pid)!,
+          eventCursor: 0, protocolVersion: null, writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+      const p = ports([row({ conversation, artifactPath: file }, "hosted")]);
+      expect(await agentActivity(conversation.id)).toMatchObject([{ verified: true, lifecycle: "running", activity: { state: "checking" } }]);
+      expect(await probeQuiet(snapshot, p, now, true, "live")).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+    } else {
+      const records = readFileSync(fixture.artifactPath, "utf8").trim().split("\n").map(line => ({ ...JSON.parse(line), timestamp: at }));
+      if (kind === "codex") records.push({ timestamp: at, type: "response_item", payload: {
+        type: "function_call", call_id: "check", name: "sleep", arguments: JSON.stringify({ duration_ms: 900000 }),
+      } });
+      writeFileSync(fixture.artifactPath, records.map(record => JSON.stringify(record)).join("\n") + "\n");
+      expect(await agentActivity(fixture.conversation.id)).toMatchObject([{ verified: true, lifecycle: "running", activity: { state: "checking" } }]);
+      const p = ports([row(fixture, "hosted")], [{ id: "pipeline_check", state: "running", cursor: { stageId: "check", state: "running" },
+        runs: [{ stageId: "check", attempts: [{ n: 1, conversationId: fixture.conversation.id }] }] }]);
+      expect(await probeQuiet(snapshot, p, now, true, "live")).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 1 } });
+    }
+  } finally { child.kill(); await child.exited; }
+});
+
+test.each(["reference", "handle", "journal"] as const)("automatic drain protects a new %s turn over the prior idle tail", async (source) => {
+  const identity = captureProcessIdentity(process.pid)!;
+  const fixture = hosted("settled", identity);
+  const entry = registry.readOnlySnapshot().entries[`codex:${fixture.key.sessionId}`]!;
+  registry.upsert({ ...entry, status: "live", structuredHost: { ...entry.structuredHost!, activeTurnRef: source === "reference" ? "new-turn" : null } });
+  const session = { ...row(fixture, "hosted"), sessionKey: fixture.key, writerClaim: "structured-host:fixture:0",
+    writerStatus: source === "journal" ? { sessionKey: fixture.key, writerClaim: "structured-host:fixture:0", host: "hosted", turn: "running", activeTurnId: "new-turn" as string | null } : undefined };
+  const p = ports([session]);
+  let handleBusy = true;
+  if (source === "handle") p.owners = read(productionLivenessSources, {
+    readEvents: async () => ({ reset: false, floorSeq: 0, events: [] }), readSession: async () => null,
+    heldHosts: () => new Map([[`codex:${fixture.key.sessionId}`, { health: async () => ({ pid: identity.pid, processStartIdentity: identity.startIdentity, status: handleBusy ? "active" : "idle", activeTurnRef: handleBusy ? "new-turn" : null }) } as never]]),
+  });
+  const census = await p.owners!([session] as never, {});
+  expect(census.bound({ conversationId: fixture.conversation.id })[0]).toMatchObject({ process: "alive", tail: { turn: "idle" } });
+  expect((await probeQuiet(snapshot, p, Date.now(), true, "live")).blockers.turnList).toContainEqual(expect.objectContaining({ conversationId: fixture.conversation.id }));
+  // The same owner's completion releases the hold.
+  handleBusy = false;
+  registry.upsert({ ...entry, status: "idle", structuredHost: { ...entry.structuredHost!, activeTurnRef: null } });
+  if (session.writerStatus) session.writerStatus = { ...session.writerStatus, turn: "idle", activeTurnId: null };
+  expect(await probeQuiet(snapshot, p, Date.now(), true, "live")).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+});
+
+test("a stale active reference still releases a truly stalled open turn", async () => {
+  const fixture = hosted("open", captureProcessIdentity(process.pid)!);
+  const entry = registry.readOnlySnapshot().entries[`codex:${fixture.key.sessionId}`]!;
+  registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, activeTurnRef: "stalled-turn" } });
+  const now = Date.now(), at = new Date(now - 11 * 60_000).toISOString();
+  writeFileSync(fixture.artifactPath, readFileSync(fixture.artifactPath, "utf8").trim().split("\n")
+    .map(line => JSON.stringify({ ...JSON.parse(line), timestamp: at })).join("\n") + "\n");
+  expect(await probeQuiet(snapshot, ports([row(fixture, "hosted")]), now, true, "live")).toMatchObject({ quiet: true, blockers: { turns: 0 } });
 });
 
 test("a conversation whose host died with its turn open does not block the drain", async () => {

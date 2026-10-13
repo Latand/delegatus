@@ -184,6 +184,8 @@ describe("automatic updates", () => {
       s.auto.drain = { state, at: AT };
       const copy = text(section(render(s), "auto"));
       expect(copy).toContain(phrase);
+      if (state === "draining") expect(copy).toContain(locale === "en"
+        ? "Running work finishes before the update starts." : "Оновлення почнеться після завершення поточної роботи.");
       expect(copy).toContain("build · Finish the feature");
       expect(copy).toContain(locale === "en" ? "Example · Codex agent" : "Example · Агент Codex");
       // Rows that name the work replace the counts of the same work.

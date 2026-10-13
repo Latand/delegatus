@@ -1,6 +1,7 @@
 /* Restart admission is read afresh for each role, including after web swaps. */
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
-import { DEFAULT_STALL_AFTER_MS, evaluateLiveness, STARTING_GRACE_MS } from "@/lib/lifecycle/liveness";
+import { DEFAULT_STALL_AFTER_MS, evaluateActivityLiveness, STARTING_GRACE_MS } from "@/lib/lifecycle/liveness";
+import type { AgentActivityFacts } from "@/lib/lifecycle/agentActivity";
 import type { OwnerReference, OwnerRole } from "@/lib/lifecycle/owners";
 import type { RuntimeSession, RuntimeSnapshot } from "@/lib/runtime/contracts";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -80,7 +81,7 @@ export type OwnerReason = "setup" | "reviewer" | "host-turn" | "turn-claimed" | 
   | "turn-unattributed" | "turn-unread" | "launch-unproven" | "unresolved";
 
 /** The turn state of one transcript tail and its newest record. */
-export interface TailReading { turn: "busy" | "idle" | "unknown"; lastRecordAt: number | null }
+export interface TailReading { turn: "busy" | "idle" | "unknown"; lastRecordAt: number | null; activityFacts?: AgentActivityFacts }
 
 /** Where an owner is shown and found. It never chooses evidence. */
 interface OwnerPlace {
@@ -112,6 +113,8 @@ export interface OwnerReading extends OwnerPlace {
   role: OwnerRole;
   process: "alive" | "gone";
   handle?: "busy" | "idle" | null;
+  /** Descendants of this owner, read from the same process evidence as activity. */
+  workProcesses?: AgentActivityFacts["workProcesses"];
   rowReference?: boolean;
   journal?: "claimed" | "idle" | "unattributed" | null;
   /** A standalone entry still claims work with no per-prompt acceptance boundary. */
@@ -347,13 +350,23 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     const liveOwner = (owner: OwnerReading): boolean => {
       if (ownerVerdict(owner).verdict === "released") return false;
       if (owner.role !== "host") return true;
+      // An own current claim can precede its transcript start. The previous
+      // turn's idle tail cannot settle or age this newer work. Once the tail
+      // records the open turn, its activity evidence supplies the stall clock.
+      if (owner.tail?.turn !== "busy" && (owner.handle === "busy" || owner.rowReference || owner.journal === "claimed")) return true;
       const last = owner.tail?.lastRecordAt;
-      if (last == null || !Number.isFinite(last) || owner.tail?.turn === "unknown") {
+      if (last == null || !Number.isFinite(last)) {
         pastBound(`unverified:${owner.id}`, "unresolved", Number.isFinite(last) ? last! : null, displayId(owner));
         return false;
       }
-      return evaluateLiveness({ host: { state: owner.process === "alive" ? "alive" : "gone" },
-        turnState: owner.tail!.turn, silentForMs: Math.max(0, now - last), stallAfterMs: DEFAULT_STALL_AFTER_MS }).lifecycle === "running";
+      const verdict = evaluateActivityLiveness({ host: { state: owner.process }, now,
+        turnState: owner.tail!.turn, silentForMs: Math.max(0, now - last), stallAfterMs: DEFAULT_STALL_AFTER_MS,
+        activityFacts: owner.tail?.activityFacts, workProcesses: owner.workProcesses });
+      if (!verdict.verified || owner.tail?.turn === "unknown" && verdict.activity?.state !== "checking") {
+        pastBound(`unverified:${owner.id}`, "unresolved", last, displayId(owner));
+        return false;
+      }
+      return verdict.lifecycle === "running";
     };
     /* What a stage reference says, from the set of owners bound to it (R10). */
     const judgeStageOwner = async (owner: StageOwner): Promise<{ verdict: "blocks" | "released" | "pending" | "settled" | "unresolved"; since: number | null }> => {

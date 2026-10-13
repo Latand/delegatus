@@ -5724,7 +5724,7 @@ export const en = {
   "selfUpdate.auto.block.memory": "Less than 4 GB of free memory ({mb} MB).",
   "selfUpdate.auto.block.unreadable": "Cannot read agent activity: {detail}",
   "selfUpdate.auto.longWait": "Waiting over 6 hours for running work to finish.",
-  "selfUpdate.auto.drain.draining": "Waiting since {time}. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.",
+  "selfUpdate.auto.drain.draining": "Waiting since {time}. New launches pause for up to 10 minutes. Running work finishes before the update starts.",
   "selfUpdate.auto.drain.overran": "The update has waited for 6 h. Each launch hold lasts at most 10 minutes.",
   "selfUpdate.auto.drain.keptWaiting": "You chose to keep waiting. The update will retry with launch holds of at most 10 minutes.",
   "selfUpdate.auto.drain.deployChosen": "You chose to deploy now. The update starts as soon as the machine can restart safely; running work may be interrupted.",

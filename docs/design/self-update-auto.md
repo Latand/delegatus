@@ -1,8 +1,8 @@
 # Self-update: apply green merges automatically — design
 
 Automatic waiting now follows [the bounded waiting policy](automatic-update-waiting.md)
-from #2515 / #2381. Its live-turn count, two-minute busy window and ten-minute
-launch hold supersede the waiting rules in this earlier design. Accepted
+from #2515 / #2381. Its live-turn count, two-minute no-start window after work finishes and
+ten-minute launch hold supersede the waiting rules in this earlier design. Accepted
 deployment custody and rollback protection remain in force.
 
 ## Originating requirement

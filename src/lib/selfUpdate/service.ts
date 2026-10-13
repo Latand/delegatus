@@ -1050,18 +1050,17 @@ export class SelfUpdateService {
       healthy processes, readable evidence and idle state controllers. */
   private quietAdmits(probe: { quiet: boolean; blockers: QuietBlockers; work: string[] } | null): boolean {
     if (!this.hasAutoCustody() && (!this.auto.drain || this.auto.deferred || this.deps.now() >= Date.parse(this.auto.drain.holdSince ?? this.auto.drain.since) + DRAIN_LEASE_MS)) return false;
-    return !!probe && (probe.quiet || this.busyWindowAdmits(probe) || this.auto.drain?.force === true
+    return !!probe && (probe.quiet || this.auto.drain?.force === true
       && !probe.blockers.busy && !probe.blockers.unreadable && probe.blockers.memoryMb === null);
   }
 
-  /** Let a stable cohort cross the existing supervised restart boundary.
-      New starts, active controllers, operator input and unavailable evidence
-      still refuse admission, including on the launcher's final reread. */
+  /** Once the held cohort finishes, a stable no-start window can admit
+      immediately. A live turn or stage always needs its own safe completion. */
   private busyWindowAdmits(probe: { blockers: QuietBlockers; work: string[] }): boolean {
     const drain = this.auto.drain;
     const window = drain?.window;
     const now = this.deps.now();
-    return !!window && (probe.blockers.turns > 0 || probe.blockers.stages > 0)
+    return !!window && probe.blockers.turns === 0 && probe.blockers.stages === 0
       && (this.hasAutoCustody() || !this.auto.deferred && now < Date.parse(drain!.holdSince ?? drain!.since) + DRAIN_LEASE_MS)
       && now - Date.parse(window.since) >= DRAIN_START_WINDOW_MS
       && window.version === quietDispatchVersion(this.deps.quiet, now)

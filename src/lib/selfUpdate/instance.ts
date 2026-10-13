@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { agentRegistry } from "@/lib/agent/registry";
 import { identityAlive, livenessProbe } from "@/lib/agent/accountLiveness";
 import { headlessRoundProcess, productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
+import { activityProcessReader } from "@/lib/lifecycle/agentActivityProcesses";
 import { censusIndex, ownerProcessAlive, registryOwners, rowKeyId, type OwnerlessRecord, type RecordedOwner } from "@/lib/lifecycle/owners";
 import type { EngineHost, HostState } from "@/lib/runtime/engineHost";
 import { structuredDeliveryHeldHosts } from "@/lib/runtime/structuredDeliveryController";
@@ -322,6 +323,7 @@ export function ownerCensusReader(
     const registry = liveness.registrySnapshot();
     const flows = liveness.flows?.() ?? [];
     const probe = liveness.probe;
+    const workProcesses = liveness.workProcesses ?? activityProcessReader(liveness.now());
     const held = heldHosts();
     // One replay per probe, only when an own journal statement needs ordering.
     // Keep only deciding events; payloads from live output are never retained.
@@ -378,7 +380,7 @@ export function ownerCensusReader(
         const kind = known ?? (await liveness.describeTranscript(path, { strict: true }))?.engine ?? null;
         if (!kind) return null;
         const evidence = await liveness.transcriptEvidence(kind as "claude" | "codex", path, { strict: true });
-        return evidence ? { turn: evidence.turn === "busy" ? "busy" : evidence.turn === "idle" ? "idle" : "unknown", lastRecordAt: evidence.lastRecordTs } : null;
+        return evidence ? { turn: evidence.turn === "busy" ? "busy" : evidence.turn === "idle" ? "idle" : "unknown", lastRecordAt: evidence.lastRecordTs, activityFacts: evidence.activityFacts } : null;
       })());
       return tails.get(memo)!;
     };
@@ -457,6 +459,7 @@ export function ownerCensusReader(
           reading.handle = handle;
           reading.rowReference = !!owner.entry && !owner.entry.host && !!owner.entry.structuredHost?.activeTurnRef && owner.structuredHost;
           reading.tail = await tail(owner.artifactPath, owner.engine);
+          reading.workProcesses = reading.tail && reading.tail.turn !== "idle" ? workProcesses(owner.pid) : [];
           if (owner.writerEpoch !== null) {
             const rows = await rowsFor(owner);
             const history = await events();
@@ -525,6 +528,7 @@ export function ownerCensusReader(
         owners.push({ id: `handle:${key}:${state.pid ?? ""}`, binding, artifactPath: entry?.artifactPath ?? null, entryKey: key,
           launchId: null, engine: entry?.key.engine ?? null, cwd: entry?.cwd ?? null,
           role: "host", process: "alive", handle: turn, rowReference: false, journal: null,
+          workProcesses: state.pid === null || turn !== "busy" ? [] : workProcesses(state.pid),
           tail: await tail(entry?.artifactPath ?? null, entry?.key.engine) });
       });
     }

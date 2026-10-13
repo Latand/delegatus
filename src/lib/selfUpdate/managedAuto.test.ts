@@ -47,7 +47,7 @@ test("automatic waiting admits launches at the ten-minute bound and persists its
   } finally { service.stop(); }
 });
 
-test("automatic waiting admits an update after two minutes with no new starts on a busy machine", async () => {
+test("automatic waiting protects busy turns until the cohort finishes", async () => {
   const h = scenario();
   h.setTurns(1); h.setStages(1);
   const service = h.service();
@@ -58,6 +58,10 @@ test("automatic waiting admits an update after two minutes with no new starts on
     expect(h.requests).toHaveLength(0);
     h.advance(1);
     await service.autoTick();
+    expect(h.requests).toHaveLength(0);
+    h.setTurns(0); h.setStages(0);
+    await service.autoTick();
+    h.advance(60_000); await service.autoTick();
     expect(h.requests).toHaveLength(1);
     expect(h.requests[0]?.revision).toBe(TARGET);
     expect((await service.snapshot()).auto?.blockers).toBeNull();
@@ -81,7 +85,7 @@ test.each(["launch", "turn", "operator", "memory", "unreadable", "controller", "
     if (change === "checks") h.setGreen("red");
     await service.autoTick(); expect(h.requests).toHaveLength(0);
     if (change === "launch" || change === "turn") {
-      h.advance(2 * 60_000); await service.autoTick(); expect(h.requests).toHaveLength(1);
+      h.advance(2 * 60_000); await service.autoTick(); expect(h.requests).toHaveLength(0);
     }
   } finally { service.stop(); }
 });
@@ -102,7 +106,27 @@ test("the busy window survives reconstruction and refuses a late start at final 
     service.stop(); service = h.service();
     await service.autoTick(); expect(h.requests).toHaveLength(0);
     await service.autoTick(); h.advance(2 * 60_000);
-    await service.autoTick(); expect(h.requests).toHaveLength(1);
+    await service.autoTick(); expect(h.requests).toHaveLength(0);
+    h.setTurns(0); await service.autoTick();
+    expect(h.requests).toHaveLength(1);
+  } finally { service.stop(); }
+});
+
+test("a returning cohort turn blocks managed final admission after the safe boundary", async () => {
+  const h = scenario(); h.setTurns(1);
+  let late = false;
+  const green = h.deps.green!;
+  h.deps.green = { read: async (...args: Parameters<NonNullable<ServiceDeps["green"]>["read"]>) => {
+    if (late) h.setTurns(1);
+    return green.read(...args);
+  } } as ServiceDeps["green"];
+  const service = h.service();
+  try {
+    await service.autoTick(); h.advance(2 * 60_000);
+    h.setTurns(0); late = true;
+    await service.autoTick();
+    expect(h.requests).toHaveLength(0);
+    expect(readAuto(join(h.dir, "auto.json")).managedPending).toBeNull();
   } finally { service.stop(); }
 });
 
@@ -116,7 +140,7 @@ test("a slow final check cannot admit after the waiting deadline", async () => {
   } } as ServiceDeps["green"];
   const service = h.service();
   try {
-    await service.autoTick(); h.advance(2 * 60_000); expire = true;
+    await service.autoTick(); h.advance(2 * 60_000); h.setTurns(0); expire = true;
     await service.autoTick();
     expect(h.requests).toHaveLength(0);
     expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
@@ -736,7 +760,7 @@ test("a drain whose journal holds only dead-host and unresolved turns deploys an
   service.stop();
 });
 
-test("a verified running turn counts until the stable busy window admits the update", async () => {
+test("a verified running turn remains protected throughout the bounded wait", async () => {
   const h = scenario();
   h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "conversation_work", sessionKey: { engine: "codex" }, cwd: null, host: "hosted", turn: "running" }] }) as never;
   const service = h.service();
@@ -745,7 +769,11 @@ test("a verified running turn counts until the stable busy window admits the upd
     expect(readAuto(join(h.dir, "auto.json")).lastBlockers).toMatchObject({ turns: 1, discounted: 0, unresolved: 0 });
     expect(h.requests).toHaveLength(0);
     h.advance(2 * 60_000); await service.autoTick();
-    expect(h.requests).toHaveLength(1);
+    expect(h.requests).toHaveLength(0);
+    h.advance(DRAIN_LEASE_MS - 2 * 60_000); await service.autoTick();
+    expect(h.requests).toHaveLength(0);
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
+    expect(readAuto(join(h.dir, "auto.json")).deferred?.reason).toBe("launch-hold-expired");
   } finally { service.stop(); }
 });
 

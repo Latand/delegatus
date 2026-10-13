@@ -31,17 +31,39 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 const TARGET = "a".repeat(40);
 const OLD = "b".repeat(40);
 
-test("a busy checkout survives reconstruction and requests its restart within two minutes", async () => {
+test("a busy checkout survives reconstruction and protects turns until they finish", async () => {
   const h = scenario(); h.setTurn(true);
   let service = h.service();
   try {
     await service.autoTick(); expect(h.pending()).toBeNull();
     service.stop(); service = h.service();
     h.advance(2 * 60_000); await service.autoTick();
+    expect(h.pending()).toBeNull();
+    h.setTurn(false); await service.autoTick();
+    h.advance(60_000); await service.autoTick();
     expect(h.pending()?.role).toBe("web");
     expect(readAuto(join(h.dir, "auto.json")).drain?.admitted).toBe(true);
     h.advance(DRAIN_LEASE_MS);
     expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+  } finally { service.stop(); }
+});
+
+test.each(["web", "runtime-host"] as const)("a returning cohort turn blocks final %s admission after the safe boundary", async (role) => {
+  const h = scenario(); h.setTurn(true);
+  if (role === "runtime-host") h.record.web.revision = TARGET.slice(0, 7);
+  const service = h.service();
+  try {
+    await service.autoTick(); h.advance(2 * 60_000);
+    h.setTurn(false); await service.autoTick();
+    expect(h.pending()?.role).toBe(role);
+    h.setTurn(true);
+    let restarted = 0;
+    const watcher = watchRestartRequests(h.record.requestFile, async () => { restarted++; }, {
+      intervalMs: 60_000, admitAuto: ({ requestId, autoGateId }) => service.admitAutoRestart(requestId, autoGateId),
+    });
+    try { await watcher.poll(); } finally { watcher.stop(); }
+    expect(restarted).toBe(0);
+    expect(h.pending()).toBeNull();
   } finally { service.stop(); }
 });
 
