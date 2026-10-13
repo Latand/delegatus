@@ -219,10 +219,14 @@ export async function runClaimedRequest(
   let rounds = 0;
   let loop: ReturnType<typeof createToolLoop> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let cadenceTimer: ReturnType<typeof setTimeout> | null = null;
+  let heartbeatStopped = false;
   let pendingBeat: Promise<void> | null = null;
   const loopRecord = () => loop ? { rounds, toolCalls: loop.records } : {};
   const finish = async (body: ExternalRelayCompletion, stallMs = 45_000) => {
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    heartbeatStopped = true;
+    if (cadenceTimer) { clearTimeout(cadenceTimer); cadenceTimer = null; }
     if (pendingBeat) await pendingBeat;
     // Persist the local decision before any delivery wait: a restart must
     // leave the generated answer and early declines inspectable.
@@ -308,7 +312,8 @@ export async function runClaimedRequest(
     let leaseUnavailable = false;
     let beatBusy = false;
     let seq = 0;
-    let nextBeatAt = 0;
+    const intervalMs = request.liveness.heartbeat_interval_s * 1000;
+    const beatAnchor = Date.now();
     let acked = false;
     const started = Date.now();
     const stallMs = request.liveness.stall_window_s * 1000;
@@ -324,6 +329,7 @@ export async function runClaimedRequest(
       beatBusy = true;
       const beatSeq = ++seq;
       const sentAt = Date.now();
+      let acknowledged = false;
       let step: string | null = null;
       const journal = (phase: "attempt" | "acknowledged" | "failed", status?: number, code?: string) =>
         console.info("External relay heartbeat", { request: requestId.slice(0, 8), seq: beatSeq, phase, step,
@@ -346,7 +352,7 @@ export async function runClaimedRequest(
         if (newestProgress === sentProgress) newestProgress = null;
         acked = true;
         heartbeatAt = Date.now();
-        nextBeatAt = heartbeatAt + request.liveness.heartbeat_interval_s * 1000;
+        acknowledged = true;
       } catch (error) {
         journal("failed", error instanceof ExternalRelayError ? error.status : 0,
           error instanceof ExternalRelayError && ["lease_lost", "unreachable", "malformed", "too_large", "unauthorized",
@@ -362,9 +368,16 @@ export async function runClaimedRequest(
           callAbort.abort();
         }
       } finally {
-        if (nextBeatAt <= Date.now()) nextBeatAt = Date.now() + 1000;
         beatBusy = false;
         cancelStalledRun();
+        if (!heartbeatStopped && !leaseUnavailable) {
+          if (cadenceTimer) clearTimeout(cadenceTimer);
+          const now = Date.now();
+          const nextGrid = beatAnchor + (Math.floor((now - beatAnchor) / intervalMs) + 1) * intervalMs;
+          const due = acknowledged ? nextGrid : Math.min(nextGrid, now + 1000);
+          cadenceTimer = setTimeout(() => { pendingBeat = beat(); }, Math.max(0, due - now));
+          cadenceTimer.unref();
+        }
       }
     };
     // Acknowledge before filesystem context, account selection or agent launch.
@@ -376,7 +389,7 @@ export async function runClaimedRequest(
       if (!beatBusy) cancelStalledRun();
       if (!beatBusy && !leaseUnavailable) {
         if (steps?.changeDue(Date.now())) pendingBeat = beat(true);
-        else if (Date.now() >= nextBeatAt) pendingBeat = beat();
+
       }
     }, 1000);
     heartbeatTimer.unref();
@@ -573,6 +586,8 @@ export async function runClaimedRequest(
       if (leaseUnavailable) return null;
     }
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    heartbeatStopped = true;
+    if (cadenceTimer) { clearTimeout(cadenceTimer); cadenceTimer = null; }
     if (pendingBeat) await pendingBeat;
     cancelStalledRun();
     if (leaseUnavailable) return null;
@@ -602,6 +617,8 @@ export async function runClaimedRequest(
     return await finish(body, request.liveness.stall_window_s * 1000);
   } catch {
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    heartbeatStopped = true;
+    if (cadenceTimer) { clearTimeout(cadenceTimer); cadenceTimer = null; }
     if (callAbort.signal.aborted) return null;
     if (run) {
       if (!runFinished) run.cancel();
@@ -612,6 +629,8 @@ export async function runClaimedRequest(
       request.liveness.stall_window_s * 1000,
     );
   } finally {
+    heartbeatStopped = true;
+    if (cadenceTimer) clearTimeout(cadenceTimer);
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     callAbort.abort();
     if (conversation) {

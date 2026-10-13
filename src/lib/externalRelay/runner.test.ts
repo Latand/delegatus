@@ -337,6 +337,27 @@ test("heartbeat journal records attempts, step ids and failures without credenti
   } finally { logger.mockRestore(); await server.close(); }
 });
 
+test("heartbeat sends stay on their grid despite acknowledgement latency", async () => {
+  const sends: number[] = [];
+  const server = await startTestRelay(async req => {
+    if (req.url?.endsWith("/heartbeat")) { sends.push(Date.now()); await Bun.sleep(400); }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  try {
+    const result = await runClaimedRequest(paired, { ...contextRequest, request_id: "cadence",
+      liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_cadence" } }),
+        observe: async () => sends.length >= 6 ? { state: "ended", finalText: "Done" } : { state: "running" }, stop: async () => {}, pollMs: 20 },
+    });
+    expect(result?.outcome).toBe("answered");
+    expect(sends.length).toBeGreaterThanOrEqual(6);
+    for (let i = 1; i < sends.length; i++) expect(sends[i]! - sends[i - 1]!).toBeLessThanOrEqual(2050);
+  } finally { await server.close(); }
+}, 25000);
+
 test("heartbeats continue through silence, newest progress is sent, completion frees slot", async () => {
   const beats: { seq: number; progress: { label: string } | null }[] = [];
   const completed: unknown[] = [];
