@@ -903,7 +903,33 @@ test("an immediately admitted owner can answer in the final ten seconds", async 
   } finally { await server.close(); }
 }, 10000);
 
-test("claim contention through the deadline returns an explicit busy completion", async () => {
+test("a confirmed owner run keeps its configured hard cap and may answer after the request deadline", async () => {
+  const completions: unknown[] = [];
+  const stops: string[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  try {
+    const result = await runClaimedRequest(paired, { ...contextRequest, request_id: "rq_confirmed_past_deadline",
+      deadline_at: new Date(Date.now() + 700).toISOString(),
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      ownerPorts: {
+        launch: async () => ({ status: 202, body: { conversationId: "conversation_past_deadline", initialMessage: "delivered" } }),
+        observe: async () => { await Bun.sleep(1100); return { state: "ended", finalText: "Done" }; },
+        stop: async (_id, action) => { stops.push(action); }, pollMs: 5,
+      },
+    });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Done" } });
+    expect(stops).toEqual([]);
+    expect(completions).toHaveLength(1);
+  } finally { await server.close(); }
+}, 10000);
+
+test("claim contention through expiry never sends a completion without exclusive request custody", async () => {
   const completions: unknown[] = [];
   const requestLock = `${externalRelayFile("requests")}.lock`;
   fs.mkdirSync(path.dirname(requestLock), { recursive: true });
@@ -914,10 +940,14 @@ test("claim contention through the deadline returns an explicit busy completion"
     return { body: { status: "accepted", duplicate: false } };
   });
   try {
-    const result = await runClaimedRequest(relay(`${server.origin}/v1`), { ...sampleRequest,
-      request_id: "rq_claim_contention_expired", deadline_at: new Date(Date.now() + 3000).toISOString() });
-    expect(result).toMatchObject({ outcome: "declined", reason: "busy" });
-    expect(completions).toHaveLength(1);
+    const request = { ...sampleRequest, request_id: "rq_claim_contention_expired",
+      deadline_at: new Date(Date.now() + 3000).toISOString() };
+    const results = await Promise.all([
+      runClaimedRequest(relay(`${server.origin}/v1`), request),
+      runClaimedRequest(relay(`${server.origin}/v1`), request),
+    ]);
+    expect(results).toEqual([null, null]);
+    expect(completions).toHaveLength(0);
   } finally {
     clearTimeout(release);
     fs.rmSync(requestLock, { force: true });

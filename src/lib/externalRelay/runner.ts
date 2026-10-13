@@ -224,8 +224,10 @@ export async function runClaimedRequest(
     requestClaim = await claimRelayRequestAsync(requestId, leaseId, deadline.at);
   } catch (error) {
     if (!(error instanceof RelayStoreBusy)) throw error;
-    return (await completeRelayRequest(relay, requestId, declined(leaseId, "busy"), () => deadline.at,
-      undefined, runtime?.onUnknownFeature)).body;
+    // A claim-lock timeout gives this process no request custody. Let the
+    // paired service's fixed deadline produce its timeout error; an unclaimed
+    // busy completion could race a different process that later acquires it.
+    return null;
   }
   if (requestClaim.kind === "duplicate") return null;
   if (requestClaim.kind === "terminal")
@@ -647,7 +649,7 @@ export async function runClaimedRequest(
           authorize: () => { if (!allowOwnerReply!()) throw new Error("owner relay authorization revoked"); },
           credentials: [relay.credential],
           request, owner, target, deadline, accountId: selectedAccount().accountId,
-          hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity, deadline.at - Date.now()), ports: runtime?.ownerPorts,
+          hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
           onConversation: async (conversationId) => {
             await changeRunAsync(requestId, current => ({ ...current, conversationId }), Date.now() + 5000);
             recorder?.bindConversation(conversationId);
@@ -705,19 +707,9 @@ export async function runClaimedRequest(
           identityTimers.push(timer);
         }
       if (leaseUnavailable) launchedRun.cancel();
-      let requestDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
-      const requestDeadline = new Promise<null>(resolve => {
-        requestDeadlineTimer = setTimeout(() => resolve(null), Math.max(0, deadline.at - Date.now()));
-        requestDeadlineTimer.unref();
-      });
-      const boundedResult = await Promise.race([launchedRun.done, requestDeadline]);
-      if (requestDeadlineTimer) clearTimeout(requestDeadlineTimer);
-      if (boundedResult === null) {
-        launchedRun.cancel();
-        await launchedRun.done;
-        return await finish(declined(leaseId, "busy"));
-      }
-      result = boundedResult;
+      // The request deadline bounds admission and delivery retries. A run
+      // already launched remains protected by its lease and configured cap.
+      result = await launchedRun.done;
       if (conversation) {
         if (result.sessionId) conversation.sessionId = result.sessionId;
         else { conversationBroken = true; if (result.status === "done") result = { ...result, status: "failed" }; }

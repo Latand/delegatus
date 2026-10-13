@@ -8,7 +8,7 @@ import type { AgentRegistry } from "@/lib/agent/registry";
 import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { spawnNoticeFinalMessage } from "@/lib/spawnNotice/production";
 import { scrubOwnerOutput } from "./ownerOutput";
-import { changeRun, readRunLedger, type RunRecord } from "./store";
+import { changeRun, changeRunAsync, readRunLedger, type RunRecord } from "./store";
 import { ownerRelayAuthorized } from "./ownerAuthority";
 import { noteRelayOutcome } from "./activity";
 import { offersHandoff, type ExternalRelayRequest, type ExternalRelayDecision } from "./protocol";
@@ -350,13 +350,14 @@ export function runOwnerAgent(input: {
   };
   const authorize = () => { if (stopped) throw new Error("owner relay turn revoked"); input.authorize?.(); };
   const timer = setTimeout(() => cancel("timeout"), input.hardCapMs); timer.unref();
+  const firstMessageDeadline = deadline.declineAt <= started ? deadline.at : deadline.declineAt;
   const admissionTimer = setTimeout(() => {
     if (!firstMessagePending || settled || stopped) return;
     stopped = "kill"; cancelStatus = "failed";
     const durable = persistStop(); wake.abort();
     if (turn.conversationId || !durable) void applyStop();
     else finish("failed");
-  }, Math.max(0, deadline.declineAt - Date.now()));
+  }, Math.max(0, firstMessageDeadline - Date.now()));
   admissionTimer.unref();
   const authorizationTimer = setInterval(() => { if (!stopped) { try { authorize(); } catch { cancel("cancelled"); } } }, 100);
   authorizationTimer.unref();
@@ -384,7 +385,8 @@ export function runOwnerAgent(input: {
         if (custody) custody = { ...custody, conversationId: id };
         await input.onConversation(id); // attribution persists even after a pending cutoff
       }
-      changeRun(input.request.request_id, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, admissionComplete: true } }));
+      await changeRunAsync(input.request.request_id,
+        r => ({ ...r, ownerTurn: { ...r.ownerTurn!, admissionComplete: true } }), Date.now() + 5000);
       try { authorize(); } catch { cancel("cancelled"); }
       if (stopped) { await applyStop(); return; }
       if (launched.status < 200 || launched.status >= 300 || !turn.conversationId) {
