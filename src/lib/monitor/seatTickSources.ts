@@ -72,6 +72,8 @@ import { scanRootEntries } from "@/lib/scanner/roots";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import type { StructuredHostRetirementReport } from "@/lib/runtime/structuredHostRetirement";
 import { loadTasks } from "@/lib/tasks/store";
+import { telegramPostSignals } from "@/lib/prototypeReview/telegramPostSignals";
+import { loadSeatRounds } from "@/lib/prototypeReview/seatRounds";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { evidenceFromPipelines, evidenceFromTasks } from "./evidence";
@@ -1386,7 +1388,7 @@ export function readRetirementJournalWindow(filename: string, sinceMs: number): 
 }
 
 function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
-  const found: SeatTickSignalInput[] = [];
+  const found: SeatTickSignalInput[] = telegramPostSignals(project, sources.tasks(), loadSeatRounds(project));
   if (viewerOwnProjectKeys().includes(project)) {
     found.push(...selfUpdateSignals(readAuto(statePath("self-update", "auto.json"))));
   }

@@ -5,7 +5,7 @@ import { LIST_ANSWER_BYTES } from "./listAnswers";
 
 type Metadata = { id: string; time: string; project: string; status: string; placement: string; priority: string; hidden: number; text: string; links: string };
 export type Source<T> = { filename: string; read: (id: string) => T | null; database?: Database | null };
-export type BoardScope = { project: string; ids: string[]; query: string; updatedSince: string;
+export type BoardScope = { project: string; ids: string[]; query: string; updatedSince: string; queryIds?: string[];
   statuses?: string[]; states?: string[]; placement?: string; priorities?: string[]; openOnly?: boolean; includeClosed?: boolean };
 export type ProjectSelection = { canonical: (project: string) => string; aliases: () => Record<string, string> };
 const defaultProjects: ProjectSelection = { canonical: canonicalProject, aliases: () => projectAliasSnapshot().aliases };
@@ -99,6 +99,36 @@ export class BoardSelection {
     this.sync();
     return this.db.query<{ pipeline: string }, [string]>("SELECT pipeline FROM links WHERE task=? ORDER BY pipeline").all(task).map(row => row.pipeline);
   }
+  projectKeys<T>(source: Source<T>): string[] {
+    const Database = sqliteDatabase();
+    const database = source.database ?? new Database(this.filename, { readonly: true });
+    try {
+      return database.query<{ project: string }, [string]>("SELECT DISTINCT json_extract(value_json,'$.project') AS project FROM state_rows WHERE collection=?")
+        .all(this.collection).flatMap(row => typeof row.project === "string" ? [row.project] : []);
+    } finally { if (!source.database) database.close(); }
+  }
+  /** Read only association fields in the authorized project. Large prompts,
+   * reports and transcripts never enter reference selection. The forge cache
+   * is joined at read time, so a cache refresh needs no registry revision. */
+  referenceRecords<T>(source: Source<T>, project: string): T[] {
+    const Database = sqliteDatabase();
+    const database = source.database ?? new Database(this.filename, { readonly: true });
+    try {
+      const projects = project ? [project, ...Object.keys(this.projects.aliases()).filter(key => this.projects.canonical(key) === project)] : [];
+      const where = projects.length ? ` AND json_extract(value_json,'$.project') IN (${projects.map(() => "?").join(",")})` : "";
+      const pipeline = this.collection === "pipelines";
+      const columns = ["id", "project", pipeline ? "task" : "text", "workLinks", ...(pipeline ? ["taskIds", "branch", "createdAt", "closedAt"] : [])];
+      const fields = columns.map(key => `'${key}', json_extract(value_json,'$.${key}')`).join(",");
+      const provenance = pipeline ? `,'delivery', CASE WHEN json_type(value_json,'$.delivery.target') = 'object' THEN json_object('target', json_extract(value_json,'$.delivery.target')) ELSE NULL END,
+        'runs', json_array(json_object('attempts', json(COALESCE((
+        SELECT json_group_array(json_object('report', json_object('provenance', json_object('pullRequest', json_extract(attempt.value,'$.report.provenance.pullRequest')))))
+        FROM json_each(state_rows.value_json,'$.runs') AS run, json_each(run.value,'$.attempts') AS attempt
+        WHERE json_extract(attempt.value,'$.report.provenance.pullRequest.number') IS NOT NULL
+      ),'[]'))))` : "";
+      return database.query<{ value: string }, SQLQueryBindings[]>(`SELECT json_object(${fields}${provenance}) AS value FROM state_rows
+        WHERE collection=?${this.collection === "tasks" ? " AND row_key GLOB 't:*'" : ""}${where}`).all(this.collection, ...projects).map(row => JSON.parse(row.value));
+    } finally { if (!source.database) database.close(); }
+  }
   page<T, Row>(source: Source<T>, scope: BoardScope, cursor: unknown, limit: number, project: (record: T) => Row) {
     const hash = createHash("sha256").update(JSON.stringify(scope)).digest("hex").slice(0, 16);
     let boundary: { id: string; time: string } | null = null, cursorReset = false;
@@ -162,7 +192,10 @@ export class BoardSelection {
     if (scope.openOnly) clauses.push("status != 'done'");
     if (this.collection !== "tasks" && !scope.includeClosed) clauses.push("status != 'closed' AND hidden=0");
     if (scope.updatedSince) { clauses.push("time >= ?"); values.push(scope.updatedSince); }
-    if (scope.query) {
+    if (scope.queryIds !== undefined) {
+      set("id", scope.queryIds);
+      if (!scope.queryIds.length) clauses.push("0");
+    } else if (scope.query) {
       const terms = [...grams(scope.query, Math.min(3, scope.query.length))];
       // Pick the narrowest indexed posting; verify literal substring semantics.
       const term = terms.sort((a, b) => this.termCount(a) - this.termCount(b))[0]!;
@@ -186,7 +219,7 @@ function matches(row: Record<string, any>, scope: BoardScope, collection: string
     && (!scope.priorities?.length || scope.priorities.includes(row.priority === "high" || row.priority === "low" ? row.priority : "normal"))
     && (task || scope.includeClosed || (row.state !== "closed" && !(collection === "flows" ? row.closedAt : row.hiddenAt)))
     && (!scope.updatedSince || (task ? row.updatedAt : row.createdAt) >= scope.updatedSince)
-    && (!scope.query || (task ? row.text : row.task).toLowerCase().includes(scope.query));
+    && (scope.queryIds !== undefined ? scope.queryIds.includes(row.id) : !scope.query || (task ? row.text : row.task).toLowerCase().includes(scope.query));
 }
 function compare(a: { time: string; id: string }, b: { time: string; id: string }) { return a.time === b.time ? (a.id > b.id ? -1 : a.id === b.id ? 0 : 1) : a.time > b.time ? -1 : 1; }
 export function boardSelection(filename: string, collection: "tasks" | "pipelines" | "flows") {

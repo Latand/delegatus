@@ -9,6 +9,7 @@ import { primeTranscriptTurnEvidence } from "@/lib/scanner/activity";
 import { globalCache } from "@/lib/scanner/caches";
 import { primePersistedLineageFacts } from "@/lib/scanner/links";
 import { QUESTION_CACHE_NAME } from "@/lib/scanner/questions";
+import { FileScanIncompleteError, isFileScanIncompleteError } from "@/lib/scanner/incompleteScan";
 import { coordinatedFileScan, resetFileScanCoordinatorForTests, runFileCatalogScan } from "@/lib/scanner/scanCoordinator";
 import type { Engine, FileEntry, PendingQuestion, TranscriptEngine } from "@/lib/types";
 import type { TurnState } from "@/lib/accounts/migration/contracts";
@@ -67,6 +68,7 @@ type FileScanCacheSlot = {
   pinnedGenerations?: Map<string, number>;
   requestCount?: number;
   lastScan?: FileScanDiagnostic;
+  lastScanError?: unknown;
   ordinaryRefreshRequestedAt?: number;
   membership?: string;
   membershipProbe?: Promise<string | null>;
@@ -489,7 +491,7 @@ function normalizeFileScanCacheSlot(value: unknown): FileScanCacheSlot {
   const pending = refreshPromise(legacy.refresh);
   if (pending) {
     const promise = pending.then((snapshot) => {
-      if (!snapshot.complete) throw new Error("filesystem scan incomplete");
+      if (!snapshot.complete) throw new FileScanIncompleteError();
       slot.snapshot = snapshot;
       slot.refreshedAt = Date.now();
       slot.completedAt = slot.refreshedAt;
@@ -509,12 +511,21 @@ async function instrumentFileScan(
   const startedAt = performance.now();
   try {
     const snapshot = await task();
+    slot.lastScanError = undefined;
     slot.lastScan = { generation, reason, status: "complete", durationMs: performance.now() - startedAt };
     return snapshot;
   } catch (error) {
+    // The final subscriber intentionally aborts a shared generation. That
+    // cancellation is local to its readers and must not poison later reads
+    // while a replacement generation is running.
+    if (!isAbortError(error)) slot.lastScanError = error;
     slot.lastScan = { generation, reason, status: "failed", durationMs: performance.now() - startedAt };
     throw error;
   }
+}
+
+function isAbortError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
 }
 
 function fileScanRefreshPromise(
@@ -550,7 +561,7 @@ function fileScanRefreshPromise(
         ...(onResourceSnapshot ? { onResourceSnapshot, resourceBaseline: slot.snapshot } : {}),
       }, generationSignal);
     });
-    if (!snapshot.complete) throw new Error("filesystem scan incomplete");
+    if (!snapshot.complete) throw new FileScanIncompleteError();
     const membershipAfterScan = await probeFileCatalogMembership(slot);
     if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(snapshot, { epoch: slot.epoch, generation });
     slot.snapshot = snapshot;
@@ -635,7 +646,7 @@ function beginPinnedFileScanRefresh(
       persistIndex: process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1",
       pin: pinnedPath,
     }, signal));
-    if (!pinnedSnapshot.complete) throw new Error("filesystem scan incomplete");
+    if (!pinnedSnapshot.complete) throw new FileScanIncompleteError();
     const pinOverlayPaths = pinnedSnapshot.pinOverlayPaths ?? [];
     const overlayPathSet = new Set(pinOverlayPaths);
     const globalSnapshot = {
@@ -770,6 +781,16 @@ function continueRefreshInBackground(refresh: Promise<FileScanSnapshot>): void {
   /* The response carries an incomplete target generation. Its client retries
      until a later scan completes, including after this attempt rejects. */
   void refresh.catch(() => undefined);
+}
+
+function deferFileScan(slot: FileScanCacheSlot, refresh: FileScanRefresh): never {
+  // Keep the shared generation alive independently of this caller. The
+  // instrumented scan retains unexpected errors for the next read.
+  continueRefreshInBackground(waitForFileScanRefresh(refresh));
+  if (slot.lastScanError !== undefined && !isFileScanIncompleteError(slot.lastScanError)) {
+    throw slot.lastScanError;
+  }
+  throw new FileScanIncompleteError();
 }
 
 function rememberPinnedGeneration(slot: FileScanCacheSlot, pinnedPath: string, generation: number): number {
@@ -1011,16 +1032,24 @@ export async function cachedFileScan(
 }
 
 /** Returns the latest completed global generation. A missing snapshot joins
-    or starts the shared cold generation so every consumer receives a corpus. */
+    or starts the shared cold generation. Non-waiting callers keep that work
+    alive in the background and receive a typed incomplete-inventory refusal. */
 export async function completedFileScan(
-  { revalidate = true, signal }: { revalidate?: boolean; signal?: AbortSignal | null } = {},
+  { revalidate = true, signal, wait = true }: { revalidate?: boolean; signal?: AbortSignal | null; wait?: boolean } = {},
 ): Promise<CachedFileScan> {
   if (signal?.aborted) throw scanAbortError(signal.reason);
   const slot = globalFileScanSlot();
   slot.requestCount = (slot.requestCount ?? 0) + 1;
   if (slot.snapshot) {
     if (revalidate) {
-      await waitForCatalogMembership(slot, signal);
+      if (wait) await waitForCatalogMembership(slot, signal);
+      else {
+        const refresh = await membershipFileScanRefresh(slot);
+        if (signal?.aborted) throw scanAbortError(signal.reason);
+        // A completed inventory from before a new member appeared cannot
+        // establish absence in the caller's observed catalog scope.
+        if (refresh) return deferFileScan(slot, refresh);
+      }
     }
     const now = Date.now();
     if (revalidate
@@ -1035,6 +1064,7 @@ export async function completedFileScan(
 
   const targetGeneration = slot.refresh?.generation ?? nextGeneration(slot);
   const refresh = slot.refresh ?? beginFileScanRefresh(slot, targetGeneration, "cold");
+  if (!wait) return deferFileScan(slot, refresh);
   await waitForFileScanRefresh(refresh, signal);
   if (revalidate) await waitForCatalogMembership(slot, signal);
   return completedScan(slot, undefined, targetGeneration, "miss");

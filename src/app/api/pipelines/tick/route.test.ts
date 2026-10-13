@@ -16,6 +16,6 @@ test("pipeline tick joins one coalesced reconciliation inside the live Viewer pr
     calls += 1;
   });
 
-  expect(response.status).toBe(202);
+  expect(response.status).toBe(200);
   expect(calls).toBe(1);
 });

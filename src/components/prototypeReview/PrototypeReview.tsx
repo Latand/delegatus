@@ -21,6 +21,7 @@ import { normalizePrototypeAnswers, recommendedAnswers } from "@/lib/prototypeRe
 
 import { DecisionQuestions, selectPrototypeAnswer } from "./DecisionQuestions";
 import { markPrototypeReviewSeen } from "./prototypeReviewStore";
+import { PrototypeTelegramActions } from "./PrototypeTelegramActions";
 
 type Variant = PrototypeRoundView["variants"][number];
 type Frame = Variant["frames"][number];
@@ -582,7 +583,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     </section>
   );
 
-  const footer = !round ? null : round.decision ? (
+  const decisionFooter = !round ? null : round.decision ? (
     <div data-prototype-decision={round.id} className="flex min-w-0 flex-1 flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-1.5">
         <span {...(round.decision.skipped ? { "data-prototype-skipped": "" } : {})} className="text-label font-semibold text-secondary">{round.decision.rejected ? null : t(!hasQuestions ? "proto.chosen" : round.decision.skipped ? "proto.q.skipped" : "proto.q.answered")}</span>
@@ -652,6 +653,13 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
       </div>
       {hasQuestions && !answersValid ? <p role="status" className="m-0 text-label text-muted">{t(draft.answers.some(a => a.other) && !draft.comment.trim() ? "proto.q.otherNeedsComment" : "proto.q.answerAll")}</p> : null}
       {voiceError ? <p role="alert" className="m-0 text-label font-semibold text-danger">{voiceError}</p> : null}
+    </div>
+  );
+
+  const footer = !round ? decisionFooter : (
+    <div className="flex min-w-0 flex-1 flex-col gap-2">
+      {!elsewhere ? <PrototypeTelegramActions key={round.id} round={round} disabled={review.saving} onResend={() => review.resendTelegram(round.id)} /> : null}
+      {decisionFooter}
     </div>
   );
 
