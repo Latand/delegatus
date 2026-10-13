@@ -302,18 +302,42 @@ test("PR self-tests use the trusted import closure and workflow changes while in
     mkdirSync(join(root, "candidate/.github/workflows"), { recursive: true });
     writeFileSync(join(root, "candidate/scripts/privacy-fixture.test.ts"), 'import "./fixture-rule";');
     writeFileSync(join(root, "candidate/scripts/fixture-rule.ts"), "export const value = true;");
+    writeFileSync(join(root, "candidate/test-preload.ts"), "// trusted test preload\n");
+    writeFileSync(join(root, "candidate/scripts/preload-helper.ts"), "export const value = true;\n");
+    writeFileSync(join(root, "candidate/bunfig.toml"), '[test]\npreload = ["./test-preload.ts"]\n');
+    writeFileSync(join(root, "candidate/tsconfig.json"), "{}\n");
+    writeFileSync(join(root, "candidate/package.json"), "{}\n");
+    writeFileSync(join(root, "candidate/bun.lock"), "{}\n");
     git("init", "-b", "main"); git("config", "core.hooksPath", "/dev/null"); git("add", "."); git("commit", "-m", "scope baseline");
     const base = git("rev-parse", "HEAD");
     const clone = Bun.spawnSync(["git", "clone", "--quiet", join(root, "candidate"), join(root, "trusted")], { env });
     expect(clone.exitCode).toBe(0);
+    mkdirSync(join(root, "trusted/scripts"), { recursive: true });
+    mkdirSync(join(root, "trusted/src"), { recursive: true });
     writeFileSync(join(root, "trusted/scripts/ci-platform-scope.ts"), readFileSync(join(import.meta.dir, "ci-platform-scope.ts")));
-    for (const [file, expected] of [["src/components/fixture.ts", false], ["scripts/fixture-rule.ts", true], ["scripts/privacy-new.test.ts", true], [".github/workflows/privacy-publication.yml", true]]) {
+    mkdirSync(join(root, "trusted/node_modules"));
+    writeFileSync(join(root, "trusted/test-preload.ts"), 'import "./scripts/preload-helper";\n');
+    writeFileSync(join(root, "trusted/scripts/preload-helper.ts"), "export const value = true;\n");
+    for (const [file, expected] of [["src/components/fixture.ts", false], ["scripts/fixture-rule.ts", true], ["scripts/privacy-new.test.ts", true], [".github/workflows/privacy-publication.yml", true], ["test-preload.ts", true], ["scripts/preload-helper.ts", true], ["bunfig.toml", true], ["tsconfig.json", true], ["package.json", true], ["bun.lock", true]]) {
       git("checkout", "--detach", base);
       writeFileSync(join(root, "candidate", file as string), "// changed fixture\n"); git("add", "."); git("commit", "-m", "scope change");
       const output = join(root, "output"); writeFileSync(output, "");
       const result = Bun.spawnSync(["bash", "-e", "-c", scope.run!], { cwd: join(root, "trusted"), env: { ...env, PRIVACY_BASE_SHA: base, GITHUB_OUTPUT: output } });
       expect(result.exitCode, result.stderr.toString()).toBe(0);
       expect(readFileSync(output, "utf8")).toBe(`run=${expected}\n`);
+
+      if (file === "test-preload.ts") {
+        writeFileSync(join(root, "candidate/test-preload.ts"), 'throw new Error("broken privacy preload");\n');
+        git("add", "."); git("commit", "--amend", "--no-edit");
+        writeFileSync(output, "");
+        const preloadScope = Bun.spawnSync(["bash", "-e", "-c", scope.run!], { cwd: join(root, "trusted"), env: { ...env, PRIVACY_BASE_SHA: base, GITHUB_OUTPUT: output } });
+        expect(preloadScope.exitCode, preloadScope.stderr.toString()).toBe(0);
+        expect(readFileSync(output, "utf8")).toBe("run=true\n");
+        const candidate = step(jobs[0]!, "Verify candidate privacy gate behavior within budget");
+        const candidateRun = Bun.spawnSync(["bash", "-e", "-c", candidate.run!], { cwd: join(root, "candidate"), env, stdout: "pipe", stderr: "pipe" });
+        expect(candidateRun.exitCode).not.toBe(0);
+        expect(candidateRun.stderr.toString()).toContain("broken privacy preload");
+      }
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

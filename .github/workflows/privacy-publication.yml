@@ -191,11 +191,11 @@ jobs:
           bun -e '
             const { execFileSync } = require("node:child_process");
             const { readdirSync, appendFileSync } = require("node:fs");
-            const { executedPaths } = require("./scripts/ci-platform-scope.ts");
+            const { ALWAYS_IN_SCOPE, executedPaths } = require("./scripts/ci-platform-scope.ts");
             const tests = readdirSync("scripts").filter(f => /^privacy-.*\.test\.ts$/.test(f)).map(f => `scripts/${f}`);
-            const closure = executedPaths(process.cwd(), tests);
+            const closure = executedPaths(process.cwd(), [...tests, "test-preload.ts"]);
             const changed = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `${process.env.PRIVACY_BASE_SHA}...HEAD`], { cwd: "../candidate", encoding: "utf8" }).split("\0").filter(Boolean);
-            const run = changed.some(f => closure.has(f) || /^scripts\/privacy-.*\.test\.ts$/.test(f) || f === ".github/workflows/privacy-publication.yml");
+            const run = changed.some(f => closure.has(f) || ALWAYS_IN_SCOPE.includes(f) || /^scripts\/privacy-.*\.test\.ts$/.test(f) || f === ".github/workflows/privacy-publication.yml");
             appendFileSync(process.env.GITHUB_OUTPUT, `run=${run}\n`);
           '
 
