@@ -7,9 +7,13 @@ import { viewerControlOrigin, viewerControlToken } from "./controlEndpoint";
 import type { McpToolArgs, McpToolCallContext, McpToolName, McpToolResult } from "./server";
 
 /** These reads otherwise materialize registry, scanner and resource caches in
- * every agent. The Viewer owns their projections and bounded durable receipts. */
+ * every agent. The Viewer owns their projections and bounded durable receipts.
+ * Activity also journals observations; its original key must reach the shared
+ * service. Even HTTP-backed prototype/search bindings load the local domain
+ * unless delegation happens before importing those bindings. */
 export const VIEWER_LARGE_READS: ReadonlySet<McpToolName> = new Set([
   "agent_fleet", "conversation_messages", "resources", "operator_snapshot", "board_snapshot",
+  "list_pipelines", "get_pipeline", "read_prototype_review", "agent_activity", "search_transcripts",
 ]);
 
 function record(value: unknown): Record<string, unknown> | null {

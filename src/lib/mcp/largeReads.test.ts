@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { NextRequest } from "next/server";
 import { createMcpToolService, createProductionViewerMcpService, SqliteMcpReceiptStore, MemoryMcpReceiptStore, type McpToolBindings, type McpToolCallContext } from "./server";
 import { handleMcpHttpRequest, setMcpHttpDependenciesForTests } from "./http";
@@ -9,6 +10,31 @@ import { currentMcpHttpCaller } from "./callerContext";
 
 const original = { ...process.env };
 const listeners: Array<ReturnType<typeof Bun.serve>> = [];
+
+test("the stdio entry's eager imports cannot load Viewer caches or local bindings", () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+  const pending = [path.join(root, "src/lib/mcp/entry.ts")];
+  const seen = new Set<string>();
+  const forbidden = new Set(["src/lib/agent/registry.ts", "src/lib/scanner/scanCache.ts", "src/lib/mcp/bindings.ts", "src/lib/pipelines/store.ts"]);
+  while (pending.length) {
+    const filename = pending.pop()!;
+    if (seen.has(filename)) continue;
+    seen.add(filename);
+    expect(forbidden.has(path.relative(root, filename))).toBe(false);
+    if (!/\.(?:ts|tsx|mjs)$/.test(filename)) continue;
+    const scanner = new Bun.Transpiler({ loader: filename.endsWith(".tsx") ? "tsx" : "ts" });
+    const source = fs.readFileSync(filename, "utf8").replace(/^#!.*\n/, "");
+    for (const dependency of scanner.scanImports(source)) {
+      if (dependency.kind !== "import-statement") continue;
+      const candidate = dependency.path.startsWith("@/") ? path.join(root, "src", dependency.path.slice(2))
+        : dependency.path.startsWith(".") ? path.resolve(path.dirname(filename), dependency.path) : null;
+      if (!candidate) continue;
+      const resolved = [candidate, `${candidate}.ts`, `${candidate}.tsx`, path.join(candidate, "index.ts")]
+        .find(file => fs.existsSync(file) && fs.statSync(file).isFile());
+      if (resolved) pending.push(resolved);
+    }
+  }
+});
 afterEach(() => {
   setMcpHttpDependenciesForTests(null);
   for (const listener of listeners.splice(0)) listener.stop(true);
@@ -76,11 +102,11 @@ test("stdio large reads run in the Viewer and preserve its receipt and native wo
   });
   const service = await createProductionViewerMcpService(false, true);
   const nativeWork = { threadId: "fixture-thread", turnId: "fixture-turn", turnTrigger: "realtime", callId: "fixture-call", itemId: "fixture-item" };
-  for (const name of ["conversation_messages", "resources", "operator_snapshot", "board_snapshot", "agent_fleet"] as const) {
+  for (const name of ["conversation_messages", "resources", "operator_snapshot", "board_snapshot", "agent_fleet", "list_pipelines", "get_pipeline", "read_prototype_review", "agent_activity", "search_transcripts"] as const) {
     expect(await service.callTool(name, { clientRequestId: "read-key", full: true }, { nativeWork }))
       .toEqual({ ok: true, toolName: name, clientRequestId: "read-key", replayed: true, marker: "Viewer answer" });
   }
-  expect(calls).toHaveLength(5);
+  expect(calls).toHaveLength(10);
   expect(calls[0]).toMatchObject({ name: "conversation_messages", arguments: { clientRequestId: "read-key", full: true }, _meta: {
     threadId: "fixture-thread", callId: "fixture-call", itemId: "fixture-item",
     "x-codex-turn-metadata": { thread_id: "fixture-thread", turn_id: "fixture-turn", turn_trigger: "realtime" },

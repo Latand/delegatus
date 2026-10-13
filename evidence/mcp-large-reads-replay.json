@@ -1,0 +1,274 @@
+{
+  "schemaVersion": 1,
+  "baselineCommit": "7140fa6739dfd3fb4712878325a8ae19b2e1b8b4",
+  "live": {
+    "observedAt": "2026-10-13T01:45:27Z",
+    "deploymentCommit": "40451576b3eece32dbfd1d6b87e8a2f9846f1905",
+    "serverCount": 42,
+    "rssMiB": {
+      "min": 120.3,
+      "median": 278.6,
+      "max": 1013.0
+    },
+    "largestPairs": [
+      {
+        "label": "agent 1",
+        "engine": "claude",
+        "agentRssMiB": 323.5,
+        "mcpRssMiB": 1013.0,
+        "launcherRssMiB": 47.6,
+        "ageSeconds": 7541
+      },
+      {
+        "label": "agent 2",
+        "engine": "claude",
+        "agentRssMiB": 275.3,
+        "mcpRssMiB": 916.0,
+        "launcherRssMiB": 49.6,
+        "ageSeconds": 6011
+      },
+      {
+        "label": "agent 3",
+        "engine": "claude",
+        "agentRssMiB": 328.8,
+        "mcpRssMiB": 853.3,
+        "launcherRssMiB": 44.3,
+        "ageSeconds": 3954
+      },
+      {
+        "label": "agent 4",
+        "engine": "codex",
+        "agentRssMiB": 193.6,
+        "mcpRssMiB": 801.1,
+        "launcherRssMiB": 51.9,
+        "ageSeconds": 6460
+      }
+    ]
+  },
+  "isolated": {
+    "method": "Real stdio MCP child, real MCP HTTP service and prototype route handlers in a separate process, private state and PID namespace, 10 ms RSS polling, 30 s idle, diagnostic synchronous GC afterward",
+    "samplesPerSide": 1,
+    "baseline": {
+      "runtime": "1.4.0",
+      "pipelines": 120,
+      "pipelineJsonBytes": 44733021,
+      "rounds": 3,
+      "idleMs": 30000,
+      "peakRss": 332271616,
+      "before": {
+        "rss": 123359232,
+        "heapSize": 32378472,
+        "heapCapacity": 37782168,
+        "extraMemorySize": 8122696,
+        "objectCount": 448921
+      },
+      "afterIdle": {
+        "rss": 260939776,
+        "heapSize": 139267502,
+        "heapCapacity": 145408478,
+        "extraMemorySize": 108365902,
+        "objectCount": 550045
+      },
+      "afterGc": {
+        "rss": 260108288,
+        "heapSize": 122664270,
+        "heapCapacity": 130263998,
+        "extraMemorySize": 94908974,
+        "objectCount": 521535
+      }
+    },
+    "candidate": {
+      "runtime": "1.4.0",
+      "pipelines": 120,
+      "pipelineJsonBytes": 44733021,
+      "rounds": 3,
+      "idleMs": 30000,
+      "peakRss": 141893632,
+      "before": {
+        "rss": 75231232,
+        "heapSize": 18204563,
+        "heapCapacity": 22593539,
+        "extraMemorySize": 3397555,
+        "objectCount": 278518
+      },
+      "afterIdle": {
+        "rss": 98004992,
+        "heapSize": 38158018,
+        "heapCapacity": 42456962,
+        "extraMemorySize": 23097138,
+        "objectCount": 283052
+      },
+      "afterGc": {
+        "rss": 98004992,
+        "heapSize": 15620262,
+        "heapCapacity": 20464358,
+        "extraMemorySize": 1235606,
+        "objectCount": 276474
+      }
+    },
+    "equivalence": {
+      "equivalent": true,
+      "calls": 15,
+      "normalization": [
+        "sandbox root",
+        "fixture conversation id",
+        "activity observation time and positive clock durations; zero/null preserved",
+        "activity phase durations; field names preserved",
+        "transcript cursor scope; offsets and fingerprints preserved"
+      ],
+      "answers": [
+        {
+          "round": 0,
+          "tool": "list_pipelines",
+          "bytes": 374052,
+          "hash": "a98b6c1c313523e9b7d81381caeff5208b703e76c9b7e272d6250bb40e4c6752"
+        },
+        {
+          "round": 0,
+          "tool": "get_pipeline",
+          "bytes": 373880,
+          "hash": "b871f14881dc7f9977c102e2b2b29a8ef2015746063d3cae2ff6f019c36feef2"
+        },
+        {
+          "round": 0,
+          "tool": "conversation_messages",
+          "bytes": 3222436,
+          "hash": "988a431064288df337adc8dfede70ef6d30f90630fe024a68e3eab7f2e295fdd"
+        },
+        {
+          "round": 0,
+          "tool": "read_prototype_review",
+          "bytes": 10670,
+          "hash": "359f97587817fb4de2a55dc98d3d12b09e8967abbeab4c3318cb8c228f39695d"
+        },
+        {
+          "round": 0,
+          "tool": "agent_activity",
+          "bytes": 1783,
+          "hash": "f2021905e1ce72fb363f967667b8a1a8985ac7aa2e6cd2b6b1b838285b83080c"
+        },
+        {
+          "round": 1,
+          "tool": "list_pipelines",
+          "bytes": 374052,
+          "hash": "422948509a8e7af0c44f56ba043400a6b203e4573924966afc5fac04f789c2ae"
+        },
+        {
+          "round": 1,
+          "tool": "get_pipeline",
+          "bytes": 373880,
+          "hash": "d9117f82d28b47513f290c076e92b21be38539d4b8282c43e5516fd994c4c271"
+        },
+        {
+          "round": 1,
+          "tool": "conversation_messages",
+          "bytes": 3222436,
+          "hash": "245cfd2c49095c0fae3319d13066d8d630c1a2870ebf255e0149dc37e38077b6"
+        },
+        {
+          "round": 1,
+          "tool": "read_prototype_review",
+          "bytes": 10670,
+          "hash": "bca69e752099550317da1c2e75ca16be2c013923c63d752272b719a21d900183"
+        },
+        {
+          "round": 1,
+          "tool": "agent_activity",
+          "bytes": 1783,
+          "hash": "b1cd9435a1e47ffaaac40ab15a2599ed6787045e4085cfec99628d5054ee929f"
+        },
+        {
+          "round": 2,
+          "tool": "list_pipelines",
+          "bytes": 374052,
+          "hash": "7405aab5544ecf1d9ae906d542d36540a6352a1b90d446f8c914bd9d710be281"
+        },
+        {
+          "round": 2,
+          "tool": "get_pipeline",
+          "bytes": 373880,
+          "hash": "62b6f7cb3879e60717cded8fb91b85833957e2a72bcecc2a8ad3d4a379a5d401"
+        },
+        {
+          "round": 2,
+          "tool": "conversation_messages",
+          "bytes": 3222436,
+          "hash": "16e55b000125b039fbbf7c9a348db50a15118e9a94727620fd207e0834612e69"
+        },
+        {
+          "round": 2,
+          "tool": "read_prototype_review",
+          "bytes": 10670,
+          "hash": "67f834be74647ba6b62731b7e8ef1d9b50e4781682c69be3eeab888185f5063b"
+        },
+        {
+          "round": 2,
+          "tool": "agent_activity",
+          "bytes": 1783,
+          "hash": "4e63578613e4bcd2a8d0175b2e33b8b03242415c97a16d82cd33179ccdee8106"
+        }
+      ]
+    }
+  },
+  "initialReproduction": {
+    "note": "Measured before changing product source; the initial fixture also held a fixed legacy updatedAt field on pipelines. The final benchmark omits that extra field.",
+    "baseline": {
+      "runtime": "1.4.0",
+      "pipelines": 120,
+      "pipelineJsonBytes": 44737701,
+      "rounds": 3,
+      "idleMs": 30000,
+      "peakRss": 330432512,
+      "before": {
+        "rss": 120729600,
+        "heapSize": 32370576,
+        "heapCapacity": 37756512,
+        "extraMemorySize": 8113424,
+        "objectCount": 448920
+      },
+      "afterIdle": {
+        "rss": 249782272,
+        "heapSize": 132738457,
+        "heapCapacity": 138817049,
+        "extraMemorySize": 101872777,
+        "objectCount": 549303
+      },
+      "afterGc": {
+        "rss": 248971264,
+        "heapSize": 122661994,
+        "heapCapacity": 130441754,
+        "extraMemorySize": 94906506,
+        "objectCount": 521630
+      }
+    },
+    "candidate": {
+      "runtime": "1.4.0",
+      "pipelines": 120,
+      "pipelineJsonBytes": 44737701,
+      "rounds": 3,
+      "idleMs": 30000,
+      "peakRss": 138625024,
+      "before": {
+        "rss": 74514432,
+        "heapSize": 18190553,
+        "heapCapacity": 22734073,
+        "extraMemorySize": 3390633,
+        "objectCount": 278431
+      },
+      "afterIdle": {
+        "rss": 91557888,
+        "heapSize": 31678258,
+        "heapCapacity": 36126322,
+        "extraMemorySize": 16635426,
+        "objectCount": 282770
+      },
+      "afterGc": {
+        "rss": 91557888,
+        "heapSize": 15609488,
+        "heapCapacity": 20573952,
+        "extraMemorySize": 1230512,
+        "objectCount": 276399
+      }
+    }
+  }
+}
