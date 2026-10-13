@@ -72,5 +72,89 @@
     "clipped": false,
     "visible": true,
     "text": "Чекає черги CPU · 2-й · до 7 хв"
+  },
+  {
+    "lang": "en",
+    "viewport": 1440,
+    "stalled": true,
+    "clipped": false,
+    "width": 428,
+    "text": "CPU queue is stalled · 7th · nothing started for 62 min"
+  },
+  {
+    "lang": "en",
+    "viewport": 1000,
+    "stalled": true,
+    "clipped": false,
+    "width": 676,
+    "text": "CPU queue is stalled · 7th · nothing started for 62 min"
+  },
+  {
+    "lang": "en",
+    "viewport": 390,
+    "stalled": true,
+    "clipped": false,
+    "width": 262,
+    "text": "CPU queue is stalled · 7th · nothing started for 62 min"
+  },
+  {
+    "lang": "en",
+    "viewport": 390,
+    "surface": "task",
+    "stalled": true,
+    "clipped": false,
+    "visible": true,
+    "text": "CPU queue is stalled · 7th · nothing started for 62 min"
+  },
+  {
+    "lang": "en",
+    "viewport": 390,
+    "surface": "stages",
+    "stalled": true,
+    "clipped": false,
+    "visible": true,
+    "text": "CPU queue is stalled · 7th · nothing started for 62 min"
+  },
+  {
+    "lang": "uk",
+    "viewport": 1440,
+    "stalled": true,
+    "clipped": false,
+    "width": 428,
+    "text": "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв"
+  },
+  {
+    "lang": "uk",
+    "viewport": 1000,
+    "stalled": true,
+    "clipped": false,
+    "width": 676,
+    "text": "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв"
+  },
+  {
+    "lang": "uk",
+    "viewport": 390,
+    "stalled": true,
+    "clipped": false,
+    "width": 260,
+    "text": "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв"
+  },
+  {
+    "lang": "uk",
+    "viewport": 390,
+    "surface": "task",
+    "stalled": true,
+    "clipped": false,
+    "visible": true,
+    "text": "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв"
+  },
+  {
+    "lang": "uk",
+    "viewport": 390,
+    "surface": "stages",
+    "stalled": true,
+    "clipped": false,
+    "visible": true,
+    "text": "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв"
   }
 ]

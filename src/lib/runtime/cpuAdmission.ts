@@ -8,7 +8,15 @@ import { procBackend } from "../proc";
 
 export const CPU_QUEUE_MAX_WAIT_MS = 10 * 60_000;
 export const CPU_QUEUE_SPACING_MS = 2_000;
-export type CpuQueueWait = { since: number; position: number; remainingMs: number };
+/** A waiting stage polls every five seconds. An ownerless ticket nobody has
+ * polled for this long stops counting ahead of others; it keeps its row. */
+export const CPU_QUEUE_UNPOLLED_MS = 60_000;
+/** An ownerless ticket unpolled for this long, and held by no fence, is removed. */
+export const CPU_QUEUE_ABANDONED_MS = 24 * 60 * 60_000;
+/** How long a head may stay past its bound, with nothing admitted, before the wait reads as stalled. */
+export const CPU_QUEUE_STALE_GRACE_MS = 60_000;
+/** `stalledMs` is set only while the head is past its bound and nothing is admitted. */
+export type CpuQueueWait = { since: number; position: number; remainingMs: number; stalledMs?: number };
 type Ticket = { seq: number; key: string; since: number; owner: string | null };
 export type CpuSlotLease = { owner: ProcessIdentity; slot: string };
 
@@ -64,8 +72,11 @@ function machineHome(): string {
   return nativeHome[homeSymbol] = result.stdout;
 }
 
-/** Shared by the Viewer and gate-slot, including children with sandboxed HOME. */
-export function cpuAdmissionFile(): string {
+/** Shared by the operator's Viewer and gate-slot, including children with
+ * sandboxed HOME. An instance on an isolated state directory passes that
+ * directory and keeps its own queue there (cpuAdmissionScope.ts). */
+export function cpuAdmissionFile(isolatedStateDir?: string | null): string {
+  if (!process.env.LLV_GATE_LOCK_DIR && isolatedStateDir) return path.join(isolatedStateDir, "cpu-gate", "admission.sqlite");
   if (!process.env.LLV_GATE_LOCK_DIR && /\.test\.[cm]?[jt]sx?$/.test(process.argv[1] ?? "")) {
     // Bun's test process names its first file as argv[1]. Gate helpers name
     // their own script, so the outer heavy command still shares machine FIFO.
@@ -79,10 +90,12 @@ export function cpuAdmissionFile(): string {
 
 /** Admission is committed under SQLite's writer lock, before a caller starts.
  * Stage keys outlive the Viewer; command keys carry a kernel start identity.
- * Sequence numbers break equal-clock ties and never depend on tick order. */
+ * Sequence numbers break equal-clock ties and never depend on tick order.
+ * A stage key has no process to outlive, so every check records its poll: a
+ * ticket whose instance went away stops holding the head (2026-10-13). */
 export class CpuAdmissionQueue {
   private readonly db: Database;
-  constructor(file: string, private readonly now = Date.now, private readonly spacingMs = CPU_QUEUE_SPACING_MS, private readonly maxWaitMs = CPU_QUEUE_MAX_WAIT_MS) {
+  constructor(file: string, private readonly now = Date.now, private readonly spacingMs = CPU_QUEUE_SPACING_MS, private readonly maxWaitMs = CPU_QUEUE_MAX_WAIT_MS, private readonly unpolledMs = CPU_QUEUE_UNPOLLED_MS) {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite?.Database) throw new Error("CPU admission requires the supported Bun runtime");
@@ -91,6 +104,12 @@ export class CpuAdmissionQueue {
     this.db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
     this.db.exec("CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, since INTEGER NOT NULL, owner TEXT); CREATE TABLE IF NOT EXISTS suspended (key TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS admission (id INTEGER PRIMARY KEY, last INTEGER); INSERT OR IGNORE INTO admission VALUES (1, NULL);");
     this.db.exec("CREATE TABLE IF NOT EXISTS stage_admissions (key TEXT PRIMARY KEY);");
+    // Releases that predate polls share this file; they leave the column NULL,
+    // and a NULL poll reads as the ticket's own age.
+    if (!this.db.query<{ name: string }, []>("PRAGMA table_info(tickets)").all().some(column => column.name === "polled")) {
+      try { this.db.exec("ALTER TABLE tickets ADD COLUMN polled INTEGER"); }
+      catch (error) { if (!/duplicate column/i.test(String(error))) throw error; }
+    }
   }
   close(): void { this.db.close(); }
   cancel(key: string): void {
@@ -102,6 +121,12 @@ export class CpuAdmissionQueue {
    * Retain its sequence and timestamp without blocking eligible heavy work. */
   suspend(key: string): void {
     this.db.query("INSERT OR IGNORE INTO suspended SELECT key FROM tickets WHERE key = ? AND owner IS NULL").run(key);
+    this.touch(key);
+  }
+  /** Its owner holding or releasing a ticket shows the owner is there, as a
+   * check does: a released stage is ahead of later work before its next tick. */
+  private touch(key: string): void {
+    this.db.query("UPDATE tickets SET polled = ? WHERE key = ? AND owner IS NULL").run(this.now(), key);
   }
   /** Only the release owning this pipeline namespace reconciles stage tickets. */
   reconcile(prefix: string, active: ReadonlySet<string>, eligible = active): void {
@@ -114,7 +139,7 @@ export class CpuAdmissionQueue {
           // original ticket after a crash, preserving both sequence and age.
           this.db.query("DELETE FROM stage_admissions WHERE key = ?").run(row.key);
           if (!eligible.has(row.key)) this.suspend(row.key);
-          else this.db.query("DELETE FROM suspended WHERE key = ?").run(row.key);
+          else if (this.db.query("DELETE FROM suspended WHERE key = ?").run(row.key).changes > 0) this.touch(row.key);
         }
       }
     }).immediate();
@@ -126,11 +151,19 @@ export class CpuAdmissionQueue {
         const identity = JSON.parse(row.owner!) as ProcessIdentity;
         if (processIdentityStatus(identity) === "dead" || procBackend.processExited(identity.pid)) this.cancel(row.key);
       }
+      for (const row of this.db.query<{ key: string }, [number]>("SELECT key FROM tickets WHERE owner IS NULL AND COALESCE(polled, since) < ? AND key NOT IN (SELECT key FROM suspended)").all(now - CPU_QUEUE_ABANDONED_MS)) this.cancel(row.key);
       this.db.query("INSERT OR IGNORE INTO tickets (key, since, owner) VALUES (?, ?, ?)").run(key, now, owner ? JSON.stringify(owner) : null);
+      this.db.query("UPDATE tickets SET polled = ? WHERE key = ?").run(now, key);
       this.db.query("DELETE FROM suspended WHERE key = ?").run(key);
       this.db.query("DELETE FROM stage_admissions WHERE key = ?").run(key);
       const ticket = this.db.query<Ticket, [string]>("SELECT * FROM tickets WHERE key = ?").get(key)!;
-      const ahead = this.db.query<{ n: number; since: number | null }, [number, number]>("SELECT COUNT(*) AS n, MAX(CASE WHEN seq < ? THEN since END) AS since FROM tickets WHERE seq <= ? AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)").get(ticket.seq, ticket.seq)!;
+      // An ownerless ticket nobody polls is passed over, never removed here:
+      // its instance may only be restarting, and it returns to its sequence
+      // and age with its next check. Spacing below still separates starts.
+      const counted = "seq <= ?1 AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions) AND NOT (owner IS NULL AND COALESCE(polled, since) < ?2)";
+      const unpolledBefore = now - this.unpolledMs;
+      const ahead = this.db.query<{ n: number; since: number | null }, [number, number]>(`SELECT COUNT(*) AS n, MAX(CASE WHEN seq < ?1 THEN since END) AS since FROM tickets WHERE ${counted}`).get(ticket.seq, unpolledBefore)!;
+      const head = this.db.query<{ since: number }, [number, number]>(`SELECT since FROM tickets WHERE ${counted} ORDER BY seq LIMIT 1`).get(ticket.seq, unpolledBefore)!;
       const position = ahead.n;
       const last = this.db.query<{ last: number | null }, []>("SELECT last FROM admission WHERE id = 1").get()!.last;
       const spacing = last === null ? 0 : Math.max(0, last + this.spacingMs - now);
@@ -149,15 +182,21 @@ export class CpuAdmissionQueue {
         }
         return null;
       }
-      return { since: ticket.since, position, remainingMs: Math.max(budget, priorBudget, spacing) + (position - 1) * this.spacingMs };
+      // The bounds above assume the head is admitted at its own. Once it is
+      // past that and nothing has been admitted since, they promise nothing.
+      const stalledMs = now - Math.max(head.since + this.maxWaitMs, last ?? 0);
+      return {
+        since: ticket.since, position, remainingMs: Math.max(budget, priorBudget, spacing) + (position - 1) * this.spacingMs,
+        ...(stalledMs > CPU_QUEUE_STALE_GRACE_MS ? { stalledMs } : {}),
+      };
     }).immediate();
   }
 }
 
 const queueSymbol = Symbol.for("delegatus.cpuAdmission");
 const globals = globalThis as typeof globalThis & { [queueSymbol]?: { file: string; queue: CpuAdmissionQueue } };
-export function machineCpuAdmissionQueue(): CpuAdmissionQueue {
-  const file = cpuAdmissionFile();
+export function machineCpuAdmissionQueue(isolatedStateDir?: string | null): CpuAdmissionQueue {
+  const file = cpuAdmissionFile(isolatedStateDir);
   if (globals[queueSymbol]?.file !== file) {
     globals[queueSymbol]?.queue.close();
     globals[queueSymbol] = { file, queue: new CpuAdmissionQueue(file) };

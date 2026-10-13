@@ -156,6 +156,30 @@ the operating-system user's `$HOME/.cache/delegatus-cpu`, shared with the
 Viewer container even when a child sandboxes HOME. `LLV_GATE_LOCK_DIR` puts a
 private queue alongside private slot locks for tests.
 
+Only the operator's own installation waits in that machine queue. An instance
+whose state directory is somewhere else (a test's `LLV_STATE_DIR`, a driver's
+sandboxed `XDG_CONFIG_HOME`, a spawned agent's sandbox, any test or build
+process) keeps its queue in `<state>/cpu-gate`, whatever started it
+(`src/lib/runtime/cpuAdmissionScope.ts`). `scripts/gate-slot.sh` stays on the
+machine queue from any environment: its command tickets end with their owner.
+An installation that keeps real state outside the operator's config roots
+gets its own queue too; `LLV_GATE_LOCK_DIR` set to one directory for the Viewer
+and for gate-slot joins them again.
+
+A stage ticket has no process behind it, so every check records its poll. An
+ownerless ticket nobody has polled for 60 seconds is passed over by every
+checker. Its row stays, so an instance that was only restarting returns to its
+sequence and age with its next check, and the spacing between admissions still
+holds. After 24 hours without a poll, a ticket no fence holds is removed. On
+2026-10-13 two stage tickets left by a test's child processes held the head of
+the machine queue for 1 h 45 min; nothing reconciled them, because each
+release reconciles only its own namespace.
+
+When the head is past its ten-minute bound and nothing has been admitted for
+a minute since, the wait no longer promises minutes: the state detail reads
+`Waiting for the CPU queue · 7th · stalled for 62 min`, the card says the
+queue is stalled, and gate-slot prints the same line.
+
 A stage waits before its spawn reservation and wakes every five seconds. Its
 state detail and board card name the queue position and remaining whole minutes:
 `Waiting for the CPU queue · 2nd · up to 7 min`, or

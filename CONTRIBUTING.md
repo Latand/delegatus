@@ -316,6 +316,9 @@ Heavy commands run through `scripts/gate-slot.sh`: six slots by default,
 `/var/tmp`, the files the installed `/var/tmp/llv-gate` uses, so both gates
 share one set of slots; `LLV_GATE_LOCK_DIR` overrides the directory. Stage starts and gates share a durable FIFO CPU queue. After ten minutes,
 the head can start under sustained pressure, with two seconds between admissions.
+A test, a driver or any instance on a state directory of its own queues its
+stage starts in `<state>/cpu-gate`, never in the machine queue; a stage ticket
+nobody polls for a minute is passed over.
 Queue waits are excluded from hook and command execution budgets. On Linux a
 gate then runs in its own scope in
 `delegatus-agents-work.slice` with a 300% CPU quota; without a reachable user

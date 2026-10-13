@@ -64,7 +64,7 @@ try {
   for (;;) {
     const wait = queue.check(key, !pressure.check(), owner, false);
     if (!wait && slotAvailable()) break;
-    const text = wait ? cpuQueueDetail(wait.position, wait.remainingMs) : "Waiting for a heavy command slot";
+    const text = wait ? cpuQueueDetail(wait.position, wait.remainingMs, wait.stalledMs) : "Waiting for a heavy command slot";
     if (text !== shown) { console.error(`gate-slot: ${text}`); shown = text; }
     await Bun.sleep(Number(process.env.LLV_GATE_POLL_SECONDS ?? 2) * 1000);
   }

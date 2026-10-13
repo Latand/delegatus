@@ -4579,6 +4579,7 @@ export const en = {
   "kanban.progress.needs": "{stage} needs you",
   "kanban.progress.live": "{stage} {state}",
   "kanban.progress.cpuQueue": "Waiting for the CPU queue · {ordinal} · up to {minutes} min",
+  "kanban.progress.cpuQueueStalled": "CPU queue is stalled · {ordinal} · nothing started for {minutes} min",
   "kanban.progress.failed": "{stage} failed · parked",
   "kanban.stageAria": "{stage}: {state}",
   "kanban.stageAriaRounds": { one: "{stage}: {state}, {count} review round", other: "{stage}: {state}, {count} review rounds" },

@@ -121,7 +121,7 @@ const DRAG_BOARD = SCENARIO === "drag-board";
 /* The orchestrator's wires (docs/design/orchestrator-arrows.md): the pipelines board, with the seat
    owning some of its lanes. */
 const ARROWS = SCENARIO === "orchestrator-arrows";
-const CPU_QUEUE = SCENARIO === "cpu-queue";
+const CPU_QUEUE = SCENARIO === "cpu-queue" || SCENARIO === "cpu-queue-stalled";
 const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD || ARROWS || CPU_QUEUE;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
@@ -1617,7 +1617,7 @@ const pipelines: Pipeline[] = [
 if (CPU_QUEUE) {
   Object.assign(searchVer2, { activity: "idle", proc: null, pid: null, authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(5 * MIN) }, lastTurn: { startedAt: (now - 400) * 1_000, endedAt: (now - 300) * 1_000 } });
   const waiting = pipelines.find(p => p.id === "p-search")!;
-  waiting.stateDetail = "Waiting for the CPU queue · 2nd · up to 7 min · Viewer publication: owner; owner viewer, epoch 1";
+  waiting.stateDetail = `Waiting for the CPU queue · ${SCENARIO === "cpu-queue-stalled" ? "7th · stalled for 62 min" : "2nd · up to 7 min"} · Viewer publication: owner; owner viewer, epoch 1`;
   waiting.cursor = { stageId: "verify", state: "pending", input: null, activatedBy: null };
   waiting.runs.find(r => r.stageId === "verify")!.attempts = [attempt(3, "pending", null, { startedAt: null })] as Pipeline["runs"][number]["attempts"];
 }

@@ -1,21 +1,26 @@
 import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CpuAdmissionQueue, cpuAdmissionFile, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS } from "./cpuAdmission";
+import { CpuAdmissionQueue, cpuAdmissionFile, CPU_QUEUE_ABANDONED_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS, CPU_QUEUE_STALE_GRACE_MS, CPU_QUEUE_UNPOLLED_MS } from "./cpuAdmission";
 import { cpuQueueDetail, ordinal, parseCpuQueueDetail } from "./cpuQueueText";
 import { captureProcessIdentity } from "../processIdentity";
 
 const directories: string[] = [];
 const queues: CpuAdmissionQueue[] = [];
 afterEach(() => { for (const q of queues.splice(0)) q.close(); for (const dir of directories.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
-function fixture() {
+/* The ordering cases below move a fake clock across minutes between checks, so
+   their tickets stand for waiters that poll throughout: `unpolledMs` is
+   unbounded there. The cases that name polling pass the production bound. */
+function fixture(unpolledMs = Number.POSITIVE_INFINITY) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cpu-admission-")); directories.push(dir);
   const file = path.join(dir, "queue.sqlite");
   let now = 0;
-  const open = () => { const q = new CpuAdmissionQueue(file, () => now); queues.push(q); return q; };
-  return { open, at: (value: number) => { now = value; } };
+  const open = () => { const q = new CpuAdmissionQueue(file, () => now, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, unpolledMs); queues.push(q); return q; };
+  return { open, file, at: (value: number) => { now = value; } };
 }
+const FOREIGN = `stage:${"b".repeat(64)}:895e3de4:plan:1`, LIVE = `stage:${"0".repeat(64)}:762633d8:build:1`;
 
 test("a direct test invocation resolves its default queue inside its chosen state", () => {
   const environment = { ...process.env }, directory = fs.mkdtempSync(path.join(os.tmpdir(), "cpu-test-routing-"));
@@ -149,4 +154,118 @@ test("an update-held stage keeps its order and age across restart without starvi
   expect(restarted.check("stage:two", false)?.remainingMs).toBe(CPU_QUEUE_SPACING_MS);
   f.at(CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS);
   expect(restarted.check("stage:two", false)).toBeNull();
+});
+
+test("a foreign ownerless stage ticket nobody polls stops holding the head within the bound", () => {
+  const f = fixture(CPU_QUEUE_UNPOLLED_MS), q = f.open();
+  // The incident: an isolated instance queued a stage start and went away.
+  expect(q.check(FOREIGN, true, undefined, false)).toBeNull();
+  f.at(1_000);
+  const command = captureProcessIdentity(process.pid);
+  expect(q.check(LIVE, true)).toMatchObject({ position: 2 });
+  expect(q.check("command:push", true, command)).toMatchObject({ position: 3 });
+  f.at(CPU_QUEUE_UNPOLLED_MS);
+  expect(q.check(LIVE, true)).toMatchObject({ position: 2 }); // within the bound the orphan still counts
+  f.at(CPU_QUEUE_UNPOLLED_MS + 1);
+  expect(q.check("command:push", true, command)).toMatchObject({ position: 2 }); // FIFO behind the live stage holds
+  expect(q.check(LIVE, true)).toBeNull();
+  // Skipping the orphan admits one start at a time: the spacing still applies.
+  expect(q.check("command:push", true, command)).toMatchObject({ since: 1_000, position: 1 });
+  f.at(CPU_QUEUE_UNPOLLED_MS + CPU_QUEUE_SPACING_MS);
+  expect(q.check("command:push", true, command)).not.toBeNull();
+  f.at(CPU_QUEUE_UNPOLLED_MS + 1 + CPU_QUEUE_SPACING_MS);
+  expect(q.check("command:push", true, command)).toBeNull();
+});
+
+test("a polled live stage keeps its sequence and age across the bound, and a skipped one returns to its place", () => {
+  const f = fixture(CPU_QUEUE_UNPOLLED_MS), q = f.open();
+  const row = (key: string) => {
+    const db = new Database(f.file, { readonly: true });
+    try { return db.query<{ seq: number; since: number }, [string]>("SELECT seq, since FROM tickets WHERE key = ?").get(key); } finally { db.close(); }
+  };
+  expect(q.check(LIVE, false)).toMatchObject({ since: 0, position: 1 });
+  expect(q.check("stage:later", false)).toMatchObject({ position: 2 });
+  const first = row(LIVE)!;
+  for (let at = 5_000; at <= CPU_QUEUE_UNPOLLED_MS * 3; at += 5_000) {
+    f.at(at);
+    expect(q.check(LIVE, false)).toMatchObject({ since: 0, position: 1 });
+    expect(q.check("stage:later", false)).toMatchObject({ position: 2 });
+  }
+  expect(row(LIVE)).toEqual(first);
+  // Its Viewer stops for longer than the bound: later work passes, the ticket stays.
+  const stopped = CPU_QUEUE_UNPOLLED_MS * 3;
+  f.at(stopped + CPU_QUEUE_UNPOLLED_MS + 1);
+  expect(q.check("stage:later", false)).toMatchObject({ position: 1 });
+  expect(row(LIVE)).toEqual(first);
+  // Back again, it is ahead of everything queued after it, with its original age.
+  expect(q.check(LIVE, false)).toMatchObject({ since: 0, position: 1 });
+  expect(q.check("stage:later", false)).toMatchObject({ position: 2 });
+  f.at(CPU_QUEUE_MAX_WAIT_MS);
+  expect(q.check(LIVE, false)).toBeNull();
+  expect(q.check("stage:later", false)).toMatchObject({ position: 1, remainingMs: CPU_QUEUE_SPACING_MS });
+});
+
+test("a stage released from a long hold is ahead of later work before its own next check", () => {
+  const f = fixture(CPU_QUEUE_UNPOLLED_MS), q = f.open(), held = new Set(["stage:one", "stage:two"]);
+  q.check("stage:one", false); q.check("stage:two", false);
+  q.reconcile("stage:", held, new Set());
+  f.at(CPU_QUEUE_MAX_WAIT_MS - 1);
+  q.reconcile("stage:", held); // the hold ends; neither stage has ticked yet
+  expect(q.check("command:later", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 3 });
+  expect(q.check("stage:two", false)).toMatchObject({ since: 0, position: 2 });
+  f.at(CPU_QUEUE_MAX_WAIT_MS);
+  expect(q.check("stage:one", false)).toBeNull();
+});
+
+test("a queue written before polls were recorded is read by its ticket age", () => {
+  const f = fixture(CPU_QUEUE_UNPOLLED_MS);
+  const legacy = new Database(f.file, { create: true });
+  legacy.exec("CREATE TABLE tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, since INTEGER NOT NULL, owner TEXT)");
+  legacy.query("INSERT INTO tickets (key, since, owner) VALUES (?, 0, NULL)").run(FOREIGN);
+  legacy.close();
+  const q = f.open(), again = f.open(); // two releases opening the same file both migrate it
+  f.at(CPU_QUEUE_UNPOLLED_MS + 1);
+  expect(q.check(LIVE, true)).toBeNull();
+  expect(again.check(FOREIGN, true)).toMatchObject({ since: 0, position: 1 });
+});
+
+test("an ownerless ticket nobody has polled for a day is removed; a held one stays", () => {
+  const f = fixture(CPU_QUEUE_UNPOLLED_MS), q = f.open();
+  const keys = () => {
+    const db = new Database(f.file, { readonly: true });
+    try { return db.query<{ key: string }, []>("SELECT key FROM tickets ORDER BY seq").all().map(row => row.key); } finally { db.close(); }
+  };
+  q.check(FOREIGN, false); q.check("stage:held", false); q.suspend("stage:held");
+  f.at(CPU_QUEUE_ABANDONED_MS);
+  expect(q.check("command:probe", true)).toBeNull();
+  expect(keys()).toEqual([FOREIGN, "stage:held"]);
+  f.at(CPU_QUEUE_ABANDONED_MS + CPU_QUEUE_SPACING_MS);
+  expect(q.check("command:probe", true)).toBeNull();
+  expect(keys()).toEqual(["stage:held"]);
+});
+
+test("a head past its bound while nothing is admitted reads as a stalled queue", () => {
+  const f = fixture(CPU_QUEUE_UNPOLLED_MS), q = f.open();
+  // A polled head that never claims, such as a command waiting for a slot.
+  const holder = captureProcessIdentity(process.pid);
+  expect(q.check("command:holder", true, holder, false)).toBeNull();
+  expect(q.check(LIVE, true)).toEqual({ since: 0, position: 2, remainingMs: CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_SPACING_MS });
+  f.at(CPU_QUEUE_MAX_WAIT_MS + CPU_QUEUE_STALE_GRACE_MS);
+  q.check("command:holder", true, holder, false);
+  expect(q.check(LIVE, true)?.stalledMs).toBeUndefined();
+  f.at(CPU_QUEUE_MAX_WAIT_MS + 62 * 60_000);
+  q.check("command:holder", true, holder, false);
+  const wait = q.check(LIVE, true)!;
+  expect(wait).toMatchObject({ position: 2, stalledMs: 62 * 60_000 });
+  expect(cpuQueueDetail(wait.position, wait.remainingMs, wait.stalledMs)).toBe("Waiting for the CPU queue · 2nd · stalled for 62 min");
+  // Admission moving again clears the reading at once.
+  expect(q.check("command:holder", true, holder)).toBeNull();
+  expect(q.check(LIVE, true)).toEqual({ since: 0, position: 1, remainingMs: CPU_QUEUE_SPACING_MS });
+});
+
+test("the stalled wait detail parses beside the bounded one", () => {
+  expect(parseCpuQueueDetail("Waiting for the CPU queue · 2nd · up to 7 min")).toEqual({ position: 2, minutes: 7 });
+  expect(parseCpuQueueDetail(cpuQueueDetail(7, 1, 62 * 60_000))).toEqual({ position: 7, minutes: 62, stalled: true });
+  expect(parseCpuQueueDetail(`${cpuQueueDetail(7, 1, 90_000)} · Viewer publication: owner; owner viewer, epoch 1`)).toEqual({ position: 7, minutes: 1, stalled: true });
+  expect(parseCpuQueueDetail("Waiting for the CPU queue · 2nd · stalled for 3 min · unknown detail")).toBeNull();
 });

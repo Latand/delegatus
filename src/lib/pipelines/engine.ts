@@ -6,7 +6,7 @@ import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
 import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, machineCpuPressurePollMs, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
-import { machineCpuAdmissionQueue } from "@/lib/runtime/cpuAdmission";
+import { instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
 import { stateDir } from "@/lib/configDir";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -1409,9 +1409,9 @@ export function defaultPipelinePorts(
         && !stageStartRetryHeld(pipeline, now)
         && !tickStore.__llvCpuIngressReads?.has(cpuStageKey(pipeline))
         && (currentStage(pipeline)?.kind !== "run" || publication === "ready")).map(cpuStageKey));
-      machineCpuAdmissionQueue().reconcile(cpuStagePrefix(), active, eligible);
+      instanceCpuAdmissionQueue().reconcile(cpuStagePrefix(), active, eligible);
     },
-    cpuAdmissionSuspend: (key) => machineCpuAdmissionQueue().suspend(key),
+    cpuAdmissionSuspend: (key) => instanceCpuAdmissionQueue().suspend(key),
     structuredDeliveryPublication: () => structuredHostsEnabled()
       ? structuredDeliveryPublicationState()
       : "ready",

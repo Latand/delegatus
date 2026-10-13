@@ -161,30 +161,32 @@ describe("prototype Telegram resend", () => {
 });
 
 describe("CPU admission queue", () => {
-  browserTest("the waiting card shows queue position and remaining minutes in en and uk", async () => {
+  browserTest("the waiting card shows queue position and remaining minutes, or a stalled queue, in en and uk", async () => {
     const out = path.resolve(".artifacts/cpu-queue");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
     const browser = await chromium.launch(LAUNCH);
     const readings: unknown[] = [];
     try {
-      for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cpu-queue`, { width, height: 900 }, "dark", lang, "reduce", width === 390);
+      for (const stalled of [false, true]) for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cpu-queue${stalled ? "-stalled" : ""}`, { width, height: 900 }, "dark", lang, "reduce", width === 390);
         try {
           if (width === 390) await page.locator('[data-phone-kanban-tab="assigned"]').click();
           const selector = width === 390 ? '[data-phone-card="task:t-search"]' : card("t-search");
           const target = page.locator(selector);
           const line = target.locator("[data-cpu-queue]");
           await line.waitFor(); await target.scrollIntoViewIfNeeded();
-          const text = lang === "en" ? "Waiting for the CPU queue · 2nd · up to 7 min" : "Чекає черги CPU · 2-й · до 7 хв";
+          const text = stalled
+            ? lang === "en" ? "CPU queue is stalled · 7th · nothing started for 62 min" : "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв"
+            : lang === "en" ? "Waiting for the CPU queue · 2nd · up to 7 min" : "Чекає черги CPU · 2-й · до 7 хв";
           expect(await line.textContent()).toBe(text);
           expect(await target.textContent()).toContain("#2190");
           expect(await target.locator('[data-motion="working"]').count()).toBe(0);
           const geometry = await line.evaluate(element => ({ clipped: element.scrollWidth > element.clientWidth + 1, width: element.clientWidth, text: element.textContent }));
           expect(geometry.clipped).toBe(false);
           expect(pageErrors).toEqual([]);
-          await target.screenshot({ path: path.join(out, `variant-1-${width}-${lang}.png`) });
-          readings.push({ lang, viewport: width, ...geometry });
+          await target.screenshot({ path: path.join(out, `${stalled ? "stalled" : "variant-1"}-${width}-${lang}.png`) });
+          readings.push({ lang, viewport: width, ...(stalled ? { stalled } : {}), ...geometry });
           if (width === 390) {
             await target.click();
             const lane = page.locator('[data-phone-task-lane="p-search"]');
@@ -203,8 +205,8 @@ describe("CPU admission queue", () => {
               expect(box.clipped).toBe(false); expect(box.visible).toBe(true);
               expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
               expect(pageErrors).toEqual([]);
-              await page.screenshot({ path: path.join(out, `phone-${surface}-${lang}.png`) });
-              readings.push({ lang, viewport: width, surface, ...box });
+              await page.screenshot({ path: path.join(out, `phone-${stalled ? "stalled-" : ""}${surface}-${lang}.png`) });
+              readings.push({ lang, viewport: width, surface, ...(stalled ? { stalled } : {}), ...box });
             }
           }
         } finally { await context.close(); }
@@ -213,7 +215,7 @@ describe("CPU admission queue", () => {
       fs.mkdirSync("evidence/cpu-queue", { recursive: true });
       fs.writeFileSync("evidence/cpu-queue/readings.json", JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
-  }, 60_000);
+  }, 120_000);
 });
 
 describe("memory profile", () => {
