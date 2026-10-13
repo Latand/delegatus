@@ -69,28 +69,37 @@ test("automatic waiting protects busy turns until the cohort finishes", async ()
 });
 
 test.each((["pipeline", "flow"] as const).flatMap(kind => [2 * 60_000, DRAIN_LEASE_MS - 30_000].flatMap(elapsed =>
-  (["completed", "removed"] as const).map(ending => ({ kind, elapsed, ending })))))(
+  (["completed", "removed", "during-probe"] as const).map(ending => ({ kind, elapsed, ending })))))(
 "a $ending $kind admits at the safe boundary after $elapsed ms without starts", async ({ kind, elapsed, ending }) => {
   const h = scenario(); h.setTurns(1);
-  let completed = false;
+  let completed = false, completeDuringRead = false;
   h.deps.quiet!.dispatchVersion = () => "same-admissions";
-  if (ending === "removed") {
+  if (ending !== "completed") {
     h.deps.quiet!.admissionStarts = () => completed ? [] : ["cohort-launch"];
     h.deps.quiet!.dispatchVersion = () => completed ? "completed-owners" : "running-owners";
   }
-  h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: completed ? [] : [{ conversationId: "conversation_0", host: "hosted", turn: "running", activeTurnId: "cohort-turn" }] }) as never;
+  h.deps.quiet!.runtimeSnapshot = async () => {
+    if (completeDuringRead) { completed = true; completeDuringRead = false; }
+    return { sessions: completed ? [] : [{ conversationId: "conversation_0", host: "hosted", turn: "running", activeTurnId: "cohort-turn" }] } as never;
+  };
   h.deps.quiet!.owners = owners(() => completed ? "gone" : "alive");
-  h.deps.quiet!.pipelines = () => kind === "pipeline" && !(completed && ending === "removed") ? [{ id: "cohort", state: completed ? "completed" : "running",
+  h.deps.quiet!.pipelines = () => kind === "pipeline" && !(completed && ending !== "completed") ? [{ id: "cohort", state: completed ? "completed" : "running",
     cursor: { stageId: "build", state: completed ? "completed" : "running" },
     runs: [{ stageId: "build", attempts: [{ n: 1, conversationId: "conversation_0", launchId: "cohort-launch" }] }] }] as never : [];
-  h.deps.quiet!.flows = () => kind === "flow" && !(completed && ending === "removed") ? [{ id: "cohort-flow", state: completed ? "completed" : "reviewing",
+  h.deps.quiet!.flows = () => kind === "flow" && !(completed && ending !== "completed") ? [{ id: "cohort-flow", state: completed ? "completed" : "reviewing",
     rounds: [{ n: 1, reviewerConversationId: "conversation_0", launchId: "cohort-review" }] }] as never : [];
   const service = h.service();
   try {
     await service.autoTick();
     h.advance(elapsed);
-    completed = true; h.setTurns(0);
+    if (ending === "during-probe") completeDuringRead = true;
+    else completed = true;
+    h.setTurns(0);
     await service.autoTick();
+    if (ending === "during-probe") {
+      expect(h.requests).toHaveLength(0); // The changed final fence refuses this reading.
+      await service.autoTick();
+    }
     expect(h.requests).toHaveLength(1);
     expect(h.requests[0]?.revision).toBe(TARGET);
   } finally { service.stop(); }

@@ -738,9 +738,9 @@ export class SelfUpdateService {
     if (hold?.id !== this.auto.drain?.id || hold?.holdSince !== this.auto.drain?.holdSince || this.auto.deferred) return false;
     const stable = version !== null && version === quietDispatchVersion(this.deps.quiet, this.deps.now());
     const currentStarts = quietStartEvidence(this.deps.quiet);
-    const currentStartSet = new Set(currentStarts);
+    const initialStartSet = new Set(starts);
     const startsStable = starts !== null && currentStarts !== null
-      && starts.length === currentStarts.length && starts.every(id => currentStartSet.has(id));
+      && currentStarts.every(id => initialStartSet.has(id));
     const window = this.auto.drain?.window;
     if (this.auto.drain) {
       const previousStarts = new Set(window?.starts);
