@@ -167,6 +167,86 @@ test("a recovered worktree lookalike name addresses only its canonical parent se
   expect(h.posts.map(p => p.body.conversationId)).toEqual(["conversation_parent"]);
 });
 
+for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-relay"] as const) {
+  test(`${route} preserves a verified project owner when another retained cwd names a foreign worktree`, async () => {
+    const alphaRoot = path.join(directory, "AlphaRepo");
+    const betaRoot = path.join(directory, "BetaRepo");
+    for (const root of [alphaRoot, betaRoot]) {
+      fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+      fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+    }
+    fs.writeFileSync(path.join(alphaRoot, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/AlphaRemote.git\n');
+    fs.writeFileSync(path.join(betaRoot, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/BetaRemote.git\n');
+    const alpha = projectForCwd(alphaRoot)!;
+    const betaWorktree = path.join(betaRoot, "worktrees", "deleted-lane");
+    seat(alpha, "Alpha Board", "conversation_alpha");
+    seat(projectForCwd(betaRoot)!, "Beta Board", "conversation_beta");
+    const snapshot = {
+      conversations: {
+        conversation_alpha: { id: "conversation_alpha", projectOwnership: { project: alpha, source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" }, generations: [{ launchProfile: { cwd: alphaRoot } }], continuityPaths: [] },
+        conversation_beta: { id: "conversation_beta", projectOwnership: { project: projectForCwd(betaRoot), source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" }, generations: [{ launchProfile: { cwd: betaRoot } }], continuityPaths: [] },
+        conversation_alpha_root: {
+          id: "conversation_alpha_root",
+          projectOwnership: { project: alpha, source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" },
+          generations: [{ launchProfile: { cwd: alphaRoot } }], continuityPaths: [],
+        },
+        conversation_alpha_foreign_cwd: {
+          id: "conversation_alpha_foreign_cwd",
+          projectOwnership: { project: alpha, source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" },
+          generations: [{ launchProfile: { cwd: betaWorktree } }], continuityPaths: [],
+        },
+      },
+      conversationAliases: {}, lineageEdges: {}, memberships: {}, receipts: {},
+    };
+    fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
+    fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "project-remotes.json"), JSON.stringify({ schemaVersion: 1, remotes: { [alpha]: "github.com/team/AlphaRemote" } }));
+    const h = harness(route === "owner-relay", null, { registrySnapshot: () => snapshot as never });
+    const tool = route === "owner-relay" ? "send_message_to_orchestrator" : route;
+    for (const name of [alpha, "Alpha Board", "AlphaRepo", "AlphaRemote"]) {
+      const result = await h.call(tool, name);
+      if (result.ok) expect(result).toMatchObject({ project: alpha, ...(tool === "get_orchestrator" ? {} : { conversationId: "conversation_alpha" }) });
+      else expect(result).toMatchObject({ code: "ambiguous_project", details: { candidates: [alpha, projectForCwd(betaRoot)] } });
+    }
+    expect(h.posts.every(post => post.body.conversationId !== "conversation_beta")).toBe(true);
+    expect(h.scans()).toBe(0);
+  });
+}
+
+for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-relay"] as const) {
+  for (const alphaFirst of [true, false]) {
+    test(`${route} refuses conflicting deleted-worktree parents independent of registry order`, async () => {
+      const alphaRoot = path.join(directory, "AlphaRepo");
+      const betaRoot = path.join(directory, "BetaRepo");
+      for (const root of [alphaRoot, betaRoot]) {
+        fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+        fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+      }
+      fs.writeFileSync(path.join(alphaRoot, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/AlphaRemote.git\n');
+      fs.writeFileSync(path.join(betaRoot, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/BetaRemote.git\n');
+      const alpha = projectForCwd(alphaRoot)!;
+      const beta = projectForCwd(betaRoot)!;
+      seat(alpha, "Alpha Board", "conversation_alpha");
+      seat(beta, "Beta Board", "conversation_beta");
+      const owner = "lookalike-project";
+      const alphaRow = { id: "conversation_stale_alpha", projectOwnership: { project: owner, source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" }, generations: [{ launchProfile: { cwd: path.join(alphaRoot, "worktrees", "deleted-alpha") } }], continuityPaths: [] };
+      const betaRow = { id: "conversation_stale_beta", projectOwnership: { project: owner, source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" }, generations: [{ launchProfile: { cwd: path.join(betaRoot, "worktrees", "deleted-beta") } }], continuityPaths: [] };
+      const snapshot = { conversations: Object.fromEntries((alphaFirst ? [alphaRow, betaRow] : [betaRow, alphaRow]).map(row => [row.id, row])), conversationAliases: {}, lineageEdges: {}, memberships: {}, receipts: {} };
+      const h = harness(route === "owner-relay", null, {
+        registrySnapshot: () => snapshot as never,
+        lastCompletedCatalog: () => ({ files: [], projectCatalog: [{ project: owner, displayName: "Shared lane", smt: 2, conversations: 2 }] }),
+      });
+      const tool = route === "owner-relay" ? "send_message_to_orchestrator" : route;
+      const result = await h.call(tool, " Shared lane ");
+      const candidates = [alpha, beta].sort();
+      expect(result).toMatchObject({ ok: false, code: "ambiguous_project", retryable: false, details: { candidates } });
+      expect("error" in result && result.error).toBe(`ambiguous project "Shared lane": ${candidates.join(", ")}; pass one of these project keys`);
+      expect(h.posts).toEqual([]);
+      expect(h.receipts.lookup(`${tool}:resolve-1`)).toBeNull();
+      expect(h.scans()).toBe(0);
+    });
+  }
+}
+
 for (const tool of ["rotate_orchestrator", "seat_tick_settings", "create_orchestrator", "ask_orchestrator_in_parallel", "bridge_directive"] as const) {
   test(`${tool} resolves a named project before its control or settings operation`, async () => {
     seat("target-project", "Example Board");
@@ -306,11 +386,17 @@ test("a fresh name lookup after succession selects the current seat", async () =
 
 test("retained registry history keeps a cold name lookup within one second", async () => {
   seat("target-project", "Example Board");
+  const parentRoot = path.join(directory, "ParentRepo");
+  fs.mkdirSync(path.join(parentRoot, ".git"), { recursive: true });
+  fs.writeFileSync(path.join(parentRoot, ".git", "HEAD"), "ref: refs/heads/main\n");
+  fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
+  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "project-remotes.json"), JSON.stringify({ schemaVersion: 1, remotes: { "target-project": "github.com/team/example-board" } }));
   registry.ensureConversation("codex", "/sessions/history.jsonl", null);
   const original = registry.readOnlySnapshot();
   const template = Object.values(original.conversations)[0]!;
   const snapshot = { ...original, conversations: Object.fromEntries(Array.from({ length: 30_000 }, (_, index) => [
-    `conversation_history_${index}`, { ...template, projectOwnership: { project: "target-project", source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" } },
+    `conversation_history_${index}`, { ...template, projectOwnership: { project: "target-project", source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" },
+      generations: [{ launchProfile: { cwd: path.join(parentRoot, "worktrees", `deleted-lane-${index}`) } }] },
   ])) as typeof original.conversations };
   const h = harness(false, null, { registrySnapshot: () => snapshot });
   expect(await h.call("get_orchestrator", " EXAMPLE BOARD ")).toMatchObject({ ok: true, project: "target-project" });

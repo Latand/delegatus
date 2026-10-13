@@ -4143,18 +4143,29 @@ async function resolveOrchestratorToolProject(named: string, dependencies: Viewe
     if (!directories.has(root)) directories.set(root, projectInfoFromCwd(root));
     return directories.get(root);
   };
+  const protectedProjects = new Set<string>();
+  for (const key of Object.keys(recordedProjectRemotes({ strict: true }))) protectedProjects.add(canonicalOrchestratorProject(key));
   const registryConversations = Object.values(dependencies.registrySnapshot?.().conversations ?? {});
-  const provenWorktreeOwners = new Map<string, string>();
+  const provenWorktreeOwners = new Map<string, Set<string>>();
   for (const conversation of registryConversations) {
     const owner = conversation.projectOwnership?.project;
     const cwd = conversation.generations.at(-1)?.launchProfile?.cwd;
+    // A recorded remote identity keeps its own project key. A row's cwd proves
+    // that row's grouping; it cannot globally reassign every name of the owner.
+    // For other owners, inspect worktree evidence so stale memberships can be
+    // recovered and conflicting parents remain visible as ambiguity.
+    if (owner && protectedProjects.has(canonicalOrchestratorProject(owner))
+      && (!cwd || path.basename(cwd).trim().toLowerCase() !== folded)) continue;
     const info = cwd ? directoryInfo(cwd) : null;
     if (!owner || !info?.worktree) continue;
     const oldProject = canonicalOrchestratorProject(owner);
     const parentProject = canonicalOrchestratorProject(info.project);
-    if (oldProject !== parentProject) {
-      provenWorktreeOwners.set(owner, parentProject);
-      provenWorktreeOwners.set(oldProject, parentProject);
+    if (oldProject !== parentProject && !protectedProjects.has(oldProject)) {
+      for (const key of new Set([owner, oldProject])) {
+        const parents = provenWorktreeOwners.get(key) ?? new Set<string>();
+        parents.add(parentProject);
+        provenWorktreeOwners.set(key, parents);
+      }
     }
   }
   const canonicalKey = (key: string) => {
@@ -4162,7 +4173,7 @@ async function resolveOrchestratorToolProject(named: string, dependencies: Viewe
     if (cached) return cached;
     const canonical = canonicalOrchestratorProject(key);
     const proven = provenWorktreeOwners.get(key) ?? provenWorktreeOwners.get(canonical);
-    const resolved = proven ? canonicalOrchestratorProject(proven) : canonical;
+    const resolved = proven?.size === 1 ? canonicalOrchestratorProject([...proven][0]!) : canonical;
     canonicalKeys.set(key, resolved);
     return resolved;
   };
@@ -4173,16 +4184,22 @@ async function resolveOrchestratorToolProject(named: string, dependencies: Viewe
     candidates.add(project);
     map.set(normalized, candidates);
   };
-  const add = (key: string, name?: string, root?: string | null) => {
-    const info = root ? directoryInfo(root) : null;
+  const add = (key: string, name?: string, root?: string | null, inspectRoot = false) => {
+    const info = root && (inspectRoot || path.basename(root).trim().toLowerCase() === folded) ? directoryInfo(root) : null;
     const canonical = canonicalKey(info?.worktree ? info.project : key);
-    index(keys, key, canonical);
-    index(keys, canonical, canonical);
-    const display = projectDisplayName(canonical, aliases.displayNames[canonical] ?? name);
-    if (name || aliases.displayNames[canonical] || !labels.has(canonical)) labels.set(canonical, display);
-    index(names, display, canonical);
-    if (name) index(names, name, canonical);
-    if (root) index(names, path.basename(info?.repo ?? root), canonical);
+    const ambiguousParents = provenWorktreeOwners.get(key);
+    const projects = ambiguousParents && ambiguousParents.size > 1 && !protectedProjects.has(canonicalOrchestratorProject(key))
+      ? [...ambiguousParents]
+      : [canonical];
+    for (const project of projects) {
+      index(keys, key, project);
+      index(keys, project, project);
+      const display = projectDisplayName(project, aliases.displayNames[project] ?? name ?? aliases.displayNames[key]);
+      if (name || aliases.displayNames[project] || !labels.has(project)) labels.set(project, display);
+      index(names, display, project);
+      if (name) index(names, name, project);
+    }
+    if (root) for (const project of projects) index(names, path.basename(info?.repo ?? root), project);
   };
   if (directory) {
     const info = directoryInfo(directory);
@@ -4205,7 +4222,10 @@ async function resolveOrchestratorToolProject(named: string, dependencies: Viewe
   const describedDirectories = new Set<string>();
   for (const conversation of registryConversations) {
     const cwd = conversation.generations.at(-1)?.launchProfile?.cwd;
-    const cwdInfo = cwd ? directoryInfo(cwd) : null;
+    const owner = conversation.projectOwnership?.project;
+    const cwdMatchesRequest = !!cwd && path.basename(cwd).trim().toLowerCase() === folded;
+    const inspectWorktree = !!cwd && (!owner || !protectedProjects.has(canonicalOrchestratorProject(owner)));
+    const cwdInfo = cwd && (cwdMatchesRequest || inspectWorktree) ? directoryInfo(cwd) : null;
     // A proven worktree path is the shared project identity, even when a
     // retained ownership row still names the lookalike project it used to be.
     const project = cwdInfo?.worktree ? cwdInfo.project : conversation.projectOwnership?.project ?? cwdInfo?.project;
@@ -4226,7 +4246,10 @@ async function resolveOrchestratorToolProject(named: string, dependencies: Viewe
     }
   }
   const last = dependencies.lastCompletedCatalog?.() ?? null;
-  for (const entry of last?.projectCatalog ?? []) add(entry.project, entry.displayName, entry.projectRoot);
+  for (const entry of last?.projectCatalog ?? []) {
+    const matchingName = entry.displayName?.trim().toLowerCase() === folded;
+    add(entry.project, entry.displayName, entry.projectRoot, matchingName);
+  }
   for (const entry of last?.files ?? []) add(entry.project, entry.projectName, entry.projectRoot);
   // Fresh bounded member attribution detects names introduced since the last
   // generation. A lagging index contributes no complete scan dependency.

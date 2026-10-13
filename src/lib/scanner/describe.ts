@@ -878,15 +878,7 @@ function projectInfoFromHandoffDigest(cwd: string): ProjectInfo | null {
     human label from that repository's canonical remote. */
 export function projectInfoFromCwd(cwd: string, requestedState?: string): ProjectInfo | null {
   if (!cwd.trim()) return null;
-  /* Observation records facts before any early return. Grouping still uses
-     the canonical pure recognizers first, followed by the live pointer. */
-  const liveWorktree = worktreeFromGitFile(cwd);
-  const liveRepositoryRoot = liveWorktree?.repo || repositoryRootForPath(cwd);
   const resolutionState = requestedState ?? projectResolutionStateKey();
-  const cached = projectInfoCwdCache.get(cwd);
-  if (cached && cached[0] > Date.now() && cached[1] === resolutionState
-    && (!liveRepositoryRoot || cached[2]?.repo === liveRepositoryRoot)
-    && (cached[2]?.worktree || !liveWorktree)) return cached[2];
   const scratchpad = projectInfoFromClaudeTaskCwd(cwd) ?? projectInfoFromHandoffDigest(cwd);
   if (scratchpad) {
     projectInfoCwdCache.set(cwd, [Date.now() + PROJECT_INFO_CWD_TTL_MS, resolutionState, scratchpad]);
@@ -897,6 +889,34 @@ export function projectInfoFromCwd(cwd: string, requestedState?: string): Projec
     projectInfoCwdCache.set(cwd, [Date.now() + PROJECT_INFO_CWD_TTL_MS, resolutionState, openclawWorkspace]);
     return openclawWorkspace;
   }
+  // Nested and Claude worktrees carry their parent in the path. Resolve that
+  // shared parent once before touching checkout metadata, then reuse the
+  // canonical identity for every retained cwd beneath the worktree. Besides
+  // keeping deleted checkouts resolvable, this bounds history lookups whose
+  // rows contain many distinct worktree directory names.
+  const pureWorktree = worktreeFromPath(cwd) ?? worktreeFromNested(cwd);
+  if (pureWorktree) {
+    // Preserve the live observation side effect that records a checkout
+    // before it is removed. Deleted worktrees skip this filesystem walk.
+    if (fs.existsSync(cwd)) worktreeFromGitFile(cwd);
+    const parentCache = projectInfoCwdCache.get(pureWorktree.repo);
+    const parent = parentCache && parentCache[0] > Date.now() && parentCache[1] === resolutionState
+      ? parentCache[2]
+      : projectInfoFromCwd(pureWorktree.repo, resolutionState);
+    if (parent?.repo) {
+      const grouped = { ...parent, worktree: pureWorktree.worktree };
+      projectInfoCwdCache.set(cwd, [Date.now() + PROJECT_INFO_CWD_TTL_MS, resolutionState, grouped]);
+      return grouped;
+    }
+  }
+  /* Observation records facts before any early return. Grouping still uses
+     the canonical pure recognizers first, followed by the live pointer. */
+  const liveWorktree = worktreeFromGitFile(cwd);
+  const liveRepositoryRoot = liveWorktree?.repo || repositoryRootForPath(cwd);
+  const cached = projectInfoCwdCache.get(cwd);
+  if (cached && cached[0] > Date.now() && cached[1] === resolutionState
+    && (!liveRepositoryRoot || cached[2]?.repo === liveRepositoryRoot)
+    && (cached[2]?.worktree || !liveWorktree)) return cached[2];
   const codexWorktree = worktreeFromCodexPath(cwd);
   let worktree =
     worktreeFromPath(cwd) ??
