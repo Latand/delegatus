@@ -13,7 +13,8 @@ import { buildSchemeLayout, type SchemeLayout } from "@/components/scheme/layout
 import { reconcileLayoutNodes } from "@/components/scheme/layoutIdentity";
 import { buildTaskBands } from "@/components/scheme/taskBands";
 import { isPlacedTask } from "@/components/scheme/taskGeometry";
-import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
+import { createTaskWorkflowProjector } from "@/components/tasks/taskWorkflowModel";
+import { createOverviewBands } from "./overviewBands";
 
 /**
  * The task bands a kanban draws, and the task projection they were built from
@@ -61,8 +62,15 @@ export function useBands(input: BandsInput) {
   const deckFlows = useMemo(() => (reviewGroups.length ? [...flows, ...reviewGroups] : flows), [flows, reviewGroups]);
   const layoutFlows = useMemo(() => compactPipelineLayoutFlows(pipelines, deckFlows), [pipelines, deckFlows]);
   const placedTasks = useMemo(() => tasks.filter(isPlacedTask), [tasks]);
+  const deriveOverview = useMemo(() => createOverviewBands(), []);
+  const overview = useMemo(() => input.overview && !input.layout && !manual.length && !drafts.length
+    && !favorites.size && !isolatedManualPaths.size && !draftBands.size
+    ? deriveOverview({ groups, files, flows, layoutFlows, pipelines, surface: surfacePipelines, tasks: allTasks, placed: placedTasks, now,
+      untitled: t("bands.untitled"), reviewFlow: t("bands.reviewFlow") }) : null,
+  [input.overview, input.layout, manual, drafts, favorites, isolatedManualPaths, draftBands, deriveOverview, groups, files, flows, layoutFlows, pipelines, surfacePipelines, allTasks, placedTasks, now, t]);
   const previousLayout = useRef<SchemeLayout | null>(null);
   const layout = useMemo(() => {
+    if (overview) return null;
     const built = reconcileLayoutNodes(
       // eslint-disable-next-line react-hooks/refs -- Layout identity cache; never an input to task visibility.
       previousLayout.current,
@@ -71,18 +79,19 @@ export function useBands(input: BandsInput) {
     // eslint-disable-next-line react-hooks/refs -- Retain geometry identity between projections without a state update.
     previousLayout.current = built;
     return built;
-  }, [input.layout, groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths, placedTasks, now]);
+  }, [overview, input.layout, groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths, placedTasks, now]);
   /* The projection's `project` only fences its UNLINKED buckets to one
      project; omitting it is already the cross-project answer, so the Overview
      passes nothing rather than calling this once per project. */
   const projectionProject = input.overview ? undefined : project;
+  const projectTaskWorkflows = useMemo(() => createTaskWorkflowProjector(), []);
   const projection = useMemo(
-    () => projectTaskWorkflows([...allTasks], pipelines, flows, files, projectionProject),
-    [allTasks, pipelines, flows, files, projectionProject],
+    () => overview?.projection ?? projectTaskWorkflows(allTasks, pipelines, flows, files, projectionProject),
+    [overview, projectTaskWorkflows, allTasks, pipelines, flows, files, projectionProject],
   );
   const bands = useMemo(
-    () => buildTaskBands(layout, { tasks: allTasks, projection, draftBands, untitled: t("bands.untitled"), reviewFlow: t("bands.reviewFlow"), deferDoneVisibility: true }),
-    [layout, allTasks, projection, draftBands, t],
+    () => overview?.bands ?? buildTaskBands(layout!, { tasks: allTasks, projection, draftBands, untitled: t("bands.untitled"), reviewFlow: t("bands.reviewFlow"), deferDoneVisibility: true }),
+    [overview, layout, allTasks, projection, draftBands, t],
   );
   return { bands, projection };
 }

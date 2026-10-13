@@ -67,6 +67,97 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("Overview incremental catalog", () => {
+  browserTest("measures changed files payloads with the rendered catalog unchanged", async () => {
+    const out = path.resolve(".artifacts/overview-performance");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    let baselineOutput: string | undefined;
+    let baselineGeometry: Array<{ id: string | null; x: number; y: number; width: number; height: number }> | undefined;
+    try {
+      for (const variant of process.env.OVERVIEW_BASELINE_BUNDLE ? ["main", "incremental"] : ["candidate"]) {
+        const { context, page, pageErrors } = await openFixture(browser, "about:blank", VIEWPORT, "dark", "en", "reduce");
+        try {
+          // Fix the display clock alone: Playwright's clock also replaces the
+          // Performance API whose real long tasks this case measures.
+          await page.addInitScript(() => { Date.now = () => 1_791_856_800_000; });
+          const metrics = await context.newCDPSession(page);
+          await metrics.send("Performance.enable");
+          const taskTime = async () => (await metrics.send("Performance.getMetrics")).metrics.find(metric => metric.name === "TaskDuration")!.value * 1000;
+          if (variant === "main" && process.env.OVERVIEW_BASELINE_BUNDLE) {
+            await page.route("**/app.js", route => route.fulfill({ path: process.env.OVERVIEW_BASELINE_BUNDLE!, contentType: "text/javascript" }));
+          }
+          await page.addInitScript(() => {
+            const timings: { start: number; duration: number }[] = [];
+            new PerformanceObserver(list => {
+              for (const entry of list.getEntries()) timings.push({ start: entry.startTime, duration: entry.duration });
+            }).observe({ type: "longtask", buffered: true });
+            Object.assign(window, { overviewLongTasks: timings });
+          });
+          await page.goto(`${server.base}?scenario=overview-performance&cards=closed`);
+          await page.locator(card("catalog-0")).waitFor({ timeout: 30_000 });
+          await page.waitForTimeout(1500);
+          type TraceEvent = { name: string; ph: string; ts: number; dur?: number; pid: number; tid: number; args?: { name?: string } };
+          const trace: TraceEvent[] = [];
+          metrics.on("Tracing.dataCollected", event => trace.push(...event.value as unknown as TraceEvent[]));
+          await metrics.send("Tracing.start", { categories: "toplevel,blink.user_timing", transferMode: "ReportEvents" });
+          const samples = [];
+          for (let sample = 0; sample < 8; sample++) {
+            const before = await taskTime();
+            const start = await page.evaluate(() => {
+              (window as unknown as { overviewPoll(): void }).overviewPoll();
+              return performance.getEntriesByName("overview-poll").at(-1)!.startTime;
+            });
+            await page.waitForTimeout(1000);
+            const timing = await page.evaluate(start => {
+              const tasks = (window as unknown as { overviewLongTasks: { start: number; duration: number }[] }).overviewLongTasks.filter(task => task.start >= start);
+              return { longTasks: tasks.map(task => task.duration), totalBlockingMs: tasks.reduce((sum, task) => sum + task.duration - 50, 0) };
+            }, start);
+            samples.push({ ...timing, taskDurationMs: Math.round(((await taskTime()) - before) * 10) / 10 });
+          }
+          const traceDone = new Promise<void>(resolve => metrics.once("Tracing.tracingComplete", () => resolve()));
+          await metrics.send("Tracing.end");
+          await traceDone;
+          const marks = trace.filter(event => event.name === "overview-poll");
+          const longestTasks = marks.map((mark, i) => {
+            const end = marks[i + 1]?.ts ?? mark.ts + 1_000_000;
+            return Math.max(0, ...trace.filter(event => event.pid === mark.pid && event.tid === mark.tid
+              && event.ph === "X" && /(?:^|::)RunTask$/.test(event.name) && event.ts + (event.dur ?? 0) > mark.ts && event.ts < end).map(event => (event.dur ?? 0) / 1000));
+          });
+          fs.writeFileSync(path.join(out, `${variant}-trace.json`), JSON.stringify(trace));
+          const output = await page.locator("[data-kanban-board]").innerText();
+          const geometry = await page.locator("[data-kanban-board]").evaluate(board => [...board.querySelectorAll(".card[data-id]")].map(element => {
+            const rect = element.getBoundingClientRect();
+            return { id: element.getAttribute("data-id"), x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+          }));
+          readings.push({ variant, browser: browser.version(), viewport: VIEWPORT, catalog: { projects: 194, conversations: 1071, tasks: 1331, pipelines: 1071 }, samples: samples.map((sample, i) => ({ ...sample, longestTaskMs: longestTasks[i] })), renderedText: output, geometry });
+          fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+          if (baselineOutput !== undefined) expect(output).toBe(baselineOutput);
+          if (baselineGeometry !== undefined) expect(geometry).toEqual(baselineGeometry);
+          baselineOutput = output;
+          baselineGeometry = geometry;
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${variant}.png`) });
+          if (process.env.OVERVIEW_CPU_PROFILE && variant !== "main") {
+            await metrics.send("Profiler.enable");
+            await metrics.send("Profiler.start");
+            await page.evaluate(() => (window as unknown as { overviewPoll(): void }).overviewPoll());
+            await page.waitForTimeout(1000);
+            const { profile } = await metrics.send("Profiler.stop");
+            fs.writeFileSync(path.join(out, "poll.cpuprofile"), JSON.stringify(profile));
+          }
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+      const evidence = path.resolve("evidence/overview-performance");
+      fs.mkdirSync(evidence, { recursive: true });
+      fs.writeFileSync(path.join(evidence, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("prototype Telegram resend", () => {
   browserTest("a failed post and its resend fit desktop, 1000 and 390px; a delivered post stays one quiet line", async () => {
     const out = path.resolve(".artifacts/prototype-telegram"); fs.mkdirSync(out, { recursive: true });
@@ -20792,6 +20883,55 @@ describe("parallel ask idle fallback", () => {
  * are never committed); the measurement records are written to `evidence/voice-companion/`.
  */
 describe("floating voice companion", () => {
+  browserTest("call memory settings show bounded notes and clear them on desktop and phone", async () => {
+    const out = path.resolve(".artifacts/voice-call-memory");
+    fs.mkdirSync(out,{ recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const measurements: unknown[] = [];
+    try {
+      for (const width of [1440,390]) for (const lang of ["en","uk"] as const) for (const scheme of ["light","dark"] as const) for (const state of ["empty","three","failed","long"]) {
+        const label = `${width}-${lang}-${scheme}-${state}`;
+        const { context,page,pageErrors } = await openVoice(browser,server.base,`&mount=product&backend=codex&callmemory=${state}`,{ viewport:{ width,height:844 },lang,scheme,product:true,phone:width === 390,motion:"reduce" });
+        try {
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
+          const dialog = page.locator("[data-voice-companion-settings]");
+          const memory = page.locator("[data-call-memory]");
+          await memory.waitFor();
+          await page.waitForFunction(() => !document.querySelector("[data-call-memory] [role=status]")?.textContent?.includes("…"));
+          await memory.scrollIntoViewIfNeeded();
+          const read = await memory.evaluate((element,configuredWidth) => {
+            const dialog = element.closest<HTMLElement>("[role=dialog]")!;
+            const list = element.querySelector<HTMLElement>("[data-call-memory-list]")!;
+            const row = list.firstElementChild as HTMLElement | null;
+            const button = row?.querySelector("button");
+            const visible = list.getBoundingClientRect(); const box = button?.getBoundingClientRect(); const dialogBox = dialog.getBoundingClientRect();
+            return { background:getComputedStyle(dialog).backgroundColor, viewportOverflow:document.documentElement.scrollWidth > configuredWidth + 1,
+              dialogOverflow:dialog.scrollWidth > dialog.clientWidth, listOverflow:list.scrollWidth > list.clientWidth,
+              scrolls:list.scrollHeight > list.clientHeight, rowButtonVisible:!box || box.top >= visible.top && box.bottom <= visible.bottom && box.top >= dialogBox.top && box.bottom <= dialogBox.bottom,
+              rowCount:list.children.length, width:dialogBox.width, height:dialogBox.height };
+          },width);
+          expect(read.background).not.toBe("rgba(0, 0, 0, 0)"); expect(read.dialogOverflow).toBe(false); expect(read.listOverflow).toBe(false);
+          expect(read.viewportOverflow).toBe(false); expect(read.rowButtonVisible).toBe(true); expect(read.rowCount).toBe(state === "empty" ? 0 : state === "three" ? 3 : 1);
+          // The first action stays at the row head even when its notes scroll.
+          if (read.rowCount) {
+            await memory.locator("[data-call-memory-row] button").first().scrollIntoViewIfNeeded();
+            await page.screenshot({ path:path.join(out,`${label}.png`) });
+            const forget = memory.getByRole("button",{ name:translate(lang,"voiceCompanion.memory.forget"),exact:true }).first();
+            if (width === 390) await forget.tap(); else await forget.click();
+            await page.waitForFunction(count => document.querySelectorAll("[data-call-memory-row]").length === count,read.rowCount - 1);
+          } else await page.screenshot({ path:path.join(out,`${label}.png`) });
+          if (state === "three") { await memory.getByRole("button",{ name:translate(lang,"voiceCompanion.memory.forgetAll"),exact:true }).click(); await page.waitForFunction(() => document.querySelectorAll("[data-call-memory-row]").length === 0); }
+          const toggle = memory.getByRole("switch"); await toggle.click(); await page.waitForFunction(() => !(document.querySelector("[data-call-memory] input") as HTMLInputElement)?.checked); expect(await toggle.isChecked()).toBe(false);
+          expect(pageErrors).toEqual([]); measurements.push({ label,...read, cleared:true,switch:false });
+          expect(await dialog.isVisible()).toBe(true);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/voice-companion",{ recursive:true });
+      fs.writeFileSync("evidence/voice-companion/call-memory.json",JSON.stringify({ driver:"src/components/kanban/kanbanBoard.browser.test.tsx",synthetic:true,viewportBasis:"configured scene width",measurements },null,2)+"\n");
+    } finally { await browser.close(); server.stop(); }
+  });
+
   browserTest("placement leaves skipped card contents unmeasured until they scroll into view", async () => {
     const out = path.resolve(".artifacts/voice-companion-skipped-layout");
     const server = await serveEvidenceFixture(out);
@@ -20914,10 +21054,12 @@ describe("floating voice companion", () => {
     viewport: { width: number; height: number }; scheme: Scheme; lang: "en" | "uk"; motion?: "no-preference" | "reduce"; video?: string; surface?: "underlay" | "buttons";
     /** The shell's own mount: nothing is on screen until the settings turn the companion on. */
     product?: boolean;
+    phone?: boolean;
     /** Run in the page before its own scripts, from the navigation on. */
     init?: () => void;
   }) => {
     const context = await browser.newContext({
+      ...(options.phone ? { isMobile: true, hasTouch: true } : {}),
       viewport: options.viewport, colorScheme: options.scheme, reducedMotion: options.motion ?? "no-preference",
       ...(options.video ? { recordVideo: { dir: options.video, size: options.viewport } } : {}),
     });

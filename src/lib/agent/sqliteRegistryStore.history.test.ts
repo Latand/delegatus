@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { fullGC } from "bun:jsc";
 
 import { reboundAssembledMcpGrants } from "./mcpAllowlist";
 import { normalizeRegistry, readOnlyConversationLookupFromSnapshot, type RegistryFile } from "./registry";
@@ -38,6 +39,41 @@ function history() {
   };
   return { dataset, open };
 }
+
+test("mixed foreign writes release superseded history views while keeping lazy archive reads", async () => {
+  const { dataset, open } = history();
+  const writer = open();
+  const reader = open();
+  const conversationKeys = writer.read((file) => Object.keys(file.conversations).slice(-24));
+  const deliveryKeys = writer.read((file) => Object.keys(file.heldDeliveries));
+  const views: WeakRef<RegistryFile>[] = [];
+  const read = () => {
+    const file = reader.readOnlySnapshot().file;
+    expect(file).not.toBe(views.at(-1)?.deref());
+    for (const collection of ["entries", "receipts", "conversations", "heldDeliveries"] as const) Object.keys(file[collection]);
+    views.push(new WeakRef(file));
+  };
+  read();
+  for (let index = 0; index < 36; index++) {
+    writer.mutate((file) => {
+      const subject = dataset.grantSubjects[index % dataset.grantSubjects.length]!;
+      const stamp = new Date(Date.UTC(2026, 9, 13) + index * 1000).toISOString();
+      if (index % 3 === 0) {
+        if (subject.collection === "entries") file.entries[subject.key]!.updatedAt = stamp;
+        else file.receipts[subject.key]!.createdAt = stamp;
+      } else if (index % 3 === 1) file.conversations[conversationKeys[index % conversationKeys.length]!]!.updatedAt = stamp;
+      else file.heldDeliveries[deliveryKeys[index % deliveryKeys.length]!]!.deliveredAt = stamp;
+    }, false);
+    read();
+  }
+  // WeakRef targets stay alive until this job ends. Collect in later jobs
+  // so the read's stack and job no longer keep a prior view alive.
+  await Bun.sleep(0);
+  fullGC();
+  await Bun.sleep(0);
+  fullGC();
+  expect(views.filter((view) => view.deref()).length).toBeLessThanOrEqual(2);
+}, 30_000);
 
 type Grantable = "entries" | "receipts" | "conversations";
 const lists = (file: RegistryFile, collection: Grantable, key: string) => {

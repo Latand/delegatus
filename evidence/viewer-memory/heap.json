@@ -1,0 +1,128 @@
+{
+  "method": "V8-format heap snapshots from compiled Viewer after two GC requests; object nodes with entries, receipts, conversations and heldDeliveries own edges; up to three strong-edge paths from readOnlyCache.file to another such object",
+  "interpretation": "Registry-shaped objects include hot and normalized envelopes, so they are not equivalent to the distinct read-only views counted by WeakRef. The after path crosses the global object; it does not demonstrate an old reader retained by a collection getter.",
+  "before": {
+    "nodes": 11246961,
+    "edges": 30013884,
+    "registryShapedRoots": 465,
+    "stores": 1,
+    "chains": [
+      {
+        "length": 5,
+        "path": [
+          {
+            "edge": "memberships",
+            "node": "GetterSetter"
+          },
+          {
+            "edge": "",
+            "node": "Function"
+          },
+          {
+            "edge": "",
+            "node": "system / JSLexicalEnvironment"
+          },
+          {
+            "edge": "",
+            "node": "system / JSLexicalEnvironment"
+          },
+          {
+            "edge": "u",
+            "node": "Object"
+          }
+        ]
+      },
+      {
+        "length": 5,
+        "path": [
+          {
+            "edge": "receipts",
+            "node": "GetterSetter"
+          },
+          {
+            "edge": "",
+            "node": "Function"
+          },
+          {
+            "edge": "",
+            "node": "system / JSLexicalEnvironment"
+          },
+          {
+            "edge": "",
+            "node": "system / JSLexicalEnvironment"
+          },
+          {
+            "edge": "u",
+            "node": "Object"
+          }
+        ]
+      },
+      {
+        "length": 5,
+        "path": [
+          {
+            "edge": "entries",
+            "node": "GetterSetter"
+          },
+          {
+            "edge": "",
+            "node": "Function"
+          },
+          {
+            "edge": "",
+            "node": "system / JSLexicalEnvironment"
+          },
+          {
+            "edge": "",
+            "node": "system / JSLexicalEnvironment"
+          },
+          {
+            "edge": "u",
+            "node": "Object"
+          }
+        ]
+      }
+    ]
+  },
+  "after": {
+    "nodes": 1062795,
+    "edges": 2907602,
+    "registryShapedRoots": 4,
+    "stores": 1,
+    "chains": [
+      {
+        "length": 7,
+        "path": [
+          {
+            "edge": "",
+            "node": "Structure"
+          },
+          {
+            "edge": "",
+            "node": "GlobalObject"
+          },
+          {
+            "edge": "__llvSpawnCapabilityResolver",
+            "node": "Function"
+          },
+          {
+            "edge": "",
+            "node": "system / JSLexicalEnvironment"
+          },
+          {
+            "edge": "b",
+            "node": "b4"
+          },
+          {
+            "edge": "",
+            "node": "system / JSLexicalEnvironment"
+          },
+          {
+            "edge": "aI",
+            "node": "Object"
+          }
+        ]
+      }
+    ]
+  }
+}

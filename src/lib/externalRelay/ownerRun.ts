@@ -96,6 +96,7 @@ const productionPorts: OwnerRunPorts = {
 };
 
 class OwnerPromptCleanupPending extends Error {}
+export const OWNER_STOP_RECOVERY_GRACE_MS = 60_000;
 export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickSources, "registry" | "liveness" | "now">, progressSteps = false): Promise<OwnerTurnObservation> {
   const observed = await observeSpawnedTurn(run, sources, child => spawnNoticeFinalMessage(child, scrubOwnerOutput));
   if (progressSteps && observed.conversationId) {
@@ -113,6 +114,24 @@ export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickS
     const live = (await sources.liveness({ conversationId: observed.conversationId, stallAfterMs: 30 * 60_000, limit: 1 }))[0];
     if (live?.reason === "host_gone_turn_open" || live?.reason === "host_gone_turn_settled")
       return { ...observed, failure: { kind: "host-died", detail: "owner host is gone" } };
+    // A failed structured launch can leave a session binding whose transcript
+    // was never created. Such a conversation has no catalog liveness row.
+    // After a grace period, its exact registry entry proves that no launcher,
+    // host, resumed generation or first prompt remains able to execute work.
+    if (!live && receipt?.state === "failed" && receipt.transport === "structured" && receipt.key &&
+      !receipt.admissionOwner && !receipt.queuedPinnedSpawn && !receipt.verifiedHost && !receipt.pane &&
+      sources.now() - Date.parse(run.claimedAt) >= OWNER_STOP_RECOVERY_GRACE_MS) {
+      const snapshot = sources.registry().conversationDeliverySnapshot({ conversationId: observed.conversationId });
+      const conversation = snapshot.conversations[observed.conversationId];
+      const entry = snapshot.entries[`${receipt.key.engine}:${receipt.key.sessionId}`];
+      const promptPending = Object.values(snapshot.heldDeliveries).some(row =>
+        row.command.operationId === `spawn_message_${receipt.launchId}` &&
+        row.state !== "delivered" && !(row.state === "failed" && !row.text));
+      if (!promptPending && conversation?.generations.at(-1)?.id === receipt.key.sessionId && entry &&
+        entry.structuredHostOperationId === receipt.launchId && !entry.host && !entry.structuredHost &&
+        !entry.claimOwner && !entry.pendingAction && !entry.structuredTerminationSurvivors?.length)
+        return { ...observed, failure: { kind: "host-died", detail: "failed owner launch has no remaining execution custody" } };
+    }
   }
   return observed;
 }

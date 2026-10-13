@@ -19,7 +19,8 @@ import { useClosingPipelines } from "./mobile/MobilePipelineScreen";
 import { overviewAttention } from "./mobile/overviewPhone";
 import { pipelinesForProjects } from "./pipelines/pipelineModel";
 import { PhoneKanbanSkeleton } from "./skeletons";
-import { buildBranchGroups, OVERVIEW } from "./projectModel";
+import { OVERVIEW } from "./projectModel";
+import { createOverviewGroups } from "./overviewGroups";
 
 /**
  * The Overview's board (#1820).
@@ -107,12 +108,11 @@ export function OverviewKanban({ projects, displayNames, files, tasks, flows, pi
      seats it does today until it is told which conversations they are. */
   const seatRefs = useSeatConversations(true);
   const shown = useMemo(() => new Set(projects), [projects]);
-  /* One grouping pass per project, concatenated. `buildBranchGroups` already
-     selects a project's own roots out of the whole file list, so this is the
-     same grouping a project's board gets, for each project in turn. */
+  const groupProjects = useMemo(() => createOverviewGroups(), []);
+  /* Retain untouched project groups across changed catalog answers. */
   const groups = useMemo(
-    () => projects.flatMap((project) => buildBranchGroups(files, project, { now })),
-    [projects, files, now],
+    () => groupProjects(files, projects, now),
+    [groupProjects, projects, files, now],
   );
   /* The fence that lets a pipeline grow memberless stage rows, taken over the
      union instead of one project — asking per project would walk every

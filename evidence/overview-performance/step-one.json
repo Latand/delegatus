@@ -1,0 +1,62 @@
+[
+  {
+    "variant": "main",
+    "catalog": {
+      "projects": 194,
+      "conversations": 1071,
+      "tasks": 1331,
+      "pipelines": 1071
+    },
+    "samples": [
+      {
+        "longTasks": [
+          567
+        ],
+        "totalBlockingMs": 517
+      },
+      {
+        "longTasks": [
+          276
+        ],
+        "totalBlockingMs": 226
+      },
+      {
+        "longTasks": [
+          242
+        ],
+        "totalBlockingMs": 192
+      },
+      {
+        "longTasks": [
+          405
+        ],
+        "totalBlockingMs": 355
+      },
+      {
+        "longTasks": [
+          418
+        ],
+        "totalBlockingMs": 368
+      },
+      {
+        "longTasks": [
+          417
+        ],
+        "totalBlockingMs": 367
+      },
+      {
+        "longTasks": [
+          450
+        ],
+        "totalBlockingMs": 400
+      },
+      {
+        "longTasks": [
+          429
+        ],
+        "totalBlockingMs": 379
+      }
+    ],
+    "renderedText": "1331 tasks on the board\nInbox0\nIn progress12\nWaiting0\nDone1319\nInbox\n0 of 0\nIn progress\n12 of 12\n12 working\ncatalog-0\nCatalog task 0\nWorking · 1\nBuild\n→\nReview\n59m\ncatalog-1\nCatalog task 1\nWorking · 1\nBuild\n→\nReview\n59m\ncatalog-10\nCatalog task 10\nWorking · 1\nBuild\n→\nReview\n59m\ncatalog-11\nCatalog task 11\nWorking · 1\nBuild\n→\nReview\n59m\ncatalog-2\nCatalog task 2\nWorking · 1\nBuild\n→\nReview\n59m\ncatalog-3\nCatalog task 3\nWorking · 1\nBuild\n→\nReview\n59m\ncatalog-4\nCatalog task 4\nWorking · 1\nBuild\n→\nReview\n59m\ncatalog-5\nCatalog task 5\nWorking · 1\nBuild\n→\nReview\n59m\ncatalog-6\nCatalog task 6\nWorking · 1\nBuild\n→\nReview\n59m\ncatalog-7\nCatalog task 7\nWorking · 1\nBuild\n→\nReview\n59m\ncatalog-8\nCatalog task 8\nWorking · 1\nBuild\n→\nReview\n59m\ncatalog-9\nCatalog task 9\nWorking · 1\nBuild\n→\nReview\n59m\nWaiting\n0 of 0\nDone\n0 of 1319\nNo agent is working in any project right now.\nOnly cards someone is working on appear here; a project's own board holds the rest."
+  }
+]

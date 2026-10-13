@@ -1,0 +1,471 @@
+{
+  "revision": "ba6ae835ced5fcd2ffae8b220f51618c3ad50dd4",
+  "runtime": "Bun 1.4.0",
+  "process": "Viewer (next start)",
+  "start": "2026-10-13T04:12:56.646759+00:00",
+  "end": "2026-10-13T04:22:56.648970+00:00",
+  "samples": 601,
+  "elapsedSeconds": 600.002,
+  "intervalSeconds": 1,
+  "source": "Linux /proc/PID/status and fd; kernel start identity checked each sample",
+  "memoryMiB": {
+    "rss": {
+      "floor": 4614.969,
+      "peak": 6999.887,
+      "first": 5521.797,
+      "last": 5660.398
+    },
+    "anon": {
+      "floor": 4534.012,
+      "peak": 6918.93,
+      "first": 5440.84,
+      "last": 5579.441
+    },
+    "swap": {
+      "floor": 0.0,
+      "peak": 0.0,
+      "first": 0.0,
+      "last": 0.0
+    }
+  },
+  "perMinuteRssMiB": [
+    {
+      "startSecond": 0,
+      "floor": 4614.969,
+      "peak": 5842.121,
+      "first": 5521.797,
+      "last": 4777.973
+    },
+    {
+      "startSecond": 60,
+      "floor": 4765.652,
+      "peak": 5836.871,
+      "first": 4779.145,
+      "last": 5498.344
+    },
+    {
+      "startSecond": 120,
+      "floor": 5418.246,
+      "peak": 6523.301,
+      "first": 5489.613,
+      "last": 6015.344
+    },
+    {
+      "startSecond": 180,
+      "floor": 5481.273,
+      "peak": 6034.539,
+      "first": 5869.953,
+      "last": 5570.129
+    },
+    {
+      "startSecond": 240,
+      "floor": 5476.016,
+      "peak": 5929.496,
+      "first": 5660.215,
+      "last": 5476.016
+    },
+    {
+      "startSecond": 300,
+      "floor": 4717.805,
+      "peak": 5692.203,
+      "first": 5495.816,
+      "last": 5467.793
+    },
+    {
+      "startSecond": 360,
+      "floor": 5525.602,
+      "peak": 6157.062,
+      "first": 5589.266,
+      "last": 5779.516
+    },
+    {
+      "startSecond": 420,
+      "floor": 5166.141,
+      "peak": 6010.105,
+      "first": 5695.168,
+      "last": 5524.637
+    },
+    {
+      "startSecond": 480,
+      "floor": 5513.996,
+      "peak": 6236.672,
+      "first": 5584.578,
+      "last": 5596.449
+    },
+    {
+      "startSecond": 540,
+      "floor": 5482.871,
+      "peak": 6999.887,
+      "first": 5636.316,
+      "last": 5615.09
+    }
+  ],
+  "twentySecondLagCorrelation": {
+    "detrendedRss": 0.02,
+    "rssDifferences": -0.0124
+  },
+  "descriptors": {
+    "admission.sqlite": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "admission.sqlite-shm": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "admission.sqlite-wal": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "agent-registry.sqlite": {
+      "floor": 2,
+      "peak": 2,
+      "first": 2,
+      "last": 2
+    },
+    "agent-registry.sqlite-shm": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "agent-registry.sqlite-wal": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "bot.sqlite": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "bot.sqlite-shm": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "bot.sqlite-wal": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "delivery-progress.sqlite": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "delivery-progress.sqlite-shm": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "delivery-progress.sqlite-wal": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "handoff-queue.sqlite": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "handoff-queue.sqlite-shm": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "handoff-queue.sqlite-wal": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "mcp-receipts.sqlite": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "mcp-receipts.sqlite-shm": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "mcp-receipts.sqlite-wal": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "memory-index.sqlite": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "memory-index.sqlite-shm": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "memory-index.sqlite-wal": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "records.sqlite": {
+      "floor": 0,
+      "peak": 1,
+      "first": 0,
+      "last": 0
+    },
+    "records.sqlite-shm": {
+      "floor": 0,
+      "peak": 1,
+      "first": 0,
+      "last": 0
+    },
+    "records.sqlite-wal": {
+      "floor": 0,
+      "peak": 1,
+      "first": 0,
+      "last": 0
+    },
+    "state.sqlite": {
+      "floor": 52,
+      "peak": 52,
+      "first": 52,
+      "last": 52
+    },
+    "state.sqlite-shm": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "state.sqlite-wal": {
+      "floor": 47,
+      "peak": 50,
+      "first": 47,
+      "last": 47
+    },
+    "team.sqlite": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "team.sqlite-shm": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "team.sqlite-wal": {
+      "floor": 1,
+      "peak": 1,
+      "first": 1,
+      "last": 1
+    },
+    "transcript-search.sqlite": {
+      "floor": 0,
+      "peak": 1,
+      "first": 0,
+      "last": 0
+    },
+    "transcript-search.sqlite-shm": {
+      "floor": 0,
+      "peak": 1,
+      "first": 0,
+      "last": 0
+    },
+    "transcript-search.sqlite-wal": {
+      "floor": 0,
+      "peak": 1,
+      "first": 0,
+      "last": 0
+    }
+  },
+  "descriptorIdentityCheck": {
+    "admission.sqlite": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "admission.sqlite-shm": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "admission.sqlite-wal": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "agent-registry.sqlite": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        2
+      ]
+    },
+    "agent-registry.sqlite-shm": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "agent-registry.sqlite-wal": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "bot.sqlite": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "bot.sqlite-shm": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "bot.sqlite-wal": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "delivery-progress.sqlite": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "delivery-progress.sqlite-shm": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "delivery-progress.sqlite-wal": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "handoff-queue.sqlite": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "handoff-queue.sqlite-shm": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "handoff-queue.sqlite-wal": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "mcp-receipts.sqlite": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "mcp-receipts.sqlite-shm": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "mcp-receipts.sqlite-wal": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "memory-index.sqlite": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "memory-index.sqlite-shm": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "memory-index.sqlite-wal": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "state.sqlite": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        52
+      ]
+    },
+    "state.sqlite-shm": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "state.sqlite-wal": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        47
+      ]
+    },
+    "team.sqlite": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "team.sqlite-shm": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    },
+    "team.sqlite-wal": {
+      "distinctFiles": 1,
+      "descriptorsPerFile": [
+        1
+      ]
+    }
+  }
+}

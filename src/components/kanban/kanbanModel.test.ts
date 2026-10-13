@@ -11,11 +11,11 @@ import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { buildSchemeLayout, type SchemeLayout } from "@/components/scheme/layout";
 import { buildTaskBands } from "@/components/scheme/taskBands";
-import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
+import { createTaskWorkflowProjector, projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 import { buildPhoneKanban } from "@/components/mobile/phoneKanbanModel";
 
 import { conversationIdentity } from "@/lib/accounts/identity";
-import { buildKanbanModel, cardHasLiveWork, holdsOnlyDrafts, KANBAN_STATUSES, summarizePipeline, taskReasonFiltersOfCard, workingStageConversations, type KanbanCard } from "./kanbanModel";
+import { buildKanbanModel, createKanbanModel, cardHasLiveWork, holdsOnlyDrafts, KANBAN_STATUSES, summarizePipeline, taskReasonFiltersOfCard, workingStageConversations, type KanbanCard, type KanbanModelInput } from "./kanbanModel";
 import { pipelineProgress } from "./PipelineSection";
 import { translate, type TFunction } from "@/lib/i18n";
 
@@ -88,6 +88,48 @@ function model(tasks: readonly BoardTask[], files: readonly FileEntry[], options
   const bands = buildTaskBands(layout(files), { tasks, projection, untitled: "Untitled task", deferDoneVisibility: true });
   return buildKanbanModel({ bands, tasks, pipelines, projection, files, query: options.query, cardFilter: options.cardFilter, reasonFilter: options.reasonFilter, statusOverrides: options.overrides, now: NOW });
 }
+
+test("incremental cards retain unrelated work and agree with a full rebuild after edits, arrivals, removals and ageing", () => {
+  const project = createTaskWorkflowProjector(), build = createKanbanModel();
+  const a = file(1), b = file(2);
+  const tasks = [task("t1", "assigned", [a.path]), task("t2", "assigned", [b.path])];
+  const input = (rows: BoardTask[], files: FileEntry[], overrides: Partial<KanbanModelInput> = {}): KanbanModelInput => {
+    const projection = project(rows, [], [], files);
+    return { tasks: rows, files, pipelines: [], projection, bands: buildTaskBands(layout(files), { tasks: rows, projection, untitled: "Untitled", deferDoneVisibility: true }), now: NOW, ...overrides };
+  };
+  const first = build(input(tasks, [a, b]));
+  const changed = { ...a, lastAgentWorkAt: NOW * 1000, title: "Updated worker" };
+  const nextInput = input(tasks, [changed, b]);
+  const next = build(nextInput);
+  expect(next).toEqual(buildKanbanModel(nextInput));
+  expect(next.columns.assigned.cards.find(card => card.id === "task:t2")).toBe(first.columns.assigned.cards.find(card => card.id === "task:t2"));
+  expect(next.columns.assigned.cards.find(card => card.id === "task:t1")).not.toBe(first.columns.assigned.cards.find(card => card.id === "task:t1"));
+  for (const view of [
+    input([{ ...tasks[0], text: "Renamed task" }, tasks[1]], [changed, b]),
+    input(tasks, [b]), input(tasks, [changed, b]),
+    input(tasks, [changed, b], { query: "Updated" }),
+    input(tasks, [changed, b], { statusOverrides: new Map([["t1", "done"]]) }),
+    input(tasks, [changed, b], { now: NOW + 4 * 24 * 3600 }),
+    input([], []), input(tasks, [changed, b]),
+  ]) expect(build(view)).toEqual(buildKanbanModel(view));
+});
+
+test("a held task refreshes when its target changes, and seat designation invalidates cached cards", () => {
+  const project = createTaskWorkflowProjector(), build = createKanbanModel();
+  const member = file(1);
+  const held = task("t1", "blocked", [member.path], { hold: { kind: "task", ref: "t2", note: "After the target", since: new Date(NOW * 1000).toISOString(), by: "operator" } });
+  const target = task("t2", "inbox");
+  for (const [rows, seat] of [
+    [[held, target], null],
+    [[held, { ...target, status: "done", text: "Finished target" }], null],
+    [[held, target], { conversationIds: [member.conversationId!], paths: [member.path], previous: { conversationIds: [], paths: [] } }],
+  ] as const) {
+    const projection = project(rows, [], [], [member]);
+    const view: KanbanModelInput = { tasks: rows, files: [member], pipelines: [], projection, seat: seat as KanbanModelInput["seat"], now: NOW,
+      bands: buildTaskBands(layout([member]), { tasks: rows, projection, untitled: "Untitled", deferDoneVisibility: true }) };
+    expect(build(view)).toEqual(buildKanbanModel(view));
+  }
+});
 
 test("every stored task is a card in exactly one column or counted off the board, at a thousand tasks", () => {
   const files: FileEntry[] = [];
