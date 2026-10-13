@@ -105,8 +105,17 @@ export class CallMemory {
   }
   private rows(starter: SessionStarter | undefined, days = 7): CallMemoryRow[] {
     return this.sessions().filter(session => sameCallOwner(starter, session.startedBy))
-      .flatMap(session => { const summary = this.records.summary(session.id); return summary && summary.state !== "cleared"
-        && this.now() - (summary.endedAt ?? summary.startedAt) <= days * 86400_000 ? [{ sessionId: session.id, summary }] : []; })
+      .flatMap(session => {
+        const transcript = this.records.read(session.id);
+        if (transcript.truncated) return [];
+        const summary = this.records.summary(session.id);
+        if (!summary || summary.state === "cleared" || this.now() - (summary.endedAt ?? summary.startedAt) > days * 86400_000) return [];
+        // A checkpoint that crosses the current privacy cut remains private
+        // while a safe-prefix replacement is pending or unavailable.
+        const current = summaryInput(transcript.entries,summary);
+        if (summary.privateOmitted !== current.privateOmitted || summary.through >= current.cut) return [];
+        return [{ sessionId: session.id, summary }];
+      })
       .sort((a,b) => (b.summary.endedAt ?? b.summary.startedAt) - (a.summary.endedAt ?? a.summary.startedAt));
   }
   retained(starter: SessionStarter | undefined): number { return this.rows(starter,30).length; }
@@ -141,13 +150,14 @@ export class CallMemory {
       if (!this.storage.settings().callMemory) return;
       for (const session of this.sessions()) {
         if (!session.closed || this.running.has(session.id)) continue;
-        const entries = this.records.read(session.id).entries;
+        const transcript = this.records.read(session.id);
+        if (transcript.truncated) continue;
+        const entries = transcript.entries;
         if (!entries.some(row => row.kind === "session_start" && row.data.memoryVersion === 1)) continue;
         const summary = this.records.summary(session.id);
-        if (summary?.pending && summary.attempts >= 3) {
-          const failed = { ...summary }; delete failed.pending;
-          this.save(session.id,failed);
-        } else if (!summary || summary.pending) this.trigger(session.id);
+        if (summary?.code && summary.attempts >= 3) {
+          if (summary.pending) { const failed = { ...summary }; delete failed.pending; this.save(session.id,failed); }
+        } else if (!summary || summary.pending || summary.state === "checkpoint") this.trigger(session.id);
       }
     } catch { /* A bad journal refuses its memory without holding startup. */ }
   }
@@ -181,7 +191,9 @@ export class CallMemory {
     if (!session) return;
     const previous = this.records.summary(id);
     if (previous?.state === "cleared" || (previous?.code && previous.attempts >= 3)) return;
-    const entries = this.records.read(id).entries;
+    const transcript = this.records.read(id);
+    if (transcript.truncated) return;
+    const entries = transcript.entries;
     if (!entries.some(row => row.kind === "utterance" && row.data.final === true)) return;
     const input = summaryInput(entries, previous);
     if (previous?.state === "final" && !previous.code && previous.through >= input.through && previous.privateOmitted === input.privateOmitted) return;
@@ -200,7 +212,9 @@ export class CallMemory {
         const stopped = { ...base }; delete stopped.pending;
         this.save(id,stopped); return;
       }
-      const current = summaryInput(this.records.read(id).entries, previous);
+      const currentTranscript = this.records.read(id);
+      if (currentTranscript.truncated) return;
+      const current = summaryInput(currentTranscript.entries, previous);
       if (current.cut !== input.cut) { this.queued.add(id); return; }
       const live = this.storage.read().sessions[id];
       const clean = (text: string) => withoutLocalPaths(withoutCredentials(text, this.storage.credentials()));

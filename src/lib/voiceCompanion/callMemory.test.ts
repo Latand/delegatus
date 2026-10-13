@@ -100,6 +100,9 @@ test("failure codes retry on mint up to three attempts and preserve a good check
     await h.service.close(call.sessionId); await h.memory.drain(); expect(h.admission.records.summary(call.sessionId)?.state).toBe("checkpoint");
     for (let n = 0; n < 3; n++) { const next = await start(h); await h.memory.drain(); await h.service.close(next.sessionId); }
     expect(h.admission.records.summary(call.sessionId)?.attempts).toBe(3); expect(h.memory.block({ operator: true })).toContain(answer.asked[0]);
+    const beforeRecovery = requests;
+    const recovered = new CallMemory(h.storage,new CompanionTranscriptRecords(),async () => { requests++; throw new MemoryProfileError(code); },h.now);
+    recovered.recover(); await recovered.drain(); expect(requests).toBe(beforeRecovery); expect(recovered.records.summary(call.sessionId)?.attempts).toBe(3);
   }
 });
 test("an unanswered summarizer never holds close or start; timeout is durable", async () => {
@@ -192,4 +195,67 @@ test("checkpoint cadence uses its saved time even when the covered speech was mu
   h.advance(15000); h.memory.checkpoint(call.sessionId); await h.memory.drain(); expect(requests).toBe(1);
   h.advance(300001); h.memory.checkpoint(call.sessionId); await h.memory.drain(); expect(requests).toBe(2);
   await h.service.close(call.sessionId); await h.memory.drain();
+});
+
+for (const backend of ["api","codex"] as const) test(`${backend}: a truncated journal cannot summarize or recall an unknown private-history boundary`, async () => {
+  const inputs: SummaryInput[] = [];
+  const h = harness(backend,async input => { inputs.push(input); return result({ asked:[input.text],done:[],decided:[],open:[] }); });
+  const call = await start(h); speech(h,call.sessionId);
+  h.admission.record(call.sessionId,{ id:"growing-private-reply",kind:"reply",atMs:7000,data:{ final:true,text:"near-capacity private message sentinel" } },false);
+  const file = path.join(process.env.LLV_STATE_DIR!,"voice-companion","transcripts",`${call.sessionId}.jsonl`);
+  const currentBytes = fs.statSync(file).size;
+  const filler = { id:"capacity-fill",kind:"tool" as const,atMs:7000,data:{ name:"ordinary_tool",status:"done",result:"" },order:h.admission.records.read(call.sessionId).entries.length };
+  const overhead = Buffer.byteLength(JSON.stringify(filler)+"\n");
+  const growingBytes = Buffer.byteLength(JSON.stringify(h.admission.records.read(call.sessionId).entries.at(-1))+"\n");
+  filler.data.result = "x".repeat(4*1024*1024-8192-80-currentBytes-overhead-growingBytes);
+  h.admission.record(call.sessionId,filler);
+  expect(fs.statSync(file).size).toBeLessThan(4*1024*1024);
+  h.admission.record(call.sessionId,{ id:"history-running",kind:"tool",atMs:8000,data:{ name:"relay_owner_history",status:"running",delegationId:"private-turn" } });
+  h.admission.record(call.sessionId,{ id:"history-done",kind:"tool",atMs:8001,data:{ name:"relay_owner_history",status:"done",delegationId:"private-turn" } });
+  h.admission.record(call.sessionId,{ id:"private-reply",kind:"reply",atMs:8002,data:{ final:true,text:"near-capacity private message sentinel" } });
+  await h.service.close(call.sessionId); await h.memory.drain();
+  expect(h.admission.records.read(call.sessionId).truncated).toBe(true);
+  expect(inputs).toEqual([]);
+  expect(JSON.stringify(h.admission.records.summary(call.sessionId))).not.toContain("sentinel");
+  expect(h.memory.block({ operator:true })).not.toContain("sentinel");
+  const next = await start(h); expect(h.provider.sessions.at(-1)?.memory ?? "").not.toContain("sentinel"); await h.service.close(next.sessionId);
+});
+
+test("a private-history cut immediately hides an older checkpoint from recall and list while replacement is pending", async () => {
+  let requests = 0; let rejectReplacement!: (error: Error) => void;
+  const h = harness("codex",async input => {
+    requests++;
+    if (requests === 1) return result({ asked:["PRIVATE_TRIGGER_SENTINEL"],done:[],decided:[],open:[] });
+    return new Promise((_,reject) => { rejectReplacement = reject; });
+  });
+  const call = await start(h); speech(h,call.sessionId,4);
+  h.admission.record(call.sessionId,{ id:"private-question",kind:"utterance",atMs:300000,data:{ text:"Read private history.",final:true } });
+  h.advance(300001); h.memory.checkpoint(call.sessionId); await h.memory.drain();
+  expect(h.memory.block({ operator:true })).toContain("PRIVATE_TRIGGER_SENTINEL");
+  h.admission.record(call.sessionId,{ id:"private-delegation",kind:"delegation",atMs:301001,data:{ delegationId:"private-turn",sourceTurn:"private-question" } });
+  h.admission.record(call.sessionId,{ id:"private-read",kind:"tool",atMs:301002,data:{ name:"relay_owner_history",status:"done",delegationId:"private-turn",sourceTurn:"private-question" } });
+  await h.service.close(call.sessionId); await new Promise(resolve => setTimeout(resolve,0));
+  expect(h.memory.block({ operator:true })).not.toContain("PRIVATE_TRIGGER_SENTINEL");
+  expect(JSON.stringify(h.memory.list({ operator:true }))).not.toContain("PRIVATE_TRIGGER_SENTINEL");
+  expect(h.admission.records.summary(call.sessionId)?.asked.join(" ") ?? "").not.toContain("PRIVATE_TRIGGER_SENTINEL");
+  const next = await start(h); expect(h.provider.sessions.at(-1)?.memory ?? "").not.toContain("PRIVATE_TRIGGER_SENTINEL"); await h.service.close(next.sessionId);
+  rejectReplacement(new Error("summary unavailable")); await h.memory.drain();
+  expect(h.memory.block({ operator:true })).not.toContain("PRIVATE_TRIGGER_SENTINEL");
+  expect(JSON.stringify(h.memory.list({ operator:true }))).not.toContain("PRIVATE_TRIGGER_SENTINEL");
+});
+
+test("restart completes a closed checkpoint from its journal tail, including journal-only ownership", async () => {
+  const inputs: SummaryInput[] = [];
+  const h = harness("codex",async input => { inputs.push(input); return result({ asked:[input.text.slice(-100)],done:[],decided:[],open:[] }); });
+  const call = await start(h); speech(h,call.sessionId,4); h.advance(300001); h.memory.checkpoint(call.sessionId); await h.memory.drain();
+  expect(h.admission.records.summary(call.sessionId)?.state).toBe("checkpoint");
+  h.admission.record(call.sessionId,{ id:"later-decision",kind:"utterance",atMs:301000,data:{ text:"Keep the new decision.",final:true } });
+  h.admission.emit(call.sessionId,{ type:"session.closed",reason:"operator",incomplete:false }); h.admission.retire(call.sessionId);
+  expect(h.admission.records.summary(call.sessionId)?.state).toBe("checkpoint");
+  h.storage.change(document => { delete document.sessions[call.sessionId]; });
+  const records = new CompanionTranscriptRecords();
+  const recovered = new CallMemory(h.storage,records,async input => { inputs.push(input); return result({ asked:[input.text.slice(-100)],done:[],decided:[],open:[] }); },h.now);
+  recovered.recover(); await recovered.drain();
+  expect(records.summary(call.sessionId)?.state).toBe("final"); expect(records.summary(call.sessionId)?.asked.join(" ")).toContain("new decision");
+  expect(recovered.block({ operator:true })).toContain("new decision"); expect(inputs.at(-1)?.text).toContain("new decision");
 });
