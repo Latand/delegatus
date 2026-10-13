@@ -3370,3 +3370,18 @@ See [relay-slice3.md](relay-slice3.md) for the boundaries and lifecycle.
 `evidence/external-relay/install_compact_loop.json` records the real poller
 and runner replay against the service's X3 claims. Activation awaits the
 final-head cross-check and the operators' go.
+
+### 2026-10-13 request deadline amendment
+
+The paired service may apply a fixed 120 s total deadline and show an error
+instead of invoking its hosted assistant. An agent's explicit hand-off still
+returns the request to that assistant. This supersedes the earlier L1 rule
+for a service that enforces a total deadline.
+
+The install reads the provisional additive `deadline_at` from the raw claim.
+It maps `deadline_at - claimed_at` onto its receipt time, avoiding clock skew.
+An absent, malformed, past or more than 600 s distant value uses receipt +
+120 s; the request remains valid. The deadline is fixed through every wait.
+Busy holds end ten seconds before it. Completion retries end at it, including
+invalid compact claims. Valid compact requests retain their own lifecycle.
+See [relay-request-deadline.md](relay-request-deadline.md) for the wait rules.

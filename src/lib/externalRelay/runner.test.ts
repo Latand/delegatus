@@ -265,6 +265,26 @@ test("heartbeat 1 acknowledges the claim before account selection and a held own
   }
 });
 
+test("invalid compact completion retries end at the captured request deadline", async () => {
+  setRelaySwitch("chat_conversations", true);
+  setRelaySwitch("compact", true);
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  let attempts = 0, accept = false, settled = false;
+  const server = await startTestRelay(() => {
+    attempts++; now += 121000;
+    return accept ? { body: { status: "ok" } } : { status: 503, body: { error: { code: "unavailable" } } };
+  });
+  const pending = runClaimedRequest(relay(`${server.origin}/v1`), { kind: "compact", request_id: "invalid-compact-deadline", lease_id: sampleRequest.lease_id })
+    .then(value => { settled = true; return value; });
+  try {
+    await Promise.race([pending, Bun.sleep(300)]);
+    expect(settled).toBe(true);
+    expect(attempts).toBe(1);
+    expect(await pending).toMatchObject({ outcome: "declined", reason: "invalid_request" });
+  } finally { accept = true; await pending; clock.mockRestore(); setRelaySwitch("compact", false); setRelaySwitch("chat_conversations", false); await server.close(); }
+}, 10000);
+
 test("an early decline stops heartbeats so failed completions reach the retry deadline", async () => {
   let now = Date.now();
   const clock = spyOn(Date, "now").mockImplementation(() => now);
@@ -2735,7 +2755,7 @@ for (const retry of [false, true]) test(`owner completion rechecks cutoff after 
     const paired = relay(`${server.origin.replace("127.0.0.1", "relay-fixture.test")}/v1`);
     const done = completeRelayRequest(paired, "owner_dns_fixture", {
       lease_id: "lease_fixture", outcome: "answered", duration_ms: 0, answer: { action: "reply", text: "Late owner reply", reply_to: null },
-    }, Date.now, 45000, () => allowed);
+    }, () => Date.now() + 45000, () => allowed);
     await resolving; allowed = false; release();
     expect(await done).toMatchObject({ body: { outcome: "failed", reason: "cancelled" }, delivery: "accepted" });
     expect(completions.at(-1)).toMatchObject({ outcome: "failed", reason: "cancelled" });

@@ -1,3 +1,4 @@
+import { relayRequestDeadline } from "./deadline";
 import { ownerRelayAuthorized } from "./ownerAuthority";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
@@ -128,13 +129,15 @@ export async function completeRelayRequest(
   relay: PairedRelay,
   requestId: string,
   body: ExternalRelayCompletion,
-  lastHeartbeat: () => number,
-  stallMs: number,
+  until: () => number,
   allowOwnerReply?: () => boolean,
   onUnknownFeature?: () => Promise<unknown>,
 ): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery }> {
   let wait = 1000;
+  let attempted = false;
   while (true) {
+    if (attempted && Date.now() >= until()) return { body, delivery: "unconfirmed" };
+    attempted = true;
     if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
     try {
       await relayCall(
@@ -165,9 +168,9 @@ export async function completeRelayRequest(
         if ([400, 401, 404, 409, 413, 426].includes(error.status))
           return { body, delivery: "refused" };
       }
-      if (Date.now() - lastHeartbeat() > stallMs)
+      if (Date.now() >= until())
         return { body, delivery: "unconfirmed" };
-      await new Promise((resolve) => setTimeout(resolve, wait));
+      await new Promise((resolve) => setTimeout(resolve, Math.min(wait, Math.max(0, until() - Date.now()))));
       wait = Math.min(wait * 2, 5000);
     }
   }
@@ -178,12 +181,13 @@ export async function runClaimedRequest(
   onFreed?: () => void,
   runtime?: HeadlessReviewRuntime & ToolLoopRuntime & { timeoutMs?: number; ownerPorts?: OwnerRunPorts; onUnknownFeature?: () => Promise<unknown> },
 ): Promise<ExternalRelayCompletion | null> {
+  const deadline = relayRequestDeadline(raw);
   if (readRelaySwitches().compact && raw && typeof raw === "object" && (raw as Record<string, unknown>).kind === "compact") {
     const compact = compactRequestSchema.safeParse(raw);
     if (compact.success) return runCompactRequest(relay, compact.data, onFreed, runtime);
     const invalid = raw as Record<string, unknown>;
     if (typeof invalid.request_id !== "string" || typeof invalid.lease_id !== "string") return null;
-    return (await completeRelayRequest(relay, invalid.request_id, declined(invalid.lease_id, "invalid_request"), Date.now, 45000,
+    return (await completeRelayRequest(relay, invalid.request_id, declined(invalid.lease_id, "invalid_request"), () => deadline.at,
       undefined, runtime?.onUnknownFeature)).body;
   }
   const parsed = requestSchema.safeParse(raw);
@@ -200,7 +204,8 @@ export async function runClaimedRequest(
     return null;
   const requestId = request?.request_id ?? (rawId as string);
   const leaseId = request?.lease_id ?? (rawLease as string);
-  let heartbeatAt = Date.now();
+  let heartbeatAt = deadline.receivedAt;
+  if (deadline.fallback) console.info("External relay deadline", { request: requestId.slice(0, 8), fallback: deadline.fallback });
   if (request) console.info("External relay claim received", { request: requestId.slice(0, 8), kind: request.kind });
   if (readRunLedger().runs.some((run) => run.requestId === requestId)) return null;
   const rawRequest = raw as Record<string, unknown>;
@@ -245,7 +250,9 @@ export async function runClaimedRequest(
       delivery: "unconfirmed",
       ...loopRecord(),
     });
-    const sent = await completeRelayRequest(relay, requestId, body, () => heartbeatAt, stallMs, allowOwnerReply, runtime?.onUnknownFeature);
+    const deliveryStart = Date.now();
+    const until = deliveryStart < deadline.at ? deadline.at : deliveryStart + stallMs;
+    const sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature);
     const completion = sent.body;
     recorder?.recordDelivery({
       outcome: completion.outcome === "answered" ? "answered" : `${completion.outcome}:${completion.reason}`,
