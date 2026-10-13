@@ -67,7 +67,7 @@ function isolatedEnvironment(sandbox: string, extra: Record<string, string> = {}
     LLV_CODEX_HOME: path.join(sandbox, "codex-home"),
   };
   for (const directory of Object.values(directories)) fs.mkdirSync(directory, { recursive: true });
-  return { ...environment, ...directories, ...extra };
+  return { ...environment, ...directories, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", ...extra };
 }
 
 /**
@@ -227,14 +227,18 @@ test("a launched stdio server releases repeated large read answers without loadi
     const before = await sample("before");
     let answeredBytes = 0;
     const reads = [
+      { name: "resources", arguments: {} },
+      { name: "operator_snapshot", arguments: {} },
       { name: "board_snapshot", arguments: {} },
+      { name: "agent_fleet", arguments: {} },
       { name: "list_pipelines", arguments: { full: true } },
       { name: "get_pipeline", arguments: { pipelineId: "fixture", full: true } },
       { name: "conversation_messages", arguments: { transcriptPath: "/fixture/messages.jsonl" } },
       { name: "read_prototype_review", arguments: {} },
       { name: "agent_activity", arguments: { full: true } },
+      { name: "search_transcripts", arguments: { query: "fixture" } },
     ];
-    for (let index = 0; index < 12; index++) {
+    for (let index = 0; index < reads.length * 2; index++) {
       const read = reads[index % reads.length]!;
       const result = await client.callTool({ name: read.name, arguments: { ...read.arguments, clientRequestId: `memory-${index}` } });
       expect(result.structuredContent).toMatchObject({ ok: true, sequence: index + 1 });
@@ -243,8 +247,8 @@ test("a launched stdio server releases repeated large read answers without loadi
     }
     const after = await sample("after");
     console.log(JSON.stringify({ largeReadMemory: { calls, answeredBytes, retainedHeapBytes: after - before } }));
-    expect(calls).toBe(12);
-    expect(answeredBytes).toBeGreaterThan(24 * 1024 * 1024);
+    expect(calls).toBe(20);
+    expect(answeredBytes).toBeGreaterThan(39 * 1024 * 1024);
     expect(after - before).toBeLessThan(8 * 1024 * 1024);
     expect(fs.existsSync(path.join(environment.LLV_STATE_DIR!, "mcp-receipts.sqlite"))).toBe(false);
   } finally { await client.close(); await transport.close(); http.stop(true); }

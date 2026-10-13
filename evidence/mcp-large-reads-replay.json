@@ -1,273 +1,628 @@
 {
-  "schemaVersion": 1,
-  "baselineCommit": "7140fa6739dfd3fb4712878325a8ae19b2e1b8b4",
-  "live": {
-    "observedAt": "2026-10-13T01:45:27Z",
-    "deploymentCommit": "40451576b3eece32dbfd1d6b87e8a2f9846f1905",
-    "serverCount": 42,
-    "rssMiB": {
-      "min": 120.3,
-      "median": 278.6,
-      "max": 1013.0
+  "issue": 1816,
+  "baselineCommit": "8f103d02ec68ecae135c5a60d8bb14430ca207b7",
+  "candidateProductCommit": "0fd1c3caf17cf9d75a9ec9525fed2a56910390b6",
+  "benchmarkSha256": "9279813d901171af3c3b8ed2fa27cb1c55a93338392dd67506f52d0d806b08f2",
+  "method": {
+    "rss": "Linux /proc/<MCP-child-pid>/status VmRSS, bytes; spawn after MCP initialize, before diagnostic GC",
+    "peakPollingMs": 10,
+    "idleMs": 30000,
+    "heap": "Bun JSC heapSize + extraMemorySize; diagnostic full GC at before and afterGc",
+    "latency": "performance.now around client.callTool, including complete stdio response parsing; milliseconds",
+    "isolation": "Private HOME/XDG/provider homes/TMPDIR/LLV_STATE_DIR, closed default control URL, private PID namespace, port-0 fixtures",
+    "sample": "One fresh process per revision on the same machine, same session, Bun 1.4.0; three sequential rounds; shared CPU gate (300% scope quota); concurrent machine activity is uncontrolled"
+  },
+  "before": {
+    "measuredAt": "2026-10-13T04:17:27.664Z",
+    "runtime": "1.4.0",
+    "pipelines": 120,
+    "pipelineJsonBytes": 44733021,
+    "rounds": 3,
+    "idleMs": 30000,
+    "peakRss": 312283136,
+    "atSpawn": {
+      "rss": 124612608,
+      "heapSize": 32330917,
+      "heapCapacity": 39179333,
+      "extraMemorySize": 8143605,
+      "objectCount": 448382
     },
-    "largestPairs": [
+    "before": {
+      "rss": 122392576,
+      "heapSize": 32427507,
+      "heapCapacity": 37839635,
+      "extraMemorySize": 8147395,
+      "objectCount": 449331
+    },
+    "afterIdle": {
+      "rss": 263147520,
+      "heapSize": 134185674,
+      "heapCapacity": 140743882,
+      "extraMemorySize": 103144250,
+      "objectCount": 552904
+    },
+    "afterGc": {
+      "rss": 262389760,
+      "heapSize": 122696999,
+      "heapCapacity": 130488151,
+      "extraMemorySize": 94887367,
+      "objectCount": 522606
+    },
+    "answers": [
       {
-        "label": "agent 1",
-        "engine": "claude",
-        "agentRssMiB": 323.5,
-        "mcpRssMiB": 1013.0,
-        "launcherRssMiB": 47.6,
-        "ageSeconds": 7541
+        "round": 0,
+        "tool": "list_pipelines",
+        "bytes": 374052,
+        "hash": "71dd682255bc1ce971dcf196bfc3c26b2cd2ec77717daff0e7e7c049b3b4f292",
+        "responseBytes": 749294,
+        "responseHash": "f30c6b024c7399dfe739c69b32dd60f6b4e9ff591550c77cfb8d79085852ac44",
+        "elapsedMs": 165.4535669999998,
+        "rssAfter": 150007808
       },
       {
-        "label": "agent 2",
-        "engine": "claude",
-        "agentRssMiB": 275.3,
-        "mcpRssMiB": 916.0,
-        "launcherRssMiB": 49.6,
-        "ageSeconds": 6011
+        "round": 0,
+        "tool": "get_pipeline",
+        "bytes": 373880,
+        "hash": "2ee245de798a0b462052766f3178d49693518fe8973d45548c9c36d4634cbc27",
+        "responseBytes": 748944,
+        "responseHash": "a3533d2fc182f5f39c390fa8c5d6d98281b2407fce3cd34ff986370dca37986e",
+        "elapsedMs": 20.913601999999855,
+        "rssAfter": 156704768
       },
       {
-        "label": "agent 3",
-        "engine": "claude",
-        "agentRssMiB": 328.8,
-        "mcpRssMiB": 853.3,
-        "launcherRssMiB": 44.3,
-        "ageSeconds": 3954
+        "round": 0,
+        "tool": "conversation_messages",
+        "bytes": 3222433,
+        "hash": "f8f58960b1b314274ab104e47385c60ddc4521d4a3cbf5e2dff4f5a7d3f6c517",
+        "responseBytes": 6449008,
+        "responseHash": "13fe6510217155b969529520335c431dda91822bfbc149f1b57a57cc907bbcb1",
+        "elapsedMs": 385.49861699999997,
+        "rssAfter": 180789248
       },
       {
-        "label": "agent 4",
-        "engine": "codex",
-        "agentRssMiB": 193.6,
-        "mcpRssMiB": 801.1,
-        "launcherRssMiB": 51.9,
-        "ageSeconds": 6460
+        "round": 0,
+        "tool": "read_prototype_review",
+        "bytes": 10670,
+        "hash": "0887a6738507f7a6ba14155b20c6d89152d04ddbc6c539355f62b66b7bc98c49",
+        "responseBytes": 21482,
+        "responseHash": "4ddefeaaaaf4c073b22713f5d3f70b134e26797742ee27d97e5643670661ce7e",
+        "elapsedMs": 127.39607400000023,
+        "rssAfter": 158171136
+      },
+      {
+        "round": 0,
+        "tool": "agent_activity",
+        "bytes": 1676,
+        "hash": "65014187f0e900d7154e5246eb140d06047b3ab339df6a0dd5f3039685297df1",
+        "responseBytes": 3694,
+        "responseHash": "17130fb81534918e0934db8dafaffcc0d71f892317df2aa1aabfd573ff0f0fda",
+        "elapsedMs": 163.22726199999988,
+        "rssAfter": 264544256
+      },
+      {
+        "round": 0,
+        "tool": "search_transcripts",
+        "bytes": 60087,
+        "hash": "9f2d295f1785c317631119edf5eaf8d0ace57f9b537e07ac05b7a17f955724d7",
+        "responseBytes": 132272,
+        "responseHash": "08487fc4d5033db8fa40cec7f60428c35899ee60905dc2261b94125805af81fa",
+        "elapsedMs": 620.186561,
+        "rssAfter": 260509696
+      },
+      {
+        "round": 1,
+        "tool": "list_pipelines",
+        "bytes": 374052,
+        "hash": "0c8978dd347d7f2018111747cd46b28cb5a8c2686ef8f7bcb8c6e1b33905443e",
+        "responseBytes": 749294,
+        "responseHash": "0c309f89a8274f15a36309bdf9500b45b98f6114b534f205064d06429e253c94",
+        "elapsedMs": 22.71957799999973,
+        "rssAfter": 265388032
+      },
+      {
+        "round": 1,
+        "tool": "get_pipeline",
+        "bytes": 373880,
+        "hash": "692443012eb1d44a9a71d3a9fff26ccd5978af51c364d30af9520c56b04e4401",
+        "responseBytes": 748944,
+        "responseHash": "e564537622202c2db0813d3f3dd4a079c4666c4ba6e3f16010493d8cce85ef22",
+        "elapsedMs": 24.2527070000001,
+        "rssAfter": 269402112
+      },
+      {
+        "round": 1,
+        "tool": "conversation_messages",
+        "bytes": 3222433,
+        "hash": "5ace738b459fc93373b04cc0726e91ec0d53601bc53b2a126f7a00f3a776efa9",
+        "responseBytes": 6449008,
+        "responseHash": "6445c093505259b5b431eb80b11a0bb027070d48f01339a0d92a4ceafc4e6508",
+        "elapsedMs": 219.49957500000028,
+        "rssAfter": 292741120
+      },
+      {
+        "round": 1,
+        "tool": "read_prototype_review",
+        "bytes": 10670,
+        "hash": "f011bf3d2bde9863a269484ff581278d9994e2aca6a69c603c7e0a4013126923",
+        "responseBytes": 21482,
+        "responseHash": "f75918e339090e1984f780e2b3f126205f2c4e8bc311a081101128c984d585bb",
+        "elapsedMs": 25.185157999999774,
+        "rssAfter": 293277696
+      },
+      {
+        "round": 1,
+        "tool": "agent_activity",
+        "bytes": 1669,
+        "hash": "60cefe09653428aefe2554f2c245355cde0a0c02cf44737c2cea019bdc7b2ff6",
+        "responseBytes": 3680,
+        "responseHash": "53fe34f25ec2ccb13177903db9a874a576b535121c8bd0c95acd8b46c9d496f4",
+        "elapsedMs": 22.011091000000306,
+        "rssAfter": 295473152
+      },
+      {
+        "round": 1,
+        "tool": "search_transcripts",
+        "bytes": 60087,
+        "hash": "c52b17cc9ede8464e3ef8c1904fbee62442758a1da6fea8339c203aed54d861d",
+        "responseBytes": 132272,
+        "responseHash": "e87cb5c4bc7a33c4a8522288d8775e4ae27f59ac2b9c86a1ead895b462edf768",
+        "elapsedMs": 643.0809640000002,
+        "rssAfter": 300285952
+      },
+      {
+        "round": 2,
+        "tool": "list_pipelines",
+        "bytes": 374052,
+        "hash": "3915e6adc55169955c1e93f0a157204b4a3aed0db0e742931158a1d84836942f",
+        "responseBytes": 749294,
+        "responseHash": "894cc07e8fec3c30d91e0996cc21f80217b2e8541e3ea6a8365108c1aadc1a58",
+        "elapsedMs": 88.31900299999961,
+        "rssAfter": 308011008
+      },
+      {
+        "round": 2,
+        "tool": "get_pipeline",
+        "bytes": 373880,
+        "hash": "80c00ff3efa514bcf2fd632bb0740cbf1e76ea968a4eb2b5d48f84d8ba7b1e54",
+        "responseBytes": 748944,
+        "responseHash": "b6fbd451312a3bd652357dd7713c5e167b6836258220c1a3abf6c2cf3489aa86",
+        "elapsedMs": 75.37671599999976,
+        "rssAfter": 312045568
+      },
+      {
+        "round": 2,
+        "tool": "conversation_messages",
+        "bytes": 3222433,
+        "hash": "f8804bb808044bfbbc8b876f6983c18a47f74993bbb7524e2716b9831d10f1d0",
+        "responseBytes": 6449008,
+        "responseHash": "5c140dc4a660bdda3fb7722ddc72ac52b1e6cb96b258db7aa7200c2501efec7f",
+        "elapsedMs": 562.3836739999997,
+        "rssAfter": 290615296
+      },
+      {
+        "round": 2,
+        "tool": "read_prototype_review",
+        "bytes": 10670,
+        "hash": "ba30f634b808cd623ccee94945e345f9bc015d1e27169a35e7c4cb9c53945a7f",
+        "responseBytes": 21482,
+        "responseHash": "de6e1b6ac5e85abaea91792081271f4ed0a36fbdcad4e9f7a3ef00652a7ee305",
+        "elapsedMs": 62.18588,
+        "rssAfter": 291459072
+      },
+      {
+        "round": 2,
+        "tool": "agent_activity",
+        "bytes": 1674,
+        "hash": "293670c0d93d411a01ade18ad7c49682bd65cbad6d6ecfc0f76c04c502c344b3",
+        "responseBytes": 3690,
+        "responseHash": "599b0c94352c5b8f272eb99a1285c843174c22dbf675c688e1cc90d53660c080",
+        "elapsedMs": 50.0972240000001,
+        "rssAfter": 290799616
+      },
+      {
+        "round": 2,
+        "tool": "search_transcripts",
+        "bytes": 60087,
+        "hash": "11cb64a0411265cafa641313af0c914d47a27fa7a1d0e1ad35f5ba8ce1e19005",
+        "responseBytes": 132272,
+        "responseHash": "47f651ae090b2c8fa1868be89931f06efc9d80e1d4fa1a8b42577a963f5ea17d",
+        "elapsedMs": 884.7651950000009,
+        "rssAfter": 268136448
       }
     ]
   },
-  "isolated": {
-    "method": "Real stdio MCP child, real MCP HTTP service and prototype route handlers in a separate process, private state and PID namespace, 10 ms RSS polling, 30 s idle, diagnostic synchronous GC afterward",
-    "samplesPerSide": 1,
-    "baseline": {
-      "runtime": "1.4.0",
-      "pipelines": 120,
-      "pipelineJsonBytes": 44733021,
-      "rounds": 3,
-      "idleMs": 30000,
-      "peakRss": 332271616,
-      "before": {
-        "rss": 123359232,
-        "heapSize": 32378472,
-        "heapCapacity": 37782168,
-        "extraMemorySize": 8122696,
-        "objectCount": 448921
-      },
-      "afterIdle": {
-        "rss": 260939776,
-        "heapSize": 139267502,
-        "heapCapacity": 145408478,
-        "extraMemorySize": 108365902,
-        "objectCount": 550045
-      },
-      "afterGc": {
-        "rss": 260108288,
-        "heapSize": 122664270,
-        "heapCapacity": 130263998,
-        "extraMemorySize": 94908974,
-        "objectCount": 521535
-      }
+  "after": {
+    "measuredAt": "2026-10-13T04:19:19.527Z",
+    "runtime": "1.4.0",
+    "pipelines": 120,
+    "pipelineJsonBytes": 44733021,
+    "rounds": 3,
+    "idleMs": 30000,
+    "peakRss": 115929088,
+    "atSpawn": {
+      "rss": 76697600,
+      "heapSize": 18138554,
+      "heapCapacity": 23197082,
+      "extraMemorySize": 3411274,
+      "objectCount": 277848
     },
-    "candidate": {
-      "runtime": "1.4.0",
-      "pipelines": 120,
-      "pipelineJsonBytes": 44733021,
-      "rounds": 3,
-      "idleMs": 30000,
-      "peakRss": 141893632,
-      "before": {
-        "rss": 75231232,
-        "heapSize": 18204563,
-        "heapCapacity": 22593539,
-        "extraMemorySize": 3397555,
-        "objectCount": 278518
-      },
-      "afterIdle": {
-        "rss": 98004992,
-        "heapSize": 38158018,
-        "heapCapacity": 42456962,
-        "extraMemorySize": 23097138,
-        "objectCount": 283052
-      },
-      "afterGc": {
-        "rss": 98004992,
-        "heapSize": 15620262,
-        "heapCapacity": 20464358,
-        "extraMemorySize": 1235606,
-        "objectCount": 276474
-      }
+    "before": {
+      "rss": 75784192,
+      "heapSize": 18240895,
+      "heapCapacity": 22443999,
+      "extraMemorySize": 3411855,
+      "objectCount": 278952
     },
-    "equivalence": {
-      "equivalent": true,
-      "calls": 15,
-      "normalization": [
-        "sandbox root",
-        "fixture conversation id",
-        "activity observation time and positive clock durations; zero/null preserved",
-        "activity phase durations; field names preserved",
-        "transcript cursor scope; offsets and fingerprints preserved"
-      ],
-      "answers": [
-        {
-          "round": 0,
-          "tool": "list_pipelines",
-          "bytes": 374052,
-          "hash": "a98b6c1c313523e9b7d81381caeff5208b703e76c9b7e272d6250bb40e4c6752"
-        },
-        {
-          "round": 0,
-          "tool": "get_pipeline",
-          "bytes": 373880,
-          "hash": "b871f14881dc7f9977c102e2b2b29a8ef2015746063d3cae2ff6f019c36feef2"
-        },
-        {
-          "round": 0,
-          "tool": "conversation_messages",
-          "bytes": 3222436,
-          "hash": "988a431064288df337adc8dfede70ef6d30f90630fe024a68e3eab7f2e295fdd"
-        },
-        {
-          "round": 0,
-          "tool": "read_prototype_review",
-          "bytes": 10670,
-          "hash": "359f97587817fb4de2a55dc98d3d12b09e8967abbeab4c3318cb8c228f39695d"
-        },
-        {
-          "round": 0,
-          "tool": "agent_activity",
-          "bytes": 1783,
-          "hash": "f2021905e1ce72fb363f967667b8a1a8985ac7aa2e6cd2b6b1b838285b83080c"
-        },
-        {
-          "round": 1,
-          "tool": "list_pipelines",
-          "bytes": 374052,
-          "hash": "422948509a8e7af0c44f56ba043400a6b203e4573924966afc5fac04f789c2ae"
-        },
-        {
-          "round": 1,
-          "tool": "get_pipeline",
-          "bytes": 373880,
-          "hash": "d9117f82d28b47513f290c076e92b21be38539d4b8282c43e5516fd994c4c271"
-        },
-        {
-          "round": 1,
-          "tool": "conversation_messages",
-          "bytes": 3222436,
-          "hash": "245cfd2c49095c0fae3319d13066d8d630c1a2870ebf255e0149dc37e38077b6"
-        },
-        {
-          "round": 1,
-          "tool": "read_prototype_review",
-          "bytes": 10670,
-          "hash": "bca69e752099550317da1c2e75ca16be2c013923c63d752272b719a21d900183"
-        },
-        {
-          "round": 1,
-          "tool": "agent_activity",
-          "bytes": 1783,
-          "hash": "b1cd9435a1e47ffaaac40ab15a2599ed6787045e4085cfec99628d5054ee929f"
-        },
-        {
-          "round": 2,
-          "tool": "list_pipelines",
-          "bytes": 374052,
-          "hash": "7405aab5544ecf1d9ae906d542d36540a6352a1b90d446f8c914bd9d710be281"
-        },
-        {
-          "round": 2,
-          "tool": "get_pipeline",
-          "bytes": 373880,
-          "hash": "62b6f7cb3879e60717cded8fb91b85833957e2a72bcecc2a8ad3d4a379a5d401"
-        },
-        {
-          "round": 2,
-          "tool": "conversation_messages",
-          "bytes": 3222436,
-          "hash": "16e55b000125b039fbbf7c9a348db50a15118e9a94727620fd207e0834612e69"
-        },
-        {
-          "round": 2,
-          "tool": "read_prototype_review",
-          "bytes": 10670,
-          "hash": "67f834be74647ba6b62731b7e8ef1d9b50e4781682c69be3eeab888185f5063b"
-        },
-        {
-          "round": 2,
-          "tool": "agent_activity",
-          "bytes": 1783,
-          "hash": "4e63578613e4bcd2a8d0175b2e33b8b03242415c97a16d82cd33179ccdee8106"
-        }
-      ]
-    }
+    "afterIdle": {
+      "rss": 80994304,
+      "heapSize": 19243113,
+      "heapCapacity": 23395593,
+      "extraMemorySize": 4150457,
+      "objectCount": 283715
+    },
+    "afterGc": {
+      "rss": 80666624,
+      "heapSize": 15676032,
+      "heapCapacity": 20338544,
+      "extraMemorySize": 1240864,
+      "objectCount": 277474
+    },
+    "answers": [
+      {
+        "round": 0,
+        "tool": "list_pipelines",
+        "bytes": 374052,
+        "hash": "71dd682255bc1ce971dcf196bfc3c26b2cd2ec77717daff0e7e7c049b3b4f292",
+        "responseBytes": 749294,
+        "responseHash": "f30c6b024c7399dfe739c69b32dd60f6b4e9ff591550c77cfb8d79085852ac44",
+        "elapsedMs": 140.66513099999997,
+        "rssAfter": 82964480
+      },
+      {
+        "round": 0,
+        "tool": "get_pipeline",
+        "bytes": 373880,
+        "hash": "2ee245de798a0b462052766f3178d49693518fe8973d45548c9c36d4634cbc27",
+        "responseBytes": 748944,
+        "responseHash": "a3533d2fc182f5f39c390fa8c5d6d98281b2407fce3cd34ff986370dca37986e",
+        "elapsedMs": 30.928526000000147,
+        "rssAfter": 87273472
+      },
+      {
+        "round": 0,
+        "tool": "conversation_messages",
+        "bytes": 3222433,
+        "hash": "80ab059a4d24fb42db2304605c65b35015260dea02b017dd27af92aac5824481",
+        "responseBytes": 6449008,
+        "responseHash": "8898e85ae9939d883aa3a426babe756b0d2d46e245398d37b674fcffcef00710",
+        "elapsedMs": 319.06894599999987,
+        "rssAfter": 113127424
+      },
+      {
+        "round": 0,
+        "tool": "read_prototype_review",
+        "bytes": 10670,
+        "hash": "0887a6738507f7a6ba14155b20c6d89152d04ddbc6c539355f62b66b7bc98c49",
+        "responseBytes": 21482,
+        "responseHash": "4ddefeaaaaf4c073b22713f5d3f70b134e26797742ee27d97e5643670661ce7e",
+        "elapsedMs": 180.73387800000023,
+        "rssAfter": 100642816
+      },
+      {
+        "round": 0,
+        "tool": "agent_activity",
+        "bytes": 1673,
+        "hash": "bfd152cc37086f77e2f40cf4aa82cf75f1d02ab8ce4db16fb180ce5e64d68979",
+        "responseBytes": 3686,
+        "responseHash": "7c0aa66fe98b4f66a600feebe13058b8b95836f03386c067559373276aca6b85",
+        "elapsedMs": 45.70431400000007,
+        "rssAfter": 100847616
+      },
+      {
+        "round": 0,
+        "tool": "search_transcripts",
+        "bytes": 60087,
+        "hash": "9f2d295f1785c317631119edf5eaf8d0ace57f9b537e07ac05b7a17f955724d7",
+        "responseBytes": 132072,
+        "responseHash": "f1188be7257e74007f1583ebe40cb8abfe27ab6f5c91e019b740bbb057500793",
+        "elapsedMs": 582.070565,
+        "rssAfter": 82636800
+      },
+      {
+        "round": 1,
+        "tool": "list_pipelines",
+        "bytes": 374052,
+        "hash": "0c8978dd347d7f2018111747cd46b28cb5a8c2686ef8f7bcb8c6e1b33905443e",
+        "responseBytes": 749294,
+        "responseHash": "0c309f89a8274f15a36309bdf9500b45b98f6114b534f205064d06429e253c94",
+        "elapsedMs": 30.51866599999994,
+        "rssAfter": 86556672
+      },
+      {
+        "round": 1,
+        "tool": "get_pipeline",
+        "bytes": 373880,
+        "hash": "692443012eb1d44a9a71d3a9fff26ccd5978af51c364d30af9520c56b04e4401",
+        "responseBytes": 748944,
+        "responseHash": "e564537622202c2db0813d3f3dd4a079c4666c4ba6e3f16010493d8cce85ef22",
+        "elapsedMs": 28.57093999999961,
+        "rssAfter": 90329088
+      },
+      {
+        "round": 1,
+        "tool": "conversation_messages",
+        "bytes": 3222433,
+        "hash": "8f09694e4226394ef6ab9ce8f875351e86f25eb235872a57545ae8c506e705e2",
+        "responseBytes": 6449008,
+        "responseHash": "0c8d3841f6cdc604dba86bd0240031220a0616c401d3b9b5e875e57427fab10b",
+        "elapsedMs": 260.438815,
+        "rssAfter": 101142528
+      },
+      {
+        "round": 1,
+        "tool": "read_prototype_review",
+        "bytes": 10670,
+        "hash": "f011bf3d2bde9863a269484ff581278d9994e2aca6a69c603c7e0a4013126923",
+        "responseBytes": 21482,
+        "responseHash": "f75918e339090e1984f780e2b3f126205f2c4e8bc311a081101128c984d585bb",
+        "elapsedMs": 32.80603599999995,
+        "rssAfter": 101384192
+      },
+      {
+        "round": 1,
+        "tool": "agent_activity",
+        "bytes": 1672,
+        "hash": "cb9ad40eee9306c1146c744f0d4343f452bdfdad85b5417ddd228a716beb4e59",
+        "responseBytes": 3684,
+        "responseHash": "51f75c3ba1124e3219144a11efe6256f48574e30bff37c993bf186e64a65f2c2",
+        "elapsedMs": 28.83055000000013,
+        "rssAfter": 101457920
+      },
+      {
+        "round": 1,
+        "tool": "search_transcripts",
+        "bytes": 60087,
+        "hash": "c52b17cc9ede8464e3ef8c1904fbee62442758a1da6fea8339c203aed54d861d",
+        "responseBytes": 132072,
+        "responseHash": "3719559dd18064ae45db545ce5155844c5ef4c5334378034f4910b8c268210ff",
+        "elapsedMs": 481.2558140000001,
+        "rssAfter": 83247104
+      },
+      {
+        "round": 2,
+        "tool": "list_pipelines",
+        "bytes": 374052,
+        "hash": "3915e6adc55169955c1e93f0a157204b4a3aed0db0e742931158a1d84836942f",
+        "responseBytes": 749294,
+        "responseHash": "894cc07e8fec3c30d91e0996cc21f80217b2e8541e3ea6a8365108c1aadc1a58",
+        "elapsedMs": 32.86646000000019,
+        "rssAfter": 86597632
+      },
+      {
+        "round": 2,
+        "tool": "get_pipeline",
+        "bytes": 373880,
+        "hash": "80c00ff3efa514bcf2fd632bb0740cbf1e76ea968a4eb2b5d48f84d8ba7b1e54",
+        "responseBytes": 748944,
+        "responseHash": "b6fbd451312a3bd652357dd7713c5e167b6836258220c1a3abf6c2cf3489aa86",
+        "elapsedMs": 33.88920099999996,
+        "rssAfter": 90062848
+      },
+      {
+        "round": 2,
+        "tool": "conversation_messages",
+        "bytes": 3222433,
+        "hash": "a8f912549048097c50e26f6d2a1c8100485b431710d0072a8e5b78b0d2cdad20",
+        "responseBytes": 6449008,
+        "responseHash": "8f25982bc835551423784c50b872bf2ac3388c6ced296997217c95e480493b6f",
+        "elapsedMs": 243.82222200000024,
+        "rssAfter": 109068288
+      },
+      {
+        "round": 2,
+        "tool": "read_prototype_review",
+        "bytes": 10670,
+        "hash": "ba30f634b808cd623ccee94945e345f9bc015d1e27169a35e7c4cb9c53945a7f",
+        "responseBytes": 21482,
+        "responseHash": "de6e1b6ac5e85abaea91792081271f4ed0a36fbdcad4e9f7a3ef00652a7ee305",
+        "elapsedMs": 36.76750399999992,
+        "rssAfter": 103038976
+      },
+      {
+        "round": 2,
+        "tool": "agent_activity",
+        "bytes": 1672,
+        "hash": "b6a3bac6f5b83e0a383a875037e87aef93cfb59b08bbb5fee34245a4590ac1fc",
+        "responseBytes": 3684,
+        "responseHash": "bbcd347622fc931547120aa18f46601f037043c816a9a1067a4178e24e711051",
+        "elapsedMs": 28.707640999999967,
+        "rssAfter": 103215104
+      },
+      {
+        "round": 2,
+        "tool": "search_transcripts",
+        "bytes": 60087,
+        "hash": "11cb64a0411265cafa641313af0c914d47a27fa7a1d0e1ad35f5ba8ce1e19005",
+        "responseBytes": 132072,
+        "responseHash": "97ceb6eafcf4a3f17ff550f019bf1f5ffc17b17236a028ba8e6288d6861926af",
+        "elapsedMs": 481.43492400000014,
+        "rssAfter": 83677184
+      }
+    ]
   },
-  "initialReproduction": {
-    "note": "Measured before changing product source; the initial fixture also held a fixed legacy updatedAt field on pipelines. The final benchmark omits that extra field.",
-    "baseline": {
-      "runtime": "1.4.0",
-      "pipelines": 120,
-      "pipelineJsonBytes": 44737701,
-      "rounds": 3,
-      "idleMs": 30000,
-      "peakRss": 330432512,
-      "before": {
-        "rss": 120729600,
-        "heapSize": 32370576,
-        "heapCapacity": 37756512,
-        "extraMemorySize": 8113424,
-        "objectCount": 448920
+  "comparison": {
+    "equivalent": true,
+    "calls": 18,
+    "normalization": [
+      "sandbox root",
+      "fixture conversation id",
+      "activity observation time and positive clock durations; zero/null preserved",
+      "activity phase durations; field names preserved",
+      "transcript cursor scope; offsets and fingerprints preserved"
+    ],
+    "answers": [
+      {
+        "tool": "list_pipelines",
+        "round": 0,
+        "hash": "71dd682255bc1ce971dcf196bfc3c26b2cd2ec77717daff0e7e7c049b3b4f292",
+        "bytes": 374052,
+        "responseHash": "f30c6b024c7399dfe739c69b32dd60f6b4e9ff591550c77cfb8d79085852ac44",
+        "responseBytes": 749294
       },
-      "afterIdle": {
-        "rss": 249782272,
-        "heapSize": 132738457,
-        "heapCapacity": 138817049,
-        "extraMemorySize": 101872777,
-        "objectCount": 549303
+      {
+        "tool": "get_pipeline",
+        "round": 0,
+        "hash": "2ee245de798a0b462052766f3178d49693518fe8973d45548c9c36d4634cbc27",
+        "bytes": 373880,
+        "responseHash": "a3533d2fc182f5f39c390fa8c5d6d98281b2407fce3cd34ff986370dca37986e",
+        "responseBytes": 748944
       },
-      "afterGc": {
-        "rss": 248971264,
-        "heapSize": 122661994,
-        "heapCapacity": 130441754,
-        "extraMemorySize": 94906506,
-        "objectCount": 521630
+      {
+        "tool": "conversation_messages",
+        "round": 0,
+        "hash": "25d9d7a2239f0b2442fc5943f7652b742881468850f9a77b75f6a465cac83e5a",
+        "bytes": 3222436,
+        "responseHash": "c8047100d59bf9d6b6e7dbee0657d86e4565c40ef30e14cf4dceb25cf05448a7",
+        "responseBytes": 6448956
+      },
+      {
+        "tool": "read_prototype_review",
+        "round": 0,
+        "hash": "0887a6738507f7a6ba14155b20c6d89152d04ddbc6c539355f62b66b7bc98c49",
+        "bytes": 10670,
+        "responseHash": "4ddefeaaaaf4c073b22713f5d3f70b134e26797742ee27d97e5643670661ce7e",
+        "responseBytes": 21482
+      },
+      {
+        "tool": "agent_activity",
+        "round": 0,
+        "hash": "400c7a0f5901752e1f976b69a8d3ae5d5e5f021645dc98c9f3fb9c5c42a6af7c",
+        "bytes": 1783,
+        "responseHash": "e5ffb18a9ff2d6e0e5af2ab9e99e3fb231b50da2c99df5b182908078811b3cd8",
+        "responseBytes": 3796
+      },
+      {
+        "tool": "search_transcripts",
+        "round": 0,
+        "hash": "9f2d295f1785c317631119edf5eaf8d0ace57f9b537e07ac05b7a17f955724d7",
+        "bytes": 60087,
+        "responseHash": "7d75e36d81260f54e58e4fd07c17986053294469d8e31497722c1e37031a0468",
+        "responseBytes": 125472
+      },
+      {
+        "tool": "list_pipelines",
+        "round": 1,
+        "hash": "0c8978dd347d7f2018111747cd46b28cb5a8c2686ef8f7bcb8c6e1b33905443e",
+        "bytes": 374052,
+        "responseHash": "0c309f89a8274f15a36309bdf9500b45b98f6114b534f205064d06429e253c94",
+        "responseBytes": 749294
+      },
+      {
+        "tool": "get_pipeline",
+        "round": 1,
+        "hash": "692443012eb1d44a9a71d3a9fff26ccd5978af51c364d30af9520c56b04e4401",
+        "bytes": 373880,
+        "responseHash": "e564537622202c2db0813d3f3dd4a079c4666c4ba6e3f16010493d8cce85ef22",
+        "responseBytes": 748944
+      },
+      {
+        "tool": "conversation_messages",
+        "round": 1,
+        "hash": "e62b3cfb5ad7ee11f0f132046b79be941772675835f467cffa0ae4f69a6ab43d",
+        "bytes": 3222436,
+        "responseHash": "9734f0688c0627077972f3e70a28eea73aee894eb5315f785f7815bc1696cf36",
+        "responseBytes": 6448956
+      },
+      {
+        "tool": "read_prototype_review",
+        "round": 1,
+        "hash": "f011bf3d2bde9863a269484ff581278d9994e2aca6a69c603c7e0a4013126923",
+        "bytes": 10670,
+        "responseHash": "f75918e339090e1984f780e2b3f126205f2c4e8bc311a081101128c984d585bb",
+        "responseBytes": 21482
+      },
+      {
+        "tool": "agent_activity",
+        "round": 1,
+        "hash": "a78a96226a20b0e6a30a193223c434cf82771e02e295b7ce5c861a75e88ff404",
+        "bytes": 1783,
+        "responseHash": "2fd8385a1ec46d581012708a415035d114bffd098cf26b34e76a9846bcba9782",
+        "responseBytes": 3796
+      },
+      {
+        "tool": "search_transcripts",
+        "round": 1,
+        "hash": "c52b17cc9ede8464e3ef8c1904fbee62442758a1da6fea8339c203aed54d861d",
+        "bytes": 60087,
+        "responseHash": "cd1ee0f982b3dbce131b9c3a4e45eecb0d8673cdac0fdaaa299c184d7ddf4f27",
+        "responseBytes": 125472
+      },
+      {
+        "tool": "list_pipelines",
+        "round": 2,
+        "hash": "3915e6adc55169955c1e93f0a157204b4a3aed0db0e742931158a1d84836942f",
+        "bytes": 374052,
+        "responseHash": "894cc07e8fec3c30d91e0996cc21f80217b2e8541e3ea6a8365108c1aadc1a58",
+        "responseBytes": 749294
+      },
+      {
+        "tool": "get_pipeline",
+        "round": 2,
+        "hash": "80c00ff3efa514bcf2fd632bb0740cbf1e76ea968a4eb2b5d48f84d8ba7b1e54",
+        "bytes": 373880,
+        "responseHash": "b6fbd451312a3bd652357dd7713c5e167b6836258220c1a3abf6c2cf3489aa86",
+        "responseBytes": 748944
+      },
+      {
+        "tool": "conversation_messages",
+        "round": 2,
+        "hash": "d19220ad161ba009154192df81c13255b9a1ddbbb34b3fca0a289152bcea98ec",
+        "bytes": 3222436,
+        "responseHash": "176775609785e6f15c45762474da48c0d1091cdb6e48a04ced95b2e7efb208c9",
+        "responseBytes": 6448956
+      },
+      {
+        "tool": "read_prototype_review",
+        "round": 2,
+        "hash": "ba30f634b808cd623ccee94945e345f9bc015d1e27169a35e7c4cb9c53945a7f",
+        "bytes": 10670,
+        "responseHash": "de6e1b6ac5e85abaea91792081271f4ed0a36fbdcad4e9f7a3ef00652a7ee305",
+        "responseBytes": 21482
+      },
+      {
+        "tool": "agent_activity",
+        "round": 2,
+        "hash": "d83423ea862a6a57451950f5f401e7382bfe1c87fb805850680d7dc2b353eb2c",
+        "bytes": 1783,
+        "responseHash": "0555d67338768f2d9080de46ba7361a4b89b03d1e6bd5357c3b6db54ff46b3b9",
+        "responseBytes": 3796
+      },
+      {
+        "tool": "search_transcripts",
+        "round": 2,
+        "hash": "11cb64a0411265cafa641313af0c914d47a27fa7a1d0e1ad35f5ba8ce1e19005",
+        "bytes": 60087,
+        "responseHash": "ce05c1797ef45b4f44be2360be846d8d2eac157c1bd8740404a5d61624509061",
+        "responseBytes": 125472
       }
+    ]
+  },
+  "regressions": {
+    "main": {
+      "testsCopiedFromCandidate": true,
+      "failed": [
+        "eager import boundary",
+        "stdio delegated receipt/native-work routing",
+        "repeated large read release"
+      ]
     },
     "candidate": {
-      "runtime": "1.4.0",
-      "pipelines": 120,
-      "pipelineJsonBytes": 44737701,
-      "rounds": 3,
-      "idleMs": 30000,
-      "peakRss": 138625024,
-      "before": {
-        "rss": 74514432,
-        "heapSize": 18190553,
-        "heapCapacity": 22734073,
-        "extraMemorySize": 3390633,
-        "objectCount": 278431
-      },
-      "afterIdle": {
-        "rss": 91557888,
-        "heapSize": 31678258,
-        "heapCapacity": 36126322,
-        "extraMemorySize": 16635426,
-        "objectCount": 282770
-      },
-      "afterGc": {
-        "rss": 91557888,
-        "heapSize": 15609488,
-        "heapCapacity": 20573952,
-        "extraMemorySize": 1230512,
-        "objectCount": 276399
+      "largeReadsTestsPassed": 6,
+      "stdioTestsPassed": 34,
+      "largeReadMemory": {
+        "calls": 20,
+        "answeredBytes": 43520051,
+        "retainedHeapBytes": 1364088
       }
     }
   }

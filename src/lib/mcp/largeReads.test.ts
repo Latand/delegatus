@@ -20,7 +20,7 @@ test("the stdio entry's eager imports cannot load Viewer caches or local binding
     const filename = pending.pop()!;
     if (seen.has(filename)) continue;
     seen.add(filename);
-    expect(forbidden.has(path.relative(root, filename))).toBe(false);
+    expect(forbidden).not.toContain(path.relative(root, filename));
     if (!/\.(?:ts|tsx|mjs)$/.test(filename)) continue;
     const scanner = new Bun.Transpiler({ loader: filename.endsWith(".tsx") ? "tsx" : "ts" });
     const source = fs.readFileSync(filename, "utf8").replace(/^#!.*\n/, "");
@@ -107,7 +107,7 @@ test("stdio large reads run in the Viewer and preserve its receipt and native wo
       .toEqual({ ok: true, toolName: name, clientRequestId: "read-key", replayed: true, marker: "Viewer answer" });
   }
   expect(calls).toHaveLength(10);
-  expect(calls[0]).toMatchObject({ name: "conversation_messages", arguments: { clientRequestId: "read-key", full: true }, _meta: {
+  for (const call of calls) expect(call).toMatchObject({ arguments: { clientRequestId: "read-key", full: true }, _meta: {
     threadId: "fixture-thread", callId: "fixture-call", itemId: "fixture-item",
     "x-codex-turn-metadata": { thread_id: "fixture-thread", turn_id: "fixture-turn", turn_trigger: "realtime" },
   } });

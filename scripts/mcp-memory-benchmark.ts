@@ -51,7 +51,7 @@ function isolated(directory: string): Record<string, string> {
     env[name] = path.join(directory, name);
     fs.mkdirSync(env[name], { recursive: true });
   }
-  return { ...env, LLV_CODEX_HOME: env.CODEX_HOME!, LLV_CLAUDE_HOME: env.CLAUDE_CONFIG_DIR!, LLV_STATE_ACTIVATION: "sqlite", LLV_AGENT_REGISTRY_SQLITE: "sqlite", NODE_ENV: "test", MCP_MEMORY_ROOT: directory };
+  return { ...env, LLV_CODEX_HOME: env.CODEX_HOME!, LLV_CLAUDE_HOME: env.CLAUDE_CONFIG_DIR!, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_STATE_ACTIVATION: "sqlite", LLV_AGENT_REGISTRY_SQLITE: "sqlite", NODE_ENV: "test", MCP_MEMORY_ROOT: directory };
 }
 
 function requirePrivateProc() {
@@ -78,7 +78,20 @@ if (mode === "compare") {
     const a = comparable(row.tool, JSON.parse(fs.readFileSync(path.join(beforePath, filename), "utf8")));
     const b = comparable(row.tool, JSON.parse(fs.readFileSync(path.join(afterPath, filename), "utf8")));
     if (a !== b) throw new Error(`Answer differs: ${filename}`);
-    return { ...row, hash: createHash("sha256").update(a).digest("hex"), bytes: Buffer.byteLength(a) };
+    // Check the complete MCP answer as well as its structured payload. The
+    // SDK's text block must be the exact JSON spelling of that same payload.
+    const envelopes = [beforePath, afterPath].map(directory => {
+      const envelope = JSON.parse(fs.readFileSync(path.join(directory, `${row.round}-${row.tool}.response.json`), "utf8"));
+      const { structuredContent, content, ...rest } = envelope;
+      if (content.length !== 1 || content[0].type !== "text" || content[0].text !== JSON.stringify(structuredContent)) {
+        throw new Error(`Text and structured answer differ: ${filename}`);
+      }
+      return JSON.stringify({ ...rest, content: [{ type: "text", text: comparable(row.tool, structuredContent) }], structuredContent: JSON.parse(comparable(row.tool, structuredContent)) });
+    });
+    if (envelopes[0] !== envelopes[1]) throw new Error(`MCP envelope differs: ${filename}`);
+    const { tool, round } = row;
+    return { tool, round, hash: createHash("sha256").update(a).digest("hex"), bytes: Buffer.byteLength(a),
+      responseHash: createHash("sha256").update(envelopes[0]!).digest("hex"), responseBytes: Buffer.byteLength(envelopes[0]!) };
   });
   if (answers.length !== after.answers.length) throw new Error("Different call counts");
   console.log(JSON.stringify({ equivalent: true, calls: answers.length, normalization: ["sandbox root", "fixture conversation id", "activity observation time and positive clock durations; zero/null preserved", "activity phase durations; field names preserved", "transcript cursor scope; offsets and fingerprints preserved"], answers }, null, 2));
@@ -102,6 +115,9 @@ if (mode === "compare") {
   const settled = registry.settleSpawn(begun.launchId, { key: { engine: "codex", sessionId: "memory-fixture-session" }, artifactPath: transcript, cwd, accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
   if (settled.kind !== "settled") throw new Error("Fixture settlement failed");
   const project = projectForCwd(cwd)!;
+  const { indexTranscriptSources } = await import("../src/lib/search/transcriptSearch");
+  const stat = fs.statSync(transcript);
+  await indexTranscriptSources([{ path: transcript, engine: "codex", project, size: stat.size, mtimeMs: stat.mtimeMs }], { complete: true });
   const lanes = pipelineCorpus(120, 6);
   for (const lane of lanes) {
     lane.project = project; lane.createdAt = stamp;
@@ -121,11 +137,13 @@ if (mode === "compare") {
   const { NextRequest } = await import("next/server");
   const { handleMcpHttpRequest } = await import("../src/lib/mcp/http");
   const { reviewReadPOST, reviewScopePOST } = await import("../src/lib/prototypeReview/http");
+  const { transcriptSearchPage } = await import("../src/lib/search/transcriptSearchPage");
   const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const pathname = new URL(request.url).pathname;
     if (pathname === "/api/mcp") return handleMcpHttpRequest(new NextRequest(request));
     if (pathname === "/api/prototype-reviews/read") return reviewReadPOST(new NextRequest(request));
     if (pathname === "/api/prototype-reviews/scope") return reviewScopePOST(new NextRequest(request));
+    if (pathname === "/api/search/transcripts") return transcriptSearchPage(request);
     return new Response("Fixture route not exposed", { status: 404 });
   } });
   process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${listener.port}`;
@@ -164,16 +182,17 @@ if (mode === "compare") {
     sampler = setInterval(() => { peakRss = Math.max(peakRss, rss()); }, 10);
     async function sample(label: string) {
       fs.writeFileSync(path.join(root, "sample"), label);
-      return waitFile(`${label}.json`);
+      return { ...await waitFile(`${label}.json`), rss: rss() };
     }
+    const atSpawn = await sample("spawn");
     const before = await sample("before-gc");
-    const answers: Array<{ round: number; tool: string; bytes: number; hash: string }> = [];
+    const answers: Array<{ round: number; tool: string; bytes: number; hash: string; responseBytes: number; responseHash: string; elapsedMs: number; rssAfter: number }> = [];
     // Native times and sandbox identities differ between independent runs.
     // No text, records, result codes or pagination fields are omitted.
     const normalize = (value: unknown): unknown => {
       if (typeof value === "string") return value.replaceAll(root, "<sandbox>").replaceAll(fixture.conversationId, "conversation_fixture").replaceAll(fixture.transcript, "<transcript>");
       if (Array.isArray(value)) return value.map(normalize);
-      if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, normalize(child)]));
+      if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, normalize(child)]));
       return value;
     };
     const steps: Array<[string, Record<string, unknown>]> = [
@@ -182,20 +201,26 @@ if (mode === "compare") {
       ["conversation_messages", { transcriptPath: fixture.transcript, limit: 200, maxChars: 16000 }],
       ["read_prototype_review", { taskId: fixture.taskId }],
       ["agent_activity", { full: true, transcriptPath: fixture.transcript, limit: 200 }],
+      ["search_transcripts", { query: "fixture", order: "newest", limit: 100, full: true }],
     ];
     for (let round = 0; round < 3; round++) for (const [tool, args] of steps) {
+      const started = performance.now();
       const response = await client.callTool({ name: tool, arguments: { ...args, clientRequestId: `memory-${round}-${tool}` } });
+      const elapsedMs = performance.now() - started;
       const result = response.structuredContent as Record<string, unknown>;
       if (!result?.ok) throw new Error(`${tool}: ${JSON.stringify(result)}`);
       const serialized = JSON.stringify(normalize(result));
       fs.writeFileSync(path.join(root, `${round}-${tool}.answer.json`), serialized);
-      answers.push({ round, tool, bytes: Buffer.byteLength(serialized), hash: createHash("sha256").update(serialized).digest("hex") });
+      const rawResponse = JSON.stringify(response);
+      fs.writeFileSync(path.join(root, `${round}-${tool}.response.json`), JSON.stringify(normalize(response)));
+      answers.push({ round, tool, bytes: Buffer.byteLength(serialized), hash: createHash("sha256").update(serialized).digest("hex"),
+        responseBytes: Buffer.byteLength(rawResponse), responseHash: createHash("sha256").update(rawResponse).digest("hex"), elapsedMs, rssAfter: rss() });
       console.error(`round ${round + 1} ${tool}: ${Math.round(rss() / 1048576)} MiB`);
     }
     await sleep(30_000);
     const afterIdle = await sample("after-idle");
     const afterGc = await sample("after-gc");
-    write("result.json", { runtime: Bun.version, pipelines: 120, pipelineJsonBytes: fixture.pipelineJsonBytes, rounds: 3, idleMs: 30_000, peakRss, before, afterIdle, afterGc, answers });
+    write("result.json", { measuredAt: new Date().toISOString(), runtime: Bun.version, pipelines: 120, pipelineJsonBytes: fixture.pipelineJsonBytes, rounds: 3, idleMs: 30_000, peakRss, atSpawn, before, afterIdle, afterGc, answers });
     console.log(JSON.stringify(read("result.json")));
   } finally {
     if (sampler) clearInterval(sampler);
