@@ -141,6 +141,22 @@ for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-
   });
 }
 
+for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-relay"] as const) {
+  test(`${route} refuses a folded key that collides with another project's display name`, async () => {
+    seat("atlas", "Atlas", "conversation_atlas");
+    seat("named-project", "ATLAS", "conversation_named");
+    const h = harness(route === "owner-relay", null);
+    const tool = route === "owner-relay" ? "send_message_to_orchestrator" : route;
+    const result = await h.call(tool, " ATLAS ");
+    expect(result).toMatchObject({ ok: false, code: "ambiguous_project", retryable: false,
+      details: { candidates: ["atlas", "named-project"] } });
+    expect("error" in result && result.error).toBe('ambiguous project "ATLAS": atlas, named-project; pass one of these project keys');
+    expect(h.posts).toEqual([]);
+    expect(h.receipts.lookup(`${tool}:resolve-1`)).toBeNull();
+    expect(h.scans()).toBe(0);
+  });
+}
+
 test("a recovered worktree lookalike name addresses only its canonical parent seat", async () => {
   seat("lookalike-project", "Parent Board lane", "conversation_lookalike");
   seat("parent-project", "Parent Board", "conversation_parent");
@@ -207,6 +223,65 @@ test("a stale directory lookalike with a deleted worktree root is never the reci
   expect(h.posts.every(post => post.body.conversationId !== "conversation_lookalike")).toBe(true);
   expect(h.scans()).toBe(0);
 });
+
+for (const route of ["send_message_to_orchestrator", "owner-relay"] as const) {
+  test(`${route} canonicalizes stale registry ownership from a deleted nested worktree cwd`, async () => {
+    const root = path.join(directory, "ParentRepo");
+    fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+    const checkout = path.join(root, "worktrees", "deleted-lane");
+    const parent = projectForCwd(checkout)!;
+    seat("lookalike-project", "ParentRepo lane", "conversation_lookalike");
+    seat(parent, "ParentRepo", "conversation_parent");
+    const snapshot = {
+      conversations: {
+        conversation_stale: {
+          id: "conversation_stale",
+          projectOwnership: { project: "lookalike-project", source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" },
+          generations: [{ launchProfile: { cwd: checkout } }], continuityPaths: [],
+        },
+      },
+      conversationAliases: {}, lineageEdges: {}, memberships: {}, receipts: {},
+    };
+    const h = harness(route === "owner-relay", null, { registrySnapshot: () => snapshot as never });
+    expect(await h.call("get_orchestrator", " PARENTREPO LANE ")).toMatchObject({ ok: true, project: parent, designated: true });
+    const result = await h.call("send_message_to_orchestrator", " PARENTREPO LANE ");
+    expect(result).toMatchObject({ ok: true, project: parent, conversationId: "conversation_parent" });
+    expect(h.posts.map(post => post.body.conversationId)).toEqual(["conversation_parent"]);
+    expect(h.receipts.lookup("send_message_to_orchestrator:resolve-2")).not.toBeNull();
+    expect(h.scans()).toBe(0);
+  });
+}
+
+for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-relay"] as const) {
+  for (const cwdFirst of [false, true]) {
+    test(`${route} finds repository directory evidence after ${cwdFirst ? "cwd" : "ownership-only"} row order`, async () => {
+      const root = path.join(directory, "WidgetsRepo");
+      fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+      fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+      fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/RemoteWidgets.git\n');
+      const project = projectForCwd(root)!;
+      seat(project, "Example Board");
+      const ownershipOnly = {
+        id: "conversation_owner_only",
+        projectOwnership: { project, source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" },
+        generations: [], continuityPaths: [],
+      };
+      const cwdEvidence = {
+        id: "conversation_cwd_evidence",
+        generations: [{ launchProfile: { cwd: root } }], continuityPaths: [],
+      };
+      const rows = cwdFirst ? [cwdEvidence, ownershipOnly] : [ownershipOnly, cwdEvidence];
+      const snapshot = { conversations: Object.fromEntries(rows.map(row => [row.id, row])), conversationAliases: {}, lineageEdges: {}, memberships: {}, receipts: {} };
+      const h = harness(route === "owner-relay", null, { registrySnapshot: () => snapshot as never });
+      const tool = route === "owner-relay" ? "send_message_to_orchestrator" : route;
+      const result = await h.call(tool, " wIDGETSrEPO ");
+      expect(result).toMatchObject({ ok: true, project });
+      if (tool === "send_message_to_orchestrator") expect(h.posts.map(post => post.body.conversationId)).toEqual(["conversation_target"]);
+      expect(h.scans()).toBe(0);
+    });
+  }
+}
 
 for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-relay"] as const) {
   test(`${route} refuses case-colliding project keys before selecting a seat`, async () => {

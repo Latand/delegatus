@@ -4138,17 +4138,33 @@ async function resolveOrchestratorToolProject(named: string, dependencies: Viewe
   const names = new Map<string, Set<string>>();
   const labels = new Map<string, string>();
   const canonicalKeys = new Map<string, string>();
-  const canonicalKey = (key: string) => {
-    const cached = canonicalKeys.get(key);
-    if (cached) return cached;
-    const canonical = canonicalOrchestratorProject(key);
-    canonicalKeys.set(key, canonical);
-    return canonical;
-  };
   const directories = new Map<string, ReturnType<typeof projectInfoFromCwd>>();
   const directoryInfo = (root: string) => {
     if (!directories.has(root)) directories.set(root, projectInfoFromCwd(root));
     return directories.get(root);
+  };
+  const registryConversations = Object.values(dependencies.registrySnapshot?.().conversations ?? {});
+  const provenWorktreeOwners = new Map<string, string>();
+  for (const conversation of registryConversations) {
+    const owner = conversation.projectOwnership?.project;
+    const cwd = conversation.generations.at(-1)?.launchProfile?.cwd;
+    const info = cwd ? directoryInfo(cwd) : null;
+    if (!owner || !info?.worktree) continue;
+    const oldProject = canonicalOrchestratorProject(owner);
+    const parentProject = canonicalOrchestratorProject(info.project);
+    if (oldProject !== parentProject) {
+      provenWorktreeOwners.set(owner, parentProject);
+      provenWorktreeOwners.set(oldProject, parentProject);
+    }
+  }
+  const canonicalKey = (key: string) => {
+    const cached = canonicalKeys.get(key);
+    if (cached) return cached;
+    const canonical = canonicalOrchestratorProject(key);
+    const proven = provenWorktreeOwners.get(key) ?? provenWorktreeOwners.get(canonical);
+    const resolved = proven ? canonicalOrchestratorProject(proven) : canonical;
+    canonicalKeys.set(key, resolved);
+    return resolved;
   };
   const index = (map: Map<string, Set<string>>, value: string, project: string) => {
     const normalized = value.trim().toLowerCase();
@@ -4186,17 +4202,27 @@ async function resolveOrchestratorToolProject(named: string, dependencies: Viewe
   const callerProject = dependencies.callerProject?.();
   if (callerProject) add(callerProject);
   const describedProjects = new Set<string>();
-  for (const conversation of Object.values(dependencies.registrySnapshot?.().conversations ?? {})) {
+  const describedDirectories = new Set<string>();
+  for (const conversation of registryConversations) {
     const cwd = conversation.generations.at(-1)?.launchProfile?.cwd;
-    const project = conversation.projectOwnership?.project ?? (cwd ? directoryInfo(cwd)?.project : null);
+    const cwdInfo = cwd ? directoryInfo(cwd) : null;
+    // A proven worktree path is the shared project identity, even when a
+    // retained ownership row still names the lookalike project it used to be.
+    const project = cwdInfo?.worktree ? cwdInfo.project : conversation.projectOwnership?.project ?? cwdInfo?.project;
     if (!project) continue;
     const canonical = canonicalKey(project);
-    if (describedProjects.has(canonical)) continue;
-    describedProjects.add(canonical);
-    add(project);
-    if (cwd) {
-      const info = directoryInfo(cwd);
-      if (info && canonicalKey(info.project) === canonical) add(project, info.displayName, info.repo ?? cwd);
+    if (!describedProjects.has(canonical)) {
+      describedProjects.add(canonical);
+      add(project);
+    }
+    if (cwd && cwdInfo) {
+      const evidence = `${canonical}\0${cwd}`;
+      if (!describedDirectories.has(evidence)) {
+        describedDirectories.add(evidence);
+        // Pass the recorded cwd so add() can apply worktree grouping before
+        // indexing its stale key and the repository basename.
+        add(conversation.projectOwnership?.project ?? project, cwdInfo.displayName, cwd);
+      }
     }
   }
   const last = dependencies.lastCompletedCatalog?.() ?? null;
@@ -4205,7 +4231,9 @@ async function resolveOrchestratorToolProject(named: string, dependencies: Viewe
   // Fresh bounded member attribution detects names introduced since the last
   // generation. A lagging index contributes no complete scan dependency.
   for (const member of await dependencies.catalogMemberProjects?.() ?? []) add(member.project, member.projectName);
-  const candidates = [...(keys.get(folded) ?? names.get(folded) ?? [])].sort();
+  // Keys, aliases and human/repository names share one namespace. A hit in
+  // either namespace cannot conceal a second project in the other.
+  const candidates = [...new Set([...(keys.get(folded) ?? []), ...(names.get(folded) ?? [])])].sort();
   const details = { outcome: "not-executed", evidence: "project-resolution", nextAction: "new-request-permitted", retryable: false };
   if (candidates.length > 1) {
     throw new McpToolRefusal(`ambiguous project "${requested}": ${candidates.join(", ")}; pass one of these project keys`, {
