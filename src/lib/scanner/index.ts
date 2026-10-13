@@ -1,4 +1,6 @@
 import { readBackgroundTaskLedger, pendingBackgroundTasks } from "@/lib/pipelines/backgroundTasks";
+import fs from "node:fs";
+import path from "node:path";
 import { activityFactsFromRecords } from "@/lib/lifecycle/agentActivityEvidence";
 import { activityProcessReader } from "@/lib/lifecycle/agentActivityProcesses";
 import { tailRecordsResult } from "./activity";
@@ -23,6 +25,7 @@ import type { ConversationCatalogEntry } from "./conversationCatalog";
 import { ctxFor } from "./context";
 import { lastAgentWorkAtFor, lastAssistantMessageAtFor, lastTurnFor } from "./turnDuration";
 import { discoverFiles, discoverFilesWithProjectCatalog } from "./discover";
+import { describeFile } from "./describe";
 import { durableServiceTierIndex, entryEffort, entryEffortResult, entryServiceTier } from "./effort";
 import { linkEntries } from "./links";
 import { entryModelsResult } from "./model";
@@ -232,6 +235,29 @@ export async function listFilesWithProjectCatalog(selectedProject?: string, opti
   return listFilesInternal(true, selectedProject, options);
 }
 
+/** Discovery can precede hydration by seconds. Reobserve a moving file only
+    after its current header confirms the same catalog identity. A replacement
+    with different metadata belongs to the next discovery generation. */
+function refreshEntryIdentity(entry: FileEntry): boolean {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(entry.path);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile()) return false;
+  if (stat.size === entry.size && stat.mtimeMs / 1000 === entry.mtime) return true;
+  const root = path.resolve(entry.path.slice(0, -entry.name.length));
+  const current = describeFile(entry.root, root, entry.path, stat);
+  const keys = ["cwd", "nativeParentThreadId", "nativeForkSourceThreadId", "engine", "fmt", "kind"] as const;
+  if (!current.complete || keys.some((key) => (entry[key] ?? null) !== (current.description[key] ?? null))) return false;
+  entry.title = current.description.title;
+  entry.sessionStartedAt = current.description.sessionStartedAt;
+  entry.size = stat.size;
+  entry.mtime = stat.mtimeMs / 1000;
+  return true;
+}
+
 /* Transcript paths superseded by an account migration: every generation and
    continuity path of a conversation except its current one. Mirrors the
    `migratedTo` annotation in the files response — these entries are folded
@@ -345,7 +371,8 @@ async function listFilesInternal(
   const needsHolders = entries.some((entry) => entry.root === "claude-tasks" && entry.path.endsWith(".output"));
   const holders = needsHolders ? outputHolders() : NO_HOLDERS;
   const durableTiers = durableServiceTierIndex();
-  await forEachEntryYielding(entries, (entry) => {
+  const invalidTails = new Set<string>();
+  const hydrateEntry = (entry: FileEntry) => {
     const verdict = activityVerdict(entry.root, entry.path, entry.mtime, entry.size);
     entry.activity = verdict.state;
     entry.activityReason = verdict.reason;
@@ -384,6 +411,20 @@ async function listFilesInternal(
     entry.lastAgentWorkAt = lastAgentWorkAtFor(entry);
     entry.pendingWakeup = pendingWakeupFor(entry);
     pendingQuestionFor(entry);
+  };
+  await forEachEntryYielding(entries, (entry) => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (!refreshEntryIdentity(entry)) {
+        entry.derivationComplete = false;
+        return;
+      }
+      hydrateEntry(entry);
+      if (entry.derivationComplete !== false || !entry.path.endsWith(".jsonl")) return;
+      const tail = tailRecordsResult(entry.path, entry.size, entry.mtime * 1000);
+      if (tail.failure === "changed" && attempt === 0) continue;
+      if (tail.failure === "content") invalidTails.add(entry.path);
+      return;
+    }
   });
   await forEachEntryYielding(entries, (entry) => {
     applyProcessState(entry, holders);
@@ -421,6 +462,9 @@ async function listFilesInternal(
   });
   await linkEntries(entries, { persist });
   if (options.signal?.aborted) throw new DOMException("file scan cancelled", "AbortError");
+  if (invalidTails.size) {
+    console.warn(`[scanner] ${invalidTails.size} transcript tail(s) unavailable; retained with unknown turn evidence: ${[...invalidTails].slice(0, 5).join(", ")}`);
+  }
   const pinOverlayPaths = "pinOverlayPaths" in scan ? scan.pinOverlayPaths : undefined;
   return {
     files: entries,
@@ -429,7 +473,10 @@ async function listFilesInternal(
       ? { conversationCatalog: scan.conversationCatalog }
       : {}),
     ...(pinOverlayPaths?.length ? { pinOverlayPaths } : {}),
-    complete: scan.complete && entries.every((entry) => entry.derivationComplete !== false),
+    // A stable damaged transcript remains present with unknown turn evidence.
+    // It cannot prevent unrelated conversations from reaching the inventory.
+    // Changing identities and I/O failures still withhold this generation.
+    complete: scan.complete && entries.every((entry) => entry.derivationComplete !== false || invalidTails.has(entry.path)),
   };
 }
 

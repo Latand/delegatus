@@ -120,6 +120,9 @@ export interface TailRecordsResult {
   records: Record<string, unknown>[];
   complete: boolean;
   prefixTruncated: boolean;
+  /** Stable unreadable content is local to this transcript; I/O and changing
+      identities still leave the scanner's observation incomplete. */
+  failure?: "content" | "changed" | "io";
 }
 
 function storeTurnEvidence(pathname: string, evidence: CachedTurnEvidence): void {
@@ -377,7 +380,7 @@ function readTail(pathname: string, size: number, nbytes: number): TailRecordsRe
     const fd = fs.openSync(pathname, "r");
     try {
       const before = fs.fstatSync(fd);
-      if (!before.isFile() || before.size !== size) return { records: [], complete: false, prefixTruncated: false };
+      if (!before.isFile() || before.size !== size) return { records: [], complete: false, prefixTruncated: false, failure: "changed" };
       seek = Math.max(0, size - nbytes);
       const buf = Buffer.alloc(Math.max(0, size - seek));
       let read = 0;
@@ -387,25 +390,30 @@ function readTail(pathname: string, size: number, nbytes: number): TailRecordsRe
         read += chunk;
       }
       complete = read === buf.length;
-      let tail = buf.subarray(0, read);
-      if (seek > 0) {
-        const firstNewline = tail.indexOf(0x0a);
-        if (firstNewline < 0) return { records: [], complete: false, prefixTruncated: true };
-        tail = tail.subarray(firstNewline + 1);
-      }
-      data = new TextDecoder("utf-8", { fatal: true }).decode(tail);
       const after = fs.fstatSync(fd);
       const pathAfter = fs.statSync(pathname);
       if (after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size
         || after.mtimeMs !== before.mtimeMs || pathAfter.dev !== after.dev || pathAfter.ino !== after.ino
         || pathAfter.size !== after.size || pathAfter.mtimeMs !== after.mtimeMs) {
-        return { records: [], complete: false, prefixTruncated: false };
+        return { records: [], complete: false, prefixTruncated: false, failure: "changed" };
+      }
+      if (!complete) return { records: [], complete: false, prefixTruncated: seek > 0, failure: "io" };
+      let tail = buf.subarray(0, read);
+      if (seek > 0) {
+        const firstNewline = tail.indexOf(0x0a);
+        if (firstNewline < 0) return { records: [], complete: false, prefixTruncated: true, failure: "content" };
+        tail = tail.subarray(firstNewline + 1);
+      }
+      try {
+        data = new TextDecoder("utf-8", { fatal: true }).decode(tail);
+      } catch {
+        return { records: [], complete: false, prefixTruncated: seek > 0, failure: "content" };
       }
     } finally {
       fs.closeSync(fd);
     }
   } catch {
-    return { records: [], complete: false, prefixTruncated: false };
+    return { records: [], complete: false, prefixTruncated: false, failure: "io" };
   }
   const lines = data.split("\n");
   const out: Record<string, unknown>[] = [];
@@ -416,9 +424,9 @@ function readTail(pathname: string, size: number, nbytes: number): TailRecordsRe
     try {
       parsed = JSON.parse(text);
     } catch {
-      return { records: [], complete: false, prefixTruncated: seek > 0 };
+      return { records: [], complete: false, prefixTruncated: seek > 0, failure: "content" };
     }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { records: [], complete: false, prefixTruncated: seek > 0 };
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { records: [], complete: false, prefixTruncated: seek > 0, failure: "content" };
     out.push(parsed as Record<string, unknown>);
   }
   return { records: out, complete, prefixTruncated: seek > 0 };
