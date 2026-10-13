@@ -533,9 +533,10 @@ The fully uncached first files request remains **4,166.999 ms**, compared with
 initial scan and 2,102.9 ms for worker construction; these are sequential cold
 costs outside the reproduced archive burst. The cold page answers in 253.107 ms
 and storage health in 694.893 ms. Warm first-data and all measured workload loop
-and lease budgets pass. The one-second requirement for a completely uncached
-first-data miss remains an explicit acceptance question; this report does not
-claim that criterion passes.
+and lease budgets pass. The controller's scope decision applies the one-second
+first-data bound to a warm process while the reproduced blocking operation runs.
+The cold first build is unchanged and tracked separately by the controller; it
+is outside this lane, and this change includes no cold-start work.
 
 Earlier samples are retained as diagnosis and intermediate evidence. One 12 GiB
 replay ended before completing its health window and is excluded from paired
@@ -553,5 +554,5 @@ retention suites. The #2813 Overview model suites pass. Three assertions in the
 startup suite fail on both the candidate and a fresh pinned baseline: delivered
 Claude spawn recovery, delivered pipeline retry recovery, and deferred pipeline
 receipt settlement. Their classifications and raw outputs are retained. They are
-not new failures from this change. The cold-cache decision remains separate from
+not new failures from this change. The accepted cold-cache scope is separate from
 these baseline test failures.
