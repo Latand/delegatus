@@ -10,7 +10,9 @@ import type {
   ViewerRuntimeHostStartupPhase,
 } from "@/lib/runtime/contracts";
 
+import { CANDIDATE_PERFORMANCE_BOUNDS, candidatePerformanceBreaches, type CandidatePerformanceEvidence, type CandidatePerformanceMeasurements } from "./candidatePerformance";
 import { HostCommandViewerDeploymentAdapter } from "./deploymentAdapter";
+import { passingCandidatePerformanceMeasurements } from "./fixtures/candidatePerformanceMeasurements";
 import { promotedViewerReadinessPhase } from "./deploymentHealth";
 import { PROMOTE_ACTION_TIMEOUT_MS } from "./deploymentHotState";
 import type { RuntimeHostHandoffIntent } from "./hostRelease";
@@ -347,6 +349,7 @@ test("the candidate runtime-host rehearsal reaches the record with the runtime i
       socket: { polls: 30, answered: 30, abandoned: 15 },
       ok: true,
     },
+    performance: passingPerformance(),
     ok: true,
   };
   const candidate = {
@@ -397,6 +400,117 @@ test("a refused runtime-host rehearsal carries its reason and the failing genera
   ));
 
   expect(await adapter.verifyCandidate(candidate)).toEqual(failing);
+});
+
+const PASSING_MEASUREMENTS = passingCandidatePerformanceMeasurements();
+
+function passingPerformance(): CandidatePerformanceEvidence {
+  return {
+    checkedAt: "2026-10-11T21:00:00.000Z",
+    runtime: "bun 1.4.0",
+    bounds: CANDIDATE_PERFORMANCE_BOUNDS,
+    measurements: PASSING_MEASUREMENTS,
+    breaches: [],
+    ok: true,
+  };
+}
+
+/* #2761: the performance gate's verdict crosses into the durable record, and a
+   refused gate refuses the candidate whatever the rest of the evidence says. */
+test("a refused candidate performance gate reaches the record and refuses the candidate", async () => {
+  const measured: CandidatePerformanceMeasurements = {
+    ...PASSING_MEASUREMENTS,
+    grantWrites: { count: 60, p50Ms: 610, p95Ms: 640, maxMs: 700, mismatches: 0, failures: 0 },
+    eventLoop: { p95Ms: 620, maxMs: 700 },
+  };
+  const breaches = candidatePerformanceBreaches(measured);
+  const performance: CandidatePerformanceEvidence = {
+    checkedAt: "2026-10-11T21:00:00.000Z",
+    runtime: "bun 1.4.0",
+    bounds: CANDIDATE_PERFORMANCE_BOUNDS,
+    measurements: measured,
+    breaches,
+    ok: false,
+    detail: breaches[0],
+  };
+  const reported = {
+    checkedAt: "2026-10-11T20:59:00.000Z",
+    endpoint: "http://127.0.0.1:19312",
+    processReady: true,
+    rootStatus: 200,
+    authenticatedStatus: 200,
+    unauthorizedStatus: 403,
+    assets: [],
+    performance,
+    // A gate that reports a refusal refuses, even beside an ok it did not earn.
+    ok: true,
+  };
+  const candidate = { image: "viewer:test", container: "viewer-candidate", endpoint: "http://127.0.0.1:19312", revision: "a".repeat(40) };
+  const adapter = new HostCommandViewerDeploymentAdapter(async (action) => (action === "verify-candidate" ? reported : {}));
+
+  const evidence = await adapter.verifyCandidate(candidate);
+  expect(evidence.ok).toBe(false);
+  /* The record names the gate's refusal, never a bare "health gate failed". */
+  expect(evidence.detail).toBe("candidate performance gate refused the release: grant-bearing write p95 640ms exceeds 350ms; grant-bearing write max 700ms exceeds 500ms; Viewer event-loop delay p95 620ms exceeds 50ms; Viewer event-loop delay max 700ms exceeds 500ms");
+  expect(evidence.performance).toEqual(performance);
+  expect(evidence.performance?.breaches).toEqual([
+    "grant-bearing write p95 640ms exceeds 350ms",
+    "grant-bearing write max 700ms exceeds 500ms",
+    "Viewer event-loop delay p95 620ms exceeds 50ms",
+    "Viewer event-loop delay max 700ms exceeds 500ms",
+  ]);
+
+  const forged = new HostCommandViewerDeploymentAdapter(async (action) => (
+    action === "verify-candidate" ? { ...reported, performance: { ...performance, breaches: "none" } } : {}
+  ));
+  await expect(forged.verifyCandidate(candidate)).rejects.toThrow("invalid candidate performance evidence");
+});
+
+/* #2761, the reviewer's probe: an adapter answer that passed every probe and
+   carries no performance report reads exactly like an adapter that skipped
+   the gate, so it refuses the candidate. The serving release's own check owes
+   no rehearsal. */
+test("a candidate verification without the performance report or the runtime-host rehearsal is refused", async () => {
+  const probesPassed = {
+    checkedAt: "2026-10-12T00:00:00.000Z",
+    endpoint: "http://127.0.0.1:19312",
+    processReady: true,
+    rootStatus: 200,
+    authenticatedStatus: 200,
+    unauthorizedStatus: 403,
+    assets: [],
+    ok: true,
+  };
+  const runtimeHost = {
+    checkedAt: "2026-10-12T00:01:00.000Z",
+    runtime: "bun 1.4.0",
+    succession: { predecessorReadyMs: 1_480, successorTookOverMs: 2_140, completed: true },
+    listener: { windowMs: 15_000, polls: 30, answered: 30, abandoned: 15 },
+    socket: { polls: 30, answered: 30, abandoned: 15 },
+    ok: true,
+  };
+  const candidate = { image: "viewer:test", container: "viewer-candidate", endpoint: "http://127.0.0.1:19312", revision: "a".repeat(40) };
+  const answering = (answer: Record<string, unknown>) => new HostCommandViewerDeploymentAdapter(async (action) => (
+    action === "verify-candidate" || action === "verify-promoted" ? answer : {}
+  ));
+
+  const withoutReport = await answering({ ...probesPassed, runtimeHost }).verifyCandidate(candidate);
+  expect({ ok: withoutReport.ok, hasPerformance: withoutReport.performance !== undefined }).toEqual({ ok: false, hasPerformance: false });
+  expect(withoutReport.detail).toBe("the candidate performance gate reported nothing; a candidate is promoted only on a measured pass");
+
+  const withoutRehearsal = await answering({ ...probesPassed, performance: passingPerformance() }).verifyCandidate(candidate);
+  expect(withoutRehearsal.ok).toBe(false);
+  expect(withoutRehearsal.detail).toBe("the candidate runtime-host rehearsal reported nothing; a candidate is promoted only after it passes");
+
+  /* A failed probe keeps its own cause. */
+  const failed = await answering({ ...probesPassed, ok: false, detail: "candidate readiness timed out" }).verifyCandidate(candidate);
+  expect(failed).toMatchObject({ ok: false, detail: "candidate readiness timed out" });
+
+  const both = await answering({ ...probesPassed, runtimeHost, performance: passingPerformance() }).verifyCandidate(candidate);
+  expect(both.ok).toBe(true);
+  expect(both.detail).toBeUndefined();
+
+  expect((await answering(probesPassed).verifyPromoted(candidate)).ok).toBe(true);
 });
 
 test("issue 1272: runtime-host output is bounded and printable before it reaches the durable record", async () => {

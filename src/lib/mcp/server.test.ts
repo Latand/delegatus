@@ -14,6 +14,7 @@ import { DeadlineExceededError } from "@/lib/deadline";
 
 import {
   MCP_TOOL_NAMES,
+  RECEIPT_FREE_READ_TOOLS,
   TOOL_INPUT_SCHEMAS,
   FileMcpReceiptStore,
   MemoryMcpReceiptStore,
@@ -615,7 +616,7 @@ describe("MCP tool service", () => {
     expect(completed).toEqual(["list_pipelines:failed"]);
   });
 
-  test("each v1 tool returns structured ids and replays a duplicate clientRequestId", async () => {
+  test("v1 tools with receipts return structured ids and replay a duplicate clientRequestId", async () => {
     const calls = new Map<string, number>();
     const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((toolName) => [
       toolName,
@@ -632,7 +633,7 @@ describe("MCP tool service", () => {
     ])) as unknown as McpToolBindings;
     const service = createMcpToolService(bindings, new MemoryMcpReceiptStore());
 
-    for (const toolName of MCP_TOOL_NAMES) {
+    for (const toolName of MCP_TOOL_NAMES.filter(name => !RECEIPT_FREE_READ_TOOLS.has(name))) {
       const args = { clientRequestId: `request-${toolName}`, value: toolName, ...(toolName === "backfill_worktree_projects" ? { dryRun: false } : {}) };
       const first = await service.callTool(toolName, args);
       const replay = await service.callTool(toolName, args);
@@ -1921,6 +1922,7 @@ describe("MCP tool service", () => {
         "deployment_status",
         "resources",
         "conversation_migration",
+        "agent_fleet",
         "agent_activity",
         "lifecycle_events",
         "request_attention",
@@ -1945,9 +1947,10 @@ describe("MCP tool service", () => {
         "telegram_bot_send_media",
         "telegram_bot_send_document",
         "telegram_bot_messages",
+        "relay_owner_history",
         "issue_report",
       ]);
-      const optionalReadKeys = new Set(["backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review"]);
+      const optionalReadKeys = new Set(["relay_owner_history", "backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review", "agent_fleet"]);
       for (const tool of listed.tools) {
         if (optionalReadKeys.has(tool.name)) expect(tool.inputSchema.required ?? []).not.toContain("clientRequestId");
         else expect(tool.inputSchema.required).toContain("clientRequestId");
@@ -3122,3 +3125,22 @@ for (const tool of ["send_message", "spawn_agent"] as const) {
     });
   }
 }
+
+
+test("prototype publication tells callers about the critic gate and fresh refusal retries", async () => {
+  const bindings = Object.fromEntries(MCP_TOOL_NAMES.map(name => [name, async () => ({})])) as unknown as McpToolBindings;
+  const server = createViewerMcpServer(createMcpToolService(bindings, new MemoryMcpReceiptStore()));
+  const client = new Client({ name: "prototype-gate-test", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const tool = (await client.listTools()).tools.find(entry => entry.name === "publish_prototype_review")!;
+    expect(tool.description).toContain("visual-critic pass or a passed fix after its last fail");
+    expect(tool.description).toContain("proto-fix (2 rounds)");
+    expect(tool.description).toContain("new clientRequestId");
+    expect(tool.description).toContain("questions without variants");
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});

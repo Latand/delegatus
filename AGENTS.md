@@ -214,6 +214,20 @@ in-container rehearsal under `bun-container` remains in `verify-candidate`
 before promotion. Docker images still build and publish on main and v* tags;
 PRs build only when image install, build or runtime inputs change.
 
+`verify-candidate` also runs the candidate performance gate
+(`src/runtime-host/candidatePerformanceRun.ts`, bounds and reasons in
+`docs/design/candidate-performance-gate.md`) in another throwaway container,
+from the `candidate-gate` image (the candidate plus Chromium, never served):
+a synthetic registry of about 30,000 rows of retained history, two Viewer
+releases as their own processes, live workers handed from one to the other
+through the real demotion and startup adoption, two concurrent writers, eight
+board scopes, and then eight Chromium views of the candidate's own production
+build while two writers run. A breached bound, a missing measurement, a
+missing report or a successor that fails refuses the candidate and the serving
+release keeps serving. Run it locally with `bun scripts/verify-viewer-runtime.ts
+--performance` after `bun run build`, with `CHROME_BIN` set; an empty registry
+proves nothing about a release that has to read history.
+
 Three consequences worth keeping:
 
 - **A failing socket write is a connection event, never a process event.**

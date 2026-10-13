@@ -1,3 +1,5 @@
+import { ownerHistoryRead } from "./ownerHistoryRead";
+import type { OwnerHistoryRead } from "@/lib/externalRelay/ownerHistory";
 import { READ_TOOL_NAMES, type CompanionBoardReads } from "./boardReads";
 import type { CallRequest, CompanionAdmission, OperatorAttempt } from "./admission";
 import { DELEGATION_REASONS, deliveryFailureReason } from "./delegationOutcome";
@@ -17,6 +19,7 @@ export interface CompanionToolContext {
   attempt?: OperatorAttempt;
   admission: CompanionAdmission;
   reads: CompanionBoardReads;
+  ownerHistory?: OwnerHistoryRead;
   read?(name: string, args: Record<string, unknown>): Promise<unknown>;
   endConversation(): void;
 }
@@ -26,7 +29,8 @@ interface ToolEntry {
   name: string;
   description: string;
   capability: string;
-  class: "board-read" | "call-read" | "delegation" | "session-control";
+  privateResult?: true;
+  class: "owner-read" | "board-read" | "call-read" | "delegation" | "session-control";
   parameters: { type: "object"; properties: Record<string, ToolProperty>; required: string[]; additionalProperties: false };
   handler(context: CompanionToolContext, args: Record<string, unknown>): unknown | Promise<unknown>;
 }
@@ -67,12 +71,13 @@ const READ_CAPABILITIES: Record<typeof READ_TOOL_NAMES[number], { capability: st
   get_task: { capability: "One task: its note, hold and steps.", description: "Read one project's task with its note, hold and steps. taskId is a handle returned by list_tasks." },
   list_pipelines: { capability: "Pipelines: the project's pipelines by state, newest first.", description: "Read the project's pipelines by state, newest first." },
   get_pipeline: { capability: "One pipeline: its stages and where each stands.", description: "Read one project's pipeline and its stages. pipelineId is a handle returned by list_pipelines." },
+  agent_fleet: { capability: "Fleet summary: counts by engine, model, effort and account, and account limit waits.", description: "Use this summary first for fleet questions. Request detail or filters for individual agents and pipelines." },
   agent_activity: { capability: "Running agents: who is working on the project now.", description: "Read agents currently working on this project and their conversation handles." },
   conversation_messages: { capability: "Conversation messages: any conversation of the selected project, newest first.", description: "Read a project conversation by its handle, including inactive conversations; follow the opaque cursor for older messages." },
   orchestrator_messages: { capability: "Orchestrator messages: what the selected project's current orchestrator said lately.", description: "Read the current orchestrator's conversation, newest first. By default only its own words; pass roles user and assistant to also see what it was sent. A project name selects another project's orchestrator." },
   search_transcripts: { capability: "Search: find project conversations by what was said in them.", description: "Search project conversation text. A project name selects another project; unknown or ambiguous names are refused." },
-  read_prototype_review: { capability: "Prototype reviews: every variant, question, recommendation and saved decision in one read.", description: "Read the task's whole prototype review, including variant names and descriptions, every question and option, the recommended option, saved answers and exact comment. Frame ids let view_prototype_frame inspect images. Makes no choice and sends nothing." },
-  view_prototype_frame: { capability: "Prototype frames: visually inspect a stored frame, read-only.", description: "Inspect a prototype frame named by read_prototype_review, including an original frame. The backend receives the image. A missing frame is refused. Makes no decision and sends nothing." },
+  read_prototype_review: { capability: "Prototype reviews: find waiting reviews by project or words, and read one compact round with every variant, question, recommendation and saved decision.", description: "With taskId null, find reviews by the operator's words in query (round title, variants, questions or task); query null lists waiting reviews. One match returns that round with complete descriptions, questions, options, recommendations, saved answers and exact comment, frame counts and available views. Several matches return taskId/reviewId rows. A supplied taskId selects its waiting or latest round; reviewId selects an earlier round. Pictures have not been viewed by this read. Makes no choice and sends nothing." },
+  view_prototype_frame: { capability: "Prototype frames: compare up to three variants by view, width and language, through pictures the backend inspects.", description: "Use the same taskId or query from read_prototype_review, with up to three variant numbers, view words, width and language. Returns stored pictures in variant order, or their originals with original true. The backend receives each image; the speaking model speaks its description. Missing pictures are named explicitly. Say what a picture shows only after it was attached in this conversation, naming variant and view. Makes no decision and sends nothing." },
 };
 
 /** Definitions, execution allowlist, argument validation and project admission
@@ -83,6 +88,14 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
     parameters: schema(READ_SCHEMAS[name]),
     handler: (context, args) => context.read ? context.read(name,args) : context.reads.call(context.reads.resolveProject(context.project, typeof args.project === "string" ? args.project : undefined),name,args),
   })),
+  { name: "relay_owner_history", class: "owner-read", privateResult: true,
+    capability: "Telegram groups: the operator's groups where Celestia or a clone is present, and what was written in one of them on a day or over a range.",
+    description: "Read Telegram group history directly for the operator: groups lists eligible chats; messages reads one page oldest first, for today or inclusive dates. Pass nextCursor alone as cursor for the next page; null ends the range. Use messages only in this conversation. Never put message text, names, usernames, titles or chat ids into requests or reports to the orchestrator, other agents, tasks or files. The owner-tools switch defaults OFF.",
+    parameters: schema({ action: { type: "string", enum: ["groups", "messages"] }, chat: { type: ["string", "null"], maxLength: 20 },
+      from: { type: ["string", "null"], maxLength: 10 }, to: { type: ["string", "null"], maxLength: 10 },
+      cursor: { type: ["string", "null"], maxLength: 400 }, limit: { type: ["integer", "null"], minimum: 1, maximum: 100 } }),
+    handler: (context, args) => ownerHistoryRead(args, context.ownerHistory),
+  },
   { name: "orchestrator_reports", capability: "Reports: what the orchestrator reported during this call, and which requests still wait for its answer.", class: "call-read",
     description: "Read this call's requests to the orchestrator, each with its handle, whether its answer arrived and the answering report whole, and the latest other reports, whole. Read it before sending when the operator asks about something already sent. Sends nothing.",
     parameters: schema(),
@@ -161,6 +174,8 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
       return { status: "ending", speech: "The conversation is ending." };
     } },
 ];
+
+export const PRIVATE_RESULT_TOOLS = new Set(COMPANION_TOOL_REGISTRY.filter(entry => entry.privateResult).map(entry => entry.name));
 
 export const COMPANION_TOOLS = COMPANION_TOOL_REGISTRY.map(({ name, description, parameters }) =>
   ({ type: "function" as const, name, description, strict: true, parameters }));

@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { accessKeyWithheld } from "@/lib/team";
-import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
+import { callerConversationId, requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { isStagingMode } from "@/lib/staging";
 import { ExternalRelayError } from "./client";
+import { liveOwnerRelayConversation } from "./ownerAuthority";
 export function guardRelayRoute(request: NextRequest): NextResponse | null {
   const origin = rejectCrossOrigin(request);
   if (origin) return origin;
@@ -39,4 +40,15 @@ export function relayRouteError(error: unknown): NextResponse {
   // A request body that is not JSON.
   if (error instanceof SyntaxError) return refusedHere();
   return NextResponse.json({ error: "local_error" }, { status: 500 });
+}
+
+/** Ordinary installation agents may read; a live Telegram reply cannot carry another group's history. */
+export function guardOwnerHistoryRoute(request: NextRequest): NextResponse | null {
+  const origin = rejectCrossOrigin(request);
+  if (origin) return origin;
+  if (isStagingMode()) return NextResponse.json({ error: "staging" }, { status: 409 });
+  const conversation = callerConversationId(request);
+  if (conversation) return liveOwnerRelayConversation(conversation)
+    ? NextResponse.json({ error: "Group history cannot be read while answering in Telegram.", code: "owner_history_refused" }, { status: 403 }) : null;
+  return guardRelayRoute(request);
 }

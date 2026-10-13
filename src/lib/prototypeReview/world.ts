@@ -13,11 +13,13 @@ import { PrototypeError } from "./input";
 
 export interface PrototypeCaller { conversationId: string | null; project: string | null }
 export interface PrototypeWorld {
+  pipeline(id: string): import("@/lib/pipelines/types").Pipeline | null;
   caller(request: NextRequest): PrototypeCaller;
   stage(conversationId: string): { taskIds: string[]; project: string; source: PrototypeReviewRound["source"] } | null;
   orchestrator(project: string): string | null;
 }
 export const prototypeWorld: PrototypeWorld = {
+  pipeline: id => loadPipelines().find(p => p.id === id) ?? null,
   caller(request) {
     const id = callerConversationId(request);
     if (!id) {

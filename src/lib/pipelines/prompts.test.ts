@@ -318,6 +318,7 @@ test("design and UI stages receive the task-bound prototype publishing contract"
   const pipeline = buildPipeline({ id: "prototype", task: "Layout", project: "viewer", repoDir: "/repo", stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
   const prompt = renderStagePrompt(pipeline, stage, stage.effectiveRole, "");
   expect(prompt).toContain("publish_prototype_review");
-  expect(prompt).toContain("pipeline's task");
+  expect(prompt).toContain("Only its publish stage");
+  expect(prompt).toContain("maxRounds 2");
   for (const role of ["builder", "architect"]) expect(ROLE_DEFAULTS.find(r => r.id === role)!.promptScaffold).toContain("publish_prototype_review");
 });

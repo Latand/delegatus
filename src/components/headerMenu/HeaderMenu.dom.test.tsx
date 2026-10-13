@@ -39,11 +39,12 @@ globalThis.fetch = (async (input: unknown) => {
 const { HeaderMenuPanel, HeaderMenuSheet } = await import("./HeaderMenu");
 const { RailHeaderMenu } = await import("@/components/ProjectRail");
 const { OPEN_VOICE_COMPANION_SETTINGS_EVENT } = await import("@/components/voiceCompanion/VoiceCompanionSetting");
+const { hidePhoneVoice, readPhoneVoice, resetPhoneVoiceForTests, setPhoneVoiceAvailable } = await import("@/components/voiceCompanion/phoneVoiceStore");
 
 let root: Root | undefined;
 afterEach(() => {
   act(() => root?.unmount()); root = undefined;
-  document.body.innerHTML = ""; localStorage.clear(); setLocale("en");
+  document.body.innerHTML = ""; localStorage.clear(); setLocale("en"); resetPhoneVoiceForTests();
 });
 process.on("exit", () => { globalThis.fetch = originalFetch; });
 
@@ -137,6 +138,43 @@ test("phone: Voice Delegatus is reachable through Settings and closes the sheet"
     await click(row);
     expect([opened, closed]).toEqual([1, 1]);
   } finally { window.removeEventListener(OPEN_VOICE_COMPANION_SETTINGS_EVENT, open); }
+});
+
+for (const lang of ["en", "uk"] as const) test(`${lang} phone: «Показати голос» stands directly above Settings only while the voice head is on and hidden, and a tap closes the sheet and shows the head`, async () => {
+  setLocale(lang);
+  dom.innerWidth = 390;
+  let closed = 0;
+  const nav = { closeSheet: () => {}, leave: () => {} } as unknown as MobileNav;
+  await mount(<HeaderMenuSheet title="atlas" project="atlas" nav={nav} board={[]} onClose={() => { closed += 1; }} />);
+  const keys = () => [...document.querySelectorAll("[data-mobile2-menu-row]")].map((row) => row.getAttribute("data-mobile2-menu-row"));
+  const atRest = keys();
+  expect(atRest).not.toContain("voice-show");
+  /* Hidden while the companion is off: nothing to show. */
+  await act(async () => hidePhoneVoice());
+  expect(keys()).toEqual(atRest);
+  /* Shown while on: the menu is as it was. */
+  await act(async () => { resetPhoneVoiceForTests(); localStorage.clear(); setPhoneVoiceAvailable(true); });
+  expect(keys()).toEqual(atRest);
+  await act(async () => hidePhoneVoice());
+  const withRow = keys();
+  expect(withRow.indexOf("voice-show")).toBe(withRow.indexOf("settings") - 1);
+  expect(withRow.filter((key) => key !== "voice-show")).toEqual(atRest);
+  const row = document.querySelector('[data-mobile2-menu-row="voice-show"]')!;
+  expect(row.textContent).toBe(translate(lang, "voiceCompanion.show"));
+  expect(row.textContent).toBe(lang === "uk" ? "Показати голос" : "Show voice");
+  await click(row);
+  expect(closed).toBe(1);
+  expect(readPhoneVoice()).toEqual({ hidden: false, side: "right", available: true });
+  expect(keys()).not.toContain("voice-show");
+});
+
+test("desktop: the ⋯ menu never offers «Показати голос»", async () => {
+  setPhoneVoiceAvailable(true);
+  hidePhoneVoice();
+  const host = await mount(<HeaderMenuPanel project="atlas" onClose={() => {}} />);
+  expect(host.textContent).not.toContain(translate("en", "voiceCompanion.show"));
+  await click(host.querySelector("[data-rail-menu-settings]"));
+  expect(host.textContent).not.toContain(translate("en", "voiceCompanion.show"));
 });
 
 test("Help and learning opens in place under its own row", async () => {

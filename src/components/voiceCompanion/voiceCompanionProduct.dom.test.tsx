@@ -29,7 +29,9 @@ const { VoiceCompanionSetting } = await import("./VoiceCompanionSetting");
 const { COMPANION_SETTINGS_EVENT } = await import("./hostSurfaces");
 const { createCompanionStore } = await import("@/hooks/useVoiceCompanion");
 const { translate } = await import("@/lib/i18n/core");
+const { LAYER } = await import("@/components/layers");
 const { companionErrorMessage } = await import("@/lib/voiceCompanion/errors");
+const { PHONE_VOICE_STORAGE_KEY, readPhoneVoice, resetPhoneVoiceForTests, showPhoneVoice } = await import("./phoneVoiceStore");
 
 const FAKE_KEY = ["fixture", "voice", "value", "42"].join("-");
 const settingsOf = (over: Partial<CompanionSettings> = {}): CompanionSettings => ({
@@ -68,6 +70,8 @@ afterEach(async () => {
     host.remove();
     mounted = null;
   }
+  localStorage.removeItem(PHONE_VOICE_STORAGE_KEY);
+  resetPhoneVoiceForTests();
 });
 async function mount(node: React.ReactNode): Promise<HTMLDivElement> {
   const host = document.createElement("div");
@@ -91,19 +95,32 @@ const click = async (element: Element | null | undefined) => {
   await act(async () => settle());
 };
 
-test("off by default the shell mounts nothing, and on a phone it does not even read the settings", async () => {
+test("off by default the shell mounts nothing on either surface; on the phone, turned on, it mounts the head and no desktop window, and asks for no session", async () => {
   routes(settingsOf());
   await mount(<VoiceCompanionHost project="atlas" mobile={false} />);
   expect(document.querySelector("[data-voice-companion]")).toBeNull();
   expect(harness.calls.map((call) => call.url)).toEqual(["/api/voice-companion/settings"]);
-  await act(async () => mounted!.root.unmount());
-  mounted!.host.remove();
-  mounted = null;
+  await unmountNow();
 
-  routes(settingsOf({ enabled: true }));
+  /* The phone reads the settings as the desktop does, and while off mounts nothing and offers nothing to show. */
+  routes(settingsOf());
   await mount(<VoiceCompanionHost project="atlas" mobile />);
+  expect(document.querySelector("[data-phone-voice], [data-voice-companion]")).toBeNull();
+  expect(harness.calls.map((call) => call.url)).toEqual(["/api/voice-companion/settings"]);
+  expect(readPhoneVoice().available).toBe(false);
+  await unmountNow();
+
+  routes(settingsOf({ enabled: true, keySource: "file" }));
+  await mount(<VoiceCompanionHost project="atlas" mobile />);
+  const head = document.querySelector<HTMLElement>("[data-phone-voice]");
+  expect(head?.dataset.phase).toBe("offline");
+  expect(head?.dataset.mode).toBe("official-realtime");
+  expect(head?.querySelector("[data-phone-voice-head]")?.getAttribute("aria-label")).toBe(`Delegatus · ${translate("en", "voiceCompanion.phase.offline")}`);
   expect(document.querySelector("[data-voice-companion]")).toBeNull();
-  expect(harness.calls).toEqual([]);
+  expect(readPhoneVoice()).toEqual({ hidden: false, side: "right", available: true });
+  expect(sessionCalls()).toEqual([]);
+  await unmountNow();
+  expect(readPhoneVoice().available).toBe(false);
 });
 
 test("turned on, it mounts without starting a call; Talk with no key or a reached cap is refused in words and no session is asked for", async () => {
@@ -399,6 +416,8 @@ async function liveHarness() {
   Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia: async () => stream }, configurable: true });
   /** fail: "before" loses the request on its way in; "after" loses the reply to a request the Viewer handled. */
   const failing: { command: "before" | "after" | null } = { command: null };
+  /** `start`: held until the test settles it, as a slow mint holds a real start. */
+  const holding: { start: Promise<void> | null } = { start: null };
   const document = settingsOf({ enabled: true, keySource: "file" });
   harness.setRoute(async (url, init) => {
     const target = new URL(url, "http://127.0.0.1:8898");
@@ -409,6 +428,7 @@ async function liveHarness() {
     }
     if (target.pathname !== "/api/voice-companion/session") return jsonResponse({ error: "not routed in this test" }, 404);
     const body = typeof init?.body === "string" ? JSON.parse(init.body) as { action?: string } : null;
+    if (body?.action === "start" && holding.start) await holding.start;
     const lost = body?.action === "command" ? failing.command : null;
     if (lost === "before") { failing.command = null; return jsonResponse({ code: "COMPANION_UNAVAILABLE" }, 502); }
     const request = new NextRequest(`http://127.0.0.1${target.pathname}${target.search}`, { method: init?.method ?? "GET", headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" }, ...(typeof init?.body === "string" ? { body: init.body } : {}) });
@@ -440,7 +460,7 @@ async function liveHarness() {
       const id = `report-${reportList.length + 1}`;
       reportList.push({ id, key: id, seq: reportList.length + 1, at: new Date(Date.now() + 1).toISOString(), class: "completed", body, project, correlatesDirective: sent[sent.length - 1],
         origin: { kind: "manager", conversationId: `conversation_${project}`, role: "orchestrator" } });
-    }, service, trackStops: () => track.stops, tones,
+    }, service, holding, trackStops: () => track.stops, trackEnabled: () => track.enabled, tones,
     starts: () => harness.calls.filter((call) => (call.body as { action?: string } | null)?.action === "start").length,
     async release() {
       for (const row of Object.values(storage.read().sessions)) if (!row.closed) await service.close(row.id);
@@ -990,4 +1010,198 @@ test("phone settings on Codex keep the last Codex call and its plan window in bo
       await unmountNow();
     }
   } finally { await act(async () => setLocale("en")); }
+});
+
+/*
+ * The phone's head (docs/design/phone-voice-head-build.md): shown and hidden from this browser's storage, Hide
+ * ending a call by unmounting, a project change keeping the call, and nothing but Talk starting one.
+ */
+const phoneHead = () => document.querySelector<HTMLElement>("[data-phone-voice]");
+/** Opens the head's popover and taps one of its rows. */
+const phoneRow = async (row: "talk" | "hide" | "end" | "mute") => {
+  if (!document.querySelector("[data-phone-voice-pop]")) await click(document.querySelector("[data-phone-voice-head]"));
+  await click(document.querySelector(`[data-phone-voice-${row}]`));
+};
+
+test("phone: a hidden head stays hidden across a reload, mounts nothing and asks for no session; «Показати голос» brings it back with no call", async () => {
+  routes(settingsOf({ enabled: true, keySource: "file" }));
+  localStorage.setItem(PHONE_VOICE_STORAGE_KEY, JSON.stringify({ hidden: true, side: "left" }));
+  await mount(<VoiceCompanionHost project="atlas" mobile />);
+  expect(phoneHead()).toBeNull();
+  expect(harness.calls.map((call) => call.url)).toEqual(["/api/voice-companion/settings"]);
+  expect(readPhoneVoice()).toEqual({ hidden: true, side: "left", available: true });
+  /* A reload: the page forgets what it held, and the storage says hidden still. */
+  await unmountNow();
+  resetPhoneVoiceForTests();
+  await mount(<VoiceCompanionHost project="atlas" mobile />);
+  expect(phoneHead()).toBeNull();
+  expect(readPhoneVoice().hidden).toBe(true);
+
+  await act(async () => showPhoneVoice());
+  await act(async () => settle());
+  expect(phoneHead()?.dataset.phase).toBe("offline");
+  expect(phoneHead()?.dataset.side).toBe("left");
+  expect(JSON.parse(localStorage.getItem(PHONE_VOICE_STORAGE_KEY)!)).toEqual({ hidden: false, side: "left" });
+  await unmountNow();
+  resetPhoneVoiceForTests();
+  await mount(<VoiceCompanionHost project="atlas" mobile />);
+  expect(phoneHead()).not.toBeNull();
+  expect(sessionCalls()).toEqual([]);
+
+  /* A browser that refuses the write keeps the choice for the page. */
+  const setItem = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(localStorage), "setItem");
+  Object.defineProperty(localStorage, "setItem", { value: () => { throw new Error("QuotaExceededError"); }, configurable: true });
+  try {
+    await phoneRow("hide");
+    expect(phoneHead()).toBeNull();
+    expect(readPhoneVoice().hidden).toBe(true);
+    expect(JSON.parse(localStorage.getItem(PHONE_VOICE_STORAGE_KEY)!)).toEqual({ hidden: false, side: "left" });
+  } finally {
+    Reflect.deleteProperty(localStorage, "setItem");
+    if (setItem && localStorage.setItem !== setItem.value) Object.defineProperty(localStorage, "setItem", { ...setItem, configurable: true });
+  }
+});
+
+test("phone: Hide during a call ends it: the microphone is muted and stopped, the session closed and the head gone; Hide while the start is in flight opens no session", async () => {
+  const live = await liveHarness();
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile />);
+    await phoneRow("talk");
+    await pause(200);
+    expect(live.starts()).toBe(1);
+    expect(phoneHead()?.dataset.phase).not.toBe("offline");
+    expect(live.trackStops()).toBe(0);
+    await phoneRow("hide");
+    await pause(300);
+    expect(phoneHead()).toBeNull();
+    expect(readPhoneVoice().hidden).toBe(true);
+    expect(live.trackEnabled()).toBe(false);
+    expect(live.trackStops()).toBeGreaterThan(0);
+    expect(sessionCalls().map((call) => (call.body as { action?: string } | null)?.action)).toContain("close");
+    expect(Object.values(live.storage.read().sessions).every((row) => row.closed)).toBe(true);
+    expect(live.provider.attached).toBe(0);
+  } finally { await unmountNow(); await live.release(); }
+
+  resetPhoneVoiceForTests();
+  localStorage.removeItem(PHONE_VOICE_STORAGE_KEY);
+  const held = await liveHarness();
+  let release = () => {};
+  held.holding.start = new Promise<void>((resolve) => { release = resolve; });
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile />);
+    await phoneRow("talk");
+    await pause(60);
+    expect(phoneHead()?.hasAttribute("data-starting")).toBe(true);
+    await phoneRow("hide");
+    expect(phoneHead()).toBeNull();
+    release();
+    await pause(300);
+    const actions = sessionCalls().map((call) => call.body as { action?: string; requestId?: string; sessionId?: string } | null);
+    const start = actions.find((body) => body?.action === "start") as { requestId?: string };
+    /* Closed by the start's own request id before the session existed, and the session the start then got is closed too. */
+    expect(actions.some((body) => body?.action === "close" && body.requestId === start.requestId)).toBe(true);
+    expect(Object.values(held.storage.read().sessions).every((row) => row.closed)).toBe(true);
+    expect(held.provider.attached).toBe(0);
+    expect(held.trackStops()).toBeGreaterThan(0);
+    expect(held.starts()).toBe(1);
+  } finally { release(); await unmountNow(); await held.release(); }
+});
+
+test("phone: a project change, and a view with no project, keep the same head and the same live call", async () => {
+  const live = await liveHarness();
+  let closed = false, seq = 0;
+  const events: CompanionEvent[] = [];
+  const emit = (payload: Payload) => events.push({ ...payload, version: 1, sessionId: "phone-call", generation: 1, seq: ++seq, eventId: `phone-${seq}`, atMs: seq } as CompanionEvent);
+  harness.setRoute((url, init) => {
+    const path = new URL(url, "http://localhost").pathname;
+    if (path === "/api/voice-companion/settings") return jsonResponse(settingsOf({ enabled: true, keySource: "file" }));
+    if (path === "/api/orchestrator/seat") return jsonResponse({ seat: { project: "atlas", conversationId: "conversation_atlas", seatEpoch: 1, engine: "claude" }, exists: true });
+    if (path !== "/api/voice-companion/session") return undefined;
+    const body = init?.body ? JSON.parse(String(init.body)) : null;
+    if (body?.action === "start") {
+      emit({ type: "session.ready", mode: "official-realtime" });
+      return jsonResponse({ sessionId: "phone-call", sdp: "fake-answer" });
+    }
+    if (body?.action === "close") { closed = true; emit({ type: "session.closed", reason: "operator" }); }
+    return jsonResponse(body ? { ok: true } : { events });
+  });
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile />);
+    await phoneRow("talk");
+    await pause();
+    const head = phoneHead()!;
+    expect(head.dataset.phase).not.toBe("offline");
+    for (const project of ["project-b", null, "project-a"]) {
+      await act(async () => mounted!.root.render(<VoiceCompanionHost project={project} mobile />));
+      await pause(200);
+      expect(phoneHead() === head).toBe(true);
+      expect(closed).toBe(false);
+      expect(live.trackStops()).toBe(0);
+      expect(live.starts()).toBe(1);
+      expect(head.dataset.phase).not.toBe("offline");
+      const contexts = sessionCalls().filter(call => (call.body as { action?: string } | null)?.action === "context");
+      expect(contexts.at(-1)?.body).toEqual({ action: "context", sessionId: "phone-call", project });
+    }
+  } finally { await unmountNow(); await live.release(); }
+});
+
+test("the switch that turns the voice on names no surface, in both languages", () => {
+  for (const language of ["en", "uk"] as const) expect(translate(language, "voiceCompanion.settings.enable")).not.toMatch(/desktop|десктоп|комп/iu);
+});
+
+test("phone: a live or starting call keeps the head above every layer a phone surface paints (image preview, search, full-screen dialogs); with no call it stays at the dock", async () => {
+  const live = await liveHarness();
+  let release = () => {};
+  live.holding.start = new Promise<void>((resolve) => { release = resolve; });
+  const level = () => Number(phoneHead()?.style.zIndex);
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile />);
+    expect(level()).toBe(LAYER.dock);
+    await phoneRow("talk");
+    await pause(60);
+    expect(phoneHead()?.hasAttribute("data-starting")).toBe(true);
+    /* Starting already holds the microphone: the sign is above the preview (overlay) and below the toasts. */
+    expect(level()).toBeGreaterThan(LAYER.overlay);
+    expect(level()).toBeLessThan(LAYER.toast);
+    release();
+    await pause(200);
+    expect(phoneHead()?.dataset.phase).not.toBe("offline");
+    expect(level()).toBeGreaterThan(LAYER.overlay);
+    await phoneRow("end");
+    await pause(300);
+    expect(phoneHead()?.dataset.phase).toBe("offline");
+    expect(level()).toBe(LAYER.dock);
+  } finally { release(); await unmountNow(); await live.release(); }
+});
+
+test("phone: a tap on the head, a drag, Hide and Show start no call; only Talk does", async () => {
+  routes(settingsOf({ enabled: true, keySource: "file" }));
+  await mount(<VoiceCompanionHost project="atlas" mobile />);
+  /* A tap opens the popover: Talk, then Hide, and nothing else. */
+  await click(document.querySelector("[data-phone-voice-head]"));
+  const rows = [...document.querySelectorAll("[data-phone-voice-pop] [role='menuitem']")].map((row) => row.textContent);
+  expect(rows).toEqual([translate("en", "voiceCompanion.talk"), translate("en", "voiceCompanion.hide")]);
+  await click(document.querySelector("[data-phone-voice-head]"));
+  expect(document.querySelector("[data-phone-voice-pop]")).toBeNull();
+  /* A drag to the other side: the side is kept, and the popover does not open. */
+  const head = document.querySelector<HTMLElement>("[data-phone-voice-head]")!;
+  const pointer = (type: string, x: number) => head.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 7, button: 0, clientX: x, clientY: 600 } as PointerEventInit));
+  await act(async () => { pointer("pointerdown", 1400); pointer("pointermove", 900); pointer("pointermove", 40); });
+  expect(phoneHead()?.hasAttribute("data-dragging")).toBe(true);
+  expect(document.querySelectorAll("[data-phone-voice-slot]").length).toBe(2);
+  await act(async () => { pointer("pointerup", 40); head.click(); });
+  await act(async () => settle());
+  expect(phoneHead()?.dataset.side).toBe("left");
+  expect(document.querySelector("[data-phone-voice-pop]")).toBeNull();
+  await phoneRow("hide");
+  expect(phoneHead()).toBeNull();
+  await act(async () => showPhoneVoice());
+  await act(async () => settle());
+  expect(phoneHead()?.dataset.side).toBe("left");
+  expect(sessionCalls()).toEqual([]);
+  /* With no project in view, Talk says to open one, in the bubble, and still starts nothing. */
+  await act(async () => mounted!.root.render(<VoiceCompanionHost project={null} mobile />));
+  await phoneRow("talk");
+  expect(document.querySelector("[data-phone-voice-bubble]")?.textContent?.replace(/\u00a0/gu, " ")).toBe(companionErrorMessage("NO_PROJECT", "en"));
+  expect(sessionCalls()).toEqual([]);
 });

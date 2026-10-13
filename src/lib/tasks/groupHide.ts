@@ -79,7 +79,7 @@ export function isCurrentSeatConversation(seat: SeatRefs | null | undefined, ref
 /**
  * A task that exists only because a seat launch minted it (#1841): every live
  * assignment names a seat conversation and no pipeline runs under it. The
- * board draws no band for it and the Tasks panel lists no row; the task stays
+ * board draws no band for it and no task list shows a row; the task stays
  * in the store, where the seat keeps its notes. A task that also carries real
  * work is not seat-only and keeps its card.
  */

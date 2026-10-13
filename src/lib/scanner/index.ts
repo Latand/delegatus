@@ -1,5 +1,11 @@
+import { readBackgroundTaskLedger, pendingBackgroundTasks } from "@/lib/pipelines/backgroundTasks";
+import { activityFactsFromRecords } from "@/lib/lifecycle/agentActivityEvidence";
+import { activityProcessReader } from "@/lib/lifecycle/agentActivityProcesses";
+import { tailRecordsResult } from "./activity";
 import type { FileEntry, ProjectCatalogEntry } from "../types";
-import { agentRegistry, RegistryReadError } from "../agent/registry";
+import { agentRegistry, RegistryReadError, resolveConversationAlias } from "../agent/registry";
+import { registryRowProjection, type RegistryRowProjector } from "../agent/sqliteRegistryStore";
+import type { ViewerConversationId } from "../accounts/migration/contracts";
 import { forEachCooperatively, yieldToRuntime } from "../cooperative";
 import { tickFlows } from "../flows/engine";
 import { withFlowSnapshot } from "../flows/store";
@@ -29,6 +35,7 @@ import { scanRootEntries } from "./roots";
 import { createTranscriptPathCanonicalizer, type TranscriptPathCanonicalizer } from "./transcriptIdentity";
 import { waitingInputProbe } from "./waitingInput";
 import { observeCodexSubagentTranscripts } from "../runtime/codexSubagentDetection";
+import { machineCpuPressurePollMs } from "../runtime/cpuPressure";
 
 function applyProcessState(entry: FileEntry, holders: Map<string, number>) {
   if (entry.root === "claude-tasks" && entry.path.endsWith(".output")) {
@@ -112,6 +119,33 @@ export interface FileCatalogScan {
   complete: boolean;
 }
 
+/* Identity projections for the pin family walk. Enumerating the rows read
+   every cold payload, and resolving each alias through the registry opened a
+   read transaction per edge and membership: 5.9 s for one pinned scope over
+   thirty thousand rows (#2761). Aliases resolve against the same snapshot. */
+const PIN_CONVERSATION_PATHS: RegistryRowProjector<"conversations", { id: ViewerConversationId; latest: string | null; paths: string[] }> = {
+  id: "scanner.pin-conversation-paths.v1",
+  collection: "conversations",
+  project: (conversation) => ({
+    id: conversation.id,
+    latest: conversation.generations.at(-1)?.path ?? null,
+    paths: [...conversation.generations.map((generation) => generation.path), ...conversation.continuityPaths],
+  }),
+};
+const PIN_LINEAGE: RegistryRowProjector<"lineageEdges", { parent: ViewerConversationId; child: ViewerConversationId }> = {
+  id: "scanner.pin-lineage.v1",
+  collection: "lineageEdges",
+  project: (edge) => ({ parent: edge.parentConversationId, child: edge.childConversationId }),
+};
+const PIN_MEMBERSHIPS: RegistryRowProjector<"memberships", Array<{ container: string; conversationId: ViewerConversationId }>> = {
+  id: "scanner.pin-memberships.v1",
+  collection: "memberships",
+  project: (memberships) => memberships.map((membership) => ({
+    container: `${membership.kind}:${membership.containerId}`,
+    conversationId: membership.conversationId,
+  })),
+};
+
 /** Transcript paths a pin value requires in the feed. A conversation id is
     canonicalized through the registry's durable aliases and maps to its
     latest generation. A plain path also brings the registry-current
@@ -124,41 +158,37 @@ export function pinnedPathsFor(value: string | readonly string[] | undefined): R
   try {
     const registry = agentRegistry();
     const snapshot = registry.readOnlySnapshot();
+    const canonical = (id: ViewerConversationId) => resolveConversationAlias(snapshot, id);
     const paths = new Set<string>();
     const latestByKnownPath = new Map<string, string>();
     const conversationIdByKnownPath = new Map<string, `conversation_${string}`>();
-    for (const conversation of Object.values(snapshot.conversations)) {
-      const latest = conversation.generations.at(-1)?.path;
+    for (const [, conversation] of registryRowProjection(snapshot, PIN_CONVERSATION_PATHS)) {
+      const latest = conversation.latest;
       if (!latest) continue;
-      for (const generation of conversation.generations) {
-        latestByKnownPath.set(generation.path, latest);
-        conversationIdByKnownPath.set(generation.path, conversation.id);
-      }
-      for (const pathname of conversation.continuityPaths) {
+      for (const pathname of conversation.paths) {
         latestByKnownPath.set(pathname, latest);
         conversationIdByKnownPath.set(pathname, conversation.id);
       }
     }
     const children = new Map<string, `conversation_${string}`[]>();
-    for (const edge of Object.values(snapshot.lineageEdges)) {
-      const parent = registry.canonicalConversationId(edge.parentConversationId);
-      const child = registry.canonicalConversationId(edge.childConversationId);
+    for (const [, edge] of registryRowProjection(snapshot, PIN_LINEAGE)) {
+      const parent = canonical(edge.parent);
+      const child = canonical(edge.child);
       const rows = children.get(parent) ?? [];
       if (!rows.includes(child)) rows.push(child);
       children.set(parent, rows);
     }
     const membersByContainer = new Map<string, `conversation_${string}`[]>();
-    for (const memberships of Object.values(snapshot.memberships)) {
+    for (const [, memberships] of registryRowProjection(snapshot, PIN_MEMBERSHIPS)) {
       for (const membership of memberships) {
-        const key = `${membership.kind}:${membership.containerId}`;
-        const rows = membersByContainer.get(key) ?? [];
-        const member = registry.canonicalConversationId(membership.conversationId);
+        const rows = membersByContainer.get(membership.container) ?? [];
+        const member = canonical(membership.conversationId);
         if (!rows.includes(member)) rows.push(member);
-        membersByContainer.set(key, rows);
+        membersByContainer.set(membership.container, rows);
       }
     }
     const addFamily = (seed: `conversation_${string}`) => {
-      const queue = [registry.canonicalConversationId(seed)];
+      const queue = [canonical(seed)];
       const seen = new Set<string>();
       while (queue.length) {
         const conversationId = queue.shift()!;
@@ -168,7 +198,7 @@ export function pinnedPathsFor(value: string | readonly string[] | undefined): R
         const latest = conversation?.generations.at(-1)?.path;
         if (latest) paths.add(latest);
         const parent = snapshot.lineageEdges[conversationId]?.parentConversationId;
-        if (parent) queue.push(registry.canonicalConversationId(parent));
+        if (parent) queue.push(canonical(parent));
         for (const child of children.get(conversationId) ?? []) queue.push(child);
         for (const membership of snapshot.memberships[conversationId] ?? []) {
           for (const member of membersByContainer.get(`${membership.kind}:${membership.containerId}`) ?? []) queue.push(member);
@@ -177,8 +207,8 @@ export function pinnedPathsFor(value: string | readonly string[] | undefined): R
     };
     for (const pin of values) {
       if (pin.startsWith("conversation_")) {
-        const canonical = registry.canonicalConversationId(pin as `conversation_${string}`) ?? pin;
-        if (snapshot.conversations[canonical]) addFamily(canonical);
+        const id = canonical(pin as `conversation_${string}`) ?? pin;
+        if (snapshot.conversations[id]) addFamily(id);
         continue;
       }
       paths.add(pin);
@@ -342,6 +372,14 @@ async function listFilesInternal(
     entry.goal = goalFor(entry);
     entry.ctx = ctxFor(entry);
     entry.lastTurn = lastTurnFor(entry);
+    if (entry.engine === "claude" || entry.engine === "codex") {
+      const tail = tailRecordsResult(entry.path, entry.size, entry.mtime * 1000);
+      if (tail.complete) {
+        const facts = activityFactsFromRecords(tail.records);
+        facts.turnBoundaryVerified = !tail.prefixTruncated || facts.turnBoundaryFound === true;
+        entry.agentActivity = facts;
+      } else entry.agentActivity = { lastRecordAt: null, turnBoundaryVerified: false };
+    }
     entry.lastAssistantMessageAt = lastAssistantMessageAtFor(entry);
     entry.lastAgentWorkAt = lastAgentWorkAtFor(entry);
     entry.pendingWakeup = pendingWakeupFor(entry);
@@ -351,11 +389,21 @@ async function listFilesInternal(
     applyProcessState(entry, holders);
   });
   assignTranscriptPids(entries);
+  const activityProcesses = activityProcessReader();
   // After pid assignment: the claude effort source is the live process argv.
   await forEachEntryBatchYielding(entries, async (entry) => {
+    if (entry.agentActivity && entry.proc === "running" && entry.pid !== null) {
+      entry.agentActivity.workProcesses = activityProcesses(entry.pid);
+      entry.agentActivity.turnStartedAt = entry.lastTurn?.endedAt === null ? entry.lastTurn.startedAt : entry.agentActivity.turnStartedAt;
+    }
     entry.effort = entryEffort(entry);
     entry.serviceTier = entryServiceTier(entry, durableTiers);
     entry.fast = entry.serviceTier === null ? null : entry.serviceTier !== "default";
+    if (entry.engine === "claude" && entry.agentActivity && entry.proc === "running") {
+      const ledger = await readBackgroundTaskLedger(entry.path);
+      entry.agentActivity.backgroundVerified = ledger !== null;
+      if (ledger) entry.agentActivity.background = pendingBackgroundTasks(ledger, Date.now()).filter(task => task.kind !== "wakeup").map(task => ({ id: task.id, description: entry.agentActivity?.background?.find(item => item.id === task.id)?.description ?? null }));
+    }
     const pending = pendingQuestionFor(entry);
     entry.pendingQuestion = pending && entry.pid !== null
       ? { ...pending, paneTarget: await resolveTarget(entry.pid) }
@@ -431,9 +479,28 @@ export async function reconcileFileControllers(entries: FileEntry[]): Promise<vo
     console.error("[pipelines] skipping embedded review flow reconcile", error);
   }
   await yieldToRuntime();
-  await tickPipelines(entries);
-  await yieldToRuntime();
-  await tickWorkflows(entries);
+  // A controller that finishes its pass may still own the FIFO head an
+  // unfinished peer needs. Keep both ticking for the whole shared pass.
+  const controllers = [tickPipelines, tickWorkflows] as const;
+  const polling: (Promise<void> | null)[] = controllers.map(() => null);
+  const watch = setInterval(() => {
+    for (const [index, tick] of controllers.entries()) {
+      if (polling[index]) continue;
+      polling[index] = tick(entries).then(() => {})
+        .catch(error => { console.error("[scanner] work controller polling failed", error); })
+        .finally(() => { polling[index] = null; });
+    }
+  }, machineCpuPressurePollMs());
+  watch.unref();
+  try {
+    const results = await Promise.allSettled(controllers.map(tick => tick(entries)));
+    for (const result of results) if (result.status === "rejected") throw result.reason;
+  } finally {
+    // A timer may have started another pass; retain admission until it too
+    // settles, then leave no controller work behind this scanner pass.
+    while (polling.some(Boolean)) await Promise.all(polling);
+    clearInterval(watch);
+  }
   await yieldToRuntime();
   /* Canonical task membership (#1586): every root conversation the board draws
      belongs to a task. Placeholders are minted here, on the durable controller

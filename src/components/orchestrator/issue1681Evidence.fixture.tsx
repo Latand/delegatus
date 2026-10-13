@@ -35,6 +35,7 @@ import "../kanban/kanbanBoard.css";
  */
 
 const PROJECT = "atlas";
+const fixtureNow = Date.now() / 1000;
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 /** `?surface=` picks the host, `?dock=` its width, `?tick=` which reading,
     `?face=` which chip face, `?incumbent=` which status read. */
@@ -110,6 +111,13 @@ function baseAnswer(): SeatTickSettingsAnswer {
       windowKnown: true, updatedAt: ago(5), setBy: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, why: null,
       lastAttempt: params.get("autoRotate") === "failed" ? { id: "fixture-attempt", seatEpoch: 1, conversationId: "conversation_fixture", startedAt: ago(5),
         tokens: 720000, windowTokens: 1000000, thresholdPercent: 60, state: "failed", error: "fixture launch refused", told: { report: true, card: true }, nextAttemptAt: ago(-55) } : null },
+    ...(params.get("release") ? { release: {
+      enabled: true, askBeforePublish: true, minChanges: 30, minGapHours: 12, available: true,
+      updatedAt: ago(20), setBy: { kind: "gateway" as const, project: PROJECT, conversationId: null, seatEpoch: null }, why: null,
+      status: { live: null, lastRun: { key: "fixture-release", at: Date.now() - 86400000, outcome: "published" as const, cut: "fixture-cut" }, request: null,
+        hold: { reason: "An installation incident is being investigated.", at: ago(20), by: { kind: "gateway" as const, project: PROJECT, conversationId: null, seatEpoch: null } }, blocked: null,
+        observation: { state: "blocked" as const, blocker: 10, reason: params.get("release") === "unknown" ? "unknown-value" : "capture-tools: tesseract", cut: { revision: "fixture-cut", at: 0 }, count: 45, at: Date.now(), lastTag: "v1.0.0", nextEligibleAt: Date.now() } }
+    } } : {}),
     maintenance: maintenance(),
     project: PROJECT,
     changed: false,
@@ -249,6 +257,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const body = params.get("tick") === "blocked" ? blockedAnswer() : answer();
     return json({ ...body, changed: init?.method === "PUT" });
   }
+  if (url.startsWith("/api/operator/settings")) return json({ locale: params.get("locale") ?? "en" });
   if (url.startsWith("/api/roles")) return json(rolesCatalogue);
   if (url.startsWith("/api/accounts")) return json(accounts);
   if (url.startsWith("/api")) return json({});
@@ -395,7 +404,7 @@ function Phone() {
         project={PROJECT}
         projectName="Atlas"
         sheet={sheet}
-        now={Date.now() / 1000}
+        now={fixtureNow}
         state={live}
         status={{ seat, pending: null, exists: true, viewerMcpRegistered: true }}
         file={file}

@@ -9,6 +9,11 @@ import type { FileEntry } from "@/lib/types";
 import { isCardHandle } from "./cardDrag";
 import { KanbanBoard } from "./KanbanBoard";
 import type { TaskMutationPorts } from "./useTaskMutations";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* The whole card is the drag handle (operator, 2026-10-02). Mounted over the
    real board, driven with pointer events. happy-dom lays nothing out and has no

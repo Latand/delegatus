@@ -98,7 +98,7 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: settings edits the mach
   const host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host);
   await act(async () => { root.render(<WorkerLimitSettingsRow project="one" />); });
   const field = host.querySelector("input")!;
-  expect(host.textContent).toContain(lang === "en" ? "Here: own limit 10" : "Тут свій ліміт: 10");
+  expect(host.textContent).toContain(lang === "en" ? "7 here (own limit 10) · 19 on machine" : "7 тут (свій ліміт 10) · 19 на машині");
   await blur(field, "12"); expect(writes).toEqual([{ value: 12 }]);
   refused = true; await blur(field, "14"); expect(field.value).toBe("12");
   await blur(field, "0"); expect(writes).toHaveLength(2);

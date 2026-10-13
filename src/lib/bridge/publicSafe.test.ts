@@ -1,6 +1,18 @@
 import { expect, test } from "bun:test";
 
 import { privateClasses, type PublicDenyList } from "./publicSafe";
+import { renderReport } from "./reportRender";
+
+test("a bridge item copying a fleet account row retains the account privacy classification", () => {
+  const account = "fixture-account-one";
+  const row = JSON.stringify({ engine: "claude", account, agents: [9,0], session: [100,"later"] });
+  expect(privateClasses(row, { accounts: [account], people: [], local: [], projects: [] })).toContain("account");
+  const report = renderReport({ class: "status", name: "Fleet", at: new Date("2026-10-12T15:00:00Z"), locale: "en", timeZone: "UTC",
+    sections: { inProgress: [row] }, deny: { accounts: [account], people: [], local: [], projects: [] } });
+  expect(report.dropped.account).toBe(1);
+  expect(report.empty).toBe(true);
+  expect(JSON.stringify(report.cut)).not.toContain(account);
+});
 
 /* docs/design/orchestrator-reports.md §3.7, §5.5. Every name below is
    invented for this test. */

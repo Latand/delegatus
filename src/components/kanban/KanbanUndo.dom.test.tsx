@@ -5,6 +5,11 @@ import type { Root } from "react-dom/client";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 
 import type { PatchBody, TaskMutationPorts } from "./useTaskMutations";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* Undo and redo on the desktop board (#1856), rendered by React against
    invented tasks and a scripted store that keeps the revision fence the real

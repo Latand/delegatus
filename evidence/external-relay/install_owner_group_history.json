@@ -1,0 +1,678 @@
+{
+  "spec": {
+    "document": "docs/design/relay-owner-group-history.md",
+    "revision": "507ac6e0",
+    "bytes": 34077,
+    "sha256": "becc3785513c31c22411a00af4f8b7a2b3eea6348ef0c4ec097670d18fed5996"
+  },
+  "recorded_against": "local double (ownerHistory.fixture.ts); no call to Celestia",
+  "request_headers": {
+    "Authorization": "Bearer [redacted]",
+    "Delegatus-Relay-Version": "1"
+  },
+  "scenarios": [
+    {
+      "name": "list",
+      "reads": [
+        {
+          "service_now": "2026-10-12T09:00:00.000Z",
+          "exchanges": [
+            {
+              "request": {
+                "method": "GET",
+                "path": "/v1/targets/first/owner/groups",
+                "query": []
+              },
+              "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                  "groups": [
+                    {
+                      "chat_id": -101,
+                      "title": "Example group 1"
+                    },
+                    {
+                      "chat_id": -102,
+                      "title": "Example group 2"
+                    },
+                    {
+                      "chat_id": -103,
+                      "title": "Example group 3"
+                    }
+                  ]
+                }
+              }
+            }
+          ],
+          "outcome": {
+            "available": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "today plus next page",
+      "reads": [
+        {
+          "service_now": "2026-10-12T09:00:00.000Z",
+          "exchanges": [
+            {
+              "request": {
+                "method": "GET",
+                "path": "/v1/targets/first/owner/groups/-101/messages",
+                "query": [
+                  [
+                    "tz",
+                    "Europe/Kyiv"
+                  ],
+                  [
+                    "limit",
+                    "1"
+                  ]
+                ]
+              },
+              "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                  "chat_id": -101,
+                  "title": "Example group 1",
+                  "timezone": "Europe/Kyiv",
+                  "start": "2026-10-12T00:00:00+03:00",
+                  "end": "2026-10-13T00:00:00+03:00",
+                  "oldest_stored_at": "2026-10-09T09:00:00Z",
+                  "messages": [
+                    {
+                      "message_id": 10,
+                      "sent_at": "2026-10-12T09:00:00Z",
+                      "author": {
+                        "user_id": 19,
+                        "name": "Member one",
+                        "username": null
+                      },
+                      "from_assistant": false,
+                      "thread_id": null,
+                      "reply_to_message_id": null,
+                      "text": "Synthetic message 10",
+                      "media": null,
+                      "truncated": false
+                    }
+                  ],
+                  "next_cursor": "10"
+                }
+              }
+            }
+          ],
+          "outcome": {
+            "available": true,
+            "next_cursor": "10"
+          }
+        },
+        {
+          "service_now": "2026-10-12T09:00:00.000Z",
+          "exchanges": [
+            {
+              "request": {
+                "method": "GET",
+                "path": "/v1/targets/first/owner/groups/-101/messages",
+                "query": [
+                  [
+                    "tz",
+                    "Europe/Kyiv"
+                  ],
+                  [
+                    "from",
+                    "2026-10-12"
+                  ],
+                  [
+                    "to",
+                    "2026-10-12"
+                  ],
+                  [
+                    "cursor",
+                    "10"
+                  ]
+                ]
+              },
+              "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                  "chat_id": -101,
+                  "title": "Example group 1",
+                  "timezone": "Europe/Kyiv",
+                  "start": "2026-10-12T00:00:00+03:00",
+                  "end": "2026-10-13T00:00:00+03:00",
+                  "oldest_stored_at": "2026-10-09T09:00:00Z",
+                  "messages": [
+                    {
+                      "message_id": 11,
+                      "sent_at": "2026-10-12T09:00:00Z",
+                      "author": {
+                        "user_id": 20,
+                        "name": "Member one",
+                        "username": null
+                      },
+                      "from_assistant": false,
+                      "thread_id": null,
+                      "reply_to_message_id": null,
+                      "text": "Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic…",
+                      "media": null,
+                      "truncated": true
+                    },
+                    {
+                      "message_id": 12,
+                      "sent_at": "2026-10-12T09:00:00Z",
+                      "author": {
+                        "user_id": 21,
+                        "name": "Member one",
+                        "username": null
+                      },
+                      "from_assistant": false,
+                      "thread_id": null,
+                      "reply_to_message_id": null,
+                      "text": "Synthetic message 12",
+                      "media": {
+                        "kind": "voice",
+                        "description": "Synthetic voice description"
+                      },
+                      "truncated": false
+                    }
+                  ],
+                  "next_cursor": null
+                }
+              }
+            }
+          ],
+          "outcome": {
+            "available": true,
+            "next_cursor": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "explicit three-day range",
+      "reads": [
+        {
+          "service_now": "2026-10-12T09:00:00.000Z",
+          "exchanges": [
+            {
+              "request": {
+                "method": "GET",
+                "path": "/v1/targets/first/owner/groups/-101/messages",
+                "query": [
+                  [
+                    "tz",
+                    "Europe/Kyiv"
+                  ],
+                  [
+                    "from",
+                    "2026-10-10"
+                  ],
+                  [
+                    "to",
+                    "2026-10-12"
+                  ],
+                  [
+                    "limit",
+                    "2"
+                  ]
+                ]
+              },
+              "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                  "chat_id": -101,
+                  "title": "Example group 1",
+                  "timezone": "Europe/Kyiv",
+                  "start": "2026-10-10T00:00:00+03:00",
+                  "end": "2026-10-13T00:00:00+03:00",
+                  "oldest_stored_at": "2026-10-09T09:00:00Z",
+                  "messages": [
+                    {
+                      "message_id": 4,
+                      "sent_at": "2026-10-10T09:00:00Z",
+                      "author": {
+                        "user_id": 13,
+                        "name": "Member one",
+                        "username": null
+                      },
+                      "from_assistant": false,
+                      "thread_id": null,
+                      "reply_to_message_id": null,
+                      "text": "Synthetic message 4",
+                      "media": null,
+                      "truncated": false
+                    },
+                    {
+                      "message_id": 5,
+                      "sent_at": "2026-10-10T09:00:00Z",
+                      "author": {
+                        "user_id": 14,
+                        "name": "Member one",
+                        "username": null
+                      },
+                      "from_assistant": false,
+                      "thread_id": null,
+                      "reply_to_message_id": null,
+                      "text": "Synthetic message 5",
+                      "media": null,
+                      "truncated": false
+                    }
+                  ],
+                  "next_cursor": "5"
+                }
+              }
+            }
+          ],
+          "outcome": {
+            "available": true,
+            "next_cursor": "5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "continuation in later call",
+      "reads": [
+        {
+          "service_now": "2026-10-13T09:00:00.000Z",
+          "exchanges": [
+            {
+              "request": {
+                "method": "GET",
+                "path": "/v1/targets/first/owner/groups/-101/messages",
+                "query": [
+                  [
+                    "tz",
+                    "Europe/Kyiv"
+                  ],
+                  [
+                    "from",
+                    "2026-10-10"
+                  ],
+                  [
+                    "to",
+                    "2026-10-12"
+                  ],
+                  [
+                    "cursor",
+                    "5"
+                  ]
+                ]
+              },
+              "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                  "chat_id": -101,
+                  "title": "Example group 1",
+                  "timezone": "Europe/Kyiv",
+                  "start": "2026-10-10T00:00:00+03:00",
+                  "end": "2026-10-13T00:00:00+03:00",
+                  "oldest_stored_at": "2026-10-09T09:00:00Z",
+                  "messages": [
+                    {
+                      "message_id": 6,
+                      "sent_at": "2026-10-10T09:00:00Z",
+                      "author": {
+                        "user_id": 15,
+                        "name": "Member one",
+                        "username": null
+                      },
+                      "from_assistant": false,
+                      "thread_id": null,
+                      "reply_to_message_id": null,
+                      "text": "Synthetic message 6",
+                      "media": null,
+                      "truncated": false
+                    },
+                    {
+                      "message_id": 7,
+                      "sent_at": "2026-10-11T09:00:00Z",
+                      "author": {
+                        "user_id": 16,
+                        "name": "Member one",
+                        "username": null
+                      },
+                      "from_assistant": false,
+                      "thread_id": null,
+                      "reply_to_message_id": null,
+                      "text": "Synthetic message 7",
+                      "media": null,
+                      "truncated": false
+                    },
+                    {
+                      "message_id": 8,
+                      "sent_at": "2026-10-11T09:00:00Z",
+                      "author": {
+                        "user_id": 17,
+                        "name": "Member one",
+                        "username": null
+                      },
+                      "from_assistant": false,
+                      "thread_id": null,
+                      "reply_to_message_id": null,
+                      "text": "Synthetic message 8",
+                      "media": null,
+                      "truncated": false
+                    },
+                    {
+                      "message_id": 9,
+                      "sent_at": "2026-10-11T09:00:00Z",
+                      "author": {
+                        "user_id": 18,
+                        "name": "Member one",
+                        "username": null
+                      },
+                      "from_assistant": false,
+                      "thread_id": null,
+                      "reply_to_message_id": null,
+                      "text": "Synthetic message 9",
+                      "media": null,
+                      "truncated": false
+                    },
+                    {
+                      "message_id": 10,
+                      "sent_at": "2026-10-12T09:00:00Z",
+                      "author": {
+                        "user_id": 19,
+                        "name": "Member one",
+                        "username": null
+                      },
+                      "from_assistant": false,
+                      "thread_id": null,
+                      "reply_to_message_id": null,
+                      "text": "Synthetic message 10",
+                      "media": null,
+                      "truncated": false
+                    },
+                    {
+                      "message_id": 11,
+                      "sent_at": "2026-10-12T09:00:00Z",
+                      "author": {
+                        "user_id": 20,
+                        "name": "Member one",
+                        "username": null
+                      },
+                      "from_assistant": false,
+                      "thread_id": null,
+                      "reply_to_message_id": null,
+                      "text": "Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic message Synthetic…",
+                      "media": null,
+                      "truncated": true
+                    },
+                    {
+                      "message_id": 12,
+                      "sent_at": "2026-10-12T09:00:00Z",
+                      "author": {
+                        "user_id": 21,
+                        "name": "Member one",
+                        "username": null
+                      },
+                      "from_assistant": false,
+                      "thread_id": null,
+                      "reply_to_message_id": null,
+                      "text": "Synthetic message 12",
+                      "media": {
+                        "kind": "voice",
+                        "description": "Synthetic voice description"
+                      },
+                      "truncated": false
+                    }
+                  ],
+                  "next_cursor": null
+                }
+              }
+            }
+          ],
+          "outcome": {
+            "available": true,
+            "next_cursor": null
+          }
+        }
+      ]
+    },
+    {
+      "name": "forbidden group",
+      "reads": [
+        {
+          "service_now": "2026-10-13T09:00:00.000Z",
+          "exchanges": [
+            {
+              "request": {
+                "method": "GET",
+                "path": "/v1/targets/first/owner/groups/-999/messages",
+                "query": [
+                  [
+                    "tz",
+                    "Europe/Kyiv"
+                  ]
+                ]
+              },
+              "response": {
+                "status": 404,
+                "headers": {},
+                "body": {
+                  "error": {
+                    "code": "not_found",
+                    "message": "not found"
+                  }
+                }
+              }
+            }
+          ],
+          "outcome": {
+            "available": false,
+            "code": "not_found"
+          }
+        }
+      ]
+    },
+    {
+      "name": "bad timezone",
+      "reads": [
+        {
+          "service_now": "2026-10-13T09:00:00.000Z",
+          "exchanges": [
+            {
+              "request": {
+                "method": "GET",
+                "path": "/v1/targets/first/owner/groups/-101/messages",
+                "query": [
+                  [
+                    "tz",
+                    "Invalid/Zone"
+                  ]
+                ]
+              },
+              "response": {
+                "status": 422,
+                "headers": {},
+                "body": {
+                  "error": {
+                    "code": "malformed",
+                    "message": "malformed"
+                  }
+                }
+              }
+            }
+          ],
+          "outcome": {
+            "available": false,
+            "code": "malformed"
+          }
+        }
+      ]
+    },
+    {
+      "name": "overlong range",
+      "reads": [
+        {
+          "service_now": "2026-10-13T09:00:00.000Z",
+          "exchanges": [
+            {
+              "request": {
+                "method": "GET",
+                "path": "/v1/targets/first/owner/groups/-101/messages",
+                "query": [
+                  [
+                    "tz",
+                    "Europe/Kyiv"
+                  ],
+                  [
+                    "from",
+                    "2026-09-01"
+                  ],
+                  [
+                    "to",
+                    "2026-10-12"
+                  ]
+                ]
+              },
+              "response": {
+                "status": 422,
+                "headers": {},
+                "body": {
+                  "error": {
+                    "code": "malformed",
+                    "message": "malformed"
+                  }
+                }
+              }
+            }
+          ],
+          "outcome": {
+            "available": false,
+            "code": "malformed"
+          }
+        }
+      ]
+    },
+    {
+      "name": "malformed arguments",
+      "reads": [
+        {
+          "service_now": "2026-10-13T09:00:00.000Z",
+          "exchanges": [
+            {
+              "request": {
+                "method": "GET",
+                "path": "/v1/targets/first/owner/groups/-101/messages",
+                "query": [
+                  [
+                    "tz",
+                    "Europe/Kyiv"
+                  ],
+                  [
+                    "limit",
+                    "101"
+                  ]
+                ]
+              },
+              "response": {
+                "status": 400,
+                "headers": {},
+                "body": {
+                  "error": {
+                    "code": "malformed",
+                    "message": "malformed"
+                  }
+                }
+              }
+            }
+          ],
+          "outcome": {
+            "available": false,
+            "code": "malformed"
+          }
+        }
+      ]
+    },
+    {
+      "name": "rate limit",
+      "precondition": "60 admissions in the current minute, shared by both history endpoints",
+      "reads": [
+        {
+          "service_now": "2026-10-13T09:00:00.000Z",
+          "exchanges": [
+            {
+              "request": {
+                "method": "GET",
+                "path": "/v1/targets/first/owner/groups",
+                "query": []
+              },
+              "response": {
+                "status": 429,
+                "headers": {
+                  "Retry-After": "60"
+                },
+                "body": {
+                  "error": {
+                    "code": "rate_limited",
+                    "message": "rate limited",
+                    "retry_after_s": 60
+                  }
+                }
+              }
+            }
+          ],
+          "outcome": {
+            "available": false,
+            "reason": "rate_limited",
+            "retryAfterSeconds": 60,
+            "note": "Wait the stated seconds before reading group history again."
+          }
+        },
+        {
+          "service_now": "2026-10-13T09:00:00.000Z",
+          "exchanges": [],
+          "outcome": {
+            "available": false,
+            "reason": "rate_limited",
+            "retryAfterSeconds": 60,
+            "note": "Wait the stated seconds before reading group history again."
+          }
+        },
+        {
+          "service_now": "2026-10-13T09:01:00.000Z",
+          "exchanges": [
+            {
+              "request": {
+                "method": "GET",
+                "path": "/v1/targets/first/owner/groups",
+                "query": []
+              },
+              "response": {
+                "status": 200,
+                "headers": {},
+                "body": {
+                  "groups": [
+                    {
+                      "chat_id": -101,
+                      "title": "Example group 1"
+                    },
+                    {
+                      "chat_id": -102,
+                      "title": "Example group 2"
+                    },
+                    {
+                      "chat_id": -103,
+                      "title": "Example group 3"
+                    }
+                  ]
+                }
+              }
+            }
+          ],
+          "outcome": {
+            "available": true
+          }
+        }
+      ]
+    }
+  ]
+}

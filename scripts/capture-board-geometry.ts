@@ -25,8 +25,9 @@
  * it) and gone while the panel is docked; and every action still reachable:
  * the accounts in the row or in ⋯ as the row's steps say, Hidden in ⋯ opening
  * its tray, the two creators under +, the reasons and «Needs you» in the one
- * filter, the recent agents' list under its icon over the board, and the same
- * row spanning the Tasks panel. The phone's 52 px bar is measured in the same
+ * filter, and the recent agents' list under its icon over the board; and no
+ * Tasks panel control and no Tasks panel anywhere on the page (it left the
+ * board on 2026-10-12). The phone's 52 px bar is measured in the same
  * four. HEADER_WIDTHS runs a part of the matrix and the record merges.
  *
  * With BOARD_CAPTURE_CASE=seats, seat-placement or columns-wide it measures
@@ -186,6 +187,16 @@
  * archived rows in either order, must each open a reader with no not-found
  * notice; then the third generation arrives and the reader must follow it
  * with neither archived row drawn beside it, at 1440 × 900 in en and uk.
+ *
+ * With BOARD_CAPTURE_CASE=registry-history it opens the board over the
+ * candidate performance gate's synthetic registry, about 30,000 rows of
+ * retained history (#2761), in eight real browser views that each pin their
+ * own conversation, while two writer processes keep writing grant-bearing
+ * rows. From navigation, every view must draw its board within ten seconds,
+ * keep its selected conversation, receive `/api/files` answers for its own
+ * scope inside the gate's request bounds counted from the moment the page
+ * issued them, keep its main thread answering, and answer input while the
+ * writers run.
  *
  * Every reading is taken from the live DOM, and every input goes through
  * Playwright's Chromium input pipeline — real pointer clicks, real wheel,
@@ -369,7 +380,15 @@ function buildEnvironment(port: number): NodeJS.ProcessEnv {
     ...inherited,
     NODE_ENV: "production",
     HOME,
-    TMPDIR: path.join(BASE, "tmp"),
+    /* The capture root itself, so HOME, config and state all sit under the
+       children's temp root. A sibling TMPDIR left them outside it; run from a
+       stage whose temp root lies under the operator's state/scratch, an
+       unowned child (the registry-history writers) read them as the
+       operator's and was refused. */
+    TMPDIR: BASE,
+    /* Claude Code's task directory follows this before TMPDIR; the caller's
+       would put its own sessions' task output on the synthetic board. */
+    CLAUDE_CODE_TMPDIR: path.join(BASE, "tmp"),
     TMUX_TMPDIR: path.join(BASE, "tmux"),
     XDG_CONFIG_HOME: config,
     XDG_CACHE_HOME: path.join(BASE, "cache"),
@@ -388,9 +407,9 @@ function buildEnvironment(port: number): NodeJS.ProcessEnv {
 
 const CAPTURE_BUN = process.env.BOARD_CAPTURE_BUN?.trim() || process.execPath;
 
-function startServer(port: number): ChildProcess {
-  return spawn(CAPTURE_BUN, ["--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
-    cwd: repoRoot, env: buildEnvironment(port), stdio: ["ignore", "inherit", "inherit"],
+function startServer(port: number, probe?: { preload: string[]; env: Record<string, string> }): ChildProcess {
+  return spawn(CAPTURE_BUN, [...probe?.preload ?? [], "--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
+    cwd: repoRoot, env: { ...buildEnvironment(port), ...probe?.env }, stdio: ["ignore", "inherit", "inherit"],
   });
 }
 
@@ -2651,7 +2670,6 @@ function readHeader() {
       filter: shown("[data-bar-filter-toggle]"),
       create: shown("[data-bar-create]"),
       orchestrator: shown("[data-orchestrator-toggle]"),
-      tasks: shown("[data-task-panel-toggle]"),
       recentAgents: shown("[data-bar-recent-toggle]"),
       more: shown("[data-bar-more]"),
       needsYou: Boolean(chip && visible(chip)),
@@ -2662,25 +2680,13 @@ function readHeader() {
       funnel: shown("[data-attention-filter]"),
       reasonChips: shown(".reason-filter"),
     },
+    /* The old Tasks panel left the board (2026-10-12): its toggle, the panel and its slot, page-wide. */
+    tasksPanel: document.querySelectorAll("[data-task-panel-toggle], [data-task-panel], .kb-aside").length,
   };
   return out;
 }
 
 type HeaderReading = ReturnType<typeof readHeader>;
-
-/** Runs inside the page: the open Tasks panel's box and whether its header's controls take a click at their centres. */
-function readTaskPanel() {
-  const panel = document.querySelector("aside[data-task-panel]");
-  if (!panel) return null;
-  const r = panel.getBoundingClientRect();
-  const head = panel.firstElementChild;
-  const hit = [...(head?.querySelectorAll("button") ?? [])].map((button) => {
-    const box = button.getBoundingClientRect();
-    const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
-    return { label: (button.getAttribute("aria-label") || button.textContent || "").trim(), ok: Boolean(top && (top === button || button.contains(top))) };
-  });
-  return { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, hit };
-}
 
 /** Runs inside the page: the open ⋯ menu's rows, groups and rules. */
 function readMenu() {
@@ -2816,12 +2822,6 @@ async function headerMain(): Promise<void> {
         await page.waitForTimeout(3_000);
         /* The first-run telemetry notice sits over the board's foot in a fresh home; it is not the header's. */
         await page.addStyleTag({ content: "[data-telemetry-notice] { display: none !important; }" });
-        /* The Tasks panel's open state is the board's preference on the server: a frame that failed
-           before closing it would otherwise take this frame's room. */
-        if (await page.locator("aside[data-task-panel]").isVisible().catch(() => false)) {
-          await page.click(`${barSelector} [data-task-panel-toggle]`);
-          await page.waitForTimeout(1_500);
-        }
         await page.mouse.move(1, 880);
         const reading: HeaderReading = await page.evaluate(readHeader);
         entry.reading = reading;
@@ -2846,10 +2846,11 @@ async function headerMain(): Promise<void> {
         must(reading.name !== null && reading.name.w >= 40, `${tag}: the project name is ${reading.name?.w ?? 0}px wide`);
         /* What the row holds, and what left it. */
         const row = reading.inRow;
-        must(row.status && row.search && row.filter && row.create && row.orchestrator && row.tasks && row.recentAgents && row.more, `${tag}: the row is missing a control: ${JSON.stringify(row)}`);
+        must(row.status && row.search && row.filter && row.create && row.orchestrator && row.recentAgents && row.more, `${tag}: the row is missing a control: ${JSON.stringify(row)}`);
         must(!row.viewSwitch, `${tag}: the Board | Conversations switch is in the row`);
         must(!row.hiddenPill && !row.createButtons && !row.funnel && !row.reasonChips, `${tag}: the row still holds ${JSON.stringify({ hiddenPill: row.hiddenPill, createButtons: row.createButtons, funnel: row.funnel, reasonChips: row.reasonChips })}`);
         must(!/undo|redo|скасувати|повторити/i.test(reading.texts), `${tag}: the bar still names undo or redo`);
+        must(reading.tasksPanel === 0, `${tag}: ${reading.tasksPanel} Tasks panel controls or panels on the page`);
         const fit = (reading.fit ?? "").split(" ").filter(Boolean);
         must(reading.fit !== null, `${tag}: the bar carries no data-fit`);
         must(fit.includes("accounts") ? row.accounts === 0 : row.accounts === 2, `${tag}: ${row.accounts} account switches in the row at fit [${fit.join(" ")}]`);
@@ -2882,12 +2883,12 @@ async function headerMain(): Promise<void> {
         }
 
         /* Hover strengthens the border and leaves the label's colour alone. */
-        const tasksToggle = page.locator(`${barSelector} [data-task-panel-toggle]`);
-        const before = await tasksToggle.evaluate((element) => ({ color: getComputedStyle(element).color, border: getComputedStyle(element).borderTopColor }));
-        await tasksToggle.hover();
+        const outlined = page.locator(`${barSelector} [data-bar-create]`);
+        const before = await outlined.evaluate((element) => ({ color: getComputedStyle(element).color, border: getComputedStyle(element).borderTopColor }));
+        await outlined.hover();
         await page.waitForTimeout(250);
-        const hovered = await tasksToggle.evaluate((element) => ({ color: getComputedStyle(element).color, border: getComputedStyle(element).borderTopColor }));
-        must(hovered.color === before.color && hovered.border !== before.border, `${tag}: hover turns Tasks from ${JSON.stringify(before)} to ${JSON.stringify(hovered)}`);
+        const hovered = await outlined.evaluate((element) => ({ color: getComputedStyle(element).color, border: getComputedStyle(element).borderTopColor }));
+        must(hovered.color === before.color && hovered.border !== before.border, `${tag}: hover turns + from ${JSON.stringify(before)} to ${JSON.stringify(hovered)}`);
         entry.hover = { before, hovered };
         await page.mouse.move(1, 880);
 
@@ -3031,28 +3032,6 @@ async function headerMain(): Promise<void> {
           await page.click(`${barSelector} [data-attention-count]`);
           await page.waitForSelector("[data-needs-you-panel]", { state: "detached", timeout: 10_000 }).catch(() => {});
         }
-
-        /* The Tasks panel open on the Board: the bar spans it and stays one 48 px row. */
-        if (panel === "closed") {
-          await page.click(`${barSelector} [data-task-panel-toggle]`);
-          await page.waitForSelector("aside[data-task-panel]", { timeout: 30_000 });
-          await page.waitForTimeout(1_000);
-          if (await page.locator("[data-attention-toast-dismiss]").count()) {
-            await page.click("[data-attention-toast-dismiss]");
-            await page.waitForTimeout(300);
-          }
-          await page.mouse.move(1, 880);
-          const open: HeaderReading = await page.evaluate(readHeader);
-          const taskPanel = await page.evaluate(readTaskPanel);
-          await page.screenshot({ path: shot("-tasks-open"), clip: { x: 0, y: 0, width, height: 160 } });
-          clean(`${tag} tasks open`, open);
-          must(open.bar !== null && near(open.bar.x + open.bar.w, width, 0.5), `${tag} tasks open: the bar ends at x ${open.bar ? open.bar.x + open.bar.w : null}, short of the panel's edge`);
-          must(taskPanel !== null && open.bar !== null && taskPanel.rect.y >= open.bar.y + open.bar.h - 0.5, `${tag} tasks open: the panel starts at y ${taskPanel?.rect.y}, beside the bar`);
-          for (const item of taskPanel?.hit ?? []) must(item.ok, `${tag} tasks open: the panel's «${item.label}» is covered at its centre`);
-          entry.tasksOpen = { bar: open.bar, fit: open.fit, overlaps: open.overlaps, truncated: open.truncated, panel: taskPanel };
-          await page.click(`${barSelector} [data-task-panel-toggle]`);
-          await page.waitForSelector("aside[data-task-panel]", { state: "detached", timeout: 15_000 }).catch(() => {});
-        }
       } catch (error) {
         entry.error = String(error);
         must(false, `${tag}: ${String(error)}`);
@@ -3160,7 +3139,7 @@ async function headerMain(): Promise<void> {
     process.exitCode = 1;
     console.error(`board header acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
   } else {
-    console.log(`board header acceptance passed at ${widths.join(", ")} (en, uk; light, dark; the needs-you panel closed and docked; Tasks closed and open; a 21-character project name)${withPhone ? " and 390 (en, uk; light, dark)" : ""}.`);
+    console.log(`board header acceptance passed at ${widths.join(", ")} (en, uk; light, dark; the needs-you panel closed and docked; no Tasks panel; a 21-character project name)${withPhone ? " and 390 (en, uk; light, dark)" : ""}.`);
   }
 }
 
@@ -7803,7 +7782,81 @@ async function hydrationMain(): Promise<void> {
   console.log(`hydration acceptance: ${Object.keys(report.frames).length} loads, no hydration warnings or page errors`);
 }
 
-if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
+/* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=registry-history (#2761)                                */
+/* ------------------------------------------------------------------------- */
+
+/* The views, the writers and the bounds are the candidate gate's browser half
+   (src/runtime-host/candidateBrowserRun.ts, docs/design/candidate-performance-gate.md):
+   the gate runs them inside a container from the candidate image before
+   promotion; this case runs the same code against a local build and keeps
+   each view's requests and a frame of it. */
+async function registryHistoryMain(): Promise<void> {
+  const { tasks, reviewers } = seedHome();
+  seedState(PROJECT_NAME, tasks, reviewers);
+  process.env.LLV_STATE_DIR = STATE_DIR;
+  const { buildRegistryPerformanceDataset } = await import("../src/lib/agent/registryPerformanceDataset");
+  const { browserViewPins, measureBoardInBrowser, serverLoopProbe } = await import("../src/runtime-host/candidateBrowserRun");
+  const { CANDIDATE_BROWSER_BOUNDS, candidateBrowserBreaches } = await import("../src/runtime-host/candidateBrowser");
+  const { startCandidateRuntimeHost, waitForServerStartup } = await import("../src/runtime-host/candidateRuntimeHost");
+  /* The selected conversations' transcripts live in the sandboxed home, so
+     each view's pin names a conversation the board can open. */
+  const dataset = buildRegistryPerformanceDataset(STATE_DIR, undefined, { sessionsRoot: path.join(HOME, ".codex", "sessions") });
+  SERVER_EXTRA_ENV.LLV_AGENT_REGISTRY_SQLITE = "sqlite";
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const report: Record<string, unknown> & { failures: string[] } = {
+    commit: captureCommit(),
+    dataset: { rows: dataset.rows, coldRows: dataset.coldRows, payloadBytes: dataset.payloadBytes, transcripts: dataset.conversations.length },
+    bounds: CANDIDATE_BROWSER_BOUNDS, failures: [],
+  };
+  let server: ChildProcess | null = null;
+  let runtimeHost: Awaited<ReturnType<typeof startCandidateRuntimeHost>> | null = null;
+  try {
+    /* The board's runtime surfaces read a runtime host, as an operator's
+       Viewer does; the gate's own host, in this capture's state. */
+    const hostEnv = Object.fromEntries(Object.entries(buildEnvironment(0)).filter((entry): entry is [string, string] => entry[1] !== undefined));
+    runtimeHost = await startCandidateRuntimeHost({ runtimeBin: CAPTURE_BUN, cwd: repoRoot, env: hostEnv, directory: path.join(BASE, "rt") });
+    SERVER_EXTRA_ENV.LLV_RUNTIME_HOST_SOCKET = runtimeHost.socket;
+    /* The server's own event loop is part of the reading, as in the gate. */
+    fs.mkdirSync(path.join(BASE, "server-loop"), { recursive: true });
+    const probe = serverLoopProbe(path.join(BASE, "server-loop", "probe"));
+    server = startServer(port, probe);
+    await waitForServer(baseUrl, server);
+    /* The views open on a server that has started and scanned once, as an
+       operator's do; the gate itself bounds the cold first projection. */
+    await waitForBoard(baseUrl, false);
+    const startup = await waitForServerStartup(baseUrl);
+    if (startup !== "ready") throw new Error(`the server's structured-host startup is ${startup}, never ready`);
+    await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
+    const keys = dataset.grantSubjects.filter((subject) => subject.collection === "entries"
+      && !dataset.workers.some((worker) => worker.key === subject.key)).map(({ key, servers }) => ({ key, servers }));
+    const result = await measureBoardInBrowser({
+      baseUrl,
+      server: probe,
+      executablePath: process.env.CHROME_BIN ?? null,
+      pins: browserViewPins(dataset.conversations),
+      writers: {
+        runtime: CAPTURE_BUN, entry: "src/runtime-host/candidatePerformanceRun.ts", cwd: repoRoot, env: buildEnvironment(0),
+        registry: dataset.filename, keys, stopFile: path.join(BASE, "history-writers-stop"),
+      },
+      screenshotDir: OUT_DIR,
+    });
+    report.measurements = result.measurements;
+    report.serverStalls = result.serverStalls;
+    report.views = result.views.map((view, index) => ({ ...view, diagnostics: result.diagnostics[index] }));
+    report.failures.push(...candidateBrowserBreaches(result.measurements));
+  } finally {
+    await stop(server);
+    await runtimeHost?.stop();
+  }
+  fs.writeFileSync(path.join(OUT_DIR, "registry-history.json"), JSON.stringify(report, null, 2) + "\n");
+  console.log(`registry history measurements: ${path.join(OUT_DIR, "registry-history.json")}`);
+  if (report.failures.length) throw new Error(report.failures.join("; "));
+}
+
+if (process.env.BOARD_CAPTURE_CASE === "registry-history") await registryHistoryMain();
+else if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
 else if (process.env.BOARD_CAPTURE_CASE === "twice-switched-link") await twiceSwitchedLinkMain();
 else if (process.env.BOARD_CAPTURE_CASE === "install-ping") await installPingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();

@@ -80,8 +80,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 49, and a v48 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(49);
+test("the default mandate is at version 53, and a v52 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(53);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -114,8 +114,13 @@ test("the default mandate is at version 49, and a v48 seat reads as stale", () =
      instead of describing variants in prose. v42 clears waiting rows that ask
      nothing. v43 adds the questionnaire before ambiguous work. v44 combines
      both with linked-seat coordination. v46 marks a report of a handled
-     incident or an outside publication with `outcome`. v47 sets the machine-
-     wide worker limit; v48 routes operator decisions through task forms. */
+     incident or an outside publication with `outcome`. v47 makes every decision
+     a form (docs/design/operator-decision-forms.md §2.7). v48 denies native
+     asks; v49 keeps forms without a task and asks 3–7 on a task. v50
+     shortens equivalent draft wording to keep the delivery reserve. v51
+     retains the reviewed branch's refreshing fence alongside those rules. v52
+     combines them with automatic release control and incident holds. v53
+     adds the machine-wide worker limit while retaining those rules. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -135,7 +140,11 @@ test("the default mandate is at version 49, and a v48 seat reads as stale", () =
   expect(orchestratorMandateStale(46)).toBe(true);
   expect(orchestratorMandateStale(47)).toBe(true);
   expect(orchestratorMandateStale(48)).toBe(true);
-  expect(orchestratorMandateStale(49)).toBe(false);
+  expect(orchestratorMandateStale(49)).toBe(true);
+  expect(orchestratorMandateStale(50)).toBe(true);
+  expect(orchestratorMandateStale(51)).toBe(true);
+  expect(orchestratorMandateStale(52)).toBe(true);
+  expect(orchestratorMandateStale(53)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("gives the shape, the outcome rule and what");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
@@ -191,7 +200,21 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   46: "2f8d1ef97f331cb982a32746575816ea2d1fe5a4869c17a6329f05033b3f15f1",
   47: "0a204f45fe2e477c20d14888313530363eece18a53e608f8a8f427fb5ef3241c",
   48: "b5ac29298046ae89343fee1ea5d7149bd9b26d2bc8b4270300e5ca7892dd2ce2",
-  49: "a50133384753b7ad25d86b7792dcfa19ec54feb944776cbc4ebc93a62a7f2f22",
+  // The reviewed refresh branch independently used v46 with fingerprint
+  // b5640fe536df8622b6e84e9500e27418742d6b25b830a7821d795e82d5651222,
+  // then v49 with 8c62ea15caffab8bcddd09e68756275fb21d82113f3e400c47e9496d5f8155c0.
+  // Keep main's version history; v51 combines both branches' mandate rules.
+  49: "1fb19f7e3d633f95f46e7c2353fefa2cb2d00f74adfe3ace721c0d4c88336c47",
+  50: "e693c187ca781f08d3612007ff7829e3baf4ec5f64c69d7e4966fd091cdb4cb8",
+  // The automatic release branch independently used v51 with fingerprint
+  // baf75098802ed3f0ebe3ad97b183ff917536f12f8e32086cda86f9224e1dbc89.
+  // v52 combines its release rule with main's refreshing fence.
+  51: "16ededfd81b40430ab1f9d48abe8155b77411e725b5c478a28ae3d7d2a24d54b",
+  52: "faa19a0588778962bad646ccf910e8fd68c7894fa09d5b62ce89c80819f3774a",
+  // The worker-limit branch independently used v49 with fingerprint
+  // a50133384753b7ad25d86b7792dcfa19ec54feb944776cbc4ebc93a62a7f2f22.
+  // v53 combines its worker-limit rule with main's mandate.
+  53: "28e34e893a3677250f71ccad3a56a58f0c5188a34e9eb6f9812910b465e1f5d6",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -203,7 +226,7 @@ test("the merge bar follows the project's merge setting, and the mandate says wh
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("Merge bar: merge only on an APPROVE verdict");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("governs every automatic merge, yours included");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain('Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask.');
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating or merging)");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating, refreshing or merging)");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("then pipeline_action retry-merge");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Red checks hold merging");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent");
@@ -223,7 +246,7 @@ test("the mandate opens without issue numbers, greets in plain words and runs re
   expect(opening).not.toMatch(/#\d/);
   expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).toContain(`Ready in {project}.\n${CURRENT_GREETING_OFFER}`);
   expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).not.toContain("lanes");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("- The project's own release step runs only when the operator has turned releases on for this project, in their message or as a standing line in your monitor note.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("- Releases run only when seat_tick_settings.release enables them or requestNow asks for one. Hold releases during known production incidents.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("release step, where it has one");
 });
 
@@ -957,10 +980,19 @@ test("the versioned mandate asks for a current status note in the operator's lan
 });
 
 
-test("the mandate directs prototype review to the task", () => {
+test("the mandate asks every decision as a form", () => {
   for (const mandate of [ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateForDelivery("Coordinate the project.")]) {
     expect(mandate).toContain(ORCHESTRATOR_PROTOTYPE_DIRECTIVE);
     expect(mandate.split("Prototype review:")).toHaveLength(2);
+  }
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("Decisions go to the form; drafts are for replies that are not a choice.");
+  /* A plan's yes and a parked stage's question are decisions; the pills and
+     the reports never ask them a second time (decisions 3 and 5). */
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A plan you want a yes to, and a stage's question you cannot settle, are decisions.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("When a stage parks on such a question, ask the operator at once in a form.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("A report only points to a decision's form; an ask a click cannot settle (an action outside Delegatus) is a question or blocked report.");
+  for (const contradiction of ["proposes a plan you want a yes to", "with suggested replies", "Every ask to the operator is also a question or blocked report", "the plain yes"]) {
+    expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain(contradiction);
   }
 });
 
@@ -970,10 +1002,14 @@ test("the mandate names linked seats and requires coordination before a shared r
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("send_message_to_orchestrator with machine named");
 });
 
-test("questionnaire mandate upgrades the shipped pointer once and preserves bespoke wording", () => {
-  const questionnaire = `Prototype review: point to the task's review. Before work that is non-trivial or reads two ways, or on request, ask 3–7 questions there; the operator may skip. After the answers, write "how I understood" (3–5 lines) into the task text and start.`;
+test("the decision-form mandate upgrades every shipped pointer once and preserves bespoke wording", () => {
   const directive = ORCHESTRATOR_PROTOTYPE_DIRECTIVE;
-  for (const input of [ORCHESTRATOR_SYSTEM_PROMPT, "Coordinate the project.", "Coordinate.\nPrototype review: point to the task's review.", questionnaire]) {
+  const questionnaire = `Prototype review: point to the task's review. Before work that is non-trivial or reads two ways, or on request, ask 3–7 questions there; the operator may skip. After the answers, write "how I understood" (3–5 lines) into the task text and start.`;
+  const shipped = [
+    "Prototype review: every decision is a form: publish_prototype_review, 1–7 questions, taskId for a task; chat and reports only point to it. Before non-trivial or two-way work, or on request, ask 3–7 there. After answers, write \"how I understood\" (3–5 lines) in the task text and start.",
+    "Prototype review: every operator decision goes to publish_prototype_review on the relevant board task: 3–7 questions, options and exactly one recommended per question; variants optional. Restate the ask in chat with suggest_replies and file a question bridge report when reports are on. Never use engine built-in ask tools. Before non-trivial or two-way work, or on request, use this form; the operator may skip. After answers, write \"how I understood\" (3–5 lines) in task text and start.",
+  ];
+  for (const input of [ORCHESTRATOR_SYSTEM_PROMPT, "Coordinate the project.", "Coordinate.\nPrototype review: point to the task's review.", `Coordinate.\n\n${questionnaire}`, ...shipped]) {
     const delivered = orchestratorMandateForDelivery(input);
     expect(delivered).toContain(directive);
     expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
@@ -989,4 +1025,9 @@ test("the board walk clears only rows that ask nothing and replaces the shipped 
   const shipped = previous.replace(previous.split("\n")[0]!, ORCHESTRATOR_BOARD_REPORT_DIRECTIVE.split("\n")[0]!);
   expect(orchestratorMandateForDelivery(shipped)).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(orchestratorMandateForDelivery(shipped.replace("Take its sections", "Walk its sections"))).toContain("Walk its sections");
+});
+
+
+test("the role table names the gated prototype lane", () => {
+  expect(orchestratorRoleTable(ROLE_DEFAULTS)).toContain("Prototype lane: prototype → critic → proto-fix (2 rounds) → publish");
 });

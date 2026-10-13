@@ -7,16 +7,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-import type {
-  ViewerDeploymentStatus,
-  ViewerHealthEvidence,
-  ViewerMcpRuntimeIdentity,
-  ViewerMcpRuntimePublicationEvidence,
-  ViewerMcpRuntimeReconciliation,
-  ViewerReleaseIdentity,
-  ViewerRuntimeHostHandoffEvidence,
-  ViewerRuntimeHostStartupPhase,
-} from "@/lib/runtime/contracts";
+import type { ViewerDeploymentStatus, ViewerReleaseIdentity } from "@/lib/runtime/contracts";
 import { runtimeHostClient, UnixRuntimeHostClient } from "@/lib/runtime/client";
 import { initialAuto, readAuto, writeAuto } from "@/lib/selfUpdate/auto";
 import { initialCheck } from "@/lib/selfUpdate/checkState";
@@ -25,7 +16,10 @@ import { managedIdempotencyKey, readManagedRecord } from "@/lib/selfUpdate/manag
 import { SelfUpdateService, type ServiceDeps } from "@/lib/selfUpdate/service";
 import { idleCheck, type Revision } from "@/lib/selfUpdate/types";
 
-import { ViewerDeploymentCoordinator, type ViewerDeploymentAdapter } from "./deployment";
+import { CANDIDATE_PERFORMANCE_BOUNDS } from "./candidatePerformance";
+import { ViewerDeploymentCoordinator } from "./deployment";
+import { FakeDeploymentAdapter, healthy, release } from "./fixtures/fakeDeploymentAdapter";
+import { HostCommandViewerDeploymentAdapter } from "./deploymentAdapter";
 import { viewerCandidateDockerArgs, viewerComposeServiceFromConfig } from "./candidateContainer";
 import { RuntimeHost } from "./host";
 import { RuntimeJournal } from "./journal";
@@ -46,166 +40,6 @@ function journalFile(name: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `llv-deploy-${name}-`));
   sandboxes.push(dir);
   return path.join(dir, "runtime.sqlite");
-}
-
-function release(revision: string, label: string): ViewerReleaseIdentity {
-  return { revision, image: `viewer:${revision}`, container: `viewer-${label}`, endpoint: `http://127.0.0.1/${label}` };
-}
-
-function healthy(endpoint: string): ViewerHealthEvidence {
-  return {
-    checkedAt: "2026-07-11T12:00:00.000Z",
-    endpoint,
-    processReady: true,
-    rootStatus: 200,
-    authenticatedStatus: 200,
-    unauthorizedStatus: 403,
-    assets: [{ path: "/_next/static/app.js", status: 200 }, { path: "/_next/static/app.css", status: 200 }],
-    ok: true,
-  };
-}
-
-class FakeDeploymentAdapter implements ViewerDeploymentAdapter {
-  current = release("old", "old");
-  currentMcp: ViewerMcpRuntimeIdentity = {
-    source: "legacy" as const,
-    revision: "8".repeat(40),
-    releaseId: null,
-    artifactDigest: "8".repeat(64),
-    stagedAt: null,
-  };
-  resolveGate: Promise<void> | null = null;
-  resolveFailures = 0;
-  buildGate: Promise<void> | null = null;
-  candidateHealth = healthy("http://127.0.0.1/candidate");
-  promotedHealth = healthy("http://127.0.0.1:8898");
-  stageHostFailure: Error | null = null;
-  verifyHostFailure: Error | null = null;
-  promoteFailure: Error | null = null;
-  hotStateHandOver: string | null = null;
-  candidateOutput = ["startup failed before hot-state activation"];
-  servingProgress(): string | null { return "waiting for serving readiness; HTTP rejection pending"; }
-  calls: string[] = [];
-
-  async reconcile(): Promise<void> { this.calls.push("reconcile"); }
-  async verifyRuntimeHostSuccessor(candidate: ViewerReleaseIdentity): Promise<ViewerRuntimeHostHandoffEvidence> {
-    this.calls.push(`verify-host-successor:${candidate.image}:${candidate.revision}`);
-    if (this.verifyHostFailure) throw this.verifyHostFailure;
-    const generation = {
-      image: candidate.image,
-      revision: candidate.revision,
-      container: `runtime-host-${candidate.revision.slice(0, 12)}`,
-    };
-    const identity = { generation, pid: 4242, startIdentity: "4242:successor", hostEpoch: 7 };
-    const phases: ViewerRuntimeHostStartupPhase[] = [
-      "fence-waiting",
-      "fence-acquired",
-      "journal-open",
-      "handoff-cleanup-complete",
-      "consumers-recovered",
-      "socket-listening",
-      "ready",
-    ];
-    return {
-      ...identity,
-      phases: phases.map((phase, index) => ({ ...identity, phase, recordedAt: `2026-08-31T14:00:0${index}.000Z` })),
-      probe: {
-        checkedAt: "2026-08-31T14:00:08.000Z",
-        requestId: "runtime-host-health-probe",
-        responseId: "runtime-host-health-probe",
-        elapsedMs: 12,
-      },
-    };
-  }
-  async stageRuntimeHostSuccessor(candidate: ViewerReleaseIdentity): Promise<void> {
-    this.calls.push(`stage-host-successor:${candidate.image}:${candidate.revision}`);
-    if (this.stageHostFailure) throw this.stageHostFailure;
-  }
-  async resolveRevision(revision: string): Promise<string> {
-    this.calls.push(`resolve:${revision}`);
-    await this.resolveGate;
-    if (this.resolveFailures > 0) { this.resolveFailures -= 1; throw new Error("revision resolution timed out"); }
-    return revision === "origin/main" || revision.startsWith("refs/heads/") ? "a".repeat(40) : revision;
-  }
-  async buildCandidate(deploymentId: string, revision: string): Promise<ViewerReleaseIdentity> {
-    this.calls.push(`build:${revision}`);
-    await this.buildGate;
-    return {
-      ...release(revision, deploymentId),
-      mcpRuntime: {
-        source: "managed",
-        revision,
-        releaseId: `deploy-${deploymentId}`,
-        artifactDigest: "7".repeat(64),
-        stagedAt: "2026-07-23T08:00:00.000Z",
-      },
-    };
-  }
-  async startCandidate(candidate: ViewerReleaseIdentity): Promise<void> { this.calls.push(`start:${candidate.container}`); }
-  async currentRelease(): Promise<ViewerReleaseIdentity | null> { this.calls.push("current"); return this.current; }
-  async verifyCandidate(candidate: ViewerReleaseIdentity): Promise<ViewerHealthEvidence> { this.calls.push(`verify-candidate:${candidate.container}`); return this.candidateHealth; }
-  async currentMcpRuntime() { this.calls.push("current-mcp"); return this.currentMcp; }
-  async reconcileMcpRuntime(revision: string): Promise<ViewerMcpRuntimeReconciliation> {
-    this.calls.push(`reconcile-mcp-runtime:${revision}`);
-    return {
-      publication: {
-        action: "activate",
-        source: "managed",
-        revision,
-        releaseId: "deploy-reconciled",
-        artifactDigest: "9".repeat(64),
-        stagedAt: "2026-07-23T08:00:03.000Z",
-        publishedAt: "2026-07-23T08:00:04.000Z",
-        durable: true,
-      },
-      health: {
-        checkedAt: "2026-07-23T08:00:05.000Z",
-        revision,
-        artifactDigest: "9".repeat(64),
-        processReady: true,
-        tools: ["deployment_status", "board_snapshot"],
-        calls: { deploymentStatus: true, boardSnapshot: true },
-        ok: true,
-      },
-    };
-  }
-  async promote(candidate: ViewerReleaseIdentity): Promise<ViewerMcpRuntimePublicationEvidence> {
-    this.calls.push(`promote:${candidate.container}`);
-    if (this.promoteFailure) throw this.promoteFailure;
-    this.current = candidate;
-    this.currentMcp = candidate.mcpRuntime!;
-    return {
-      action: "activate",
-      ...candidate.mcpRuntime!,
-      publishedAt: "2026-07-23T08:00:01.000Z",
-      durable: true,
-      ...(this.hotStateHandOver ? { hotStateHandOver: this.hotStateHandOver } : {}),
-    };
-  }
-  async verifyPromoted(candidate: ViewerReleaseIdentity, _signal?: AbortSignal): Promise<ViewerHealthEvidence> { this.calls.push(`verify-promoted:${candidate.container}`); return this.promotedHealth; }
-  async candidateLog(candidate: ViewerReleaseIdentity): Promise<string[]> {
-    this.calls.push(`candidate-log:${candidate.container}`);
-    return this.candidateOutput;
-  }
-  async rollback(previous: ViewerReleaseIdentity, candidate: ViewerReleaseIdentity): Promise<ViewerMcpRuntimePublicationEvidence> {
-    this.calls.push(`rollback:${candidate.container}`);
-    this.current = previous;
-    this.currentMcp = previous.mcpRuntime ?? {
-      source: "legacy",
-      revision: "8".repeat(40),
-      releaseId: null,
-      artifactDigest: "8".repeat(64),
-      stagedAt: null,
-    };
-    return {
-      action: "restore",
-      ...this.currentMcp,
-      publishedAt: "2026-07-23T08:00:02.000Z",
-      durable: true,
-    };
-  }
-  async retire(candidate: ViewerReleaseIdentity): Promise<void> { this.calls.push(`retire:${candidate.container}`); }
-  async retainOnly(releases: ViewerReleaseIdentity[]): Promise<void> { this.calls.push(`retain-only:${releases.map((item) => item.container).join(",")}`); }
 }
 
 async function recoverHostHandoffAsSuccessor(
@@ -860,6 +694,85 @@ test("issue 518: a failed candidate never stages a runtime-host successor", asyn
   expect(store.viewerDeployment(receipt.deploymentId)).toMatchObject({ phase: "failed", terminal: true });
   expect(adapter.calls.filter((call) => call.startsWith("stage-host-successor:"))).toEqual([]);
   expect(handoffs).toEqual([]);
+  store.close();
+});
+
+/* #2761: a candidate the performance gate refuses is retired before anything
+   is switched, and the release that was serving keeps serving. */
+test("a candidate refused by the performance gate is retired and the serving release is kept", async () => {
+  const store = journal("performance-refused-candidate");
+  const adapter = new FakeDeploymentAdapter();
+  const serving = adapter.current;
+  adapter.candidateHealth = {
+    ...healthy("http://127.0.0.1/candidate"),
+    performance: {
+      checkedAt: "2026-10-11T21:00:00.000Z",
+      runtime: "bun 1.4.0",
+      bounds: CANDIDATE_PERFORMANCE_BOUNDS,
+      measurements: null,
+      breaches: ["grant-bearing write max 1407ms exceeds 500ms", "warm projection build p95 4467ms exceeds 1000ms"],
+      inducedDelayMs: 600,
+      ok: false,
+      detail: "grant-bearing write max 1407ms exceeds 500ms",
+    },
+    ok: false,
+    detail: "candidate performance gate refused the release: grant-bearing write max 1407ms exceeds 500ms; warm projection build p95 4467ms exceeds 1000ms",
+  };
+  const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 10, startIdentity: "10:1" });
+
+  const receipt = await coordinator.requestViewerDeployment({ idempotencyKey: "deploy-performance-refused" });
+  if (receipt.state !== "accepted") throw new Error("deployment was not accepted");
+  const status = await coordinator.waitForDeployment(receipt.deploymentId);
+
+  expect(status).toMatchObject({
+    phase: "failed",
+    terminal: true,
+    error: "candidate performance gate refused the release: grant-bearing write max 1407ms exceeds 500ms; warm projection build p95 4467ms exceeds 1000ms",
+  });
+  expect(status?.health.at(-1)?.performance?.breaches).toHaveLength(2);
+  expect(adapter.calls).toContain(`retire:${status?.candidate?.container}`);
+  expect(adapter.calls.filter((call) => call.startsWith("promote:") || call.startsWith("rollback:"))).toEqual([]);
+  expect(adapter.current).toEqual(serving);
+  store.close();
+});
+
+/* #2761: an adapter answer that passed its probes but carries no performance
+   report, read through the real host-command adapter, never reaches
+   promotion: the candidate is retired and the serving release kept. */
+test("a candidate verification that carries no performance report is retired and the serving release is kept", async () => {
+  const store = journal("performance-missing-candidate");
+  const adapter = new FakeDeploymentAdapter();
+  const serving = adapter.current;
+  const host = new HostCommandViewerDeploymentAdapter(async (action) => (action === "verify-candidate" ? {
+    ...healthy("http://127.0.0.1/candidate"),
+    runtimeHost: {
+      checkedAt: "2026-10-12T00:01:00.000Z",
+      runtime: "bun 1.4.0",
+      succession: { predecessorReadyMs: 1_480, successorTookOverMs: 2_140, completed: true },
+      listener: { windowMs: 15_000, polls: 30, answered: 30, abandoned: 15 },
+      socket: { polls: 30, answered: 30, abandoned: 15 },
+      ok: true,
+    },
+  } : {}));
+  adapter.verifyCandidate = async (candidate) => {
+    adapter.calls.push(`verify-candidate:${candidate.container}`);
+    return host.verifyCandidate(candidate);
+  };
+  const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 10, startIdentity: "10:1" });
+
+  const receipt = await coordinator.requestViewerDeployment({ idempotencyKey: "deploy-performance-missing" });
+  if (receipt.state !== "accepted") throw new Error("deployment was not accepted");
+  const status = await coordinator.waitForDeployment(receipt.deploymentId);
+
+  expect(status).toMatchObject({
+    phase: "failed",
+    terminal: true,
+    error: "the candidate performance gate reported nothing; a candidate is promoted only on a measured pass",
+  });
+  expect(status?.health.at(-1)?.performance).toBeUndefined();
+  expect(adapter.calls).toContain(`retire:${status?.candidate?.container}`);
+  expect(adapter.calls.filter((call) => call.startsWith("promote:") || call.startsWith("rollback:"))).toEqual([]);
+  expect(adapter.current).toEqual(serving);
   store.close();
 });
 

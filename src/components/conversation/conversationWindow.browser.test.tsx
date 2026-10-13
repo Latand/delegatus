@@ -4598,144 +4598,161 @@ describe("a control's hint never outlives its click", () => {
   }, 240_000);
 });
 
-describe("prototype review: the orchestrator's open composer says a prototype is ready", () => {
-  /*
-   * The phone's half of the orchestrator's notice. With the composer put away
-   * the seat's card carries one chip, which the kanban driver measures; with
-   * the orchestrator's conversation open the notice stands above the message
-   * field. This block opens that composer at 390 with three tasks waiting, in
-   * English and Ukrainian, light and dark, and reads: the one line the phone
-   * shows and the count folded behind it, the 44 px action, that the line and
-   * the field do not overlap and nothing leaves the screen, the unfolded list,
-   * and that «Go to prototype» opens the waiting round of the task it names.
-   *
-   *   LLV_CONVERSATION_BROWSER_TEST=1 bun test src/components/conversation/conversationWindow.browser.test.tsx -t "prototype review"
-   *
-   * Readings go to `evidence/prototype-review/composer-notice.json`; frames to
-   * PROTOTYPE_REVIEW_PNG_DIR (default `.artifacts/prototype-review/`), which
-   * is not committed.
-   */
-  const OUT = path.resolve(".artifacts/prototype-review");
-  const EVIDENCE = path.resolve("evidence/prototype-review");
-  const VIEWPORT = { width: 390, height: 844 };
 
-  browserTest("prototype review: the notice above the phone's open composer, its count and its jump", async () => {
-    const pngDir = process.env.PROTOTYPE_REVIEW_PNG_DIR ?? OUT;
-    fs.mkdirSync(OUT, { recursive: true });
-    fs.mkdirSync(pngDir, { recursive: true });
-    fs.mkdirSync(EVIDENCE, { recursive: true });
-    const served = await serveEvidenceFixture(OUT, FIXTURE);
-    let browser: Browser | null = null;
-    const readings: Record<string, unknown> = {};
-    const failures: string[] = [];
+describe("prototype decision forms: rejection stays in the seat's conversation", () => {
+  browserTest("a taskless form with existing frames requires corrections and records rejection in the feed", async () => {
+    const out = path.resolve(".artifacts/prototype-review/decision-feed");
+    fs.mkdirSync(out, { recursive: true });
+    // The shared board fixture renders the seat's production conversation and its decision sheet.
+    const served = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
     try {
-      browser = await chromium.launch(LAUNCH);
       for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
-        const label = `phone-390-${lang}-${scheme}`;
-        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) => translate(lang, key, vars);
-        /* Each line names the task its jump lands on, the fixture's task text. */
-        const taskTitles: Record<string, string> = lang === "uk"
-          ? { "t-search": "Повернути результати пошуку після перебудови індексу", "t-links": "Полагодити старі посилання в нотатках до випуску", "t-upload": "Переробити завантаження великих вкладень" }
-          : { "t-search": "Restore search results after the index rebuild", "t-links": "Repair old links in the release notes", "t-upload": "Redesign attachment upload for large files" };
-        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=prototype-notice&lang=${lang}`, VIEWPORT, scheme, lang, "reduce", true);
-        const shot = (name: string) => page.screenshot({ path: path.join(pngDir, `${label}-composer-${name}.png`) });
-        /* The notice, the message field and the screen: what the line says,
-           where it stands and whether anything overlaps or leaves the frame. */
-        const read = () => page.evaluate(() => {
-          const box = (element: Element) => { const rect = element.getBoundingClientRect(); return [Math.round(rect.left * 10) / 10, Math.round(rect.top * 10) / 10, Math.round(rect.width * 10) / 10, Math.round(rect.height * 10) / 10]; };
-          const crosses = (a: number[], b: number[]) => a[0]! < b[0]! + b[2]! - 0.5 && b[0]! < a[0]! + a[2]! - 0.5 && a[1]! < b[1]! + b[3]! - 0.5 && b[1]! < a[1]! + a[3]! - 0.5;
-          const list = document.querySelector<HTMLElement>("[data-evidence-composer] [data-prototype-notices]");
-          const field = document.querySelector<HTMLTextAreaElement>("[data-evidence-composer] textarea");
-          const rows = [...document.querySelectorAll<HTMLElement>("[data-evidence-composer] [data-prototype-notice]")];
-          const more = document.querySelector<HTMLElement>("[data-evidence-composer] [data-prototype-notice-more]");
-          const parts = [...rows.map(box), ...(more ? [box(more)] : []), ...(field ? [box(field)] : [])];
-          const overlaps: string[] = [];
-          for (let i = 0; i < parts.length; i += 1) for (let j = i + 1; j < parts.length; j += 1) if (crosses(parts[i]!, parts[j]!)) overlaps.push(`${i} × ${j}`);
-          return {
-            waiting: list?.dataset.prototypeNotices ?? null,
-            rows: rows.map((row) => {
-              const action = row.querySelector<HTMLElement>("[data-prototype-notice-open]")!;
-              const title = row.querySelector<HTMLElement>("span.truncate")!;
-              return {
-                task: row.dataset.prototypeNotice, text: row.textContent, box: box(row), action: box(action), actionLabel: action.getAttribute("aria-label"),
-                titleClear: title.getBoundingClientRect().right <= action.getBoundingClientRect().left + 0.5,
-                titleCut: title.scrollWidth > title.clientWidth,
-              };
-            }),
-            more: more ? { folded: more.dataset.prototypeNoticeMore, text: more.textContent, expanded: more.getAttribute("aria-expanded"), box: box(more) } : null,
-            field: field ? box(field) : null,
-            fieldEnabled: field ? !field.disabled : null,
-            overlaps,
-            outside: parts.filter((part) => part[0]! < -0.5 || part[0]! + part[2]! > window.innerWidth + 0.5 || part[1]! < -0.5 || part[1]! + part[3]! > window.innerHeight + 0.5).length,
-            overflowX: document.documentElement.scrollWidth - window.innerWidth,
-            viewport: [window.innerWidth, window.innerHeight],
-          };
-        });
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?decisions=reject`, { width: 390, height: 844 }, scheme, lang, "reduce", true);
         try {
-          await page.waitForSelector('[data-evidence-case="prototype-notice"] [data-prototype-notice]', { timeout: 20_000 });
-          await page.waitForTimeout(400);
-          const folded = await read();
-          readings[`${label}-notice`] = folded;
-          await shot("notice");
-          const first = folded.rows[0];
-          /* Three tasks wait: the phone shows one line and folds two behind the count. */
-          if (folded.waiting !== "3" || folded.rows.length !== 1 || folded.more?.folded !== "2" || !folded.more.text?.includes("2")) failures.push(`${label}: the composer's notice reads ${JSON.stringify({ waiting: folded.waiting, rows: folded.rows.length, more: folded.more })}`);
-          if (!first || first.task !== "t-search" || !first.text?.includes(tr("proto.notice.ready")) || !first.text.includes(tr("proto.notice.open")) || !first.titleClear) failures.push(`${label}: the notice line reads ${JSON.stringify(first)}`);
-          if (first && (!first.text?.includes(taskTitles[first.task!]!) || !first.actionLabel?.includes(taskTitles[first.task!]!))) failures.push(`${label}: the notice line does not name its task: «${first.text}», «${first.actionLabel}»`);
-          if (first && (first.action[3]! < 44 || first.action[2]! < 44)) failures.push(`${label}: «${tr("proto.notice.open")}» is ${first.action[2]}×${first.action[3]}, under a 44 px touch target`);
-          if (folded.more && folded.more.box[3]! < 44) failures.push(`${label}: the count behind the notice is ${folded.more.box[3]} px tall`);
-          if (!folded.field || !folded.fieldEnabled || (first && first.box[1]! + first.box[3]! > folded.field[1]! + 0.5)) failures.push(`${label}: the notice does not stand above a usable message field: ${JSON.stringify({ row: first?.box, field: folded.field })}`);
-          if (folded.overlaps.length || folded.outside || folded.overflowX > 0) failures.push(`${label}: the notice overlaps ${folded.overlaps.join(", ")}, leaves the screen (${folded.outside}) or scrolls the page sideways by ${folded.overflowX}px`);
-
-          /* Unfolded: every waiting task has its line, the long title is cut before the action and the field stays on screen. */
-          await page.locator("[data-evidence-composer] [data-prototype-notice-more]").click();
-          await page.waitForFunction(() => document.querySelectorAll("[data-evidence-composer] [data-prototype-notice]").length === 3);
-          await page.waitForTimeout(200);
-          const all = await read();
-          readings[`${label}-notice-all`] = all;
-          await shot("notice-all");
-          if (all.rows.length !== 3 || all.more?.expanded !== "true" || all.rows.some((row) => !row.titleClear || row.action[3]! < 44)) failures.push(`${label}: the unfolded notice reads ${JSON.stringify(all.rows.map((row) => ({ task: row.task, clear: row.titleClear, action: row.action })))}`);
-          for (const row of all.rows) if (!row.text?.includes(taskTitles[row.task!]!)) failures.push(`${label}: the unfolded notice of ${row.task} does not name its task: «${row.text}»`);
-          if (!all.rows.some((row) => row.titleCut)) failures.push(`${label}: the long title was expected to be cut and was not`);
-          if (all.overlaps.length || all.outside || all.overflowX > 0) failures.push(`${label}: unfolded, the notice overlaps ${all.overlaps.join(", ")}, leaves the screen (${all.outside}) or scrolls sideways by ${all.overflowX}px`);
-          await page.locator("[data-evidence-composer] [data-prototype-notice-more]").click();
-          await page.waitForFunction(() => document.querySelectorAll("[data-evidence-composer] [data-prototype-notice]").length === 1);
-
-          /* The jump: the review of the task the line names, on its waiting round. */
-          await page.locator('[data-evidence-composer] [data-prototype-notice-open="t-search"]').click();
-          await page.waitForSelector('[data-mobile2-sheet="prototype-review"] [data-prototype-variant]', { timeout: 10_000 });
-          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
-          await page.waitForTimeout(400);
-          const jump = await page.evaluate(() => {
-            const review = document.querySelector<HTMLElement>("[data-prototype-review]");
-            const sheet = document.querySelector<HTMLElement>('[data-mobile2-sheet="prototype-review"]')!.getBoundingClientRect();
-            return {
-              review: review?.dataset.prototypeReview ?? null, round: review?.dataset.prototypeRoundShown ?? null,
-              variants: document.querySelectorAll("[data-prototype-review] button[data-prototype-variant]").length,
-              sheet: [Math.round(sheet.left), Math.round(sheet.top), Math.round(sheet.width), Math.round(sheet.height)],
-              sheetInside: sheet.left >= -0.5 && sheet.right <= window.innerWidth + 0.5 && sheet.bottom <= window.innerHeight + 0.5,
-              overflowX: document.documentElement.scrollWidth - window.innerWidth,
-            };
-          });
-          readings[`${label}-jump`] = jump;
-          await shot("jump");
-          if (jump.review !== "t-search" || jump.round !== "r-search" || jump.variants !== 2 || !jump.sheetInside || jump.overflowX > 0) failures.push(`${label}: «${tr("proto.notice.open")}» opened ${JSON.stringify(jump)}`);
+          await page.locator("[data-mobile2-seat-open]").click();
+          const pointer = page.locator("[data-decision-pointer-open]");
+          await pointer.waitFor({ timeout: 30_000 });
+          await pointer.click();
+          const card = page.locator('[data-decision-card="open"]');
+          await card.locator("[data-decision-reject]").click();
+          expect(await card.locator("[data-decision-send]").isEnabled()).toBe(false);
+          expect(await card.locator("[data-decision-reject-needs]").count()).toBe(1);
+          await card.locator("[data-decision-comment]").fill("Simplify every frame.");
+          await card.locator("[data-decision-send]").click();
           await page.keyboard.press("Escape");
-          await page.waitForSelector("[data-prototype-review]", { state: "detached", timeout: 5_000 });
-          if (!await page.locator("[data-evidence-composer] [data-prototype-notice]").count()) failures.push(`${label}: the notice of an undecided review left the composer after the review was closed`);
-          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
-        } catch (error) {
-          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}${pageErrors.length ? ` (page errors: ${pageErrors.join(" | ")})` : ""}`);
-          await shot("failed-here").catch(() => {});
-        } finally {
-          await context.close();
-        }
+          const rejected = page.locator("[data-decision-pointer] [data-decision-rejected]");
+          await rejected.waitFor({ timeout: 15_000 });
+          expect(await rejected.textContent()).toBe(translate(lang, "proto.rejected"));
+          expect(await page.locator("[data-decision-record-comment]").textContent()).toBe("Simplify every frame.");
+          const posts = await page.evaluate(() => (window as unknown as { decisionPosts: { chosen: number[]; reject?: boolean; comment: string }[] }).decisionPosts);
+          expect(posts.at(-1)).toMatchObject({ chosen: [], reject: true, comment: "Simplify every frame." });
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, scheme, posts, rejected: await rejected.textContent() });
+          await page.screenshot({ path: path.join(out, `${lang}-${scheme}-rejected.png`) });
+        } finally { await context.close(); }
       }
-    } finally {
-      await browser?.close();
-      served.stop();
+      fs.writeFileSync("evidence/prototype-review/decision-feed.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); served.stop(); }
+  }, 240_000);
+});
+
+
+describe("automatic long-text attachment", () => {
+  const OPENING = "Привіт, це експорт Telegram.";
+  const LONG = `${OPENING} ${"я".repeat(30_000)}`;
+  browserTest("sent bubble shows the opening words and a file chip at desktop and 390px, light and dark", async () => {
+    const out = path.resolve(".artifacts/long-text-attachment");
+    const evidence = path.resolve("evidence/long-text-attachment");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(evidence, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const cases: { width: number; scheme: "light" | "dark"; lang: "en" | "uk"; files: number; retry: boolean }[] = [];
+    for (const width of [1440, 390]) for (const scheme of ["light", "dark"] as const) for (const lang of ["uk", "en"] as const) {
+      for (const files of [0, 3]) cases.push({ width, scheme, lang, files, retry: false });
     }
-    fs.writeFileSync(path.join(EVIDENCE, "composer-notice.json"), `${JSON.stringify({ driver: "src/components/conversation/conversationWindow.browser.test.tsx", readings, failures }, null, 2)}\n`);
-    if (failures.length) throw new Error(failures.join("\n"));
-  }, 600_000);
+    for (const width of [1440, 390]) cases.push({ width, scheme: "dark", lang: "uk", files: 0, retry: true });
+    try {
+      for (const { width, scheme, lang, files, retry } of cases) {
+        const height = width === 390 ? 844 : 900;
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=lifecycle&lang=${lang}&long-text=1${retry ? "&retry-long-text=1" : ""}`,
+          { width, height }, scheme, lang, "no-preference", width === 390);
+        try {
+          await page.waitForSelector("textarea");
+          await page.fill("textarea", LONG);
+          if (files) {
+            await page.setInputFiles('input[type="file"]', [1, 2, 3].map((n) => ({
+              name: `notes-${n}.pdf`, mimeType: "application/pdf", buffer: Buffer.from(`%PDF-1.4 notes ${n}`),
+            })));
+            await page.waitForFunction((n) => document.querySelectorAll('[data-testid="attachment-tile"][data-status="ready"]').length === n, files);
+          }
+          await page.click('button[type="submit"]');
+          if (retry) {
+            await page.waitForSelector("[data-outbox-retry]");
+            await page.click("[data-outbox-retry]");
+          }
+          await page.waitForSelector("[data-text-attachment]");
+          await page.locator("[data-text-attachment]").scrollIntoViewIfNeeded();
+          const read = () => page.evaluate(({ viewportWidth, viewportHeight }) => {
+            const chip = document.querySelector("[data-text-attachment]") as HTMLElement;
+            const bubble = chip.closest("[data-user-bubble]") as HTMLElement;
+            const excerpt = bubble.querySelector("[data-text-excerpt]") as HTMLElement | null;
+            const row = chip.parentElement as HTMLElement;
+            const style = getComputedStyle(chip);
+            const bubbleStyle = getComputedStyle(bubble);
+            const rect = chip.getBoundingClientRect();
+            const bubbleRect = bubble.getBoundingClientRect();
+            const excerptRect = excerpt?.getBoundingClientRect();
+            const lineHeight = excerpt ? parseFloat(getComputedStyle(excerpt).lineHeight) || 0 : 0;
+            const caption = [...row.children].filter((node) => node !== chip).map((node) => node.textContent?.trim()).join(" ");
+            return {
+              chip: chip.textContent?.trim(), href: chip.getAttribute("href"), icon: Boolean(chip.querySelector("svg")),
+              emoji: bubble.textContent?.includes("📎") ?? false,
+              chipBackground: style.backgroundColor, chipBorder: style.borderTopColor, chipBorderWidth: style.borderTopWidth,
+              bubbleBackground: bubbleStyle.backgroundColor,
+              excerpt: excerpt?.textContent ?? null,
+              excerptLines: excerptRect && lineHeight ? Math.round(excerptRect.height / lineHeight) : null,
+              caption,
+              bubbleText: bubble.innerText.replace(/\s+/g, " ").trim(),
+              chip_rect: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom },
+              bubble_rect: { left: bubbleRect.left, right: bubbleRect.right },
+              overflow: Math.max(0, document.documentElement.scrollWidth - viewportWidth),
+              inViewport: rect.left >= 0 && rect.right <= viewportWidth && rect.top >= 0 && rect.bottom <= viewportHeight,
+              failed: Boolean(document.querySelector("[data-outbox-retry]")),
+              implementationVisible: document.body.textContent?.includes("Read the file in full") ?? false,
+              longTextVisible: document.body.textContent?.includes("я".repeat(200)) ?? false,
+              chips: document.querySelectorAll("[data-text-attachment]").length,
+            };
+          }, { viewportWidth: width, viewportHeight: height });
+          const reading = await read();
+          expect(pageErrors).toEqual([]);
+          expect(reading.chip).toBe("message.txt");
+          expect(reading.icon).toBe(true);
+          expect(reading.emoji).toBe(false);
+          expect(reading.excerpt).toContain(OPENING);
+          expect(reading.excerptLines).toBeLessThanOrEqual(2);
+          expect(reading.bubbleText.startsWith(OPENING)).toBe(true);
+          expect(reading.caption).toBe(files ? (lang === "uk" ? "3 вкладення" : "3 attachments") : "");
+          expect(reading.caption).not.toContain("4");
+          expect(reading.chipBackground).not.toBe("rgba(0, 0, 0, 0)");
+          expect(reading.chipBackground).not.toBe(reading.bubbleBackground);
+          expect(reading.chipBorderWidth).not.toBe("0px");
+          expect(reading.overflow).toBeLessThanOrEqual(1);
+          expect(reading.inViewport).toBe(true);
+          expect(reading.chip_rect.right).toBeLessThanOrEqual(reading.bubble_rect.right);
+          expect(reading.failed).toBe(false);
+          expect(reading.implementationVisible).toBe(false);
+          expect(reading.longTextVisible).toBe(false);
+          const tag = `${width}-${scheme}-${lang}-${files ? "files" : "plain"}${retry ? "-retry" : "-send"}`;
+          readings[tag] = reading;
+          await page.screenshot({ path: path.join(out, `${tag}.png`) });
+          if (width === 1440 && scheme === "dark" && !retry) {
+            await page.hover("[data-text-attachment]");
+            const hovered = await page.evaluate(() => {
+              const style = getComputedStyle(document.querySelector("[data-text-attachment]")!);
+              return { border: style.borderTopColor, color: style.color };
+            });
+            expect(hovered.border).not.toBe(reading.chipBorder);
+            readings[`${tag}-hover`] = hovered;
+            await page.screenshot({ path: path.join(out, `${tag}-hover.png`) });
+            await page.mouse.move(0, 0);
+          }
+          // Adoption uses the same marker: one chip, the same words and caption.
+          await page.evaluate(() => (window as unknown as { llvHost: { echo(): void } }).llvHost.echo());
+          await page.waitForTimeout(300);
+          expect(await page.locator("[data-outbox-entry]").count()).toBe(0);
+          const adopted = await read();
+          expect(adopted.chips).toBe(1);
+          expect(adopted.excerpt).toBe(reading.excerpt);
+          expect(adopted.caption).toBe(reading.caption);
+          await page.screenshot({ path: path.join(out, `${tag}-adopted.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); served.stop(); }
+    fs.writeFileSync(path.join(evidence, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
+  }, 900_000);
 });

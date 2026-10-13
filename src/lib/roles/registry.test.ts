@@ -468,7 +468,7 @@ test("the visual critic ends needs_decision with no findings when a touched surf
   const text = resolved.value.prompt;
   expect(text).toContain(`When you cannot frame a touched surface (no existing driver renders it, or a driver needs access you lack), the verdict is ${VISUAL_CRITIC_UNFRAMED}`);
   expect(VISUAL_CRITIC_UNFRAMED).toStartWith("needs_decision with no findings");
-  expect(text).toContain("Report only what a frame you produced shows");
+  expect(text).toContain("Report only what a frame you inspected shows");
   expect(text).toContain("needs_decision when a touched surface cannot be framed");
   expect(text).not.toContain("is a finding that names it");
 });
@@ -486,4 +486,11 @@ test("spawning a visual critic takes a Claude runtime and refuses Codex", () => 
   expect(resolveRole("visual-critic", {}, { engine: "codex", model: "gpt-6.1-sol" })).toEqual({ ok: false, error: "visual-critic runs on claude only" });
   const architect = resolveSpawnRole({ role: "architect", engine: "codex", model: "gpt-6.1-sol" });
   expect(architect.ok && architect.value?.config.engine).toBe("codex");
+});
+
+
+test("the visual critic judges every prototype variant with the operator's checklist", () => {
+  const resolved = resolveRole("visual-critic", {});
+  if (!resolved.ok) throw new Error(resolved.error);
+  for (const words of ["judge exactly those frames", "every frame of every variant", "summary names each variant", "clutter", "no clear place to click", "many identical elements"]) expect(resolved.value.prompt).toContain(words);
 });

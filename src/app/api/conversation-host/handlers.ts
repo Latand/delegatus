@@ -1,3 +1,5 @@
+import { prepareMessageFiles } from "@/lib/longMessageFile";
+import type { MessageTextAttachment } from "@/lib/messageTextAttachment";
 /**
  * Resume or respawn a conversation's host, and deliver to it.
  *
@@ -470,8 +472,8 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
   }
   /* #1224: a general attachment is admitted against the same shared policy the
      composer refuses against, so an over-budget file is answered with the reason
-     rather than dropped from the batch on its way through. Imported lazily: only
-     a request that actually carries files touches the inbox module. */
+     rather than dropped from the batch on its way through. Validation finishes
+     before the message's inbox batch is planned or written. */
   const rawFiles = (body as { files?: unknown }).files;
   const fileAdmission: InboxFileAdmissionResult = rawFiles === undefined || rawFiles === null
     ? { files: [], error: null }
@@ -562,12 +564,15 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
      leaving a second copy behind. */
   let payloadText = text;
   let filePaths: string[] = [];
-  if (fileAdmission.files.length) {
-    const { buildFilePayload, inboxFileBatchToken } = await import("@/lib/inboxFiles");
+  let textAttachment: MessageTextAttachment | undefined;
+  {
+    const { saveInboxFiles, inboxFileBatchToken } = await import("@/lib/inboxFiles");
     try {
-      const bundle = buildFilePayload(text, fileAdmission.files, inboxFileBatchToken(clientMessageId));
-      payloadText = bundle.payload;
-      filePaths = bundle.filePaths;
+      const batch = inboxFileBatchToken(clientMessageId);
+      const prepared = prepareMessageFiles(text, fileAdmission.files, batch);
+      textAttachment = prepared.textAttachment;
+      payloadText = prepared.payload;
+      filePaths = saveInboxFiles(prepared.files, batch);
     } catch (error) {
       return NextResponse.json({
         error: error instanceof Error ? error.message : "attachments could not be saved",
@@ -584,7 +589,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     (await import("@/lib/inboxFiles")).deleteInboxFiles(filePaths);
     filePaths = [];
   };
-  const attachmentField = () => (filePaths.length ? { filePaths } : {});
+  const attachmentField = () => (filePaths.length ? { filePaths, ...(textAttachment ? { textAttachment } : {}) } : {});
 
   if (structuredHostsEnabled()) {
     const revoked = actorRejection(); if (revoked) return revoked;

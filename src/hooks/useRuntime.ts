@@ -1,5 +1,7 @@
 "use client";
 
+import type { MessageTextAttachment } from "@/lib/messageTextAttachment";
+
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import {
@@ -255,6 +257,7 @@ export function useRuntimeFlow(flowId: string | null): Flow | null {
 
 export interface CommandResult {
   ok: boolean;
+  textAttachment?: MessageTextAttachment;
   operationId?: string;
   held?: true;
   receipt?: RuntimeReceipt;
@@ -304,6 +307,11 @@ async function postCommand(url: string, body: unknown): Promise<CommandResult> {
       status: res.status,
       operationId,
       receipt,
+      ...(json.textAttachment && typeof json.textAttachment === "object"
+        && "name" in json.textAttachment && typeof json.textAttachment.name === "string"
+        && "path" in json.textAttachment && typeof json.textAttachment.path === "string"
+        && "text" in json.textAttachment && typeof json.textAttachment.text === "string"
+        ? { textAttachment: { name: json.textAttachment.name, path: json.textAttachment.path, text: json.textAttachment.text } } : {}),
       ...(res.ok && json.held === true ? { held: true as const } : {}),
       ...(delivery ? { delivery } : {}),
       ...(!res.ok ? { error: typeof json.error === "string" ? json.error : undefined } : {}),
@@ -383,10 +391,12 @@ export interface RuntimeAdmissionLookup {
 export async function lookupRuntimeAdmission(
   conversationId: string,
   clientMessageId: string,
+  signal?: AbortSignal,
 ): Promise<RuntimeAdmissionLookup> {
   try {
     const response = await fetch(`/api/runtime/send?conversationId=${encodeURIComponent(conversationId)}`
-      + `&clientMessageId=${encodeURIComponent(clientMessageId)}`);
+      + `&clientMessageId=${encodeURIComponent(clientMessageId)}`,
+      { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000) });
     const payload: unknown = await response.json().catch(() => null);
     const json = payload && typeof payload === "object" && !Array.isArray(payload)
       ? payload as Record<string, unknown> : {};
@@ -399,6 +409,10 @@ export async function lookupRuntimeAdmission(
         && "conversationId" in candidate && typeof candidate.conversationId === "string"
         && "status" in candidate && typeof candidate.status === "string"
         ? candidate as RuntimeReceipt : undefined;
+      const operationId = typeof json.operationId === "string" ? json.operationId : receipt?.operationId;
+      if (!operationId || (candidate && (!receipt || receipt.conversationId !== conversationId
+        || receipt.idempotencyKey !== clientMessageId || receipt.operationId !== operationId
+        || !["send", "inject"].includes(receipt.kind)))) return { outcome: "unknown" };
       return {
         outcome: "admitted",
         ...(typeof json.operationId === "string" ? { operationId: json.operationId } : {}),

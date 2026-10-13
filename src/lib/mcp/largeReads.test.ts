@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { NextRequest } from "next/server";
-import { createMcpToolService, createProductionViewerMcpService, SqliteMcpReceiptStore, type McpToolBindings, type McpToolCallContext } from "./server";
+import { createMcpToolService, createProductionViewerMcpService, SqliteMcpReceiptStore, MemoryMcpReceiptStore, type McpToolBindings, type McpToolCallContext } from "./server";
 import { handleMcpHttpRequest, setMcpHttpDependenciesForTests } from "./http";
 import { currentMcpHttpCaller } from "./callerContext";
 
@@ -40,6 +40,19 @@ test("the production HTTP boundary owns read replay and checks capability revoca
   } finally { receipts.close(); fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("forwarded agent_fleet keeps the authenticated caller rather than accepting a claimed project", async () => {
+  const upstream = createMcpToolService({ agent_fleet: async (args: Record<string, unknown>) => {
+    expect(currentMcpHttpCaller()?.capability).toBe("a".repeat(43));
+    if (args.project && args.project !== "project-one") throw new Error("project_out_of_scope");
+    return { scope: { project: "project-one" }, agents: { live: 1 } };
+  } } as unknown as McpToolBindings, new MemoryMcpReceiptStore());
+  setMcpHttpDependenciesForTests({ service: async () => upstream, conversationForCapability: () => "conversation_worker" });
+  fixture(async request => handleMcpHttpRequest(new NextRequest(request)));
+  const service = await createProductionViewerMcpService(false, true);
+  expect(await service.callTool("agent_fleet", {})).toMatchObject({ ok: true, scope: { project: "project-one" }, agents: { live: 1 } });
+  expect(await service.callTool("agent_fleet", { project: "project-two" })).toMatchObject({ ok: false, error: expect.stringContaining("project_out_of_scope") });
+});
+
 function fixture(handler: (request: Request) => Promise<Response>) {
   const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handler });
   listeners.push(listener);
@@ -63,11 +76,11 @@ test("stdio large reads run in the Viewer and preserve its receipt and native wo
   });
   const service = await createProductionViewerMcpService(false, true);
   const nativeWork = { threadId: "fixture-thread", turnId: "fixture-turn", turnTrigger: "realtime", callId: "fixture-call", itemId: "fixture-item" };
-  for (const name of ["conversation_messages", "resources", "operator_snapshot", "board_snapshot"] as const) {
+  for (const name of ["conversation_messages", "resources", "operator_snapshot", "board_snapshot", "agent_fleet"] as const) {
     expect(await service.callTool(name, { clientRequestId: "read-key", full: true }, { nativeWork }))
       .toEqual({ ok: true, toolName: name, clientRequestId: "read-key", replayed: true, marker: "Viewer answer" });
   }
-  expect(calls).toHaveLength(4);
+  expect(calls).toHaveLength(5);
   expect(calls[0]).toMatchObject({ name: "conversation_messages", arguments: { clientRequestId: "read-key", full: true }, _meta: {
     threadId: "fixture-thread", callId: "fixture-call", itemId: "fixture-item",
     "x-codex-turn-metadata": { thread_id: "fixture-thread", turn_id: "fixture-turn", turn_trigger: "realtime" },

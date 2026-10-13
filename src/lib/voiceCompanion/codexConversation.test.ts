@@ -27,7 +27,7 @@ const handoff = (id: string, text: string) => note("thread/realtime/itemAdded", 
 const turn = (id: string) => note("turn/started", { turn: { id, rootTurnId: id, items: [], itemsView: "notLoaded", status: "inProgress", error: null, startedAt: 1, completedAt: null, durationMs: null } });
 const tool = (id: string, turnId: string, name: string, args: Record<string, unknown>) => ({ id, ...note("item/tool/call", { turnId, callId: id, namespace: null, tool: name, arguments: args }) });
 
-async function fixture(credentials: string[] = []) {
+async function fixture(credentials: string[] = [], prototype?: import("@/lib/tasks/types").BoardTask) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-conversation-")); roots.push(root);
   process.env.LLV_STATE_DIR = path.join(root, "state");
   const binary = path.join(root, "codex");
@@ -42,7 +42,7 @@ async function fixture(credentials: string[] = []) {
   const reports: BridgeReportV1[] = [];
   const admission = new CompanionAdmission(storage, { recipient: project => ({ project, conversationId: `conversation_${project}`, seatEpoch: 1, engine: "codex" }),
     send: async binding => { deliveries.push(binding); return { status: "queued", operationId: "fixture-operation" }; }, reports: project => reports.filter(row => row.project === project) });
-  const reads = fixtureBoardReads({ tasks: () => [{ id: "task_fixture", project: "fixture", text: "Review plan", status: "inbox" }], pipelines: () => [], activity: async () => [], messages: async () => [] });
+  const reads = fixtureBoardReads({ tasks: () => [prototype ?? { id: "task_fixture", project: "fixture", text: "Review plan", status: "inbox" }], pipelines: () => [], activity: async () => [], messages: async () => [] });
   const service = new CompanionLiveSessions(storage, admission, reads, provider, { timers: false, closeTimeoutMs: 100 });
   const session = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
   const wire = () => fs.readFileSync(path.join(root, "wire"), "utf8").trim().split("\n").map(row => JSON.parse(row));
@@ -192,14 +192,16 @@ test("a project switch injects both model contexts once and the next projectless
 }, 15_000);
 
 test("the prototype frame crosses the dynamic tool reply as inputImage alongside its text result", async () => {
-  const f = await fixture();
+  const { prototypeTask, storePrototypePictures } = await import("./prototypeRead.fixture");
+  const task = prototypeTask("task_fixture");
+  const f = await fixture([], task); await storePrototypePictures(task);
   try {
-    f.replay(handoff("frame", "Inspect the prototype frame"), turn("frame"), tool("frame", "frame", "view_prototype_frame", { project: null, taskId: "task_fixture", reviewId: "review_fixture", mediaId: "frame_fixture", refresh: null }));
+    f.replay(handoff("frame", "Inspect the prototype frames"), turn("frame"), tool("frame", "frame", "view_prototype_frame", { project: null, taskId: "task_fixture", reviewId: null, query: null, variants: [1, 2, 3], view: "Board dark", width: 1440, lang: "uk", original: false, refresh: null }));
     const result = await f.reply("frame");
     expect(result.success).toBe(true);
-    expect(result.contentItems.map((row: { type: string }) => row.type)).toEqual(["inputText", "inputImage"]);
-    expect(JSON.parse(result.contentItems[0].text).speech).toContain("visual inspection");
-    expect(result.contentItems[1].imageUrl).toMatch(/^data:image\/png;base64,/);
+    expect(result.contentItems.map((row: { type: string }) => row.type)).toEqual(["inputText", "inputImage", "inputImage", "inputImage"]);
+    expect(JSON.parse(result.contentItems[0].text).speech).toContain("Attached 3 picture(s)");
+    for (const image of result.contentItems.slice(1)) expect(image.imageUrl).toMatch(/^data:image\/png;base64,/);
     expect(result.contentItems[0].text).not.toContain("base64");
     expect(JSON.stringify(f.service.transcriptRecord(f.session.sessionId))).not.toContain("base64");
   } finally { await f.close(); }

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { transcriptSearchPage } from "@/lib/search/transcriptSearchPage";
 import { viewerReadTools, productionDomainDependencies, type ViewerMcpDomainDependencies } from "@/lib/mcp/bindings";
+import { boardSelection } from "@/lib/mcp/boardSelection";
 import { budgetPage } from "@/lib/mcp/budgetPage";
 import type { AgentLivenessSources } from "@/lib/lifecycle/liveness";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
@@ -19,7 +20,9 @@ import type { BoardReadPaths } from "./boardReads";
  * lifecycle-journal writes. Search reuses its ordinary page handler. */
 export function createCompanionBoardReadPaths(dependencies: { domain?: ViewerMcpDomainDependencies; liveness?: AgentLivenessSources;
   transcript?: Pick<ViewerMcpDomainDependencies, "pinnedTranscript" | "selectedContext"> } = {}): BoardReadPaths {
-  const domain = { ...(dependencies.domain ?? productionDomainDependencies), ...dependencies.transcript,
+  const domain = { ...(dependencies.domain ?? productionDomainDependencies), fleetDetailBudgetBytes: 3_200, ...dependencies.transcript,
+    // These reads belong to the authenticated operator's voice session.
+    callerAttribution: () => ({ kind: "gateway" as const, conversationId: null, role: null }),
     ...(dependencies.liveness ? { livenessSources: () => dependencies.liveness! } : {}),
     refreshLifecycleJournal: () => ({ appended: 0 }) as ReturnType<ViewerMcpDomainDependencies["refreshLifecycleJournal"]>,
   };
@@ -68,8 +71,7 @@ export function createCompanionBoardReadPaths(dependencies: { domain?: ViewerMcp
     },
     recipient: project => orchestratorSeatFor(project).active?.conversationId ?? null,
     resolveProject(current, requested) {
-      if (!requested) { if (!current) throw new Error("PROJECT_REQUIRED"); return canonicalProject(current); }
-      if (current && canonicalProject(requested) === canonicalProject(current)) return canonicalProject(current);
+      if (!requested && !current) throw new Error("PROJECT_REQUIRED");
       const names = new Map<string, Set<string>>();
       const add = (key: string, name?: string) => {
         key = canonicalProject(key);
@@ -81,11 +83,20 @@ export function createCompanionBoardReadPaths(dependencies: { domain?: ViewerMcp
       for (const row of projectCurationSnapshot().manualProjects) add(row.project, row.displayName);
       for (const row of conversationCatalogSnapshot()) add(row.project, row.projectName);
       for (const seat of activeOrchestratorSeats()) add(seat.project);
-      const matches = names.get(requested.trim().toLowerCase());
+      const tasks = domain.taskSelectionSource?.();
+      const pipelines = domain.pipelineSelectionSource?.();
+      for (const key of tasks ? boardSelection(tasks.filename, "tasks").projectKeys(tasks) : (domain.listTaskRecords?.() ?? domain.loadTasks()).map(row => row.project)) add(key);
+      for (const key of pipelines ? boardSelection(pipelines.filename, "pipelines").projectKeys(pipelines) : (domain.listPipelineRecords?.() ?? domain.getPipelines().pipelines).map(row => row.project)) add(key);
+      const input = requested ?? current!;
+      const matches = names.get(input.trim().toLowerCase()) ?? names.get(canonicalProject(input).toLowerCase());
       if (matches?.size !== 1) throw new Error(matches?.size ? "PROJECT_AMBIGUOUS" : "PROJECT_REFUSED");
       return [...matches][0]!;
     },
     review(id) { const row = task(id); if (!row) throw new Error("PROJECT_REFUSED"); return readPrototypeReviews(row); },
+    prototypeTasks(project, taskId) {
+      return (domain.listTaskRecords?.() ?? domain.loadTasks()).filter(row => canonicalProject(row.project) === canonicalProject(project)
+        && (taskId ? row.id === taskId : !!row.prototypeReviews?.length || !!row.prototypeReviewReplica));
+    },
     async frame(id, reviewId, mediaId) {
       const row = task(id); const review = row && readPrototypeReviews(row).rounds.find(round => round.id === reviewId);
       const media = review?.variants.flatMap(variant => variant.frames.flatMap(frame => [frame.image, ...(frame.original ? [frame.original] : [])]))

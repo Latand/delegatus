@@ -56,6 +56,7 @@ export function MobileSheet({
   footer,
   pinned,
   full = false,
+  titleHidden = false,
   onClose,
   children,
   receiptStore,
@@ -69,6 +70,8 @@ export function MobileSheet({
   pinned?: ReactNode;
   /** Fullscreen (the prototype review): no handle, no rounded top, the footer at the screen's foot. */
   full?: boolean;
+  /** The title only names the dialog for assistive tech: the body already says what it holds. */
+  titleHidden?: boolean;
   onClose: () => void;
   children: ReactNode;
   /** Tests inject their own receipt store; the app uses the singleton. */
@@ -147,7 +150,8 @@ export function MobileSheet({
           </div>
         )}
         <div className="flex min-h-12 shrink-0 touch-none items-center gap-1 pl-4 pr-1" data-mobile2-sheet-header {...handle}>
-          <h2 className="min-w-0 flex-1 truncate text-title font-semibold text-primary">{title}</h2>
+          <h2 className={titleHidden ? "sr-only" : "min-w-0 flex-1 truncate text-title font-semibold text-primary"}>{title}</h2>
+          {titleHidden ? <span className="flex-1" aria-hidden /> : null}
           {extra}
           <button type="button" className={CLOSE_BUTTON} aria-label={t("mobile2.sheet.close")} data-mobile2-close onClick={onClose}>
             <X className="h-5 w-5" aria-hidden />

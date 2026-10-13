@@ -1,4 +1,4 @@
-import { constants as FS, type promises as fsp } from "node:fs";
+import { constants as FS, realpathSync, type promises as fsp } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -108,13 +108,25 @@ export function lexicalAllowedRoots(): AllowedRoots {
 
 /** The same roots with symlinks resolved; a root that does not exist is dropped. */
 export async function realAllowedRoots(): Promise<AllowedRoots> {
-  const real = async (root: string) => fs.realpath(root).catch(() => null);
-  const home = (await real(homeRoot())) ?? homeRoot();
-  const evidence = (await Promise.all(evidenceRoots().map(real))).filter((root): root is string => root !== null);
+  return realAllowedRootsSync();
+}
+
+/** {@link realAllowedRoots} without an await: a handful of realpath calls,
+    for a caller that must not queue behind a busy server's other work. */
+export function realAllowedRootsSync(): AllowedRoots {
+  const real = (root: string) => {
+    try {
+      return realpathSync(root);
+    } catch {
+      return null;
+    }
+  };
+  const home = real(homeRoot()) ?? homeRoot();
+  const evidence = evidenceRoots().map(real).filter((root): root is string => root !== null);
   /* A store that does not exist yet holds nothing to read; one reached through
      a link is fenced at the place the link leads to as well. */
   const stores = fencedStores();
-  const fenced = [...new Set([...stores, ...(await Promise.all(stores.map(real))).filter((store): store is string => store !== null)])];
+  const fenced = [...new Set([...stores, ...stores.map(real).filter((store): store is string => store !== null)])];
   return { home, evidence, fenced };
 }
 

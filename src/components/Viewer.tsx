@@ -256,7 +256,7 @@ function ViewerApp() {
      new object and starts without a pin. */
   const [hashPinFor, setHashPinFor] = useState<ConversationHash | null>(null);
   const wantsHashPin = pendingHash !== null && hashPinFor === pendingHash;
-  const { systemHealth, files: polledFiles, pinOverlayPaths, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks: polledTasks, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, catalogPin?.requested ? catalogPin.path : null, wantsHashPin));
+  const { systemHealth, files: polledFiles, pinOverlayPaths, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks: polledTasks, seatDecisions, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, catalogPin?.requested ? catalogPin.path : null, wantsHashPin));
   /* A dismissal is drawn the moment a card's Dismiss is clicked: layered over
      the polled rows here, the one place they are read, so the cards, the
      phone's ⚠ count and the queue stop flagging it in the same frame
@@ -1012,7 +1012,7 @@ function ViewerApp() {
     }
     publishBlockerNames({ projects: projectDisplayNames, conversations, tasks: taskTitles, cards });
   }, [updateBlockers, updateDecision, wantedNames, allFiles, tasks, projectDisplayNames]);
-  const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision, tasks), [files, pipelines, clock, closingPipelines, updateDecision, tasks]);
+  const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision, tasks, seatDecisions), [files, pipelines, clock, closingPipelines, updateDecision, tasks, seatDecisions]);
   /* «Готово» (docs/design/done-section.md §5): finished work still waiting to
      be accepted counts with the decisions on the header, the panel, the tab
      title and the phone's badge, until it is accepted. The rail's ⏸, «Dismiss
@@ -1075,7 +1075,7 @@ function ViewerApp() {
 
   /* The width the board's columns have, for whether the panel can dock
      beside them: the kanban's own pane, which it hands in when it mounts (a
-     seat open beside the board and the Tasks panel take theirs out of it),
+     seat open beside the board takes its width out of it),
      else the whole main column. Both are observed, so a window resize and a
      seat moving to the side each re-measure. */
   const [boardPane, setBoardPane] = useState<HTMLElement | null>(null);
@@ -1908,7 +1908,7 @@ function ViewerApp() {
           nothing at all the rest of the time. */}
       <AttentionHost mobile={isMobile} />
       {/* A task's prototype review, opened from its card or from the orchestrator's notice. */}
-      <PrototypeReviewHost tasks={tasks} />
+      <PrototypeReviewHost tasks={tasks} seatDecisions={seatDecisions} />
       {/* #1054: the global "find my messages" palette. Mounted here so one
           surface serves every board and both form factors; it renders nothing
           until the header button or `/` opens it, and a selected row leaves
@@ -1946,10 +1946,12 @@ function ViewerApp() {
           Cards publish a place; the composer's lifetimes (dictation, attachment
           object URLs, outbox) live here and survive the card unmounting mid-call. */}
       <VoiceComposerHost files={allFiles} />
-      {/* #2519: the floating voice companion. Desktop only, and nothing is mounted
-          until the operator turns it on in the settings. It talks about the project
-          in view; a tap on Talk is the only thing that starts a conversation. */}
-      <VoiceCompanionHost project={project === OVERVIEW ? null : project} mobile={isMobile} />
+      {/* #2519: the floating voice companion; on the phone its head
+          (docs/design/phone-voice-head-build.md). Nothing is mounted until the
+          operator turns it on in the settings. It talks about the project in view,
+          on the phone the project of the screen on top, and stays mounted across
+          screens and sheets; a tap on Talk is the only thing that starts a conversation. */}
+      <VoiceCompanionHost project={dashboardProject === OVERVIEW ? null : dashboardProject} mobile={isMobile} />
       {/* Staging instances (#659) announce themselves on every device; prod
           renders nothing. Top-center, clear of both corner anchors. */}
       <StagingBadge />

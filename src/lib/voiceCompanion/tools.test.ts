@@ -12,16 +12,31 @@ const { CompanionAdmission } = await import("./admission");
 const { COMPANION_TOOL_REGISTRY, COMPANION_TOOLS, runCompanionTool } = await import("./tools");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
+test("prototype selectors have strict nullable fields and bounded variants and language", async () => {
+  const { validToolValue, READ_SCHEMAS } = await import("./readSchemas");
+  for (const name of ["read_prototype_review", "view_prototype_frame"]) {
+    const schema = COMPANION_TOOLS.find(tool => tool.name === name)!.parameters;
+    expect(schema.required).toEqual(Object.keys(schema.properties));
+    expect(schema.additionalProperties).toBe(false);
+    for (const key of ["project", "taskId", "reviewId", "query", "refresh"]) expect(validToolValue(READ_SCHEMAS[name][key], null)).toBe(true);
+  }
+  const frame = READ_SCHEMAS.view_prototype_frame;
+  for (const variants of [[], [1, 2, 3, 4], [0], [10], [1.5]]) expect(validToolValue(frame.variants, variants)).toBe(false);
+  expect(validToolValue(frame.variants, [3, 1, 2])).toBe(true);
+  expect(validToolValue(frame.lang, "fr")).toBe(false);
+});
+
 test("all declarations execute through one allowlist, parameter schema and project fence", async () => {
   let ended = false;
   const admission = new CompanionAdmission(new CompanionStorage(), { recipient: () => null, reports: () => [], send: async () => { throw new Error("unexpected delivery"); } });
   const session = admission.create({ project: "fixture", locale: "en", authority: "live-model" });
   const reads = fixtureBoardReads({ tasks: () => [{ id: "task-a", project: "fixture", text: "A task", status: "open" }, { id: "task-b", project: "foreign", text: "Foreign", status: "open" }],
     pipelines: () => [{ id: "pipeline-a", project: "fixture", task: "A pipeline", state: "running", stages: [], runs: [] }],
-    activity: async () => [{ conversationId: "conversation_a", project: "fixture", title: "Agent", lifecycle: "running" }], messages: async () => [{ role: "assistant", text: "Checked it" }] });
+    activity: async () => [{ conversationId: "conversation_a", project: "fixture", title: "Agent", lifecycle: "running" }], messages: async () => [{ role: "assistant", text: "Checked it" }],
+    fleet: async () => ({ summary: { agents: { live: 1, running: 1 }, byEngine: { claude: [1, 1] } }, agents: [] }) });
   const context = { project: "fixture", sessionId: session.id, callId: "call-a", delegationId: "delegation-a", admission, reads, endConversation: () => { ended = true; } };
   const args: Record<string, Record<string, unknown>> = { list_tasks: {}, get_task: { taskId: "task-a" }, list_pipelines: {}, get_pipeline: { pipelineId: "pipeline-a" },
-    agent_activity: {}, conversation_messages: { conversationId: "conversation_a" }, orchestrator_messages:{},search_transcripts:{query:"plan"},read_prototype_review:{taskId:"task-a"},view_prototype_frame:{taskId:"task-a",reviewId:"review-a",mediaId:"frame-a"}, orchestrator_reports: {}, reread_orchestrator_report: { report: null }, request_orchestrator_delegation: { instruction: "Review it", confirmation_reason: null },
+    agent_activity: {}, agent_fleet: {}, conversation_messages: { conversationId: "conversation_a" }, orchestrator_messages:{},search_transcripts:{query:"plan"},read_prototype_review:{taskId:"task-a"},view_prototype_frame:{taskId:"task-a",variants:[1]}, relay_owner_history: { action: "groups" }, orchestrator_reports: {}, reread_orchestrator_report: { report: null }, request_orchestrator_delegation: { instruction: "Review it", confirmation_reason: null },
     resolve_orchestrator_confirmation: { decision: "send" }, end_conversation: {} };
   expect(COMPANION_TOOLS.map(row => row.name)).toEqual(COMPANION_TOOL_REGISTRY.map(row => row.name));
   for (const tool of COMPANION_TOOL_REGISTRY) {

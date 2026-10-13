@@ -152,3 +152,31 @@ The ordinary test compares the generated capture byte for byte. Set
 `LLV_RELAY_PRIVATE_LOOP_OUTPUT` to a scratch file to export it through the
 same test, using isolated HOME, XDG, TMPDIR and LLV_STATE_DIR and a closed
 loopback Viewer control URL. See `docs/design/telegram-relay-publication.md`.
+
+
+## Owner group history (H1–H3), dark
+
+The install reads the operator's IANA zone from `operator-settings.json` via
+`operatorTimeZone()`. The pairing-authenticated endpoints use the existing
+owner-tools switch, default OFF. Agents and voice read one page per call;
+continuations retain the first page's explicit local dates and zone. The
+operator's decision permits ordinary installation agents and voice callers,
+including team members who direct them; live relay replies in Telegram are
+refused. The direct browser route remains operator-only.
+
+The authoritative Celestia document is `docs/design/relay-owner-group-history.md`,
+introduced at `507ac6e0` and unchanged at main `8e1a0904`: 34,077 bytes,
+SHA-256 `becc3785513c31c22411a00af4f8b7a2b3eea6348ef0c4ec097670d18fed5996`.
+The strict response schemas match its `OwnerHistoryGroups` and `OwnerHistoryPage`
+definitions. Authors' ids are discarded before presentation. MCP receipts
+never store this read, and voice tool records contain only status and count speech.
+
+`evidence/external-relay/install_owner_group_history.json` is a recorded API run
+against the local synthetic double in `ownerHistory.fixture.ts`, with no call to
+Celestia. It covers all nine cross-check scenarios and redacts credentials:
+28,729 bytes, SHA-256
+`1fa1865c6e8611f8252a8c769faa816303d545c828b379e7368a6fa0e2058f0a`.
+Set `LLV_RELAY_WIRE_OUTPUT_HISTORY=1` when running
+`src/lib/externalRelay/ownerHistory.test.ts` to regenerate it. The recording test
+validates scenario statuses and credential redaction before writing, even when
+selected by name. The build report names the commit containing these bytes.

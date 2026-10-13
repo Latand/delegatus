@@ -8,6 +8,11 @@ import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import { KanbanBoard, kanbanColumnTracks, kanbanLayoutMode, kanbanLayoutModeBeside, type KanbanBoardProps } from "./KanbanBoard";
 import type { TaskMutationPorts } from "./useTaskMutations";
 import { DWELL_MS } from "./useColumnDwell";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* The board rendered by React against invented tasks and scripted task ports.
    No route, no store, no state directory is touched. */

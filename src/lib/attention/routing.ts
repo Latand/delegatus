@@ -1,11 +1,12 @@
 import { attentionReason } from "@/components/attention";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { prototypeReviewNotices } from "@/lib/prototypeReview/model";
+import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import type { ConversationReasonKind, LaneReasonKind } from "./dismissalTypes";
-import { conversationRouteKey, laneNeedKind, laneRouteKey, type AttentionEscalationMark, type AttentionRouteMark } from "./routeTypes";
+import { conversationRouteKey, laneNeedKind, laneRouteKey, laneWaitCleared, type AttentionEscalationMark, type AttentionRouteMark } from "./routeTypes";
 
 /*
  * Who answers a needs-you reason first (docs/design/attention-auto-resolve.md,
@@ -62,9 +63,10 @@ export function laneReservedForOperator(pipeline: Pick<Pipeline, "srcConversatio
 
 /** The decision rounds that still need an answer, by round id. A decided
     round's delivery warning keeps its own row while the original wait goes
-    back to the seat. `tasks` carry the board summary and dismissal marks. */
-export function waitingRoundIds(tasks: readonly BoardTask[]): Set<string> {
-  return new Set(prototypeReviewNotices(tasks).filter((notice) => !notice.undelivered).map((notice) => notice.reviewId));
+    back to the seat. `tasks` carry the board summary and dismissal marks;
+    taskless forms carry the seat notices the board draws. */
+export function waitingRoundIds(tasks: readonly BoardTask[], seatDecisions: readonly PrototypeReviewNotice[] = []): Set<string> {
+  return new Set(prototypeReviewNotices(tasks, seatDecisions).filter((notice) => !notice.undelivered).map((notice) => notice.reviewId));
 }
 
 export interface AttentionRoutingInputs {
@@ -122,6 +124,10 @@ export function conversationRoute(file: FileEntry, now: number, inputs: Attentio
 export function laneRoute(pipeline: Pipeline, inputs: AttentionRoutingInputs): AttentionRoute {
   const kind = laneNeedKind(pipeline);
   if (!kind) return OPERATOR;
+  /* A wait someone already cleared («Leave the PR open», a dismissed
+     decision) is answered: nobody is woken for it, and the card says who
+     cleared it (docs/design/calm-task-cards-build.md §7.3). */
+  if (laneWaitCleared(pipeline)) return OPERATOR;
   const key = laneRouteKey(pipeline, kind);
   if (kind === "lane-decision" && laneAwaitsAutomaticRetry(pipeline)) return { key, owner: "system" };
   if (laneReservedForOperator(pipeline, kind)) return OPERATOR;

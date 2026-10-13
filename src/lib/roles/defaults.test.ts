@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { ROLE_DEFAULTS } from "./defaults";
+import { PROTOTYPE_PUBLICATION_RULE, ROLE_DEFAULTS } from "./defaults";
 
 test("maintainer preserves Done while deployment is pending and follows the project merge setting", () => {
   const scaffold = ROLE_DEFAULTS.find(role => role.id === "maintainer")!.promptScaffold;
@@ -37,4 +37,10 @@ test("reviewers require captured-base evidence before attributing a test failure
   expect(scaffold).toContain("New head-only failures still block");
   expect(scaffold).toContain("Missing, skipped or incomplete runs");
   expect(scaffold).toContain("Independently evidenced defects in the diff still warrant findings");
+});
+
+test("prototype builders hand frames to a critic before a separate publication stage", () => {
+  expect(PROTOTYPE_PUBLICATION_RULE).toContain("frame directory in your report");
+  expect(PROTOTYPE_PUBLICATION_RULE).toContain("onFail proto-fix, maxRounds 2, onExhausted advance");
+  expect(PROTOTYPE_PUBLICATION_RULE).toContain("Only its publish stage calls publish_prototype_review after the critic passes or its findings are fixed");
 });

@@ -1,5 +1,6 @@
 import {
   agentRegistry,
+  conversationRegistryEntries,
   readOnlyConversationLookupFromSnapshot,
   type RegistryFile,
 } from "@/lib/agent/registry";
@@ -75,13 +76,14 @@ export function submissionIdentities(
     if (lookup.canonicalConversationId(conversationId as ViewerConversationId) !== conversation.id) return;
     identities[deliveryDedupToken(operationId)] = clientMessageId;
   };
-  for (const [operationId, owner] of Object.entries(snapshot.deliveryOperationOwners ?? {})) {
+  /* Only this conversation's rows, read by index (#2761). */
+  for (const [operationId, owner] of conversationRegistryEntries(snapshot, "deliveryOperationOwners", conversation.id)) {
     record(operationId, owner?.clientMessageId, owner?.conversationId);
   }
   /* The reservation carries the same pair while it is alive. Owners outlive
      it, so this adds nothing for a settled send — and it is what answers for
      a delivery admitted by a build that wrote no owner row. */
-  for (const delivery of Object.values(snapshot.heldDeliveries ?? {})) {
+  for (const [, delivery] of conversationRegistryEntries(snapshot, "heldDeliveries", conversation.id)) {
     record(delivery?.command?.operationId, delivery?.clientMessageId, delivery?.conversationId);
   }
   return identities;

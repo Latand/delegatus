@@ -4,6 +4,7 @@ import { Flag, Link2, Settings } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
+import { parseCpuQueueDetail } from "@/lib/runtime/cpuQueueText";
 import { pipelineCompletedUnreviewed } from "@/lib/pipelines/failEdgeBudget";
 import { pipelineTaskFinishState } from "@/lib/pipelines/taskFinish";
 import type { Pipeline, PipelineStage, PipelineStageReportEntry, StageFinding } from "@/lib/pipelines/types";
@@ -36,9 +37,10 @@ import {
   stageAgentRowModel,
 } from "./pipelineModel";
 import {
-  answerLabel, blockAgeSeconds, cardChain, chainSteps, cardChainLevels, laneMergeWord, mergeNeedsYou, mergeReasonText, parkedStage, pipelineAnswers, pipelineEnded, pipelineMovedAtMs, pipelineNeedsYou, pipelineReason, reviewStopFindings, reviewStopReason, sameTitle, screenCurrentStageId, STAGE_MARK, stageFindings,
-  type ChainItem, type PipelineAnswer, type PipelineAnswers, type PipelineBlockDensity, type ReviewStop,
+  blockAgeSeconds, cardChain, chainSteps, cardChainLevels, laneMergeWord, mergeNeedsYou, mergeReasonText, parkedStage, pipelineAnswers, pipelineEnded, pipelineMovedAtMs, pipelineNeedsYou, pipelineReason, reviewStopFindings, reviewStopReason, sameTitle, screenCurrentStageId, STAGE_MARK, stageFindings,
+  type ChainItem, type PipelineAnswers, type PipelineBlockDensity, type ReviewStop,
 } from "./pipelineBlockModel";
+import { laneState } from "@/components/kanban/cardState";
 
 /*
  * One pipeline, drawn by one component everywhere it appears (#2072 slice 3;
@@ -418,49 +420,19 @@ function MergeNote({ pipeline }: { pipeline: Pipeline }) {
   return null;
 }
 
-/** The two ways on, the quiet one first. */
-function AnswerButtons({ pipeline, answers, acting, large, onAnswer }: {
-  pipeline: Pipeline;
-  answers: PipelineAnswers;
-  acting: PipelineActionKind | null;
-  /** The pipeline screen's 44 px buttons, in the phone's shorter words. */
-  large: boolean;
-  onAnswer: (pipeline: Pipeline, answer: PipelineAnswer) => void;
-}) {
-  const { t } = useLocale();
-  const label = (answer: PipelineAnswer): string => answerLabel(t, answers, answer, large);
-  return (
-    <div className={`pb-actions${large ? " large" : ""}`}>
-      {answers.choices.map((answer, index) => (
-        <button
-          key={answer.action}
-          type="button"
-          className={`pb-act${index === 1 ? " primary" : ""}`}
-          data-answer-action={answer.action}
-          disabled={Boolean(acting)}
-          onClick={() => onAnswer(pipeline, answer)}
-        >
-          {label(answer)}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/** The answer in place: what the lane stopped on, and the two ways on. */
-function AnswerPanel({ pipeline, answers, names, nameOf, acting, large, onAnswer }: {
+/** What the lane stopped on: what the stage said, its findings, the merge's
+    reason or the review's heads. The answers themselves are the lane's ⋯
+    (docs/design/calm-task-cards-build.md §6.2): the orchestrator gives them
+    by itself, and the operator overrides it there. */
+function AnswerPanel({ pipeline, answers, names, nameOf }: {
   pipeline: Pipeline;
   answers: PipelineAnswers;
   names: ReadonlyMap<string, string>;
   nameOf: (stage: PipelineStage) => string;
-  acting: PipelineActionKind | null;
-  large: boolean;
-  onAnswer?: (pipeline: Pipeline, answer: PipelineAnswer) => void;
 }) {
   return (
     <div className="pb-answer" data-answer={answers.kind}>
       <AnswerReport pipeline={pipeline} answers={answers} names={names} nameOf={nameOf} />
-      {onAnswer ? <AnswerButtons pipeline={pipeline} answers={answers} acting={acting} large={large} onAnswer={onAnswer} /> : null}
     </div>
   );
 }
@@ -515,13 +487,9 @@ export interface PipelineBlockProps {
   onMenu?: (pipeline: Pipeline, anchor: HTMLElement) => void;
   /** Every PR and issue link of the pipeline, with the attach form (#2059). */
   onWorkLinks?: (target: WorkLinkTarget, anchor: HTMLElement) => void;
-  /** Answers a decision or a spent review budget in place. Absent, the block
-      shows what the lane stopped on and no buttons. */
-  onAnswer?: (pipeline: Pipeline, answer: PipelineAnswer) => void;
-  /** Task density: the answer as the phone's 44 px buttons in its shorter
-      words ("Retry stage"), the phone task screen's (§3.13). The stage is
-      named once, in the report line right above them. */
-  largeAnswers?: boolean;
+  /** Card density: the warning line naming why the lane stopped. The closed
+      desktop card and the phone card leave it to their state line. */
+  reasonLine?: boolean;
   /** Screen density: a waiting stage's ⚙, which opens its configuration. */
   onConfigureStage?: (pipeline: Pipeline, stage: PipelineStage) => void;
   /** Screen density: what the host knows about a stage's conversation, which
@@ -561,17 +529,25 @@ export function PipelineBlock(props: PipelineBlockProps) {
   const nameOf = (stage: PipelineStage) => names.get(stage.id) ?? stageChipLabel(t, stage);
   const links = useWorkLinks().of({ kind: "pipeline", id: pipeline.id });
   const suffixes = loopSuffixes(t, summary, nameOf);
+  /* Amber is the operator's alone: a stop the orchestrator handles, or one
+     someone cleared, takes no warning tone (§5.1). */
+  const owner = laneState(pipeline).owner;
   const needs = pipelineNeedsYou(pipeline);
+  const seatStop = owner === "seat";
   const moved = pipelineMovedAtMs(pipeline);
   const selected = props.selected ?? NO_STAGES;
   const title = pipelineTitle(t, pipeline);
   const progress = pipelineProgress(t, summary, nameOf);
+  const cpuWaiting = !!parseCpuQueueDetail(pipeline.stateDetail);
   const answers = props.managedOn ? null : pipelineAnswers(pipeline, nameOf);
   const root = {
     "data-pipeline": pipeline.id,
     "data-density": density,
     "data-lane-state": pipeline.state,
-    "data-needs": needs ? "1" : undefined,
+    "data-needs": owner === "you" ? "1" : undefined,
+    "data-seat-stop": seatStop ? "1" : undefined,
+    /* A stop nobody is asked about (an automatic retry, a cleared wait) waits in grey. */
+    "data-stop-waits": (needs || laneMergeWord(pipeline) === "stopped") && owner === "waiting" ? "1" : undefined,
   };
 
   if (density === "card") {
@@ -588,19 +564,25 @@ export function PipelineBlock(props: PipelineBlockProps) {
             <span className="pb-grow" />
             {text}
           </span>
+          {props.aside ? <span className="pb-line sub"><span className="pb-grow" /><span className="pb-aside" data-pipeline-aside={pipeline.id}>{props.aside}</span></span> : null}
         </span>
       );
     }
-    const reason = props.managedOn ? props.managedOn.reason : pipelineReason(t, pipeline, nameOf);
+    const reason = props.managedOn ? props.managedOn.reason : props.reasonLine === false ? null : pipelineReason(t, pipeline, nameOf);
     /* Running says itself in the live pill; any other state that is not the
        operator's to answer says its word beside the age. */
-    const word = needs || pipeline.state === "running" ? null : pipelineStateLabel(t, pipeline.state);
+    const word = needs || seatStop || pipeline.state === "running" ? null : pipelineStateLabel(t, pipeline.state);
     const ageNode = reason ? null : <span className="pb-age">{[word, age].filter(Boolean).join(" · ")}</span>;
     const reasonLine = reason ? <span className="pb-reason" data-pipeline-reason={pipeline.id}>{[reason, age].filter(Boolean).join(" · ")}</span> : null;
     const aside = props.aside ? <span className="pb-aside" data-pipeline-aside={pipeline.id}>{props.aside}</span> : null;
     return (
       <span className="pblock" {...root} data-managed={props.managedOn ? "" : undefined}>
-        <CardLine summary={summary} nameOf={nameOf} suffixes={suffixes} age={ageNode} tail={text} />
+        {cpuWaiting ? (
+          <span className="pb-line sub">
+            <span className="min-w-0 [overflow-wrap:anywhere]" data-cpu-queue>{progress}</span>
+            <span className="pb-grow" />{text}
+          </span>
+        ) : <CardLine summary={summary} nameOf={nameOf} suffixes={suffixes} age={ageNode} tail={text} />}
         {aside ? (
           <span className={`pb-line${reasonLine ? " reason" : " sub"}`}>{reasonLine}<span className="pb-grow" />{aside}</span>
         ) : reasonLine}
@@ -698,6 +680,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
           {controls}
         </div>
       )}
+      {cpuWaiting ? <p className="pb-line sub" data-cpu-queue>{progress}</p> : null}
       {graphOpen ? (
         <>
           <GraphSlot summary={summary} names={names} selected={selected} onOpenStage={props.onOpenStage!} />
@@ -718,7 +701,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
       ) : (
         <>
           {answers ? (
-            <AnswerPanel pipeline={pipeline} answers={answers} names={names} nameOf={nameOf} acting={props.acting ?? null} large={Boolean(props.largeAnswers)} onAnswer={props.onAnswer} />
+            <AnswerPanel pipeline={pipeline} answers={answers} names={names} nameOf={nameOf} />
           ) : needs ? (
             <div className="pb-answer">
               {pipeline.state === "needs_review"
@@ -813,6 +796,7 @@ function ScreenBlock(props: PipelineBlockProps & {
   const chips = summary.chips;
   const ended = pipelineEnded(pipeline);
   const needs = pipelineNeedsYou(pipeline);
+  const stopOwner = laneState(pipeline).owner;
   const parked = parkedStage(pipeline);
   const currentId = screenCurrentStageId(summary);
   const currentIndex = currentId ? chips.findIndex((chip) => chip.stage.id === currentId) : -1;
@@ -884,7 +868,8 @@ function ScreenBlock(props: PipelineBlockProps & {
     const waitsOnYou = needs && stage.id === parked?.id;
     const isHeld = held(chip);
     const shown: StageChipState = isHeld ? "pending" : chip.state;
-    const tone = waitsOnYou ? "needs" : STAGE_TONE[shown];
+    /* Amber only where the operator answers; the orchestrator's stop takes its tone. */
+    const tone = waitsOnYou ? (stopOwner === "seat" ? "seat" : stopOwner === "you" ? "needs" : STAGE_TONE[shown]) : STAGE_TONE[shown];
     const state = waitsOnYou || isHeld ? pipelineStateLabel(t, pipeline.state) : graphStateWord(t, shown);
     const identity = stage.effectiveRole ? stageIdentity(pipeline, stage) : null;
     const who = whoRuns(t, pipeline, stage);
@@ -960,7 +945,6 @@ function ScreenBlock(props: PipelineBlockProps & {
                 <AnswerReport pipeline={pipeline} answers={answers} names={names} nameOf={nameOf} />
                 {edges.map((edge) => <p key={edge.id} className="pb-edge" data-stage-edge={edge.id}>{`↺ ${edge.text}`}</p>)}
                 {answers.kind === "review" && answers.stage && !answers.stop ? <FindingList findings={stageFindings(pipeline, answers.stage.id)} shown={ANSWER_FINDINGS} /> : null}
-                {props.onAnswer ? <AnswerButtons pipeline={pipeline} answers={answers} acting={props.acting ?? null} large onAnswer={props.onAnswer} /> : null}
               </div>
             ) : isCurrent ? (
               <>
@@ -999,10 +983,12 @@ function ScreenBlock(props: PipelineBlockProps & {
   const hasLinks = Boolean(links?.links.length || links?.noPr);
   const hasFlag = finishFlagShown(pipeline, props.taskId);
   const diskWait = pipeline.state === "provisioning" ? pipelineReason(t, pipeline, nameOf) : null;
+  const cpuWaiting = !!parseCpuQueueDetail(pipeline.stateDetail);
   return (
     <section className="pblock" aria-label={t("kanban.pipelineAria", { title: pipelineTitle(t, pipeline), progress: pipelineProgress(t, summary, nameOf) })} {...props.root}>
       {props.embedded ? null : <h2 className="pb-heading" ref={props.headingRef} data-pipeline-heading={pipeline.id}>{pipelineTitle(t, pipeline)}</h2>}
       {diskWait ? <p className="pb-reason" data-pipeline-reason={pipeline.id}>{diskWait}</p> : null}
+      {cpuWaiting ? <p className="pb-reason" data-cpu-queue>{pipelineProgress(t, summary, nameOf)}</p> : null}
       {hasLinks || hasFlag ? (
         <div className="pb-links-row">
           <FinishFlag pipeline={pipeline} taskId={props.taskId} />
@@ -1013,7 +999,7 @@ function ScreenBlock(props: PipelineBlockProps & {
       <UnreviewedNote pipeline={pipeline} />
       <MergeNote pipeline={pipeline} />
       {props.answers?.kind === "merge" ? (
-        <AnswerPanel pipeline={pipeline} answers={props.answers} names={names} nameOf={nameOf} acting={props.acting ?? null} large onAnswer={props.onAnswer} />
+        <AnswerPanel pipeline={pipeline} answers={props.answers} names={names} nameOf={nameOf} />
       ) : null}
       {lastReport ? <div className="pb-note"><StageReportLine pipeline={pipeline} entry={lastReport} names={names} shown={ANSWER_FINDINGS} /></div> : null}
       {props.embedded ? (

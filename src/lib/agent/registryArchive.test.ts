@@ -5,7 +5,8 @@ import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, normalizeRegistry } from "./registry";
-import { registryConversationsForPath, registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { registryConversationsForPath, registryLivenessRows, registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
 
 const directories: string[] = [];
 const stores: SqliteAgentRegistryStore[] = [];
@@ -95,6 +96,145 @@ function archiveAll(store: SqliteAgentRegistryStore) {
   }
   throw new Error("archive pass did not converge");
 }
+
+test("keyed archive reads use the cold identity index after upgrading an existing view", () => {
+  const { open, filename } = fixture();
+  archiveAll(open());
+  const db = new Database(filename);
+  try {
+    // Reproduce the first archive schema, including its retained cold payloads.
+    db.exec(`DROP VIEW registry_records;
+      CREATE VIEW registry_records AS
+      SELECT collection,row_key,value_json,row_order FROM registry_hot_rows
+      UNION ALL SELECT a.collection,a.row_key,a.value_json,a.row_order
+      FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id`);
+    const before = db.query("SELECT * FROM registry_records ORDER BY collection,row_key").all();
+    installRegistryArchive(db);
+    expect(db.query("SELECT * FROM registry_records ORDER BY collection,row_key").all()).toEqual(before);
+    const query = "SELECT value_json FROM registry_records WHERE collection=? AND row_key=?";
+    for (const key of [`codex:${id(0)}`, "missing-entry"]) {
+      const plan = db.query<{ detail: string }, [string, string]>(`EXPLAIN QUERY PLAN ${query}`)
+        .all("entries", key).map(row => row.detail);
+      expect(plan.some(detail => /SCAN c\b/.test(detail))).toBe(false);
+      expect(plan.some(detail => /SEARCH c .*\(collection=\? AND row_key=\?\)/.test(detail))).toBe(true);
+    }
+    expect(db.query(query).get("entries", `codex:${id(0)}`)).not.toBeNull();
+    expect(db.query(query).get("entries", "missing-entry")).toBeNull();
+    // Reopening a store must retain the indexed definition and the same rows.
+    open();
+    expect(db.query("SELECT * FROM registry_records ORDER BY collection,row_key").all()).toEqual(before);
+  } finally { db.close(); }
+});
+
+test("field lookups over cold history start from the archive's expression indexes and keep every row", () => {
+  const { open, filename } = fixture();
+  archiveAll(open());
+  const db = new Database(filename);
+  try {
+    // The view as #2762 first shipped it: identity from the mapping alone.
+    db.exec(`DROP VIEW registry_records;
+      CREATE VIEW registry_records AS
+      SELECT collection,row_key,value_json,row_order FROM registry_hot_rows
+      UNION ALL SELECT c.collection,c.row_key,a.value_json,a.row_order
+      FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id`);
+    const all = "SELECT * FROM registry_records ORDER BY collection,row_key";
+    const before = db.query(all).all();
+    installRegistryArchive(db);
+    expect(db.query(all).all()).toEqual(before);
+    const lookup = "SELECT row_key FROM registry_records WHERE collection=? AND json_extract(value_json,'$.command.operationId')=?";
+    const plan = db.query<{ detail: string }, [string, string]>(`EXPLAIN QUERY PLAN ${lookup}`)
+      .all("heldDeliveries", "archive-operation-0").map(row => row.detail);
+    expect(plan.some(detail => /SEARCH a USING INDEX registry_archive_operation/.test(detail))).toBe(true);
+    expect(plan.some(detail => /SCAN c\b|SEARCH c USING INDEX \S+ \(collection=\?\)$/.test(detail))).toBe(false);
+    expect(db.query(lookup).all("heldDeliveries", "archive-operation-0")).toEqual([{ row_key: "archive-delivery-0" }]);
+    expect(db.query(lookup).all("heldDeliveries", "missing-operation")).toEqual([]);
+  } finally { db.close(); }
+});
+
+test("a cold mapping naming another row's archive version keeps the conserving view until it is repaired", () => {
+  const { open, filename } = fixture();
+  archiveAll(open());
+  const db = new Database(filename);
+  const warnings: string[] = [];
+  const warn = console.warn;
+  console.warn = (...values: unknown[]) => { warnings.push(values.join(" ")); };
+  try {
+    const target = db.query<{ archive_id: number }, []>(
+      "SELECT archive_id FROM registry_cold WHERE collection='receipts' AND row_key='archive-launch-0'").get()!;
+    const other = db.query<{ archive_id: number }, []>(
+      "SELECT archive_id FROM registry_cold WHERE NOT (collection='receipts' AND row_key='archive-launch-0') ORDER BY archive_id LIMIT 1").get()!;
+    const otherPayload = db.query<{ value_json: string }, [number]>("SELECT value_json FROM registry_archive WHERE id=?").get(other.archive_id)!.value_json;
+    db.run("UPDATE registry_cold SET archive_id=? WHERE collection='receipts' AND row_key='archive-launch-0'", [other.archive_id]);
+    db.run("DROP VIEW registry_records");
+    db.run("CREATE VIEW registry_records AS SELECT collection,row_key,value_json,row_order FROM registry_hot_rows");
+    open();
+    // The damaged mapping still reads under the identity its mapping gives it.
+    const keyed = "SELECT value_json FROM registry_records WHERE collection='receipts' AND row_key=?";
+    const ownPayload = db.query<{ value_json: string }, [number]>("SELECT value_json FROM registry_archive WHERE id=?").get(target.archive_id)!.value_json;
+    expect(db.query(keyed).get("archive-launch-0")).toEqual({ value_json: otherPayload });
+    expect(warnings.some(line => line.includes("1 cold mapping(s) name an archive version of another row"))).toBe(true);
+    expect(db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='registry_records'").get()!.sql)
+      .not.toContain("a.collection=c.collection");
+    db.run("UPDATE registry_cold SET archive_id=? WHERE collection='receipts' AND row_key='archive-launch-0'", [target.archive_id]);
+    open();
+    expect(db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='registry_records'").get()!.sql)
+      .toContain("a.collection=c.collection AND a.row_key=c.row_key");
+    expect(db.query(keyed).get("archive-launch-0")).toEqual({ value_json: ownPayload });
+  } finally {
+    console.warn = warn;
+    db.close();
+  }
+});
+
+test("fleet liveness census skips archived dead entries and completed dead-host receipts", () => {
+  const { open,initial } = fixture();
+  for (const index of [0,1]) initial.entries[`codex:${id(index)}`]!.status = "live";
+  const entryTemplate = initial.entries[`codex:${id(2)}`]!;
+  for (let index = 0; index < 200; index++) {
+    const key = { engine: "codex" as const,sessionId: id(index + 20_000) };
+    initial.entries[`codex:${key.sessionId}`] = { ...structuredClone(entryTemplate),key,artifactPath: `/sessions/${key.sessionId}.jsonl`,status: "dead",
+      host: null,structuredHost: null,claimOwner: null,pendingAction: null,structuredTerminationSurvivors: [] };
+  }
+  const template = initial.receipts["archive-launch-0"]!;
+  for (let index = 0; index < 200; index++) {
+    const key = { engine: "codex" as const,sessionId: id(index + 10_000) };
+    const launchId = `completed-dead-host-${index}`;
+    initial.receipts[launchId] = { ...structuredClone(template),launchId,key,artifactPath: `/sessions/${key.sessionId}.jsonl`,state: "completed",
+      verifiedHost: { kind: "tmux",endpoint: "fixture",server: { pid: 900_000 + index,startIdentity: "old" },paneId: "dead-pane",
+        panePid: { pid: 900_000 + index,startIdentity: "old" },windowName: "dead",agent: { pid: 900_000 + index,startIdentity: "old" },argv: [] } };
+  }
+  const liveKey = { engine: "codex" as const,sessionId: id(0) };
+  initial.receipts["completed-live-host"] = { ...structuredClone(template),launchId: "completed-live-host",key: liveKey,state: "completed",
+    verifiedHost: { kind: "tmux",endpoint: "fixture",server: { pid: 42,startIdentity: "current" },paneId: "live-pane",
+      panePid: { pid: 42,startIdentity: "current" },windowName: "live",agent: { pid: 42,startIdentity: "current" },argv: [] } };
+  const metrics = { reads: 0,loads: 0 };
+  const store = open(metrics);
+  archiveAll(store);
+  const db = new Database(path.join(store.filename));
+  try {
+    expect(db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM registry_cold WHERE collection='entries' AND row_key LIKE 'codex:%'").get()!.count).toBe(200);
+    expect(db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM registry_cold WHERE collection='receipts' AND row_key LIKE 'completed-dead-host-%'").get()!.count).toBe(200);
+    const plan = db.query<{ detail: string }, [string,string]>(`EXPLAIN QUERY PLAN SELECT r.row_key FROM registry_rows r INDEXED BY registry_liveness_receipt_session
+      JOIN registry_liveness_entries e ON e.row_key IN (?,?)
+      WHERE r.collection='receipts'
+        AND (json_extract(r.value_json,'$.key.engine')||':'||json_extract(r.value_json,'$.key.sessionId'))=e.row_key
+        AND (json_extract(r.value_json,'$.verifiedHost.agent') IS NOT NULL OR json_extract(r.value_json,'$.pane.panePid') IS NOT NULL)
+        AND NOT EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection='receipts' AND c.row_key=r.row_key)`)
+      .all(`codex:${id(0)}`,`codex:${id(1)}`).map(row => row.detail).join(" ");
+    expect(plan).toContain("registry_liveness_receipt_session");
+  } finally { db.close(); }
+  const snapshot = store.readOnlySnapshot().file;
+  metrics.reads = metrics.loads = 0;
+
+  const rows = registryLivenessRows(snapshot);
+
+  expect(rows.entries.map(row => row.key.sessionId)).toContain(id(0));
+  expect(rows.entries.map(row => row.key.sessionId)).toContain(id(1));
+  expect(rows.receipts.map(row => row.launchId)).not.toContain("completed-dead-host-0");
+  expect(rows.receipts.map(row => row.launchId)).toContain("completed-live-host");
+  expect(metrics.loads).toBe(0);
+  expect(metrics.reads).toBeLessThanOrEqual(8);
+});
 
 for (const archived of [false,true]) {
   for (const external of [false,true]) {
@@ -290,6 +430,44 @@ test("an interrupted archive move rolls back and outstanding work stays hot", ()
       expect(db.query("SELECT 1 AS found FROM registry_hot_rows WHERE collection=? AND row_key=?").get(collection!,key!)).toEqual({ found: 1 });
     }
     expect(() => db.run("DELETE FROM registry_archive")).toThrow("no expiry");
+  } finally { db.close(); }
+});
+
+/* #2761: the pass finds its candidates before it takes the write lock, since
+   the search is most of the pass and every writer waits behind the lock. What
+   another writer revives between the search and the lock must stay hot. */
+test("an archive pass confirms under the lock what it selected before it, and a pass with nothing to move takes no lock", () => {
+  const { open,filename } = fixture();
+  const store = open();
+  const db = new Database(filename);
+  try {
+    const selected = archiveCandidates(db,1_000);
+    const entry = { collection: "entries",row_key: `codex:${id(0)}` };
+    const delivery = { collection: "heldDeliveries",row_key: "archive-delivery-0" };
+    expect(selected).toContainEqual(entry);
+    expect(selected).toContainEqual(delivery);
+    /* Revived after the search: a claim on the entry, a delivery held again. */
+    store.mutate(file => {
+      file.entries[entry.row_key]!.claimOwner = "fixture-owner";
+      file.heldDeliveries[delivery.row_key]!.state = "held";
+    },false);
+    db.exec("BEGIN IMMEDIATE");
+    const moved = archiveInactiveRegistryRows(db,1_000,selected);
+    db.exec("COMMIT");
+    expect(moved).toBeGreaterThan(0);
+    expect(moved).toBeLessThanOrEqual(selected.length - 2);
+    for (const row of [entry,delivery]) {
+      expect(db.query("SELECT 1 AS found FROM registry_hot_rows WHERE collection=? AND row_key=?").get(row.collection,row.row_key)).toEqual({ found: 1 });
+    }
+    const cold = db.query<{ collection: string; row_key: string }, []>("SELECT collection,row_key FROM registry_cold").all();
+    expect(cold).toHaveLength(moved);
+    for (const row of cold) expect(selected).toContainEqual(row);
+    /* The same rows the single statement under the lock selects. */
+    archiveAll(store);
+    expect(archiveCandidates(db,1_000)).toEqual([]);
+    /* Nothing left: another connection holding the write lock is not waited for. */
+    db.exec("BEGIN IMMEDIATE");
+    try { expect(store.archiveInactive()).toBe(0); } finally { db.exec("ROLLBACK"); }
   } finally { db.close(); }
 });
 
@@ -519,7 +697,9 @@ test("external refresh leaves unrelated cold root grants warm", () => {
   expect(fresh.receipts["root-history-0"]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
   console.info({ reads: metrics.reads, loads: metrics.loads, refreshMs: performance.now() - refreshStart });
   expect(metrics.loads).toBe(0);
-  expect(metrics.reads).toBe(2);
+  /* The unrelated archived root was normalized before the commit and its
+     version and pinned decision are unchanged, so it is not read again. */
+  expect(metrics.reads).toBe(1);
 });
 
 

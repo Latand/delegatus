@@ -16,6 +16,7 @@ import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
+import { RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
@@ -34,6 +35,8 @@ import { Viewer } from "@/components/Viewer";
 import { orchestratorLinks } from "./orchestratorArrows";
 import { orchestratorWireLayers } from "./SeatActionWires";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
+import { laneNeedKind, laneRouteKey, type AttentionRouteMark } from "@/lib/attention/routeTypes";
+import { setKanbanCardsOpenByDefault } from "./cardOpenDefault";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { ORCHESTRATOR_PROMPT_VERSION, orchestratorMandateForDelivery } from "@/lib/orchestrator/prompt";
@@ -118,7 +121,8 @@ const DRAG_BOARD = SCENARIO === "drag-board";
 /* The orchestrator's wires (docs/design/orchestrator-arrows.md): the pipelines board, with the seat
    owning some of its lanes. */
 const ARROWS = SCENARIO === "orchestrator-arrows";
-const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD || ARROWS;
+const CPU_QUEUE = SCENARIO === "cpu-queue";
+const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD || ARROWS || CPU_QUEUE;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
 /* The seat-noise scenario (docs/design/seat-panel-noise.md) seats the orchestrator on a structured host too,
@@ -326,7 +330,8 @@ const REVIEW_STOPS = SCENARIO === "review-stops";
    waiting for checks, updating from main, merge stopped with its two answers,
    merged by Delegatus — and the project's merge setting in the board's ⋯,
    on by default and off with `&merge=off`. */
-const MERGE_STATES = SCENARIO === "merge-states";
+const AUTO_REFRESH = SCENARIO === "auto-refresh";
+const MERGE_STATES = SCENARIO === "merge-states" || AUTO_REFRESH;
 /* #2187 §5.3, §6 (mockup D4): a lane marked as finishing its task, running;
    a task whose marked lane merged while a second lane still runs, so its move
    to Done waits; and a Done task its marked lane finished. */
@@ -377,6 +382,15 @@ const UNSTARTED = SCENARIO === "unstarted-regression";
 const WALL = SCENARIO === "elsewhere-wall";
 /* Board order: working cards first, then recently worked, then idle. */
 const BOARD_ORDER = SCENARIO === "board-order";
+/* Recent first (docs/design/kanban-recent-first.md): every column orders by
+   work in flight, then by the newest agent work with each lane's own last move
+   counted, never by motion. An Assigned column of six cards (a stage running,
+   a lane finished minutes ago whose transcript is not loaded, a lane parked
+   on the operator for two days, a lane paused for three, a transcript from six
+   days ago, a task nobody worked on), an Inbox and a Done column, and the
+   hidden tasks: one worked two days ago that the board shows, and three that
+   it keeps in the hidden tray. */
+const RECENT_FIRST = SCENARIO === "recent-first";
 /* Task priority: an Inbox of high, normal and low tasks read in its order,
    one low task with a working agent, and an Assigned column whose priorities
    do not change its order. */
@@ -400,6 +414,13 @@ const NEW_AGENT = SCENARIO === "new-agent";
    other eleven roles and one from an agent that names no role; the second implement attempt is the builder's
    conversation, and a conversation started by hand, which no card holds, names no role: the agent in the tuxedo. */
 const ROLE_AVATARS = SCENARIO === "role-avatars";
+/* Calm task cards (docs/design/calm-task-cards-build.md §10): nine cards, one per
+   owner and stop the closed card names, with the project's seat designated and
+   its routes stamped as `/api/files` stamps them. Cards start closed here, as in
+   the product; every other scenario starts them open (`&cards=closed` closes
+   them too), so the blocks that read lane rows keep their setup. */
+const CALM = SCENARIO === "calm-cards";
+setKanbanCardsOpenByDefault(!CALM && new URLSearchParams(location.search).get("cards") !== "closed");
 /* Five states no single press reaches (`?naseed=`): a handoff draft, restored the way the product restores
    a tab's drafts, continuing the conversation «Worker waiting for a seat»; the same draft when the source's
    folder is on no record; the engine's active account signed out; a launch the server refuses by name; and
@@ -465,6 +486,15 @@ function pipeline(id: string, task: string, taskId: string, state: string, stage
 
 const files: FileEntry[] = [];
 const add = (file: FileEntry) => { files.push(file); return file; };
+if (SCENARIO === "true-activity") {
+  for (const [state, age] of [["working", 20], ["checking", 300], ["idle", 840]] as const) {
+    add(conversation(`activity-${state}`, `Activity ${state}`, working({
+      mtime: now - age, activity: age > 180 ? "stalled" : "live",
+      agentActivity: { lastRecordAt: (now - age) * 1000, checking: state === "checking", check: state === "checking" ? "privacy-publication-gate-with-an-extremely-long-check-name".repeat(3) : null },
+    })));
+  }
+}
+
 
 /* t-search: implement → review (review loop) → verify → merge, with verify's fail edge back to implement. */
 const searchImpl1 = add(conversation("search-impl-1", "Keep the old index serving until the new one answers", { mtime: now - 180 * MIN }));
@@ -1125,6 +1155,33 @@ const mergeStatePipelines: Pipeline[] = MERGE_STATES ? (() => {
   ];
 })() : [];
 
+if (AUTO_REFRESH) {
+  const parent = mergeStatePipelines[0]!;
+  parent.merge!.state = "refreshing";
+  parent.merge!.refresh = { attempt: 0, base: "a".repeat(40), head: "b".repeat(40), key: "auto-refresh:parent:zero", digest: "c".repeat(64), requestedAt: iso(MIN), pipelineId: "p-refresh" };
+  const successor = structuredClone(parent);
+  successor.id = "p-refresh";
+  successor.task = L("Refresh the delivery branch", "Оновити гілку PR");
+  successor.state = "running";
+  delete successor.merge;
+  successor.closedAt = null;
+  successor.stages = [stage("refresh", "builder", "review"), stage("review", "reviewer", null, { onFail: { to: "fix", maxRounds: 1, onExhausted: "advance" } }), stage("fix", "builder", "review")] as Pipeline["stages"];
+  successor.runs = [{ stageId: "refresh", attempts: [attempt(1, "running", add(conversation("refresh-builder", "Refresh delivery", { mtime: now - MIN })))] }] as Pipeline["runs"];
+  successor.cursor = { stageId: "refresh", state: "running", input: null, activatedBy: null };
+  successor.stateDetail = "refreshing the delivery branch";
+  mergeStatePipelines.push(successor);
+  for (const [index, reason] of [
+    [1, "the refresh was closed before the PR merged"],
+    [2, "the refresh did not clear the conflict, and main has not moved since"],
+    [3, "Delegatus could not start the refresh: target already owned"],
+  ] as const) {
+    const record = mergeStatePipelines[index]!.merge!;
+    record.state = "blocked";
+    record.reason = reason;
+    record.blockedAt = iso(MIN);
+  }
+}
+
 const taskFinishPipelines: Pipeline[] = TASK_FINISH ? (() => {
   const readOnly = { ...role("reviewer", "codex"), access: "read-only" };
   const pass = { status: "pass", findings: [] };
@@ -1557,6 +1614,14 @@ const pipelines: Pipeline[] = [
     { stageId: "review", state: "reviewing", input: null, activatedBy: null })] : []),
 ];
 
+if (CPU_QUEUE) {
+  Object.assign(searchVer2, { activity: "idle", proc: null, pid: null, authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(5 * MIN) }, lastTurn: { startedAt: (now - 400) * 1_000, endedAt: (now - 300) * 1_000 } });
+  const waiting = pipelines.find(p => p.id === "p-search")!;
+  waiting.stateDetail = "Waiting for the CPU queue · 2nd · up to 7 min · Viewer publication: owner; owner viewer, epoch 1";
+  waiting.cursor = { stageId: "verify", state: "pending", input: null, activatedBy: null };
+  waiting.runs.find(r => r.stageId === "verify")!.attempts = [attempt(3, "pending", null, { startedAt: null })] as Pipeline["runs"][number]["attempts"];
+}
+
 if (STAGES) {
   for (const record of pipelines) {
     for (const entry of record.stages) {
@@ -1832,7 +1897,7 @@ const tasks: BoardTask[] = [
     task("t-merge-wait", "assigned", L("Deploy failure notifies the seat and the phone", "Сповіщення, коли деплой падає"), "", 12 * MIN),
     task("t-merge-update", "assigned", L("Composer model pills: one width at 390", "Кнопки моделі в композері однієї ширини"), "", 20 * MIN),
     task("t-merge-stop", "assigned", L("Per-feature screenshot catalog and one capture command", "Каталог скриншотів по фічах і одна команда зйомки"), "", 30 * MIN),
-    task("t-merge-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 70 * MIN),
+    task("t-merge-done", AUTO_REFRESH ? "assigned" : "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 70 * MIN),
   ] : []),
   ...(TASK_FINISH ? [
     task("t-finish-marked", "assigned", L("Pipelines that finish their task", "Пайплайни, що завершують задачу"), "", 25 * MIN),
@@ -1884,6 +1949,110 @@ if (SCENARIO === "hold-kinds") {
     task("hold-slot-note", "blocked", L("Start the docs lane", "Запустити лінію документації"), "", 20 * MIN, [], { hold: { kind: "worker", note: L("Three of three workers busy", "Зайняті всі три агенти"), since: iso(20 * MIN), by: "agent" } }),
     task("hold-resource-note", "blocked", L("Run the full build", "Запустити повну збірку"), "", 15 * MIN, [], { hold: { kind: "resource", note: L("4 GB of memory available, 8 GB needed", "Доступно 4 ГБ памʼяті, потрібно 8 ГБ"), since: iso(15 * MIN), by: "agent" } }),
     task("hold-resource", "blocked", L("Older resource hold", "Давніша причина про ресурси"), "", 60 * MIN, [], { hold: { kind: "resource", note: "", since: iso(60 * MIN), by: "agent" } }),
+  );
+}
+
+/* Calm task cards: the nine cards of docs/design/calm-task-cards-build.md §10. */
+if (CALM) {
+  const seat = orchestrator.conversationId!;
+  /* The route `/api/files` stamps for the movement the lane stands on. */
+  const routed = (lane: Pipeline, owner: AttentionRouteMark["owner"], extra: Partial<AttentionRouteMark> = {}): Pipeline => {
+    lane.attentionRoute = { key: laneRouteKey(lane, laneNeedKind(lane)!), owner, seat, ...extra };
+    return lane;
+  };
+  const readOnly = { ...role("reviewer", "codex"), access: "read-only" };
+  const pass = { status: "pass", findings: [] };
+  const conv = (id: string, title: string, ago: number, over: Record<string, unknown> = {}) => add(conversation(id, title, { mtime: now - ago, ...over }));
+  const span = (from: number, to: number | null) => ({ startedAt: iso(from), completedAt: to === null ? null : iso(to) });
+  const merge = (state: string, prNumber: number, over: Record<string, unknown> = {}) => ({
+    state, by: null, repository: "acme/atlas", prNumber, policyChangedAt: iso(24 * 60 * MIN), reviewedHead: "0", chain: ["0"], updates: [], seenChecks: [], head: null,
+    headSeenAt: null, lastChecks: null, readAt: iso(MIN), nextReadAt: null, requestedAt: iso(120 * MIN), mergedHead: null, mergeCommit: null, method: null, mergedAt: null,
+    attempts: 0, reason: null, blockedAt: null, updatedAt: iso(MIN), ...over,
+  });
+  const reviewed = (key: string, from: number) => [
+    { stageId: "build", attempts: [attempt(1, "passed", conv(`calm-${key}-build`, "Build pass 1", from - 20 * MIN), { ...span(from, from - 20 * MIN), verdict: pass })] },
+    { stageId: "review", attempts: [attempt(1, "passed", conv(`calm-${key}-review`, "Review pass 1", from - 40 * MIN, { engine: "codex", model: "gpt-5.6" }), { ...span(from - 22 * MIN, from - 40 * MIN), effectiveRole: readOnly, verdict: pass, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } })] },
+  ];
+  const twoStages = () => [stage("build", "builder", "review"), stage("review", "reviewer", null, { kind: "run", onFail: { to: "build", maxRounds: 3 }, effectiveRole: readOnly })];
+  const commitError = "committing the passed stage: fatal: Unable to create '.git/index.lock': File exists.";
+  const capacity = "no allowed codex account has capacity for project atlas (allowed codex accounts: one, two); resetsAt=unknown";
+  const cut = "interrupted by a Delegatus restart";
+  const asker = conv("calm-ask", L("Which banner copy ships?", "Який текст банера йде в реліз?"), 9 * MIN, {
+    pendingQuestion: {
+      kind: "question", toolUseId: "toolu-calm-ask", transcriptPath: "/repo/calm-ask.jsonl", pid: 1, paneTarget: null, askedAt: iso(9 * MIN),
+      questions: [{ question: L("Which banner copy ships?", "Який текст банера йде в реліз?"), header: L("Banner copy", "Текст банера"), multiSelect: false, options: [{ label: L("Short", "Короткий") }, { label: L("Long", "Довгий") }] }],
+    },
+  });
+  pipelines.splice(0, pipelines.length,
+    /* C1: the passed stage's commit failed; the seat has it. */
+    routed(pipeline("p-calm-commit", L("Retry banner names the attempt that failed", "Банер повтору називає спробу, що не вдалася"), "t-calm-commit", "needs_decision", twoStages(), [
+      { stageId: "build", attempts: [attempt(1, "failed", conv("calm-commit-build", "Build pass 1", 48 * MIN), { ...span(70 * MIN, 48 * MIN), error: commitError })] },
+    ], { stageId: "build", state: "needs_decision", input: null, activatedBy: null }, { stateDetail: commitError, createdAt: iso(75 * MIN) }), "seat"),
+    /* C2: the merge stopped on a conflict, the seat has it, and a refresh lane runs beside it. */
+    routed(pipeline("p-calm-merge", L("Search index swap without an empty window", "Заміна пошукового індексу без порожнього вікна"), "t-calm-merge", "completed", twoStages(), reviewed("merge", 150 * MIN), null, {
+      closedAt: iso(110 * MIN), stateDetail: "completed", merge: merge("blocked", 2302, { reason: "conflict with the base branch", blockedAt: iso(25 * MIN), requestedAt: iso(110 * MIN) }), createdAt: iso(160 * MIN),
+    }), "seat"),
+    pipeline("p-calm-refresh", L("Refresh PR #2302 from main", "Оновити PR #2302 з main"), "t-calm-merge", "running", [stage("refresh", "builder", null)], [
+      { stageId: "refresh", attempts: [attempt(1, "running", conv("calm-refresh", "Merging current main", 30, working()), span(6 * MIN, null))] },
+    ], { stageId: "refresh", state: "running", input: null, activatedBy: null }, { createdAt: iso(7 * MIN) }),
+    /* C3: the seat asked the operator in a decision form. */
+    routed(pipeline("p-calm-form", L("Retry banner: keep it or drop it", "Банер повтору: лишити чи прибрати"), "t-calm-form", "needs_decision", [stage("design", "architect", null)], [
+      { stageId: "design", attempts: [attempt(1, "needs_decision", conv("calm-form-design", "Two ways for the banner", 22 * MIN), { ...span(40 * MIN, 22 * MIN), report: { seq: 1, at: iso(22 * MIN), actor: { kind: "agent", role: "architect", conversationId: "conversation_calm-form-design" }, verdict: { status: "needs_decision", findings: [] }, summary: L("Keep the retry banner or drop it?", "Лишити банер повтору чи прибрати?"), provenance: {} } })] },
+    ], { stageId: "design", state: "needs_decision", input: null, activatedBy: null }, { createdAt: iso(45 * MIN) }), "form", { form: { taskId: "t-calm-form", reviewId: "r-calm-form" } }),
+    /* C5: a stage at work. */
+    pipeline("p-calm-run", L("Upload resumes after a reload", "Завантаження продовжується після перезавантаження"), "t-calm-run", "running", twoStages(), [
+      { stageId: "build", attempts: [attempt(1, "running", conv("calm-run-build", "Wiring the resume token", 30, working()), span(12 * MIN, null))] },
+    ], { stageId: "build", state: "running", input: null, activatedBy: null }, { createdAt: iso(13 * MIN) }),
+    /* C6: a provider wait the engine retries by itself. */
+    routed(pipeline("p-calm-wait", L("Weekly digest email", "Щотижневий лист-дайджест"), "t-calm-wait", "needs_decision", twoStages(), [
+      { stageId: "build", attempts: [attempt(1, "needs_decision", conv("calm-wait-build", "Usage limit reached", 15 * MIN), { ...span(30 * MIN, 15 * MIN), providerWait: { stageRetry: { controlGeneration: null, detail: "usage limit" }, resumeAt: iso(-40 * MIN) } })] },
+    ], { stageId: "build", state: "needs_decision", input: null, activatedBy: null }, { createdAt: iso(32 * MIN) }), "system"),
+    /* C7: done, merged by Delegatus. */
+    pipeline("p-calm-done", L("Wider agent replies in the conversation", "Ширші відповіді агентів у розмові"), "t-calm-done", "completed", twoStages(), reviewed("done", 200 * MIN), null, {
+      closedAt: iso(140 * MIN), stateDetail: "completed", merge: merge("merged", 2307, { by: "auto-merge", mergedAt: iso(50 * MIN), requestedAt: iso(140 * MIN) }), createdAt: iso(210 * MIN),
+    }),
+    /* C8: the first lane stopped early on capacity; the second lane's work pushes that stop under the fold. */
+    routed(pipeline("p-calm-long-a", L("Capture command: first pass", "Команда зйомки: перший підхід"), "t-calm-long", "needs_decision", twoStages(), [
+      { stageId: "build", attempts: [attempt(1, "failed", null, { ...span(300 * MIN, 290 * MIN), error: capacity })] },
+    ], { stageId: "build", state: "needs_decision", input: null, activatedBy: null }, { stateDetail: capacity, createdAt: iso(310 * MIN) }), "seat"),
+    pipeline("p-calm-long-b", L("Capture command: per-feature catalog", "Команда зйомки: каталог по фічах"), "t-calm-long", "running", twoStages(), [
+      { stageId: "build", attempts: [
+        attempt(1, "failed", conv("calm-long-build-1", "Build pass 1", 275 * MIN), { ...span(280 * MIN, 275 * MIN), error: cut }),
+        attempt(2, "failed", conv("calm-long-build-2", "Build pass 2", 268 * MIN), { ...span(270 * MIN, 268 * MIN), error: cut }),
+        attempt(3, "failed", conv("calm-long-build-3", "Build pass 3", 258 * MIN), { ...span(260 * MIN, 258 * MIN), error: cut }),
+        attempt(4, "passed", conv("calm-long-build-4", "Build pass 4", 220 * MIN), { ...span(250 * MIN, 220 * MIN), verdict: pass }),
+        attempt(5, "passed", conv("calm-long-build-5", "Build pass 5", 170 * MIN), { ...span(195 * MIN, 170 * MIN), verdict: pass, activatedBy: { stageId: "review", attempt: 1, edge: "fail" } }),
+        attempt(6, "passed", conv("calm-long-build-6", "Build pass 6", 120 * MIN), { ...span(145 * MIN, 120 * MIN), verdict: pass, activatedBy: { stageId: "review", attempt: 2, edge: "fail" } }),
+      ] },
+      { stageId: "review", attempts: [
+        attempt(1, "failed", conv("calm-long-review-1", "Review pass 1", 200 * MIN, { engine: "codex", model: "gpt-5.6" }), { ...span(215 * MIN, 200 * MIN), effectiveRole: readOnly, verdict: { status: "fail", findings: ["P1 — the catalog misses the phone frames", "P2 — the command ignores the stage address"] } }),
+        attempt(2, "failed", conv("calm-long-review-2", "Review pass 2", 150 * MIN, { engine: "codex", model: "gpt-5.6" }), { ...span(165 * MIN, 150 * MIN), effectiveRole: readOnly, verdict: { status: "fail", findings: ["P2 — the command ignores the stage address"] } }),
+        attempt(3, "running", conv("calm-long-review-3", "Review pass 3", 30, { ...working(), engine: "codex", model: "gpt-5.6" }), { ...span(30 * MIN, null), effectiveRole: readOnly }),
+      ] },
+    ], { stageId: "review", state: "reviewing", input: null, activatedBy: null }, { createdAt: iso(285 * MIN), pausedAt: iso(240 * MIN), resumedAt: iso(235 * MIN) }),
+    /* C9: the PR was closed and the seat cleared the stopped merge. */
+    pipeline("p-calm-cleared", L("Old export presets cleanup", "Прибирання старих пресетів експорту"), "t-calm-cleared", "completed", twoStages(), reviewed("cleared", 240 * MIN), null, {
+      closedAt: iso(180 * MIN), stateDetail: "completed", createdAt: iso(250 * MIN),
+      merge: merge("blocked", 2309, { reason: "the PR was closed", blockedAt: iso(90 * MIN), requestedAt: iso(180 * MIN) }),
+      dismissedAt: iso(60 * MIN), dismissedBy: { kind: "manager", conversationId: seat, role: "orchestrator" },
+    }),
+  );
+  tasks.splice(0, tasks.length,
+    task("t-calm-commit", "assigned", L("Retry banner names the attempt that failed", "Банер повтору називає спробу, що не вдалася"), "", 48 * MIN, [], {
+      createdAt: iso(80 * MIN), dueAt: iso(-26 * 60 * MIN), dueTz: "Europe/Kyiv",
+      /* The old Tasks panel's two facts: a deadline ahead and two images. */
+      attachments: ["one", "two"].map((name) => ({ id: `image-${name}`, sha256: `image-${name}`, ext: "png", mime: "image/png", bytes: 48_000, createdAt: iso(80 * MIN) })),
+    } as Partial<BoardTask>),
+    task("t-calm-merge", "assigned", L("Search index swap without an empty window", "Заміна пошукового індексу без порожнього вікна"), "", 25 * MIN, [], { createdAt: iso(165 * MIN) }),
+    task("t-calm-form", "assigned", L("Retry banner: keep it or drop it", "Банер повтору: лишити чи прибрати"), "", 22 * MIN, [], { createdAt: iso(50 * MIN) }),
+    task("t-calm-ask", "assigned", L("Banner copy for the export screen", "Текст банера на екрані експорту"), "", 9 * MIN, [asker]),
+    task("t-calm-run", "assigned", L("Upload resumes after a reload", "Завантаження продовжується після перезавантаження"), "", 12 * MIN, [], { createdAt: iso(14 * MIN) }),
+    task("t-calm-wait", "assigned", L("Weekly digest email", "Щотижневий лист-дайджест"), "", 15 * MIN, [], { createdAt: iso(35 * MIN) }),
+    task("t-calm-done", "done", L("Wider agent replies in the conversation", "Ширші відповіді агентів у розмові"), "", 50 * MIN, [], { createdAt: iso(215 * MIN) }),
+    task("t-calm-long", "assigned", L("Screenshot catalog: one capture command", "Каталог скриншотів: одна команда зйомки"), "", 30 * MIN, [], { createdAt: iso(320 * MIN) }),
+    task("t-calm-cleared", "assigned", L("Old export presets cleanup", "Прибирання старих пресетів експорту"), "", 60 * MIN, [], { createdAt: iso(255 * MIN), dueAt: iso(3 * 60 * MIN), dueTz: "Europe/Kyiv" } as Partial<BoardTask>),
+    /* Not started: a closed card keeps its priority mark, which is how the Inbox reads. */
+    task("t-calm-inbox", "inbox", L("Audit the export retry limits", "Перевірити ліміти повторів експорту"), "", 5 * MIN, [], { priority: "high" } as Partial<BoardTask>),
   );
 }
 
@@ -1994,6 +2163,56 @@ if (BOARD_ORDER) {
     task("t-order-review", "assigned", L("Agent image viewer: arrows and click-outside close", "Перегляд зображень агента: стрілки й закриття кліком поза ним"), "", 30 * MIN, [review]),
     task("t-order-yesterday", "assigned", L("Rate-limit banner copy", "Текст банера про ліміт"), "", 26 * 60 * MIN, [yesterday]),
     task("t-order-notes", "assigned", L("Write the upgrade notes", "Написати нотатки до оновлення"), L("Nobody has worked on it yet.", "Над нею ще ніхто не працював."), 1 * MIN),
+  );
+}
+if (RECENT_FIRST) {
+  const DAY = 24 * 60 * MIN;
+  const agent = (id: string, title: string, over: Record<string, unknown>) => add(conversation(id, title, over));
+  files.splice(0, files.length, orchestrator);
+  pipelines.splice(0, pipelines.length);
+  tasks.splice(0, tasks.length);
+  const lane = (id: string, taskId: string, state: string, passed: string, moved: { startedAgo: number; completedAgo: number | null }, file: FileEntry | null = null, over: Record<string, unknown> = {}) => {
+    pipelines.push(pipeline(id, `Lane ${id}`, taskId, state, [stage("build", "builder", "review"), stage("review", "builder", null)],
+      [{ stageId: "build", attempts: [attempt(1, passed, file, {
+        startedAt: iso(moved.startedAgo), completedAt: moved.completedAgo === null ? null : iso(moved.completedAgo),
+        ...(file ? {} : { conversationId: `conversation_${id}_elsewhere` }),
+      })] }],
+      state === "completed" ? null : { stageId: "build", state: state === "needs_decision" ? "needs_decision" : "running", input: null, activatedBy: null },
+      over));
+  };
+  const running = agent("rf-running", L("Builder: the stage running now", "Білдер: етап, що йде зараз"), working({ lastAgentWorkAt: (now - 40) * 1_000 }));
+  lane("p-rf-running", "t-rf-running", "running", "running", { startedAgo: 2 * MIN, completedAgo: null }, running);
+  lane("p-rf-finished", "t-rf-finished", "completed", "passed", { startedAgo: 25 * MIN, completedAgo: 5 * MIN });
+  lane("p-rf-decision", "t-rf-decision", "needs_decision", "failed", { startedAgo: 2 * DAY + 20 * MIN, completedAgo: 2 * DAY });
+  lane("p-rf-paused", "t-rf-paused", "paused", "passed", { startedAgo: 3 * DAY + 20 * MIN, completedAgo: 3 * DAY }, null, { pausedState: "running", pausedAt: iso(3 * DAY) });
+  const old = agent("rf-old", L("Builder: the transcript from six days ago", "Білдер: транскрипт шестиденної давності"), { mtime: now - 6 * DAY, lastAgentWorkAt: (now - 6 * DAY) * 1_000 });
+  const inboxWorking = agent("rf-inbox-working", L("Builder: a low-priority task being worked", "Білдер: задача з низьким пріоритетом у роботі"), working({ lastAgentWorkAt: (now - 30) * 1_000 }));
+  lane("p-rf-yesterday", "t-rf-yesterday", "completed", "passed", { startedAgo: DAY + 20 * MIN, completedAgo: DAY });
+  lane("p-rf-hidden-recent", "t-rf-hidden-recent", "completed", "passed", { startedAgo: 2 * DAY + 20 * MIN, completedAgo: 2 * DAY });
+  const doneFresh = agent("rf-done-fresh", L("Builder: finished ten minutes ago", "Білдер: завершив десять хвилин тому"), { mtime: now - 10 * MIN, lastAgentWorkAt: (now - 10 * MIN) * 1_000 });
+  lane("p-rf-done-blocked", "t-rf-done-blocked", "needs_decision", "failed", { startedAgo: DAY + 20 * MIN, completedAgo: DAY });
+  tasks.push(
+    /* Assigned. Edit times run against the work times on purpose: the order is the work's. */
+    task("t-rf-notes", "assigned", L("Write the upgrade notes", "Написати нотатки до оновлення"), L("Nobody has worked on it yet.", "Над нею ще ніхто не працював."), 1 * MIN),
+    task("t-rf-old", "assigned", L("Rate-limit banner copy", "Текст банера про ліміт"), "", 6 * DAY, [old]),
+    task("t-rf-paused", "assigned", L("Index rebuild: paused lane", "Перебудова індексу: лінію призупинено"), "", 12 * MIN),
+    task("t-rf-decision", "assigned", L("Choose the migration window", "Обрати вікно міграції"), "", 3 * MIN),
+    task("t-rf-finished", "assigned", L("Image viewer: arrows and click-outside close", "Перегляд зображень: стрілки й закриття кліком поза ним"), "", 4 * DAY),
+    task("t-rf-running", "assigned", L("Every new task gets an icon and a colour by one rule", "Кожна нова задача отримує іконку й колір за одним правилом"), "", 5 * DAY, [running]),
+    /* Inbox. */
+    task("t-rf-low", "inbox", L("Try a compact density for the Done column", "Спробувати щільніший вигляд колонки «Готово»"), "", 2 * MIN, [], { priority: "low" }),
+    task("t-rf-normal", "inbox", L("Export a board as Markdown", "Експорт дошки в Markdown"), "", 5 * MIN),
+    task("t-rf-high", "inbox", L("A failed deploy tells the seat and the phone", "Невдалий деплой повідомляє сесію та телефон"), "", 5 * DAY, [], { priority: "high" }),
+    task("t-rf-hidden-recent", "inbox", L("Message queue during a Claude turn", "Черга повідомлень під час ходу Claude"), "", 9 * DAY, [], { board: "hidden" }),
+    task("t-rf-yesterday", "inbox", L("Document the merge setting", "Задокументувати налаштування мерджу"), "", 9 * DAY),
+    task("t-rf-inbox-working", "inbox", L("Remove the unused tmux helpers", "Прибрати невживані помічники tmux"), "", 6 * DAY, [inboxWorking], { priority: "low" }),
+    /* The hidden tray: never worked, an explicit choice, and a hidden group. */
+    task("t-rf-never", "inbox", L("Imported note nobody worked on", "Імпортована нотатка, над якою ніхто не працював"), "", 8 * DAY, [], { board: "hidden" }),
+    task("t-rf-chosen", "inbox", L("Duplicate of a finished task", "Дубль завершеної задачі"), "", 8 * DAY, [], { board: "hidden", boardChoice: true }),
+    task("t-rf-grouped", "inbox", L("Task the operator hid", "Задача, яку оператор сховав"), "", 8 * DAY, [], { board: "hidden", groupHidden: { at: iso(7 * DAY), by: "operator", admitted: [] } }),
+    /* Done. */
+    task("t-rf-done-blocked", "done", L("Release notes: merge blocked yesterday", "Нотатки до релізу: мердж заблоковано вчора"), "", 1 * DAY, [], { doneAt: iso(DAY) }),
+    task("t-rf-done-fresh", "done", L("Finished ten minutes ago", "Завершено десять хвилин тому"), "", 10 * MIN, [doneFresh], { doneAt: iso(10 * MIN) }),
   );
 }
 if (TICK_CARDS) {
@@ -2259,6 +2478,18 @@ function transcriptOf(pathname: string): string {
       answered(4 * MIN, L("Noted. The retry banner lane can merge.", "Прийнято. Смугу банера повтору можна зливати.")),
       ...(voice.delivered ? [relayed(40, VOICE_RELAY_UUID, demoInstruction(UK ? "uk" : "en"))] : []),
       ...(voice.answered ? [answered(10, demoAnswer(UK ? "uk" : "en"))] : []),
+    ].join("\n")}\n`;
+  }
+  if (DECISIONS && file === orchestrator) {
+    const result = (secondsAgo: number, id: string, answer: Record<string, unknown>) => line(secondsAgo, { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: JSON.stringify(answer, null, 2) }] }] } });
+    const ask = seatRounds[0]!;
+    return `${[
+      said(16 * MIN, L("Quiet tick: three lanes are working, two wait for their turn at review.", "Тик спокійний: три лейни працюють, два чекають своєї черги на перевірку.")),
+      asked(6 * MIN, L("What about «Done» and the deploy?", "Що з «Готово» і деплоєм?")),
+      said(4 * MIN + 30, L("«Done» (#2744) passed review and the visual check. Two decisions are needed to merge and deploy it:", "«Готово» (#2744) пройшло рев’ю і візуальну перевірку. Щоб злити й задеплоїти, потрібні два рішення:")),
+      line(4 * MIN + 10, { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_decision_ask", name: "mcp__viewer__publish_prototype_review", input: { clientRequestId: "seat-done-ask", title: ask.title, questions: ask.questions } }] } }),
+      result(4 * MIN, "toolu_decision_ask", { reviewId: ask.id, taskId: null, project: PROJECT, title: ask.title, variants: 0, questions: ask.questions!.length, frames: 0, videos: 0 }),
+      ...(ask.decision ? [said(30, L("Taken: «Done» above «Waiting for you», deploy as soon as main is green. Merging #2744.", "Прийняв: «Готово» зверху «Чекають на вас», деплой одразу після мержу. Зливаю #2744."))] : []),
     ].join("\n")}\n`;
   }
   if (REPORT_PREVIEW && file === orchestrator) {
@@ -2803,7 +3034,7 @@ function mockRender(width: number, height: number, hue: number, label: string, p
    export is decided and its pictures are retired; links carries a decided
    first round and a waiting second; disk is decided and its message failed.
    `&proto=elsewhere` answers the search task as a linked installation does. */
-const PROTO = params.get("proto");
+const PROTO = params.get("proto") ?? (CALM ? "1" : null);
 const protoPosts: unknown[] = [];
 const protoRounds: Record<string, PrototypeRoundView[]> = {};
 const protoHidden = new Map<string, AttentionDismissalMark>();
@@ -2852,6 +3083,13 @@ if (PROTO) {
       { image: image(390, 760, 330, "cards · 390", true), caption: L("results, phone", "результати, телефон"), width: 390, lang: "uk" },
     ], videos: [{ media: { id: "v1", mime: "video/webm", bytes: 210_000, available: !gone, url: gone ? null : "/proto-video.webm" }, caption: L("hover and keyboard walk", "наведення і прохід клавіатурою") }] },
   ])];
+  /* `&duplicate-frames=1` gives the gallery identity regression two distinct
+     frames that reference the same media, as can happen when a review reuses
+     one image for multiple views. */
+  if (params.has("duplicate-frames")) {
+    const variants = protoRounds["t-search"]![0]!.variants;
+    variants[1]!.frames[0]!.image = variants[0]!.frames[0]!.image;
+  }
   protoRounds["t-upload"] = [round("r-upload", "t-upload", L("Upload progress sheet", "Панель перебігу завантаження"), 9 * MIN, [
     { number: 1, name: L("Progress under the attached file with speed, size and a stop", "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп"), description: L("A new design: the bar sits under the attached file.\nNothing existing changes.", "Новий дизайн: смуга стоїть під прикріпленим файлом.\nНаявне не змінюється."), videos: [], frames: [
       { image: image(960, 600, 190, "upload · running"), caption: L("uploading", "завантажується"), width: 1440, lang: "en" },
@@ -2903,6 +3141,17 @@ if (PROTO) {
     answered.decision = { chosen: [], answers: questionnaire.map(q => ({ questionId: q.id, options: [0] })), skipped: true, comment: L("Keep the recommended defaults.", "Залиште рекомендовані відповіді."), at: iso(MIN), delivery: { state: "sent", retryable: false } };
     protoRounds["t-export"] = [answered];
   }
+  /* Calm task cards: C3's lane waits on this round (§10). */
+  if (CALM) {
+    protoRounds["t-calm-form"] = [round("r-calm-form", "t-calm-form", L("Keep the retry banner or drop it?", "Лишити банер повтору чи прибрати?"), 20 * MIN, [
+      { number: 1, name: L("Keep the banner", "Лишити банер"), description: L("The banner stays and names the attempt.", "Банер лишається й називає спробу."), videos: [], frames: [
+        { image: image(960, 600, 205, "banner · 1440"), caption: L("board, desktop", "дошка, десктоп"), width: 1440, lang: "en" },
+      ] },
+      { number: 2, name: L("Drop the banner", "Прибрати банер"), description: L("The card's state line says it instead.", "Замість нього каже рядок стану картки."), videos: [], frames: [
+        { image: image(960, 600, 30, "no banner · 1440"), caption: L("board, desktop", "дошка, десктоп"), width: 1440, lang: "en" },
+      ] },
+    ])];
+  }
   protoPublish();
   /* A driver's hands on the background delivery (`&proto=1`): `protoSavePhase`
      answers a save as the Viewer does, its message saved or on its way;
@@ -2924,6 +3173,69 @@ if (PROTO) {
     },
   });
 }
+/* Every operator decision as a form (`&decisions=1`, docs/design/operator-decision-forms.md,
+   variant 3): the seat asked two questions without a task, one of them in its
+   feed, and a lane's prototype round waits on the search task with two numbered
+   frames and two questions. `GET /api/projects/decisions` answers the column
+   the way the Viewer does, and `POST` records an answer. `&decisions=answered`
+   is the same board after the seat's question in the feed was answered;
+   `&decisions=seat-frames` gives the seat's second question two numbered
+   frames, a taskless round with no review window to open them in. `&decisions=long`
+   gives the first seat question a ninety-character title and a long recommended option. */
+const DECISIONS = params.get("decisions");
+const decisionPosts: unknown[] = [];
+const seatRounds: PrototypeRoundView[] = [];
+const SEAT_ASK_ID = `pr_${"d".repeat(32)}`;
+if (DECISIONS) {
+  const ask = (id: string, title: string, ago: number, questions: PrototypeQuestion[]): PrototypeRoundView => ({ id, taskId: null, project: PROJECT, title, createdAt: iso(ago), source: { conversationId: orchestrator.conversationId ?? null }, variants: [], questions });
+  seatRounds.push(ask(SEAT_ASK_ID, L("«Done»: placement and deploy", "«Готово»: місце і деплой"), 4 * MIN, [
+    { id: "place", text: L("Where should the «Done» list be pinned?", "Де закріпити список «Готово»?"), other: true, options: [
+      { label: L("Above «Waiting for you»", "Зверху «Чекають на вас»"), recommended: true }, { label: L("Above the report feed", "Зверху стрічки звітів") }, { label: L("In both places", "В обох місцях") }] },
+    { id: "deploy", text: L("When to deploy after the merge?", "Коли деплоїти після мержу?"), options: [
+      { label: L("At once, as soon as main is green", "Одразу, щойно main зелений"), recommended: true }, { label: L("In the evening, in one deploy", "Увечері, одним деплоєм") }] },
+  ]));
+  seatRounds.push(ask(`pr_${"e".repeat(32)}`, L("Account for the night Codex lanes", "Акаунт для нічних лейнів Codex"), 2 * MIN, [
+    { id: "account", text: L("Which account runs the night lanes?", "Який акаунт веде нічні лейни?"), options: [{ label: L("Account A (Pro)", "Акаунт A (Pro)"), recommended: true }, { label: L("Account B (Plus)", "Акаунт B (Plus)") }] },
+  ]));
+  let mediaId = 0;
+  const frame = (hue: number, label: string): PrototypeMediaView => ({ id: `d${mediaId += 1}`.padEnd(64, "0"), mime: "image/png", bytes: 48_000, available: true, url: mockRender(960, 600, hue, label) });
+  protoRounds["t-search"] = [{ id: `pr_${"c".repeat(32)}`, taskId: "t-search", project: PROJECT, title: L("Update confirmation window", "Вікно підтвердження оновлення"), createdAt: iso(26 * MIN), source: { conversationId: null, pipelineId: "p-search", stageId: "design", attempt: 1 },
+    variants: [
+      { number: 1, name: L("List by project", "Список за проєктами"), description: L("One line per project.", "Рядок на проєкт."), videos: [], frames: [{ image: frame(205, "list · 1440"), caption: "", width: 1440 }] },
+      { number: 2, name: L("Summary and «Show»", "Підсумок і «Показати»"), description: L("A summary with a disclosure.", "Підсумок із розкриттям."), videos: [], frames: [{ image: frame(150, "summary · 1440"), caption: "", width: 1440 }] },
+    ],
+    questions: [
+      { id: "variant", text: L("Which variant do we build?", "Який варіант будуємо?"), options: [{ label: L("1 — List by project", "1 — Список за проєктами"), recommended: true }, { label: L("2 — Summary and «Show»", "2 — Підсумок і «Показати»") }] },
+      { id: "phone", text: L("On the phone: a bottom sheet or a centred window?", "На телефоні: шторка знизу чи вікно по центру?"), options: [{ label: L("Bottom sheet", "Шторка знизу"), recommended: true }, { label: L("Centred window", "Вікно по центру") }] },
+    ] }];
+  if (DECISIONS === "seat-frames") seatRounds[1]!.variants = [
+    { number: 1, name: L("Account A for every lane", "Акаунт A на всі лейни"), description: "", videos: [], frames: [{ image: frame(265, "account A · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
+    { number: 2, name: L("Split by engine", "Розподіл за рушієм"), description: "", videos: [], frames: [{ image: frame(32, "split · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
+  ];
+  if (DECISIONS === "reject") seatRounds[0]!.variants = protoRounds["t-search"]![0]!.variants;
+  /* `&decisions=long`: the first seat question has a title of ninety characters and a recommended option of a sentence. */
+  if (DECISIONS === "long") {
+    const held = seatRounds[0]!;
+    held.title = L("Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project", "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту");
+    held.questions![1]!.options[0] = { label: L("Right after the merge, once main is green and the checks on the merged commit have passed", "Одразу після мержу, щойно main зелений і перевірки на змерженому коміті пройшли"), recommended: true };
+  }
+  if (DECISIONS === "answered") {
+    const held = seatRounds[0]!;
+    held.decision = { chosen: [], answers: [{ questionId: "place", options: [0] }, { questionId: "deploy", options: [0] }], comment: "", at: iso(MIN), delivery: { state: "sent", retryable: false } };
+  }
+  protoPublish();
+  Object.assign(window, { decisionPosts });
+}
+/* What the Viewer answers for the column: each task's waiting round with its task, then the seat's open questions. */
+function fixtureDecisions() {
+  const fromTasks = Object.entries(protoRounds).flatMap(([taskId, rounds]) => {
+    const waiting = rounds.at(-1);
+    const held = tasks.find((entry) => entry.id === taskId);
+    return waiting && !waiting.decision && !protoHidden.has(waiting.id) && held ? [{ ...waiting, taskTitle: held.text.split("\n")[0] }] : [];
+  });
+  return [...fromTasks, ...seatRounds.filter((round) => !round.decision)].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+const seatDecisionNotices = () => seatRounds.filter((round) => !round.decision).map((round) => ({ id: `prototype:${round.id}`, project: PROJECT, taskId: null, reviewId: round.id, title: round.title, asks: "questions" as const, createdAt: round.createdAt, target: { kind: "seat-decision" as const, project: PROJECT, reviewId: round.id } }));
 type FixtureAlbumItem = { id: string; src: string; name: string | null; ts: number; via: "read" | "named" | "pasted"; source: { key: string; conversationId: string | null; path: string; stage?: { pipelineId: string; stageId: string; attempt: number; round?: number } }; isNew: boolean };
 const albumOpened = new Map<string, number>([["t-export", Date.now()]]);
 const albumSource = (file: FileEntry, stage?: { pipelineId: string; stageId: string; attempt: number; round?: number }) => ({ key: file.conversationId ?? file.path, conversationId: file.conversationId ?? null, path: file.path, ...(stage ? { stage } : {}) });
@@ -3001,6 +3313,13 @@ function fixtureWorkLinks(): FilesWorkLinks {
     pr(2240, "pipeline/p-finish-hold", "merged"),
     pr(2242, "pipeline/p-finish-other", "open"),
     pr(2236, "pipeline/p-finish-done", "merged"),
+    /* Calm task cards: the PR each lane's chain row ends on. */
+    pr(2301, "pipeline/p-calm-commit", "open", [], 60),
+    pr(2302, "pipeline/p-calm-merge", "open", [], 150),
+    pr(2305, "pipeline/p-calm-run", "draft", [], 10),
+    pr(2307, "pipeline/p-calm-done", "merged", [], 200),
+    pr(2308, "pipeline/p-calm-long-b", "open", [], 280),
+    pr(2309, "pipeline/p-calm-cleared", "closed", [], 240),
   ];
   const view: ForgeRepositoryView = {
     canonical: repository,
@@ -3029,7 +3348,7 @@ function fixtureWorkLinks(): FilesWorkLinks {
   }
   return out;
 }
-const workLinks = WORK_LINKS || SCENARIO === "task-motion" ? fixtureWorkLinks() : null;
+const workLinks = WORK_LINKS || CPU_QUEUE || SCENARIO === "task-motion" || CALM ? fixtureWorkLinks() : null;
 
 /* The «Needs you» filter's board. Six tasks: `t-nf-ask` holds a conversation
    that asks a question, `t-nf-lane` a lane parked on a decision, `t-nf-cleared`
@@ -3237,6 +3556,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return json(workerAnswer(project));
   }
+  // Seat failure evidence supplies the seat read and locale through the driver.
+  if (new URLSearchParams(location.search).has("seatfailure")
+    && ["/api/orchestrator/seat", "/api/orchestrator/seat/status", "/api/operator/settings"].includes(url.pathname)) {
+    return serverFetch(url.pathname + url.search, init);
+  }
   if (ACCOUNT_PICKER && url.pathname === "/api/accounts" && method === "GET") {
     const held = Number(PICKER_PARAMS.get("pickerdelay") ?? 0);
     if (held > 0) await new Promise((resolve) => setTimeout(resolve, held));
@@ -3282,11 +3606,25 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       return json({ ok: true, at, by, undo: !!body.undo, dismissed: [target], alreadyClear: [], changed: [] });
     }
   }
-  if (PROTO && /^\/api\/tasks\/[^/]+\/prototypes$/.test(url.pathname)) {
+  if ((DECISIONS || PROTO) && url.pathname === "/api/projects/decisions") {
+    if (method === "POST") {
+      const body = JSON.parse(String(init?.body)) as { reviewId: string; answers?: PrototypeAnswer[]; comment?: string; chosen?: number[]; reject?: true };
+      decisionPosts.push(body);
+      const held = [...seatRounds, ...Object.values(protoRounds).flat()].find((round) => round.id === body.reviewId);
+      if (!held) return json({ error: "review not found" }, 404);
+      held.decision = { ...(body.reject ? { rejected: true as const } : {}), chosen: body.chosen ?? [], answers: body.answers, comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state: "sent", retryable: false } };
+      protoPublish();
+      return json({ project: PROJECT, decisions: fixtureDecisions() });
+    }
+    const review = url.searchParams.get("review");
+    const round = review ? [...seatRounds, ...Object.values(protoRounds).flat()].find((entry) => entry.id === review) ?? null : undefined;
+    return json({ project: PROJECT, decisions: fixtureDecisions(), ...(round === undefined ? {} : { round }) });
+  }
+  if ((PROTO || DECISIONS) && /^\/api\/tasks\/[^/]+\/prototypes$/.test(url.pathname)) {
     const taskId = decodeURIComponent(url.pathname.split("/")[3]!);
     const rounds = protoRounds[taskId] ?? [];
     if (method === "POST") {
-      const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true; answers?: PrototypeAnswer[]; skip?: true };
+      const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true; reject?: true; answers?: PrototypeAnswer[]; skip?: true };
       protoPosts.push({ taskId, ...body });
       /* A held save has not been written yet: the decision is recorded only once it is released. */
       await (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave;
@@ -3300,7 +3638,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       }
       else if (!held.decision) {
         const state = phase === "saved" || phase === "delivering" ? "pending" : protoSaveState[taskId] ?? "sent";
-        held.decision = { ...(held.questions ? { answers: body.skip ? held.questions.map(q => ({ questionId: q.id, options: [q.options.findIndex(o => o.recommended)] })) : body.answers, ...(body.skip ? { skipped: true as const } : {}) } : {}), chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent", ...(phase ? { phase } : {}) } };
+        held.decision = { ...(body.reject ? { rejected: true as const } : {}), ...(held.questions ? { answers: body.skip ? held.questions.map(q => ({ questionId: q.id, options: [q.options.findIndex(o => o.recommended)] })) : body.answers, ...(body.skip ? { skipped: true as const } : {}) } : {}), chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent", ...(phase ? { phase } : {}) } };
       }
       protoPublish();
     }
@@ -3449,7 +3787,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
            folder it had before Confirm, since a seat read keyed on another folder answers from its own older cache. */
         ...(TELEGRAM_STEP || FM_SEAT ? { projectCwds: { [PROJECT]: "/repo/atlas" } } : {}),
       };
-    const body = JSON.stringify({ ...scoped, workflows: [], systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
+    const body = JSON.stringify({ ...scoped, ...(DECISIONS && seatDecisionNotices().length ? { seatDecisions: seatDecisionNotices() } : {}), workflows: [], systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) }, ...(workLinks ? { workLinks } : {}) });
     if (evidence.filesDelayMs) await new Promise((resolve) => setTimeout(resolve, evidence.filesDelayMs));
     return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
   }
@@ -3835,7 +4173,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const bytes = new TextEncoder().encode(data);
       const size = bytes.length;
       /* The first-message window reads a transcript that grows: the route answers from the caller's offset, as the real one does. */
-      if ((FIRST_MESSAGE || FEED_RECOVERY || FEED_CONTINUITY || VOICE) && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
+      if ((FIRST_MESSAGE || FEED_RECOVERY || FEED_CONTINUITY || VOICE || DECISIONS) && req.offset > 0 && req.offset < size) return [req.id, { data: new TextDecoder().decode(bytes.slice(req.offset)), start: req.offset, offset: size, size }];
       return [req.id, { data: req.offset >= size ? "" : data, start: 0, offset: size, size }];
     })) });
   }
@@ -4135,7 +4473,7 @@ function voiceCompanionScene() {
 }
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
 const diskDensity = new URLSearchParams(location.search).get("disk-density");
-createRoot(document.getElementById("root")!).render(VOICE ? voiceCompanionScene() : diskDensity ? (
+createRoot(document.getElementById("root")!).render(SCENARIO === "memory-profile" ? <RulesWindow project="garden" onClose={() => {}} /> : VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>

@@ -18,7 +18,9 @@ import { laneRouteNow } from "./routeTypes";
 
 export const NEEDS_YOU_ROW_KINDS = ["decision", "question", "plan", "permission", "delivery", "launch", "memory", "ask", "lane-decision", "lane-review", "prototype", "update"] as const;
 export type NeedsYouRowKind = typeof NEEDS_YOU_ROW_KINDS[number];
-export interface NeedsYouBody { files: readonly FileEntry[]; pipelines: readonly Pipeline[]; tasks: readonly BoardTask[]; workLinks?: import("@/lib/forge/workLinks").FilesWorkLinks }
+export interface NeedsYouBody { files: readonly FileEntry[]; pipelines: readonly Pipeline[]; tasks: readonly BoardTask[]; workLinks?: import("@/lib/forge/workLinks").FilesWorkLinks;
+  /** The orchestrators' own open questions (docs/design/operator-decision-forms.md §2.2). */
+  seatDecisions?: readonly import("@/lib/prototypeReview/types").PrototypeReviewNotice[] }
 export interface NeedsYouEvidence { code: string; stale: boolean; at: string | null; detail: string; source: string }
 export interface NeedsYouRow {
   id: string; kind: NeedsYouRowKind; title: string;
@@ -53,7 +55,7 @@ export interface NeedsYouReadOptions { kinds?: readonly NeedsYouRowKind[]; full?
 /** One projection shared with both panels; closing is a browser transient. */
 export function needsYouEntries(body: NeedsYouBody, decision: AutoView["decision"], now: number, project: string): MobileAttentionEntry[] {
   const key = canonicalOrchestratorProject(project);
-  return needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks), key)
+  return needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks, body.seatDecisions), key)
     .filter(section => canonicalOrchestratorProject(section.project) === key).flatMap(section => section.entries);
 }
 const iso = (seconds: number | null) => seconds !== null && Number.isFinite(seconds) ? new Date(seconds * 1000).toISOString() : null;
@@ -104,7 +106,7 @@ export function needsYouEvidence(entry: MobileAttentionEntry, ports: NeedsYouEvi
     for (const link of links?.links ?? []) {
       if (link.state === "merged" || link.state === "closed") add(`pr-${link.state}`, true, `The pull request is ${link.state}`, "forge", link.checkedAt);
     }
-    if (lane.merge && (PIPELINE_MERGE_LIVE_STATES.has(lane.merge.state) || lane.merge.state === "merged")) add("merge-queued", true, `Merge ${lane.merge.state}`, "pipelines", lane.merge.updatedAt);
+    if (lane.merge && (PIPELINE_MERGE_LIVE_STATES.has(lane.merge.state) || lane.merge.state === "refreshing" || lane.merge.state === "merged")) add("merge-queued", true, `Merge ${lane.merge.state}`, "pipelines", lane.merge.updatedAt);
     const tasks = ports.tasks.filter(t => lane.taskIds?.includes(t.id));
     if (ports.pipelines.some(p => p.id !== lane.id && p.taskIds?.some(id => lane.taskIds?.includes(id)) && after(p.createdAt, since)) || tasks.some(t => t.assignments.some(a => after(a.at, since)))) add("newer-work", true, "The task gained newer work after this lane parked", "pipelines/tasks");
     if (tasks.length && tasks.every(t => t.status === "done")) add("task-done", true, "Every task on this lane is done", "tasks");
@@ -135,8 +137,8 @@ function rowOf(entry: MobileAttentionEntry, ports: NeedsYouEvidencePorts, option
     : entry.kind === "pipeline" ? { pipelineId: entry.row.pipeline.id, ...(entry.row.pipeline.cursor?.stageId ? { stageId: entry.row.pipeline.cursor.stageId } : {}) }
     : entry.kind === "prototype" ? { reviewId: entry.notice.reviewId } : { decisionId: entry.decision.id };
   const facts = needsYouEvidence(entry, ports);
-  /* A decision whose message keeps failing clears once the message lands, so it offers nothing to dismiss. */
-  const target: DismissalTarget | null = entry.kind === "update" ? null : entry.kind === "prototype" ? entry.notice.undelivered ? null : { kind: "prototype", taskId: entry.notice.taskId, reviewId: entry.notice.reviewId }
+  /* A seat's own question is answered, never hidden: it has no dismissal. */
+  const target: DismissalTarget | null = entry.kind === "update" ? null : entry.kind === "prototype" ? entry.notice.taskId === null || entry.notice.undelivered ? null : { kind: "prototype", taskId: entry.notice.taskId, reviewId: entry.notice.reviewId }
     : needsYouSubject(entry) as DismissalTarget;
   return { id: entry.id, kind: entry.kind === "conversation" ? entry.item.reason.kind : entry.kind === "pipeline" ? entry.row.pipeline.state === "needs_review" ? "lane-review" : "lane-decision" : entry.kind,
     title: clip(text.title, 90), line: clip(text.line, 400),
@@ -236,7 +238,7 @@ export function needsYouAnswer(body: NeedsYouBody, decision: AutoView["decision"
   const answer: NeedsYouAnswer = { project: canonicalOrchestratorProject(project), at: new Date(now * 1000).toISOString(), count: all.length, staleCount: all.filter(r => r.stale).length,
     rows: [], cleared: clearedRows(body, decision, now, project, ports, options), omittedCount: filtered.length - start,
     ...(ports.unavailable.length ? { unavailable: [...new Set(ports.unavailable)] } : {}) };
-  const sections = needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks), project).filter(s => canonicalOrchestratorProject(s.project) === answer.project).length;
+  const sections = needsYouSections(buildNeedsYouQueue(withoutArchivedPredecessors([...body.files]), body.pipelines, now, [], decision, body.tasks, body.seatDecisions), project).filter(s => canonicalOrchestratorProject(s.project) === answer.project).length;
   if (sections > 1) answer.sections = sections;
   const routed = routedToSeat(body, now, answer.project);
   if (routed) answer.routedToSeat = routed;

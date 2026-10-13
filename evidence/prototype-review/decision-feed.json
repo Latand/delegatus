@@ -1,0 +1,114 @@
+[
+  {
+    "lang": "en",
+    "scheme": "light",
+    "posts": [
+      {
+        "project": "atlas",
+        "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+        "chosen": [],
+        "comment": "Simplify every frame.",
+        "answers": [
+          {
+            "questionId": "place",
+            "options": [
+              0
+            ]
+          },
+          {
+            "questionId": "deploy",
+            "options": [
+              0
+            ]
+          }
+        ],
+        "reject": true
+      }
+    ],
+    "rejected": "Rejected"
+  },
+  {
+    "lang": "en",
+    "scheme": "dark",
+    "posts": [
+      {
+        "project": "atlas",
+        "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+        "chosen": [],
+        "comment": "Simplify every frame.",
+        "answers": [
+          {
+            "questionId": "place",
+            "options": [
+              0
+            ]
+          },
+          {
+            "questionId": "deploy",
+            "options": [
+              0
+            ]
+          }
+        ],
+        "reject": true
+      }
+    ],
+    "rejected": "Rejected"
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "posts": [
+      {
+        "project": "atlas",
+        "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+        "chosen": [],
+        "comment": "Simplify every frame.",
+        "answers": [
+          {
+            "questionId": "place",
+            "options": [
+              0
+            ]
+          },
+          {
+            "questionId": "deploy",
+            "options": [
+              0
+            ]
+          }
+        ],
+        "reject": true
+      }
+    ],
+    "rejected": "Відхилено"
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "posts": [
+      {
+        "project": "atlas",
+        "reviewId": "pr_dddddddddddddddddddddddddddddddd",
+        "chosen": [],
+        "comment": "Simplify every frame.",
+        "answers": [
+          {
+            "questionId": "place",
+            "options": [
+              0
+            ]
+          },
+          {
+            "questionId": "deploy",
+            "options": [
+              0
+            ]
+          }
+        ],
+        "reject": true
+      }
+    ],
+    "rejected": "Відхилено"
+  }
+]

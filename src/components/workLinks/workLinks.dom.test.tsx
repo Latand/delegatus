@@ -7,6 +7,11 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import type { TaskMutationPorts } from "@/components/kanban/useTaskMutations";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* PR and issue chips on the kanban board (#2059), rendered by React: the
    pipeline header's chips and its plain "no PR", the card's deduplicated row
@@ -166,7 +171,7 @@ test("each lane row draws its own chips at the end of its chain line, and a lane
   expect(two.querySelector("a")).toBeNull();
 });
 
-test("the card's row draws each link once: what no lane row draws, then three chips and +N once the card is collapsed; +N lists every link with × on the attached one only", async () => {
+test("the card's row draws each link once: what no lane row draws; closed, the card draws its top lane's chain with that lane's PR, and opened again its row lists every link with × on the attached one only", async () => {
   const host = mount();
   await tick();
   const row = () => card(host).querySelector('[data-work-links="t-chips"]');
@@ -176,12 +181,17 @@ test("the card's row draws each link once: what no lane row draws, then three ch
   click(card(host).querySelector(".icon-btn.fold"));
   await tick();
   expect(card(host).getAttribute("data-collapsed")).toBe("1");
-  expect(card(host).querySelector(".pblock")).toBeNull();
-  /* Collapsed, no lane row draws anything, so the task's row carries them all. */
-  expect(chips(row())).toEqual(["draft:#44", "merged:#41", "closed:#40"]);
-  expect(row()!.querySelector("[data-work-links-more]")?.textContent).toBe("+2");
+  /* Closed (docs/design/calm-task-cards-build.md §2.3): no lane row and no
+     task row; the one chain row carries the top lane's PR as text. */
+  expect(card(host).querySelector('.pblock[data-density="task"]')).toBeNull();
+  expect(row()).toBeNull();
+  expect(card(host).querySelector('[data-card-chain] .pblock[data-density="card"] [data-work-links-text]')).not.toBeNull();
 
-  click(row()!.querySelector("[data-work-links-more]"));
+  /* Every link stays one ⋯ away: the task's attach form lists them all. */
+  click(card(host).querySelector(".icon-btn.fold"));
+  await tick();
+  click(card(host).querySelector("[data-menu]"));
+  click(document.querySelector('.menu .cm-quick [aria-label="Attach PR or issue…"]'));
   await tick();
   const panel = document.querySelector('[data-work-links-panel="task:t-chips"]')!;
   expect([...panel.querySelectorAll("[data-work-link-row]")].map((entry) => entry.getAttribute("data-work-link-row")))
@@ -237,10 +247,11 @@ test("an attach on a pipeline redraws the task card that aggregates it from the 
   await tick(20);
   expect(patches).toEqual([{ url: "/api/pipelines/p-two", body: { action: "attach-link", link: "47" } }]);
   expect(chips(card(host).querySelector('[data-work-links="p-two"]'))).toEqual(["open:#47"]);
-  /* Drawn once: on the lane's line while the card is open, and on the task's
-     row, from the same answer, once the card folds its lanes away. */
+  /* Drawn once: on the lane's line while the card is open; closed, the card
+     draws no task row (docs/design/calm-task-cards-build.md §2.3). */
   expect(card(host).querySelector('[data-work-links="t-chips"]')).toBeNull();
   click(card(host).querySelector(".icon-btn.fold"));
   await tick();
-  expect(chips(card(host).querySelector('[data-work-links="t-chips"]'))).toEqual(["open:#47"]);
+  expect(card(host).querySelector('[data-work-links="t-chips"]')).toBeNull();
+  expect(card(host).querySelector("[data-card-chain]")).not.toBeNull();
 });

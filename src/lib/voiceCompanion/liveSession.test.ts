@@ -23,14 +23,14 @@ afterAll(async () => {
 beforeEach(() => fs.rmSync(path.join(root, "state"), { recursive: true, force: true }));
 
 const noReads = () => fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
-function fixture(key = "synthetic-credential") {
+function fixture(key = "synthetic-credential", prototype?: import("@/lib/tasks/types").BoardTask) {
   const storage = new CompanionStorage();
   storage.updateSettings({ enabled: true });
   let sends = 0;
   const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
   const admission = new CompanionAdmission(storage, { recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" }),
     send: async () => { sends++; return { status: "queued", operationId: "operation_fixture" }; }, reports: () => reports });
-  const reads = fixtureBoardReads({ tasks: () => [{ id: "task_fixture", project: "fixture", text: "Review the plan", status: "inbox" }],
+  const reads = fixtureBoardReads({ tasks: () => [prototype ?? { id: "task_fixture", project: "fixture", text: "Review the plan", status: "inbox" }],
     pipelines: () => [], activity: async () => [], messages: async () => [] });
   const provider = new FakeLiveProvider();
   const service = new CompanionLiveSessions(storage, admission, reads, provider, { key: () => key, closeTimeoutMs: 20, timers: false });
@@ -43,6 +43,52 @@ const said = (delta: string, at: number, speaker: "input" | "output" = "input") 
   ({ type: `session.${speaker}_transcript.delta`, event_id: `${speaker}-${at}-${delta}`, delta, start_ms: at, end_ms: at + 400 });
 const spoken = (f: ReturnType<typeof fixture>) => f.provider.commands.filter(row => row.type === "session.commentary.append");
 const large = { input_tokens: 1_050_000, input_tokens_details: { cached_tokens: 0 }, output_tokens: 512 };
+
+test("real voice scope refusals explain that nothing was read and PR cache follows the project in view", async () => {
+  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+  const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
+  const { createCompanionBoardReadPaths } = await import("./readPaths");
+  const { CompanionBoardReads } = await import("./boardReads");
+  const at = "2026-10-10T12:00:00.000Z";
+  const tasks = ["board-a", "board-b"].map(project => ({ id: `task-${project}`, project, text: `${project} cards`, status: "done" as const, placement: "unplaced" as const, assignments: [], createdAt: at, updatedAt: at,
+    workLinks: [{ repository: "acme/widgets", number: 2800, kind: "pr" as const, addedAt: at, addedBy: "operator" as const }] }));
+  replaceConversationCatalog(["board-a", "board-b", "empty-board"].map(project => ({ path: path.join(root, `${project}.jsonl`), root: "claude-projects" as const, name: "fixture", project, projectName: project === "empty-board" ? "Empty" : "Duplicate", title: "Fixture", firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const, mtime: 0, size: 0 })));
+  const paths = createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies, taskSelectionSource: undefined, pipelineSelectionSource: undefined, listTaskRecords: () => tasks, listPipelineRecords: () => [] } });
+  let dispatched = 0;
+  const reads = new CompanionBoardReads({ ...paths, call: (name, args, redact) => { dispatched++; return paths.call(name, args, redact); } });
+  const f = fixture();
+  const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => "synthetic-credential", timers: false });
+  const s = await service.start({ project: "board-a", locale: "en", sdp: "v=0" });
+  let next = 0;
+  const read = async (args: Record<string, unknown>) => {
+    const id = `scope-read-${next++}`;
+    f.provider.responder = calling(functionCall(id, "list_tasks", args));
+    f.provider.replay(s.providerId, delegationCreated(id, next * 100));
+    await service.drain(s.sessionId);
+    return JSON.parse(f.provider.requests.at(-1)!.input.filter(item => item.type === "function_call_output").at(-1)!.output as string);
+  };
+  try {
+    expect(await read({ project: null, query: "PR 2800", openOnly: null })).toMatchObject({ total: 1, rows: [{ handle: "task-board-a" }] });
+    expect(await read({ query: "#2800" })).toMatchObject({ repeated: true, total: 1 });
+    expect(dispatched).toBe(1);
+    await service.context(s.sessionId, "board-b");
+    expect(await read({ query: "2800" })).toMatchObject({ total: 1, rows: [{ handle: "task-board-b" }] });
+    expect(dispatched).toBe(2);
+    for (const [project, code] of [["Unknown", "PROJECT_REFUSED"], ["Duplicate", "PROJECT_AMBIGUOUS"]]) {
+      const answer = await read({ project, query: "PR 2800" });
+      expect(answer).toMatchObject({ status: "refused", code });
+      expect(answer.speech).toContain("Nothing was read");
+      expect(answer.speech).not.toContain("0 tasks");
+      expect(answer.total).toBeUndefined();
+    }
+    await service.context(s.sessionId, "stale-context");
+    expect(await read({ project: null })).toMatchObject({ status: "refused", code: "PROJECT_REFUSED" });
+    await service.context(s.sessionId, null);
+    expect(await read({ project: null })).toMatchObject({ status: "refused", code: "PROJECT_REQUIRED" });
+    expect(dispatched).toBe(2);
+    expect(await read({ project: "Empty" })).toMatchObject({ total: 0, speech: "0 tasks. " });
+  } finally { await service.close(s.sessionId); replaceConversationCatalog([]); }
+});
 
 test("minting is server configured, a model request is delivered at once with no tap, and a later tap or a closed media call adds nothing", async () => {
   const f = fixture();
@@ -1187,15 +1233,17 @@ test("an explicit refresh reads changed persisted tasks immediately and repeated
 });
 
 test("prototype frame bytes reach backend vision while tool output and transcript carry only references", async () => {
-  const f = fixture();
-  f.provider.responder = calling(functionCall("frame-call","view_prototype_frame",{taskId:"task_fixture",reviewId:"review-a",mediaId:"frame-a"}));
+  const { prototypeTask, storePrototypePictures } = await import("./prototypeRead.fixture");
+  const task = prototypeTask("task_fixture"); await storePrototypePictures(task);
+  const f = fixture("synthetic-credential", task);
+  f.provider.responder = calling(functionCall("frame-call","view_prototype_frame",{taskId:task.id,variants:[1],view:"Board",width:1440,lang:"uk"}));
   const s = await f.service.start({project:"fixture",locale:"en",sdp:"v=0"});
   f.provider.replay(s.providerId,delegationCreated("frame-request",1));
   await f.service.drain(s.sessionId);
   const vision = f.provider.requests[1].input.find(item=>Array.isArray(item.content))!;
   expect((vision.content as Array<Record<string,unknown>>)[1]).toMatchObject({type:"input_image",image_url:expect.stringContaining("data:image/png;base64,"),detail:"high"});
   const output = f.provider.requests[1].input.find(item=>item.type === "function_call_output")!.output as string;
-  expect(output).toContain("frame-a"); expect(output).not.toContain("base64");
+  expect(output).toContain("Board"); expect(output).not.toContain("base64");
   expect(JSON.stringify(f.service.transcriptRecord(s.sessionId))).not.toContain("iVBORw");
   expect(f.sends()).toBe(0); await f.service.close(s.sessionId);
 });
@@ -1261,8 +1309,9 @@ test("whole prototype review masks active credential fragments before backend in
     f.provider.replay(s.providerId, delegationCreated("review-credential", 1));
     await f.service.drain(s.sessionId);
     const output = JSON.parse(f.provider.requests[1].input.find(item => item.type === "function_call_output")!.output as string);
-    expect(output.item.rounds[0]).toMatchObject({ variants: [{ number: 1, name: "Safe variant", description: f.description }], questions: f.round.questions,
-      decision: { chosen: [1], comment: "Keep this safe decision. [redacted] Keep the final sentence." } });
+    expect(output.item).toMatchObject({ variants: [{ number: 1, name: "Safe variant", description: f.description }],
+      questions: f.round.questions.map(q => ({ id: q.id, text: q.text, options: q.options.map(o => o.label), recommended: q.options.findIndex(o => o.recommended) })),
+      decision: { chosen: [{ number: 1, name: "Safe variant" }], comment: "Keep this safe decision. [redacted] Keep the final sentence." } });
     expect(output.truncated).toBe(false);
     await expectCredentialReadSurfacesSafe(f, s.sessionId);
   } finally { await f.service.close(s.sessionId); }
@@ -1580,6 +1629,36 @@ test("after four tool rounds the backend answers once more with tools off, so wh
   expect(f.provider.requests.at(-1)!.input.filter(item => item.type === "function_call_output")).toHaveLength(4);
   expect(spoken(f)).toMatchObject([{ delegation_id: "reads", content: "One open task: review the plan. Its stage is unknown." }]);
   await f.service.close(s.sessionId);
+});
+
+test("a failed prototype read tells the backend exactly that nothing was read", async () => {
+  const f = fixture();
+  f.provider.responder = calling(functionCall("failed-review", "read_prototype_review", { taskId: "foreign-task" }));
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  try {
+    f.provider.replay(s.providerId, delegationCreated("failed-review", 1));
+    await f.service.drain(s.sessionId);
+    const result = JSON.parse(f.provider.requests[1].input.find(item => item.type === "function_call_output")!.output as string);
+    expect(result).toMatchObject({ status: "refused", code: "PROJECT_REFUSED", speech: "The read failed: project refused. Nothing was read by this call. Say that you could not read it and what you tried." });
+    expect(f.provider.requests[1].input.some(item => Array.isArray(item.content))).toBe(false);
+  } finally { await f.service.close(s.sessionId); }
+});
+
+test("an empty final answer names the searches tried and admits that no frame was viewed", async () => {
+  const f = fixture();
+  f.provider.responder = (request, index) => backendResponse(`spent-${index}`, request.tool_choice === "none" ? []
+    : [functionCall(`search-${index}`, "list_tasks", { query: `unknown ${index}` })]);
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  try {
+    f.provider.replay(s.providerId, delegationCreated("spent-review", 1));
+    await f.service.drain(s.sessionId);
+    const speech = String(spoken(f).at(-1)!.content);
+    expect(speech).toContain("I could not finish within the allowed steps. I tried:");
+    expect(speech).toContain("searched the tasks for «unknown 0»: 0 tasks");
+    expect(speech).toContain("No prototype frame was viewed. Nothing more was done.");
+    expect(Buffer.byteLength(speech)).toBeLessThanOrEqual(480);
+    expect(speech).not.toContain("task_fixture");
+  } finally { await f.service.close(s.sessionId); }
 });
 
 test("a report hand-off that fails part-way resumes at the failed part on the next poll: every fact once, in order, and a later report waits behind it", async () => {

@@ -6,10 +6,11 @@ import type { BoardTask } from "@/lib/tasks/types";
 
 /** Small fixtures retain the real task/pipeline filtering and projection. */
 export function fixtureBoardReads(input: {
-  tasks(): readonly {id:string;project:string;text:string;status:string;note?:{text:string};hold?:{note:string};steps?:Array<{text:string;state:string}>}[];
+  tasks(): readonly {id:string;project:string;text:string;status:string;note?:{text:string};hold?:{note:string};steps?:Array<{text:string;state:string}>;prototypeReviews?:BoardTask["prototypeReviews"]}[];
   pipelines(): readonly {id:string;project:string;task:string;state:string;stages:Array<{id:string;kind:string}>;runs:unknown[]}[];
   activity(project:string):Promise<Array<{conversationId:string;project:string;title?:string|null;lifecycle:string}>>;
   messages(id:string):Promise<Array<{role:string;text:string}>>;
+  fleet?():Promise<Record<string,unknown>>;
 }) {
   const at = "2026-10-10T00:00:00.000Z";
   const taskRows = input.tasks().map(row=>({createdAt:at,updatedAt:at,placement:"unplaced",assignments:[],...row})) as unknown as BoardTask[];
@@ -23,9 +24,9 @@ export function fixtureBoardReads(input: {
     async projectFor(kind,id) {if(kind === "task")return taskRows.find(row=>row.id===id)?.project??null;if(kind === "pipeline")return pipelineRows.find(row=>row.id===id)?.project??null;
       return (await input.activity("fixture")).find(row=>row.conversationId===id)?.project??null;},
     recipient:()=>"conversation_a",
-    review:id=>({taskId:id,rounds:[],waitingReviewId:null}),
+    review:id=>paths.review(id),
     frame:async()=>({mime:"image/png",data:"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="}),
-    call:async(name,args,redactText)=>name==="search_transcripts" ? {items:[],total:0,nextCursor:null,projectScope:{resolved:args.project}} : name==="agent_activity" ? {conversations:(await input.activity(String(args.project))).filter(row=>row.project===args.project),count:(await input.activity(String(args.project))).filter(row=>row.project===args.project).length}
+    call:async(name,args,redactText)=>name==="search_transcripts" ? {items:[],total:0,nextCursor:null,projectScope:{resolved:args.project}} : name==="agent_fleet" ? await (input.fleet?.() ?? Promise.resolve({summary:{agents:{live:0,running:0},byEngine:{}},agents:[]})) : name==="agent_activity" ? {conversations:(await input.activity(String(args.project))).filter(row=>row.project===args.project),count:(await input.activity(String(args.project))).filter(row=>row.project===args.project).length}
       : name==="conversation_messages" ? {records:(await input.messages(String(args.conversationId))).map(row=>({role:row.role,text:row.text}))} : paths.call(name,args,redactText),
   });
 }

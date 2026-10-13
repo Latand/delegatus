@@ -5,6 +5,7 @@ import { currentConversationFile } from "@/lib/accounts/identity";
 import type { Locale, MessageKey, TFunction } from "@/lib/i18n";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { currentSeatFailure, type SeatFailureRecord, type SeatHostObservation } from "@/lib/orchestrator/seatFailure";
 import { parseSeatDeputyViews, type SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import type { SeatRefs } from "@/lib/tasks/groupHide";
 import { taskMotion } from "@/lib/tasks/motion";
@@ -13,6 +14,8 @@ import type { FileEntry } from "@/lib/types";
 import type { StripSurface } from "../agentCapabilities";
 import { attentionId } from "../attention";
 import type { IncumbentRotationCause, IncumbentTelegramAction, OrchestratorIncumbent } from "./incumbent";
+
+export type { SeatFailureRecord } from "@/lib/orchestrator/seatFailure";
 
 /*
  * The orchestrator panel's state machine, as a pure module (PRD #976 slice A).
@@ -25,22 +28,23 @@ import type { IncumbentRotationCause, IncumbentTelegramAction, OrchestratorIncum
  *   empty/draft → creating → live → stalled/dead → rotation-recommended
  *                                              ↘ intent-error
  *
- * `intent-error` is never a dead end and never hidden. With no incumbent it IS
+ * A current `intent-error` is recoverable. With no incumbent it IS
  * the panel; with one, it rides ALONGSIDE the live conversation
  * (`OrchestratorLiveState.transition`) so a failed transition can be read and
- * retried without taking the conversation away.
+ * retried without taking the conversation away. Terminal failures whose seat
+ * has recovered remain in history and clear from this state.
  */
 
 /** `GET /api/orchestrator/seat?project=…`, as the client reads it. */
 export interface OrchestratorSeatStatus {
   seat: OrchestratorSeat | null;
   pending: OrchestratorSeat | null;
-  /** The last designation attempt that failed, after it left the pending
-      position (issue #1757). A failure is durable history the moment it
-      happens, so this is what keeps the reason on the panel — including a
-      failure this browser never submitted: a rotation ordered from the seat
-      itself, or an accepted launch that died after the request returned. */
+  /** The latest terminal failure that still needs attention. History remains
+      durable after a healthy host or later designation clears this banner. */
   lastFailure?: SeatFailureRecord | null;
+  /** The latest terminal request, including a failure whose banner cleared. */
+  settledFailureRequestId?: string | null;
+  hostObservation?: SeatHostObservation | null;
   /** False once the active seat's transcript has left the disk — the operator
       closed the conversation card, so the panel returns to the draft. */
   exists: boolean;
@@ -87,15 +91,6 @@ export interface PreviousSeat {
   hasNotes: boolean;
 }
 
-/** One terminalized designation attempt, as the panel reads it. */
-export interface SeatFailureRecord {
-  error: string;
-  clientRequestId: string;
-  seatEpoch: number;
-  designatedAt: string;
-  terminalizedAt: string;
-}
-
 /** Crash-safe read of the seat route's body: anything malformed reads as «no
     seat», which lands the panel on the draft rather than on a broken render. */
 export function parseSeatStatus(body: unknown): OrchestratorSeatStatus {
@@ -103,6 +98,8 @@ export function parseSeatStatus(body: unknown): OrchestratorSeatStatus {
     seat?: unknown;
     pending?: unknown;
     lastFailure?: unknown;
+    settledFailureRequestId?: unknown;
+    hostObservation?: unknown;
     exists?: unknown;
     viewerMcpRegistered?: unknown;
     previous?: unknown;
@@ -114,6 +111,8 @@ export function parseSeatStatus(body: unknown): OrchestratorSeatStatus {
     seat: seatOf(raw?.seat),
     pending: seatOf(raw?.pending),
     lastFailure: failureOf(raw?.lastFailure),
+    ...(typeof raw?.settledFailureRequestId === "string" ? { settledFailureRequestId: raw.settledFailureRequestId } : {}),
+    ...(raw?.hostObservation ? { hostObservation: hostObservationOf(raw.hostObservation) } : {}),
     exists: raw?.exists !== false,
     viewerMcpRegistered: raw?.viewerMcpRegistered === true,
     previous: Array.isArray(raw?.previous) ? raw.previous.flatMap((entry) => previousSeatOf(entry) ?? []) : [],
@@ -257,31 +256,26 @@ function failureOf(value: unknown): SeatFailureRecord | null {
   const failure = value as Partial<SeatFailureRecord>;
   if (typeof failure.error !== "string" || !failure.error) return null;
   if (typeof failure.clientRequestId !== "string") return null;
+  const replacement = failure.automaticReplacement;
   return {
+    ...(replacement && typeof replacement.conversationId === "string" && Number.isSafeInteger(replacement.seatEpoch)
+      ? { automaticReplacement: { conversationId: replacement.conversationId, seatEpoch: replacement.seatEpoch } } : {}),
     error: failure.error,
     clientRequestId: failure.clientRequestId,
     seatEpoch: typeof failure.seatEpoch === "number" ? failure.seatEpoch : 0,
+    ...(typeof failure.predecessorConversationId === "string" ? { predecessorConversationId: failure.predecessorConversationId } : {}),
     designatedAt: typeof failure.designatedAt === "string" ? failure.designatedAt : "",
     terminalizedAt: typeof failure.terminalizedAt === "string" ? failure.terminalizedAt : "",
   };
 }
 
-/**
- * The failure the panel should still be SAYING, if any.
- *
- * A terminalized attempt is permanent history, so showing every one of them
- * forever would hang a dead banner over a healthy seat. It is shown while it is
- * the LAST thing that happened to this project's seat: no active seat, or one
- * whose activation it postdates — which is exactly the shape of a rotation that
- * failed and left the previous seat in place, including one rolled back after
- * its launch died (#1757).
- */
-function standingFailure(status: OrchestratorSeatStatus | null, active: OrchestratorSeat | null): SeatFailureRecord | null {
-  const failure = status?.lastFailure ?? null;
-  if (!failure) return null;
-  const activatedAt = active?.activatedAt ?? null;
-  if (!activatedAt) return failure;
-  return failure.terminalizedAt >= activatedAt ? failure : null;
+function hostObservationOf(value: unknown): SeatHostObservation | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const observation = value as Partial<SeatHostObservation>;
+  return typeof observation.conversationId === "string" && typeof observation.seatEpoch === "number"
+    && typeof observation.hostState === "string" && typeof observation.observedAt === "string"
+    ? { conversationId: observation.conversationId, seatEpoch: observation.seatEpoch, hostState: observation.hostState, observedAt: observation.observedAt }
+    : null;
 }
 
 function seatOf(value: unknown): OrchestratorSeat | null {
@@ -548,7 +542,7 @@ export function resolveSeatFile(input: {
     designation is visible without the conversation disappearing. */
 export type SeatTransition =
   | { kind: "creating"; launchId: string | null }
-  | { kind: "error"; error: string };
+  | { kind: "error"; error: string; failedAt?: string };
 
 export interface OrchestratorLiveState {
   kind: "live";
@@ -580,7 +574,7 @@ export type OrchestratorPanelState =
       carries a way through instead of spinning forever. */
   | { kind: "creating"; launchId: string | null; clientRequestId: string | null; designatedAt: string }
   /** A durable terminal error on the pending intent, with retry. */
-  | { kind: "intent-error"; error: string; retry: "fresh" | "same"; designatedAt: string }
+  | { kind: "intent-error"; error: string; retry: "fresh" | "same"; designatedAt: string; failedAt?: string }
   | OrchestratorLiveState;
 
 export function deriveOrchestratorPanelState(input: {
@@ -613,9 +607,10 @@ export function deriveOrchestratorPanelState(input: {
   const active = status?.seat && status.exists ? status.seat : null;
   const pending = status?.pending ?? null;
   const clientError = unsettledClientError(status, input.submitFailure);
-  const failure = standingFailure(status, active);
+  const failure = currentSeatFailure(status?.lastFailure ?? null, active, status?.hostObservation ?? null);
   const pendingError = pending?.intent.error ?? failure?.error ?? null;
-  const failedAt = pending?.designatedAt ?? failure?.designatedAt ?? "";
+  const designatedAt = pending?.designatedAt ?? failure?.designatedAt ?? "";
+  const failureTime = pending?.intent.error ? undefined : failure?.terminalizedAt;
 
   if (active?.conversationId) {
     const liveness = seatLivenessOf({
@@ -640,7 +635,7 @@ export function deriveOrchestratorPanelState(input: {
       transition: input.submitting
         ? { kind: "creating", launchId: pending?.intent.launchId ?? null }
         : pendingError
-          ? { kind: "error", error: pendingError }
+          ? { kind: "error", error: pendingError, ...(failureTime ? { failedAt: failureTime } : {}) }
           : clientError
             ? { kind: "error", error: clientError.error }
             : pending
@@ -658,10 +653,10 @@ export function deriveOrchestratorPanelState(input: {
     };
   }
   if (pendingError) {
-    return { kind: "intent-error", error: pendingError, retry: "fresh", designatedAt: failedAt };
+    return { kind: "intent-error", error: pendingError, retry: "fresh", designatedAt, ...(failureTime ? { failedAt: failureTime } : {}) };
   }
   if (clientError) {
-    return { kind: "intent-error", error: clientError.error, retry: clientError.retry, designatedAt: failedAt };
+    return { kind: "intent-error", error: clientError.error, retry: clientError.retry, designatedAt };
   }
   if (pending) {
     return {
@@ -943,7 +938,7 @@ export function seatRequestSettled(status: OrchestratorSeatStatus | null, client
      pending position at once. Holding the key past that is the same trap in the
      other direction: the retry would carry a key the server has already
      answered for. */
-  if (status.lastFailure?.clientRequestId === clientRequestId) return true;
+  if (status.lastFailure?.clientRequestId === clientRequestId || status.settledFailureRequestId === clientRequestId) return true;
   return false;
 }
 

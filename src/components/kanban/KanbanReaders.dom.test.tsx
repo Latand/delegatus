@@ -8,6 +8,11 @@ import type { FileEntry } from "@/lib/types";
 
 import type { AssignmentPorts } from "./kanbanAssignments";
 import type { TaskMutationPorts } from "./useTaskMutations";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* Conversations opened on the board (#1695 K3), in the agent window
    (docs/design/agent-window.md), rendered by React with the real conversation

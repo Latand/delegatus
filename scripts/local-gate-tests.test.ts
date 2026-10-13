@@ -23,6 +23,19 @@ function fixture(source: string) {
 }
 const source = (pass: boolean) => `import { test, expect, describe } from "bun:test"; describe("contract", () => test("same name & Unicode Ω", () => expect(${pass}).toBe(true)));`;
 
+test("private CPU wait ledgers do not invalidate a warm baseline", () => {
+  const f = fixture(source(true));
+  for (const word of ["one", "two"]) {
+    const ledger = path.join(f.dir, word); mkdirSync(ledger);
+    f.env.LLV_CPU_WAIT_ROOTS = JSON.stringify([ledger]);
+    f.env.LLV_GATE_SLOT_LEASE = word;
+    f.logs.length = 0;
+    expect(f.run().introduced).toHaveLength(0);
+  }
+  expect(f.logs.join("\n")).toContain("baseline cache hit");
+  expect(readdirSync(f.cache).filter(file => file.endsWith(".json"))).toHaveLength(1);
+});
+
 test("review evidence names the exact base and head without changing repository refs", () => {
   const f = fixture(source(false));
   // The fixture's private run environment may acquire Bun cache files.
@@ -234,7 +247,7 @@ test("real pre-push entry permits PRE-EXISTING and refuses NEW after privacy/typ
   const f = fixture(source(false));
   for (const leaf of [".githooks", ".github/workflows", "shims"]) mkdirSync(path.join(f.dir, leaf), { recursive: true });
   mkdirSync(path.join(f.dir, "scripts"));
-  for (const name of ["local-gate.ts", "local-gate-tests.ts", "gate-slot.sh", "owned-runner.ts", "verify-native-codex-runtime.ts"]) symlinkSync(path.join(root, "scripts", name), path.join(f.dir, "scripts", name));
+  for (const name of ["local-gate.ts", "local-gate-tests.ts", "gate-slot.sh", "cpu-admission.ts", "owned-runner.ts", "verify-native-codex-runtime.ts"]) symlinkSync(path.join(root, "scripts", name), path.join(f.dir, "scripts", name));
   writeFileSync(path.join(f.dir, ".githooks/pre-push"), readFileSync(path.join(root, ".githooks/pre-push")));
   for (const name of ["platform-tests.yml", "bun-runtime.yml"]) writeFileSync(path.join(f.dir, ".github/workflows", name), readFileSync(path.join(root, ".github/workflows", name)));
   const calls = path.join(f.dir, "phases.log");
