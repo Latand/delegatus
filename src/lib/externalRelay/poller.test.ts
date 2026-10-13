@@ -140,6 +140,66 @@ test("an unknown-feature 4xx refreshes the descriptor before five minutes with o
   }
 });
 
+test("a heartbeat unknown-feature refusal refreshes cached features before the next claim", async () => {
+  const previous = readRelayStore().relays;
+  const originalSelection = accountManager.resolveHeadlessSpawn;
+  accountManager.resolveHeadlessSpawn = (() => ({ kind: "exhausted", resetsAt: null })) as typeof originalSelection;
+  let descriptorReads = 0, claims = 0, heartbeats = 0;
+  let releaseRefreshed!: () => void;
+  const refreshed = new Promise<void>(resolve => { releaseRefreshed = resolve; });
+  let featuresAtNextClaim: string[] | undefined;
+  let features: string[] = [];
+  const server = await startTestRelay(async (req) => {
+    if (req.url?.endsWith("/targets")) return { body: { targets: [
+      { target_id: "target_1", name: "Target", answered_by: "install", fallback: "service" },
+    ] } };
+    if (req.url === "/.well-known/delegatus-relay.json") {
+      descriptorReads++;
+      if (descriptorReads === 2) releaseRefreshed();
+      return { body: { protocol: "delegatus-relay", versions: [1], name: "Test", description: "",
+        api_base: `${server.origin}/v1`, kinds: ["answer"], liveness: sampleRequest.liveness,
+        limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, features } };
+    }
+    if (req.url?.endsWith("/heartbeat")) {
+      heartbeats++;
+      features = ["progress_steps"];
+      return { status: 400, body: { error: { code: "unknown_feature" } } };
+    }
+    if (req.url?.endsWith("/complete")) return { body: { status: "ok" } };
+    if (req.url?.endsWith("/requests/claim")) {
+      claims++;
+      if (claims === 1) return { body: { request: { ...sampleRequest, request_id: "heartbeat-unknown-feature" } } };
+      await Promise.race([refreshed, Bun.sleep(100)]);
+      for (let i = 0; i < 20 && !readRelayStore().relays[0]!.features?.includes("progress_steps"); i++) await Bun.sleep(5);
+      featuresAtNextClaim ??= readRelayStore().relays[0]!.features;
+      stopExternalRelayPollers();
+    }
+    return { status: 204 };
+  });
+  try {
+    setRelaySwitch("relay:owner_tools:enabled", false);
+    updateRelayStore(store => ({ ...store, relays: [{ id: "heartbeat_unknown_feature", origin: server.origin,
+      api_base: `${server.origin}/v1`, name: "Test", description: "", credential: "x".repeat(43),
+      owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+      pairedAt: "2026-01-01T00:00:00Z", paused: false, targets: [{ id: "target_1", name: "Target",
+        answered_by: "install", fallback: "service", enabled: true, engine: "codex", model: "auto", effort: "low",
+        project: null, concurrency: 1, hardCapMinutes: 1 }], features: [],
+      limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 } }] }));
+    ensureExternalRelayPollers();
+    for (let i = 0; i < 400 && (claims < 2 || descriptorReads < 2 || featuresAtNextClaim === undefined); i++) await Bun.sleep(5);
+    expect(heartbeats).toBe(1);
+    expect(claims).toBeGreaterThanOrEqual(2);
+    expect(descriptorReads).toBe(2);
+    expect(featuresAtNextClaim).toEqual(["progress_steps"]);
+    expect(readRelayStore().relays[0]!.features).toEqual(["progress_steps"]);
+  } finally {
+    stopExternalRelayPollers();
+    accountManager.resolveHeadlessSpawn = originalSelection;
+    updateRelayStore(store => ({ ...store, relays: previous }));
+    await server.close();
+  }
+});
+
 test("F4 requires the local switch and latest descriptor, and refresh removes withdrawn features", async () => {
   let features = ["requester_context", "relay_tool_calls", "relay_tool_actions", "relay_owner_tools"];
   let descriptorReads = 0;

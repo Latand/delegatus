@@ -12,7 +12,7 @@ import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/st
 import { isStagingMode } from "@/lib/staging";
 import { noteRelayOutcome, relayActivity } from "./activity";
 import { pruneAnswerRecords, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
-import { discoverRelay, ExternalRelayError, fetchRelayTargets, relayCall } from "./client";
+import { discoverRelay, ExternalRelayError, fetchRelayTargets, isUnknownFeatureRefusal, relayCall } from "./client";
 import { RELAY_OWNER_TOOLS } from "./protocol";
 import {
   advertisedSlots,
@@ -52,6 +52,7 @@ type PollerController = {
   armed: boolean;
   targetRefreshes?: Map<string, TargetRefresh>;
   descriptorRefreshes?: Map<string, TargetRefresh>;
+  forcedDescriptorRefreshes?: Map<string, TargetRefresh>;
   prunedAt?: number;
 };
 const globalRelay = globalThis as typeof globalThis & {
@@ -68,6 +69,7 @@ const targetRefreshes = (controller.targetRefreshes ??= new Map<
   TargetRefresh
 >());
 const descriptorRefreshes = (controller.descriptorRefreshes ??= new Map<string, TargetRefresh>());
+const forcedDescriptorRefreshes = (controller.forcedDescriptorRefreshes ??= new Map<string, TargetRefresh>());
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export function relayPollerStatus(id: string) {
   const loop = loops.get(id);
@@ -147,6 +149,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
 export const TARGETS_REFRESH_ON_READ_MS = 30_000;
 export const TARGETS_REFRESH_IN_LOOP_MS = 300_000;
 export const DESCRIPTOR_REFRESH_ON_READ_MS = 300_000;
+export const DESCRIPTOR_REFRESH_ON_UNKNOWN_FEATURE_MS = 30_000;
 export type TargetRefreshOutcome =
   | "changed"
   | "unchanged"
@@ -260,31 +263,45 @@ export function relayClaimBody(relay: PairedRelay) {
 }
 /** Every paired install refreshes before its first claim and every five minutes,
  * independently of the switches that gate individual optional features. */
-export function refreshRelayDescriptorFeatures(id: string, minIntervalMs = 0, options: { quiet?: boolean } = {}): Promise<TargetRefreshOutcome> {
+export function refreshRelayDescriptorFeatures(id: string, minIntervalMs = 0, options: { quiet?: boolean; force?: boolean } = {}): Promise<TargetRefreshOutcome> {
+  const now = Date.now();
+  if (options.force) {
+    const forced = forcedDescriptorRefreshes.get(id);
+    if (forced?.running) return forced.running;
+    if (forced && now - forced.at < DESCRIPTOR_REFRESH_ON_UNKNOWN_FEATURE_MS)
+      return Promise.resolve("skipped");
+    const entry: TargetRefresh = { at: now, running: null };
+    forcedDescriptorRefreshes.set(id, entry);
+    entry.running = refreshRelayDescriptorFeaturesNow(id, options).finally(() => { entry.running = null; });
+    return entry.running;
+  }
+  const forced = forcedDescriptorRefreshes.get(id);
+  if (forced?.running) return forced.running;
   const prior = descriptorRefreshes.get(id);
   if (prior?.running) return prior.running;
-  if (prior && Date.now() - prior.at < minIntervalMs) return Promise.resolve("skipped");
-  const entry: TargetRefresh = { at: Date.now(), running: null };
+  if (prior && now - prior.at < minIntervalMs) return Promise.resolve("skipped");
+  const entry: TargetRefresh = { at: now, running: null };
   descriptorRefreshes.set(id, entry);
-  entry.running = (async (): Promise<TargetRefreshOutcome> => {
-    const relay = readRelayStore().relays.find((item) => item.id === id);
-    if (!relay) { descriptorRefreshes.delete(id); return "gone"; }
-    try {
-      const { descriptor } = await discoverRelay(relay.origin);
-      const features = descriptor.features ?? [];
-      let changed = false;
-      updateRelayStore((store) => ({ ...store, relays: store.relays.map((item) => {
-        if (item.id !== id || JSON.stringify(item.features ?? []) === JSON.stringify(features)) return item;
-        changed = true;
-        return { ...item, features };
-      }) }));
-      return changed ? "changed" : "unchanged";
-    } catch {
-      if (!options.quiet) noteRelayOutcome(id, "descriptor:unreachable");
-      return "failed";
-    }
-  })().finally(() => { entry.running = null; });
+  entry.running = refreshRelayDescriptorFeaturesNow(id, options).finally(() => { entry.running = null; });
   return entry.running;
+}
+async function refreshRelayDescriptorFeaturesNow(id: string, options: { quiet?: boolean }): Promise<TargetRefreshOutcome> {
+  const relay = readRelayStore().relays.find((item) => item.id === id);
+  if (!relay) { descriptorRefreshes.delete(id); forcedDescriptorRefreshes.delete(id); return "gone"; }
+  try {
+    const { descriptor } = await discoverRelay(relay.origin);
+    const features = descriptor.features ?? [];
+    let changed = false;
+    updateRelayStore((store) => ({ ...store, relays: store.relays.map((item) => {
+      if (item.id !== id || JSON.stringify(item.features ?? []) === JSON.stringify(features)) return item;
+      changed = true;
+      return { ...item, features };
+    }) }));
+    return changed ? "changed" : "unchanged";
+  } catch {
+    if (!options.quiet) noteRelayOutcome(id, "descriptor:unreachable");
+    return "failed";
+  }
 }
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 async function poll(
@@ -316,8 +333,9 @@ async function poll(
       backoff = 5000;
       const current = readRelayStore().relays.find((item) => item.id === relay.id);
       if (result.status === 200 && result.body?.request)
-        void runClaimedRequest(current ?? { ...relay, paused: true }, result.body.request, () =>
+      void runClaimedRequest(current ?? { ...relay, paused: true }, result.body.request, () =>
           wakeExternalRelayPoller(relay.id),
+          { onUnknownFeature: () => refreshRelayDescriptorFeatures(relay.id, 0, { force: true }) },
         )
           .then((outcome) => {
             noteRelayOutcome(
@@ -347,9 +365,8 @@ async function poll(
         await sleep((error.retryAfterSeconds ?? 5) * 1000);
         continue;
       }
-      if (error instanceof ExternalRelayError && error.status >= 400 && error.status < 500 &&
-        /^(?:(?:unknown|unsupported)(?:_[a-z]+)*_features?|features?_(?:unknown|unsupported))$/.test(error.code)) {
-        const refreshed = await refreshRelayDescriptorFeatures(relay.id);
+      if (isUnknownFeatureRefusal(error)) {
+        const refreshed = await refreshRelayDescriptorFeatures(relay.id, 0, { force: true });
         if (loop.stopped) break;
         // Retry with a changed descriptor now; unchanged refusals keep the
         // ordinary backoff so a persistent 4xx cannot spin the claim loop.

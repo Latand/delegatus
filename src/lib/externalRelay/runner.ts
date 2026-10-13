@@ -18,7 +18,7 @@ import {
   EphemeralProfileError,
 } from "@/lib/agent/ephemeral";
 import type { HeadlessReviewRuntime } from "@/lib/agent/headless";
-import { relayCall, ExternalRelayError } from "./client";
+import { relayCall, ExternalRelayError, isUnknownFeatureRefusal } from "./client";
 import {
   answerSchema,
   replyAnswerSchema,
@@ -131,6 +131,7 @@ export async function completeRelayRequest(
   lastHeartbeat: () => number,
   stallMs: number,
   allowOwnerReply?: () => boolean,
+  onUnknownFeature?: () => Promise<unknown>,
 ): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery }> {
   let wait = 1000;
   while (true) {
@@ -151,6 +152,7 @@ export async function completeRelayRequest(
       );
       return { body, delivery: "accepted" };
     } catch (error) {
+      if (isUnknownFeatureRefusal(error)) await onUnknownFeature?.();
       if (error instanceof ExternalRelayError) {
         if (error.status === 413 && body.outcome === "answered") {
           body = failed(body.lease_id, "invalid_answer");
@@ -174,14 +176,15 @@ export async function runClaimedRequest(
   relay: PairedRelay,
   raw: unknown,
   onFreed?: () => void,
-  runtime?: HeadlessReviewRuntime & ToolLoopRuntime & { timeoutMs?: number; ownerPorts?: OwnerRunPorts },
+  runtime?: HeadlessReviewRuntime & ToolLoopRuntime & { timeoutMs?: number; ownerPorts?: OwnerRunPorts; onUnknownFeature?: () => Promise<unknown> },
 ): Promise<ExternalRelayCompletion | null> {
   if (readRelaySwitches().compact && raw && typeof raw === "object" && (raw as Record<string, unknown>).kind === "compact") {
     const compact = compactRequestSchema.safeParse(raw);
     if (compact.success) return runCompactRequest(relay, compact.data, onFreed, runtime);
     const invalid = raw as Record<string, unknown>;
     if (typeof invalid.request_id !== "string" || typeof invalid.lease_id !== "string") return null;
-    return (await completeRelayRequest(relay, invalid.request_id, declined(invalid.lease_id, "invalid_request"), Date.now, 45000)).body;
+    return (await completeRelayRequest(relay, invalid.request_id, declined(invalid.lease_id, "invalid_request"), Date.now, 45000,
+      undefined, runtime?.onUnknownFeature)).body;
   }
   const parsed = requestSchema.safeParse(raw);
   const request = parsed.success ? parsed.data : null;
@@ -234,7 +237,7 @@ export async function runClaimedRequest(
       delivery: "unconfirmed",
       ...loopRecord(),
     });
-    const sent = await completeRelayRequest(relay, requestId, body, () => heartbeatAt, stallMs, allowOwnerReply);
+    const sent = await completeRelayRequest(relay, requestId, body, () => heartbeatAt, stallMs, allowOwnerReply, runtime?.onUnknownFeature);
     const completion = sent.body;
     recorder?.recordDelivery({
       outcome: completion.outcome === "answered" ? "answered" : `${completion.outcome}:${completion.reason}`,
@@ -346,6 +349,7 @@ export async function runClaimedRequest(
         journal("failed", error instanceof ExternalRelayError ? error.status : 0,
           error instanceof ExternalRelayError && ["lease_lost", "unreachable", "malformed", "too_large", "unauthorized",
             "unsupported_version", "unavailable", "rate_limited", "unknown_feature"].includes(error.code) ? error.code : "transport_error");
+        if (isUnknownFeatureRefusal(error)) await runtime?.onUnknownFeature?.();
         if (
           error instanceof ExternalRelayError &&
           (error.status === 404 ||
