@@ -283,6 +283,24 @@ function gather(over: Parameters<typeof sources>[0], state: SeatTickProjectState
   return gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources(over));
 }
 
+test("a failed prototype Telegram post is an actionable item in the project's seat wake", async () => {
+  const { telegramRound, telegramTask } = await import("@/lib/prototypeReview/telegram.fixture");
+  const round = telegramRound("seat-wake-post"); round.project = PROJECT;
+  round.telegramPost = { key: round.id, state: "failed", reason: "forbidden", at: new Date(NOW).toISOString() };
+  const own = { ...telegramTask([round]), project: PROJECT };
+  const foreign = telegramRound("foreign-post"); foreign.telegramPost = round.telegramPost;
+  const input = await gather({ tasks: [own, { ...telegramTask([foreign]), id: "foreign-task" }] });
+  const signals = input.signals.filter(s => s.id.startsWith("prototype-telegram:"));
+  expect(signals).toHaveLength(1);
+  expect(signals[0]!.actionable).toBe(true);
+  expect(signals[0]!.label).toContain(round.id);
+  const decision = seatTickDecision(input);
+  expect(decision.verdict.kind).toBe("wake");
+  expect(JSON.stringify(decision)).toContain("forbidden");
+  expect(JSON.stringify(decision)).toContain("resend_prototype_review_telegram");
+  expect(JSON.stringify(decision)).not.toContain(foreign.id);
+});
+
 test("a note edited during evidence gathering renders the refreshed length", async () => {
   const { seatTickNoteRevision, seatTickWakeMessage } = await import("./report");
   const oldNote = "a".repeat(7_155);

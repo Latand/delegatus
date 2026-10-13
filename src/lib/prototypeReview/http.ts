@@ -20,6 +20,29 @@ import { postPrototypeReviewToTelegram } from "./telegramPost";
 export function prototypeFailure(error: unknown): NextResponse {
   return NextResponse.json({ error: error instanceof PrototypeError ? error.message : "prototype review is unavailable" }, { status: error instanceof PrototypeError ? error.status : 503 });
 }
+/** The same project fence as reads, resolved by round for taskless forms too. */
+function resendTarget(request: NextRequest, reviewId: unknown, world: PrototypeWorld) {
+  if (typeof reviewId !== "string" || !/^pr_[a-f0-9]{32}$/.test(reviewId)) throw new PrototypeError("invalid reviewId");
+  const caller = world.caller(request);
+  const task = loadTasks().find(t => t.prototypeReviews?.some(r => r.id === reviewId));
+  const round = task?.prototypeReviews?.find(r => r.id === reviewId) ?? findSeatRound(reviewId);
+  if (!round) throw new PrototypeError("review not found", 404);
+  if (caller.conversationId && (!caller.project || canonicalProject(round.project) !== canonicalProject(caller.project))) throw new PrototypeError("prototype access is limited to the caller's project", 403);
+  if (task) taskForPrototype(task.id, caller, true);
+  return { caller, round };
+}
+export async function resendTelegramPOST(request: NextRequest, world: PrototypeWorld = prototypeWorld): Promise<NextResponse> {
+  const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
+  const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
+  try {
+    const body = await request.json();
+    const { round } = resendTarget(request, body?.reviewId, world);
+    if (typeof body.clientRequestId !== "string" || !body.clientRequestId.trim() || body.clientRequestId.length > 200) throw new PrototypeError("clientRequestId is required");
+    const key = `${round.id}:resend:${body.clientRequestId.trim()}`;
+    const telegramPost = await postPrototypeReviewToTelegram(round, key);
+    return NextResponse.json({ reviewId: round.id, telegramPost }, { headers: { "cache-control": "private, no-store" } });
+  } catch (error) { return prototypeFailure(error); }
+}
 /** The project whose designated orchestrator is calling, or null. Only that
     seat may ask without a task (docs/design/operator-decision-forms.md §2.1). */
 function seatProject(caller: PrototypeCaller,world: PrototypeWorld): string | null {
@@ -60,8 +83,13 @@ export async function reviewScopePOST(request: NextRequest,world: PrototypeWorld
   const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   try {
     const body = await request.json();
-    if (!body || typeof body !== "object" || (body.mode !== "publish" && body.mode !== "read")) throw new PrototypeError("invalid scope request");
+    if (!body || typeof body !== "object" || !["publish", "read", "resend"].includes(body.mode)) throw new PrototypeError("invalid scope request");
     if (body.taskId !== undefined && (typeof body.taskId !== "string" || !body.taskId)) throw new PrototypeError("invalid taskId");
+    if (body.mode === "resend") {
+      const { caller, round } = resendTarget(request, body.reviewId, world);
+      if (!caller.conversationId) throw new PrototypeError("caller could not be identified", 403);
+      return NextResponse.json({ conversationId: caller.conversationId, taskId: round.taskId, reviewId: round.id });
+    }
     const target = body.mode === "publish" ? publicationTarget(request,body.taskId,world) : readTarget(request,body.taskId,world);
     if (!target.caller.conversationId) throw new PrototypeError("caller could not be identified",403);
     return NextResponse.json({ conversationId: target.caller.conversationId, taskId: target.taskId },{ headers: { "cache-control": "private, no-store" } });
@@ -99,7 +127,7 @@ export async function publishPOST(request: NextRequest,world: PrototypeWorld = p
       critic = gate.pass;
     }
     const round = await publishPrototype(input,taskId,stage?.source ?? { conversationId: caller.conversationId },seat,critic);
-    void postPrototypeReviewToTelegram(round);
+    await postPrototypeReviewToTelegram(round);
     return NextResponse.json({ reviewId: round.id, taskId, project: round.project, title: round.title, variants: round.variants.length,
       ...(round.critic ? { critic: { stageId: round.critic.stageId, attempt: round.critic.attempt, outcome: round.critic.outcome } } : {}),
       ...(round.questions ? { questions: round.questions.length } : {}),

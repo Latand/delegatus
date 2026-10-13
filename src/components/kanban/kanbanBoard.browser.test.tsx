@@ -67,6 +67,190 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("Overview incremental catalog", () => {
+  browserTest("measures changed files payloads with the rendered catalog unchanged", async () => {
+    const out = path.resolve(".artifacts/overview-performance");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    let baselineOutput: string | undefined;
+    let baselineGeometry: Array<{ id: string | null; x: number; y: number; width: number; height: number }> | undefined;
+    try {
+      for (const variant of process.env.OVERVIEW_BASELINE_BUNDLE ? ["main", "incremental"] : ["candidate"]) {
+        const { context, page, pageErrors } = await openFixture(browser, "about:blank", VIEWPORT, "dark", "en", "reduce");
+        try {
+          // Fix the display clock alone: Playwright's clock also replaces the
+          // Performance API whose real long tasks this case measures.
+          await page.addInitScript(() => { Date.now = () => 1_791_856_800_000; });
+          const metrics = await context.newCDPSession(page);
+          await metrics.send("Performance.enable");
+          const taskTime = async () => (await metrics.send("Performance.getMetrics")).metrics.find(metric => metric.name === "TaskDuration")!.value * 1000;
+          if (variant === "main" && process.env.OVERVIEW_BASELINE_BUNDLE) {
+            await page.route("**/app.js", route => route.fulfill({ path: process.env.OVERVIEW_BASELINE_BUNDLE!, contentType: "text/javascript" }));
+          }
+          await page.addInitScript(() => {
+            const timings: { start: number; duration: number }[] = [];
+            new PerformanceObserver(list => {
+              for (const entry of list.getEntries()) timings.push({ start: entry.startTime, duration: entry.duration });
+            }).observe({ type: "longtask", buffered: true });
+            Object.assign(window, { overviewLongTasks: timings });
+          });
+          await page.goto(`${server.base}?scenario=overview-performance&cards=closed`);
+          await page.locator(card("catalog-0")).waitFor({ timeout: 30_000 });
+          await page.waitForTimeout(1500);
+          type TraceEvent = { name: string; ph: string; ts: number; dur?: number; pid: number; tid: number; args?: { name?: string } };
+          const trace: TraceEvent[] = [];
+          metrics.on("Tracing.dataCollected", event => trace.push(...event.value as unknown as TraceEvent[]));
+          await metrics.send("Tracing.start", { categories: "toplevel,blink.user_timing", transferMode: "ReportEvents" });
+          const samples = [];
+          for (let sample = 0; sample < 8; sample++) {
+            const before = await taskTime();
+            const start = await page.evaluate(() => {
+              (window as unknown as { overviewPoll(): void }).overviewPoll();
+              return performance.getEntriesByName("overview-poll").at(-1)!.startTime;
+            });
+            await page.waitForTimeout(1000);
+            const timing = await page.evaluate(start => {
+              const tasks = (window as unknown as { overviewLongTasks: { start: number; duration: number }[] }).overviewLongTasks.filter(task => task.start >= start);
+              return { longTasks: tasks.map(task => task.duration), totalBlockingMs: tasks.reduce((sum, task) => sum + task.duration - 50, 0) };
+            }, start);
+            samples.push({ ...timing, taskDurationMs: Math.round(((await taskTime()) - before) * 10) / 10 });
+          }
+          const traceDone = new Promise<void>(resolve => metrics.once("Tracing.tracingComplete", () => resolve()));
+          await metrics.send("Tracing.end");
+          await traceDone;
+          const marks = trace.filter(event => event.name === "overview-poll");
+          const longestTasks = marks.map((mark, i) => {
+            const end = marks[i + 1]?.ts ?? mark.ts + 1_000_000;
+            return Math.max(0, ...trace.filter(event => event.pid === mark.pid && event.tid === mark.tid
+              && event.ph === "X" && /(?:^|::)RunTask$/.test(event.name) && event.ts + (event.dur ?? 0) > mark.ts && event.ts < end).map(event => (event.dur ?? 0) / 1000));
+          });
+          fs.writeFileSync(path.join(out, `${variant}-trace.json`), JSON.stringify(trace));
+          const output = await page.locator("[data-kanban-board]").innerText();
+          const geometry = await page.locator("[data-kanban-board]").evaluate(board => [...board.querySelectorAll(".card[data-id]")].map(element => {
+            const rect = element.getBoundingClientRect();
+            return { id: element.getAttribute("data-id"), x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+          }));
+          readings.push({ variant, browser: browser.version(), viewport: VIEWPORT, catalog: { projects: 194, conversations: 1071, tasks: 1331, pipelines: 1071 }, samples: samples.map((sample, i) => ({ ...sample, longestTaskMs: longestTasks[i] })), renderedText: output, geometry });
+          fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+          if (baselineOutput !== undefined) expect(output).toBe(baselineOutput);
+          if (baselineGeometry !== undefined) expect(geometry).toEqual(baselineGeometry);
+          baselineOutput = output;
+          baselineGeometry = geometry;
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${variant}.png`) });
+          if (process.env.OVERVIEW_CPU_PROFILE && variant !== "main") {
+            await metrics.send("Profiler.enable");
+            await metrics.send("Profiler.start");
+            await page.evaluate(() => (window as unknown as { overviewPoll(): void }).overviewPoll());
+            await page.waitForTimeout(1000);
+            const { profile } = await metrics.send("Profiler.stop");
+            fs.writeFileSync(path.join(out, "poll.cpuprofile"), JSON.stringify(profile));
+          }
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+      const evidence = path.resolve("evidence/overview-performance");
+      fs.mkdirSync(evidence, { recursive: true });
+      fs.writeFileSync(path.join(evidence, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
+describe("prototype Telegram resend", () => {
+  browserTest("a failed post and its resend fit desktop, 1000 and 390px; a delivered post stays one quiet line", async () => {
+    const out = path.resolve(".artifacts/prototype-telegram"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browserHome = process.env.PLAYWRIGHT_BROWSERS_PATH ? path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH) : os.tmpdir();
+    fs.mkdirSync(browserHome, { recursive: true });
+    const browserTmp = fs.mkdtempSync(path.join(browserHome, "tg-"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
+    const readings: unknown[] = [];
+    const seatId = `pr_${"d".repeat(32)}`;
+    const measure = (scope: import("playwright-core").Locator) => scope.evaluate(root => {
+      const row = root.querySelector<HTMLElement>("[data-prototype-telegram-actions]")!;
+      const action = row.querySelector<HTMLElement>("[data-prototype-telegram-resend]")!;
+      const status = row.querySelector<HTMLElement>("[data-prototype-telegram-state]")!;
+      const box = action.getBoundingClientRect(), text = status.getBoundingClientRect(), whole = row.getBoundingClientRect();
+      const style = getComputedStyle(action);
+      return { state: status.dataset.prototypeTelegramState, text: status.textContent ?? "", rowHeight: whole.height, lineHeight: parseFloat(getComputedStyle(status).lineHeight),
+        button: { x: box.x, y: box.y, width: box.width, height: box.height }, bordered: parseFloat(style.borderTopWidth) > 0,
+        visible: box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight,
+        clipped: row.scrollWidth > row.clientWidth + 1 || action.scrollWidth > action.clientWidth + 1,
+        overlap: box.left < text.right && box.right > text.left && box.top < text.bottom && box.bottom > text.top,
+        gap: box.top >= text.bottom ? box.top - text.bottom : box.left >= text.right ? 0 : -1 };
+    });
+    try {
+      for (const [width, height] of [[1440, 900], [1000, 700], [390, 844]] as const) for (const theme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=telegram&prototypeTask=t-search&prototypeReview=pr_${"e".repeat(32)}`, { width, height }, theme, "uk", "reduce", phone);
+        try {
+          const scope = page.locator("body");
+          await page.locator("[data-prototype-telegram-state]").waitFor();
+          const resend = page.locator("[data-prototype-telegram-resend]");
+          expect(await resend.innerText()).toBe("Надіслати в Telegram ще раз");
+          const failed = await measure(scope);
+          expect(failed.text).toContain("боту заборонено"); expect(failed.text).not.toContain("forbidden"); expect(failed.text).not.toContain("(");
+          expect(failed.visible && !failed.clipped && !failed.overlap).toBe(true);
+          expect(failed.gap).toBeLessThanOrEqual(10); expect(failed.gap).toBeGreaterThanOrEqual(-1);
+          await page.screenshot({ path: path.join(out, `variant-1-${width}-uk-${theme}-failed.png`) });
+          const field = page.locator("[data-prototype-comment-field]"); await field.fill("Зберегти цей коментар");
+          if (phone) await resend.tap(); else await resend.click();
+          await page.waitForFunction(() => document.querySelector<HTMLElement>("[data-prototype-telegram-state]")?.dataset.prototypeTelegramState === "sent");
+          expect(await field.inputValue()).toBe("Зберегти цей коментар");
+          expect(await page.evaluate(() => (window as unknown as { protoTelegramPosts: unknown[] }).protoTelegramPosts.length)).toBe(1);
+          const sent = await measure(scope);
+          expect(sent.bordered).toBe(false); expect(sent.visible && !sent.clipped).toBe(true);
+          expect(sent.rowHeight).toBeLessThanOrEqual(failed.rowHeight); expect(sent.rowHeight).toBeLessThanOrEqual(sent.lineHeight * 2 + 1);
+          await page.screenshot({ path: path.join(out, `variant-1-${width}-uk-${theme}-sent.png`) });
+          expect(pageErrors).toEqual([]); readings.push({ theme, width, surface: "task-review", failed, sent, calls: 1, draftPreserved: true });
+          for (const tgstate of ["sent", "uncertain", "unknown"]) {
+            await page.goto(`${server.base}?proto=telegram&tgstate=${tgstate}&prototypeTask=t-search&prototypeReview=pr_${"e".repeat(32)}`);
+            await page.locator("[data-prototype-telegram-state]").waitFor();
+            const state = await measure(page.locator("body"));
+            expect(state.visible && !state.clipped && !state.overlap).toBe(true);
+            if (tgstate === "sent") { expect(state.bordered).toBe(false); expect(state.rowHeight).toBeLessThanOrEqual(state.lineHeight * 2 + 1); }
+            else expect(state.gap).toBeLessThanOrEqual(10);
+            await page.screenshot({ path: path.join(out, `variant-1-${width}-uk-${theme}-${tgstate}-state.png`) });
+            readings.push({ theme, width, surface: "task-review", tgstate, ...state });
+          }
+          for (const tgstate of ["failed", "sent"]) {
+            const seatUrl = `${server.base}?proto=telegram&decisions=telegram&tgstate=${tgstate}`;
+            if (width === 1000) await page.goto(`${seatUrl}&project=atlas&prototypeReview=${seatId}`);
+            else {
+              await page.goto(seatUrl);
+              if (phone) {
+                await page.locator("[data-mobile2-seat-open]").click();
+                await page.locator("[data-decision-strip]").click();
+              }
+              await page.locator(`[data-decision-row="${seatId}"]`).click();
+            }
+            const seatForm = page.locator(`[data-decision-card="open"][data-decision-review="${seatId}"]`);
+            const seatComment = seatForm.locator("[data-decision-comment]"); await seatComment.fill("Зберегти коментар форми");
+            await seatForm.locator("[data-prototype-telegram-resend]").scrollIntoViewIfNeeded();
+            const seat = await measure(seatForm);
+            expect(seat.visible && !seat.clipped && !seat.overlap).toBe(true);
+            if (tgstate === "failed") { expect(seat.text).not.toContain("forbidden"); expect(seat.gap).toBeLessThanOrEqual(10); expect(seat.gap).toBeGreaterThanOrEqual(-1); }
+            else { expect(seat.bordered).toBe(false); expect(seat.rowHeight).toBeLessThanOrEqual(seat.lineHeight * 2 + 1); }
+            await page.screenshot({ path: path.join(out, `variant-1-${width}-uk-${theme}-seat-${tgstate}.png`) });
+            if (tgstate === "failed") {
+              const resendSeat = seatForm.locator("[data-prototype-telegram-resend]");
+              if (phone) await resendSeat.tap(); else await resendSeat.click();
+              await seatForm.locator('[data-prototype-telegram-state="sent"]').waitFor();
+              expect(await seatComment.inputValue()).toBe("Зберегти коментар форми");
+              await page.screenshot({ path: path.join(out, `variant-1-${width}-uk-${theme}-seat-resent.png`) });
+            }
+            expect(pageErrors).toEqual([]); readings.push({ theme, width, surface: "seat-form", tgstate, ...seat, calls: tgstate === "failed" ? 1 : 0, draftPreserved: true });
+          }
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/prototype-telegram", { recursive: true });
+      fs.writeFileSync("evidence/prototype-telegram/resend.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
+  }, 240_000);
+});
+
 describe("CPU admission queue", () => {
   browserTest("the waiting card shows queue position and remaining minutes in en and uk", async () => {
     const out = path.resolve(".artifacts/cpu-queue");

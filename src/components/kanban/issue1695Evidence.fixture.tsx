@@ -78,6 +78,7 @@ import { refreshTeamView } from "@/components/team/teamClient";
  */
 
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
+const OVERVIEW_PERFORMANCE = SCENARIO === "overview-performance";
 /* A task another machine runs (docs/design/synced-task-card.md): four tasks owned by the linked stage
    install, one of them with no lane (an older peer), beside the board's own local ones. The page
    answers nothing about them; the driver serves `/api/links/agents` with this install's id, the host
@@ -2993,6 +2994,32 @@ Object.assign(window, {
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
+/* A production-shaped, invented catalog for the landing board's poll cost.
+   Keep inactive history: the Overview still projects it before filtering. */
+if (OVERVIEW_PERFORMANCE) {
+  files.length = 0; tasks.length = 0; pipelines.length = 0; flows.length = 0;
+  for (let i = 0; i < 1071; i++) {
+    const project = `catalog-${i % 194}`;
+    files.push(conversation(`catalog-${i}`, `Catalog worker ${i}`, {
+      project, ...(i < 12 ? working() : {}),
+    }));
+  }
+  for (let i = 0; i < 1331; i++) {
+    const project = `catalog-${i % 194}`;
+    const member = files[i];
+    tasks.push(task(`catalog-${i}`, i < 12 ? "assigned" : "done", `Catalog task ${i}`, "", 60 + i, member ? [member] : [], { project }));
+    if (member) pipelines.push(pipeline(`catalog-${i}`, `Catalog task ${i}`, `catalog-${i}`, i < 12 ? "running" : "completed",
+      [stage("build", "builder", "review"), stage("review", "reviewer", null)],
+      [{ stageId: "build", attempts: [attempt(1, i < 12 ? "running" : "passed", member)] }],
+      { stageId: "build", state: i < 12 ? "running" : "completed", input: null, activatedBy: null }, { project }));
+  }
+  Object.assign(window, { overviewPoll: () => {
+    files[0] = { ...files[0], size: files[0].size + 1 };
+    performance.mark("overview-poll");
+    fireTasksChanged();
+  } });
+}
+
 /* The task album (`&album=1`): the search task's pictures across its stages
    and a conversation, as `GET /api/tasks/:id/album` answers them, and the
    export task's, all seen. The pictures are drawn on a canvas in the shapes an
@@ -3037,6 +3064,15 @@ function mockRender(width: number, height: number, hue: number, label: string, p
    `&proto=elsewhere` answers the search task as a linked installation does. */
 const PROTO = params.get("proto") ?? (CALM ? "1" : null);
 const protoPosts: unknown[] = [];
+const protoTelegramPosts: unknown[] = [];
+/* `&tgstate=sent|uncertain|unknown` starts the Telegram record in that state; the default is a failed post. */
+function telegramFixturePost(key: string): PrototypeRoundView["telegramPost"] {
+  const state = params.get("tgstate");
+  if (state === "unknown") return undefined;
+  if (state === "sent") return { key, state: "sent", at: iso(MIN) };
+  if (state === "uncertain") return { key, state: "uncertain", reason: "send_uncertain", at: iso(MIN) };
+  return { key, state: "failed", reason: "forbidden", at: iso(MIN) };
+}
 const protoRounds: Record<string, PrototypeRoundView[]> = {};
 const protoHidden = new Map<string, AttentionDismissalMark>();
 const protoSaveState: Record<string, PrototypeDeliveryState> = { "t-upload": "no-orchestrator" };
@@ -3090,6 +3126,10 @@ if (PROTO) {
   if (params.has("duplicate-frames")) {
     const variants = protoRounds["t-search"]![0]!.variants;
     variants[1]!.frames[0]!.image = variants[0]!.frames[0]!.image;
+  }
+  if (PROTO === "telegram") {
+    protoRounds["t-search"]![0]!.id = `pr_${"e".repeat(32)}`;
+    protoRounds["t-search"]![0]!.telegramPost = telegramFixturePost("fixture-automatic");
   }
   protoRounds["t-upload"] = [round("r-upload", "t-upload", L("Upload progress sheet", "Панель перебігу завантаження"), 9 * MIN, [
     { number: 1, name: L("Progress under the attached file with speed, size and a stop", "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп"), description: L("A new design: the bar sits under the attached file.\nNothing existing changes.", "Новий дизайн: смуга стоїть під прикріпленим файлом.\nНаявне не змінюється."), videos: [], frames: [
@@ -3162,6 +3202,7 @@ if (PROTO) {
   let releaseSave: (() => void) | null = null;
   Object.assign(window, {
     protoPosts,
+    protoTelegramPosts,
     protoHoldSave: () => { (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave = new Promise<void>((resolve) => { releaseSave = resolve; }); },
     protoReleaseSave: () => { releaseSave?.(); releaseSave = null; delete (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave; },
     protoPhase: (taskId: string, phase: PrototypeDeliveryPhase) => {
@@ -3214,6 +3255,7 @@ if (DECISIONS) {
     { number: 2, name: L("Split by engine", "Розподіл за рушієм"), description: "", videos: [], frames: [{ image: frame(32, "split · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
   ];
   if (DECISIONS === "reject") seatRounds[0]!.variants = protoRounds["t-search"]![0]!.variants;
+  if (DECISIONS === "telegram") seatRounds[0]!.telegramPost = telegramFixturePost("fixture-seat-post");
   /* `&decisions=long`: the first seat question has a title of ninety characters and a recommended option of a sentence. */
   if (DECISIONS === "long") {
     const held = seatRounds[0]!;
@@ -3598,6 +3640,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const review = url.searchParams.get("review");
     const round = review ? [...seatRounds, ...Object.values(protoRounds).flat()].find((entry) => entry.id === review) ?? null : undefined;
     return json({ project: PROJECT, decisions: fixtureDecisions(), ...(round === undefined ? {} : { round }) });
+  }
+  if (url.pathname === "/api/prototype-reviews/telegram" && init?.method === "POST") {
+    const body = JSON.parse(String(init.body)); protoTelegramPosts.push(body);
+    const round = [...Object.values(protoRounds).flat(), ...seatRounds].find(r => r.id === body.reviewId);
+    if (!round) return json({ error: "review not found" }, 404);
+    round.telegramPost = { key: body.clientRequestId, state: "sent", at: new Date().toISOString() };
+    return json({ reviewId: round.id, telegramPost: round.telegramPost });
   }
   if ((PROTO || DECISIONS) && /^\/api\/tasks\/[^/]+\/prototypes$/.test(url.pathname)) {
     const taskId = decodeURIComponent(url.pathname.split("/")[3]!);
@@ -4360,7 +4409,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 
 /* #1820's scenarios ARE the Overview, which is the view with no project
    selected; every other scenario opens on `atlas`'s own board. */
-const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY || new URLSearchParams(location.search).get("railview") === "overview";
+const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY || OVERVIEW_PERFORMANCE || new URLSearchParams(location.search).get("railview") === "overview";
 if (OVERVIEW_VIEW) localStorage.removeItem("llvProject");
 else localStorage.setItem("llvProject", PROJECT);
 /* The harness may seed a language before this module runs (`openFixture`), so

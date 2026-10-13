@@ -152,6 +152,7 @@ export class ComposerSubmissionPayloads {
   private readonly terminals: ComposerPayloadStore;
   private readonly receipts: ComposerPayloadStore;
   private readonly attempts: ComposerPayloadStore;
+  private readonly bindings: ComposerPayloadStore;
   private readonly wireClaims = new Set<string>();
 
   constructor(databasePrefix = "llv-composer") {
@@ -160,6 +161,7 @@ export class ComposerSubmissionPayloads {
     this.terminals = new ComposerPayloadStore({ databaseName: `${databasePrefix}-terminals-v1` });
     this.receipts = new ComposerPayloadStore({ databaseName: `${databasePrefix}-receipts-v1` });
     this.attempts = new ComposerPayloadStore({ databaseName: `${databasePrefix}-attempts-v1` });
+    this.bindings = new ComposerPayloadStore({ databaseName: `${databasePrefix}-bindings-v1` });
   }
 
   private async locked<T>(identity: ComposerPayloadIdentity, action: () => Promise<T>): Promise<T> {
@@ -229,9 +231,14 @@ export class ComposerSubmissionPayloads {
       const history = await this.receiptHistory(owner);
       const attempts = await this.attemptRows(owner);
       const state = payloadAttemptState(owner.key, history);
+      const binding = await this.bindings.read(owner);
+      const boundOperationId = typeof binding?.payload.operationId === "string" ? binding.payload.operationId : undefined;
+      if (binding && (binding.payload.version !== 1 || binding.payload.fingerprint !== raw.fingerprint
+        || !boundOperationId)) throw new ComposerPayloadStorageError();
+      if (state.operationId && boundOperationId && state.operationId !== boundOperationId) throw new ComposerPayloadStorageError();
       return { ref: { conversationId: raw.conversationId, key: raw.key, fingerprint: raw.fingerprint,
         bytes: raw.bytes, savedAt: raw.savedAt }, submission: checkedSubmission(raw.payload.submission),
-      envelope: envelope ?? null, operationId: state.operationId, receipt: state.current,
+      envelope: envelope ?? null, operationId: state.operationId ?? boundOperationId ?? null, receipt: state.current,
       retry: retryRoute(owner.key, history, attempts),
       refusal: state.current ? null : latestAttempt(attempts)?.refusal ?? null };
     });
@@ -241,6 +248,26 @@ export class ComposerSubmissionPayloads {
    * Listing is inert; even a complete sealed envelope is never replay authority. */
   list(conversationId: string): Promise<ComposerPayloadRef[]> {
     return this.submissions.list(conversationId);
+  }
+
+  /** Persist the operation identity from an admitted key lookup, even when the
+   * journal has not produced a receipt yet. A new tab can then resume the
+   * ordinary operation observer without relying on its sessionStorage outbox. */
+  bindOperation(ref: ComposerPayloadRef, operationId: string): Promise<boolean> {
+    const owner = { conversationId: ref.conversationId, key: ref.key };
+    if (typeof operationId !== "string" || !operationId.trim() || operationId.length > 1024) return Promise.resolve(false);
+    return this.locked(owner, async () => {
+      if (await this.terminals.read(owner)) return false;
+      const raw = await this.submissions.read(owner);
+      if (!raw || raw.fingerprint !== ref.fingerprint) return false;
+      const { operationId: recorded } = payloadAttemptState(owner.key, await this.receiptHistory(owner));
+      if (recorded && recorded !== operationId) return false;
+      const existing = await this.bindings.read(owner);
+      if (existing && (existing.payload.version !== 1 || existing.payload.fingerprint !== raw.fingerprint
+        || existing.payload.operationId !== operationId)) return false;
+      if (!existing) await this.bindings.retain(owner, { version: 1, fingerprint: raw.fingerprint, operationId });
+      return true;
+    });
   }
 
   private async receiptHistory(identity: ComposerPayloadIdentity): Promise<ComposerPayloadReceipt[]> {
@@ -399,6 +426,7 @@ export class ComposerSubmissionPayloads {
       const wire = await this.envelopes.read(owner);
       await this.terminals.retain(owner, { version: 1, submissionFingerprint: raw.fingerprint });
       this.wireClaims.delete(JSON.stringify([owner.conversationId, owner.key]));
+      await this.bindings.release(expected);
       if (wire) await this.envelopes.release(wire);
       return this.submissions.release(raw);
     });

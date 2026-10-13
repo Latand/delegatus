@@ -215,10 +215,15 @@ export function buildTaskBands(base: SchemeLayout, sources: BandSources): TaskBa
     bandOfKey.set(key, band);
   };
 
-  const groupFor = (kind: "pipeline" | "flow", id: string): SchemeGroup | undefined =>
-    base.groups.find((group) => group.kind === kind && group.id === id);
-  const slotFor = (pipelineId: string, stageId: string): string | null =>
-    base.slots.find((slot) => slot.pipeline.id === pipelineId && slot.stage.id === stageId)?.key ?? null;
+  const groupsById = new Map(base.groups.map(group => [`${group.kind}:${group.id}`, group]));
+  const slotsByPipeline = new Map<string, Map<string, string>>();
+  for (const slot of base.slots) {
+    const stages = slotsByPipeline.get(slot.pipeline.id) ?? new Map<string, string>();
+    if (!stages.has(slot.stage.id)) stages.set(slot.stage.id, slot.key);
+    slotsByPipeline.set(slot.pipeline.id, stages);
+  }
+  const groupFor = (kind: "pipeline" | "flow", id: string): SchemeGroup | undefined => groupsById.get(`${kind}:${id}`);
+  const slotFor = (pipelineId: string, stageId: string): string | null => slotsByPipeline.get(pipelineId)?.get(stageId) ?? null;
   /** Drafts opened from this band's local «+ Agent» sit after its members. */
   const admitDrafts = (band: TaskBand) => {
     if (!draftBands?.size) return;
@@ -248,8 +253,9 @@ export function buildTaskBands(base: SchemeLayout, sources: BandSources): TaskBa
   const provisionalTaskIds = new Set(provisionalMemberships?.values() ?? []);
   const orderedTasks = [...tasks]
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const workflowByTask = new Map(projection.tasks.map(workflow => [workflow.task.id, workflow]));
   for (const task of orderedTasks) {
-    const workflow = projection.tasks.find((entry) => entry.task.id === task.id);
+    const workflow = workflowByTask.get(task.id);
     const title = taskTitle(task.text) || untitled;
     const band = makeBand({ id: `task:${task.id}`, origin: "task", task, pipeline: null, flow: null, title, status: task.status, hue: hueFromId(task.id), pinnedTop: false, createdAt: task.createdAt });
     if (workflow) {

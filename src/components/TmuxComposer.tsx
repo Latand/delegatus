@@ -14,6 +14,8 @@ import type { TFunction } from "@/lib/i18n";
 
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { composerSubmissionPayloads, composerSubmissionSaving, presentedPayloadReceipt, withComposerSubmission, type ComposerPayloadReceipt, type RestoredComposerSubmission } from "@/lib/composerSubmissionPayloads";
+import { observeRuntimeAdmission } from "@/hooks/runtimeAdmissionObservation";
+import type { RuntimeAdmissionLookup } from "@/hooks/useRuntime";
 import { useComposer } from "@/hooks/useComposer";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useCodexRealtime } from "@/hooks/useCodexRealtime";
@@ -2602,6 +2604,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      composer said it could not confirm them. A later admission for one of
      them takes that back. */
   const unconfirmedKeys = useRef<Set<string>>(new Set());
+  const deliveryNoticeKey = useRef<string | null>(null);
   const legacyResponseEpoch = useRef<{ cardId: string; active: boolean }>({ cardId, active: true });
   useLayoutEffect(() => {
     const epoch = { cardId, active: true };
@@ -2701,24 +2704,6 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       if (payloadOwner.current === owner) setPayloadChecks(current => new Map(current).set(key, nowMs()));
     }
   };
-  const recheckPayloadRow = (row: RestoredComposerSubmission) => recheckPayload(row.ref.key, async () => {
-    const item = payloadOperationItem(row);
-    if (item) return readOperationBack(item, true);
-    if (row.operationId || !row.envelope) return;
-    const conversationId = typeof row.envelope.body.conversationId === "string" ? row.envelope.body.conversationId : cardId;
-    const answer = await runtimeDependencies.lookupRuntimeAdmission(conversationId, row.ref.key);
-    if (answer.outcome === "admitted" && answer.receipt) await composerSubmissionPayloads.observe(row.ref, answer.receipt);
-  });
-  const hasPayloadRecovery = payloadDiagnostics || payloadStorageError !== null;
-  /* The undelivered list is a surface of the region only while it is open:
-     at rest it is the chip in the composer's own row. */
-  const receiptsInRegion = displayedRuntimeReceipts.length > 0 && receiptsDrawn;
-  const renderedAccessorySurfaces = (callPanelDocked ? 1 : 0) + (queuePanelRendered ? 1 : 0)
-    + (sent.length || echoedReceipts.length ? 1 : 0) + (hasPayloadRecovery || receiptsInRegion ? 1 : 0);
-  useEffect(() => {
-    setAccessorySurfaces(renderedAccessorySurfaces);
-  }, [renderedAccessorySurfaces]);
-
   const persistPendingDeliveries = (next: PendingDelivery[]) => {
     /* Admission releases the local snapshot. A later safe-failure receipt
        cannot recreate its bytes, runtime selection or selected context. Fence
@@ -2732,6 +2717,181 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     setReplayGenerationAvailable(next.some((entry) => entry.payloadComplete !== false));
     writePendingDeliveries(cardId, next);
   };
+
+  const admissionReads = useRef(new Map<string, { controller: AbortController; result: Promise<RuntimeAdmissionLookup> }>());
+  const admissionReadTimes = useRef(new Map<string, number>());
+  const admissionRows = useRef(payloadRows);
+  const admissionReadActive = useRef(operationReadsActive);
+  useLayoutEffect(() => {
+    admissionRows.current = payloadRows;
+    admissionReadActive.current = operationReadsActive;
+  });
+  const applyAdmissionAnswer = async (key: string, answer: RuntimeAdmissionLookup, current: () => boolean) => {
+    if (!current()) return answer;
+    if (answer.outcome === "unknown") {
+      const row = admissionRows.current.find(candidate => candidate.ref.key === key);
+      if (!row) return answer;
+      let saved: RestoredComposerSubmission | null;
+      try { saved = await composerSubmissionPayloads.restore(row.ref); }
+      catch { return answer; }
+      if (!current() || !saved) return answer;
+      // A previous read may have persisted the canonical answer while this
+      // view was hidden. Reuse the normal admission path so its attempt and
+      // operation identity fences still decide whether it may be projected.
+      if (saved.receipt?.status === "delivered") {
+        answer = { outcome: "admitted", operationId: saved.receipt.operationId,
+          receipt: { ...saved.receipt, kind: "send", text: saved.submission.text } as RuntimeReceipt };
+      } else if (saved.refusal && !saved.operationId) {
+        answer = { outcome: "not-executed" };
+      } else return answer;
+    }
+    if (answer.outcome === "not-executed") {
+      const entry = readOutbox(cardId).find(candidate => candidate.id === key);
+      const row = admissionRows.current.find(candidate => candidate.ref.key === key);
+      if (entry?.state === "delivered" || row?.operationId
+        || (entry?.operationId && !entry.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX))) return { outcome: "unknown" } as const;
+      if (row && !await composerSubmissionPayloads.refuse(row.ref, { status: 404, reason: "the delivery record holds nothing under this key" })) {
+        // A previous observer may have saved this proof as the view hid.
+        // Re-read the latest attempt so a newer wire claim stays protected.
+        const recorded = await composerSubmissionPayloads.restore(row.ref);
+        if (!recorded?.refusal || recorded.operationId) return { outcome: "unknown" } as const;
+      }
+      if (!current()) return { outcome: "unknown" } as const;
+      receiptReconciliations.current.get(key)?.abort();
+      receiptReconciliations.current.delete(key);
+      setReconcilingSend(receiptReconciliations.current.size > 0);
+      unconfirmedKeys.current.delete(key);
+      updateOutbox(cardId, key, { state: "failed", deliveryReceipt: undefined, deliveryUncertain: undefined,
+        settledAt: nowMs(), error: t("composer.admissionLookupNotExecuted") });
+      persistPendingDeliveries(pendingDeliveries.current.map(pending => pending.key === key ? releasePendingReconciliation(pending) : pending));
+      setImmediateRuntimeReceipts(receipts => receipts.filter(candidate => candidate.operationId !== unconfirmedReceiptOperationId(key)));
+      if (deliveryNoticeKey.current === key) {
+        deliveryNoticeKey.current = null;
+        setStatus(status => status && [t("composer.admissionTimedOut"), t("composer.deliveryUnconfirmed")].includes(status.text)
+          ? { kind: "err", text: t("composer.admissionLookupNotExecuted") } : status);
+      }
+      await refreshPayloads();
+      return answer;
+    }
+    const operationId = answer.operationId ?? answer.receipt?.operationId;
+    let receipt = answer.receipt;
+    if (!operationId || (receipt && (receipt.conversationId !== cardId || receipt.idempotencyKey !== key
+      || receipt.operationId !== operationId || receipt.kind !== "send"))) return { outcome: "unknown" } as const;
+    const row = admissionRows.current.find(candidate => candidate.ref.key === key);
+    const entry = readOutbox(cardId).find(candidate => candidate.id === key);
+    if ((row?.operationId && row.operationId !== operationId)
+      || (entry?.operationId && !entry.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX) && entry.operationId !== operationId)) {
+      return { outcome: "unknown" } as const;
+    }
+    // A live outbox row already persists this identity for its operation
+    // reader. The separate binding is for a retained-only copy from another
+    // tab, where sessionStorage has no row to carry the admitted operation.
+    if (row && !entry && !receipt) {
+      const bound = await composerSubmissionPayloads.bindOperation(row.ref, operationId);
+      if (!current() || !bound) return { outcome: "unknown" } as const;
+    }
+    // Terminal evidence may arrive through the stream while this read waits.
+    if (entry?.state === "delivered" || row?.receipt?.status === "delivered") return answer;
+    if (receipt && row) {
+      await composerSubmissionPayloads.observe(row.ref, receipt);
+      const recorded = (await composerSubmissionPayloads.restore(row.ref))?.receipt;
+      if (!current()) return { outcome: "unknown" } as const;
+      // A previous read may have persisted evidence just as the view hid.
+      // Project the store's current answer even when this read is a duplicate.
+      if (!recorded || recorded.operationId !== operationId) return { outcome: "unknown" } as const;
+      receipt = { ...receipt, ...recorded, at: recorded.at ?? receipt.at } as RuntimeReceipt;
+    }
+    if (!current()) return { outcome: "unknown" } as const;
+    if (receipt) {
+      if (entry) updateOutbox(cardId, key, { operationId });
+      rememberRuntimeReceipt(receipt, receipt);
+    } else if (entry) {
+      updateOutbox(cardId, key, { operationId, state: "delivering", deliveryReceipt: undefined, deliveryUncertain: undefined, error: undefined });
+    }
+    persistPendingDeliveries(pendingDeliveries.current.map(pending => pending.key === key ? { ...pending, operationId } : pending));
+    // Admission belongs to this attempt; another draft's error remains intact.
+    unconfirmedKeys.current.delete(key);
+    setImmediateRuntimeReceipts(receipts => receipts.filter(candidate => candidate.operationId !== unconfirmedReceiptOperationId(key)));
+    if (deliveryNoticeKey.current === key) {
+      deliveryNoticeKey.current = null;
+      setStatus(status => status && [t("composer.admissionTimedOut"), t("composer.deliveryUnconfirmed")].includes(status.text) ? null : status);
+    }
+    await refreshPayloads();
+    return { ...answer, ...(receipt ? { receipt } : {}) };
+  };
+  const applyAdmissionAnswerRef = useRef(applyAdmissionAnswer);
+  useLayoutEffect(() => { applyAdmissionAnswerRef.current = applyAdmissionAnswer; });
+  const readAdmissionBack = (key: string, force = false): Promise<RuntimeAdmissionLookup> => {
+    if (!admissionReadActive.current || documentHidden()) return Promise.resolve({ outcome: "unknown" });
+    const held = admissionReads.current;
+    const existing = held.get(key);
+    if (existing) return existing.result;
+    const interval = admissionTiming.admissionObservationIntervalMs ?? OPERATION_RECONCILE_GRACE_MS;
+    if (!force && nowMs() - (admissionReadTimes.current.get(key) ?? -Infinity) < interval) return Promise.resolve({ outcome: "unknown" });
+    const controller = new AbortController(), epoch = legacyResponseEpoch.current;
+    admissionReadTimes.current.set(key, nowMs());
+    const current = () => epoch.active && legacyResponseEpoch.current === epoch
+      && !controller.signal.aborted && admissionReadActive.current && !documentHidden();
+    const result = observeRuntimeAdmission(cardId, key, runtimeDependencies.lookupRuntimeAdmission, controller.signal)
+      .then(answer => current() ? applyAdmissionAnswerRef.current(key, answer, current) : { outcome: "unknown" } as const)
+      .catch(() => current() ? applyAdmissionAnswerRef.current(key, { outcome: "unknown" }, current) : { outcome: "unknown" } as const)
+      .finally(() => { if (held.get(key)?.controller === controller) held.delete(key); });
+    held.set(key, { controller, result });
+    return result;
+  };
+  const readAdmissionBackRef = useRef(readAdmissionBack);
+  useLayoutEffect(() => { readAdmissionBackRef.current = readAdmissionBack; });
+  const unresolvedAdmissionKeys = () => {
+    const queue = readOutbox(cardId);
+    const keys = new Set(queue.filter(entry => entry.deliveryUncertain && !entry.launchOwned && entry.intent !== "context"
+      && (!entry.operationId || entry.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX))).map(entry => entry.id));
+    for (const row of admissionRows.current) {
+      const entry = queue.find(candidate => candidate.id === row.ref.key);
+      if (row.envelope && !row.refusal && !row.operationId && (!entry || entry.deliveryUncertain)) keys.add(row.ref.key);
+    }
+    for (const pending of pendingDeliveries.current) {
+      if (!pending.operationId && (pending.reconciling || unconfirmedKeys.current.has(pending.key))) keys.add(pending.key);
+    }
+    return keys;
+  };
+  const unresolvedAdmissionKeysRef = useRef(unresolvedAdmissionKeys);
+  useLayoutEffect(() => { unresolvedAdmissionKeysRef.current = unresolvedAdmissionKeys; });
+  useEffect(() => {
+    const held = admissionReads.current;
+    const releaseAll = () => {
+      for (const read of held.values()) read.controller.abort();
+      held.clear();
+      admissionReadTimes.current.clear();
+    };
+    if (!operationReadsActive) { releaseAll(); return; }
+    const pass = () => {
+      if (documentHidden()) return;
+      for (const key of unresolvedAdmissionKeysRef.current()) void readAdmissionBackRef.current(key);
+    };
+    const onVisibility = () => documentHidden() ? releaseAll() : pass();
+    document.addEventListener("visibilitychange", onVisibility);
+    pass();
+    const timer = setInterval(pass, admissionTiming.admissionObservationIntervalMs ?? OPERATION_RECONCILE_GRACE_MS);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", onVisibility); releaseAll(); };
+  }, [cardId, operationReadsActive, admissionTiming.admissionObservationIntervalMs]);
+  useEffect(() => {
+    if (!operationReadsActive) return;
+    for (const key of unresolvedAdmissionKeysRef.current()) void readAdmissionBackRef.current(key);
+  }, [payloadRows, outbox, operationReadsActive]);
+  const recheckPayloadRow = (row: RestoredComposerSubmission) => recheckPayload(row.ref.key, async () => {
+    const item = payloadOperationItem(row);
+    if (item) return readOperationBack(item, true);
+    if ((!row.operationId || row.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX)) && row.envelope) return readAdmissionBack(row.ref.key, true);
+  });
+  const hasPayloadRecovery = payloadDiagnostics || payloadStorageError !== null;
+  /* The undelivered list is a surface of the region only while it is open:
+     at rest it is the chip in the composer's own row. */
+  const receiptsInRegion = displayedRuntimeReceipts.length > 0 && receiptsDrawn;
+  const renderedAccessorySurfaces = (callPanelDocked ? 1 : 0) + (queuePanelRendered ? 1 : 0)
+    + (sent.length || echoedReceipts.length ? 1 : 0) + (hasPayloadRecovery || receiptsInRegion ? 1 : 0);
+  useEffect(() => {
+    setAccessorySurfaces(renderedAccessorySurfaces);
+  }, [renderedAccessorySurfaces]);
 
   const markSettled = (key: string) => {
     const keys = settledSendKeys.current;
@@ -2749,7 +2909,10 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     if (!controller) return;
     controller.abort();
     receiptReconciliations.current.delete(clientMessageId);
-    setStatus(null);
+    if (deliveryNoticeKey.current === clientMessageId) {
+      deliveryNoticeKey.current = null;
+      setStatus(current => current && [t("composer.admissionTimedOut"), t("composer.deliveryUnconfirmed")].includes(current.text) ? null : current);
+    }
     if (receiptIsTerminal(receipt.status) && !receiptIsAdmitted(receipt.status)) {
       persistPendingDeliveries(pendingDeliveries.current.map((entry) =>
         entry.key === clientMessageId
@@ -2767,6 +2930,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
   const releaseReconciliationToRetry = (clientMessageId: string) => {
     receiptReconciliations.current.delete(clientMessageId);
     unconfirmedKeys.current.add(clientMessageId);
+    deliveryNoticeKey.current = clientMessageId;
     /* Drop the polling marker while retaining the unresolved generation for
        late receipt reconciliation across remount. */
     persistPendingDeliveries(pendingDeliveries.current.map((entry) =>
@@ -2798,6 +2962,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     const controller = new AbortController();
     receiptReconciliations.current.set(clientMessageId, controller);
     setReconcilingSend(true);
+    deliveryNoticeKey.current = clientMessageId;
     void reconcileComposerReceipt({
       read: () => displayedRuntimeReceiptsRef.current.find((receipt) =>
         receipt.idempotencyKey === clientMessageId
@@ -2958,7 +3123,16 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       /* A converged retry answer records its terminal receipt before any copy
          of it reaches this pass, and observing that copy again adds nothing.
          The latest recorded receipt is itself the evidence that ends the message. */
-      if (row.receipt && (row.receipt.status === "delivered" || row.receipt.reason === "delivery-discarded")) candidates.push(row.receipt);
+      if (row.receipt && (row.receipt.status === "delivered" || row.receipt.reason === "delivery-discarded")) {
+        candidates.push(row.receipt);
+        // Storage can finish an observation while its view is away. Restore
+        // that answer into the live projection before retiring its bytes.
+        if (!settlingPayloads.current.has(evidenceKey(row.receipt))) {
+          const receipt = { ...row.receipt, kind: "send", text: row.submission.text,
+            at: row.receipt.at ?? new Date(row.ref.savedAt).toISOString() } as RuntimeReceipt;
+          rememberRuntimeReceipt(receipt, receipt);
+        }
+      }
       const evidence = candidates.filter(receipt => !settlingPayloads.current.has(evidenceKey(receipt)));
       if (!evidence.length) continue;
       for (const receipt of evidence) settlingPayloads.current.add(evidenceKey(receipt));
@@ -3030,7 +3204,8 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         .map(candidate => unconfirmedReceiptOperationId(candidate.idempotencyKey)));
       for (const candidate of confirmed) unconfirmedKeys.current.delete(candidate.idempotencyKey);
       if (retired.size) setImmediateRuntimeReceipts((current) => current.filter((candidate) => !retired.has(candidate.operationId)));
-      if (!unconfirmedKeys.current.size) {
+      if (confirmed.some(candidate => candidate.idempotencyKey === deliveryNoticeKey.current)) {
+        deliveryNoticeKey.current = null;
         setStatus((current) => current && [t("composer.admissionTimedOut"), t("composer.deliveryUnconfirmed")].includes(current.text) ? null : current);
       }
     }
@@ -4368,79 +4543,29 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
    *   operator may simply ask again. Absence never observed is not evidence.
    */
   const resolveUnknownAdmission = async (entry: OutboxEntry) => {
+    const epoch = legacyResponseEpoch.current;
+    const finishStatus = (status: { kind: "info" | "err"; text: string } | null) =>
+      setStatus(current => current?.text === t("composer.admissionLookupRunning") ? status : current);
     setBusy(true);
     setStatus({ kind: "info", text: t("composer.admissionLookupRunning") });
     try {
-      const answer = await runtimeDependencies.lookupRuntimeAdmission(cardId, entry.id);
+      const answer = await readAdmissionBack(entry.id, true);
+      if (!epoch.active || legacyResponseEpoch.current !== epoch) return;
+      const current = readOutbox(cardId).find(candidate => candidate.id === entry.id);
+      if (current?.state === "delivered") { finishStatus(null); return; }
       if (answer.outcome === "admitted") {
-        const row = payloadRows.find(candidate => candidate.ref.key === entry.id);
-        if (answer.receipt && row) await composerSubmissionPayloads.observe(row.ref, answer.receipt).catch(() => false);
-        /* The operation id lands on the entry even when no receipt could be
-           settled: it is what proves admission to every later read of this
-           key, and what stops the recovery row from offering a resend.
-
-           What the lookup FOUND then decides the row, not the bare fact that
-           it answered, so the receipt it came back with is remembered as a
-           validated observation of this operation — the same standing an
-           operation response has, and for the same reason: it IS the record,
-           read now, under the key the row is filed under. Ordinary receipt
-           reconciliation then projects it. Without that standing a stale
-           journal revision outranks the answer and the row goes on spinning
-           over a delivery the producer has already settled — and the row's
-           ONE recovery is this lookup now (round-4 P2), so nothing else would
-           ever settle it. */
-        if (answer.receipt && entry.deliveryReceipt) rememberRuntimeReceipt(answer.receipt, entry.deliveryReceipt);
-        updateOutbox(cardId, entry.id, {
-          state: "delivering",
-          deliveryUncertain: undefined,
-          error: undefined,
-          settledAt: undefined,
-          ...(answer.operationId ? { operationId: answer.operationId } : {}),
-          ...(answer.receipt ? { deliveryReceipt: answer.receipt } : {}),
-        });
-        persistPendingDeliveries(pendingDeliveries.current.map((pending) =>
-          pending.key === entry.id && answer.operationId
-            ? { ...pending, operationId: answer.operationId }
-            : pending));
-        setImmediateRuntimeReceipts(current =>
-          current.filter(candidate => candidate.operationId !== unconfirmedReceiptOperationId(entry.id)));
-        if (answer.receipt) setImmediateRuntimeReceipts(current => mergeRuntimeReceipts(current, [answer.receipt!]));
-        setStatus({ kind: "info", text: t("composer.admissionLookupAdmitted") });
-        await refreshPayloads();
+        finishStatus(answer.receipt?.status === "delivered" ? null : { kind: "info", text: t("composer.admissionLookupAdmitted") });
         return;
       }
       if (answer.outcome === "not-executed") {
-        /* Proven never sent. The placeholder stops standing for an unknown
-           fate and the message becomes an ordinary failed one the operator can
-           retry — with its original key and its original bytes.
-
-           The proof is RECORDED against the retained payload, as any other
-           pre-admission refusal is. That is what authorizes the later attempt:
-           the one-use wire claim is spent, and only affirmative evidence that
-           nothing was executed re-opens the sealed envelope. Without it the
-           operator would be told the message never went and then find Retry
-           unable to send it. */
-        const proven = payloadRows.find(candidate => candidate.ref.key === entry.id);
-        if (proven) {
-          await composerSubmissionPayloads
-            .refuse(proven.ref, { status: 404, reason: "the delivery record holds nothing under this key" })
-            .catch(() => false);
-        }
-        updateOutbox(cardId, entry.id, {
-          state: "failed",
-          deliveryUncertain: undefined,
-          settledAt: nowMs(),
-          error: t("composer.admissionLookupNotExecuted"),
-        });
-        setImmediateRuntimeReceipts(current =>
-          current.filter(candidate => candidate.operationId !== unconfirmedReceiptOperationId(entry.id)));
-        setStatus({ kind: "err", text: t("composer.admissionLookupNotExecuted") });
-        await refreshPayloads();
+        finishStatus({ kind: "err", text: t("composer.admissionLookupNotExecuted") });
         return;
       }
-      setStatus({ kind: "err", text: t("composer.admissionLookupUnknown") });
+      // Another observer may have bound this attempt while the read waited.
+      if (!current?.deliveryUncertain || (current.operationId && !current.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX))) return;
+      finishStatus({ kind: "err", text: t("composer.admissionLookupUnknown") });
     } finally {
-      setBusy(false);
+      if (epoch.active && legacyResponseEpoch.current === epoch) setBusy(false);
     }
   };
 

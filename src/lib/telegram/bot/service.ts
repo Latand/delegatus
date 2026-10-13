@@ -946,7 +946,7 @@ export class TelegramBotService {
    * recipient. This grants no general agent posting permission to that chat. */
   async sendOwnerReview(input: {
     clientRequestId: string; message: TelegramRichMessage;
-    fallbackMarkdown?: string; fallbackPlainText?: string;
+    fallbackMarkdown?: string; fallbackPlainText?: string; limitFallback?: TelegramRichMessage;
   }): Promise<TelegramBotSendAnswer | null> {
     const selected = ownerReviewDestination();
     if (selected.reason) return null;
@@ -972,14 +972,14 @@ export class TelegramBotService {
   /** One prototype message under a durable claim; ambiguous sends retain it. */
   async sendRichMessage(input: {
     clientRequestId: string; chat: string; topicId?: number;
-    message: TelegramRichMessage; fallbackMarkdown?: string; fallbackPlainText?: string;
+    message: TelegramRichMessage; fallbackMarkdown?: string; fallbackPlainText?: string; limitFallback?: TelegramRichMessage;
   }): Promise<TelegramBotSendAnswer> {
     return this.sendRich(input);
   }
 
   private async sendRich(input: {
     clientRequestId: string; chat: string; topicId?: number;
-    message: TelegramRichMessage; fallbackMarkdown?: string; fallbackPlainText?: string;
+    message: TelegramRichMessage; fallbackMarkdown?: string; fallbackPlainText?: string; limitFallback?: TelegramRichMessage;
   }, owner?: { authorize: () => void; chat: ChatRow }): Promise<TelegramBotSendAnswer> {
     const store = this.connectedStore();
     owner?.authorize();
@@ -1025,12 +1025,33 @@ export class TelegramBotService {
       return result;
     };
     let result = await call(params);
+    let mediaRejected = false;
     // Only a definitive media refusal permits the text-only retry under this claim.
     if (!result.ok && result.kind === "http" && result.status === 400 && input.message.images.length && input.fallbackMarkdown
       && /photo|image|media|file|upload|dimension/i.test(result.description ?? "")) {
+      mediaRejected = true;
       markdown = input.fallbackMarkdown;
       plainText = input.fallbackPlainText ?? plainText;
       result = await call({ chat_id: Number(chatId), ...(topicId === null ? {} : { message_thread_id: topicId }), rich_message: { markdown } });
+    }
+    // A definite limit refusal proves this attempt posted nothing. Keep the
+    // durable claim while sending the bounded summary, including its previews.
+    if (!result.ok && result.kind === "http" && result.status === 400 && input.limitFallback
+      && /too long|too many|limit|exceed/i.test(result.description ?? "")) {
+      const summary = input.limitFallback;
+      markdown = summary.markdown; plainText = summary.plainText;
+      const images = mediaRejected ? [] : summary.images;
+      if (mediaRejected) markdown = markdown.replace(/<tg-slideshow>[\s\S]*?<\/tg-slideshow>/g, "Кадри — за посиланням на повне рев’ю.");
+      const body = { ...(topicId === null ? {} : { message_thread_id: topicId }),
+        rich_message: { markdown, ...(images.length ? { media: images.map(i => ({ id: i.id, media: { type: "photo", media: `attach://${i.id}` } })) } : {}) },
+        ...Object.fromEntries(images.map(i => [i.id, i.blob])) };
+      result = await call(body);
+      if (!result.ok && result.kind === "http" && result.status === 400 && images.length
+        && /photo|image|media|file|upload|dimension/i.test(result.description ?? "")) {
+        // Remove photo references together with their attachments.
+        markdown = markdown.replace(/<tg-slideshow>[\s\S]*?<\/tg-slideshow>/g, "Кадри — за посиланням на повне рев’ю.");
+        result = await call({ ...(topicId === null ? {} : { message_thread_id: topicId }), rich_message: { markdown } });
+      }
     }
     if (!result.ok) {
       if (result.kind === "timed_out" || result.kind === "network_failed") throw new TelegramBotError("send_uncertain", "Telegram did not confirm the rich send");
