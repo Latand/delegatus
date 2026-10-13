@@ -19,6 +19,27 @@ afterAll(async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test("the incident PR query returns both completed lanes and their done task through real persistence", async () => {
+  const at = "2026-10-10T12:00:00.000Z";
+  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+  replaceConversationCatalog([{ path: path.join(root, "incident.jsonl"), root: "claude-projects", name: "fixture", project: "incident-board", projectName: "Incident", title: "Fixture", firstPrompt: "", engine: "claude", kind: "session", fmt: "claude", mtime: 0, size: 0 }]);
+  saveTasks([{ id: "incident-task", project: "incident-board", text: "Calm task cards", status: "done", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at }]);
+  savePipelines(["first", "second"].map(name => ({
+    ...buildPipeline({ id: `incident-${name}`, task: "#2800 Calm task cards", project: "incident-board", repoDir: root, srcPath: null, srcConversationId: null, now: at,
+      stages: [{ id: "build", kind: "run", prompt: "Build", next: null, effectiveRole: { roleId: null, engine: "claude", model: null, effort: null, access: "read-only", promptScaffold: null } }] }),
+    state: "completed" as const, cursor: null, taskIds: ["incident-task"],
+    delivery: { target: { repository: "acme/widgets", remote: "https://github.com/acme/widgets.git", branch: "refs/heads/main", pr: 2800 }, disposition: "owner" as const, publish: "enabled" as const, ownerId: `incident-${name}`, epoch: 1, active: false, journal: [] },
+  })));
+  const reads = new CompanionBoardReads(createCompanionBoardReadPaths());
+  try {
+    const common = { project: "Incident", query: "PR 2800", ids: null, cursor: null, limit: 10, refresh: null };
+    const pipelines = await reads.call("incident-board", "list_pipelines", { ...common, state: null, includeClosed: true });
+    const tasks = await reads.call("incident-board", "list_tasks", { ...common, statuses: null, openOnly: null });
+    expect({ pipelines, tasks }).toMatchObject({ pipelines: { total: 2, shown: 2, more: 0 }, tasks: { total: 1, rows: [{ handle: "incident-task", state: "done" }] } });
+    expect(await reads.call("incident-board", "list_tasks", { ...common, statuses: null, openOnly: false })).toMatchObject({ total: 1, rows: [{ handle: "incident-task", state: "done" }] });
+  } finally { replaceConversationCatalog([]); }
+});
+
 test("ordinary pipeline reads retain the cursor verdict and stage kinds and roles without history", async () => {
   const { pipelineCorpus, CORPUS_BODY_MARKERS } = await import("@/lib/pipelines/fixtures/corpus");
   const pipeline = pipelineCorpus(1)[0];
@@ -124,6 +145,8 @@ test("search stays project scoped and its opaque conversation handle can read an
     return { path: filename, project, engine: "claude" as const, size: stat.size, mtimeMs: stat.mtimeMs };
   });
   await indexTranscriptSources(sources, { complete: true });
+  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+  replaceConversationCatalog(sources.map(source => ({ ...source, root: "claude-projects", name: "fixture", projectName: source.project, title: "Fixture", firstPrompt: "", kind: "session", fmt: "claude", mtime: 0 })));
   const reads = new CompanionBoardReads(createCompanionBoardReadPaths({ transcript: {
     selectedContext: { selectedConversation: () => ({ resolve: () => null, readTail: () => null }),
       pathAllowed: candidate => sources.some(source => source.path === candidate) },
@@ -142,6 +165,7 @@ test("search stays project scoped and its opaque conversation handle can read an
   expect(await reads.call("search-a", "conversation_messages", { conversationId: handle })).toMatchObject({ rows: [{ excerpt: "The cobalt release belongs to search-a." }] });
   await expect(reads.call("search-b", "conversation_messages", { conversationId: handle })).rejects.toThrow("PROJECT_REFUSED");
   await expect(reads.call("unknown", "search_transcripts", { query: "cobalt" })).rejects.toThrow("PROJECT_REFUSED");
+  replaceConversationCatalog([]);
 });
 
 test("a path in a stored note or hold reaches neither the structured read nor its speech", async () => {
@@ -223,6 +247,9 @@ test("project names resolve from the real catalog and ambiguity never widens a v
   expect(reads.resolveProject(null,"Alpha")).toBe("project-a");
   expect(()=>reads.resolveProject(null)).toThrow("PROJECT_REQUIRED");
   expect(()=>reads.resolveProject("project-a","Unknown")).toThrow("PROJECT_REFUSED");
+  expect(()=>reads.resolveProject("stale-context")).toThrow("PROJECT_REFUSED");
+  expect(()=>reads.resolveProject("stale-context","stale-context")).toThrow("PROJECT_REFUSED");
+  expect(await reads.call("project-a", "list_tasks", { query: "unmatched query" })).toMatchObject({ total: 0 });
   replaceConversationCatalog([catalog("project-a","Duplicate"),catalog("project-b","Duplicate")]);
   expect(()=>reads.resolveProject("project-a","Duplicate")).toThrow("PROJECT_AMBIGUOUS");
   replaceConversationCatalog([]);
@@ -254,18 +281,21 @@ test("activity pages retain every observed agent and disclose pending evidence w
     transcriptEvidence: async () => pending ? null : { turn: "busy", lastRecordTs: now },
   };
   const reads = new CompanionBoardReads(createCompanionBoardReadPaths({ liveness }));
+  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+  replaceConversationCatalog(files.map(file => ({ path: file.path, project: file.project, projectName: "activity", root: "claude-projects" as const, engine: "claude" as const, title: file.title ?? "Fixture", kind: "session", mtime: file.mtime, size: file.size, name: "fixture", firstPrompt: "", fmt: "claude" as const })));
   const first = await reads.call("activity", "agent_activity", { liveOnly: true });
   expect(first).toMatchObject({ total: 12, shown: 10, more: 2, truncated: true });
   expect(first.nextCursor).toBeString();
   const second = await reads.call("activity", "agent_activity", { liveOnly: true, cursor: first.nextCursor });
   expect(second).toMatchObject({ total: 12, shown: 2, more: 0 });
   expect(new Set([...first.rows!, ...second.rows!].map(row => (row as { handle: string }).handle)).size).toBe(12);
-  await expect(reads.call("foreign", "agent_activity", { liveOnly: true, cursor: first.nextCursor })).rejects.toThrow("filters changed");
+  await expect(reads.call("foreign", "agent_activity", { liveOnly: true, cursor: first.nextCursor })).rejects.toThrow("PROJECT_REFUSED");
   pending = true;
   const degraded = await reads.call("activity", "agent_activity", { liveOnly: true });
   expect(degraded).toMatchObject({ truncated: true, coverage: { catalog: "stale" } });
   expect(degraded.speech).toContain("counts are partial");
   for (const page of [first, second, degraded]) expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(4000);
+  replaceConversationCatalog([]);
 });
 
 

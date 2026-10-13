@@ -212,6 +212,7 @@ import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, ty
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { recordAuthors, type RecordAuthor } from "@/lib/team";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
+import { normalizedBoardQuery, pullRequestQuery, titleHasPullRequest } from "./pullRequestQuery";
 import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, reportHeaderName, type EffectiveReportTelegram } from "@/lib/projects/settings";
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
@@ -5435,6 +5436,54 @@ async function flowAction(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
   return redactPayload({ flowId, flow: result.flow, ...mutationReceipt(operationId) });
 }
 
+/** A seat's list scope comes from its authenticated designation. */
+function boardReadProject(
+  args: McpToolArgs,
+  dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "authorizedSeats"> & Partial<Pick<ViewerMcpDomainDependencies, "attentionAuthority">>,
+): string {
+  const requested = text(args.project);
+  const caller = dependencies.callerAttribution?.() ?? (dependencies.attentionAuthority ? callerAttributionFrom(dependencies.attentionAuthority(), () => false) : null);
+  if (!caller || (caller.kind !== "manager" && caller.kind !== "gateway")) return requested ? canonicalProject(requested) : "";
+  const seat = caller.conversationId && (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+    .find(candidate => candidate.conversationId === caller.conversationId);
+  if (!seat && caller.kind === "gateway") return requested ? canonicalProject(requested) : "";
+  if (!seat || !seat.project) throw new McpToolRefusal("the caller's project designation is unavailable; nothing was read", { code: "project_scope_refused", status: 403 });
+  const own = canonicalProject(seat.project);
+  if (requested && canonicalProject(requested) !== own) throw new McpToolRefusal("an orchestrator seat reads only its own project's board; use send_message_to_orchestrator for another project", { code: "cross_project_refused", status: 403, retryable: false });
+  return own;
+}
+
+function pipelineReferenceRows(dependencies: ViewerMcpDomainDependencies, project: string): Pipeline[] {
+  const source = dependencies.pipelineSelectionSource?.();
+  return source ? boardSelection(source.filename, "pipelines").referenceRecords(source, project)
+    : (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines).filter(row => !project || canonicalProject(row.project) === project);
+}
+
+function pipelineMatchesPr(pipeline: Pipeline, number: number): boolean {
+  return recordMatchesPr(pipeline.task, pipelineWorkLinks(pipeline), number);
+}
+
+function recordMatchesPr(title: string, resolved: ReturnType<typeof pipelineWorkLinks>, number: number): boolean {
+  const matching = resolved.links.filter(link => link.number === number);
+  return matching.some(link => link.kind === "pr")
+    || (!matching.some(link => link.kind === "issue") && titleHasPullRequest(title, number));
+}
+
+function taskReferenceIds(dependencies: ViewerMcpDomainDependencies, project: string, number: number): string[] {
+  const pipelines = pipelineReferenceRows(dependencies, project);
+  const carrying = new Map<string, Set<string>>();
+  for (const pipeline of pipelines) if (pipelineMatchesPr(pipeline, number)) {
+    const ids = carrying.get(canonicalProject(pipeline.project)) ?? new Set<string>();
+    for (const id of pipeline.taskIds ?? []) ids.add(id);
+    carrying.set(canonicalProject(pipeline.project), ids);
+  }
+  const source = dependencies.taskSelectionSource?.();
+  const tasks = source ? boardSelection(source.filename, "tasks").referenceRecords(source, project)
+    : (dependencies.listTaskRecords?.() ?? dependencies.loadTasks()).filter(row => !project || canonicalProject(row.project) === project);
+  return tasks.filter(task => carrying.get(canonicalProject(task.project))?.has(task.id)
+    || recordMatchesPr(task.text, taskWorkLinks(task, []), number)).map(task => task.id).sort();
+}
+
 /** Lists reuse the store's immutable generation and materialize one page. */
 async function listPipelines(
   args: McpToolArgs,
@@ -5443,8 +5492,11 @@ async function listPipelines(
 ): Promise<McpToolPayload> {
   throwIfCallEnded(context);
   const states = stringSet(args.state, ["open", "draft", "provisioning", "running", "paused", "needs_decision", "needs_review", "completed", "closed"]);
-  const scope = { project: text(args.project), states, includeClosed: args.includeClosed === true,
-    ids: stringSet(args.ids), query: text(args.query).trim().toLowerCase(), updatedSince: sinceTime(args.updatedSince) };
+  const scope = { project: boardReadProject(args, dependencies), states, includeClosed: args.includeClosed === true,
+    ids: stringSet(args.ids), query: normalizedBoardQuery(text(args.query)), updatedSince: sinceTime(args.updatedSince),
+    queryIds: undefined as string[] | undefined };
+  const number = pullRequestQuery(scope.query);
+  if (number !== null) scope.queryIds = pipelineReferenceRows(dependencies, scope.project).filter(row => pipelineMatchesPr(row, number)).map(row => row.id).sort();
   const source = dependencies.pipelineSelectionSource?.();
   /* #2059: the compact row names its PR in one string, the full forms carry
      every resolved link. */
@@ -5460,11 +5512,11 @@ async function listPipelines(
     : await listPageAsync(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines, {
     scope, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))),
     identity: pipeline => ({ id: pipeline.id, time: pipeline.createdAt ?? "" }),
-    matches: pipeline => (!scope.project || pipeline.project === scope.project)
+    matches: pipeline => (!scope.project || canonicalProject(pipeline.project) === scope.project)
       && (!states.length || states.includes(pipeline.state) || (states.includes("open") && !["completed", "closed"].includes(pipeline.state)))
       && (scope.includeClosed || (pipeline.state !== "closed" && !pipeline.hiddenAt))
       && (!scope.ids.length || scope.ids.includes(pipeline.id))
-      && (!scope.query || pipeline.task.toLowerCase().includes(scope.query))
+      && (scope.queryIds !== undefined ? scope.queryIds.includes(pipeline.id) : !scope.query || pipeline.task.toLowerCase().includes(scope.query))
       && (!scope.updatedSince || pipeline.createdAt >= scope.updatedSince),
     project,
   }, () => throwIfCallEnded(context));
@@ -5519,9 +5571,12 @@ function listTaskRow(task: TaskPipelineReadModel) {
 
 function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext = {}): McpToolPayload {
   const statuses = stringSet(args.statuses ?? args.status, ["inbox", "assigned", "blocked", "done"]);
-  const scope = { project: text(args.project), statuses, placement: stringSet(args.placement, ["pinned", "unplaced"])[0] ?? "",
-    openOnly: args.openOnly === true, updatedSince: sinceTime(args.updatedSince), ids: stringSet(args.ids), query: text(args.query).trim().toLowerCase(),
+  const scope = { project: boardReadProject(args, dependencies), statuses, placement: stringSet(args.placement, ["pinned", "unplaced"])[0] ?? "",
+    openOnly: args.openOnly === true, updatedSince: sinceTime(args.updatedSince), ids: stringSet(args.ids), query: normalizedBoardQuery(text(args.query)),
+    queryIds: undefined as string[] | undefined,
     priorities: stringSet(args.priority, [...TASK_PRIORITIES]) };
+  const number = pullRequestQuery(scope.query);
+  if (number !== null) scope.queryIds = taskReferenceIds(dependencies, scope.project, number);
   const source = dependencies.taskSelectionSource?.();
   const project = (source: TaskPipelineReadModel) => {
     const task = projectReadText(source, context);
@@ -5532,13 +5587,13 @@ function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies,
     : listPage(taskReadModel(dependencies), {
     scope, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, 100))),
     identity: task => ({ id: task.id, time: task.updatedAt ?? "" }),
-    matches: task => (!scope.project || task.project === scope.project)
+    matches: task => (!scope.project || canonicalProject(task.project) === scope.project)
       && (!statuses.length || statuses.includes(task.status)) && (!scope.openOnly || task.status !== "done")
       && (!scope.placement || task.placement === scope.placement)
       && (!scope.priorities.length || scope.priorities.includes(taskPriority(task)))
       && (!scope.updatedSince || task.updatedAt >= scope.updatedSince)
       && (!scope.ids.length || scope.ids.includes(task.id))
-      && (!scope.query || task.text.toLowerCase().includes(scope.query)),
+      && (scope.queryIds !== undefined ? scope.queryIds.includes(task.id) : !scope.query || task.text.toLowerCase().includes(scope.query)),
     project,
   });
   const { rows: tasks, ...pagination } = page;
