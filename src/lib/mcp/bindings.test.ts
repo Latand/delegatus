@@ -3342,6 +3342,7 @@ test("seat_tick_settings accepts an expiry in minutes and records the instant it
 
 test("seat_tick_settings lets one seat set another project's tick, and says whose decision it was", async () => {
   const { bindings, store } = tickSettingsBindings({ callerProject: "viewer" });
+  expect(persistProjectAliases([{ source: "another-old", target: "another-project", displayName: "Another project" }])).toBe(true);
   const applied = await bindings.seat_tick_settings({
     clientRequestId: "tick-other-project",
     project: "another-project",
@@ -3866,22 +3867,22 @@ test("bind resolves caller and target server-side, never from the arguments", as
   const spawn = await tools.spawn_agent!.bind({ clientRequestId: "bind-request-1", cwd: sandbox, "prompt": "go", title: "Bind launch", ...forged });
   expect(spawn).toMatchObject({ caller: { kind: "worker", conversationId: callerA.id, project: projectA }, target: { identity: sandbox }, downstreamKey: expect.stringMatching(/^mcp_spawn_[0-9a-f]{64}$/) });
   expect(typeof spawn.target.project).toBe("string");
-  /* The target project is the launch directory's and nothing the arguments
-     say: a supplied `project` may only repeat it. A contradiction — another
-     project, a value that is not a project key — is refused before any
-     claim, because the route would record it as the conversation's owner. */
+  /* A supplied project name resolves first and must agree with the launch
+     directory. Unknown names and another project's key refuse before claim. */
   const canonical = spawn.target.project!;
   expect(await tools.spawn_agent!.bind({ clientRequestId: "bind-request-1", cwd: sandbox, "prompt": "go", title: "Bind launch", project: canonical }))
     .toMatchObject({ target: { project: canonical, identity: sandbox } });
-  for (const project of ["proj-forged", projectB, "not a project key!"]) {
-    expect(() => tools.spawn_agent!.bind({ clientRequestId: "bind-request-1", cwd: sandbox, "prompt": "go", title: "Bind launch", project }))
-      .toThrow("contradicts the canonical project");
+  for (const project of ["proj-forged", "not a project key!"]) {
+    await expect(tools.spawn_agent!.bind({ clientRequestId: "bind-request-1", cwd: sandbox, "prompt": "go", title: "Bind launch", project }))
+      .rejects.toThrow("no such project");
   }
+  await expect(tools.spawn_agent!.bind({ clientRequestId: "bind-request-1", cwd: sandbox, "prompt": "go", title: "Bind launch", project: projectB }))
+    .rejects.toThrow("contradicts the canonical project");
   try {
-    tools.spawn_agent!.bind({ clientRequestId: "bind-request-1", cwd: sandbox, "prompt": "go", title: "Bind launch", project: "proj-forged" });
+    await tools.spawn_agent!.bind({ clientRequestId: "bind-request-1", cwd: sandbox, "prompt": "go", title: "Bind launch", project: "proj-forged" });
   } catch (error) {
     expect(error).toBeInstanceOf(McpToolRefusal);
-    expect((error as McpToolRefusal).details).toMatchObject({ code: "invalid_request", status: 400, canonicalProject: canonical });
+    expect((error as McpToolRefusal).details).toMatchObject({ code: "unknown_project", outcome: "not-executed" });
   }
   expect(await tools.spawn_agent!.bind({ clientRequestId: "x".repeat(200), cwd: sandbox, "prompt": "go", title: "Bind launch" }))
     .toMatchObject({ downstreamKey: expect.stringMatching(/^mcp_spawn_[0-9a-f]{64}$/) });
@@ -3906,7 +3907,7 @@ test("bind resolves caller and target server-side, never from the arguments", as
   expect(await projectless.spawn_agent!.bind({ clientRequestId: "bind-2", cwd: sandbox, "prompt": "go", title: "Bind launch" }))
     .toMatchObject({ caller: { kind: "unidentified", conversationId: null, project: null } });
   expect(() => tools.send_message!.bind({ clientRequestId: "bind-3", text: "hi" })).toThrow("conversationId or transcriptPath is required");
-  expect(() => tools.spawn_agent!.bind({ clientRequestId: "bind-3", "prompt": "go" })).toThrow("cwd is required");
+  await expect(tools.spawn_agent!.bind({ clientRequestId: "bind-3", "prompt": "go" })).rejects.toThrow("cwd is required");
 });
 
 test("send recovery maps the durable delivery record to the closed outcome set", async () => {
@@ -4202,7 +4203,7 @@ test("spawn binding derives predecessor lineage from the active same-project sea
     registrySnapshot: () => snapshot,
     attentionAuthority: () => ({ kind: "worker", conversationId: finalSuccessor, role: null }),
   } as never);
-  const binding = recoverable.spawn_agent!.bind({
+  const binding = await recoverable.spawn_agent!.bind({
     clientRequestId: "seat-lineage-bind",
     cwd: "/repo",
     ["prompt"]: "inspect",
@@ -4290,6 +4291,8 @@ test("task placement bindings require atomic guards and classify field refusals 
     import { viewerMcpBindings } from "./src/lib/mcp/bindings";
     import { createMcpToolService, MemoryMcpReceiptStore } from "./src/lib/mcp/server";
     import { TASKS_FILE } from "./src/lib/tasks/store";
+    import { persistProjectAliases } from "./src/lib/projects/aliases";
+    if (!persistProjectAliases([{ source: "fixture-old", target: "fixture-project", displayName: "Fixture project" }])) throw new Error("fixture project unavailable");
     import { persistedTaskState } from "./src/lib/tasks/storeFixture";
     if (!TASKS_FILE.startsWith(process.env.LLV_STATE_DIR + "/")) throw new Error("state escaped sandbox");
     const service = createMcpToolService(viewerMcpBindings(), new MemoryMcpReceiptStore());
@@ -4328,6 +4331,8 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
     import { viewerMcpBindings } from "./src/lib/mcp/bindings";
     import { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore } from "./src/lib/mcp/server";
     import { TASKS_FILE } from "./src/lib/tasks/store";
+    import { persistProjectAliases } from "./src/lib/projects/aliases";
+    if (!persistProjectAliases([{ source: "fixture-old", target: "fixture-project", displayName: "Fixture project" }])) throw new Error("fixture project unavailable");
     import { persistedTaskRows } from "./src/lib/tasks/storeFixture";
     if (!TASKS_FILE.startsWith(process.env.LLV_STATE_DIR + "/")) throw new Error("state escaped sandbox");
     let conversationId = "conversation_create_bound";

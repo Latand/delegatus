@@ -32,6 +32,7 @@ const { getPipelines, tickPipelines } = await import("@/lib/pipelines/engine");
 const { publishHotStateAuthority } = await import("@/lib/state/hotStateAuthority");
 const { isoNow } = await import("@/lib/tasks/helpers");
 const { mutateTasks } = await import("@/lib/tasks/store");
+const { projectForCwd } = await import("@/lib/scanner/describe");
 const { FileTransactionBusyError } = await import("@/lib/state/fileTransaction");
 const { productionDomainDependencies, viewerMcpBindings, viewerMcpRecoverableTools } = await import("./bindings");
 const { SqliteMcpReceiptStore, createMcpToolService } = await import("./server");
@@ -322,7 +323,7 @@ test("a link-task refused on the task lock keeps its id too", async () => {
   const board = await linkService.callTool("create_task", {
     clientRequestId: `link-task-${crypto.randomUUID()}`,
     text: task,
-    project: path.basename(process.cwd()),
+    project: projectForCwd(process.cwd())!,
   });
   expect(board.ok).toBe(true);
   const taskId = board.ok ? board.taskId : null;

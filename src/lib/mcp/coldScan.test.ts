@@ -60,7 +60,7 @@ test("MCP waits for catalog membership before treating a cached inventory as com
   });
 });
 
-test("an incomplete scan refuses a cross-project seat send retryably before claiming its key", async () => {
+test("an incomplete scan refuses an unknown project immediately before claiming its key", async () => {
   resetFilesRouteCacheForTests();
   setFileCatalogMembershipProbeForTests(async () => "fixture");
   let complete = false;
@@ -88,15 +88,15 @@ test("an incomplete scan refuses a cross-project seat send retryably before clai
   try {
     const result = await service.callTool("send_message_to_orchestrator", args);
     expect(result).toMatchObject({
-      ok: false, code: "scan_incomplete", retryable: true,
-      details: { retryAfterSeconds: 5, outcome: "not-executed", nextAction: "retry-same-key", resend: "safe" },
+      ok: false, code: "unknown_project", retryable: false,
+      details: { outcome: "not-executed", nextAction: "new-request-permitted" },
     });
-    expect("error" in result && result.error).toContain("still scanning, retry in 5 s");
+    expect("error" in result && result.error).toContain("no such project");
     expect(receipts.lookup("send_message_to_orchestrator:cold-send")).toBeNull();
     expect(writes).toBe(0);
-    // Ordinary admission preparation uses the same retryable contract.
+    // Ordinary admission preparation refuses unknown projects before claiming too.
     const create = await service.callTool("create_orchestrator", { project: "unknown-project", clientRequestId: "cold-create" });
-    expect(create).toMatchObject({ ok: false, code: "scan_incomplete", retryable: true });
+    expect(create).toMatchObject({ ok: false, code: "unknown_project", retryable: false });
     expect(receipts.lookup("create_orchestrator:cold-create")).toBeNull();
     complete = true;
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
@@ -219,7 +219,7 @@ test("a born transcript whose folder shares the name refuses it, and other seats
   const { posts, service } = seatSendHarness();
   const args = { project: "Shared name", text: "Synthetic status", clientRequestId: "shared-name-send" };
   expect(await service.callTool("send_message_to_orchestrator", args)).toMatchObject({
-    ok: false, code: "scan_incomplete", retryable: true,
+    ok: false, code: "ambiguous_project", retryable: false,
   });
   expect(posts).toHaveLength(0);
   // The same membership proves the other name unique, so its seat is reached at once.
@@ -275,7 +275,7 @@ test("the persisted index answers for the transcripts it listed", async () => {
     files: { [listed]: recordedMember(listed, "indexed-other-project", projectName) },
   }));
   index("Indexed name");
-  expect(await send("indexed-shared-send")).toMatchObject({ ok: false, code: "scan_incomplete", retryable: true });
+  expect(await send("indexed-shared-send")).toMatchObject({ ok: false, code: "ambiguous_project", retryable: false });
   expect(posts).toHaveLength(0);
   index("Another indexed name");
   expect(await send("indexed-unique-send")).toMatchObject({ ok: true, project: "indexed-seated-project", conversationId: seated });
@@ -328,7 +328,7 @@ test("a persisted attribution does not hide a homonym after its cwd becomes a wo
   const { posts, service } = seatSendHarness();
   const args = { project: "widgets", text: "Synthetic status", clientRequestId: "worktree-homonym-send" };
   expect(await service.callTool("send_message_to_orchestrator", args)).toMatchObject({
-    ok: false, code: "scan_incomplete", retryable: true,
+    ok: false, code: "ambiguous_project", retryable: false,
   });
   expect(posts).toHaveLength(0);
   // The same verified membership still proves the other name unique.
@@ -366,7 +366,7 @@ test("a record written under an older resolution state is projected again", asyn
   expect(posts).toHaveLength(1);
 });
 
-test("a membership too far ahead of the index proves nothing", async () => {
+test("a designated seat stays addressable when membership is ahead of the index", async () => {
   resetFilesRouteCacheForTests();
   setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: false }));
   designateSeat("ahead-seated-project", "Ahead name", "conversation_88888888-8888-4888-8888-888888888888");
@@ -374,11 +374,11 @@ test("a membership too far ahead of the index proves nothing", async () => {
   const { posts, service } = seatSendHarness();
   expect(await service.callTool("send_message_to_orchestrator", {
     project: "Ahead name", text: "Synthetic status", clientRequestId: "ahead-named-send",
-  })).toMatchObject({ ok: false, code: "scan_incomplete", retryable: true });
-  expect(posts).toHaveLength(0);
+  })).toMatchObject({ ok: true, project: "ahead-seated-project" });
+  expect(posts).toHaveLength(1);
 });
 
-test("a name another project of the last completed catalog shares still waits for the complete scan", async () => {
+test("a shared name in the last completed catalog refuses immediately", async () => {
   resetFilesRouteCacheForTests();
   setFileCatalogMembershipProbeForTests(async () => "initial");
   setFileScanRunnerForTests(async () => ({
@@ -392,11 +392,11 @@ test("a name another project of the last completed catalog shares still waits fo
   const { posts, service } = seatSendHarness();
   expect(await service.callTool("send_message_to_orchestrator", {
     project: "Homonym target", text: "Synthetic status", clientRequestId: "homonym-named-send",
-  })).toMatchObject({ ok: false, code: "scan_incomplete", retryable: true });
+  })).toMatchObject({ ok: false, code: "ambiguous_project", retryable: false });
   expect(posts).toHaveLength(0);
 });
 
-test("a membership that cannot be attributed refuses a name with a homonym in the pending scan", async () => {
+test("a fresh member with a homonym refuses while the scan is held open", async () => {
   resetFilesRouteCacheForTests();
   setFileCatalogMembershipProbeForTests(async () => "initial");
   setFileScanRunnerForTests(async () => ({
@@ -405,8 +405,8 @@ test("a membership that cannot be attributed refuses a name with a homonym in th
   }));
   await completedFileScan();
   designateSeat("pending-seated-project", "Pending homonym", "conversation_44444444-4444-4444-8444-444444444444");
-  // The second project exists only in the generation that has not completed.
-  setFileCatalogMembershipProbeForTests(async () => "changed");
+  // The newly born transcript proves the second name before scan completion.
+  catalogMembers([bornTranscript("Pending homonym", "pending-homonym-session")]);
   let release!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
   setFileScanRunnerForTests(async () => {
@@ -422,19 +422,19 @@ test("a membership that cannot be attributed refuses a name with a homonym in th
   const { posts, service } = seatSendHarness();
   const args = { project: "Pending homonym", text: "Synthetic status", clientRequestId: "pending-homonym-send" };
   expect(await service.callTool("send_message_to_orchestrator", args)).toMatchObject({
-    ok: false, code: "scan_incomplete", retryable: true,
+    ok: false, code: "ambiguous_project", retryable: false,
   });
   expect(posts).toHaveLength(0);
   release();
   await completedFileScan();
   expect(await service.callTool("send_message_to_orchestrator", args)).toMatchObject({
     ok: false, code: "ambiguous_project", retryable: false,
-    details: { candidates: ["pending-born-project", "pending-seated-project"] },
+    details: { candidates: expect.arrayContaining(["pending-born-project", "pending-seated-project"]) },
   });
   expect(posts).toHaveLength(0);
 });
 
-test("a known name without a designated seat designates nothing from a partial catalog", async () => {
+test("a known seatless name reaches explicit creation without a completed catalog", async () => {
   resetFilesRouteCacheForTests();
   setFileCatalogMembershipProbeForTests(async () => "fixture");
   setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: false }));
@@ -442,8 +442,8 @@ test("a known name without a designated seat designates nothing from a partial c
   const { posts, service } = seatSendHarness();
   expect(await service.callTool("send_message_to_orchestrator", {
     project: "Seatless target", text: "Synthetic status", clientRequestId: "seatless-named-send",
-  })).toMatchObject({ ok: false, code: "scan_incomplete", retryable: true });
-  expect(posts).toHaveLength(0);
+  })).toMatchObject({ ok: false, code: "outcome_unknown", retryable: false });
+  expect(posts).toMatchObject([{ pathname: "/api/orchestrator/seat", body: { project: "seatless-project" } }]);
   expect(orchestratorSeatFor("seatless-project").active).toBeNull();
 });
 

@@ -169,7 +169,7 @@ import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
 import { listFiles } from "@/lib/scanner";
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
-import { describe, projectForCwd, reprojectFileDescription } from "@/lib/scanner/describe";
+import { describe, projectForCwd, projectInfoFromCwd, reprojectFileDescription } from "@/lib/scanner/describe";
 import { pathAllowed, scanRootEntries } from "@/lib/scanner/roots";
 import { completedFileScan, lastScannedFiles, lastScannedProjectCatalog, type FileScanSnapshot } from "@/lib/scanner/scanCache";
 import { catalogMemberProjects } from "@/lib/scanner/memberProjects";
@@ -1549,6 +1549,7 @@ function requireMcpDeployerConfirmation(args: McpToolArgs): void {
 }
 
 async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  if (dependencies) args = await namedLaunchProject(args, dependencies, "cwd");
   const retiredWorkerLimit = text(args.role) === "orchestrator" && objectRecord(args.roleParams) && "maxWorkers" in args.roleParams
     ? effectiveWorkerLimit(projectForCwd(spawnCwd(args)) ?? "") : null;
   if (text(args.role) === "deployer") requireMcpDeployerCaller(args, spawnTargetProject(args, spawnCwd(args)), dependencies);
@@ -2225,6 +2226,7 @@ function inferredPipelineSource(dependencies: ViewerMcpDomainDependencies): stri
 
 async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   if (dependencies) {
+    args = await namedLaunchProject(args, dependencies, "repoDir");
     refuseSpawnDeniedPipelineCaller(dependencies, args.src);
     assertPipelineSeatAuthority(dependencies, args.src);
   }
@@ -4126,69 +4128,140 @@ function orchestratorDispatchRefusal(error: unknown): McpDispatchNotExecutedErro
   return new McpDispatchNotExecutedError(error.message, details);
 }
 
-/** Resolve tool input before any seat lookup, request claim or control write. */
-async function resolveOrchestratorToolProject(named: string, dependencies: ViewerMcpDomainDependencies): Promise<string> {
+/** Resolve tool input from known identities before any seat lookup or claim.
+    Catalog completion never governs whether an existing seat is addressable. */
+async function resolveOrchestratorToolProject(named: string, dependencies: ViewerMcpDomainDependencies, directory?: string): Promise<string> {
+  const requested = named.trim();
+  const folded = requested.toLowerCase();
   const aliases = projectAliasSnapshot({ strict: true });
-  const keys = new Set<string>();
+  const keys = new Map<string, Set<string>>();
   const names = new Map<string, Set<string>>();
-  const add = (key: string, name?: string) => {
+  const labels = new Map<string, string>();
+  const canonicalKeys = new Map<string, string>();
+  const canonicalKey = (key: string) => {
+    const cached = canonicalKeys.get(key);
+    if (cached) return cached;
     const canonical = canonicalOrchestratorProject(key);
-    keys.add(canonical);
-    const display = projectDisplayName(canonical, name ?? aliases.displayNames[canonical]);
-    const candidates = names.get(display) ?? new Set<string>();
-    candidates.add(canonical);
-    names.set(display, candidates);
+    canonicalKeys.set(key, canonical);
+    return canonical;
   };
+  const directories = new Map<string, ReturnType<typeof projectInfoFromCwd>>();
+  const directoryInfo = (root: string) => {
+    if (!directories.has(root)) directories.set(root, projectInfoFromCwd(root));
+    return directories.get(root);
+  };
+  const index = (map: Map<string, Set<string>>, value: string, project: string) => {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return;
+    const candidates = map.get(normalized) ?? new Set<string>();
+    candidates.add(project);
+    map.set(normalized, candidates);
+  };
+  const add = (key: string, name?: string, root?: string | null) => {
+    const info = root ? directoryInfo(root) : null;
+    const canonical = canonicalKey(info?.worktree ? info.project : key);
+    index(keys, key, canonical);
+    index(keys, canonical, canonical);
+    const display = projectDisplayName(canonical, aliases.displayNames[canonical] ?? name);
+    if (name || aliases.displayNames[canonical] || !labels.has(canonical)) labels.set(canonical, display);
+    index(names, display, canonical);
+    if (name) index(names, name, canonical);
+    if (root) index(names, path.basename(info?.repo ?? root), canonical);
+  };
+  if (directory) {
+    const info = directoryInfo(directory);
+    if (info) add(info.project, info.displayName, info.repo ?? directory);
+  }
   for (const [key, name] of Object.entries(aliases.displayNames)) add(key, name);
-  for (const key of Object.values(aliases.aliases)) add(key);
+  for (const [source, target] of Object.entries(aliases.aliases)) {
+    add(target);
+    index(keys, source, canonicalKey(target));
+  }
+  for (const [key, remote] of Object.entries(recordedProjectRemotes({ strict: true }))) {
+    add(key);
+    index(names, remote.replace(/\.git$/i, "").split("/").at(-1) ?? "", canonicalKey(key));
+  }
   for (const key of Object.keys(readOrchestratorSeatFileOrNull()?.seats ?? {})) add(key);
   for (const seat of dependencies.authorizedSeats?.() ?? []) if (seat.project) add(seat.project);
   const callerProject = dependencies.callerProject?.();
   if (callerProject) add(callerProject);
-  const canonical = canonicalOrchestratorProject(named);
-  if (keys.has(canonical)) return canonical;
-  for (const conversation of Object.values(dependencies.registrySnapshot().conversations)) {
-    const project = conversationProject(conversation);
-    if (project) add(project);
+  const describedProjects = new Set<string>();
+  for (const conversation of Object.values(dependencies.registrySnapshot?.().conversations ?? {})) {
+    const cwd = conversation.generations.at(-1)?.launchProfile?.cwd;
+    const project = conversation.projectOwnership?.project ?? (cwd ? directoryInfo(cwd)?.project : null);
+    if (!project) continue;
+    const canonical = canonicalKey(project);
+    if (describedProjects.has(canonical)) continue;
+    describedProjects.add(canonical);
+    add(project);
+    if (cwd) {
+      const info = directoryInfo(cwd);
+      if (info && canonicalKey(info.project) === canonical) add(project, info.displayName, info.repo ?? cwd);
+    }
   }
-  if (keys.has(canonical)) return canonical;
-  /* A designated seat is addressed without a complete generation. Every
-     transcript born on a busy machine reopens the catalog generation, so
-     requiring a complete one here refused seat-to-seat messages for as long
-     as agents kept starting. The last completed generation proves a key it
-     lists. A display name needs proof that no other project carries it, and
-     the last generation knows nothing of a project born since, so the name
-     resolves only when every transcript now under the scanner roots has a
-     known project: then one project with that name and an active seat is the
-     recipient. A shared name, an unknown name, a project with no seat and a
-     membership that cannot be attributed still wait for the complete
-     catalog. */
   const last = dependencies.lastCompletedCatalog?.() ?? null;
-  for (const entry of last?.projectCatalog ?? []) add(entry.project, entry.displayName);
-  for (const entry of last?.files ?? []) add(entry.project, entry.projectName);
-  if (keys.has(canonical)) return canonical;
-  const members = await dependencies.catalogMemberProjects?.() ?? null;
-  if (members) {
-    for (const member of members) add(member.project, member.projectName);
-    if (keys.has(canonical)) return canonical;
-    const known = [...(names.get(named.trim()) ?? [])];
-    if (known.length === 1 && orchestratorSeatFor(known[0]!).active) return known[0]!;
-  }
-  const scan = await dependencies.completedFileScan();
-  for (const entry of scan.snapshot.projectCatalog) add(entry.project, entry.displayName);
-  for (const entry of scan.snapshot.files) add(entry.project, entry.projectName);
-  if (keys.has(canonical)) return canonical;
-  const candidates = [...(names.get(named.trim()) ?? [])].sort();
+  for (const entry of last?.projectCatalog ?? []) add(entry.project, entry.displayName, entry.projectRoot);
+  for (const entry of last?.files ?? []) add(entry.project, entry.projectName, entry.projectRoot);
+  // Fresh bounded member attribution detects names introduced since the last
+  // generation. A lagging index contributes no complete scan dependency.
+  for (const member of await dependencies.catalogMemberProjects?.() ?? []) add(member.project, member.projectName);
+  const candidates = [...(keys.get(folded) ?? names.get(folded) ?? [])].sort();
   const details = { outcome: "not-executed", evidence: "project-resolution", nextAction: "new-request-permitted", retryable: false };
   if (candidates.length > 1) {
-    throw new McpToolRefusal(`ambiguous project "${named}": ${candidates.join(", ")}; pass one of these project keys`, {
+    throw new McpToolRefusal(`ambiguous project "${requested}": ${candidates.join(", ")}; pass one of these project keys`, {
       ...details, code: "ambiguous_project", candidates,
     });
   }
   if (candidates.length === 1) return candidates[0]!;
-  throw new McpToolRefusal(`unknown project "${named}"; pass a known project key or an unambiguous display name from board_snapshot`, {
-    ...details, code: "unknown_project",
+  const closeMatches = [...labels].map(([project, name]) => ({ project, name,
+    distance: projectNameDistance(folded, name.toLowerCase()),
+  })).filter(match => match.distance <= Math.max(2, Math.floor(folded.length / 3)))
+    .sort((a, b) => a.distance - b.distance || a.project.localeCompare(b.project))
+    .slice(0, 5).map(({ project, name }) => ({ project, name }));
+  throw new McpToolRefusal(`no such project "${requested}"; ${closeMatches.length
+    ? `close matches: ${closeMatches.map(match => `${match.name} (${match.project})`).join(", ")}`
+    : "no close matches; pass a known project key, display name or repository name"}`, {
+    ...details, code: "unknown_project", closeMatches,
   });
+}
+
+/** Bounded edit distance for suggestions; suggestions never select a target. */
+function projectNameDistance(left: string, right: string): number {
+  if (left.length > 256 || right.length > 256) return Infinity;
+  let row = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 0; i < left.length; i += 1) {
+    const next = [i + 1];
+    for (let j = 0; j < right.length; j += 1) {
+      next.push(Math.min(next[j]! + 1, row[j + 1]! + 1, row[j]! + (left[i] === right[j] ? 0 : 1)));
+    }
+    row = next;
+  }
+  return row[right.length]!;
+}
+
+/** Explicit launch names resolve before claims and must still name the cwd. */
+async function namedLaunchProject(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, field: "cwd" | "repoDir"): Promise<McpToolArgs> {
+  if (!text(args.project)) return args;
+  const directory = field === "cwd" ? spawnCwd(args) : path.resolve(required(args, field));
+  const project = await resolveOrchestratorToolProject(text(args.project), dependencies, directory);
+  const canonical = projectForCwd(directory);
+  if (project !== canonical) throw new McpToolRefusal(`project contradicts the canonical project of ${field}; omit it or name the launch directory's own project`, {
+    code: "invalid_request", status: 400, canonicalProject: canonical,
+  });
+  return { ...args, project };
+}
+
+/** Original-key lookups authenticate the caller and use the recorded target.
+    A later display-name change cannot invalidate an existing launch receipt. */
+function launchRecoveryBinding(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, field: "cwd" | "repoDir"): McpRequestBindingInput {
+  const directory = field === "cwd" ? spawnCwd(args) : path.resolve(required(args, field));
+  const caller = recoveryCaller(dependencies);
+  if (field === "cwd" && caller.kind === "unidentified") requireMcpDeployerCaller(args, projectForCwd(directory), dependencies);
+  return {
+    caller,
+    target: { project: null, identity: directory },
+    downstreamKey: field === "cwd" ? `mcp_spawn_${crypto.createHash("sha256").update(requestId(args)).digest("hex")}` : `create_pipeline:${requestId(args)}`,
+  };
 }
 
 /** Fresh admission resolves the name before claiming; replay retains the recorded result. */
@@ -7444,7 +7517,8 @@ function spawnTargetProject(args: McpToolArgs, cwd: string): string | null {
   return canonical;
 }
 
-function bindSpawn(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpRequestBindingInput {
+async function bindSpawn(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpRequestBindingInput> {
+  args = await namedLaunchProject(args, dependencies, "cwd");
   const cwd = spawnCwd(args);
   const caller = recoveryCaller(dependencies);
   const project = spawnTargetProject(args, cwd);
@@ -7695,7 +7769,9 @@ export function viewerMcpRecoverableTools(
 ): Partial<Record<McpToolName, McpRecoverableTool>> {
   return {
     create_pipeline: {
-      bind: (args) => {
+      bindForRecovery: (args) => launchRecoveryBinding(args, domainDependencies, "repoDir"),
+      bind: async (args) => {
+        args = await namedLaunchProject(args, domainDependencies, "repoDir");
         const project = projectForCwd(required(args, "repoDir"));
         refuseCrossProjectFromSeat("create_pipeline", () => project, args, domainDependencies);
         return { caller: recoveryCaller(domainDependencies),
@@ -7712,6 +7788,7 @@ export function viewerMcpRecoverableTools(
     },
     spawn_agent: {
       bind: (args) => bindSpawn(args, domainDependencies),
+      bindForRecovery: (args) => launchRecoveryBinding(args, domainDependencies, "cwd"),
       authorizeClaim: (args, binding) => {
         requireMcpDeployerCaller(args, binding.target.project, domainDependencies);
         requireMcpDeployerConfirmation(args);
@@ -7764,7 +7841,7 @@ export function viewerMcpBindings(
     spawn_agent: (args, context) => spawnAgent(args, viewerControlForCall(controlDependencies, context), context, domainDependencies),
     send_message: (args, context) => sendMessage(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     message_receipt: (args) => messageReceipt(args),
-    create_task: (args) => createBoardTask(args, domainDependencies),
+    create_task: orchestratorProjectBinding(domainDependencies, (args) => createBoardTask(args, domainDependencies), true),
     update_task: (args) => updateBoardTask(args, domainDependencies),
     create_pipeline: (args, context) => unadmittedBeforeMutation(async () => (await createPipeline(args, context, domainDependencies))),
     pipeline_action: Object.assign(

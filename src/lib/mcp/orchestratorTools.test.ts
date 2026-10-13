@@ -111,7 +111,7 @@ function bindingsWith(control: ViewerControlDependencies) {
   return viewerMcpBindings(undefined, control, {
     registrySnapshot: () => ({ conversations: {}, conversationAliases: {} }),
     callerAttribution: () => ({ kind: "gateway", conversationId: "conversation_gateway", role: null }),
-    completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: [{ project: "proj-a", displayName: "Example project", smt: 1, conversations: 0 }], complete: true } }),
+    lastCompletedCatalog: () => ({ files: [], projectCatalog: [{ project: "proj-a", displayName: "Example project", smt: 1, conversations: 0 }] }),
   } as never);
 }
 
@@ -531,7 +531,7 @@ function projectService(control: ViewerControlDependencies, projects = [
     callerAttribution: () => ({ kind: "agent", role: "orchestrator", conversationId: "conversation_caller" }),
     attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_caller" }),
     authorizedSeats: () => [{ project: "caller-project", conversationId: "conversation_caller", path: null }],
-    completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: projects.map(project => ({ ...project, smt: 1, conversations: 1 })), complete: true } }),
+    lastCompletedCatalog: () => ({ files: [], projectCatalog: projects.map(project => ({ ...project, smt: 1, conversations: 1 })) }),
     ...overrides,
   } as unknown as ViewerMcpDomainDependencies;
   const receipts = new MemoryMcpReceiptStore();
@@ -642,7 +642,7 @@ test("unknown orchestrator project is refused before claiming or dispatching", a
   const { service, receipts } = projectService(control);
   const result = await service.callTool("send_message_to_orchestrator", { clientRequestId: "unknown-send", project: "Missing project", text: "status?" });
   expect(result).toMatchObject({ ok: false, code: "unknown_project", details: { outcome: "not-executed", nextAction: "new-request-permitted" } });
-  expect(result.error).toContain('unknown project "Missing project"');
+  expect(result.error).toContain('no such project "Missing project"');
   expect(result.error).toContain("project key");
   expect(posts).toEqual([]);
   expect(receipts.lookup("send_message_to_orchestrator:unknown-send")).toBeNull();
@@ -1068,13 +1068,14 @@ test("owner relay admits orchestrator messages only while its recorded run and s
     callerAttribution: () => ({ kind: "agent", conversationId: caller, role: null }),
     attentionAuthority: () => ({ kind: "worker", conversationId: caller, role: null }),
     authorizedSeats: () => [],
-    completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: [{ project: "proj-a", displayName: "Example project", smt: 1, conversations: 0 }], complete: true } }),
+    lastCompletedCatalog: () => ({ files: [], projectCatalog: [{ project: "proj-a", displayName: "Example project", smt: 1, conversations: 0 }] }),
   } as never;
   const service = createMcpToolService(viewerMcpBindings(undefined, control, domain), new MemoryMcpReceiptStore(), undefined, { recovery: viewerMcpRecoverableTools(domain) });
   let sequence = 0;
   const send = () => service.callTool("send_message_to_orchestrator", { clientRequestId: `owner-send-${++sequence}`, project: "proj-a", text: "Start the requested work" });
   const run = { requestId: "owner_request", relayId: "relay", targetId: "target", conversationId: caller,
-    ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null };
+    ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null,
+    ownerTurn: { request: { text: "Hand this request to the seat", requestText: null } } };
   const store = { v: 1, relays: [{ id: "relay", paused: false, targets: [{ id: "target", enabled: true, ownerTier: true }] }] };
   const ledger = (runs: unknown[]) => writeRelayFile(externalRelayFile("runs"), { v: 1, runs });
   writeRelayFile(externalRelayFile("relays"), store);

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { persistProjectAliases } from "@/lib/projects/aliases";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { loadTasks } from "@/lib/tasks/store";
 
@@ -111,6 +112,7 @@ test("a seat works its own board without a quote", async () => {
 });
 
 test("a project with no seat yet is refused the same way, and the answer says the handover designates its seat", async () => {
+  expect(persistProjectAliases([{ source: "seatless-old", target: "project-without-a-seat", displayName: "Seatless" }])).toBe(true);
   const refused = await call(SEAT, "create_task", { project: "project-without-a-seat", text: "Nobody manages this board" });
   expect(refused).toMatchObject(REFUSED);
   expect(refused.error).toContain("no orchestrator seat yet");
@@ -145,27 +147,27 @@ test("a seat's agent in another seat's project is refused before anything is dis
   expect(dispatched).toEqual([]);
 });
 
-test("the recoverable launch tools refuse while they bind, so no receipt is claimed for a refused launch", () => {
+test("the recoverable launch tools refuse while they bind, so no receipt is claimed for a refused launch", async () => {
   const tools = viewerMcpRecoverableTools(dependencies(SEAT));
   const spawn = () => tools.spawn_agent!.bind({ clientRequestId: "bind-spawn", cwd: otherDir(), prompt: "p", title: "t" });
   const pipeline = () => tools.create_pipeline!.bind({ clientRequestId: "bind-pipeline", repoDir: otherDir(), task: "Fix their login form", stages: [] });
   for (const bind of [spawn, pipeline]) {
     let thrown: unknown;
-    try { bind(); } catch (error) { thrown = error; }
+    try { await bind(); } catch (error) { thrown = error; }
     expect((thrown as { details?: { code?: string; use?: string } }).details).toMatchObject({ code: "cross_project_refused", use: "send_message_to_orchestrator" });
   }
   /* With the operator's request quoted, the pipeline binds to the other project. */
-  const bound = tools.create_pipeline!.bind({ clientRequestId: "bind-pipeline-asked", repoDir: otherDir(), task: "t", stages: [], crossProjectRequest: "Do it on their board." });
+  const bound = await tools.create_pipeline!.bind({ clientRequestId: "bind-pipeline-asked", repoDir: otherDir(), task: "t", stages: [], crossProjectRequest: "Do it on their board." });
   expect(bound).toMatchObject({ target: { project: otherProject() } });
   /* A directory no seat manages is refused the same way by both, and binds once the operator asked. */
   const unmanagedSpawn = () => tools.spawn_agent!.bind({ clientRequestId: "bind-unmanaged-spawn", cwd: unmanagedDir(), prompt: "p", title: "t" });
   const unmanagedPipeline = () => tools.create_pipeline!.bind({ clientRequestId: "bind-unmanaged", repoDir: unmanagedDir(), task: "t", stages: [] });
   for (const bind of [unmanagedSpawn, unmanagedPipeline]) {
     let thrown: unknown;
-    try { bind(); } catch (error) { thrown = error; }
+    try { await bind(); } catch (error) { thrown = error; }
     expect((thrown as { details?: { code?: string; targetHasSeat?: boolean; use?: string } }).details)
       .toMatchObject({ code: "cross_project_refused", targetHasSeat: false, use: "send_message_to_orchestrator" });
   }
-  expect(tools.create_pipeline!.bind({ clientRequestId: "bind-unmanaged-asked", repoDir: unmanagedDir(), task: "t", stages: [], crossProjectRequest: "Run it there." }))
+  expect(await tools.create_pipeline!.bind({ clientRequestId: "bind-unmanaged-asked", repoDir: unmanagedDir(), task: "t", stages: [], crossProjectRequest: "Run it there." }))
     .toMatchObject({ target: { project: projectForCwd(unmanagedDir()) } });
 });
