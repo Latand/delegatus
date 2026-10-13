@@ -1,0 +1,44 @@
+{
+  "method": "Linux /proc/self/fd, 100 alternating unsupported-schema and missing-collection constructor calls against one isolated state.sqlite, then two full collections in later jobs",
+  "baselineRevision": "8f103d02ec68ecae135c5a60d8bb14430ca207b7",
+  "before": {
+    "runtime": "1.4.0",
+    "rejected": 100,
+    "before": {
+      "db": 0,
+      "wal": 0,
+      "shm": 0
+    },
+    "after": {
+      "db": 100,
+      "wal": 100,
+      "shm": 1
+    },
+    "afterGC": {
+      "db": 100,
+      "wal": 99,
+      "shm": 1
+    }
+  },
+  "after": {
+    "runtime": "1.4.0",
+    "rejected": 100,
+    "before": {
+      "db": 0,
+      "wal": 0,
+      "shm": 0
+    },
+    "after": {
+      "db": 0,
+      "wal": 0,
+      "shm": 0
+    },
+    "afterGC": {
+      "db": 0,
+      "wal": 0,
+      "shm": 0
+    }
+  },
+  "regression": "src/lib/state/sqliteStateStore.lifecycle.test.ts",
+  "limit": "The live persistent reader count was not attributed to failed collection opens."
+}

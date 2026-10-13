@@ -296,6 +296,19 @@ test("any caller reads the state the Update dialog shows, and a read changes not
   expect(fs.existsSync(autoFile())).toBe(false);
 });
 
+test("the MCP read preserves the launch deferral reason and retry time", async () => {
+  const deferred = { at: "2026-10-13T01:10:00Z", until: "2026-10-13T01:20:00Z", reason: "launch-hold-expired" as const };
+  writeAuto(autoFile(), { ...initialAuto(), enabled: true, deferred });
+  service!.stop();
+  service = new SelfUpdateService(serviceDeps(path.join(sandbox, "self-update")));
+  setSelfUpdateServiceForTests(service);
+  const result = await once(WORKER, { clientRequestId: "read-deferral" });
+  expect(result.failed).toBe(false);
+  expect(result.payload.deferred).toEqual(deferred);
+  expect((await dialog()).auto?.deferred).toEqual(deferred);
+  expect(posts()).toEqual([]);
+});
+
 test("the Delegatus seat turns automatic updates on and off, and the dialog and the record name it", async () => {
   const on = await once(SEAT, { clientRequestId: "seat-on", enabled: true });
   expect(on.failed).toBe(false);

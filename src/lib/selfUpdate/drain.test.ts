@@ -31,3 +31,12 @@ test("durable automatic custody never expires on a timer", () => {
   releaseDrain(file, "persistent");
   expect(activeDrain(file)).toBeNull();
 });
+
+test("waiting expires at its absolute deadline even when its lease was renewed", () => {
+  const file = join(root, "waiting.json");
+  const waitingUntil = 10_000;
+  writeDrain(file, { id: "waiting", target: "a".repeat(40), since: "2026-01-01T00:00:00Z",
+    until: 99_000, persistent: true, waitingUntil });
+  expect(activeDrain(file, waitingUntil - 1)?.id).toBe("waiting");
+  expect(activeDrain(file, waitingUntil)).toBeNull();
+});

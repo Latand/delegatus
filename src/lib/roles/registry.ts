@@ -1,4 +1,6 @@
 import { effortScale } from "@/lib/agent/efforts";
+import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
+import { projectForCwd } from "@/lib/scanner/describe";
 import { validateLaunchModel } from "@/lib/agent/models";
 
 import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
@@ -46,6 +48,7 @@ export function validateRoleParams(
   const source = (raw ?? {}) as Record<string, unknown>;
   const byKey = new Map(definition.parameters.map((parameter) => [parameter.key, parameter]));
   for (const key of Object.keys(source)) {
+    if (definition.id === "orchestrator" && key === "maxWorkers") continue;
     /* Name the accepted alternatives (#774): the caller can only see the key it
        guessed wrong, and this role's parameter set is right here. */
     if (!byKey.has(key)) {
@@ -55,6 +58,7 @@ export function validateRoleParams(
   }
   const values: RoleParamValues = {};
   for (const parameter of definition.parameters) {
+    if (definition.id === "orchestrator" && parameter.key === "maxWorkers") continue;
     const input = source[parameter.key];
     if (input === undefined || input === "") {
       if (parameter.required && requireRequired) return { ok: false, error: `missing required role parameter: ${parameter.key}` };
@@ -87,8 +91,11 @@ function withoutLines(text: string, labels: readonly string[], emptyOnly: boolea
   return text.replace(new RegExp(`^(?:${labels.join("|")}):${value}(?:\\n|$)`, "gm"), "");
 }
 
-function renderScaffold(definition: RoleDefinition, params: RoleParamValues): string {
-  const rendered = definition.promptScaffold.replace(/\{\{([A-Za-z][A-Za-z0-9]*)\}\}/g, (_match, key: string) => String(params[key] ?? ""));
+function renderScaffold(definition: RoleDefinition, params: RoleParamValues, project = "", deferWorkerLimit = false): string {
+  const rendered = definition.promptScaffold.replace(/\{\{([A-Za-z][A-Za-z0-9]*)\}\}/g, (_match, key: string) => {
+    if (definition.id === "orchestrator" && key === "maxWorkers") return deferWorkerLimit ? "{{maxWorkers}}" : String(effectiveWorkerLimit(project).value);
+    return String(params[key] ?? "");
+  });
   const scoped = definition.id === "orchestrator" && params.mode !== "backlog-campaign"
     ? withoutLines(rendered, BACKLOG_CAMPAIGN_LINES, false)
     : rendered;
@@ -105,16 +112,16 @@ export const APPLY_FIXES_GUIDANCE = "Apply-fixes guidance: Fix every handed find
  * body without ever cutting a fence. This is the single source of the frontend
  * guidance; the pipeline reuses it, so a re-render can't drop it.
  */
-export function roleScaffoldBody(definition: RoleDefinition, params: RoleParamValues): string {
+export function roleScaffoldBody(definition: RoleDefinition, params: RoleParamValues, project = "", deferWorkerLimit = false): string {
   const frontendGuidance = definition.id === "builder" && params.domain === "frontend"
     ? "\n\nUI/frontend implementation guidance: follow the approved interaction and visual contract, preserve accessible semantics and responsive behaviour, and keep every language the project ships in step. Reuse the colours, type, spacing and components the surrounding UI already uses; add no new colour, font, pill or card shape, or decorative label the brief does not ask for."
     : "";
   const fixRound = definition.id === "builder" && params.mode === "apply-fixes";
   /* A fix round has one finish line, scoped to its findings. */
-  const rendered = fixRound ? renderScaffold(definition, params)
+  const rendered = fixRound ? renderScaffold(definition, params, project, deferWorkerLimit)
     .replace(BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE)
     .replace("Review your own diff before you finish and report the verification evidence.", "Report the verification evidence; fix any issue you notice within the specification before finishing.")
-    : renderScaffold(definition, params);
+    : renderScaffold(definition, params, project, deferWorkerLimit);
   return rendered + frontendGuidance + (fixRound ? `\n\n${APPLY_FIXES_GUIDANCE}` : "");
 }
 
@@ -148,8 +155,8 @@ export function roleFenceBlock(definition: RoleDefinition): string {
   return `\n\nSafety fences:\n${definition.safetyFences.map((fence) => `- ${fence}`).join("\n")}`;
 }
 
-function promptWithFences(definition: RoleDefinition, params: RoleParamValues): string {
-  return roleScaffoldBody(definition, params) + roleFenceBlock(definition);
+function promptWithFences(definition: RoleDefinition, params: RoleParamValues, project = ""): string {
+  return roleScaffoldBody(definition, params, project) + roleFenceBlock(definition);
 }
 
 /** The runtime a role runs on for these parameters. A variant row
@@ -171,7 +178,7 @@ function resolveConfig(definition: RoleDefinition, params: RoleParamValues, expl
   return { ok: true, value: config };
 }
 
-export function resolveRole(role: string, params: unknown = {}, explicit: ExplicitRoleConfig = {}, definitions: RoleDefinition[] = loadRoleDefinitions()): RoleResolution {
+export function resolveRole(role: string, params: unknown = {}, explicit: ExplicitRoleConfig = {}, definitions: RoleDefinition[] = loadRoleDefinitions(), project = ""): RoleResolution {
   const definition = definitions.find((candidate) => candidate.id === role);
   if (!definition) return { ok: false, error: `unknown role: ${role} (allowed: ${definitions.map((candidate) => candidate.id).join(", ")})` };
   const parsedParams = validateRoleParams(definition, params);
@@ -184,7 +191,7 @@ export function resolveRole(role: string, params: unknown = {}, explicit: Explic
       definition,
       config: config.value,
       params: parsedParams.value,
-      "prompt": promptWithFences(definition, parsedParams.value),
+      "prompt": promptWithFences(definition, parsedParams.value, project),
       requiresDeploymentConfirmation: definition.id === "deployer",
     },
   };
@@ -195,10 +202,12 @@ export function listRoles(): RoleDefinition[] {
 }
 
 /** Resolve a role-shaped spawn body before the route creates a CLI spec. */
-export function resolveSpawnRole(body: { role?: unknown; roleParams?: unknown; confirm?: unknown; engine?: unknown; model?: unknown; effort?: unknown }): SpawnRoleResolution {
+export function resolveSpawnRole(body: { role?: unknown; roleParams?: unknown; confirm?: unknown; engine?: unknown; model?: unknown; effort?: unknown; project?: unknown; cwd?: unknown }): SpawnRoleResolution {
   if (body.role === undefined || body.role === null || body.role === "") return { ok: true, value: null };
   if (typeof body.role !== "string") return { ok: false, error: "role must be a string" };
-  const base = resolveRole(body.role, body.roleParams);
+  const project = typeof body.project === "string" ? body.project : typeof body.cwd === "string" ? projectForCwd(body.cwd) ?? "" : "";
+  const definitions = loadRoleDefinitions();
+  const base = resolveRole(body.role, body.roleParams, {}, definitions, project);
   if (!base.ok) return base;
   const explicit: ExplicitRoleConfig = {};
   if (body.engine !== undefined) {
@@ -208,7 +217,7 @@ export function resolveSpawnRole(body: { role?: unknown; roleParams?: unknown; c
   }
   if (typeof body.model === "string" && body.model.trim()) explicit.model = body.model.trim();
   if (typeof body.effort === "string" && body.effort.trim()) explicit.effort = body.effort.trim();
-  const resolved = resolveRole(body.role, body.roleParams, explicit);
+  const resolved = resolveRole(body.role, body.roleParams, explicit, definitions, project);
   if (!resolved.ok) return resolved;
   if (resolved.value.requiresDeploymentConfirmation && body.confirm !== "deploy") {
     return { ok: false, error: "deployer requires confirm: deploy" };

@@ -6921,6 +6921,7 @@ async function selfUpdateAutoMain(): Promise<void> {
     waiting: { ...base, auto, history: [{ at: "2026-01-01T12:00:00Z", by: "auto", kind: "build", target: next, from: old, outcome: "done" }] },
     draining: { ...base, auto: { ...auto, longWait: true, drain: { state: "draining", at: "2026-01-02T00:00:00Z" }, blockers: { ...working, busy: true, busyReason: "pipeline-controller" } } },
     "draining-counts": { ...base, auto: { ...auto, longWait: true, drain: { state: "draining", at: "2026-01-02T00:00:00Z" } } },
+    deferred: { ...base, auto: { ...auto, deferred: { at: "2026-01-02T00:10:00Z", until: "2026-01-02T00:20:00Z", reason: "launch-hold-expired" }, drain: null } },
     overran: { ...base, auto: { ...auto, longWait: true, drain: { state: "overran", at: overranAt }, blockers: working,
       decision: { id: "drain-example", at: overranAt, project: "Delegatus", blockers: working } } },
     kept: { ...base, auto: { ...auto, longWait: true, drain: { state: "overran", at: overranAt, choice: "keep-waiting" }, blockers: working, decision: null } },
@@ -7035,6 +7036,9 @@ async function selfUpdateAutoMain(): Promise<void> {
       await openDialog();
       const geometry = await measure();
       if (name === "kept") checkKept(tag, geometry); else check(tag, geometry);
+      if (name === "deferred" && !geometry.text.includes(lang === "uk" ? "Нову роботу можна запускати" : "New work can start")) {
+        report.failures.push(`${tag}: the expired hold does not explain that launches are admitted`);
+      }
       if (name === "long-names" && width === 390 && (geometry.blockerRows.length < 2 || geometry.blockerRows.slice(0, 2).some((row) => row.lines < 2))) {
         report.failures.push(`${tag}: long blocker name did not wrap`);
       }

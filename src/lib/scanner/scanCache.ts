@@ -850,6 +850,13 @@ function probeFileCatalogMembership(slot: FileScanCacheSlot): Promise<string | n
   return probe;
 }
 
+/** The catalog's membership key as the scanner roots hold it now, through the
+    same single probe the generations use; null when it cannot be read. Starts
+    no scan. */
+export function probedFileCatalogMembership(): Promise<string | null> {
+  return probeFileCatalogMembership(globalFileScanSlot());
+}
+
 async function membershipFileScanRefresh(slot: FileScanCacheSlot): Promise<FileScanRefresh | undefined> {
   const membership = await probeFileCatalogMembership(slot);
   if (membership === null || membership === slot.membership) return undefined;

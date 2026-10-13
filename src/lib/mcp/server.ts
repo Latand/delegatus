@@ -13,10 +13,9 @@ import { FOCUS_TARGET_SHAPES } from "@/lib/attention/targets";
 import { statePath } from "@/lib/configDir";
 import { openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
-import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/liveness";
+import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/limits";
 import { operatorLocale } from "@/lib/operator/settings";
-import { MEMORY_KINDS } from "@/lib/memory/parsers";
-import { PIPELINE_LIST_DEFAULT_LIMIT, PIPELINE_LIST_MAX_LIMIT } from "@/lib/pipelines/listProjection";
+import { MEMORY_KINDS } from "@/lib/memory/kinds";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -28,13 +27,15 @@ import {
   MAX_STAGE_REPORT_FINDINGS,
   MAX_STAGE_REPORT_SUMMARY_CHARS,
   MIN_STARTED_PIPELINE_STAGES,
+  PIPELINE_LIST_DEFAULT_LIMIT,
+  PIPELINE_LIST_MAX_LIMIT,
 } from "@/lib/pipelines/limits";
 import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, STAGE_FINDING_SEVERITIES } from "@/lib/pipelines/types";
 import { procBackend } from "@/lib/proc";
 import { parseMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, PROBLEM_MAX_CHARS, PROBLEM_EVIDENCE_MAX_CHARS } from "@/lib/memory/roleTypes";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
-import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
+import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/limits";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
 import { renderTaskPriorityRule } from "@/lib/tasks/priority";
 import { TASK_STEPS_LIMIT } from "@/lib/tasks/steps";
@@ -401,7 +402,6 @@ export interface McpBoundedNumericArg {
  */
 export const MCP_BOUNDED_NUMERIC_ARGS: Partial<Record<McpToolName, readonly McpBoundedNumericArg[]>> = {
   spawn_agent: [
-    { path: ["roleParams", "maxWorkers"], min: 1, max: 20, fallback: 3, role: "orchestrator" },
     { path: ["roleParams", "parallelN"], min: 1, max: 8, fallback: 1, role: "reviewer" },
   ],
   list_conversations: [
@@ -3430,8 +3430,9 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "`project` defaults to your own on a list, and is required to add or remove.",
   ].join(" "),
   role_presets: [
+    "workerLimit reads the machine default and each project's own worker limit, with current running counts; detail:true adds overrides and the newest 20 changes. Set workerLimit {value: 1..64 or null, project?: project, reason: required text up to 300 characters} to change the machine default or one project's limit; running seats read it at their next wake. Do not combine workerLimit with overrides; expectedRevision applies only to overrides.",
     "Read — and change — which engine, model and effort each role runs on (builder, reviewer, verifier, architect, orchestrator, cleaner, prod-auditor, deployer, maintainer, and the builder and reviewer variants such as `trivial`, `frontend` or `apply-fixes`), the mapping the Settings agent mapping edits and `PUT /api/roles` writes.",
-    "Called without `overrides` it is a read: per role its `config` and its `variants`, plus the registry `revision`, its `health` and any `resets` a retirement made. `detail: true` adds each role's `shipped` values and whether its prompt text is overridden, and `choices`, every valid model per engine with the efforts each accepts.",
+    "Called without `overrides` or `workerLimit` it is a read: per role its `config` and its `variants`, plus the registry `revision`, its `health` and any `resets` a retirement made. `detail: true` adds each role's `shipped` values and whether its prompt text is overridden, and `choices`, every valid model per engine with the efforts each accepts.",
     "`overrides` writes, in the shape of the PUT: `{ [roleId]: { config?, variants? } }`, where a full `{ engine, model, effort }` sets a row and `null` resets it to the shipped default; an absent key is left alone, and `promptScaffold: null` restores the shipped prompt text (a scaffold cannot be set from here). Example: `{ builder: { config: { engine: \"claude\", model: \"claude-sonnet-5-5\", effort: \"high\" } }, reviewer: { config: null } }`.",
     "Only the designated orchestrator seat and the operator's own session write; any other caller reads, and its write is refused with `role_presets_write_refused` before anything else is checked.",
     "The whole write is refused, and nothing is stored, when a row names an engine, model or effort outside the launch catalogue (`role_presets_invalid`, with the offending `violations` and `choices`) or when `expectedRevision` is not the current revision (`role_presets_stale_revision`, carrying the current registry to resend against). `expectedRevision` is optional.",
@@ -3439,9 +3440,9 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   auto_updates: [
     "Read — and switch on or off — automatic updates of the Delegatus install that serves this MCP: the same state and the same switch as the Update dialog.",
-    "Enabling means: Delegatus follows `main`; once a newer merge's required checks are green it waits for a quiet window (no agent turns or pipeline stages running, the operator not active, no update in progress, enough free memory) and then deploys that revision by itself. A deployment that fails rolls back to the running release, and automatic updates then switch themselves off and say why (`off`) until someone turns them on again.",
+    "Enabling means: Delegatus follows `main`; once a newer merge's required checks are green it waits for a quiet or stable-work window (the operator not active, no update in progress, enough free memory) and then deploys that revision by itself. A deployment that fails rolls back to the running release, and automatic updates then switch themselves off and say why (`off`) until someone turns them on again.",
     "Called without `enabled` it is a read, open to every caller: `mode`, `availability` (`available`, or why this install cannot update itself), `enabled`, `off` (when and why they switched themselves off), `phase`, `target`, `green`, `blockers` (turn and stage totals plus bounded named `turnList`/`stageList`, `discounted` rows whose host is gone, `unresolved` rows with no liveness record, `busyReason` and `operatorWindowMs`), `drain` (draining start or six-hour operator notice), `decision` (the pending operator choice), `waitingSince`, `longWait`, `changedAt`/`changedBy` and the latest switches as `recentChanges`.",
-    "A ready green update holds new pipeline stages and autonomous launches immediately. Running work finishes without interruption; custody lasts through both processes succeeding or observed rollback. After six hours Needs-you names unfinished work and offers deploy now or keep waiting; admission never reopens on a timer. A turn counts while `agent_activity` lists its conversation as live or its registry row records a process that still answers; a turn whose host is gone never counts. A row with neither a liveness record nor a registry row counts for five minutes from the first reading that saw it and stays in `unresolved` afterwards. Evidence that cannot be read blocks admission. A launch refused with `launch_held_for_update` names the wait in `waitingFor`.",
+    "Automatic waiting holds new pipeline stages and autonomous launches for at most ten minutes, then opens admission for ten minutes and exposes `deferred` with reason `launch-hold-expired` and a retry time. A quiet minute admits the update; after two minutes without new starts it can also admit as soon as all live turns and stages finish. Running work is protected through final admission. Fresh checks, ancestry, healthy processes, idle controllers, operator inactivity, readable evidence and memory still gate admission. Accepted deployment custody lasts through success or observed rollback. Only verified live turns count; dead hosts and turns silent beyond the shared ten-minute stall window without active-check evidence do not count. Long tools, verified child checks and new accepted turns remain protected. Unverified launches are separate `unresolved` diagnostics with at most five minutes of grace. A launch refused with `launch_held_for_update` names the wait in `waitingFor`.",
     "`enabled: true|false` writes, and answers the same view afterwards. Only the designated orchestrator seat of the Delegatus project and the operator's own session write; any other caller, a seat of another project and a seat's parallel self included, is refused with `auto_updates_write_refused` (with a `reason`) before anything changes. Turning them on where `availability` is not `available` is refused with `auto_updates_unavailable`.",
     "Every write is recorded with who made it and when, on the setting and in the Update dialog's history. Idempotent by clientRequestId.",
   ].join(" "),
@@ -4388,6 +4389,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   role_presets: z.object({
     clientRequestId: clientRequestIdSchema,
+    workerLimit: z.object({ value: z.number().int().min(1).max(64).nullable(), project: z.string().trim().min(1).optional(), reason: z.string().trim().min(1).max(300) }).optional(),
     overrides: z.record(z.string(), z.object({
       config: z.object({ engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable().optional()
         .describe("A full { engine, model, effort } sets the role's row; null resets it to the shipped default."),

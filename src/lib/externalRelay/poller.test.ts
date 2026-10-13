@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { externalRelayTempRoot } from "./runner";
@@ -21,6 +21,7 @@ import { noteRelayOutcome, noteRelayProgress } from "./activity";
 import { sampleRequest } from "./request.fixture";
 import { answerRecorder, pruneAnswerRecords, readAnswerRecord, relayAnswersRoot } from "./answers";
 import { setRelaySwitch } from "./switches";
+import { createRelaySteps } from "./progressSteps";
 const root = fs.mkdtempSync(path.join(externalRelayTempRoot(), "relay-poller-test-"));
 process.env.LLV_STATE_DIR = root;
 const runDirs: string[] = [];
@@ -46,6 +47,158 @@ afterAll(() => {
   stopExternalRelayPollers();
   for (const dir of runDirs) fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("polling learns progress_steps within five minutes with owner tools OFF and ignores unknown features", async () => {
+  const previous = readRelayStore().relays;
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  let descriptorReads = 0;
+  let heartbeat: unknown, completed = false;
+  let releaseExtraClaim!: () => void;
+  const extraClaim = new Promise<void>(resolve => { releaseExtraClaim = resolve; });
+  const originalSelection = accountManager.resolveHeadlessSpawn;
+  accountManager.resolveHeadlessSpawn = (() => ({ kind: "exhausted", resetsAt: null })) as typeof originalSelection;
+  let features = ["requester_context"];
+  const observed: { features: string[]; claim: unknown }[] = [];
+  const server = await startTestRelay(async (req, body) => {
+    if (req.url?.endsWith("/heartbeat")) { heartbeat = body; stopExternalRelayPollers(); releaseExtraClaim(); return { body: { status: "ok" } }; }
+    if (req.url?.endsWith("/complete")) { completed = true; return { body: { status: "accepted", duplicate: false } }; }
+    if (req.url?.endsWith("/targets")) return { body: { targets: [{ target_id: "target_1", name: "Target", answered_by: "install", fallback: "service" }] } };
+    if (req.url === "/.well-known/delegatus-relay.json") {
+      descriptorReads++;
+      return { body: { protocol: "delegatus-relay", versions: [1], name: "Test", description: "",
+        api_base: `${server.origin}/v1`, kinds: ["answer"], liveness: sampleRequest.liveness,
+        limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, features } };
+    }
+    if (observed.length >= 3) { await extraClaim; return { status: 204 }; }
+    observed.push({ features: readRelayStore().relays[0]!.features ?? [], claim: body });
+    if (observed.length === 1) {
+      features = ["requester_context", "progress_steps", "future_feature", "relay_owner_tools"];
+      now += 299_999;
+    } else if (observed.length === 2) now++;
+    else return { body: { request: { ...sampleRequest, request_id: "loop-progress-claim" } } };
+    return { status: 204 };
+  });
+  try {
+    setRelaySwitch("relay:owner_tools:enabled", false);
+    updateRelayStore(store => ({ ...store, relays: [{ id: "progress_refresh", origin: server.origin,
+      api_base: `${server.origin}/v1`, name: "Test", description: "", credential: "x".repeat(43),
+      owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+      pairedAt: "2026-01-01T00:00:00Z", paused: false, targets: [{ id: "target_1", name: "Target",
+        answered_by: "install", fallback: "service", enabled: true, engine: "codex", model: "auto", effort: "low",
+        project: null, concurrency: 1, hardCapMinutes: 1 }], features: ["requester_context"],
+      limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 } }] }));
+    ensureExternalRelayPollers();
+    for (let i = 0; i < 400 && !completed; i++) await Bun.sleep(5);
+    expect(observed).toHaveLength(3);
+    expect(descriptorReads).toBe(2);
+    expect(observed.map(row => row.features)).toEqual([["requester_context"], ["requester_context"], features]);
+    for (const row of observed) expect(row.claim).toEqual({ wait_s: 25, kinds: ["answer"],
+      features: ["requester_context", "relay_tool_calls", "relay_tool_actions"], slots: [{ target_id: "target_1", free: 1 }] });
+    expect(completed).toBe(true);
+    expect(heartbeat).toMatchObject({ seq: 1, progress: { kind: "step", label: "accepted" } });
+  } finally {
+    stopExternalRelayPollers(); releaseExtraClaim(); clock.mockRestore(); accountManager.resolveHeadlessSpawn = originalSelection;
+    updateRelayStore(store => ({ ...store, relays: previous }));
+    await server.close();
+  }
+});
+
+test("an unknown-feature 4xx refreshes the descriptor before five minutes with owner tools OFF", async () => {
+  const previous = readRelayStore().relays;
+  let descriptorReads = 0, claims = 0;
+  let features = ["requester_context"];
+  const server = await startTestRelay(req => {
+    if (req.url?.endsWith("/targets")) return { body: { targets: [] } };
+    if (req.url === "/.well-known/delegatus-relay.json") {
+      descriptorReads++;
+      return { body: { protocol: "delegatus-relay", versions: [1], name: "Test", description: "",
+        api_base: `${server.origin}/v1`, kinds: ["answer"], liveness: sampleRequest.liveness,
+        limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, features } };
+    }
+    if (++claims === 1) {
+      features = ["requester_context", "progress_steps"];
+      return { status: 400, body: { error: { code: "unknown_feature" } } };
+    }
+    stopExternalRelayPollers();
+    return { status: 204 };
+  });
+  try {
+    setRelaySwitch("relay:owner_tools:enabled", false);
+    updateRelayStore(store => ({ ...store, relays: [{ id: "unknown_feature_refresh", origin: server.origin,
+      api_base: `${server.origin}/v1`, name: "Test", description: "", credential: "x".repeat(43),
+      owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+      pairedAt: "2026-01-01T00:00:00Z", paused: false, targets: [],
+      limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 } }] }));
+    ensureExternalRelayPollers();
+    for (let i = 0; i < 200 && claims < 2; i++) await Bun.sleep(5);
+    expect(descriptorReads).toBe(2);
+    expect(claims).toBe(2);
+    expect(readRelayStore().relays[0]!.features).toEqual(features);
+  } finally {
+    stopExternalRelayPollers(); updateRelayStore(store => ({ ...store, relays: previous })); await server.close();
+  }
+});
+
+test("a heartbeat unknown-feature refusal refreshes cached features before the next claim", async () => {
+  const previous = readRelayStore().relays;
+  const originalSelection = accountManager.resolveHeadlessSpawn;
+  accountManager.resolveHeadlessSpawn = (() => ({ kind: "exhausted", resetsAt: null })) as typeof originalSelection;
+  let descriptorReads = 0, claims = 0, heartbeats = 0;
+  let releaseRefreshed!: () => void;
+  const refreshed = new Promise<void>(resolve => { releaseRefreshed = resolve; });
+  let featuresAtNextClaim: string[] | undefined;
+  let features: string[] = [];
+  const server = await startTestRelay(async (req) => {
+    if (req.url?.endsWith("/targets")) return { body: { targets: [
+      { target_id: "target_1", name: "Target", answered_by: "install", fallback: "service" },
+    ] } };
+    if (req.url === "/.well-known/delegatus-relay.json") {
+      descriptorReads++;
+      if (descriptorReads === 2) releaseRefreshed();
+      return { body: { protocol: "delegatus-relay", versions: [1], name: "Test", description: "",
+        api_base: `${server.origin}/v1`, kinds: ["answer"], liveness: sampleRequest.liveness,
+        limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, features } };
+    }
+    if (req.url?.endsWith("/heartbeat")) {
+      heartbeats++;
+      features = ["progress_steps"];
+      return { status: 400, body: { error: { code: "unknown_feature" } } };
+    }
+    if (req.url?.endsWith("/complete")) return { body: { status: "ok" } };
+    if (req.url?.endsWith("/requests/claim")) {
+      claims++;
+      if (claims === 1) return { body: { request: { ...sampleRequest, request_id: "heartbeat-unknown-feature" } } };
+      await Promise.race([refreshed, Bun.sleep(100)]);
+      for (let i = 0; i < 20 && !readRelayStore().relays[0]!.features?.includes("progress_steps"); i++) await Bun.sleep(5);
+      featuresAtNextClaim ??= readRelayStore().relays[0]!.features;
+      stopExternalRelayPollers();
+    }
+    return { status: 204 };
+  });
+  try {
+    setRelaySwitch("relay:owner_tools:enabled", false);
+    updateRelayStore(store => ({ ...store, relays: [{ id: "heartbeat_unknown_feature", origin: server.origin,
+      api_base: `${server.origin}/v1`, name: "Test", description: "", credential: "x".repeat(43),
+      owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+      pairedAt: "2026-01-01T00:00:00Z", paused: false, targets: [{ id: "target_1", name: "Target",
+        answered_by: "install", fallback: "service", enabled: true, engine: "codex", model: "auto", effort: "low",
+        project: null, concurrency: 1, hardCapMinutes: 1 }], features: [],
+      limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 } }] }));
+    ensureExternalRelayPollers();
+    for (let i = 0; i < 400 && (claims < 2 || descriptorReads < 2 || featuresAtNextClaim === undefined); i++) await Bun.sleep(5);
+    expect(heartbeats).toBe(1);
+    expect(claims).toBeGreaterThanOrEqual(2);
+    expect(descriptorReads).toBe(2);
+    expect(featuresAtNextClaim).toEqual(["progress_steps"]);
+    expect(readRelayStore().relays[0]!.features).toEqual(["progress_steps"]);
+  } finally {
+    stopExternalRelayPollers();
+    accountManager.resolveHeadlessSpawn = originalSelection;
+    updateRelayStore(store => ({ ...store, relays: previous }));
+    await server.close();
+  }
 });
 
 test("F4 requires the local switch and latest descriptor, and refresh removes withdrawn features", async () => {
@@ -80,6 +233,64 @@ test("F4 requires the local switch and latest descriptor, and refresh removes wi
   } finally { setRelaySwitch("relay:owner_tools:enabled", false); await server.close(); }
 });
 
+test("a forced descriptor refresh preserves newly discovered features after an older read completes", async () => {
+  const previous = readRelayStore().relays;
+  let descriptorReads = 0;
+  let releaseOrdinary!: () => void;
+  let releaseForced!: () => void;
+  let ordinaryStarted!: () => void;
+  let forcedStarted!: () => void;
+  const ordinaryGate = new Promise<void>(resolve => { releaseOrdinary = resolve; });
+  const forcedGate = new Promise<void>(resolve => { releaseForced = resolve; });
+  const ordinarySeen = new Promise<void>(resolve => { ordinaryStarted = resolve; });
+  const forcedSeen = new Promise<void>(resolve => { forcedStarted = resolve; });
+  const server = await startTestRelay(async req => {
+    if (req.url !== "/.well-known/delegatus-relay.json") return { status: 404 };
+    descriptorReads++;
+    if (descriptorReads === 1) {
+      ordinaryStarted();
+      await ordinaryGate;
+      return { body: { protocol: "delegatus-relay", versions: [1], name: "Test", description: "",
+        api_base: `${server.origin}/v1`, kinds: ["answer"], liveness: sampleRequest.liveness,
+        limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, features: [] } };
+    }
+    forcedStarted();
+    await forcedGate;
+    return { body: { protocol: "delegatus-relay", versions: [1], name: "Test", description: "",
+      api_base: `${server.origin}/v1`, kinds: ["answer"], liveness: sampleRequest.liveness,
+      limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, features: ["progress_steps"] } };
+  });
+  const relay: PairedRelay = { id: "descriptor_overlap", origin: server.origin, api_base: `${server.origin}/v1`, name: "Test",
+    description: "", credential: "x".repeat(43), owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+    pairedAt: "2026-01-01T00:00:00Z", paused: true, targets: [], features: [],
+    limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 } };
+  try {
+    setRelaySwitch("relay:owner_tools:enabled", false);
+    updateRelayStore(store => ({ ...store, relays: [relay] }));
+    const ordinary = refreshRelayDescriptorFeatures(relay.id);
+    await ordinarySeen;
+    const forced = refreshRelayDescriptorFeatures(relay.id, 0, { force: true });
+    await Bun.sleep(20);
+    expect(descriptorReads).toBe(1);
+    releaseOrdinary();
+    await ordinary;
+    await forcedSeen;
+    releaseForced();
+    await forced;
+
+    const current = readRelayStore().relays[0]!;
+    expect(descriptorReads).toBe(2);
+    expect(current.features).toEqual(["progress_steps"]);
+    expect(createRelaySteps(current.features)).not.toBeNull();
+    expect(relayClaimCapabilities(current).features).not.toContain("relay_owner_tools");
+  } finally {
+    releaseOrdinary();
+    releaseForced();
+    updateRelayStore(store => ({ ...store, relays: previous }));
+    await server.close();
+  }
+});
+
 test("the real claim loop adds F4 after descriptor refresh only while the local switch is ON", async () => {
   const previous = readRelayStore().relays;
   try {
@@ -107,7 +318,7 @@ test("the real claim loop adds F4 after descriptor refresh only while the local 
         ensureExternalRelayPollers();
         const deadline = Date.now() + 2000;
         while (!claim && Date.now() < deadline) await Bun.sleep(5);
-        expect(order).toEqual(enabled ? ["targets", "descriptor", "claim"] : ["targets", "claim"]);
+        expect(order).toEqual(["targets", "descriptor", "claim"]);
         expect(claim).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions",
           ...(enabled ? ["relay_owner_tools"] : [])], slots: [] });
       } finally { stopExternalRelayPollers(); await server.close(); }

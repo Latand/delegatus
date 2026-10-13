@@ -78,6 +78,7 @@ import { refreshTeamView } from "@/components/team/teamClient";
  */
 
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
+const OVERVIEW_PERFORMANCE = SCENARIO === "overview-performance";
 /* A task another machine runs (docs/design/synced-task-card.md): four tasks owned by the linked stage
    install, one of them with no lane (an older peer), beside the board's own local ones. The page
    answers nothing about them; the driver serves `/api/links/agents` with this install's id, the host
@@ -164,6 +165,7 @@ const voicePlan = (): CompanionPlan => ({ type: "pro", limitReached: false, obse
   primary: { usedPercent: 23, resetsAt: VOICE_LOADED + 7_200, windowMinutes: 300 }, secondary: { usedPercent: 77, resetsAt: VOICE_LOADED + 4 * 86_400, windowMinutes: 10_080 } });
 const VOICE_CODEX = new URLSearchParams(location.search).get("backend") === "codex";
 const voiceSettings = {
+  callMemory: true,
   enabled: false, backend: (VOICE_CODEX ? "codex" : "api") as "api" | "codex", monthlyCapUsd: 20,
   ...(new URLSearchParams(location.search).get("nocall") === "1" ? {} : { lastCodexSession: { seconds: 471, endedAt: Date.UTC(2026, 9, 10, 9), plan: voicePlan() } }),
   keySource: (new URLSearchParams(location.search).get("keysource") ?? "missing") as "env" | "file" | "missing", keyEnvironment: "OPENAI_API_KEY" as const,
@@ -2992,6 +2994,32 @@ Object.assign(window, {
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
+/* A production-shaped, invented catalog for the landing board's poll cost.
+   Keep inactive history: the Overview still projects it before filtering. */
+if (OVERVIEW_PERFORMANCE) {
+  files.length = 0; tasks.length = 0; pipelines.length = 0; flows.length = 0;
+  for (let i = 0; i < 1071; i++) {
+    const project = `catalog-${i % 194}`;
+    files.push(conversation(`catalog-${i}`, `Catalog worker ${i}`, {
+      project, ...(i < 12 ? working() : {}),
+    }));
+  }
+  for (let i = 0; i < 1331; i++) {
+    const project = `catalog-${i % 194}`;
+    const member = files[i];
+    tasks.push(task(`catalog-${i}`, i < 12 ? "assigned" : "done", `Catalog task ${i}`, "", 60 + i, member ? [member] : [], { project }));
+    if (member) pipelines.push(pipeline(`catalog-${i}`, `Catalog task ${i}`, `catalog-${i}`, i < 12 ? "running" : "completed",
+      [stage("build", "builder", "review"), stage("review", "reviewer", null)],
+      [{ stageId: "build", attempts: [attempt(1, i < 12 ? "running" : "passed", member)] }],
+      { stageId: "build", state: i < 12 ? "running" : "completed", input: null, activatedBy: null }, { project }));
+  }
+  Object.assign(window, { overviewPoll: () => {
+    files[0] = { ...files[0], size: files[0].size + 1 };
+    performance.mark("overview-poll");
+    fireTasksChanged();
+  } });
+}
+
 /* The task album (`&album=1`): the search task's pictures across its stages
    and a conversation, as `GET /api/tasks/:id/album` answers them, and the
    export task's, all seen. The pictures are drawn on a canvas in the shapes an
@@ -3542,6 +3570,16 @@ const pickerAccounts = SIDEBAR_WEEKLY ? {
 /* The header menu's driver block (kanbanBoard.browser.test.tsx, "the header's menu, built"): `&header=1`
    hands shared memory, the key, the ping and the team to the driver, and `&member=1` signs a member in. */
 const HEADER_MENU = new URLSearchParams(location.search).has("header");
+const WORKER_SCENE = new URLSearchParams(location.search).get("workers");
+let workerMachine = WORKER_SCENE ? 8 : 3;
+let workerProject: number | null = WORKER_SCENE === "own" || WORKER_SCENE === "over" ? 10 : null;
+const workerRunning = WORKER_SCENE === "over" ? 11 : WORKER_SCENE ? 7 : 0;
+const workerSource = () => workerProject === null ? "machine" : "project";
+const workerAnswer = (project: string | null) => ({
+  machine: { value: workerMachine, default: 3, min: 1, max: 64, source: "machine", changedAt: null, changedBy: null },
+  project: project ? { key: project, value: workerProject, effective: workerProject ?? workerMachine, source: workerSource() } : null,
+  running: { here: project ? workerRunning : null, machine: WORKER_SCENE ? 19 : 0 },
+});
 const HEADER_ROUTES = ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/team"];
 const ROLE_MEMORY = new URLSearchParams(location.search).has("rolememory");
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
@@ -3549,6 +3587,18 @@ const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   const method = (init?.method ?? "GET").toUpperCase();
+  if (WORKER_SCENE && url.pathname === "/api/operator/settings") {
+    return json({ ok: true, locale: { value: new URLSearchParams(location.search).get("lang") ?? "en", source: "chosen", changedAt: iso(0) }, timeZone: null });
+  }
+  if (url.pathname === "/api/operator/worker-limit") {
+    let project = url.searchParams.get("project");
+    if (method === "PUT") {
+      const body = JSON.parse(String(init?.body));
+      if (body.project) { project = body.project; workerProject = body.value; }
+      else workerMachine = body.value ?? 3;
+    }
+    return json(workerAnswer(project));
+  }
   // Seat failure evidence supplies the seat read and locale through the driver.
   if (new URLSearchParams(location.search).has("seatfailure")
     && ["/api/orchestrator/seat", "/api/orchestrator/seat/status", "/api/operator/settings"].includes(url.pathname)) {
@@ -4189,6 +4239,19 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
      delivery's owner when it admits the send. The feed reads provenance only once a row it cannot name is
      shown, and until that read answers it draws such a record as a system fold across the whole row: answered
      late, the delegated row flashed as a fold before it took its tint. */
+  if (VOICE && url.pathname === "/api/voice-companion/memory") {
+    const mode = new URLSearchParams(location.search).get("callmemory") ?? "empty";
+    const held = window as unknown as { callMemoryRows?: Array<{ sessionId: string; summary: Record<string, unknown> }> };
+    if (!held.callMemoryRows) held.callMemoryRows = mode === "empty" ? [] : Array.from({ length: mode === "three" ? 3 : 1 }, (_, at) => ({
+      sessionId: `memory-${at}`, summary: { version: 1, state: mode === "failed" ? "failed" : "final", code: mode === "failed" ? "account" : undefined,
+        startedAt: VOICE_LOADED * 1000 - (at + 1) * 3600000, endedAt: VOICE_LOADED * 1000 - at * 3600000, projects: ["Garden"],
+        asked: mode === "failed" ? [] : [mode === "long" ? "W".repeat(160) : L("Review the current layout.", "Перевірити поточний макет.")],
+        done: mode === "long" ? ["D".repeat(80)] : [], decided: mode === "failed" ? [] : [mode === "long" ? "Д".repeat(160) : L("Keep the compact header.", "Залишити компактну шапку.")],
+        open: mode === "failed" ? [] : [mode === "long" ? "Q".repeat(160) : L("Wait for the build report.", "Дочекатися звіту збірки.")], privateOmitted: mode === "three" && at === 0,
+        through: 10, model: "fixture", durationMs: 1000, inputTokens: 1000, outputTokens: 100, attempts: 1 } }));
+    if (method === "DELETE") { const body = JSON.parse(String(init?.body ?? "{}")); held.callMemoryRows = body.all ? [] : held.callMemoryRows.filter(row => row.sessionId !== body.sessionId); }
+    return json({ calls: held.callMemoryRows });
+  }
   if (VOICE && url.pathname === "/api/voice-companion/settings") {
     if (method === "PUT") { const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>; voice.settingsWrites.push(body); Object.assign(voiceSettings, body); }
     return json(voiceSettings);
@@ -4276,6 +4339,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if ((SEAT_HEAD || (FM_SEAT && fm.confirmed)) && url.pathname === "/api/orchestrator/seat/status") {
     return json({
+      ...(WORKER_SCENE ? { workers: { running: workerRunning, runningMachine: 19, limit: workerProject ?? workerMachine, source: workerSource(), machine: workerMachine } } : {}),
       project: PROJECT, designated: true, conversationId: orchestrator.conversationId, predecessorConversationId: null,
       engine: "claude", model: "claude-opus-4-5-1m", effort: "high", accountId: "primary", cwd: "/repo/atlas", transcriptPath: orchestrator.path,
       liveness: { lifecycle: "running", hostState: "alive", silentForMs: 1_000 },
@@ -4368,7 +4432,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 
 /* #1820's scenarios ARE the Overview, which is the view with no project
    selected; every other scenario opens on `atlas`'s own board. */
-const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY || new URLSearchParams(location.search).get("railview") === "overview";
+const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY || OVERVIEW_PERFORMANCE || new URLSearchParams(location.search).get("railview") === "overview";
 if (OVERVIEW_VIEW) localStorage.removeItem("llvProject");
 else localStorage.setItem("llvProject", PROJECT);
 /* The harness may seed a language before this module runs (`openFixture`), so

@@ -6,6 +6,7 @@ import { withoutStoredLessons } from "@/lib/memory/roleStore";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 import { prepareControllerArtifactDirectory, protectExistingControllerArtifacts } from "./controllerArtifacts";
+import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
 import { renderStagePrompt } from "./prompts";
 import type { EffectivePipelineRole, Pipeline, PipelineStage } from "./types";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
@@ -26,7 +27,8 @@ export async function composeStageInput(
   reserveBytes = 0,
 ): Promise<string> {
   const limit = MAX_STRUCTURED_TEXT_BYTES - reserveBytes;
-  const inline = withoutStoredLessons(renderStagePrompt(pipeline, stage, role, previousOutput));
+  const workerLimit = effectiveWorkerLimit(pipeline.project).value;
+  const inline = withoutStoredLessons(renderStagePrompt(pipeline, stage, role, previousOutput, workerLimit));
   if (Buffer.byteLength(inline, "utf8") <= limit) {
     await protectExistingControllerArtifacts(worktreeDir, exec);
     return inline;
@@ -46,6 +48,7 @@ export async function composeStageInput(
   const render = (headBytes: number, specFile: ReturnType<typeof artifact> | null) => withoutStoredLessons(renderStagePrompt(
     specFile ? { ...pipeline, spec: artifactReference(specFile, headBytes) } : pipeline, stage, role,
     previousFile ? artifactReference(previousFile, headBytes) : previousOutput,
+    workerLimit,
   ));
   const fit = (specFile: ReturnType<typeof artifact> | null) => {
     let prompt = "";
