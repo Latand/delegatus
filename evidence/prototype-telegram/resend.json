@@ -40,7 +40,9 @@
       "width": 196.609375,
       "height": 32
     },
-    "calls": 1
+    "calls": 1,
+    "draftPreserved": true,
+    "buttonPositionPreserved": true
   },
   {
     "theme": "dark",
@@ -83,7 +85,9 @@
       "width": 196.609375,
       "height": 32
     },
-    "calls": 1
+    "calls": 1,
+    "draftPreserved": true,
+    "buttonPositionPreserved": true
   },
   {
     "theme": "light",
@@ -103,7 +107,7 @@
     "sent": {
       "width": 390,
       "button": {
-        "x": 177.390625,
+        "x": 16,
         "y": 628,
         "width": 196.609375,
         "height": 44
@@ -122,11 +126,13 @@
     "surface": "seat-form",
     "button": {
       "x": 25,
-      "y": 794.28125,
+      "y": 657.28125,
       "width": 196.609375,
       "height": 44
     },
-    "calls": 1
+    "calls": 1,
+    "draftPreserved": true,
+    "buttonPositionPreserved": true
   },
   {
     "theme": "dark",
@@ -146,7 +152,7 @@
     "sent": {
       "width": 390,
       "button": {
-        "x": 177.390625,
+        "x": 16,
         "y": 628,
         "width": 196.609375,
         "height": 44
@@ -165,10 +171,12 @@
     "surface": "seat-form",
     "button": {
       "x": 25,
-      "y": 794.28125,
+      "y": 657.28125,
       "width": 196.609375,
       "height": 44
     },
-    "calls": 1
+    "calls": 1,
+    "draftPreserved": true,
+    "buttonPositionPreserved": true
   }
 ]

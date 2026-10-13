@@ -113,19 +113,20 @@ describe("prototype Telegram resend", () => {
           await page.locator(`[data-decision-row="pr_${"d".repeat(32)}"]`).click();
           const seatForm = page.locator(`[data-decision-card="open"][data-decision-review="pr_${"d".repeat(32)}"]`);
           const seatResend = seatForm.locator("[data-prototype-telegram-resend]");
+          const seatComment = seatForm.locator("[data-decision-comment]"); await seatComment.fill("Зберегти коментар форми");
           await seatResend.scrollIntoViewIfNeeded();
           expect(await seatForm.locator("[data-prototype-telegram-state]").innerText()).toContain("forbidden");
           const seatBox = await seatResend.boundingBox();
           expect(seatBox!.x).toBeGreaterThanOrEqual(0); expect(seatBox!.x + seatBox!.width).toBeLessThanOrEqual(width);
           expect(seatBox!.y).toBeGreaterThanOrEqual(0); expect(seatBox!.y + seatBox!.height).toBeLessThanOrEqual(phone ? 844 : 900);
           expect(await seatResend.evaluate(element => element.scrollWidth > element.clientWidth + 1)).toBe(false);
-          const seatComment = seatForm.locator("[data-decision-comment]"); await seatComment.fill("Зберегти коментар форми");
           await page.screenshot({ path: path.join(out, `variant-1-${width}-uk-${theme}-seat-failed.png`) });
           if (phone) await seatResend.tap(); else await seatResend.click();
           await seatForm.locator('[data-prototype-telegram-state="sent"]').waitFor();
           expect(await seatComment.inputValue()).toBe("Зберегти коментар форми");
+          expect(await seatResend.boundingBox()).toEqual(seatBox);
           await page.screenshot({ path: path.join(out, `variant-1-${width}-uk-${theme}-seat-sent.png`) });
-          expect(pageErrors).toEqual([]); readings.push({ theme, width, surface: "seat-form", button: seatBox, calls: 1 });
+          expect(pageErrors).toEqual([]); readings.push({ theme, width, surface: "seat-form", button: seatBox, calls: 1, draftPreserved: true, buttonPositionPreserved: true });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/prototype-telegram", { recursive: true });
