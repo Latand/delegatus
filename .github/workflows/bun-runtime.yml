@@ -295,7 +295,9 @@ jobs:
 
   runtime-gate:
     needs: [bun-runtime, native-codex-runtime]
-    if: always()
+    # The separate manual queue campaign intentionally skips both normal jobs.
+    # Every PR still receives this verdict, including failed/cancelled parents.
+    if: always() && (github.event_name != 'workflow_dispatch' || !inputs.native_queue_campaign)
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:

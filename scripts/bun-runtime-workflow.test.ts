@@ -144,7 +144,7 @@ test("runtime CI runs on every PR and supports dispatch", () => {
 test("one stable runtime context refuses every incomplete upstream verdict", () => {
   const gate = workflow.jobs["runtime-gate"] as typeof workflow.jobs[string] & { needs: string[] };
   expect(gate.needs).toEqual(["bun-runtime", "native-codex-runtime"]);
-  expect(gate.if).toBe("always()");
+  expect(gate.if).toBe(`always() && (${workflow.jobs["bun-runtime"]!.if})`);
   const check = gate.steps[0]!.run!;
   for (const result of ["success", "failure", "cancelled", "skipped", ""]) {
     for (const side of ["BUN_RESULT", "CODEX_RESULT"]) {
