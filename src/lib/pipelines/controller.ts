@@ -8,6 +8,7 @@ import { scheduleAutoMerge } from "@/lib/forge/autoMerge";
 import { scheduleForgeSweep } from "@/lib/forge/sweep";
 import { loadTasks } from "@/lib/tasks/store";
 import { completedFileScan } from "@/lib/scanner/scanCache";
+import { FILE_SCAN_RETRY_SECONDS, isFileScanIncompleteError } from "@/lib/scanner/incompleteScan";
 import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 import type { FileEntry } from "@/lib/types";
 
@@ -96,11 +97,13 @@ export function writeFlowPipelineControllerHeartbeat(
 }
 
 export async function controllerFileScan(): Promise<{ files: FileEntry[]; complete: boolean }> {
-  const completed = await completedFileScan();
-  return {
-    files: completed.snapshot.files,
-    complete: completed.snapshot.complete,
-  };
+  try {
+    const completed = await completedFileScan({ wait: false });
+    return { files: completed.snapshot.files, complete: completed.snapshot.complete };
+  } catch (error) {
+    if (!isFileScanIncompleteError(error)) throw error;
+    return { files: [], complete: false };
+  }
 }
 
 function productionPorts(): FlowPipelineControllerPorts {
@@ -213,6 +216,8 @@ export class FlowPipelineController {
       if (scanOutcome?.state === "completed" && scanOutcome.value.complete) {
         entries = scanOutcome.value.files;
         scanComplete = true;
+      } else if (scanOutcome?.state === "completed") {
+        this.ports.log(`[flow pipeline controller] scan-dependent flow phase skipped: still scanning, retry in ${FILE_SCAN_RETRY_SECONDS} s`);
       }
       const flowOutcome = scanComplete
         ? await this.runPhase("flows", cycle, pass, trigger, () => this.ports.tickFlows(entries))

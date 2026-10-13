@@ -6,7 +6,8 @@
  * whose process stopped before its receipt settled is answered from the round
  * it recorded, even once its source files are gone.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
+import * as bot from "@/lib/telegram/bot/service";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { NextRequest } from "next/server";
@@ -16,9 +17,10 @@ import { viewerMcpBindings } from "@/lib/mcp/bindings";
 import { runAsMcpHttpCaller } from "@/lib/mcp/callerContext";
 import { createMcpToolService, SqliteMcpReceiptStore, type McpReceiptStore, type McpToolResult } from "@/lib/mcp/server";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { publishPOST, reviewPOST, reviewReadPOST, reviewScopePOST } from "./http";
+import { publishPOST, reviewPOST, reviewReadPOST, reviewScopePOST, resendTelegramPOST } from "./http";
 import { prototypeWorld, type PrototypeWorld } from "./world";
 import { criticLane } from "./criticGate.fixture";
+import { insertSeatRound } from "./seatRounds";
 
 const PNG = Buffer.from([137,80,78,71,13,10,26,10]);
 const CAPABILITY = { a: "a".repeat(43), b: "b".repeat(43) } as const;
@@ -49,7 +51,7 @@ function world(callers = CALLERS): PrototypeWorld {
 function control(prototype = world()) {
   return { post: async (url: string, body: Record<string, unknown>, headers?: Record<string, string>) => {
     const req = request(url, body, headers);
-    const route = url.endsWith("/read") ? reviewReadPOST : url.endsWith("/scope") ? reviewScopePOST : publishPOST;
+    const route = url.endsWith("/telegram") ? resendTelegramPOST : url.endsWith("/read") ? reviewReadPOST : url.endsWith("/scope") ? reviewScopePOST : publishPOST;
     dispatches.push(url);
     const caller = prototype.caller(req);
     const heldStage = caller.conversationId ? prototype.stage(caller.conversationId) : null;
@@ -112,6 +114,38 @@ test("another project's caller replaying a review read under the same key learns
   const again = await as(CAPABILITY.a, () => service().callTool("read_prototype_review", args));
   expect(again).toMatchObject({ ok: true, replayed: true });
   expect(JSON.stringify(again)).toContain("Private comment of project A");
+});
+
+test("MCP publication posts and resend is fenced before receipt replay and idempotent across processes", async () => {
+  const keys: string[] = [];
+  const sender = spyOn(bot.TelegramBotService.prototype, "sendOwnerReview").mockImplementation(async input => {
+    keys.push(input.clientRequestId);
+    return { alreadySent: false, sentAt: "2026-10-13T00:00:00Z", parts: 1, messageIds: [10], chat: "fixture", chatId: "41", attributedTo: { unidentified: true } };
+  });
+  try {
+    const published = await as(CAPABILITY.a, async () => service().callTool("publish_prototype_review", await input("telegram-publication", "task-a")));
+    expect(published.ok).toBe(true);
+    expect(keys).toEqual([String(published.reviewId)]);
+    expect(rounds("task-a")[0]).toMatchObject({ telegramPost: { state: "sent" } });
+    const args = { clientRequestId: "resend-one", reviewId: published.reviewId };
+    const first = await as(CAPABILITY.a, () => service().callTool("resend_prototype_review_telegram", args));
+    expect(first).toMatchObject({ ok: true, telegramPost: { state: "sent" } });
+    const again = await as(CAPABILITY.a, () => service().callTool("resend_prototype_review_telegram", args));
+    expect(again).toMatchObject({ ok: true, replayed: true });
+    expect(keys).toHaveLength(2);
+    const foreign = await as(CAPABILITY.b, () => service().callTool("resend_prototype_review_telegram", args));
+    expect(foreign.ok).toBe(false);
+    expect(JSON.stringify(foreign)).not.toContain("telegramPost");
+    expect(keys).toHaveLength(2);
+    // A fresh request intentionally sends another copy.
+    expect((await as(CAPABILITY.a, () => service().callTool("resend_prototype_review_telegram", { ...args, clientRequestId: "resend-two" }))).ok).toBe(true);
+    expect(keys).toHaveLength(3);
+    const seatRound = { ...rounds("task-a")[0]!, id: `pr_${"c".repeat(32)}`, taskId: null, publicationKey: "seat-telegram", inputDigest: "seat-telegram" };
+    insertSeatRound(seatRound);
+    expect((await as(CAPABILITY.a, () => service().callTool("resend_prototype_review_telegram", { reviewId: seatRound.id, clientRequestId: "seat-resend" }))).ok).toBe(true);
+    expect((await as(CAPABILITY.b, () => service().callTool("resend_prototype_review_telegram", { reviewId: seatRound.id, clientRequestId: "seat-resend" }))).ok).toBe(false);
+    expect(keys).toHaveLength(4);
+  } finally { sender.mockRestore(); }
 });
 
 test("each pipeline publishes on its own task under the same key, sequentially and in parallel", async () => {

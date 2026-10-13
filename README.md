@@ -246,6 +246,12 @@ open, the review can instead hold three to seven questions; answer them in
 one message or skip to the recommended answers. On a phone the review fills
 the screen, and a tap opens a frame full screen with zoom and swipe.
 
+Published reviews also go to the paired owner's Telegram as rich carousels.
+A round over Telegram's limits is sent as a compact preview with a link to
+the full review. A failed or unconfirmed post stays visible on the review
+with its reason and appears in the project's seat wake. **Send to Telegram
+again** is available in the review's action area, including older rounds.
+
 When the orchestrator starts a pipeline, launches a stage, creates a task or
 moves one, a wire runs from the orchestrator to that card for about a minute
 and then fades. Point at a wire to see its task's title, and click it to go
@@ -697,6 +703,9 @@ The tools, by area:
   `get_task`, `update_task`, and `publish_prototype_review` and
   `read_prototype_review`, which post numbered variants to a task for you to
   choose from and read back your choice;
+  `resend_prototype_review_telegram` sends a round again by `reviewId`, within
+  the caller's project. Reusing `clientRequestId` replays the result; use a
+  fresh key for an intentional new copy;
 - **pipelines:** `create_pipeline`, `list_pipelines`, `get_pipeline`,
   `pipeline_action`, `link_task_to_pipeline`, `stage_report`, which a
   stage agent calls to report its verdict, and `leave_lesson`, which stores

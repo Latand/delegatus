@@ -3063,6 +3063,15 @@ function mockRender(width: number, height: number, hue: number, label: string, p
    `&proto=elsewhere` answers the search task as a linked installation does. */
 const PROTO = params.get("proto") ?? (CALM ? "1" : null);
 const protoPosts: unknown[] = [];
+const protoTelegramPosts: unknown[] = [];
+/* `&tgstate=sent|uncertain|unknown` starts the Telegram record in that state; the default is a failed post. */
+function telegramFixturePost(key: string): PrototypeRoundView["telegramPost"] {
+  const state = params.get("tgstate");
+  if (state === "unknown") return undefined;
+  if (state === "sent") return { key, state: "sent", at: iso(MIN) };
+  if (state === "uncertain") return { key, state: "uncertain", reason: "send_uncertain", at: iso(MIN) };
+  return { key, state: "failed", reason: "forbidden", at: iso(MIN) };
+}
 const protoRounds: Record<string, PrototypeRoundView[]> = {};
 const protoHidden = new Map<string, AttentionDismissalMark>();
 const protoSaveState: Record<string, PrototypeDeliveryState> = { "t-upload": "no-orchestrator" };
@@ -3116,6 +3125,10 @@ if (PROTO) {
   if (params.has("duplicate-frames")) {
     const variants = protoRounds["t-search"]![0]!.variants;
     variants[1]!.frames[0]!.image = variants[0]!.frames[0]!.image;
+  }
+  if (PROTO === "telegram") {
+    protoRounds["t-search"]![0]!.id = `pr_${"e".repeat(32)}`;
+    protoRounds["t-search"]![0]!.telegramPost = telegramFixturePost("fixture-automatic");
   }
   protoRounds["t-upload"] = [round("r-upload", "t-upload", L("Upload progress sheet", "Панель перебігу завантаження"), 9 * MIN, [
     { number: 1, name: L("Progress under the attached file with speed, size and a stop", "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп"), description: L("A new design: the bar sits under the attached file.\nNothing existing changes.", "Новий дизайн: смуга стоїть під прикріпленим файлом.\nНаявне не змінюється."), videos: [], frames: [
@@ -3188,6 +3201,7 @@ if (PROTO) {
   let releaseSave: (() => void) | null = null;
   Object.assign(window, {
     protoPosts,
+    protoTelegramPosts,
     protoHoldSave: () => { (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave = new Promise<void>((resolve) => { releaseSave = resolve; }); },
     protoReleaseSave: () => { releaseSave?.(); releaseSave = null; delete (window as unknown as { protoHeldSave?: Promise<void> }).protoHeldSave; },
     protoPhase: (taskId: string, phase: PrototypeDeliveryPhase) => {
@@ -3240,6 +3254,7 @@ if (DECISIONS) {
     { number: 2, name: L("Split by engine", "Розподіл за рушієм"), description: "", videos: [], frames: [{ image: frame(32, "split · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
   ];
   if (DECISIONS === "reject") seatRounds[0]!.variants = protoRounds["t-search"]![0]!.variants;
+  if (DECISIONS === "telegram") seatRounds[0]!.telegramPost = telegramFixturePost("fixture-seat-post");
   /* `&decisions=long`: the first seat question has a title of ninety characters and a recommended option of a sentence. */
   if (DECISIONS === "long") {
     const held = seatRounds[0]!;
@@ -3624,6 +3639,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const review = url.searchParams.get("review");
     const round = review ? [...seatRounds, ...Object.values(protoRounds).flat()].find((entry) => entry.id === review) ?? null : undefined;
     return json({ project: PROJECT, decisions: fixtureDecisions(), ...(round === undefined ? {} : { round }) });
+  }
+  if (url.pathname === "/api/prototype-reviews/telegram" && init?.method === "POST") {
+    const body = JSON.parse(String(init.body)); protoTelegramPosts.push(body);
+    const round = [...Object.values(protoRounds).flat(), ...seatRounds].find(r => r.id === body.reviewId);
+    if (!round) return json({ error: "review not found" }, 404);
+    round.telegramPost = { key: body.clientRequestId, state: "sent", at: new Date().toISOString() };
+    return json({ reviewId: round.id, telegramPost: round.telegramPost });
   }
   if ((PROTO || DECISIONS) && /^\/api\/tasks\/[^/]+\/prototypes$/.test(url.pathname)) {
     const taskId = decodeURIComponent(url.pathname.split("/")[3]!);

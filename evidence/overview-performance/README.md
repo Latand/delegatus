@@ -6,7 +6,8 @@ and newest-work ordering (#2794). The first browser observation recorded eight
 changed payloads with long tasks of **567, 276, 242, 405, 418, 417, 450 and
 429 ms**. See `step-one.json`.
 
-The final comparison uses the existing kanban browser driver, the real Viewer
+The final comparison was rerun after merging main
+`8f103d02e` and uses the existing kanban browser driver, the real Viewer
 components and production stylesheet, and production React bundles. Its invented
 catalog contains 194 projects, 1,071 conversations, 1,331 tasks and 1,071 pipelines;
 12 workers are active and the remaining history stays in the input. Each update
@@ -16,10 +17,10 @@ one Chromium 153.0.8010.12 process, in fresh 1440 × 900 contexts.
 
 | Measurement, eight changes | Main | Incremental |
 | --- | ---: | ---: |
-| Longest main-thread task per change | 265.5–503.6 ms | 21.1–36.3 ms |
-| Median longest task | 362.9 ms | 25.4 ms |
+| Longest main-thread task per change | 312.6–517.4 ms | 21.4–33.4 ms |
+| Median longest task | 348.4 ms | 30.0 ms |
 | Long tasks (at least 50 ms) | 8 | 0 |
-| Total blocking time above 50 ms | 2,559 ms | 0 ms |
+| Total blocking time above 50 ms | 2,714 ms | 0 ms |
 
 `readings.json` keeps every sample, rendered board text and each card rectangle.
 The text and rectangles match exactly. The two complete viewport screenshots
@@ -57,7 +58,9 @@ project movement and ordering, foreign assignments, unresolved admissions, share
 workers, conversation generations, removals, review findings, seat designation,
 clock expiry, and phone/desktop model parity. The existing Overview (#1820) and
 calm task-card browser cases pass, including desktop 1440/1000 and phone 390,
-English/Ukrainian and light/dark themes where those cases apply.
+English/Ukrainian and light/dark themes where those cases apply. The merged
+main's prototype Telegram resend case also passes; the final browser run totals
+five passing cases.
 
 The main baseline already fails three other browser assertions: #1695 reports
 14 px horizontal overflow at 640 px; newest-work ordering expects old state-line
