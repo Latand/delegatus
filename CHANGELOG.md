@@ -468,15 +468,16 @@ guarantees for the 1.x series.
   cancel or overwrite each other's calls; each client now has its own
   session ([#2704]).
 - **The CLI and the updater finish cleanly.** A CLI that failed during
-  startup could exit while its runtime host or web server was still alive;
-  it now waits for them to stop and keeps its exit status. An update step
+  startup could exit while processes it had started were still alive; it
+  now waits for them to stop and keeps its exit status. An update step
   whose process had finished just as its deadline arrived is read as its
   real result, and a step whose process vanished ends within a bound
   ([#2733], [#2711]).
-- **The runtime host no longer dies opening its journal.** A start that met
-  another reader at the wrong moment failed with "database is locked" and
-  the host exited. The busy wait is now set before the first statement that
-  reads the file ([#2803]).
+- **A start no longer fails on a locked journal.** The process that keeps
+  agents running across restarts could exit at startup with "database is
+  locked" when another reader had its journal open at that moment. The busy
+  wait is now set before the first statement that reads the file
+  ([#2803]).
 - **Temporary directories in use are not swept.** A directory whose owner
   was still running could be removed once it passed the age limit. A live
   owner now protects its directory until it exits ([#2718]).
