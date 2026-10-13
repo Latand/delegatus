@@ -22,7 +22,7 @@ export async function PUT(req: NextRequest) {
       if (body.releaseUncertainSession !== true || Object.keys(body).length !== 1) throw new Error("INVALID_SETTINGS");
       return NextResponse.json(new CompanionStorage().releaseUncertainMints(LIVE_USD_PER_SECOND), { headers: { "Cache-Control": "no-store" } });
     }
-    if (Object.keys(body).some(key => !["enabled", "monthlyCapUsd", "backend"].includes(key))) throw new Error("INVALID_SETTINGS");
+    if (Object.keys(body).some(key => !["enabled", "monthlyCapUsd", "backend", "callMemory"].includes(key))) throw new Error("INVALID_SETTINGS");
     return NextResponse.json(new CompanionStorage().updateSettings(body), { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return companionFailure(error); }
 }

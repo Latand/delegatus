@@ -13,10 +13,9 @@ import { FOCUS_TARGET_SHAPES } from "@/lib/attention/targets";
 import { statePath } from "@/lib/configDir";
 import { openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
-import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/liveness";
+import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/limits";
 import { operatorLocale } from "@/lib/operator/settings";
-import { MEMORY_KINDS } from "@/lib/memory/parsers";
-import { PIPELINE_LIST_DEFAULT_LIMIT, PIPELINE_LIST_MAX_LIMIT } from "@/lib/pipelines/listProjection";
+import { MEMORY_KINDS } from "@/lib/memory/kinds";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -28,13 +27,15 @@ import {
   MAX_STAGE_REPORT_FINDINGS,
   MAX_STAGE_REPORT_SUMMARY_CHARS,
   MIN_STARTED_PIPELINE_STAGES,
+  PIPELINE_LIST_DEFAULT_LIMIT,
+  PIPELINE_LIST_MAX_LIMIT,
 } from "@/lib/pipelines/limits";
 import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, STAGE_FINDING_SEVERITIES } from "@/lib/pipelines/types";
 import { procBackend } from "@/lib/proc";
 import { parseMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, PROBLEM_MAX_CHARS, PROBLEM_EVIDENCE_MAX_CHARS } from "@/lib/memory/roleTypes";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
-import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
+import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/limits";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
 import { renderTaskPriorityRule } from "@/lib/tasks/priority";
 import { TASK_STEPS_LIMIT } from "@/lib/tasks/steps";

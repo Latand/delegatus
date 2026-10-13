@@ -78,6 +78,7 @@ import { refreshTeamView } from "@/components/team/teamClient";
  */
 
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
+const OVERVIEW_PERFORMANCE = SCENARIO === "overview-performance";
 /* A task another machine runs (docs/design/synced-task-card.md): four tasks owned by the linked stage
    install, one of them with no lane (an older peer), beside the board's own local ones. The page
    answers nothing about them; the driver serves `/api/links/agents` with this install's id, the host
@@ -164,6 +165,7 @@ const voicePlan = (): CompanionPlan => ({ type: "pro", limitReached: false, obse
   primary: { usedPercent: 23, resetsAt: VOICE_LOADED + 7_200, windowMinutes: 300 }, secondary: { usedPercent: 77, resetsAt: VOICE_LOADED + 4 * 86_400, windowMinutes: 10_080 } });
 const VOICE_CODEX = new URLSearchParams(location.search).get("backend") === "codex";
 const voiceSettings = {
+  callMemory: true,
   enabled: false, backend: (VOICE_CODEX ? "codex" : "api") as "api" | "codex", monthlyCapUsd: 20,
   ...(new URLSearchParams(location.search).get("nocall") === "1" ? {} : { lastCodexSession: { seconds: 471, endedAt: Date.UTC(2026, 9, 10, 9), plan: voicePlan() } }),
   keySource: (new URLSearchParams(location.search).get("keysource") ?? "missing") as "env" | "file" | "missing", keyEnvironment: "OPENAI_API_KEY" as const,
@@ -2992,6 +2994,32 @@ Object.assign(window, {
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
+/* A production-shaped, invented catalog for the landing board's poll cost.
+   Keep inactive history: the Overview still projects it before filtering. */
+if (OVERVIEW_PERFORMANCE) {
+  files.length = 0; tasks.length = 0; pipelines.length = 0; flows.length = 0;
+  for (let i = 0; i < 1071; i++) {
+    const project = `catalog-${i % 194}`;
+    files.push(conversation(`catalog-${i}`, `Catalog worker ${i}`, {
+      project, ...(i < 12 ? working() : {}),
+    }));
+  }
+  for (let i = 0; i < 1331; i++) {
+    const project = `catalog-${i % 194}`;
+    const member = files[i];
+    tasks.push(task(`catalog-${i}`, i < 12 ? "assigned" : "done", `Catalog task ${i}`, "", 60 + i, member ? [member] : [], { project }));
+    if (member) pipelines.push(pipeline(`catalog-${i}`, `Catalog task ${i}`, `catalog-${i}`, i < 12 ? "running" : "completed",
+      [stage("build", "builder", "review"), stage("review", "reviewer", null)],
+      [{ stageId: "build", attempts: [attempt(1, i < 12 ? "running" : "passed", member)] }],
+      { stageId: "build", state: i < 12 ? "running" : "completed", input: null, activatedBy: null }, { project }));
+  }
+  Object.assign(window, { overviewPoll: () => {
+    files[0] = { ...files[0], size: files[0].size + 1 };
+    performance.mark("overview-poll");
+    fireTasksChanged();
+  } });
+}
+
 /* The task album (`&album=1`): the search task's pictures across its stages
    and a conversation, as `GET /api/tasks/:id/album` answers them, and the
    export task's, all seen. The pictures are drawn on a canvas in the shapes an
@@ -4211,6 +4239,19 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
      delivery's owner when it admits the send. The feed reads provenance only once a row it cannot name is
      shown, and until that read answers it draws such a record as a system fold across the whole row: answered
      late, the delegated row flashed as a fold before it took its tint. */
+  if (VOICE && url.pathname === "/api/voice-companion/memory") {
+    const mode = new URLSearchParams(location.search).get("callmemory") ?? "empty";
+    const held = window as unknown as { callMemoryRows?: Array<{ sessionId: string; summary: Record<string, unknown> }> };
+    if (!held.callMemoryRows) held.callMemoryRows = mode === "empty" ? [] : Array.from({ length: mode === "three" ? 3 : 1 }, (_, at) => ({
+      sessionId: `memory-${at}`, summary: { version: 1, state: mode === "failed" ? "failed" : "final", code: mode === "failed" ? "account" : undefined,
+        startedAt: VOICE_LOADED * 1000 - (at + 1) * 3600000, endedAt: VOICE_LOADED * 1000 - at * 3600000, projects: ["Garden"],
+        asked: mode === "failed" ? [] : [mode === "long" ? "W".repeat(160) : L("Review the current layout.", "Перевірити поточний макет.")],
+        done: mode === "long" ? ["D".repeat(80)] : [], decided: mode === "failed" ? [] : [mode === "long" ? "Д".repeat(160) : L("Keep the compact header.", "Залишити компактну шапку.")],
+        open: mode === "failed" ? [] : [mode === "long" ? "Q".repeat(160) : L("Wait for the build report.", "Дочекатися звіту збірки.")], privateOmitted: mode === "three" && at === 0,
+        through: 10, model: "fixture", durationMs: 1000, inputTokens: 1000, outputTokens: 100, attempts: 1 } }));
+    if (method === "DELETE") { const body = JSON.parse(String(init?.body ?? "{}")); held.callMemoryRows = body.all ? [] : held.callMemoryRows.filter(row => row.sessionId !== body.sessionId); }
+    return json({ calls: held.callMemoryRows });
+  }
   if (VOICE && url.pathname === "/api/voice-companion/settings") {
     if (method === "PUT") { const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>; voice.settingsWrites.push(body); Object.assign(voiceSettings, body); }
     return json(voiceSettings);
@@ -4391,7 +4432,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 
 /* #1820's scenarios ARE the Overview, which is the view with no project
    selected; every other scenario opens on `atlas`'s own board. */
-const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY || new URLSearchParams(location.search).get("railview") === "overview";
+const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY || OVERVIEW_PERFORMANCE || new URLSearchParams(location.search).get("railview") === "overview";
 if (OVERVIEW_VIEW) localStorage.removeItem("llvProject");
 else localStorage.setItem("llvProject", PROJECT);
 /* The harness may seed a language before this module runs (`openFixture`), so

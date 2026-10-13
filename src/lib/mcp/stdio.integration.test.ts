@@ -67,7 +67,7 @@ function isolatedEnvironment(sandbox: string, extra: Record<string, string> = {}
     LLV_CODEX_HOME: path.join(sandbox, "codex-home"),
   };
   for (const directory of Object.values(directories)) fs.mkdirSync(directory, { recursive: true });
-  return { ...environment, ...directories, ...extra };
+  return { ...environment, ...directories, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", ...extra };
 }
 
 /**
@@ -190,6 +190,7 @@ test("a launched stdio server releases repeated large read answers without loadi
   const sandbox = sandboxDir("llv-mcp-large-reads-");
   let calls = 0;
   const http = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    if (new URL(request.url).pathname === "/api/runtime/deployments") return Response.json({ deployments: [] });
     const body = await request.json() as { id: string; params: { name: string } };
     return Response.json({ jsonrpc: "2.0", id: body.id, result: { content: [], structuredContent: {
       ok: true, toolName: body.params.name, clientRequestId: null, replayed: false,
@@ -226,16 +227,31 @@ test("a launched stdio server releases repeated large read answers without loadi
     await client.connect(transport);
     const before = await sample("before");
     let answeredBytes = 0;
-    for (let index = 0; index < 12; index++) {
-      const result = await client.callTool({ name: "board_snapshot", arguments: {} });
+    const reads = [
+      { name: "resources", arguments: {} },
+      { name: "operator_snapshot", arguments: {} },
+      { name: "board_snapshot", arguments: {} },
+      { name: "agent_fleet", arguments: {} },
+      { name: "list_pipelines", arguments: { full: true } },
+      { name: "get_pipeline", arguments: { pipelineId: "fixture", full: true } },
+      { name: "conversation_messages", arguments: { transcriptPath: "/fixture/messages.jsonl" } },
+      { name: "read_prototype_review", arguments: {} },
+      { name: "agent_activity", arguments: { full: true } },
+      { name: "search_transcripts", arguments: { query: "fixture" } },
+      { name: "lifecycle_events", arguments: { mode: "query", limit: 1 } },
+      { name: "lifecycle_events", arguments: { mode: "digest", subscriberId: "fixture-subscriber" } },
+    ];
+    for (let index = 0; index < reads.length * 2; index++) {
+      const read = reads[index % reads.length]!;
+      const result = await client.callTool({ name: read.name, arguments: { ...read.arguments, clientRequestId: `memory-${index}` } });
       expect(result.structuredContent).toMatchObject({ ok: true, sequence: index + 1 });
       const payload = (result.structuredContent as Record<string, unknown> | undefined)?.payload;
       if (typeof payload === "string") answeredBytes += Buffer.byteLength(payload);
     }
     const after = await sample("after");
     console.log(JSON.stringify({ largeReadMemory: { calls, answeredBytes, retainedHeapBytes: after - before } }));
-    expect(calls).toBe(12);
-    expect(answeredBytes).toBeGreaterThan(24 * 1024 * 1024);
+    expect(calls).toBe(24);
+    expect(answeredBytes).toBeGreaterThan(46 * 1024 * 1024);
     expect(after - before).toBeLessThan(8 * 1024 * 1024);
     expect(fs.existsSync(path.join(environment.LLV_STATE_DIR!, "mcp-receipts.sqlite"))).toBe(false);
   } finally { await client.close(); await transport.close(); http.stop(true); }
@@ -291,13 +307,35 @@ test("store reads stay independent of a slow host, held pipeline lease and same-
     });
   `], { cwd: process.cwd(), env: environment, stdin: "pipe", stdout: "pipe", stderr: "pipe" }));
   let session: McpSession | undefined;
+  let viewer: typeof seed | undefined;
   try {
     const reader = seed.stdout.getReader();
     const ready = await reader.read();
     if (ready.done) throw new Error(await new Response(seed.stderr).text());
     expect(new TextDecoder().decode(ready.value)).toContain("held");
     reader.releaseLock();
-    session = await startMcp(environment, "read-latency");
+    // Delegated reads cross the real HTTP service in its own process, sharing
+    // the fixture state and held lease. Its search binding still reaches the
+    // slow dependency above; get_pipeline must complete independently of it.
+    viewer = ownFixtureChild(Bun.spawn([process.execPath, "-e", `
+      const { NextRequest } = await import('next/server');
+      const { handleMcpHttpRequest } = await import('./src/lib/mcp/http');
+      const upstream = process.env.LLV_VIEWER_CONTROL_URL;
+      const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: request => {
+        if (new URL(request.url).pathname === '/api/mcp') return handleMcpHttpRequest(new NextRequest(request));
+        return fetch(new URL(new URL(request.url).pathname, upstream), { method: request.method, headers: request.headers, body: request.body });
+      } });
+      console.log('http://127.0.0.1:' + server.port);
+      for await (const chunk of Bun.stdin.stream()) break;
+      server.stop(true);
+      process.exit(0);
+    `], { cwd: process.cwd(), env: environment, stdin: "pipe", stdout: "pipe", stderr: "pipe" }));
+    const viewerReader = viewer.stdout.getReader();
+    const viewerReady = await viewerReader.read();
+    if (viewerReady.done) throw new Error(await new Response(viewer.stderr).text());
+    const viewerOrigin = new TextDecoder().decode(viewerReady.value).trim();
+    viewerReader.releaseLock();
+    session = await startMcp({ ...environment, LLV_VIEWER_CONTROL_URL: viewerOrigin }, "read-latency");
     const slow = session.client.callTool({ name: "search_transcripts", arguments: { clientRequestId: "slow-http", query: "fixture" } });
     await started;
     let completedCloses = 0;
@@ -321,9 +359,11 @@ test("store reads stay independent of a slow host, held pipeline lease and same-
     seed.stdin.end();
     for (const result of await Promise.all(closes)) expect(result.structuredContent).toMatchObject({ ok: true });
     await slow;
+    viewer.stdin.end();
+    await viewer.exited;
     expect(methods).toEqual(["snapshot"]);
     expect(httpPaths.filter(pathname => pathname !== "/api/pipelines/tick")).toEqual(["/api/search/transcripts"]);
-    const lines = session.stderr().split("\n").filter(line => line.startsWith("[mcp slow]"));
+    const lines = `${session.stderr()}\n${await new Response(viewer.stderr).text()}`.split("\n").filter(line => line.startsWith("[mcp slow]"));
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatch(/tool=search_transcripts callerMs=\d+ httpMs=\d+/);
     expect(Number(lines[0]!.match(/httpMs=(\d+)/)?.[1])).toBeGreaterThanOrEqual(2_900);
@@ -332,6 +372,7 @@ test("store reads stay independent of a slow host, held pipeline lease and same-
     seed.stdin.end();
     await seed.exited;
     await session?.close();
+    if (viewer) { viewer.stdin.end(); await viewer.exited; }
     http.stop(true);
     for (const socket of sockets) socket.destroy();
     await new Promise<void>(resolve => host.close(() => resolve()));
