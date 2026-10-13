@@ -4,6 +4,7 @@ import { statePath } from "@/lib/configDir";
 import { writePrivate, type StoredSession } from "./storage";
 import { validCallSummary, type CallSummary } from "./callMemoryTypes";
 import type { CompanionUsage } from "./contract";
+import { CALL_RETENTION_COUNT, CALL_RETENTION_MS, callEndedAt, safelyClosed } from "./retention";
 
 export type TranscriptKind = "session_start" | "session_end" | "utterance" | "reply" | "delegation" | "tool" | "handoff" | "request" | "report" | "summary";
 /** Page contract. Times are milliseconds from session start; speech also
@@ -51,7 +52,8 @@ export class CompanionTranscriptRecords {
   private size(entry: TranscriptEntry) { return Buffer.byteLength(JSON.stringify(entry) + "\n"); }
   begin(session: StoredSession, voice: string, sessions: Record<string, StoredSession>, now: number): void {
     this.prune(sessions, now);
-    this.put(session.id, { id: "start", kind: "session_start", atMs: 0, data: { createdAt: session.createdAt, locale: session.locale, voice } }, true);
+    this.put(session.id, { id: "start", kind: "session_start", atMs: 0, data: { createdAt: session.createdAt, locale: session.locale, voice,
+      project: session.project, startedBy: session.startedBy ?? { operator: true } } }, true);
   }
   put(id: string, entry: TranscriptEntry, settled: boolean): void {
     const held = this.active.get(id) ?? this.load(id);
@@ -98,12 +100,36 @@ export class CompanionTranscriptRecords {
     writePrivate(this.file(id), [...held.entries.values()].map(entry => JSON.stringify(entry) + "\n").join(""));
     this.active.delete(id);
   }
+  /** Ownership travels with the journal so removing a heavy state row cannot
+   * orphan its summary. Legacy journals without ownership remain unreadable as
+   * memory unless their retained state row supplies that authority. */
+  sessions(requireOwner = true): StoredSession[] {
+    let files: string[];
+    try { files = fs.readdirSync(this.directory()); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+    return files.flatMap(file => {
+      if (!file.endsWith(".jsonl") || !validId(file.slice(0,-6))) return [];
+      const id = file.slice(0,-6);
+      const entries = this.read(id).entries;
+      const start = entries.find(row => row.kind === "session_start")?.data;
+      const end = entries.find(row => row.kind === "session_end")?.data;
+      if (!start || !end || !Number.isFinite(start.createdAt) || !Number.isFinite(end.endedAt)) return [];
+      const owner = start.startedBy;
+      const owned = owner && typeof owner === "object" && !Array.isArray(owner) && Object.keys(owner).length === 1
+        && ("operator" in owner && owner.operator === true || "memberId" in owner && typeof owner.memberId === "string" && owner.memberId.length > 0);
+      if (requireOwner && (!owned || typeof start.project !== "string" || !start.project || !["en","uk"].includes(String(start.locale)))) return [];
+      return [{ id, project: typeof start.project === "string" ? start.project : "unknown", locale: start.locale === "uk" ? "uk" : "en", startedBy: owned ? owner as StoredSession["startedBy"] : undefined,
+        createdAt: start.createdAt as number, endedAt: end.endedAt as number, closed: true, generation: 1, seq: 0, inputs: [], events: [], proposals: {} }];
+    });
+  }
   prune(sessions: Record<string, StoredSession>, now: number): void {
-    const closed = Object.values(sessions).filter(session => session.closed).map(session => {
+    const known = new Map(this.sessions(false).map(session => [session.id,session]));
+    for (const session of Object.values(sessions)) known.set(session.id,session);
+    const closed = [...known.values()].filter(session => safelyClosed(session)).map(session => {
       const end = this.read(session.id).entries.find(entry => entry.kind === "session_end");
-      return { ...session, endedAt: typeof end?.data.endedAt === "number" ? end.data.endedAt : session.createdAt };
+      return { ...session, endedAt: typeof end?.data.endedAt === "number" ? end.data.endedAt : callEndedAt(session) };
     }).sort((a, b) => b.endedAt - a.endedAt);
-    for (const [index, session] of closed.entries()) if (index >= 50 || now - session.endedAt > 30 * 86400_000) {
+    for (const [index, session] of closed.entries()) if (index >= CALL_RETENTION_COUNT || now - session.endedAt > CALL_RETENTION_MS) {
       fs.rmSync(this.file(session.id), { force: true }); this.active.delete(session.id);
     }
   }

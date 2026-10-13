@@ -702,6 +702,7 @@ export class CompanionAdmission {
       const session = document.sessions[id];
       if (!session) return;
       session.closed = true;
+      session.endedAt ??= this.now();
       // Nobody is left to hear them; the transcript keeps every report.
       delete session.reportSpeech;
       for (const row of Object.values(session.proposals)) if (row.state === "pending") { row.state = "cancelled"; row.cancelCode = "session_closed"; }

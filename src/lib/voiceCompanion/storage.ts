@@ -7,6 +7,7 @@ import type { CompanionEvent, CompanionPlan, CompanionUsage, Delivery, Locale, P
 import type { BackendTokens } from "./usage";
 import type { DelegationCode } from "./delegationOutcome";
 import type { OperatorInput } from "./gate";
+import { CALL_RETENTION_COUNT, CALL_RETENTION_MS, callEndedAt, safelyClosed } from "./retention";
 
 /** How a call talks: the OpenAI API, paid by its key, or Codex V3 on a managed
  * account's subscription. The API is the default. */
@@ -110,9 +111,13 @@ export interface CompanionDocument {
   version: 1;
   settings: Pick<CompanionSettings, "enabled" | "monthlyCapUsd"> & { backend?: CompanionBackend; callMemory?: boolean };
   charges: Record<string, Charge>;
+  /** Current month's settled charges whose call records have expired. */
+  closedCharges?: { month: string; usd: number; incomplete: boolean };
   sessions: Record<string, StoredSession>;
 }
 const empty = (): CompanionDocument => ({ version: 1, settings: { enabled: false, monthlyCapUsd: 20 }, charges: {}, sessions: {} });
+const chargeRows = (document: CompanionDocument): Charge[] => [...Object.values(document.charges),
+  ...(document.closedCharges ? [{ ...document.closedCharges, reserved: false }] : [])];
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const identifier = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 200;
 const recipientValid = (value: unknown): boolean => record(value) && identifier(value.project) && identifier(value.conversationId)
@@ -195,7 +200,14 @@ const uncertainMint = (session: StoredSession) => !session.providerId && !!sessi
 /** Session authority and accounting only. Delivery receipts and reports remain
  * in their existing stores. Reads fail closed on corrupt/unreadable state. */
 export class CompanionStorage {
+  private readonly held = new Map<string, number>();
   constructor(private readonly now: () => number = Date.now) {}
+  /** A live service releases this only after its final state and journal writes. */
+  hold(id: string): () => void {
+    this.held.set(id, (this.held.get(id) ?? 0) + 1);
+    let released = false;
+    return () => { if (released) return; released = true; const count = this.held.get(id)! - 1; if (count) this.held.set(id,count); else this.held.delete(id); };
+  }
   private file() { return statePath("voice-companion.json"); }
   read(): CompanionDocument {
     try {
@@ -204,6 +216,8 @@ export class CompanionStorage {
         || typeof value.settings.enabled !== "boolean"
         || (value.settings.callMemory !== undefined && typeof value.settings.callMemory !== "boolean")
         || !Number.isFinite(value.settings.monthlyCapUsd) || value.settings.monthlyCapUsd < 0
+        || (value.closedCharges !== undefined && (!record(value.closedCharges) || !/^\d{4}-\d{2}$/.test(value.closedCharges.month)
+          || !Number.isFinite(value.closedCharges.usd) || value.closedCharges.usd < 0 || typeof value.closedCharges.incomplete !== "boolean"))
         || Object.values(value.charges).some(charge => !charge || !Number.isFinite(charge.usd) || charge.usd < 0
           || !/^\d{4}-\d{2}$/.test(charge.month) || typeof charge.reserved !== "boolean" || typeof charge.incomplete !== "boolean"
           || (charge.observedUsd !== undefined && (!Number.isFinite(charge.observedUsd) || charge.observedUsd < 0 || charge.observedUsd > charge.usd)))
@@ -228,14 +242,35 @@ export class CompanionStorage {
     return withFileTransactionSync(file, "companion state is busy", () => {
       const document = this.read();
       const result = operation(document);
+      this.prune(document);
       writePrivate(file, JSON.stringify(document));
       return result;
     });
   }
+  private prune(document: CompanionDocument): void {
+    const now = this.now();
+    const closed = Object.values(document.sessions).filter(session => safelyClosed(session) && !this.held.has(session.id) && !document.charges[session.id]?.reserved)
+      .sort((a,b) => callEndedAt(b) - callEndedAt(a));
+    for (const [index, session] of closed.entries()) if (index >= CALL_RETENTION_COUNT || now - callEndedAt(session) > CALL_RETENTION_MS) delete document.sessions[session.id];
+    const month = new Date(now).toISOString().slice(0,7);
+    if (document.closedCharges?.month !== month) delete document.closedCharges;
+    // Standalone charges can briefly precede a mint. Keep their latest settled
+    // receipts bounded too; live reservations and retained calls keep their keys.
+    const orphaned = Object.entries(document.charges).filter(([id,charge]) => !document.sessions[id] && !charge.reserved);
+    for (const [index,[id,charge]] of orphaned.reverse().entries()) {
+      if (index < CALL_RETENTION_COUNT && charge.month === month) continue;
+      if (charge.month === month) {
+        document.closedCharges ??= { month, usd: 0, incomplete: false };
+        document.closedCharges.usd += charge.usd;
+        document.closedCharges.incomplete ||= charge.incomplete;
+      }
+      delete document.charges[id];
+    }
+  }
   settings(): CompanionSettings {
     const document = this.read();
     const month = new Date(this.now()).toISOString().slice(0, 7);
-    const charges = Object.values(document.charges).filter(charge => charge.month === month);
+    const charges = chargeRows(document).filter(charge => charge.month === month);
     const ended = (session: StoredSession) => session.endedAt ?? (() => {
       const closed = session.events.findLast(event => event.type === "session.closed");
       return closed ? session.createdAt + closed.atMs : undefined;
@@ -273,7 +308,7 @@ export class CompanionStorage {
     return { callUsd: charge ? charge.reserved ? charge.observedUsd ?? 0 : charge.usd : 0,
       callFinal: !!charge && !charge.reserved && !charge.incomplete,
       callIncomplete: !!charge?.incomplete, month,
-      monthUsd: Object.values(document.charges).filter(row => row.month === month)
+      monthUsd: chargeRows(document).filter(row => row.month === month)
         .reduce((sum, row) => sum + (row.reserved ? row.observedUsd ?? 0 : row.usd), 0),
       monthCapUsd: document.settings.monthlyCapUsd };
   }
@@ -339,7 +374,7 @@ export class CompanionStorage {
     this.change(document => {
       if (document.charges[key]) return;
       const month = new Date(this.now()).toISOString().slice(0, 7);
-      const spent = Object.values(document.charges).filter(charge => charge.month === month).reduce((sum, charge) => sum + charge.usd, 0);
+      const spent = chargeRows(document).filter(charge => charge.month === month).reduce((sum, charge) => sum + charge.usd, 0);
       if (spent + room > document.settings.monthlyCapUsd) throw new Error("CAP_REACHED");
       document.charges[key] = { month, usd, reserved: true, incomplete: false };
     });
@@ -352,7 +387,7 @@ export class CompanionStorage {
       if (!charge?.reserved) throw new Error("INVALID_USAGE");
       const month = new Date(this.now()).toISOString().slice(0, 7);
       if (charge.month !== month) throw new Error("CAP_REACHED");
-      const spent = Object.values(document.charges).filter(row => row.month === month).reduce((sum, row) => sum + row.usd, 0);
+      const spent = chargeRows(document).filter(row => row.month === month).reduce((sum, row) => sum + row.usd, 0);
       if (spent + usd > document.settings.monthlyCapUsd) throw new Error("CAP_REACHED");
       charge.usd += usd;
     });

@@ -517,6 +517,29 @@ five-minute cadence uses the summary entry’s saved timestamp. Private reads
 from a Codex backing turn correlate through the recorded source turn when
 its native turn id differs from the voice handoff id.
 
+Call summaries explicitly exclude legacy account homes; the profile caller
+keeps its existing admission default.
+
+The added state-retention scope prunes every `storage.change` publication to
+the newest 50 safely closed calls within 30 days, using closure time. Open
+calls, active service holds, unresolved provider sessions and reservations
+remain intact. Retiring a call records its end time even without a close event.
+Expired per-call charges roll into one current-month total, preserving observed
+usage, incomplete status and cap admission. At most 50 recent standalone settled
+receipts remain for mint deduplication; the total resets at the month boundary.
+Thus completed call history cannot increase subsequent state writes without
+bound; live and unresolved calls remain protected.
+
+Ownership and project metadata now travel in `session_start`. Memory lookup,
+forgetting and summary recovery read those journals even if the heavy state row
+is absent. Journal pruning independently finds closed calls outside the state
+document, including legacy journals for expiry, and applies the same 50-call,
+30-day limits. A legacy journal without ownership cannot supply memory on its
+own. Summaries survive state-row removal for their journal's retention period;
+they expire with that journal. `retention.test.ts` covers a thousand closed
+calls, repeated bounded writes, protected calls, monthly totals, journal-only
+recall/recovery, owner isolation, forgetting and independent journal expiry.
+
 The real Messages endpoint rejects `maxItems` in a structured-output schema.
 The wire schema carries the object and list types, as the existing memory
 profile does; the prompt requests length limits and server validation enforces

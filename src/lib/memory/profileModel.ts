@@ -52,12 +52,12 @@ export function directProfileCaller(oauthToken: string, model: string, request: 
 }
 
 type AccountPorts = { manager: Pick<AccountManager, "resolveHeadlessSpawn">; credentials: typeof readClaudeCredentials; model: string };
-export async function prepareJsonCaller(project: string, ports: AccountPorts = { manager: accountManager, credentials: readClaudeCredentials, model: MEMORY_PROFILE_MODEL }): Promise<JsonCaller> {
+export async function prepareJsonCaller(project: string, ports: AccountPorts = { manager: accountManager, credentials: readClaudeCredentials, model: MEMORY_PROFILE_MODEL }, managedOnly = false): Promise<JsonCaller> {
   const unavailable: string[] = [];
   while (true) {
     const selected = ports.manager.resolveHeadlessSpawn("claude", null, [], project, ports.model, unavailable);
     if (selected.kind !== "available" || unavailable.includes(selected.account.accountId)) throw new MemoryProfileError("account");
-    if (!selected.account.claudeProvider) {
+    if (!selected.account.claudeProvider && (!managedOnly || selected.account.kind === "managed")) {
       const credentials = ports.credentials(selected.account.home);
       const oauth = credentials.state === "present" ? credentials.document.claudeAiOauth : null;
       if (typeof oauth?.accessToken === "string" && oauth.accessToken && typeof oauth.expiresAt === "number" && oauth.expiresAt > Date.now()) return directJsonCaller(oauth.accessToken, ports.model);

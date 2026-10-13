@@ -20716,17 +20716,17 @@ describe("floating voice companion", () => {
           await memory.waitFor();
           await page.waitForFunction(() => !document.querySelector("[data-call-memory] [role=status]")?.textContent?.includes("…"));
           await memory.scrollIntoViewIfNeeded();
-          const read = await memory.evaluate(element => {
+          const read = await memory.evaluate((element,configuredWidth) => {
             const dialog = element.closest<HTMLElement>("[role=dialog]")!;
             const list = element.querySelector<HTMLElement>("[data-call-memory-list]")!;
             const row = list.firstElementChild as HTMLElement | null;
             const button = row?.querySelector("button");
             const visible = list.getBoundingClientRect(); const box = button?.getBoundingClientRect(); const dialogBox = dialog.getBoundingClientRect();
-            return { background:getComputedStyle(dialog).backgroundColor, viewportOverflow:document.documentElement.scrollWidth > window.visualViewport!.width + 1,
+            return { background:getComputedStyle(dialog).backgroundColor, viewportOverflow:document.documentElement.scrollWidth > configuredWidth + 1,
               dialogOverflow:dialog.scrollWidth > dialog.clientWidth, listOverflow:list.scrollWidth > list.clientWidth,
               scrolls:list.scrollHeight > list.clientHeight, rowButtonVisible:!box || box.top >= visible.top && box.bottom <= visible.bottom && box.top >= dialogBox.top && box.bottom <= dialogBox.bottom,
               rowCount:list.children.length, width:dialogBox.width, height:dialogBox.height };
-          });
+          },width);
           expect(read.background).not.toBe("rgba(0, 0, 0, 0)"); expect(read.dialogOverflow).toBe(false); expect(read.listOverflow).toBe(false);
           expect(read.viewportOverflow).toBe(false); expect(read.rowButtonVisible).toBe(true); expect(read.rowCount).toBe(state === "empty" ? 0 : state === "three" ? 3 : 1);
           // The first action stays at the row head even when its notes scroll.
@@ -20744,7 +20744,7 @@ describe("floating voice companion", () => {
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/voice-companion",{ recursive:true });
-      fs.writeFileSync("evidence/voice-companion/call-memory.json",JSON.stringify({ driver:"src/components/kanban/kanbanBoard.browser.test.tsx",synthetic:true,measurements },null,2)+"\n");
+      fs.writeFileSync("evidence/voice-companion/call-memory.json",JSON.stringify({ driver:"src/components/kanban/kanbanBoard.browser.test.tsx",synthetic:true,viewportBasis:"configured scene width",measurements },null,2)+"\n");
     } finally { await browser.close(); server.stop(); }
   });
 

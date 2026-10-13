@@ -1,6 +1,7 @@
 {
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
   "synthetic": true,
+  "viewportBasis": "configured scene width",
   "measurements": [
     {
       "label": "1440-en-light-empty",

@@ -76,6 +76,7 @@ interface ActiveSession {
   /** A private owner-history result remains in provider context for the life of the session. */
   privateHistory?: boolean;
   memory?: string;
+  releaseState?: () => void;
   /** The paying account's plan ran out: the call says so once and ends with reason limit. */
   limitReached?: boolean;
   /** The latest handoff: the operator turn then latest, the turn it was given, and whether the voice spoke since. */
@@ -226,6 +227,7 @@ export class CompanionLiveSessions {
       delegations: new Set(), reads: new Map(), reading: new Map(), backend: new Set(), abort: new AbortController(), timers: [], ended: false, endRequested: false, lastSeen: this.now(),
       createdAt: this.now(), voiceAllowanceSeconds: LIVE_SESSION_LIMIT_MS / 1_000, codexTurns: new Map() };
     this.active.set(id, active);
+    active.releaseState = this.storage.hold(id);
     // Recorded before the provider is asked: a lost answer or a stop before the
     // id is stored leaves a session that may be open and that nobody can name.
     this.storage.change(document => { Object.assign(document.sessions[id], { ...(codex ? { backend: "codex" } : {}), usage: { seconds: 0, responses: {} }, remoteOpen: true, mintUncertain: true }); });
@@ -903,6 +905,7 @@ export class CompanionLiveSessions {
       for (const timer of active.timers) clearTimeout(timer);
       active.connection?.dispose(); active.resolveClose?.();
       this.active.delete(active.id);
+      active.releaseState?.();
       // The provider never confirmed this session closed: keep asking.
       if (active.providerId && !active.providerClosed && !active.hungUp) this.retryHangup(active.id);
     }
