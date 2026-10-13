@@ -551,7 +551,7 @@ export async function runClaimedRequest(
         }) : owner ? runOwnerAgent({
           authorize: () => { if (!allowOwnerReply!()) throw new Error("owner relay authorization revoked"); },
           credentials: [relay.credential],
-          request, owner, target, accountId: selectedAccount().accountId,
+          request, owner, target, deadline, accountId: selectedAccount().accountId,
           hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
           onConversation: async (conversationId) => {
             await changeRunAsync(requestId, current => ({ ...current, conversationId }), Date.now() + 5000);

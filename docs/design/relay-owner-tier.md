@@ -774,3 +774,13 @@ nothing; each is one line to change.
 4. The reply budget in the prompt is about two minutes, matching the
    service's 120 s hold; the hard stop stays the target's hard cap (§5).
 5. Orchestrator messaging is admitted for the live run only (§2.4).
+
+### 2026-10-13 first-message wait amendment
+
+A recoverable queued first message keeps the same spawn receipt under
+observation through the shared request admission deadline. It sends `queued`
+progress while unconfirmed. If the first message lands, the owner turn keeps
+its existing lease and hard cap. Otherwise the install kills the unconfirmed
+turn at the deadline's ten-second margin and sends `failed` / `agent_error`.
+The cutoff retains durable cancellation custody, including a launch response
+that arrives later. Shared spawn machinery keeps its per-call bounds.

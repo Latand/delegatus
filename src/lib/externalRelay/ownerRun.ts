@@ -1,3 +1,4 @@
+import { relayRequestDeadline, type RelayRequestDeadline } from "./deadline";
 import { withSpawnDiagnostics } from "@/lib/agent/spawnDiagnostics";
 import os from "node:os";
 import type { EphemeralAgentRun, EphemeralAgentResult } from "@/lib/agent/ephemeral";
@@ -18,7 +19,7 @@ import { readOwnerStepObservation } from "./stepObservation";
 import type { RelayStepObservation } from "./progressSteps";
 import { ownerNeedsClarification } from "./ownerBridgeContext";
 
-export type OwnerTurnObservation = SpawnedTurnObservation & RelayStepObservation;
+export type OwnerTurnObservation = SpawnedTurnObservation & RelayStepObservation & { firstMessagePending?: boolean };
 
 export function ownerRunPrompt(request: ExternalRelayRequest, owner: OwnerInstruction, hardCapMinutes: number): string {
   const input = request.input;
@@ -98,18 +99,17 @@ const productionPorts: OwnerRunPorts = {
 class OwnerPromptCleanupPending extends Error {}
 export const OWNER_STOP_RECOVERY_GRACE_MS = 60_000;
 export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickSources, "registry" | "liveness" | "now">, progressSteps = false): Promise<OwnerTurnObservation> {
-  const observed = await observeSpawnedTurn(run, sources, child => spawnNoticeFinalMessage(child, scrubOwnerOutput));
+  const observed: OwnerTurnObservation = { ...await observeSpawnedTurn(run, sources, child => spawnNoticeFinalMessage(child, scrubOwnerOutput)), firstMessagePending: false };
   if (progressSteps && observed.conversationId) {
     Object.assign(observed, readOwnerStepObservation(sources.registry(), observed.conversationId));
   }
   const receipt = sources.registry().spawnReceiptForClientAttempt(run.clientAttemptId);
   const prompt = receipt && Object.values(sources.registry().readOnlySnapshot().heldDeliveries)
     .find(row => row.command.operationId === `spawn_message_${receipt.launchId}`);
-  // A dead/idle host cannot prove cancellation while its first prompt can recover.
-  if (prompt && prompt.state !== "delivered" && !(prompt.state === "failed" && !prompt.text))
-    return observed.state === "failed"
-      ? { ...observed, failure: { kind: "launch-failed", detail: "owner first prompt cleanup remains owed" } }
-      : { ...observed, state: "running", failure: undefined };
+  const promptPending = !!prompt && prompt.state !== "delivered" && !(prompt.state === "failed" && !prompt.text);
+  observed.firstMessagePending = promptPending || !!receipt && !["completed", "failed", "conflicted"].includes(receipt.state);
+  // Recoverable custody keeps this same receipt under observation.
+  if (observed.firstMessagePending) return { ...observed, state: "running", failure: undefined };
   if (observed.failure?.kind === "launch-failed" && observed.conversationId) {
     const live = (await sources.liveness({ conversationId: observed.conversationId, stallAfterMs: 30 * 60_000, limit: 1 }))[0];
     if (live?.reason === "host_gone_turn_open" || live?.reason === "host_gone_turn_settled")
@@ -258,7 +258,7 @@ export async function revokeOwnerRuns(relayId: string): Promise<void> {
 /** Returns before admission so the runner can acknowledge the lease immediately. */
 export function runOwnerAgent(input: {
   request: ExternalRelayRequest; owner: OwnerInstruction; target: RelayTargetSettings;
-  accountId: string | null; hardCapMs: number; ports?: OwnerRunPorts;
+  accountId: string | null; hardCapMs: number; ports?: OwnerRunPorts; deadline?: RelayRequestDeadline;
   authorize?: () => void; credentials?: readonly string[];
   onConversation(conversationId: string): void | Promise<void>;
   onProgress?(observed: RelayStepObservation): void;
@@ -275,6 +275,8 @@ export function runOwnerAgent(input: {
   try { custody = readRunLedger().runs.find(r => r.requestId === input.request.request_id); }
   catch { throw new Error("owner launch custody unavailable"); }
   let settled = false, admitted = false, launchAttempted = false;
+  let firstMessagePending = true;
+  const deadline = input.deadline ?? relayRequestDeadline(input.request, started);
   let stopped: "interrupt" | "kill" | null = null;
   let cancelStatus: "timeout" | "cancelled" | "failed" = "cancelled";
   let stopWork: Promise<void> | null = null;
@@ -285,7 +287,7 @@ export function runOwnerAgent(input: {
   const finish = (status: EphemeralAgentResult["status"], answer: unknown = null) => {
     if (settled) return;
     settled = true;
-    clearTimeout(timer); clearTimeout(retryTimer); clearInterval(authorizationTimer);
+    clearTimeout(timer); clearTimeout(admissionTimer); clearTimeout(retryTimer); clearInterval(authorizationTimer);
     cancels.delete(input.request.request_id);
     activeOwnerRelays.delete(input.request.request_id);
     wake.abort();
@@ -341,13 +343,21 @@ export function runOwnerAgent(input: {
   const cancel = (status: typeof cancelStatus) => {
     if (settled && !stopped) return;
     if (!stopped) cancelStatus = status;
-    stopped ??= admitted ? "interrupt" : "kill";
+    stopped ??= admitted && !firstMessagePending ? "interrupt" : "kill";
     const durable = persistStop(); wake.abort();
     if (turn.conversationId || !durable) void applyStop();
     else finish(status); // pending launch remains in the durable ledger
   };
   const authorize = () => { if (stopped) throw new Error("owner relay turn revoked"); input.authorize?.(); };
   const timer = setTimeout(() => cancel("timeout"), input.hardCapMs); timer.unref();
+  const admissionTimer = setTimeout(() => {
+    if (!firstMessagePending || settled || stopped) return;
+    stopped = "kill"; cancelStatus = "failed";
+    const durable = persistStop(); wake.abort();
+    if (turn.conversationId || !durable) void applyStop();
+    else finish("failed");
+  }, Math.max(0, deadline.declineAt - Date.now()));
+  admissionTimer.unref();
   const authorizationTimer = setInterval(() => { if (!stopped) { try { authorize(); } catch { cancel("cancelled"); } } }, 100);
   authorizationTimer.unref();
   cancels.set(input.request.request_id, () => cancel("cancelled"));
@@ -370,7 +380,8 @@ export function runOwnerAgent(input: {
         await input.onConversation(id); // attribution persists even after a pending cutoff
       }
       changeRun(input.request.request_id, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, admissionComplete: true } }));
-      if (launched.body.initialMessage === "queued") { stopped = "kill"; cancelStatus = "failed"; persistStop(); await applyStop(); return; }
+      firstMessagePending = launched.body.initialMessage === "queued" || launched.body.initialMessage === "pending";
+      if (!firstMessagePending) clearTimeout(admissionTimer);
       try { authorize(); } catch { cancel("cancelled"); }
       if (stopped) { await applyStop(); return; }
       if (launched.status < 200 || launched.status >= 300 || !turn.conversationId) {
@@ -381,7 +392,10 @@ export function runOwnerAgent(input: {
         if (settled || stopped) break;
         authorize();
         if (observed.state === "failed" || observed.turnError) { cancel("failed"); break; }
-        input.onProgress?.({ currentTool: observed.currentTool, writingAnswer: observed.writingAnswer || observed.state === "ended" });
+        if (observed.firstMessagePending === false || observed.state === "ended") {
+          firstMessagePending = false; clearTimeout(admissionTimer);
+        }
+        input.onProgress?.(firstMessagePending ? { queued: true } : { currentTool: observed.currentTool, writingAnswer: observed.writingAnswer || observed.state === "ended" });
         if (observed.state === "ended") {
           const answer = ownerAnswer(observed.finalText ?? null, input.request, input.owner, input.credentials);
           // A silent final message cannot discharge the owner's request. A
