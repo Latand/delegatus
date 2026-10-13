@@ -20,6 +20,9 @@ const { persistProjectAliases } = await import("@/lib/projects/aliases");
 expect(persistProjectAliases([
   { source: "fixture-project-fixture-old", target: "fixture-project", displayName: "fixture-project" },
 ])).toBe(true);
+const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+beginOrchestratorSeatIntent({ project: "fixture-project", mandate: "own the board", clientRequestId: "task-position-seat", mode: "existing", conversationId: "conversation_task_position" });
+completeOrchestratorSeatIntent({ project: "fixture-project", clientRequestId: "task-position-seat", conversationId: "conversation_task_position", path: null });
 const { viewerMcpBindings } = await import("./bindings");
 const { createMcpToolService, createViewerMcpServer, SqliteMcpReceiptStore } = await import("./server");
 const { TASKS_FILE, loadTasks } = await import("@/lib/tasks/store");
@@ -168,6 +171,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
   const children = [0, 1].map(index => {
     const ready = path.join(sandbox, `race-ready-${index}`);
     const child = Bun.spawn([process.execPath, "-e", script], { cwd: process.cwd(), env: { ...process.env,
+      LLV_STAGING: "1",
       POSITION_RACE_ARGS: JSON.stringify({ clientRequestId: `race-${index}`, taskId: created.task.id, expectedProject: "fixture-project", expectedRevision: created.task.revision, pos: { x: 1, y: 1 } }),
       POSITION_RACE_RECEIPTS: path.join(sandbox, `race-${index}.sqlite`), POSITION_RACE_READY: ready, POSITION_RACE_GATE: gate,
     }, stdout: "pipe", stderr: "pipe" });

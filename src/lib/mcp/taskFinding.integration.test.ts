@@ -19,6 +19,13 @@ const { persistProjectAliases } = await import("@/lib/projects/aliases");
 expect(persistProjectAliases([
   { source: "mcp-findings-fixture-old", target: "mcp-findings", displayName: "mcp-findings" },
 ])).toBe(true);
+const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+for (const project of ["mcp-findings", "finding-maintenance"]) {
+  const clientRequestId = `finding-seat-${project}`;
+  const conversationId = `conversation-${project}`;
+  beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId, mode: "existing", conversationId });
+  completeOrchestratorSeatIntent({ project, clientRequestId, conversationId, path: null });
+}
 const { viewerMcpBindings, viewerMcpToolPolicy } = await import("./bindings");
 const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore, SqliteMcpReceiptStore } = await import("./server");
 const { loadTasks } = await import("@/lib/tasks/store");

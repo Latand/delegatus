@@ -28,6 +28,9 @@ const { persistProjectAliases } = await import("@/lib/projects/aliases");
 expect(persistProjectAliases([
   { source: "color-project-fixture-old", target: "color-project", displayName: "color-project" },
 ])).toBe(true);
+const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+beginOrchestratorSeatIntent({ project: "color-project", mandate: "own the board", clientRequestId: "color-project-seat", mode: "existing", conversationId: "conversation_color_project" });
+completeOrchestratorSeatIntent({ project: "color-project", clientRequestId: "color-project-seat", conversationId: "conversation_color_project", path: null });
 const { viewerMcpBindings } = await import("./bindings");
 const { createMcpToolService, createViewerMcpServer, SqliteMcpReceiptStore } = await import("./server");
 const { TASKS_FILE, loadTasks } = await import("@/lib/tasks/store");

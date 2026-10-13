@@ -20,6 +20,13 @@ expect(persistProjectAliases([
   { source: "size-board-fixture-old", target: "size-board", displayName: "size-board" },
   { source: "created-board-fixture-old", target: "created-board", displayName: "created-board" },
 ])).toBe(true);
+const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+for (const project of ["size-board", "created-board"]) {
+  const clientRequestId = `size-seat-${project}`;
+  const conversationId = `conversation-${project}`;
+  beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId, mode: "existing", conversationId });
+  completeOrchestratorSeatIntent({ project, clientRequestId, conversationId, path: null });
+}
 const { viewerMcpBindings } = await import(bindingModule);
 const { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES } = await import("./server");
 const { saveTasks, loadTasks, loadTasksForList, taskSelectionSource, mutateTasks } = await import("@/lib/tasks/store");

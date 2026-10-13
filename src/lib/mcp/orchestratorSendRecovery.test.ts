@@ -15,7 +15,7 @@ const { AgentRegistry } = await import("@/lib/agent/registry");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
 const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
 const { viewerMcpBindings, viewerMcpRecoverableTools, productionViewerControlDependencies } = await import("./bindings");
-const { createMcpToolService, SqliteMcpReceiptStore, FileMcpReceiptStore, MemoryMcpReceiptStore, McpDispatchUncertainError, McpDispatchNotExecutedError } = await import("./server");
+const { createMcpToolService, SqliteMcpReceiptStore, FileMcpReceiptStore, MemoryMcpReceiptStore } = await import("./server");
 import type { McpRequestBinding } from "./server";
 import type { ViewerControlDependencies, ViewerMcpDomainDependencies } from "./bindings";
 
@@ -129,70 +129,6 @@ test("uncertain orchestrator send recovers one busy-target operation after late 
   }
 }, 15000);
 
-
-test("missing-seat creation pins its recipient before the message and recovers after rotation", async () => {
-  const f = fixture("created");
-  const posts: string[] = [];
-  const args = { clientRequestId: "created-report", project: f.project, text: "report" };
-  const control: ViewerControlDependencies = {
-    post: async () => { throw new Error("reconnecting post must not run"); },
-    dispatch: async (pathname, body, _headers, context) => {
-      posts.push(pathname);
-      context!.dispatch!.attempted = true;
-      if (pathname === "/api/orchestrator/seat") {
-        f.seat();
-        return { ok: true, seat: { conversationId: f.first.id, path: f.first.generations.at(-1)!.path } };
-      }
-      expect(f.receipt(args.clientRequestId)?.binding?.target.identity).toBe(f.first.id);
-      expect(body.conversationId).toBe(f.first.id);
-      expect(body.policy).toBe("steer-or-queue");
-      f.registry.holdDelivery(f.first.id, String(body.text), String(body.clientMessageId), "text", [], null, {
-        operationId: "created-operation", kind: "send", policy: "queue",
-        origin: { kind: "agent", role: "gateway", conversationId: (body.origin as { conversationId: string }).conversationId },
-      });
-      throw new McpDispatchUncertainError("response lost after admission");
-    },
-  };
-  try {
-    expect(await f.service(control).callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: true, operationId: "created-operation", outcome: "accepted" });
-    f.seat(f.successor);
-    f.reopen();
-    expect(await f.service(control).callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: true, operationId: "created-operation", conversationId: f.first.id });
-    expect(posts).toEqual(["/api/orchestrator/seat", "/api/orchestrator/message"]);
-  } finally { f.close(); }
-});
-
-test("uncertain creation and a refused second dispatch never authorize a new-key resend", async () => {
-  for (const phase of ["creation", "message"]) {
-    const f = fixture(`uncertain-${phase}`);
-    let calls = 0;
-    const control: ViewerControlDependencies = {
-      post: async () => { throw new Error("reconnecting post must not run"); },
-      dispatch: async (pathname, _body, _headers, context) => {
-        calls++;
-        context!.dispatch!.attempted = true;
-        if (phase === "creation") throw new McpDispatchUncertainError("creation response lost");
-        if (pathname === "/api/orchestrator/seat") return { ok: true, seat: { conversationId: f.first.id } };
-        throw new McpDispatchNotExecutedError("second connection refused");
-      },
-    };
-    const args = { clientRequestId: `unknown-${phase}`, project: f.project, text: "report" };
-    try {
-      expect(await f.service(control).callTool("send_message_to_orchestrator", { ...args, recoveryOnly: true }))
-        .toMatchObject({ ok: false, code: "outcome_unknown", retryable: false });
-      expect(calls).toBe(0);
-      expect(f.receipt(args.clientRequestId)).toBeNull();
-      expect(await f.service(control).callTool("send_message_to_orchestrator", args))
-        .toMatchObject({ ok: false, code: "outcome_unknown", retryable: false });
-      const originalCalls = calls;
-      f.seat(f.successor);
-      f.reopen();
-      for (const recoveryOnly of [false, true]) expect(await f.service(control).callTool("send_message_to_orchestrator", { ...args, recoveryOnly }))
-        .toMatchObject({ ok: false, code: "outcome_unknown", retryable: false });
-      expect(calls).toBe(originalCalls);
-    } finally { f.close(); }
-  }
-});
 
 test("equal text under new keys and direct-send keys remains intentional separate work", async () => {
   const f = fixture("equal");

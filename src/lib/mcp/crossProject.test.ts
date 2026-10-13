@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { persistProjectAliases } from "@/lib/projects/aliases";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
 import { projectForCwd } from "@/lib/scanner/describe";
 import { loadTasks } from "@/lib/tasks/store";
 
@@ -27,6 +28,13 @@ beforeEach(() => {
   process.env.LLV_STATE_DIR = path.join(sandbox, "state");
   fs.mkdirSync(path.join(sandbox, "other"), { recursive: true });
   fs.mkdirSync(path.join(sandbox, "unmanaged"), { recursive: true });
+  for (const [project, clientRequestId, conversationId] of [
+    [OWN, "cross-own-seat", OWN_SEAT],
+    [otherProject(), "cross-other-seat", OTHER_SEAT],
+  ] as const) {
+    beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId, mode: "existing", conversationId });
+    completeOrchestratorSeatIntent({ project, clientRequestId, conversationId, path: null });
+  }
 });
 afterEach(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -111,20 +119,13 @@ test("a seat works its own board without a quote", async () => {
   expect(cardsNamed("Our own work").map((task) => task.project)).toEqual([OWN]);
 });
 
-test("a project with no seat yet is refused the same way, and the answer says the handover designates its seat", async () => {
+test("a project with no active seat is refused as unknown before cross-project admission", async () => {
   expect(persistProjectAliases([{ source: "seatless-old", target: "project-without-a-seat", displayName: "Seatless" }])).toBe(true);
   const refused = await call(SEAT, "create_task", { project: "project-without-a-seat", text: "Nobody manages this board" });
-  expect(refused).toMatchObject(REFUSED);
-  expect(refused.error).toContain("no orchestrator seat yet");
-  expect(refused.error).toContain("send_message_to_orchestrator");
-  expect(refused.error).toContain("crossProjectRequest");
-  expect(refused.details).toMatchObject({ tool: "create_task", targetProject: "project-without-a-seat", targetHasSeat: false, use: "send_message_to_orchestrator" });
+  expect(refused).toMatchObject({ ok: false, code: "unknown_project", retryable: false });
+  expect(refused.error).toBe('no such project "project-without-a-seat"; no close matches; pass a known project key, display name or repository name');
   expect(cardsNamed("Nobody manages this board")).toEqual([]);
-  /* The operator's explicit request lets it through. */
-  expect((await call(SEAT, "create_task", {
-    project: "project-without-a-seat", text: "Asked for on an unmanaged board", crossProjectRequest: "Add the card to that project yourself.",
-  })).ok).toBe(true);
-  expect(cardsNamed("Asked for on an unmanaged board").map((task) => task.project)).toEqual(["project-without-a-seat"]);
+  expect(cardsNamed("Asked for on an unmanaged board")).toEqual([]);
 });
 
 test("only a seat is judged: a worker and the operator's own session create the task as before", async () => {

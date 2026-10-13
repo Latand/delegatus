@@ -38,6 +38,9 @@ const { persistProjectAliases } = await import("@/lib/projects/aliases");
 expect(persistProjectAliases([
   { source: "widgets-board-fixture-old", target: "widgets-board", displayName: "widgets-board" },
 ])).toBe(true);
+const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+beginOrchestratorSeatIntent({ project: "widgets-board", mandate: "own the board", clientRequestId: "work-links-seat", mode: "existing", conversationId: "conversation_widgets_board" });
+completeOrchestratorSeatIntent({ project: "widgets-board", clientRequestId: "work-links-seat", conversationId: "conversation_widgets_board", path: null });
 const { viewerMcpBindings } = await import("./bindings");
 const { agentRegistry } = await import("@/lib/agent/registry");
 agentRegistry().ensureConversation("codex", creatorPath, null);

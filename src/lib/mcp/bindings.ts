@@ -146,7 +146,7 @@ import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParent
 import { beginSeatDeployment, forgetSeatDeploymentRequest, recoverSeatDeploymentRequests, recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
-import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, readOrchestratorSeatFileOrNull, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
@@ -4124,18 +4124,18 @@ function orchestratorDispatchRefusal(error: unknown): McpDispatchNotExecutedErro
 }
 
 /** Resolve a member name through aliases and active seats before any claim. */
-async function resolveOrchestratorToolProject(named: string, dependencies: ViewerMcpDomainDependencies): Promise<string> {
+async function resolveOrchestratorToolProject(named: string, dependencies: ViewerMcpDomainDependencies, requireActiveSeat = true): Promise<string> {
   const requested = named.trim();
   const folded = requested.toLowerCase();
   const aliases = projectAliasSnapshot({ strict: true });
   const active = new Set(activeOrchestratorSeats().map((seat) => canonicalOrchestratorProject(seat.project)));
+  const authorizedSeats = dependencies.authorizedSeats?.() ?? [];
+  for (const seat of authorizedSeats) if (seat.project) active.add(canonicalOrchestratorProject(seat.project));
   const names = new Map<string, Set<string>>();
   const labels = new Map<string, string>();
-  const known = new Set(active);
   const index = (name: string, project: string) => {
     const normalized = name.trim().toLowerCase();
     if (!normalized) return;
-    known.add(project);
     const candidates = names.get(normalized) ?? new Set<string>();
     candidates.add(project);
     names.set(normalized, candidates);
@@ -4153,6 +4153,23 @@ async function resolveOrchestratorToolProject(named: string, dependencies: Viewe
   for (const [key, displayName] of Object.entries(aliases.displayNames)) {
     index(key, canonicalOrchestratorProject(key));
     index(displayName, canonicalOrchestratorProject(key));
+  }
+  for (const key of Object.keys(readOrchestratorSeatFileOrNull()?.seats ?? {})) {
+    const project = canonicalOrchestratorProject(key);
+    index(key, project);
+    index(projectDisplayName(project, aliases.displayNames[key]), project);
+  }
+  for (const seat of authorizedSeats) {
+    if (!seat.project) continue;
+    const project = canonicalOrchestratorProject(seat.project);
+    index(seat.project, project);
+    index(projectDisplayName(project, aliases.displayNames[seat.project]), project);
+  }
+  const callerProject = dependencies.callerProject?.();
+  if (callerProject) {
+    const project = canonicalOrchestratorProject(callerProject);
+    index(callerProject, project);
+    index(projectDisplayName(project, aliases.displayNames[callerProject]), project);
   }
   // The completed project catalogue provides each member's repository root.
   // Reading its basename names the project without examining conversation cwd
@@ -4180,8 +4197,13 @@ async function resolveOrchestratorToolProject(named: string, dependencies: Viewe
       ...details, code: "ambiguous_project", candidates,
     });
   }
-  if (candidates.length === 1 && active.has(candidates[0]!)) return candidates[0]!;
-  const closeMatches = [...active].map((project) => ({ project, name: labels.get(project) ?? projectDisplayName(project),
+  if (candidates.length === 1 && (!requireActiveSeat || active.has(candidates[0]!))) return candidates[0]!;
+  const suggestionProjects = new Set([
+    ...active,
+    ...Object.keys(aliases.displayNames).map((project) => canonicalOrchestratorProject(project)),
+    ...Object.values(aliases.aliases).map((project) => canonicalOrchestratorProject(project)),
+  ]);
+  const closeMatches = [...suggestionProjects].map((project) => ({ project, name: labels.get(project) ?? projectDisplayName(project, aliases.displayNames[project]),
     distance: projectNameDistance(folded, (labels.get(project) ?? projectDisplayName(project)).toLowerCase()),
   })).filter((match) => match.distance <= Math.max(2, Math.floor(folded.length / 3)))
     .sort((a, b) => a.distance - b.distance || a.project.localeCompare(b.project))
@@ -4237,11 +4259,12 @@ function orchestratorProjectBinding(
   dependencies: ViewerMcpDomainDependencies,
   run: (resolved: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>,
   optionalProject = false,
+  requireActiveSeat = true,
 ): McpToolBinding {
   const resolved = new WeakMap<McpToolArgs, McpToolArgs>();
   const resolve = async (args: McpToolArgs) => {
     if (optionalProject && !text(args.project)) return args;
-    return { ...args, project: await resolveOrchestratorToolProject(required(args, "project"), dependencies) };
+    return { ...args, project: await resolveOrchestratorToolProject(required(args, "project"), dependencies, requireActiveSeat) };
   };
   return Object.assign(
     async (args: McpToolArgs, context?: McpToolCallContext) => {
@@ -4490,7 +4513,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     throw new Error("project is required: this session's own project could not be resolved, so name the project whose tick to read or change");
   }
   // Explicit input was resolved by the binding before its receipt was claimed.
-  const project = text(args.project) || await resolveOrchestratorToolProject(requested, dependencies);
+  const project = text(args.project) || canonicalOrchestratorProject(requested);
 
   const readSettings = dependencies.readTickSettings ?? readSeatTickSettings;
   const writeSettings = dependencies.writeTickSettings ?? writeSeatTickSettings;
@@ -4943,7 +4966,7 @@ async function accountProjectBindingTool(args: McpToolArgs, dependencies: Viewer
   const requestedProject = text(args.project) || (action === "list" ? callerProject ?? "" : "");
   const project = requestedProject
     ? action === "list"
-      ? await resolveOrchestratorToolProject(requestedProject, dependencies)
+      ? await resolveOrchestratorToolProject(requestedProject, dependencies, false)
       : canonicalOrchestratorProject(requestedProject)
     : null;
 
@@ -7902,7 +7925,7 @@ export function viewerMcpBindings(
     role_presets: async (args) => rolePresetsTool(args, domainDependencies),
     auto_updates: (args, context) => autoUpdatesTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     account_limits: async (args) => accountLimitsTool(args, domainDependencies),
-    create_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context))),
+    create_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)), false, false),
     send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     ask_orchestrator_in_parallel: orchestratorProjectBinding(domainDependencies, (args, context) => askOrchestratorInParallelTool(args, viewerControlForCall(controlDependencies, context))),
     rotate_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => rotateOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies)),

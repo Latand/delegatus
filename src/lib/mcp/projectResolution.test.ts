@@ -88,6 +88,10 @@ function harness(owner = false, overrides: Partial<ViewerMcpDomainDependencies> 
   const posts: Array<{ pathname: string; body: Record<string, unknown> }> = [];
   const control = { post: async (pathname: string, body: Record<string, unknown>) => {
     posts.push({ pathname, body });
+    if (pathname === "/api/spawn") return {
+      ok: true, launchId: "launch-fixture", conversationId: "conversation_launched",
+      state: "starting", initialMessage: "pending",
+    };
     return { ok: true, outcome: "delivered", operationId: "fixture-operation" };
   } };
   const receipts = new SqliteMcpReceiptStore(path.join(directory, "receipts.sqlite"));
@@ -283,6 +287,23 @@ test("a worktree lookalike without an active seat is refused with its known pare
   expect(h.scans()).toBe(0);
 });
 
+test("a known parent remains a close match when neither it nor the worktree lookalike has a seat", async () => {
+  expect(persistProjectAliases([{ source: "parent-project-old", target: "parent-project", displayName: "Parent Board" }])).toBe(true);
+  const h = harness(false, {
+    lastCompletedCatalog: () => ({ files: [], projectCatalog: [
+      { project: "parent-project", displayName: "Parent Board", projectRoot: "/repos/ParentRepo", smt: 1, conversations: 1 },
+      { project: "lookalike-project", displayName: "Parent Board lane", projectRoot: "/repos/ParentRepo/worktrees/lane", smt: 1, conversations: 1 },
+    ] }),
+  });
+  const result = await h.call("send_message_to_orchestrator", " Parent Board lane ");
+  expect(result).toMatchObject({ ok: false, code: "unknown_project", retryable: false,
+    details: { closeMatches: expect.arrayContaining([{ project: "parent-project", name: "Parent Board" }]) } });
+  expect("error" in result && result.error).toContain("no such project \"Parent Board lane\"");
+  expect(h.posts).toEqual([]);
+  expect(h.receipts.lookup("send_message_to_orchestrator:resolve-1")).toBeNull();
+  expect(h.scans()).toBe(0);
+});
+
 for (const tool of ["rotate_orchestrator", "seat_tick_settings", "create_orchestrator", "ask_orchestrator_in_parallel", "bridge_directive"] as const) {
   test(`${tool} resolves a named project before its control or settings operation`, async () => {
     seat("target-project", "Example Board");
@@ -315,8 +336,13 @@ for (const tool of ["spawn_agent", "create_pipeline"] as const) {
     const args = tool === "spawn_agent" ? { cwd: root, prompt: "Synthetic", engine: "codex", role: "builder" }
       : { repoDir: root, task: "Synthetic", stages: [], src: "/sessions/source.jsonl", autoStart: false };
     const result = await h.service.callTool(tool, { ...args, project: " eXAMPLE bOARD ", crossProjectRequest: "Do this work here", clientRequestId: "named-launch" });
-    expect("error" in result && result.error).not.toContain("project contradicts");
-    if (tool === "spawn_agent") expect(h.posts[0]?.pathname).toBe("/api/spawn");
+    if (tool === "spawn_agent") {
+      expect(result).toMatchObject({ ok: true });
+      expect(h.posts[0]?.pathname).toBe("/api/spawn");
+      expect(h.posts[0]?.body.project).toBe(projectForCwd(root));
+    } else {
+      expect("error" in result && result.error).not.toContain("project contradicts");
+    }
     const refused = await h.service.callTool(tool, { ...args, project: " Example Boar ", clientRequestId: "unknown-launch" });
     expect(refused).toMatchObject({ ok: false, code: "unknown_project", retryable: false });
     expect(h.scans()).toBe(0);

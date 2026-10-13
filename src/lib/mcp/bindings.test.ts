@@ -3343,6 +3343,8 @@ test("seat_tick_settings accepts an expiry in minutes and records the instant it
 test("seat_tick_settings lets one seat set another project's tick, and says whose decision it was", async () => {
   const { bindings, store } = tickSettingsBindings({ callerProject: "viewer" });
   expect(persistProjectAliases([{ source: "another-old", target: "another-project", displayName: "Another project" }])).toBe(true);
+  beginOrchestratorSeatIntent({ project: "another-project", mandate: "own the board", clientRequestId: "tick-other-seat", mode: "existing", conversationId: "conversation_another_project" });
+  completeOrchestratorSeatIntent({ project: "another-project", clientRequestId: "tick-other-seat", conversationId: "conversation_another_project", path: null });
   const applied = await bindings.seat_tick_settings({
     clientRequestId: "tick-other-project",
     project: "another-project",
@@ -3844,6 +3846,15 @@ test("bind resolves caller and target server-side, never from the arguments", as
   const callerB = callerFor(callerCwdB, "caller-b");
   const projectA = projectForCwd(callerCwdA);
   const projectB = projectForCwd(callerCwdB);
+  const launchProject = projectForCwd(sandbox)!;
+  for (const [project, clientRequestId, conversationId] of [
+    [projectA!, "bind-project-a-seat", "conversation_project_a_seat"],
+    [projectB!, "bind-project-b-seat", "conversation_project_b_seat"],
+    [launchProject, "bind-launch-seat", "conversation_launch_seat"],
+  ] as const) {
+    beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId, mode: "existing", conversationId });
+    completeOrchestratorSeatIntent({ project, clientRequestId, conversationId, path: null });
+  }
   expect(typeof projectA).toBe("string");
   expect(projectA).not.toBe(projectB);
   let authority: { kind: "worker"; conversationId: string; role: string | null } = { kind: "worker", conversationId: callerA.id, role: "builder" };
@@ -4281,6 +4292,7 @@ test("task placement bindings require atomic guards and classify field refusals 
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "task-binding-position-"));
   sandboxes.push(sandbox);
   const env: NodeJS.ProcessEnv = { ...process.env, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_RUNTIME_HOST_SOCKET: path.join(sandbox, "runtime.sock") };
+  env.LLV_STAGING = "1";
   for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR"]) {
     const dir = path.join(sandbox, key); fs.mkdirSync(dir); env[key] = dir;
   }
@@ -4292,7 +4304,10 @@ test("task placement bindings require atomic guards and classify field refusals 
     import { createMcpToolService, MemoryMcpReceiptStore } from "./src/lib/mcp/server";
     import { TASKS_FILE } from "./src/lib/tasks/store";
     import { persistProjectAliases } from "./src/lib/projects/aliases";
+    import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "./src/lib/orchestrator/seats";
     if (!persistProjectAliases([{ source: "fixture-old", target: "fixture-project", displayName: "Fixture project" }])) throw new Error("fixture project unavailable");
+    beginOrchestratorSeatIntent({ project: "fixture-project", mandate: "own the board", clientRequestId: "fixture-seat", mode: "existing", conversationId: "conversation_fixture" });
+    completeOrchestratorSeatIntent({ project: "fixture-project", clientRequestId: "fixture-seat", conversationId: "conversation_fixture", path: null });
     import { persistedTaskState } from "./src/lib/tasks/storeFixture";
     if (!TASKS_FILE.startsWith(process.env.LLV_STATE_DIR + "/")) throw new Error("state escaped sandbox");
     const service = createMcpToolService(viewerMcpBindings(), new MemoryMcpReceiptStore());
@@ -4321,7 +4336,7 @@ test("task placement bindings require atomic guards and classify field refusals 
 test("MCP task writes normalize holds, preserve step operator reasons and server provenance", async () => {
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "task-binding-hold-provenance-"));
   sandboxes.push(sandbox);
-  const env: NodeJS.ProcessEnv = { ...process.env, LLV_STATE_DIR: path.join(sandbox, "state") };
+  const env: NodeJS.ProcessEnv = { ...process.env, LLV_STATE_DIR: path.join(sandbox, "state"), LLV_STAGING: "1" };
   for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR"]) {
     const dir = path.join(sandbox, key); fs.mkdirSync(dir); env[key] = dir;
   }
@@ -4332,7 +4347,10 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
     import { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore } from "./src/lib/mcp/server";
     import { TASKS_FILE } from "./src/lib/tasks/store";
     import { persistProjectAliases } from "./src/lib/projects/aliases";
+    import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "./src/lib/orchestrator/seats";
     if (!persistProjectAliases([{ source: "fixture-old", target: "fixture-project", displayName: "Fixture project" }])) throw new Error("fixture project unavailable");
+    beginOrchestratorSeatIntent({ project: "fixture-project", mandate: "own the board", clientRequestId: "fixture-seat", mode: "existing", conversationId: "conversation_fixture" });
+    completeOrchestratorSeatIntent({ project: "fixture-project", clientRequestId: "fixture-seat", conversationId: "conversation_fixture", path: null });
     import { persistedTaskRows } from "./src/lib/tasks/storeFixture";
     if (!TASKS_FILE.startsWith(process.env.LLV_STATE_DIR + "/")) throw new Error("state escaped sandbox");
     let conversationId = "conversation_create_bound";
