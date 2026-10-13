@@ -776,6 +776,16 @@ function continueRefreshInBackground(refresh: Promise<FileScanSnapshot>): void {
   void refresh.catch(() => undefined);
 }
 
+function deferFileScan(slot: FileScanCacheSlot, refresh: FileScanRefresh): never {
+  // Keep the shared generation alive independently of this caller. The
+  // instrumented scan retains unexpected errors for the next read.
+  continueRefreshInBackground(waitForFileScanRefresh(refresh));
+  if (slot.lastScanError !== undefined && !isFileScanIncompleteError(slot.lastScanError)) {
+    throw slot.lastScanError;
+  }
+  throw new FileScanIncompleteError();
+}
+
 function rememberPinnedGeneration(slot: FileScanCacheSlot, pinnedPath: string, generation: number): number {
   slot.pinnedGenerations ??= new Map();
   const remembered = Math.max(slot.pinnedGenerations.get(pinnedPath) ?? -1, generation);
@@ -1026,7 +1036,13 @@ export async function completedFileScan(
   if (slot.snapshot) {
     if (revalidate) {
       if (wait) await waitForCatalogMembership(slot, signal);
-      else void waitForCatalogMembership(slot).catch((error) => { slot.lastScanError = error; });
+      else {
+        const refresh = await membershipFileScanRefresh(slot);
+        if (signal?.aborted) throw scanAbortError(signal.reason);
+        // A completed inventory from before a new member appeared cannot
+        // establish absence in the caller's observed catalog scope.
+        if (refresh) return deferFileScan(slot, refresh);
+      }
     }
     const now = Date.now();
     if (revalidate
@@ -1041,16 +1057,7 @@ export async function completedFileScan(
 
   const targetGeneration = slot.refresh?.generation ?? nextGeneration(slot);
   const refresh = slot.refresh ?? beginFileScanRefresh(slot, targetGeneration, "cold");
-  if (!wait) {
-    // This subscriber belongs to the background refresh, independent of the
-    // caller's lifetime. instrumentFileScan retains its error for the next
-    // read; only the incomplete-inventory error is an expected deferral.
-    void waitForFileScanRefresh(refresh).catch(() => {});
-    if (slot.lastScanError !== undefined && !isFileScanIncompleteError(slot.lastScanError)) {
-      throw slot.lastScanError;
-    }
-    throw new FileScanIncompleteError();
-  }
+  if (!wait) return deferFileScan(slot, refresh);
   await waitForFileScanRefresh(refresh, signal);
   if (revalidate) await waitForCatalogMembership(slot, signal);
   return completedScan(slot, undefined, targetGeneration, "miss");

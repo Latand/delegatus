@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { agentRegistry } from "@/lib/agent/registry";
+import { statePath } from "@/lib/configDir";
 import { completedFileScan, resetFilesRouteCacheForTests, setFileCatalogMembershipProbeForTests, setFileScanRunnerForTests } from "@/lib/scanner/scanCache";
 import { productionDomainDependencies, viewerMcpBindings, viewerMcpRecoverableTools, type ViewerMcpDomainDependencies } from "./bindings";
 import { createMcpToolService, SqliteMcpReceiptStore } from "./server";
@@ -12,6 +13,20 @@ afterEach(() => {
   resetFilesRouteCacheForTests();
   setFileScanRunnerForTests(null);
   setFileCatalogMembershipProbeForTests(null);
+  fs.rmSync(statePath("files-scan-snapshot.json"), { force: true });
+});
+
+test("MCP waits for catalog membership before treating a cached inventory as complete", async () => {
+  resetFilesRouteCacheForTests();
+  setFileCatalogMembershipProbeForTests(async () => "initial");
+  setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: true }));
+  await completedFileScan();
+  setFileCatalogMembershipProbeForTests(async () => "changed");
+  setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: false }));
+  // An older snapshot cannot prove that a newly created project is absent.
+  await expect(productionDomainDependencies.completedFileScan()).rejects.toMatchObject({
+    details: { code: "scan_incomplete", retryable: true },
+  });
 });
 
 test("an incomplete scan refuses an orchestrator send retryably before claiming its key", async () => {
