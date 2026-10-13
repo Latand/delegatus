@@ -170,6 +170,7 @@ import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { describe, projectForCwd, reprojectFileDescription } from "@/lib/scanner/describe";
 import { pathAllowed, scanRootEntries } from "@/lib/scanner/roots";
 import { completedFileScan, lastScannedFiles, lastScannedProjectCatalog, type FileScanSnapshot } from "@/lib/scanner/scanCache";
+import { catalogMemberProjects } from "@/lib/scanner/memberProjects";
 import { completedScanForMcp } from "./completedScan";
 import { readCachedResourceSessions, readResources, readResourcesWithDiagnostic } from "@/lib/resources";
 import { adoptLiveRootSession, conversationRole, liveRootSession, type RootSessionSource } from "@/lib/root/adopt";
@@ -769,6 +770,9 @@ export interface ViewerMcpDomainDependencies {
       a scan; null before any generation completed. Absent in harnesses that
       inject their own complete scan. */
   lastCompletedCatalog?(): { projectCatalog: FileScanSnapshot["projectCatalog"]; files: readonly FileScanSnapshot["files"][number][] } | null;
+  /** The project of every transcript under the scanner roots now, read
+      without a scan; null when that cannot be established for all of them. */
+  catalogMemberProjects?(): Promise<readonly { project: string; projectName?: string }[] | null>;
   registrySnapshot(): RegistrySnapshot;
   boardFor(project: string): ReturnType<typeof boardFor>;
   applyBoardCommand(input: unknown, snapshot: RegistrySnapshot): ReturnType<typeof applyBoardCommand>;
@@ -1279,6 +1283,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
     const files = lastScannedFiles();
     return projectCatalog && files ? { projectCatalog, files } : null;
   },
+  catalogMemberProjects,
   registrySnapshot: () => agentRegistry().readOnlySnapshot(),
   readSpawnAdmissionFence,
   validateSpawnAdmission: (body, context) => productionViewerControlDependencies().post(
@@ -4141,20 +4146,28 @@ async function resolveOrchestratorToolProject(named: string, dependencies: Viewe
     if (project) add(project);
   }
   if (keys.has(canonical)) return canonical;
-  /* A designated seat is addressed from durable records. Every transcript
-     born on a busy machine reopens the catalog generation, so requiring a
-     complete one here refused seat-to-seat messages for as long as agents
-     kept starting. The last completed generation proves a key it lists and
-     otherwise only adds candidates: one known project with that name and an
-     active seat is the recipient, while a shared name, an unknown name and a
-     project with no seat still wait for the complete catalog, which alone
-     can prove absence. */
+  /* A designated seat is addressed without a complete generation. Every
+     transcript born on a busy machine reopens the catalog generation, so
+     requiring a complete one here refused seat-to-seat messages for as long
+     as agents kept starting. The last completed generation proves a key it
+     lists. A display name needs proof that no other project carries it, and
+     the last generation knows nothing of a project born since, so the name
+     resolves only when every transcript now under the scanner roots has a
+     known project: then one project with that name and an active seat is the
+     recipient. A shared name, an unknown name, a project with no seat and a
+     membership that cannot be attributed still wait for the complete
+     catalog. */
   const last = dependencies.lastCompletedCatalog?.() ?? null;
   for (const entry of last?.projectCatalog ?? []) add(entry.project, entry.displayName);
   for (const entry of last?.files ?? []) add(entry.project, entry.projectName);
   if (keys.has(canonical)) return canonical;
-  const known = [...(names.get(named.trim()) ?? [])];
-  if (known.length === 1 && orchestratorSeatFor(known[0]!).active) return known[0]!;
+  const members = await dependencies.catalogMemberProjects?.() ?? null;
+  if (members) {
+    for (const member of members) add(member.project, member.projectName);
+    if (keys.has(canonical)) return canonical;
+    const known = [...(names.get(named.trim()) ?? [])];
+    if (known.length === 1 && orchestratorSeatFor(known[0]!).active) return known[0]!;
+  }
   const scan = await dependencies.completedFileScan();
   for (const entry of scan.snapshot.projectCatalog) add(entry.project, entry.displayName);
   for (const entry of scan.snapshot.files) add(entry.project, entry.projectName);

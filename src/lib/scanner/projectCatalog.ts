@@ -214,6 +214,31 @@ function readState(): ProjectCatalogState {
   }
 }
 
+export type RecordedProjectAttribution = { project: string; projectName?: string };
+let recordedAttributions: { signature: string; byPath: ReadonlyMap<string, RecordedProjectAttribution> } | undefined;
+
+/** The project and display name the last persisted index recorded for each
+    transcript it listed, keyed by path. A record whose summary was incomplete
+    is left out, so its file reads as unrecorded. Parsed once per written
+    index. */
+export function recordedProjectAttributions(): ReadonlyMap<string, RecordedProjectAttribution> {
+  let signature: string;
+  try {
+    const st = fs.statSync(catalogPath());
+    signature = `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}`;
+  } catch {
+    return new Map();
+  }
+  if (recordedAttributions?.signature === signature) return recordedAttributions.byPath;
+  const byPath = new Map<string, RecordedProjectAttribution>();
+  for (const [pathname, file] of Object.entries(readState().files)) {
+    if (file.summaryVersion !== PROJECT_SUMMARY_VERSION || file.summaryIncomplete) continue;
+    byPath.set(pathname, { project: file.project, projectName: file.projectName });
+  }
+  recordedAttributions = { signature, byPath };
+  return byPath;
+}
+
 function persistenceDiagnostic(operation: string, target: string, error: unknown): void {
   const now = Date.now();
   if (now - lastCatalogPersistenceDiagnosticAt < CATALOG_PERSISTENCE_DIAGNOSTIC_MS) return;
