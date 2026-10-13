@@ -3385,3 +3385,11 @@ An absent, malformed, past or more than 600 s distant value uses receipt +
 Busy holds end ten seconds before it. Completion retries end at it, including
 invalid compact claims. Valid compact requests retain their own lifecycle.
 See [relay-request-deadline.md](relay-request-deadline.md) for the wait rules.
+
+Answer admission acknowledges before reserving execution capacity. Drain, full
+target and busy chat races enter a hold with the `queued` step. A hold owns no
+execution slot or chat reservation; capacity waiters take slots in deadline
+order and advertised free slots exclude them. On expiry it sends `declined`
+with reason `busy`, retaining detail `chat busy` for a chat hold. Demotion
+wakes holds and attempts that completion once before its bounded exit.
+Heartbeats follow a fixed grid through admission and completion delivery.

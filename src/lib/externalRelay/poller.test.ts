@@ -891,7 +891,7 @@ test("a 5xx, an invalid body or a network error keeps the stored targets and say
 });
 
 
-test("a claim already waiting when drain begins is declined without reserving an answer", async () => {
+test("a claim already waiting when drain begins is held until its busy bound without reserving an answer", async () => {
   const { drainFile, writeDrain, releaseDrain } = await import("@/lib/selfUpdate/drain");
   let entered!: () => void, release!: () => void, completed!: () => void;
   const waiting = new Promise<void>(resolve => { entered = resolve; });
@@ -905,14 +905,15 @@ test("a claim already waiting when drain begins is declined without reserving an
       slots.push((body as { slots: unknown }).slots);
       if (claimed) return { status: 204 };
       claimed = true; entered(); await gate;
-      return { body: { request: { ...sampleRequest, request_id: "rq_waiting_drain" } } };
+      return { body: { request: { ...sampleRequest, request_id: "rq_waiting_drain", deadline_at: new Date(Date.parse(sampleRequest.claimed_at) + 14000).toISOString() } } };
     }
     if (req.url?.endsWith("/complete")) { completions.push(body); completed(); return { body: { status: "accepted", duplicate: false } }; }
+    if (req.url?.endsWith("/heartbeat")) return { body: { status: "ok" } };
     return { status: 404 };
   });
   const originalRelays = readRelayStore().relays;
   const resolve = accountManager.resolveHeadlessSpawn;
-  accountManager.resolveHeadlessSpawn = () => ({ kind: "unavailable" });
+  accountManager.resolveHeadlessSpawn = () => ({ kind: "available", account: { engine: "codex", accountId: "fixture", kind: "managed", home: root, transcriptRoot: root, env: { ...process.env } } });
   try {
     updateRelayStore(store => ({ ...store, relays: [pairedRelay("drain_claim", server.origin, [configured("target_1")])] }));
     ensureExternalRelayPollers();

@@ -425,7 +425,7 @@ test("heartbeats continue through silence, newest progress is sent, completion f
     await server.close();
   }
 });
-test("a full target is declined and a nonzero CLI exit cannot use a written answer", async () => {
+test("a full target waits for its slot and a nonzero CLI exit cannot use a written answer", async () => {
   const completions: unknown[] = [];
   const server = await startTestRelay((req, body) =>
     req.url?.endsWith("/complete")
@@ -451,7 +451,7 @@ test("a full target is declined and a nonzero CLI exit cannot use a written answ
       undefined,
       { command: script },
     );
-    expect(busy).toMatchObject({ outcome: "declined", reason: "busy" });
+    expect(busy).toMatchObject({ outcome: "failed", reason: "agent_error" });
     expect(await first).toMatchObject({
       outcome: "failed",
       reason: "agent_error",
@@ -959,14 +959,15 @@ test("relay advertises zero capacity and starts no answer child during drain, th
   const request = { ...sampleRequest, request_id: "rq_drain" };
   try {
     writeDrain(drainFile(), { id: "relay-hold", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
-    expect(await runClaimedRequest(paired, request, undefined, { command })).toMatchObject({ outcome: "declined", reason: "busy" });
+    const pending = runClaimedRequest(paired, request, undefined, { command });
+    await Bun.sleep(100);
     expect(fs.existsSync(marker)).toBe(false); expect(readRunLedger().runs).toEqual([]);
     expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 0 }]);
     releaseDrain(drainFile(), "relay-hold");
     expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 1 }]);
-    expect(await runClaimedRequest(paired, { ...request, lease_id: "ls_released_Zq3vN8bY1xKp4Lm" }, undefined, { command })).toMatchObject({ outcome: "answered" });
+    expect(await pending).toMatchObject({ outcome: "answered" });
     expect(fs.readFileSync(marker, "utf8")).toBe("launched");
-    expect(completed).toHaveLength(2);
+    expect(completed).toHaveLength(1);
   } finally { releaseDrain(drainFile(), "relay-hold"); await server.close(); }
 });
 
@@ -1168,7 +1169,7 @@ test("pre-launch capacity and drain declines leave the member's allowance availa
       writeDrain(drainFile(), { id: "admission-hold", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
       return { kind: "available", account };
     }) as typeof previous;
-    expect(await runClaimedRequest(paired, request("rq_before_drain"), undefined, { command })).toMatchObject({ outcome: "declined", reason: "busy" });
+    expect(await runClaimedRequest(paired, { ...request("rq_before_drain"), deadline_at: new Date(Date.parse(sampleRequest.claimed_at) + 10500).toISOString() }, undefined, { command })).toMatchObject({ outcome: "declined", reason: "busy" });
     releaseDrain(drainFile(), "admission-hold");
     accountManager.resolveHeadlessSpawn = previous;
     for (const id of ["rq_before_capacity", "rq_before_drain"])

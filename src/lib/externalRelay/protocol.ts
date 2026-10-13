@@ -302,7 +302,7 @@ export type ExternalRelayProgress = {
   status: "running" | "completed" | "failed" | null;
   at: string;
 } | ExternalRelayStepProgress;
-export type ExternalRelayStepId = "accepted" | "thinking" | "reading_board" | "working" | "writing_answer";
+export type ExternalRelayStepId = "accepted" | "queued" | "thinking" | "reading_board" | "working" | "writing_answer";
 export type ExternalRelayStepProgress = {
   kind: "step";
   label: ExternalRelayStepId;

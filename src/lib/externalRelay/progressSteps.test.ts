@@ -8,6 +8,7 @@ test("the descriptor gates steps independently of the legacy note preference", (
 });
 
 test("only explicit viewer reads map to reading_board; other tools map to working", () => {
+  expect(relayStepFor({ queued: true, writingAnswer: true, currentTool: "Bash" })).toBe("queued");
   expect(relayStepFor({})).toBe("thinking");
   expect(relayStepFor({ currentTool: null })).toBe("thinking");
   for (const tool of ["mcp__viewer__list_tasks", "mcp__viewer__get_pipeline", "viewer.board_snapshot", "mcp__viewer__read_prototype_review"])

@@ -1,3 +1,4 @@
+import { capacityWaiters, olderCapacityWaiter, enterRelayHold, leaveRelayHold, releasingRelayHolds, type RelayHoldCause } from "./hold";
 import { relayRequestDeadline } from "./deadline";
 import { ownerRelayAuthorized } from "./ownerAuthority";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
@@ -7,7 +8,7 @@ import { runOwnerAgent, ownerClarificationAnswer, type OwnerRunPorts } from "./o
 import { readRelaySwitches } from "./switches";
 import { compactRequestSchema } from "./protocol";
 import { runCompactRequest } from "./compact";
-import { conversationContext, reserveConversationsAsync, releaseConversationAsync, prepareConversationAccount, conversationCodexHome, sweepConversationsAsync, type RelayConversation } from "./conversations";
+import { conversationContext, reserveConversationsAsync, releaseConversationAsync, prepareConversationAccount, conversationCodexHome, sweepConversationsAsync, readConversations, type RelayConversation } from "./conversations";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import fs from "node:fs";
 import os from "node:os";
@@ -51,6 +52,7 @@ import {
   changeRunAsync,
   dropRunAsync,
   reserveRunAsync,
+  RelayStoreBusy,
   readRunLedger,
   type PairedRelay,
   type RelayTargetSettings,
@@ -58,8 +60,10 @@ import {
 
 const globalRelay = globalThis as typeof globalThis & {
   __llvExternalRelayActive?: Map<string, number>;
+  __llvExternalRelayInflight?: Set<string>;
 };
 const active = (globalRelay.__llvExternalRelayActive ??= new Map<string, number>());
+const inflight = globalRelay.__llvExternalRelayInflight ??= new Set<string>();
 export function externalRelayTempRoot(): string {
   const temporary = path.resolve(os.tmpdir());
   const home = path.resolve(os.homedir());
@@ -89,7 +93,7 @@ export function advertisedSlots(
             held.filter(
               (run) => run.relayId === relay.id && run.targetId === target.id,
             ).length,
-          ),
+          ) - capacityWaiters(relay.id, target.id),
       ),
     }));
 }
@@ -207,7 +211,7 @@ export async function runClaimedRequest(
   let heartbeatAt = deadline.receivedAt;
   if (deadline.fallback) console.info("External relay deadline", { request: requestId.slice(0, 8), fallback: deadline.fallback });
   if (request) console.info("External relay claim received", { request: requestId.slice(0, 8), kind: request.kind });
-  if (readRunLedger().runs.some((run) => run.requestId === requestId)) return null;
+  if (inflight.has(requestId) || readRunLedger().runs.some((run) => run.requestId === requestId)) return null;
   const rawRequest = raw as Record<string, unknown>;
   const targetId = request?.target_id ?? rawRequest.target_id;
   const recorder = answerRecorder({
@@ -220,6 +224,10 @@ export async function runClaimedRequest(
     requester: request?.input.requester ?? null,
     input: rawRequest.input,
   });
+  inflight.add(requestId);
+  let releaseRequested = false;
+  let deliverySettled!: () => void;
+  const released = new Promise<void>(resolve => { deliverySettled = resolve; });
   let allowOwnerReply: (() => boolean) | undefined;
   let rounds = 0;
   let loop: ReturnType<typeof createToolLoop> | null = null;
@@ -248,7 +256,7 @@ export async function runClaimedRequest(
       ...loopRecord(),
     });
     const deliveryStart = Date.now();
-    const until = deliveryStart < deadline.at ? deadline.at : deliveryStart + stallMs;
+    const until = releaseRequested ? deliveryStart : deliveryStart < deadline.at ? deadline.at : deliveryStart + stallMs;
     const sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature);
     const completion = sent.body;
     recorder?.recordDelivery({
@@ -258,6 +266,8 @@ export async function runClaimedRequest(
     heartbeatStopped = true;
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
     if (cadenceTimer) { clearTimeout(cadenceTimer); cadenceTimer = null; }
+    inflight.delete(requestId);
+    deliverySettled();
     return completion;
   };
   if (!request)
@@ -276,8 +286,7 @@ export async function runClaimedRequest(
     return finish(declined(leaseId, "not_configured"));
   if (relay.paused || !target.enabled)
     return finish(declined(leaseId, "disabled"));
-  if (activeDrain()) return finish(declined(leaseId, "busy"));
-  let conversation: RelayConversation | null = null;
+  let conversation = null as RelayConversation | null;
   let conversationEvidence: { sessionId?: string | null; promptTokens?: number | null; compacted?: boolean } = {};
   let turn: ReturnType<typeof conversationTurnPrompt> | null = null;
   let conversationBroken = false;
@@ -290,28 +299,6 @@ export async function runClaimedRequest(
   const identityTimers: ReturnType<typeof setTimeout>[] = [];
   let owner: ReturnType<typeof ownerTierFor> = null;
   try {
-    runDir = fs.mkdtempSync(
-      path.join(externalRelayTempRoot(), "llv-external-relay-"),
-    );
-    const ownerIdentity = procBackend.processIdentity(process.pid);
-    if (!ownerIdentity) throw new Error("viewer process identity unavailable");
-    const record = {
-      requestId,
-      leaseId,
-      relayId: relay.id,
-      targetId: target.id,
-      childPid: null,
-      childIdentity: null,
-      ownerPid: process.pid,
-      ownerIdentity,
-      runDir,
-      startedAt: new Date().toISOString(),
-    };
-    const admission = await reserveRunAsync(record, target.concurrency, deadline.declineAt);
-    if (admission === "duplicate") { duplicate = true; return null; }
-    if (admission === "full") return await finish(declined(leaseId, "busy"));
-    recorded = true;
-    markActive(relay, target);
     let newestProgress: ExternalRelayProgress | null = null;
     const steps = createRelaySteps(relay.features);
     let stepLog: string | null = null;
@@ -405,27 +392,16 @@ export async function runClaimedRequest(
     // fallback setting decides whether its own agent answers instead.
     const requester = request.input.requester;
     const limit = memberLimitFor(target);
-    if (requester && limit !== null && !exemptFromMemberLimit(requester)) {
+    const memberDecline = (): ExternalRelayCompletion | null => {
+      if (!requester || limit === null || exemptFromMemberLimit(requester)) return null;
       const now = Date.now();
-      const used = countMemberAnswers({
-        relayId: relay.id,
-        targetId: target.id,
-        chatKey: request.chat?.key ?? null,
-        requesterKey: requester.key,
-        sinceMs: now - RELAY_MEMBER_LIMIT_WINDOW_MS,
-      });
-      if (used.count >= limit)
-        return await finish(
-          declined(
-            leaseId,
-            "member_limit",
-            used.oldestMs === null
-              ? null
-              : Math.max(1, Math.ceil((used.oldestMs + RELAY_MEMBER_LIMIT_WINDOW_MS - now) / 1000)),
-            memberLimitDetail(limit),
-          ),
-        );
-    }
+      const used = countMemberAnswers({ relayId: relay.id, targetId: target.id, chatKey: request.chat?.key ?? null,
+        requesterKey: requester.key, sinceMs: now - RELAY_MEMBER_LIMIT_WINDOW_MS });
+      return used.count >= limit ? declined(leaseId, "member_limit", used.oldestMs === null ? null :
+        Math.max(1, Math.ceil((used.oldestMs + RELAY_MEMBER_LIMIT_WINDOW_MS - now) / 1000)), memberLimitDetail(limit)) : null;
+    };
+    const earlyMemberDecline = memberDecline();
+    if (earlyMemberDecline) return await finish(earlyMemberDecline);
     const profile = answerProfileFor(requester);
     const ownerMessage = ownerTierFor({ ownerTier: true }, request);
     const previousAnswer = ownerMessage ? readAnswerRecord(relay.id, target.id, requestId) : null;
@@ -437,40 +413,100 @@ export async function runClaimedRequest(
       try { owner.bridgeReport = resolveOwnerBridgeContext(request, owner, relay.api_base); }
       catch { owner.bridgeReport = null; }
     }
-    if (owner) {
-      allowOwnerReply = () => ownerRelayAuthorized(relay.id, target.id, requestId);
-      await changeRunAsync(requestId, current => ({ ...current, ownerTurn: { clientAttemptId: `relay-owner-${requestId}`,
-        request: { text: owner!.text, requestText: owner!.requestText },
-        ...(owner!.bridgeReport ? { bridgeReport: owner!.bridgeReport } : {}),
-        ...(prototype && target.ownerTier !== true ? { prototype: true as const } : {}) } }), deadline.at);
-    }
-    if (activeDrain()) return await finish(declined(leaseId, "busy"));
     if (owner && !prototype && ownerNeedsClarification(owner)) return await finish({ lease_id: leaseId, outcome: "answered", answer: ownerClarificationAnswer(request, owner), duration_ms: 0 });
+    if (owner) allowOwnerReply = () => ownerRelayAuthorized(relay.id, target.id, requestId);
     const context = conversationContext(request.input.requester);
-    if (!owner && readRelaySwitches().chat_conversations && request.chat && context) {
-      await sweepConversationsAsync([relay], readRunLedger().runs.filter((r) => r.requestId !== requestId), Date.now(), deadline.declineAt, relay.id);
-      const reserved = await reserveConversationsAsync(relay, target, request.chat.key, requestId, [context], deadline.declineAt);
-      if (!reserved) return await finish(declined(leaseId, "busy", null, "chat busy"));
-      conversation = reserved[0]!;
-    }
-    const selection = prototype ? null : accountManager.resolveHeadlessSpawn(
-      target.engine,
-      conversation?.accountId ?? null,
-      [],
-      target.project,
-      target.model,
+    const usesConversation = !owner && readRelaySwitches().chat_conversations && request.chat && context;
+    const selectAccount = () => prototype ? null : accountManager.resolveHeadlessSpawn(target.engine!,
+      conversation?.accountId ?? (usesConversation ? readConversations().find(r => r.relayId === relay.id && r.targetId === target.id && r.chatKey === request.chat!.key && r.context === context)?.accountId : null) ?? null,
+      [], target.project, target.model);
+    let selection = selectAccount();
+    const selectedAccount = () => {
+      if (!selection || selection.kind !== "available") throw new Error("relay account unavailable");
+      return selection.account;
+    };
+    const capacityDecline = () => selection && selection.kind !== "available" ? declined(leaseId, "no_capacity",
+      selection.kind === "exhausted" && selection.resetsAt ? Math.max(0, selection.resetsAt - Math.floor(Date.now() / 1000)) : null) : null;
+    const earlyCapacityDecline = capacityDecline();
+    if (earlyCapacityDecline) return await finish(earlyCapacityDecline);
+    runDir = fs.mkdtempSync(
+      path.join(externalRelayTempRoot(), "llv-external-relay-"),
     );
-    if (selection && selection.kind !== "available")
-      return await finish(
-        declined(
-          leaseId,
-          "no_capacity",
-          selection.kind === "exhausted" && selection.resetsAt
-            ? Math.max(0, selection.resetsAt - Math.floor(Date.now() / 1000))
-            : null,
-        ),
-      );
-    if (conversation && selection?.kind === "available") { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
+    const ownerIdentity = procBackend.processIdentity(process.pid);
+    if (!ownerIdentity) throw new Error("viewer process identity unavailable");
+    const record = {
+      requestId,
+      leaseId,
+      relayId: relay.id,
+      targetId: target.id,
+      childPid: null,
+      childIdentity: null,
+      ownerPid: process.pid,
+      ownerIdentity,
+      runDir,
+      startedAt: new Date().toISOString(),
+      ...(owner ? { ownerTurn: { clientAttemptId: `relay-owner-${requestId}`,
+        request: { text: owner.text, requestText: owner.requestText },
+        ...(owner.bridgeReport ? { bridgeReport: owner.bridgeReport } : {}),
+        ...(prototype && target.ownerTier !== true ? { prototype: true as const } : {}) } } : {}),
+    };
+    let admissionDecline: ExternalRelayCompletion | null = null;
+    let wakeHold: (() => void) | null = null;
+    const releaseAdmission = async () => {
+      if (conversation) { await releaseConversationAsync(conversation.id, {}, Date.now() + 5000); conversation = null; }
+      if (recorded) { await dropRunAsync(requestId, Date.now() + 5000); free(relay, target); recorded = false; }
+    };
+    const admit = async (): Promise<boolean> => {
+      let waited = false;
+      while (!leaseUnavailable) {
+        let cause: RelayHoldCause | null = activeDrain() ? "drain" : usesConversation && readConversations().some(r =>
+          r.relayId === relay.id && r.targetId === target.id && r.chatKey === request.chat!.key && r.state === "running") ? "chat" :
+          olderCapacityWaiter(relay.id, target.id, requestId, deadline) ? "capacity" : null;
+        if (releaseRequested || releasingRelayHolds()) { admissionDecline = declined(leaseId, "busy", null, cause === "chat" ? "chat busy" : null); releaseRequested = true; return false; }
+        if (!cause) {
+          try {
+            const admission = await reserveRunAsync(record, target.concurrency, deadline.declineAt);
+            if (admission === "duplicate") { duplicate = true; return false; }
+            if (admission === "full") cause = "capacity";
+            else {
+              recorded = true; markActive(relay, target);
+              if (usesConversation) {
+                await sweepConversationsAsync([relay], readRunLedger().runs, Date.now(), deadline.declineAt, relay.id);
+                const reserved = await reserveConversationsAsync(relay, target, request.chat!.key, requestId, [context!], deadline.declineAt);
+                if (!reserved) { await releaseAdmission(); cause = "chat"; }
+                else conversation = reserved[0]!;
+              }
+            }
+          } catch (error) {
+            if (!(error instanceof RelayStoreBusy)) throw error;
+            await releaseAdmission(); cause = "capacity";
+          }
+        }
+        if (!cause) {
+          leaveRelayHold(requestId); steps?.observe({});
+          if (waited) {
+            admissionDecline = memberDecline();
+            if (admissionDecline) return false;
+          }
+          selection = selectAccount(); admissionDecline = capacityDecline();
+          if (admissionDecline) return false;
+          if (conversation && selection?.kind === "available") { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
+          return true;
+        }
+        waited = true;
+        enterRelayHold({ requestId, relayId: relay.id, targetId: target.id, cause, deadline,
+          release: () => { releaseRequested = true; wakeHold?.(); return released; } });
+        steps?.observe({ queued: true });
+        if (Date.now() >= deadline.declineAt) { admissionDecline = declined(leaseId, "busy", null, cause === "chat" ? "chat busy" : null); return false; }
+        await new Promise<void>(resolve => {
+          const timer = setTimeout(() => { wakeHold = null; resolve(); }, Math.min(1000, deadline.declineAt - Date.now()));
+          timer.unref();
+          wakeHold = () => { clearTimeout(timer); wakeHold = null; resolve(); };
+        });
+      }
+      return false;
+    };
+    if (!await admit()) return admissionDecline ? await finish(admissionDecline) : null;
     const lose = () => { leaseUnavailable = true; run?.cancel(); callAbort.abort(); };
     if (!owner && callableTools(request).length) loop = createToolLoop(relay, request, {
       signal: callAbort.signal, lose,
@@ -500,7 +536,10 @@ export async function runClaimedRequest(
       const final = rounds === 8 || !!loop && loop.callsLeft() === 0;
       runFinished = false;
       try {
-        if (rounds === 1 && activeDrain()) return await finish(declined(leaseId, "busy"));
+        if (rounds === 1 && activeDrain()) {
+          await releaseAdmission();
+          if (!await admit()) return admissionDecline ? await finish(admissionDecline) : null;
+        }
         const roundPrompt = loop ? toolRoundPrompt(request, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent }) : answerPrompt(request);
         const frame = roundPrompt.slice(roundPrompt.lastIndexOf("[Answer with one JSON object"));
         if (conversation && rounds === 1) turn = conversationTurnPrompt(request, conversation, frame);
@@ -512,7 +551,7 @@ export async function runClaimedRequest(
         }) : owner ? runOwnerAgent({
           authorize: () => { if (!allowOwnerReply!()) throw new Error("owner relay authorization revoked"); },
           credentials: [relay.credential],
-          request, owner, target, accountId: selection!.account.accountId,
+          request, owner, target, accountId: selectedAccount().accountId,
           hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
           onConversation: async (conversationId) => {
             await changeRunAsync(requestId, current => ({ ...current, conversationId }), Date.now() + 5000);
@@ -525,7 +564,7 @@ export async function runClaimedRequest(
           engine: target.engine,
           model: target.model,
           effort: target.effort,
-          account: selection!.account,
+          account: selectedAccount(),
           ["prompt"]: conversation ? persistentPrompt : roundPrompt,
           schema: loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent })) : offersHandoff(request) ? handoffAnswerSchema : answerSchema,
           runDir: loop ? path.join(runDir, `round-${rounds}`) : runDir,
@@ -630,6 +669,9 @@ export async function runClaimedRequest(
       request.liveness.stall_window_s * 1000,
     );
   } finally {
+    inflight.delete(requestId);
+    leaveRelayHold(requestId);
+    deliverySettled();
     heartbeatStopped = true;
     if (cadenceTimer) clearTimeout(cadenceTimer);
     if (heartbeatTimer) clearInterval(heartbeatTimer);

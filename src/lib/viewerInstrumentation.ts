@@ -993,6 +993,8 @@ export async function registerViewerRuntime(): Promise<void> {
       try {
         const relays = await import("@/lib/externalRelay/poller");
         relays.stopExternalRelayPollers();
+        const { declineHeldRelayRequests } = await import("@/lib/externalRelay/hold");
+        await declineHeldRelayRequests(5000);
       } catch (error) {
         console.error("[external relay] poller stop failed", error instanceof Error ? error.name : "unknown");
       }
