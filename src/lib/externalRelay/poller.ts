@@ -258,9 +258,8 @@ export function relayClaimBody(relay: PairedRelay) {
     ...relayClaimCapabilities(readRelayStore().relays.find(item => item.id === relay.id)),
     slots: advertisedSlots(relay) };
 }
-/** The claim loop of a dark install makes no extra descriptor request. Enabled
- * installs refresh before their first claim, then with the existing five-minute
- * target cadence; the settings page reads it at most every five minutes too. */
+/** Every paired install refreshes before its first claim and every five minutes,
+ * independently of the switches that gate individual optional features. */
 export function refreshRelayDescriptorFeatures(id: string, minIntervalMs = 0, options: { quiet?: boolean } = {}): Promise<TargetRefreshOutcome> {
   const prior = descriptorRefreshes.get(id);
   if (prior?.running) return prior.running;
@@ -297,10 +296,8 @@ async function poll(
     await refreshRelayTargets(relay.id, TARGETS_REFRESH_IN_LOOP_MS);
     // A changed list restarted this relay's loop; a 401 parked it.
     if (loop.stopped) break;
-    if (readRelaySwitches().owner_tools) {
-      await refreshRelayDescriptorFeatures(relay.id, TARGETS_REFRESH_IN_LOOP_MS);
-      if (loop.stopped) break;
-    }
+    await refreshRelayDescriptorFeatures(relay.id, DESCRIPTOR_REFRESH_ON_READ_MS);
+    if (loop.stopped) break;
     loop.abort = new AbortController();
     try {
       const result = await relayCall<{ request?: unknown }>(
@@ -349,6 +346,14 @@ async function poll(
         loop.state = "rate_limited";
         await sleep((error.retryAfterSeconds ?? 5) * 1000);
         continue;
+      }
+      if (error instanceof ExternalRelayError && error.status >= 400 && error.status < 500 &&
+        /^(?:(?:unknown|unsupported)(?:_[a-z]+)*_features?|features?_(?:unknown|unsupported))$/.test(error.code)) {
+        const refreshed = await refreshRelayDescriptorFeatures(relay.id);
+        if (loop.stopped) break;
+        // Retry with a changed descriptor now; unchanged refusals keep the
+        // ordinary backoff so a persistent 4xx cannot spin the claim loop.
+        if (refreshed === "changed") continue;
       }
       loop.state = "unreachable";
       await sleep(backoff);

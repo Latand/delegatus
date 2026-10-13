@@ -198,6 +198,7 @@ export async function runClaimedRequest(
   const requestId = request?.request_id ?? (rawId as string);
   const leaseId = request?.lease_id ?? (rawLease as string);
   let heartbeatAt = Date.now();
+  if (request) console.info("External relay claim received", { request: requestId.slice(0, 8), kind: request.kind });
   if (readRunLedger().runs.some((run) => run.requestId === requestId)) return null;
   const rawRequest = raw as Record<string, unknown>;
   const targetId = request?.target_id ?? rawRequest.target_id;
@@ -257,43 +258,6 @@ export async function runClaimedRequest(
     return finish(declined(leaseId, "not_configured"));
   if (relay.paused || !target.enabled)
     return finish(declined(leaseId, "disabled"));
-  // The member limit (§B.8): a member past it is declined, and the service's
-  // fallback setting decides whether its own agent answers instead.
-  const requester = request.input.requester;
-  const limit = memberLimitFor(target);
-  if (requester && limit !== null && !exemptFromMemberLimit(requester)) {
-    const now = Date.now();
-    const used = countMemberAnswers({
-      relayId: relay.id,
-      targetId: target.id,
-      chatKey: request.chat?.key ?? null,
-      requesterKey: requester.key,
-      sinceMs: now - RELAY_MEMBER_LIMIT_WINDOW_MS,
-    });
-    if (used.count >= limit)
-      return finish(
-        declined(
-          leaseId,
-          "member_limit",
-          used.oldestMs === null
-            ? null
-            : Math.max(1, Math.ceil((used.oldestMs + RELAY_MEMBER_LIMIT_WINDOW_MS - now) / 1000)),
-          memberLimitDetail(limit),
-        ),
-      );
-  }
-  const profile = answerProfileFor(requester);
-  const ownerMessage = ownerTierFor({ ownerTier: true }, request);
-  const previousAnswer = ownerMessage ? readAnswerRecord(relay.id, target.id, requestId) : null;
-  const replayReviewId = previousAnswer?.profile?.owner && previousAnswer.requester?.key === requester?.key
-    && previousAnswer.chatKey === (request.chat?.key ?? null) ? previousAnswer.profile.prototype : undefined;
-  const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId) : null;
-  const owner = prototype ? ownerMessage : ownerTierFor(target, request);
-  if (owner && !prototype) {
-    try { owner.bridgeReport = resolveOwnerBridgeContext(request, owner, relay.api_base); }
-    catch { owner.bridgeReport = null; }
-  }
-  if (owner) allowOwnerReply = () => ownerRelayAuthorized(relay.id, target.id, requestId);
   if (activeDrain()) return finish(declined(leaseId, "busy"));
   let conversation: RelayConversation | null = null;
   let conversationEvidence: { sessionId?: string | null; promptTokens?: number | null; compacted?: boolean } = {};
@@ -301,11 +265,13 @@ export async function runClaimedRequest(
   let conversationBroken = false;
   let runDir: string | null = null;
   let recorded = false;
+  let duplicate = false;
   let run: ReturnType<typeof runEphemeralAgent> | null = null;
   let runFinished = false;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   const callAbort = new AbortController();
   const identityTimers: ReturnType<typeof setTimeout>[] = [];
+  let owner: ReturnType<typeof ownerTierFor> = null;
   try {
     runDir = fs.mkdtempSync(
       path.join(externalRelayTempRoot(), "llv-external-relay-"),
@@ -313,10 +279,6 @@ export async function runClaimedRequest(
     const ownerIdentity = procBackend.processIdentity(process.pid);
     if (!ownerIdentity) throw new Error("viewer process identity unavailable");
     const record = {
-      ...(owner ? { ownerTurn: { clientAttemptId: `relay-owner-${requestId}`,
-        request: { text: owner.text, requestText: owner.requestText },
-        ...(owner.bridgeReport ? { bridgeReport: owner.bridgeReport } : {}),
-        ...(prototype && target.ownerTier !== true ? { prototype: true as const } : {}) } } : {}),
       requestId,
       leaseId,
       relayId: relay.id,
@@ -329,10 +291,134 @@ export async function runClaimedRequest(
       startedAt: new Date().toISOString(),
     };
     const admission = reserveRun(record, target.concurrency);
-    if (admission === "duplicate") return null;
+    if (admission === "duplicate") { duplicate = true; return null; }
     if (admission === "full") return await finish(declined(leaseId, "busy"));
     recorded = true;
     markActive(relay, target);
+    let newestProgress: ExternalRelayProgress | null = null;
+    const steps = createRelaySteps(relay.features);
+    let stepLog: string | null = null;
+    let pendingServiceTools = 0;
+    let leaseUnavailable = false;
+    let beatBusy = false;
+    let pendingBeat: Promise<void> | null = null;
+    let seq = 0;
+    let nextBeatAt = 0;
+    let acked = false;
+    const started = Date.now();
+    const stallMs = request.liveness.stall_window_s * 1000;
+    const cancelStalledRun = () => {
+      if (!leaseUnavailable && Date.now() - heartbeatAt > stallMs) {
+        leaseUnavailable = true;
+        run?.cancel();
+        callAbort.abort();
+      }
+    };
+    const beat = async (stepChange = false) => {
+      if (beatBusy || leaseUnavailable) return;
+      beatBusy = true;
+      const beatSeq = ++seq;
+      const sentAt = Date.now();
+      let step: string | null = null;
+      const journal = (phase: "attempt" | "acknowledged" | "failed", status?: number, code?: string) =>
+        console.info("External relay heartbeat", { request: requestId.slice(0, 8), seq: beatSeq, phase, step,
+          durationMs: Date.now() - sentAt, ...(status !== undefined ? { status } : {}), ...(code ? { code } : {}) });
+      try {
+        const sentProgress = newestProgress;
+        const progress = steps ? steps.beat(beatSeq, Date.now(), stepChange) : sentProgress;
+        step = progress?.kind === "step" ? progress.label : null;
+        if (progress?.kind === "step") noteRelayProgress(relay.id, target.id, progress);
+        journal("attempt");
+        const response = await relayCall(
+          relay.api_base,
+          `/requests/${encodeURIComponent(requestId)}/heartbeat`,
+          "POST",
+          { lease_id: leaseId, seq: beatSeq, progress },
+          relay.credential,
+          { timeoutMs: 5000, maxBytes: relay.limits.max_response_bytes },
+        );
+        journal("acknowledged", response.status);
+        if (newestProgress === sentProgress) newestProgress = null;
+        acked = true;
+        heartbeatAt = Date.now();
+        nextBeatAt = heartbeatAt + request.liveness.heartbeat_interval_s * 1000;
+      } catch (error) {
+        journal("failed", error instanceof ExternalRelayError ? error.status : 0,
+          error instanceof ExternalRelayError && ["lease_lost", "unreachable", "malformed", "too_large", "unauthorized",
+            "unsupported_version", "unavailable", "rate_limited", "unknown_feature"].includes(error.code) ? error.code : "transport_error");
+        if (
+          error instanceof ExternalRelayError &&
+          (error.status === 404 ||
+            (error.status === 409 && error.code === "lease_lost"))
+        ) {
+          leaseUnavailable = true;
+          run?.cancel();
+          callAbort.abort();
+        }
+      } finally {
+        if (nextBeatAt <= Date.now()) nextBeatAt = Date.now() + 1000;
+        beatBusy = false;
+        cancelStalledRun();
+      }
+    };
+    // Acknowledge before filesystem context, account selection or agent launch.
+    // The same sequencer and timer retain the lease throughout slow admission.
+    pendingBeat = beat();
+    await pendingBeat;
+    heartbeatTimer = setInterval(() => {
+      if (steps && !owner && !runFinished && stepLog) steps.observe(readRelayStepObservation(stepLog));
+      if (!beatBusy) cancelStalledRun();
+      if (!beatBusy && !leaseUnavailable) {
+        if (steps?.changeDue(Date.now())) pendingBeat = beat(true);
+        else if (Date.now() >= nextBeatAt) pendingBeat = beat();
+      }
+    }, 1000);
+    heartbeatTimer.unref();
+    if (leaseUnavailable) return null;
+    // The member limit (§B.8): a member past it is declined, and the service's
+    // fallback setting decides whether its own agent answers instead.
+    const requester = request.input.requester;
+    const limit = memberLimitFor(target);
+    if (requester && limit !== null && !exemptFromMemberLimit(requester)) {
+      const now = Date.now();
+      const used = countMemberAnswers({
+        relayId: relay.id,
+        targetId: target.id,
+        chatKey: request.chat?.key ?? null,
+        requesterKey: requester.key,
+        sinceMs: now - RELAY_MEMBER_LIMIT_WINDOW_MS,
+      });
+      if (used.count >= limit)
+        return await finish(
+          declined(
+            leaseId,
+            "member_limit",
+            used.oldestMs === null
+              ? null
+              : Math.max(1, Math.ceil((used.oldestMs + RELAY_MEMBER_LIMIT_WINDOW_MS - now) / 1000)),
+            memberLimitDetail(limit),
+          ),
+        );
+    }
+    const profile = answerProfileFor(requester);
+    const ownerMessage = ownerTierFor({ ownerTier: true }, request);
+    const previousAnswer = ownerMessage ? readAnswerRecord(relay.id, target.id, requestId) : null;
+    const replayReviewId = previousAnswer?.profile?.owner && previousAnswer.requester?.key === requester?.key
+      && previousAnswer.chatKey === (request.chat?.key ?? null) ? previousAnswer.profile.prototype : undefined;
+    const prototype = ownerMessage ? matchPrototypeAnswer(ownerMessage.text, undefined, replayReviewId) : null;
+    owner = prototype ? ownerMessage : ownerTierFor(target, request);
+    if (owner && !prototype) {
+      try { owner.bridgeReport = resolveOwnerBridgeContext(request, owner, relay.api_base); }
+      catch { owner.bridgeReport = null; }
+    }
+    if (owner) {
+      allowOwnerReply = () => ownerRelayAuthorized(relay.id, target.id, requestId);
+      changeRun(requestId, current => ({ ...current, ownerTurn: { clientAttemptId: `relay-owner-${requestId}`,
+        request: { text: owner!.text, requestText: owner!.requestText },
+        ...(owner!.bridgeReport ? { bridgeReport: owner!.bridgeReport } : {}),
+        ...(prototype && target.ownerTier !== true ? { prototype: true as const } : {}) } }));
+    }
+    if (activeDrain()) return await finish(declined(leaseId, "busy"));
     if (owner && !prototype && ownerNeedsClarification(owner)) return await finish({ lease_id: leaseId, outcome: "answered", answer: ownerClarificationAnswer(request, owner), duration_ms: 0 });
     const context = conversationContext(request.input.requester);
     if (!owner && readRelaySwitches().chat_conversations && request.chat && context) {
@@ -359,61 +445,6 @@ export async function runClaimedRequest(
         ),
       );
     if (conversation && selection?.kind === "available") { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
-    let newestProgress: ExternalRelayProgress | null = null;
-    const steps = createRelaySteps(relay.features);
-    let stepLog: string | null = null;
-    let pendingServiceTools = 0;
-    let leaseUnavailable = false;
-    let beatBusy = false;
-    let pendingBeat: Promise<void> | null = null;
-    let seq = 0;
-    let nextBeatAt = 0;
-    let acked = false;
-    const started = Date.now();
-    const stallMs = request.liveness.stall_window_s * 1000;
-    const cancelStalledRun = () => {
-      if (!leaseUnavailable && Date.now() - heartbeatAt > stallMs) {
-        leaseUnavailable = true;
-        run?.cancel();
-        callAbort.abort();
-      }
-    };
-    const beat = async (stepChange = false) => {
-      if (beatBusy || leaseUnavailable) return;
-      beatBusy = true;
-      try {
-        const sentProgress = newestProgress;
-        const beatSeq = ++seq;
-        const progress = steps ? steps.beat(beatSeq, Date.now(), stepChange) : sentProgress;
-        if (progress?.kind === "step") noteRelayProgress(relay.id, target.id, progress);
-        await relayCall(
-          relay.api_base,
-          `/requests/${encodeURIComponent(requestId)}/heartbeat`,
-          "POST",
-          { lease_id: leaseId, seq: beatSeq, progress },
-          relay.credential,
-          { timeoutMs: 5000, maxBytes: relay.limits.max_response_bytes },
-        );
-        if (newestProgress === sentProgress) newestProgress = null;
-        acked = true;
-        heartbeatAt = Date.now();
-        nextBeatAt = heartbeatAt + request.liveness.heartbeat_interval_s * 1000;
-      } catch (error) {
-        if (
-          error instanceof ExternalRelayError &&
-          (error.status === 404 ||
-            (error.status === 409 && error.code === "lease_lost"))
-        ) {
-          leaseUnavailable = true;
-          run?.cancel();
-          callAbort.abort();
-        }
-      } finally {
-        if (nextBeatAt <= Date.now()) nextBeatAt = Date.now() + 1000;
-        beatBusy = false;
-        cancelStalledRun();
-      }
-    };
     const lose = () => { leaseUnavailable = true; run?.cancel(); callAbort.abort(); };
     if (!owner && callableTools(request).length) loop = createToolLoop(relay, request, {
       signal: callAbort.signal, lose,
@@ -450,11 +481,6 @@ export async function runClaimedRequest(
         const persistentPrompt = conversation ? rounds === 1 ? turn!.prompt : conversationRoundPrompt(loop!.results.filter((r) => r.round === rounds - 1), frame) : roundPrompt;
         steps?.observe({});
         stepLog = path.join(loop ? path.join(runDir, `round-${rounds}`) : runDir, "stdout.log");
-        if (prototype && rounds === 1) {
-          pendingBeat = beat();
-          await pendingBeat;
-          if (leaseUnavailable) return null;
-        }
         run = prototype ? runPrototypeAnswer(prototype, owner!.messageId, () => {
           if (leaseUnavailable || callAbort.signal.aborted || !allowOwnerReply!()) throw new Error("owner relay authorization revoked");
         }) : owner ? runOwnerAgent({
@@ -518,19 +544,6 @@ export async function runClaimedRequest(
           timer.unref();
           identityTimers.push(timer);
         }
-      if (rounds === 1) {
-        pendingBeat = beat();
-        await pendingBeat;
-        heartbeatTimer = setInterval(() => {
-          if (steps && !owner && !runFinished && stepLog) steps.observe(readRelayStepObservation(stepLog));
-          if (!beatBusy) cancelStalledRun();
-          if (!beatBusy && !leaseUnavailable) {
-            if (steps?.changeDue(Date.now())) pendingBeat = beat(true);
-            else if (Date.now() >= nextBeatAt) pendingBeat = beat();
-          }
-        }, 1000);
-        heartbeatTimer.unref();
-      }
       if (leaseUnavailable) launchedRun.cancel();
       result = await launchedRun.done;
       if (conversation) {
@@ -604,7 +617,7 @@ export async function runClaimedRequest(
     }
     for (const timer of identityTimers) clearTimeout(timer);
     // The only way out without a completion is a lost lease.
-    if (recorder?.begun && !recorder.finished)
+    if (recorder && !duplicate && !recorder.finished)
       recorder.finish({ outcome: "lease_lost", answer: null, delivery: null, ...loopRecord() });
     try {
       const held = readRunLedger().runs.find(r => r.requestId === requestId);

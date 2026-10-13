@@ -230,6 +230,60 @@ test("an unsafe provider home declines as a profile error before launch", async 
     await server.close();
   }
 });
+test("heartbeat 1 acknowledges the claim before account selection and a held owner spawn", async () => {
+  const beats: { seq: number; progress: unknown }[] = [];
+  let release!: () => void;
+  const slowSpawn = new Promise<void>(resolve => { release = resolve; });
+  let selectedAfterAck = false, launchedAfterAck = false, spawnStarted = false;
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/heartbeat")) { beats.push(body as typeof beats[number]); return { body: { status: "ok" } }; }
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.features = ["progress_steps"];
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  const selection = spyOn(accountManager, "resolveHeadlessSpawn").mockImplementation(() => {
+    selectedAfterAck = beats.length > 0;
+    return { kind: "available", account };
+  });
+  const claimedAt = Date.now();
+  const pending = runClaimedRequest(paired, { ...contextRequest, request_id: "early-ack",
+    input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+    ownerPorts: { launch: async () => { spawnStarted = true; launchedAfterAck = beats.length > 0; await slowSpawn;
+      return { status: 202, body: { conversationId: "conversation_early_ack" } }; },
+      observe: async () => ({ state: "ended", finalText: "Done" }), stop: async () => {}, pollMs: 1 },
+  });
+  try {
+    for (let i = 0; i < 100 && !spawnStarted; i++) await Bun.sleep(5);
+    expect(beats[0]).toMatchObject({ seq: 1, progress: { kind: "step", label: "accepted" } });
+    expect(Date.now() - claimedAt).toBeLessThan(contextRequest.liveness.ack_window_s * 1000);
+    expect(selectedAfterAck).toBe(true);
+    expect(launchedAfterAck).toBe(true);
+    expect(readRunLedger().runs.some(run => run.requestId === "early-ack")).toBe(true);
+  } finally {
+    release(); await pending; selection.mockRestore(); await server.close();
+  }
+});
+
+test("heartbeat journal records attempts, step ids and failures without credential or note content", async () => {
+  const logs: unknown[][] = [];
+  const logger = spyOn(console, "info").mockImplementation((...args) => { logs.push(args); });
+  const server = await startTestRelay(req => req.url?.endsWith("/heartbeat")
+    ? { status: 409, body: { error: { code: "lease_lost", message: "private remote detail" } } }
+    : { body: { status: "accepted", duplicate: false } });
+  const paired = relay(`${server.origin}/v1`); paired.features = ["progress_steps"];
+  const request = { ...sampleRequest, request_id: "journal-request" };
+  try {
+    expect(await runClaimedRequest(paired, request, undefined, { command: "/missing-journal-cli" })).toBeNull();
+    const journal = logs.filter(row => row[0] === "External relay heartbeat");
+    expect(journal).toHaveLength(2);
+    expect(journal[0]![1]).toMatchObject({ request: "journal-", seq: 1, phase: "attempt", step: "accepted" });
+    expect(journal[1]![1]).toMatchObject({ request: "journal-", seq: 1, phase: "failed", status: 409, code: "lease_lost", step: "accepted" });
+    for (const secret of [paired.credential, request.lease_id, "private remote detail", request.input.request_text])
+      if (secret) expect(JSON.stringify(journal)).not.toContain(secret);
+  } finally { logger.mockRestore(); await server.close(); }
+});
+
 test("heartbeats continue through silence, newest progress is sent, completion frees slot", async () => {
   const beats: { seq: number; progress: { label: string } | null }[] = [];
   const completed: unknown[] = [];
@@ -634,7 +688,8 @@ test("newly confirmed targets default to a 30 minute hard cap", async () => {
 });
 test("exhausted account sends a retry hint in seconds", async () => {
   const completions: unknown[] = [];
-  const server = await startTestRelay((_req, body) => {
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/heartbeat")) return { body: { status: "ok" } };
     completions.push(body);
     return { body: { status: "accepted", duplicate: false } };
   });
@@ -904,9 +959,9 @@ test("without a tool index the schema and the answer stay as before", async () =
 });
 test("declines, lost leases and refused completions are recorded too", async () => {
   let completeStatus = 200;
-  const server = await startTestRelay((req) => {
+  const server = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/heartbeat"))
-      return req.url.includes("rq_rec_lost")
+      return req.url.includes("rq_rec_lost") && (body as { seq: number }).seq > 1
         ? { status: 409, body: { error: { code: "lease_lost", message: "gone" } } }
         : { body: { status: "ok" } };
     return completeStatus === 200
@@ -919,7 +974,7 @@ test("declines, lost leases and refused completions are recorded too", async () 
     expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_rec_paused" })).toMatchObject({ reason: "disabled" });
     expect(readAnswerRecord(paired.id, "target_1", "rq_rec_paused")).toMatchObject({ state: "finished", outcome: "declined:disabled", answer: null, delivery: "accepted", engine: null });
     paired.paused = false;
-    expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_rec_lost" }, undefined, { command: stub(`await Bun.stdin.text();await Bun.sleep(5000);`) })).toBeNull();
+    expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_rec_lost", liveness: { ...sampleRequest.liveness, heartbeat_interval_s: 2 } }, undefined, { command: stub(`await Bun.stdin.text();await Bun.sleep(5000);`) })).toBeNull();
     expect(readAnswerRecord(paired.id, "target_1", "rq_rec_lost")).toMatchObject({ state: "finished", outcome: "lease_lost", delivery: null, engine: "codex" });
     completeStatus = 409;
     expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_rec_refused", kind: "other" })).toMatchObject({ reason: "unsupported_kind" });
@@ -2339,7 +2394,7 @@ for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "inva
     const server = await startTestRelay((req, body) => {
       if (req.url?.endsWith("/heartbeat")) {
         beats.push(body as Record<string, unknown>);
-        return scenario === "lease_lost" ? { status: 409, body: { error: { code: "lease_lost", message: "gone" } } } : { body: { status: "ok" } };
+        return scenario === "lease_lost" && beats.length > 1 ? { status: 409, body: { error: { code: "lease_lost", message: "gone" } } } : { body: { status: "ok" } };
       }
       return { body: { status: "ok" } };
     });
@@ -2347,14 +2402,14 @@ for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "inva
     paired.targets[0]!.ownerTier = true;
     if (scenario === "owner_tools") paired.features = ownerFeatures;
     updateRelayStore(s => ({ ...s, relays: [paired] }));
-    const request = { ...contextRequest, request_id: id, chat: { key: "owner-group" },
+    const request = { ...contextRequest, liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 }, request_id: id, chat: { key: "owner-group" },
       input: { ...contextRequest.input, ...(scenario === "owner_tools" ? { tools: ownerRequest().input.tools } : {}), requester: { ...contextRequest.input.requester, is_owner: scenario === "invalid_request" ? "true" : true } } };
     const conversationsBefore = readConversations();
     try {
       setRelaySwitch("chat_conversations", true);
       if (scenario === "owner_tools") setRelaySwitch("relay:owner_tools:enabled", true);
       const completion = await runClaimedRequest(paired, request, undefined, {
-        command: "/missing-owner-must-never-run-cli", timeoutMs: scenario === "hard_cap" ? 50 : 2000,
+        command: "/missing-owner-must-never-run-cli", timeoutMs: scenario === "hard_cap" ? 50 : 4000,
         ownerPorts: {
           launch: async body => { bodies.push(body); return { status: 202, body: { conversationId: "conversation_owner_runner" } }; },
           observe: async () => {
@@ -2452,7 +2507,7 @@ test("owner admission rechecks current store even when the claimed target object
 
 for (const trigger of ["hard_cap", "lease_lost"] as const) test(`owner ${trigger} retains failed-stop custody and recovers through sweep`, async () => {
   const { sweepExternalRelayOrphans } = await import("./poller");
-  const service = await startTestRelay(req => req.url?.endsWith("/heartbeat") && trigger === "lease_lost"
+  const service = await startTestRelay((req, body) => req.url?.endsWith("/heartbeat") && trigger === "lease_lost" && (body as { seq: number }).seq > 1
     ? { status: 409, body: { error: { code: "lease_lost", message: "gone" } } } : { body: { status: "ok" } });
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   updateRelayStore(s => ({ ...s, relays: [paired] }));
@@ -2461,8 +2516,8 @@ for (const trigger of ["hard_cap", "lease_lost"] as const) test(`owner ${trigger
     observe: async () => ({ state: "running" as const }), stopRetryMs: 1, pollMs: 1,
     stop: async () => { stops++; if (!recover) throw Error("control unavailable"); working = false; } };
   try {
-    const done = await runClaimedRequest(paired, { ...contextRequest, request_id: `stop_${trigger}`,
-      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { timeoutMs: 20, ownerPorts: ports });
+    const done = await runClaimedRequest(paired, { ...contextRequest, request_id: `stop_${trigger}`, liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { timeoutMs: trigger === "lease_lost" ? 4000 : 20, ownerPorts: ports });
     if (trigger === "lease_lost") expect(done).toBeNull(); else expect(done).toMatchObject({ reason: "hard_cap" });
     expect(stops).toBe(3); expect(working).toBe(true);
     expect(readRunLedger().runs[0]).toMatchObject({ conversationId: `conversation_stop_${trigger}`, ownerTurn: { cancel: "interrupt" } });
