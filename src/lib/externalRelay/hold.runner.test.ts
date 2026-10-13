@@ -13,6 +13,7 @@ import { reserveConversations, releaseConversation } from "./conversations";
 import { declineHeldRelayRequests } from "./hold";
 import { setRelaySwitch } from "./switches";
 import { contextRequest } from "./request.fixture";
+import { readAnswerRecord } from "./answers";
 import { startTestRelay } from "./testRelay";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-hold-test-"));
@@ -230,6 +231,49 @@ test("an orphan conversation has free chat capacity and is recovered before admi
   try {
     expect(await runClaimedRequest(relay, request, undefined, { command })).toMatchObject({ outcome: "answered" });
   } finally { releaseConversation(record.id); setRelaySwitch("chat_conversations", false); await server.close(); }
+});
+
+test("lease loss during an asynchronous admission wait starts no agent and consumes no allowance", async () => {
+  let completions = 0;
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/heartbeat") && (body as { seq: number }).seq > 1)
+      return { status: 409, body: { error: { code: "lease_lost" } } };
+    if (req.url?.endsWith("/complete")) completions++;
+    return { body: { status: "ok" } };
+  });
+  const relay = paired(`${server.origin}/v1`);
+  const lock = `${externalRelayFile("runs")}.lock`;
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, identity: procBackend.processIdentity(process.pid) }), { flag: "wx" });
+  const request = { ...claim("lost-during-admission", 20000), liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 } };
+  const unlock = setTimeout(() => fs.rmSync(lock, { force: true }), 2600);
+  try {
+    expect(await runClaimedRequest(relay, request, undefined, { command })).toBeNull();
+    expect(completions).toBe(0);
+    expect(readAnswerRecord(relay.id, "target_1", request.request_id)?.admitted).toBe(false);
+    expect(readRunLedger().runs).toEqual([]);
+  } finally { clearTimeout(unlock); fs.rmSync(lock, { force: true }); await server.close(); }
+}, 10000);
+
+test("member allowance is rechecked after a store admission wait", async () => {
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const relay = paired(`${server.origin}/v1`); relay.id = "member-store-wait"; relay.targets[0]!.memberLimitPerHour = 1;
+  const request = claim("member-after-lock", 20000);
+  const lock = `${externalRelayFile("runs")}.lock`;
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, identity: procBackend.processIdentity(process.pid) }), { flag: "wx" });
+  const pending = runClaimedRequest(relay, request, undefined, { command });
+  try {
+    await Bun.sleep(100);
+    const { answerRecorder } = await import("./answers");
+    const answer = answerRecorder({ requestId: "member-lock-companion", relayId: relay.id, targetId: "target_1", targetName: "Target",
+      claimedAt: request.claimed_at, chatKey: request.chat.key, requester: request.input.requester, input: request.input })!;
+    answer.begin("codex", "gpt-6-sol", { webSearch: false });
+    answer.finish({ outcome: "answered", answer: { action: "reply", text: "Other", reply_to: null }, delivery: "accepted" });
+    fs.rmSync(lock, { force: true });
+    expect(await pending).toMatchObject({ outcome: "declined", reason: "member_limit" });
+    expect(readAnswerRecord(relay.id, "target_1", request.request_id)?.admitted).toBe(false);
+  } finally { fs.rmSync(lock, { force: true }); await pending; await server.close(); }
 });
 
 test("demotion sends one explicit busy attempt and respects its own bounded exit", async () => {

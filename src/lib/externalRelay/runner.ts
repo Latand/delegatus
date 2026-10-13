@@ -496,12 +496,16 @@ export async function runClaimedRequest(
             await releaseAdmission(); cause = "capacity";
           }
         }
+        if (leaseUnavailable) return false;
+        if (releaseRequested || releasingRelayHolds()) {
+          releaseRequested = true;
+          admissionDecline = declined(leaseId, "busy", null, cause === "chat" ? "chat busy" : null);
+          return false;
+        }
         if (!cause) {
           leaveRelayHold(requestId); steps?.observe({});
-          if (waited) {
-            admissionDecline = memberDecline();
-            if (admissionDecline) return false;
-          }
+          admissionDecline = memberDecline();
+          if (admissionDecline) return false;
           selection = selectAccount(); admissionDecline = capacityDecline();
           if (admissionDecline) return false;
           if (conversation && selection?.kind === "available") { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
