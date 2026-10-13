@@ -80,8 +80,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 51, and a v50 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(51);
+test("the default mandate is at version 52, and a v51 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(52);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -118,7 +118,8 @@ test("the default mandate is at version 51, and a v50 seat reads as stale", () =
      a form (docs/design/operator-decision-forms.md §2.7). v48 denies native
      asks; v49 keeps forms without a task and asks 3–7 on a task. v50
      shortens equivalent draft wording to keep the delivery reserve. v51
-     retains the reviewed branch's refreshing fence alongside those rules. */
+     retains the reviewed branch's refreshing fence alongside those rules. v52
+     combines them with automatic release control and incident holds. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -140,7 +141,8 @@ test("the default mandate is at version 51, and a v50 seat reads as stale", () =
   expect(orchestratorMandateStale(48)).toBe(true);
   expect(orchestratorMandateStale(49)).toBe(true);
   expect(orchestratorMandateStale(50)).toBe(true);
-  expect(orchestratorMandateStale(51)).toBe(false);
+  expect(orchestratorMandateStale(51)).toBe(true);
+  expect(orchestratorMandateStale(52)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("gives the shape, the outcome rule and what");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
@@ -202,7 +204,11 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   // Keep main's version history; v51 combines both branches' mandate rules.
   49: "1fb19f7e3d633f95f46e7c2353fefa2cb2d00f74adfe3ace721c0d4c88336c47",
   50: "e693c187ca781f08d3612007ff7829e3baf4ec5f64c69d7e4966fd091cdb4cb8",
+  // The automatic release branch independently used v51 with fingerprint
+  // baf75098802ed3f0ebe3ad97b183ff917536f12f8e32086cda86f9224e1dbc89.
+  // v52 combines its release rule with main's refreshing fence.
   51: "16ededfd81b40430ab1f9d48abe8155b77411e725b5c478a28ae3d7d2a24d54b",
+  52: "faa19a0588778962bad646ccf910e8fd68c7894fa09d5b62ce89c80819f3774a",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -234,7 +240,7 @@ test("the mandate opens without issue numbers, greets in plain words and runs re
   expect(opening).not.toMatch(/#\d/);
   expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).toContain(`Ready in {project}.\n${CURRENT_GREETING_OFFER}`);
   expect(ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE).not.toContain("lanes");
-  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("- The project's own release step runs only when the operator has turned releases on for this project, in their message or as a standing line in your monitor note.");
+  expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("- Releases run only when seat_tick_settings.release enables them or requestNow asks for one. Hold releases during known production incidents.");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).not.toContain("release step, where it has one");
 });
 

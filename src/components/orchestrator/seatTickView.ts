@@ -63,6 +63,8 @@ const REASONS: Record<SeatTickWakeReasonKind, MessageKey> = {
   "child-terminal": "seatTick.reason.childTerminal",
   "own-lane-settled": "seatTick.reason.ownLaneSettled",
   "deploy-settled": "seatTick.reason.deploySettled",
+  "release-settled": "seatTick.reason.releaseSettled",
+  "release-blocked": "seatTick.reason.releaseBlocked",
   "maintenance-settled": "seatTick.reason.maintenanceSettled",
   "permission-request": "seatTick.reason.permissionRequest",
   "worker-ask": "seatTick.reason.workerAsk",

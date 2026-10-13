@@ -3,6 +3,8 @@ export const COMPOSER_RECEIPT_RECONCILIATION_MS = 30_000;
 export const COMPOSER_RECEIPT_POLL_INTERVAL_MS = 1_000;
 
 export interface ComposerAdmissionTiming {
+  /** Original-key observation continues after the short snapshot window. */
+  admissionObservationIntervalMs?: number;
   admissionDeadlineMs: number;
   receiptReconciliationMs: number;
   receiptPollIntervalMs: number;

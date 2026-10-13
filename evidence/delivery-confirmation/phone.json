@@ -1,0 +1,85 @@
+{
+  "browser": "153.0.8010.12",
+  "cases": [
+    {
+      "locale": "en",
+      "scheme": "light",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "transport": "POST answer dropped after ledger delivery",
+      "receiptTail": "empty",
+      "variant": "automatic",
+      "sends": 1,
+      "deliveries": 1,
+      "originalKeyReads": 3,
+      "warningCount": 0,
+      "newerDraftPreserved": true,
+      "documentWidth": 390,
+      "messages": 1,
+      "background": "rgb(244, 241, 236)",
+      "pageErrors": []
+    },
+    {
+      "locale": "en",
+      "scheme": "dark",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "transport": "POST answer dropped after ledger delivery",
+      "receiptTail": "empty",
+      "variant": "concurrent check",
+      "sends": 1,
+      "deliveries": 1,
+      "originalKeyReads": 3,
+      "warningCount": 0,
+      "newerDraftPreserved": true,
+      "documentWidth": 390,
+      "messages": 1,
+      "background": "rgb(17, 18, 24)",
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "scheme": "light",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "transport": "POST answer dropped after ledger delivery",
+      "receiptTail": "empty",
+      "variant": "automatic",
+      "sends": 1,
+      "deliveries": 1,
+      "originalKeyReads": 3,
+      "warningCount": 0,
+      "newerDraftPreserved": true,
+      "documentWidth": 390,
+      "messages": 1,
+      "background": "rgb(244, 241, 236)",
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "scheme": "dark",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "transport": "POST answer dropped after ledger delivery",
+      "receiptTail": "empty",
+      "variant": "reload",
+      "sends": 1,
+      "deliveries": 1,
+      "originalKeyReads": 3,
+      "warningCount": 0,
+      "newerDraftPreserved": true,
+      "documentWidth": 390,
+      "messages": 1,
+      "background": "rgb(17, 18, 24)",
+      "pageErrors": []
+    }
+  ]
+}

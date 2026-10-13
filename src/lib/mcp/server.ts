@@ -4343,6 +4343,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Project whose allowed set to read or change. Defaults to your own on a list; required to add or remove."),
   }).passthrough(),
   seat_tick_settings: z.object({
+    release: z.object({ enabled: z.boolean().optional(), askBeforePublish: z.boolean().optional(), minChanges: z.union([z.number(), z.string()]).nullable().optional(), minGapHours: z.union([z.number(), z.string()]).nullable().optional(), why: z.string().nullable().optional(), requestNow: z.boolean().optional(), taskId: z.string().optional(), hold: z.string().nullable().optional() }).optional()
+      .describe("Automatic releases: off until enabled, 30 visible changes, 12-hour gap, six-hour production soak and screenshots every time. why is required from agents. requestNow skips amount/gap but keeps every blocker; hold names an incident, null clears it. Only the project seat or operator may turn askBeforePublish off, quoting the operator request. Read release status here."),
     problemId: z.string().trim().min(1).max(128).optional().describe("Read the full local problem report named by a wake, including after delivery. Undo or replacement returns null for the old identity."),
     autoRotate: z.object({ enabled: z.boolean().optional(), thresholdPercent: z.union([z.number(), z.string(), z.null()]).optional(), why: z.string().nullable().optional() }).optional()
       .describe("Automatic context rotation, off by default. thresholdPercent is 50–90 (default 50; null restores it). Every non-gateway change requires why, naming the request."),
