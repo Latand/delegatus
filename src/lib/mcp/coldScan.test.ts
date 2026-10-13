@@ -7,6 +7,9 @@ import { agentRegistry } from "@/lib/agent/registry";
 import { statePath } from "@/lib/configDir";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { persistProjectAliases } from "@/lib/projects/aliases";
+import { projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
+import { projectCatalogSnapshotFromRaw } from "@/lib/scanner/projectCatalog";
+import { PROJECT_RESOLUTION_VERSION, projectResolutionStateKey } from "@/lib/scanner/projectState";
 import { scanRootEntries } from "@/lib/scanner/roots";
 import { completedFileScan, resetFilesRouteCacheForTests, setFileCatalogMembershipProbeForTests, setFileScanRunnerForTests } from "@/lib/scanner/scanCache";
 import { productionDomainDependencies, viewerMcpBindings, viewerMcpRecoverableTools, type ViewerControlDependencies, type ViewerMcpDomainDependencies } from "./bindings";
@@ -233,11 +236,24 @@ test("a born transcript whose folder shares the name refuses it, and other seats
   expect(posts).toHaveLength(1);
 });
 
-/** A complete index record, as a scan persists it for a transcript it listed. */
-function recordedMember(project: string, projectName: string) {
+/** Writes a Claude transcript with no working directory and returns its path. */
+function listedTranscript(folder: string, name: string): string {
+  const root = scanRootEntries().find(([rootName]) => rootName === "claude-projects")![1];
+  const directory = path.join(root, folder);
+  fs.mkdirSync(directory, { recursive: true });
+  if (!bornPaths.includes(directory)) bornPaths.push(directory);
+  const transcript = path.join(directory, `${name}.jsonl`);
+  fs.writeFileSync(transcript, `${JSON.stringify({ type: "user", sessionId: name, message: { role: "user", content: "Synthetic" } })}\n`);
+  return transcript;
+}
+
+/** A complete index record, as a scan persists it for these bytes under the
+    current resolution state. */
+function recordedMember(transcript: string, project: string, projectName: string) {
+  const st = fs.statSync(transcript);
   return {
-    summaryVersion: 4, rootName: "claude-projects", size: 1, mtimeMs: 1, sidecarSize: null, sidecarMtimeMs: null,
-    stateKey: "fixture", project, projectName, projectRoot: null, kind: "session", cwd: null, sessionStartedAt: null,
+    summaryVersion: 4, rootName: "claude-projects", size: st.size, mtimeMs: st.mtimeMs, sidecarSize: null, sidecarMtimeMs: null,
+    stateKey: projectResolutionStateKey(), project, projectName, projectRoot: null, kind: "session", cwd: null, sessionStartedAt: null,
     nativeParentThreadId: null, nativeForkSourceThreadId: null, title: "Synthetic", engine: "claude", fmt: "claude",
   };
 }
@@ -247,8 +263,7 @@ test("the persisted index answers for the transcripts it listed", async () => {
   setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: false }));
   const seated = "conversation_77777777-7777-4777-8777-777777777777";
   designateSeat("indexed-seated-project", "Indexed name", seated);
-  const root = scanRootEntries().find(([name]) => name === "claude-projects")![1];
-  const listed = path.join(root, "-indexed", "indexed-session.jsonl");
+  const listed = listedTranscript("-indexed", "indexed-session");
   catalogMembers([`claude-projects:${listed}`]);
   const { posts, service } = seatSendHarness();
   const send = (clientRequestId: string) => service.callTool("send_message_to_orchestrator", {
@@ -256,7 +271,8 @@ test("the persisted index answers for the transcripts it listed", async () => {
   });
   fs.mkdirSync(path.dirname(statePath("project-catalog.json")), { recursive: true });
   const index = (projectName: string) => fs.writeFileSync(statePath("project-catalog.json"), JSON.stringify({
-    version: 2, resolutionVersion: 0, files: { [listed]: recordedMember("indexed-other-project", projectName) },
+    version: 2, resolutionVersion: PROJECT_RESOLUTION_VERSION,
+    files: { [listed]: recordedMember(listed, "indexed-other-project", projectName) },
   }));
   index("Indexed name");
   expect(await send("indexed-shared-send")).toMatchObject({ ok: false, code: "scan_incomplete", retryable: true });
@@ -266,12 +282,95 @@ test("the persisted index answers for the transcripts it listed", async () => {
   expect(posts).toHaveLength(1);
 });
 
+test("a persisted attribution does not hide a homonym after its cwd becomes a worktree", async () => {
+  resetFilesRouteCacheForTests();
+  const disk = fs.mkdtempSync(path.join(os.tmpdir(), "homonym-worktree-"));
+  const repo = path.join(disk, "widgets");
+  const checkout = `${repo}-lane-42`;
+  const cwd = path.join(checkout, "src");
+  fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+  fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
+  fs.writeFileSync(path.join(repo, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/widgets.git\n');
+  fs.mkdirSync(cwd, { recursive: true });
+  const root = scanRootEntries().find(([name]) => name === "codex-sessions")![1];
+  const directory = path.join(root, "homonym-worktree");
+  fs.mkdirSync(directory, { recursive: true });
+  bornPaths.push(disk, directory);
+  const transcript = path.join(directory, "rollout-homonym.jsonl");
+  fs.writeFileSync(transcript, `${JSON.stringify({ type: "session_meta", payload: { cwd } })}\n`);
+  // A scan indexes the transcript while its folder is an ordinary directory.
+  const indexed = await projectCatalogSnapshotFromRaw([
+    { rootName: "codex-sessions", root, path: transcript, st: fs.statSync(transcript) },
+  ]);
+  expect(indexed.projectCatalog.map((entry) => entry.displayName)).toEqual(["src"]);
+  catalogMembers([`codex-sessions:${transcript}`]);
+  const seated = "conversation_99999999-9999-4999-8999-999999999999";
+  designateSeat("widgets-seated-project", "widgets", seated);
+  const unique = "conversation_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  designateSeat("unique-seated-project", "Unique seated", unique);
+  // The folder's ancestor becomes a linked checkout of another repository
+  // named widgets. The transcript keeps its path and bytes.
+  fs.writeFileSync(path.join(checkout, ".git"), `gitdir: ${path.join(repo, ".git", "worktrees", "lane-42")}\n`);
+  const identity = projectIdentityFromRepositoryRoot(repo)!;
+  expect(identity.displayName).toBe("widgets");
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  setFileScanRunnerForTests(async () => {
+    await held;
+    return {
+      files: [], complete: true,
+      projectCatalog: [
+        { project: "widgets-seated-project", displayName: "widgets", smt: 1, conversations: 1 },
+        { project: identity.project, displayName: identity.displayName, smt: 2, conversations: 1 },
+      ],
+    };
+  });
+  const { posts, service } = seatSendHarness();
+  const args = { project: "widgets", text: "Synthetic status", clientRequestId: "worktree-homonym-send" };
+  expect(await service.callTool("send_message_to_orchestrator", args)).toMatchObject({
+    ok: false, code: "scan_incomplete", retryable: true,
+  });
+  expect(posts).toHaveLength(0);
+  // The same verified membership still proves the other name unique.
+  expect(await service.callTool("send_message_to_orchestrator", {
+    project: "Unique seated", text: "Synthetic status", clientRequestId: "worktree-unique-send",
+  })).toMatchObject({ ok: true, project: "unique-seated-project", conversationId: unique, created: false });
+  expect(posts.map((post) => post.body.conversationId)).toEqual([unique]);
+  release();
+  await completedFileScan();
+  expect(await service.callTool("send_message_to_orchestrator", args)).toMatchObject({
+    ok: false, code: "ambiguous_project", retryable: false,
+    details: { candidates: expect.arrayContaining([identity.project, "widgets-seated-project"]) },
+  });
+  expect(posts).toHaveLength(1);
+});
+
+test("a record written under an older resolution state is projected again", async () => {
+  resetFilesRouteCacheForTests();
+  setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: false }));
+  const seated = "conversation_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  designateSeat("stale-seated-project", "Stale name", seated);
+  const listed = listedTranscript("-stale", "stale-session");
+  catalogMembers([`claude-projects:${listed}`]);
+  fs.mkdirSync(path.dirname(statePath("project-catalog.json")), { recursive: true });
+  // The record claims the seat's name for another project, under a state key
+  // that is no longer current: its claim is derived again and does not stand.
+  fs.writeFileSync(statePath("project-catalog.json"), JSON.stringify({
+    version: 2, resolutionVersion: PROJECT_RESOLUTION_VERSION,
+    files: { [listed]: { ...recordedMember(listed, "stale-other-project", "Stale name"), stateKey: "older-state" } },
+  }));
+  const { posts, service } = seatSendHarness();
+  expect(await service.callTool("send_message_to_orchestrator", {
+    project: "Stale name", text: "Synthetic status", clientRequestId: "stale-record-send",
+  })).toMatchObject({ ok: true, project: "stale-seated-project", conversationId: seated });
+  expect(posts).toHaveLength(1);
+});
+
 test("a membership too far ahead of the index proves nothing", async () => {
   resetFilesRouteCacheForTests();
   setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: false }));
   designateSeat("ahead-seated-project", "Ahead name", "conversation_88888888-8888-4888-8888-888888888888");
-  const root = scanRootEntries().find(([name]) => name === "claude-projects")![1];
-  catalogMembers(Array.from({ length: 257 }, (_, index) => `claude-projects:${path.join(root, "-ahead", `${index}.jsonl`)}`));
+  catalogMembers(Array.from({ length: 257 }, (_, index) => `claude-projects:${listedTranscript("-ahead", String(index))}`));
   const { posts, service } = seatSendHarness();
   expect(await service.callTool("send_message_to_orchestrator", {
     project: "Ahead name", text: "Synthetic status", clientRequestId: "ahead-named-send",
