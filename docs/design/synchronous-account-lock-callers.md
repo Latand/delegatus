@@ -21,6 +21,20 @@ replays within 10 s. These waits yield. No provider probe, fork, delivery,
 withdrawal socket call, digest calculation or handoff summarizer moved under
 the lock.
 
+The body audit in #1935 extends this admission policy to work performed after
+acquisition. Credential and transcript discovery, login child I/O, RPC,
+provider-home preparation, recursive archive scans and image publication run
+outside the shared lease. Commits reread the protected account, binding, seat,
+login or registry evidence before writing. Provider engine guards serialize
+home preparation before account admission and refuse a live competing owner.
+A contended state or registry writer never sleeps while holding the account
+lease. Spawn/resume/send retry writer acquisition outside it and repeat their
+admission guards; generic account callbacks are never replayed automatically.
+The legacy JSON routing setter retains its synchronous writer wait before
+account admission. The complete 101-body inventory, before/after timings and
+stimulus paths are recorded in
+[`evidence/account-mutation-lock/bodies.json`](../../evidence/account-mutation-lock/bodies.json).
+
 | Caller | File:line | Foreign holder | Why | Local holder or local waiter |
 | --- | --- | --- | --- | --- |
 | `runIdentityWaveMigrationAtStartup` | `src/lib/agent/identityWaveStartup.ts:196` | 25 ms wait | Boot needs a completed migration result; rerunning the outer startup later remains idempotent. | The Viewer startup wrapper (`src/lib/viewerInstrumentation.ts:573`) yields and retries up to three total attempts, with 5 s and 10 s pauses by default. Exhaustion logs diagnostics and leaves the migration for a later startup. The direct synchronous API raises safe AccountMutationBusyError. |
@@ -46,7 +60,7 @@ the lock.
 | `ManagedCodexRuntime.record` | `src/lib/accounts/codexRuntime.ts:458` | 25 ms wait; existing queued replay | A short holder permits synchronous persistence; longer/local contention keeps the existing coalesced queue. | Existing coalesced async persistence queue replays latest records; client completion/cleanup continues while the holder remains runnable. |
 | `withRegistryLock` | `src/lib/accounts/claude.ts:283` | 25 ms wait | Catalog operations synchronously return their committed account record. | Async manager admission and `/api/accounts/claude` provider edit/create and orphan cleanup queue each catalog commit (2 s); exhausted admission returns 503 `account_store_busy`. Provider model reads stay outside the lock. Direct catalog API raises safe AccountMutationBusyError without returning a committed account; retry after yielding. |
 | `setActiveClaudeAccount` | `src/lib/accounts/claude.ts:325` | 25 ms wait | Selection must commit before its caller proceeds. | Async manager selection and compatibility routing queue. Direct sync API raises safe AccountMutationBusyError before selection changes. |
-| `withRegistryLock` | `src/lib/accounts/codex.ts:297` | 25 ms wait | Catalog operations synchronously return their committed account record. | Async manager admission and `/api/accounts/codex` creation/orphan cleanup queue each catalog commit (2 s); exhausted admission returns 503 `account_store_busy`. Device login starts after the catalog lease releases. Direct catalog API raises safe AccountMutationBusyError without returning a committed account; retry after yielding. |
+| `withRegistryLock` | `src/lib/accounts/codex.ts:297` | 25 ms wait | Catalog operations synchronously return their committed account record. | HTTP creation/orphan cleanup first await preparation admission (2 s); preparation runs outside the lease and each catalog commit revalidates current state. Exhausted admission returns 503 `account_store_busy`. Manager creation delegates to the provider commit. Device login starts after the catalog lease releases. Direct catalog API raises safe AccountMutationBusyError without returning a committed account; retry after yielding. |
 | `setActiveCodexAccount` | `src/lib/accounts/codex.ts:472` | 25 ms wait | Selection must commit before its caller proceeds. | Async manager selection and compatibility routing queue. Direct sync API raises safe AccountMutationBusyError before selection changes. |
 | `setActiveCopilotAccount` | `src/lib/accounts/copilot.ts:173` | 25 ms wait | Selection must commit before its caller proceeds. | `/api/accounts/copilot` selection queues the commit (2 s); exhausted admission returns 503 `account_store_busy` with the safe sentence. Direct sync API raises safe AccountMutationBusyError before selection changes. |
 | `createManagedCopilotAccount` | `src/lib/accounts/copilot.ts:184` | 25 ms wait | Creation must return the account that was durably added. | `/api/accounts/copilot` creation queues the commit (2 s); exhausted admission returns 503 `account_store_busy` with the safe sentence. Direct sync API raises safe AccountMutationBusyError without adding an account. |

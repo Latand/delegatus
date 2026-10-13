@@ -2643,14 +2643,15 @@ export class SqliteAgentRegistryStore {
     }
   }
 
-  replace(file: RegistryFile, expectedRevision?: number): SqliteRegistryReplacement {
+  replace(file: RegistryFile, expectedRevision?: number, options: { noWait?: boolean } = {}): SqliteRegistryReplacement {
     /* A wholesale replacement is a mutation like any other, and its payload
        arrives from outside this store, so it is re-decided before it lands
        rather than on the way back out (#739). `persistDiff` takes only a
        DecidedRegistryFile, so this line cannot be dropped without the store
        failing to compile. */
     const decided = this.decideAssembled(file);
-    this.db.exec("BEGIN IMMEDIATE");
+    if (options.noWait) this.beginMutationWrite(true);
+    else this.db.exec("BEGIN IMMEDIATE");
     try {
       const current = this.loadInTransaction();
       if (expectedRevision !== undefined && current.revision !== expectedRevision) {

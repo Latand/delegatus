@@ -4962,7 +4962,7 @@ export class AgentRegistry {
       this.compactAtStartupLocked(sqlite.revision);
       const file = readFile(this.filename, this.mcpGrantPolicy);
       beforeReplace?.();
-      const replacement = this.sqliteStore!.replace(file, sqlite.revision);
+      const replacement = this.sqliteStore!.replace(file, sqlite.revision, { noWait: accountMutationHeld() });
       if (!replacement.replaced) {
         this.mirrorSqliteSnapshot(replacement);
         throw new RegistryParityError(
@@ -5368,7 +5368,7 @@ export class AgentRegistry {
         let replacement: SqliteRegistryReplacement;
         try {
           this.beforeDualWriteMutationReplace?.();
-          replacement = this.sqliteStore!.replace(file, sqlite.revision);
+          replacement = this.sqliteStore!.replace(file, sqlite.revision, { noWait: accountMutationHeld() });
         } catch (error) {
           const durableSqlite = this.sqliteStore!.snapshot();
           if (durableSqlite.revision === sqlite.revision) {

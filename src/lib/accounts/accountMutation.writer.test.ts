@@ -87,3 +87,27 @@ test("an asynchronous account commit refuses a busy state writer without replayi
     expect(Math.max(...leases.holds)).toBeLessThan(150);
   } finally { leases.stop(); await holder.close(); }
 });
+
+test("a dual-write routing commit refuses SQLite contention and preserves both stores", async () => {
+  const made = sqliteRegistryFixture("account-dual-writer", { sqliteMode: "dual-write" });
+  const holder = registryLockHolder(made.sqliteFilename);
+  const leases = trackAccountLeases();
+  try {
+    const before = made.registry.engineRouting("codex");
+    await holder.hold(400);
+    let refusal: unknown;
+    const { gapMs } = await longestLoopGap(() => {
+      try { made.registry.setEngineRouting("codex", "changed-account"); } catch (error) { refusal = error; }
+    });
+    expect(refusal).toBeInstanceOf(Error);
+    expect(gapMs).toBeLessThan(150);
+    expect(Math.max(...leases.holds)).toBeLessThan(150);
+    expect(made.registry.engineRouting("codex")).toEqual(before);
+    await holder.release();
+    await withAccountMutationLockAsync(() => made.registry.setEngineRouting("codex", "changed-account"));
+    expect(made.registry.engineRouting("codex").activeAccountId).toBe("changed-account");
+  } finally {
+    leases.stop(); await holder.close(); made.registry.close(); made.cleanup();
+    console.info(JSON.stringify({ measurement: "dual-write registry writer", maxHoldMs: Math.max(0, ...leases.holds) }));
+  }
+});
