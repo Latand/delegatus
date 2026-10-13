@@ -265,6 +265,18 @@ test("heartbeat 1 acknowledges the claim before account selection and a held own
   }
 });
 
+test("failed feature refresh during an early completion releases duplicate suppression", async () => {
+  let refuse = true;
+  const server = await startTestRelay(() => refuse ? { status: 400, body: { error: { code: "unknown_feature" } } } : { body: { status: "ok" } });
+  const paired = relay(`${server.origin}/v1`);
+  const request = { ...sampleRequest, request_id: "early-refresh-failure", target_id: "unconfigured" };
+  try {
+    await expect(runClaimedRequest(paired, request, undefined, { onUnknownFeature: async () => { throw new Error("refresh failed"); } })).rejects.toThrow("refresh failed");
+    refuse = false;
+    expect(await runClaimedRequest(paired, request)).toMatchObject({ outcome: "declined", reason: "not_configured" });
+  } finally { refuse = false; await server.close(); }
+});
+
 test("invalid compact completion retries end at the captured request deadline", async () => {
   setRelaySwitch("chat_conversations", true);
   setRelaySwitch("compact", true);

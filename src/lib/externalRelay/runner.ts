@@ -240,38 +240,41 @@ export async function runClaimedRequest(
   const loopRecord = () => loop ? { rounds, toolCalls: loop.records } : {};
   const finish = async (body: ExternalRelayCompletion, stallMs = 45_000) => {
     leaveRelayHold(requestId);
-    if (pendingBeat) await pendingBeat;
-    // Persist the local decision before any delivery wait: a restart must
-    // leave the generated answer and early declines inspectable.
-    if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
-    recorder?.finish({
-      outcome:
-        body.outcome === "answered"
-          ? "answered"
-          : `${body.outcome}:${body.reason}`,
-      answer:
-        body.outcome === "answered"
-          ? body.answer
-          : body.outcome === "declined" && body.reason === "handoff"
-            ? { action: "handoff", text: "", reply_to: null }
-            : null,
-      delivery: "unconfirmed",
-      ...loopRecord(),
-    });
-    const deliveryStart = Date.now();
-    const until = releaseRequested ? deliveryStart : deliveryStart < deadline.at ? deadline.at : deliveryStart + stallMs;
-    const sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature);
-    const completion = sent.body;
-    recorder?.recordDelivery({
-      outcome: completion.outcome === "answered" ? "answered" : `${completion.outcome}:${completion.reason}`,
-      delivery: sent.delivery,
-    });
-    heartbeatStopped = true;
-    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-    if (cadenceTimer) { clearTimeout(cadenceTimer); cadenceTimer = null; }
-    inflight.delete(requestId);
-    deliverySettled();
-    return completion;
+    try {
+      if (pendingBeat) await pendingBeat;
+      // Persist the local decision before any delivery wait: a restart must
+      // leave the generated answer and early declines inspectable.
+      if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
+      recorder?.finish({
+        outcome:
+          body.outcome === "answered"
+            ? "answered"
+            : `${body.outcome}:${body.reason}`,
+        answer:
+          body.outcome === "answered"
+            ? body.answer
+            : body.outcome === "declined" && body.reason === "handoff"
+              ? { action: "handoff", text: "", reply_to: null }
+              : null,
+        delivery: "unconfirmed",
+        ...loopRecord(),
+      });
+      const deliveryStart = Date.now();
+      const until = releaseRequested ? deliveryStart : deliveryStart < deadline.at ? deadline.at : deliveryStart + stallMs;
+      const sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature);
+      const completion = sent.body;
+      recorder?.recordDelivery({
+        outcome: completion.outcome === "answered" ? "answered" : `${completion.outcome}:${completion.reason}`,
+        delivery: sent.delivery,
+      });
+      return completion;
+    } finally {
+      heartbeatStopped = true;
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+      if (cadenceTimer) { clearTimeout(cadenceTimer); cadenceTimer = null; }
+      inflight.delete(requestId);
+      deliverySettled();
+    }
   };
   if (!request)
     return finish(
