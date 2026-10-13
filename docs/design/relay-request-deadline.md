@@ -35,7 +35,7 @@ No product file changes here.
 |---|---|---|
 | This repository | `main` f275413e (unchanged at the time of writing) | `src/lib/externalRelay/{protocol,compact,runner,store,conversations,progressSteps,ownerRun,poller}.ts`, `src/lib/runtime/structuredSpawn.ts`, `src/lib/agent/autonomousConversation.ts`, `src/lib/selfUpdate/{drain,service}.ts`, `src/lib/viewerInstrumentation.ts`, `docs/design/relay.md` §A.4, §A.6, §A.7, `docs/design/relay-owner-tier.md` §2.2, and the runner, poller, ownerTier and slice 3 tests |
 | Paired service | its `main` c661b598 (2026-10-13 11:17 UTC) | `apps/backend/api/schemas/relay_v1.json` (`Progress`, `Request`, `Liveness`, `Completion`), `apps/backend/application/usecase/clones/relay_progress.py`, `apps/backend/domain/entities/relay.py` (`RelayStep`) |
-| Paired service's seat, relayed by our seat | 2026-10-13, after the first version of this document | `deadline_at` on the claim (name provisional), a stall window equal to the remaining budget, an interim heartbeat-gap tolerance of about 13 s, and the unchanged list of explicit early outcomes (§1.2) |
+| Paired service's seat, relayed by our seat | 2026-10-13, after the first version of this document | final `request_deadline` negotiation and optional `request.deadline_at`, a stall window of `max(10, ceil(remaining seconds))`, an interim heartbeat-gap tolerance of about 13 s, and the unchanged list of explicit early outcomes (§1.2) |
 | Paired service, its lane for this requirement | open PR #3597 at head 37232a7e, "wait for Delegatus without automatic hosted fallback" | the PR body, and the diff of `relay_v1.json`, `infrastructure/tgbot/config.py`, `domain/entities/relay.py`, `infrastructure/database/repo/relay.py`; `relay_protocol.py` for how refusals reach the wire |
 
 Earlier work: transcript and memory searches found the seat's answer quoted
@@ -92,11 +92,14 @@ From its body and diff:
 Settled since, by the paired service's seat (2026-10-13, relayed by our seat;
 its lane is still being built):
 
-- The claim will carry `deadline_at` (RFC 3339, UTC) = the request's arrival
-  on its side + 120 s. Name and placement are provisional until its PR is
-  reviewed (G1, §3).
-- The claim's `stall_window_s` will equal the request's remaining budget, so
-  the stall rule never cuts a request short of 120 s (G2).
+- After the install announces `request_deadline` in claim negotiation, an
+  answer claim may carry optional `request.deadline_at`, RFC 3339 UTC ending
+  in `Z`, equal to the original `created_at` + 120 s. Its name and placement
+  are final. Compact claims omit it; older services keep their existing
+  claims unchanged.
+- The claim's `request.liveness.stall_window_s` is
+  `max(10, ceil(remaining seconds at response preparation))`. The install
+  uses that supplied duration for stall handling; it can shrink below 120.
 - Until our fixed-rate heartbeats land (item 7), it tolerates gaps between
   heartbeats of up to about 13 s. The largest gap our journal showed in a day
   was 12.4 s, so item 7 now comes early in the order (§5.4, §7).
@@ -125,33 +128,23 @@ but the `Request` carries only `claimed_at`. Under PR #3597 a claim can come
 up to 120 s after creation (a request held before the claim), so `claimed_at`
 can differ from the start by the whole window.
 
-**Settled with the paired service's seat (2026-10-13, relayed by our seat):**
-the claim will carry a new additive field `deadline_at`, an RFC 3339 time in
-UTC equal to the request's arrival on the service's side + 120 s. Our single
-request deadline counts from it. **The name and its place in the claim are
-provisional** until the service's PR is reviewed; the parser below makes a
-rename or a move a one-line change.
+**Final contract, reviewed by the paired service's seat (2026-10-13):**
+announce the feature `request_deadline` alongside the other install features
+in claim negotiation. Without that announcement its answer claims retain
+exactly their earlier bytes. With it, an answer request may carry optional
+`request.deadline_at` in `$defs.Request`, RFC 3339 UTC ending in `Z`, equal
+to the request's original `created_at` + 120 s. Compact claims omit the field.
 
-Every current install already tolerates the field: `requestSchema` is a
-stripping `z.object`, so an unknown key is dropped (probe below), and the
-service's own `Request` schema has no `additionalProperties: false`. The
-install does **not** add it to `requestSchema`: `deadline.ts` reads it from the
-raw claim body through one constant path (§3.1), so the field can never make
-a request fail validation.
+The install reads the absolute timestamp from the raw request through
+`RELAY_DEADLINE_PATH = ["deadline_at"]`. `requestSchema` remains a stripping
+`z.object`; optional deadline metadata cannot produce `invalid_request`.
 
-A `deadline_at` keeps the window in one place (the service's
-`RELAY_ANSWER_TIMEOUT`), and `deadline_at − claimed_at` is a difference of two
-times on the same clock, so clock skew between the hosts cannot move our
-deadline (§3.2).
-
-**Fallback.** When the field is absent (an older paired release), unparseable,
-already past at the claim, or implausibly far out, the install counts 120 s
-from its own receipt of the claim, which is `claimed_at` plus transit time.
-The request goes on normally; nothing about the field can refuse it. Two other
-anchors were rejected. Reading `claimed_at` against our wall clock gains
-nothing over receipt and adds skew. Using the `respond_to` message's `sent_at`
-moves the deadline into the past for any message delivered from a backlog,
-and mixes in the chat platform's clock.
+**Fallback.** An absent or unparseable field produces one fixed deadline at
+receipt + 120 s and the request is served normally. A timestamp at or before
+receipt also uses that fixed fallback budget for delivery, but the runner
+sends `declined` / `busy` immediately, without holding or starting work.
+The comparison uses the receipt clock, and never adds claim transit time to a
+valid deadline. `claimed_at` does not affect the calculation.
 
 Consequence of the fallback against an older release that held the request
 before the claim: our deadline ends later than the service's. A request we
@@ -178,25 +171,15 @@ too (`client.ts:233`). This is outside the seven items. It is the first slice
 above 60 until S0 runs on this install, or it must set
 `RELAY_CLAIM_WINDOW_SECONDS` to 60 or less until then.
 
-The same holds for the stall window. The paired service's seat confirmed that
-its claim will send `stall_window_s` equal to the request's remaining budget,
-so its stall rule never cuts a request short of its 120 s. A request claimed
-in its last ten seconds then carries `stall_window_s` below 10, and our
-schema's minimum of 10 (`protocol.ts:44`) would refuse it as
-`invalid_request`.
-
-**Shape:** the install reads only `heartbeat_interval_s` and `stall_window_s`.
-Keep `heartbeat_interval_s` at 2–60. Accept `stall_window_s` from 1 to 600:
-the install uses it only for its local "no acknowledgement for this long"
-check (`runner.ts:315-321`) and the delivery fallback (§5.3), and both work for
-any positive value. A remaining budget of 0 never arrives, because the service
-does not claim an expired request. A small value, which means a claim late in
-the window, makes the local check end the run at about the service's own
-deadline, which is the right moment; a busy request claimed that late is
-declined at once, because its `declineAt` has already passed (§3.2).
-Validate the three fields the install never reads as positive integers, so a
-service-side window change cannot refuse requests again. Update the schema in
-`relay.md` §A.5 to match.
+The final service contract floors `stall_window_s` at 10 seconds, including
+claims in their last ten seconds. Its exact value is
+`max(10, ceil(remaining seconds at response preparation))`; no minimum
+relaxation is needed for those final claims. The install remains tolerant of
+positive stall durations from 1 to 600, as covered by the parser slice, and
+uses the value supplied for its local acknowledgement silence check and
+legacy completion allowance. Keep `heartbeat_interval_s` at 2–60. Validate
+the three unread service windows as positive integers so a service-side
+window change cannot refuse requests again. Update `relay.md` §A.5 to match.
 
 ### G3. «у черзі» is not in the closed step set
 
@@ -227,17 +210,16 @@ is needed: `declined` / `busy` and its `chat busy` detail already exist.
 A new module `src/lib/externalRelay/deadline.ts`:
 
 ```ts
-/** Provisional until the paired service's PR is reviewed: a rename or a move
-    (for example under `liveness`) changes this line only. */
+/** Optional request field negotiated by the request_deadline feature. */
 export const RELAY_DEADLINE_PATH = ["deadline_at"] as const;
 export const RELAY_REQUEST_WINDOW_MS = 120_000;
 export const RELAY_BUSY_DECLINE_MARGIN_MS = 10_000;
 export type RelayRequestDeadline = Readonly<{
   receivedAt: number;          // Date.now() when the claim body reached runClaimedRequest
-  at: number;                  // the service refuses everything after this (estimate)
+  at: number;                  // absolute service deadline, or fixed receipt fallback
   declineAt: number;           // at − margin: the last moment to give up explicitly
   source: "deadline_at" | "receipt";
-  fallback: null | "absent" | "unparseable" | "past" | "far";   // why receipt was used
+  fallback: null | "absent" | "unparseable" | "past";   // why receipt was used
 }>;
 export function relayRequestDeadline(raw: unknown, receivedAt = Date.now()): RelayRequestDeadline;
 export const remainingMs = (d: RelayRequestDeadline, now = Date.now()) => Math.max(0, d.at - now);
@@ -252,27 +234,25 @@ compact requests otherwise keep their own lifecycle, as on the service.
 
 ### 3.2 Which clock, and how it is computed
 
-`relayRequestDeadline` reads the value at `RELAY_DEADLINE_PATH` and the raw
-`claimed_at`, and never throws:
+`relayRequestDeadline` reads the value at `RELAY_DEADLINE_PATH` and never
+throws. It compares the absolute UTC timestamp against receipt time:
 
-| Value at the path | Deadline | `fallback` |
-|---|---|---|
-| missing, or the object has no such path | `receivedAt + 120 s` | `absent` |
-| not a string, or not an RFC 3339 time with an offset (the same `z.iso.datetime({ offset: true })` check `claimed_at` uses), or `claimed_at` unreadable | `receivedAt + 120 s` | `unparseable` |
-| at or before `claimed_at` | `receivedAt + 120 s` | `past` |
-| more than 600 s after `claimed_at` (the protocol's largest stall window) | `receivedAt + 120 s` | `far` |
-| otherwise | `receivedAt + (deadline_at − claimed_at)` | `null` |
+| Value at the path | Deadline | `fallback` | Runner behavior |
+|---|---|---|---|
+| missing, or the object has no such path | `receivedAt + 120 s` | `absent` | serve normally, including older peers |
+| not a string, or not an RFC 3339 UTC time ending in `Z` | `receivedAt + 120 s` | `unparseable` | serve normally |
+| at or before `receivedAt` | `receivedAt + 120 s` | `past` | immediately complete `declined` / `busy`, without a hold |
+| otherwise | `Date.parse(deadline_at)` | `null` | serve inside the remaining original budget |
 
-- Both service times are on the service's clock, so their difference is free
-  of skew. "Past" is judged against `claimed_at` for the same reason: judging
-  it against our wall clock would let a fast local clock throw away a valid
-  deadline. The only error left is the claim response's transit time, which
-  makes `at` late by milliseconds to a few seconds; the 10 s margin absorbs
-  it.
-- A fallback is journaled once per claim as `External relay deadline` with the
-  request prefix and the `fallback` word, never the value. An `absent` from an
-  older release is expected; the others point at a service defect.
-- `declineAt = at − 10 s`. For a window shorter than 10 s it is `receivedAt`.
+- A valid deadline is never translated through `claimed_at`. Claim transit
+  reduces the available budget, as the final service contract requires.
+- A fallback is journaled once per claim with the request prefix and one
+  reason word, never the supplied value.
+- `declineAt = max(receivedAt, at − 10 s)`. A valid claim with fewer than
+  ten seconds left can run if immediately available; a busy claim declines
+  immediately. A past claim declines immediately even if capacity is free.
+- Valid compact requests have their separate lifecycle and omit the field.
+  Invalid compact completion retries use the fixed receipt fallback.
 
 The clock is `Date.now()`, captured once. Every other liveness comparison in
 the runner (stall, heartbeat schedule) already uses it, and the runner and
@@ -303,11 +283,12 @@ step changes, a return to the hold after a drain appears before launch,
 lock contention, and failed completion attempts, and asserts that the busy
 decline is sent at `declineAt` computed at receipt (within one hold tick) and
 that delivery stops at `at`. A second case gives the request a
-`deadline_at` 13 s after `claimed_at`, so the production path is exercised
+`deadline_at` 13 s after receipt, so the production path is exercised
 without a test seam: the decline comes about 3 s after receipt. Unit cases in
 `deadline.test.ts` cover each row of the §3.2 table, and a runner case sends a
-claim whose `deadline_at` is unparseable and one whose value is past: both run
-to `answered`, and neither is declined `invalid_request`.
+claim whose `deadline_at` is unparseable and one whose value is past: the
+former runs to `answered`, the latter immediately completes `declined` /
+`busy`, and neither is declined `invalid_request`.
 
 ## 4. The hold (item 2)
 
@@ -623,8 +604,8 @@ against its lane.
 | Owner launch whose first message was not confirmed in 30 s | `failed` / `agent_error` about 30 s after launch | step `queued` while unconfirmed; a normal answer if it lands and the turn ends; else `failed` / `agent_error` at `declineAt` |
 | Completion delivery | heartbeats stop; retries until 45 s (or the stall window) after the last acknowledgement | heartbeats continue until delivery settles; retries stop at the request's deadline |
 | Invalid compact claim | `declined` / `invalid_request`, retried without end on transient errors | the same body; retries stop at the request's deadline |
-| `declineAt` | — | `deadline_at − 10 s`, mapped through `claimed_at`, when the claim carries a valid `deadline_at`; when it is absent, unparseable, past or implausibly far, 110 s after the install received the claim, and the request is served normally |
-| New wire values | — | the step id `queued` (shown once the service adds it to `RelayStep` and its `relay-step` text); the install accepts `claim_window_s` of any positive value and `stall_window_s` from 1 to 600, and reads the provisional `deadline_at` |
+| `declineAt` | — | `max(receivedAt, deadline_at − 10 s)` for valid future UTC deadlines; absent or malformed fields use receipt + 110 s; past fields send `declined` / `busy` immediately |
+| New wire values | — | the step id `queued` (shown once the service adds it to `RelayStep` and its `relay-step` text); the install accepts `claim_window_s` of any positive value and `stall_window_s` from 1 to 600, and announces `request_deadline` and reads optional `request.deadline_at` ending in `Z`; the service sends shrinking stall windows floored at 10 s |
 
 Unchanged: every completion outcome and reason enum, `member_limit` and
 definite `no_capacity` as explicit early outcomes (both now checked before the
@@ -642,7 +623,7 @@ lane (G2).
 |---|---|---|---|---|
 | S0 | Tolerant `livenessSchema`: the three unread fields any positive integer, `stall_window_s` 1–600; `relay.md` §A.5 schema | G2 | a request and a descriptor with `claim_window_s: 120` parse, and so does a request with `stall_window_s: 4`; each claim runs to `answered` (`protocol.test.ts`, `runner.test.ts`) | none |
 | S1 | Fixed heartbeat grid; moved forward because of the service's interim ~13 s tolerance | 7 | the 2 s / 400 ms gap test (§5.4) | none |
-| S2 | `deadline.ts` with the provisional `RELAY_DEADLINE_PATH` read from the raw claim; `completeRelayRequest(…, until)`; invalid-compact bound; `relay.md` §A.6 note on the service's total deadline and how the install reads it | 1, 6 | a unit case per row of the §3.2 table and a short window; unparseable and past `deadline_at` claims run to `answered`; an invalid compact claim with completions failing 503 stops at `deadline.at` under a fake clock (red: it never stops) (`deadline.test.ts`, `runner.test.ts`) | S0 |
+| S2 | `deadline.ts` with the final `RELAY_DEADLINE_PATH` read from the raw claim; `completeRelayRequest(…, until)`; invalid-compact bound; `relay.md` §A.6 note on the service's total deadline and how the install reads it | 1, 6 | a unit case per row of the §3.2 table and a short window; absent and unparseable `deadline_at` claims run to `answered`; a past claim completes `declined` / `busy` immediately; negotiation announces `request_deadline`; an invalid compact claim with completions failing 503 stops at `deadline.at` under a fake clock (red: it never stops) (`deadline.test.ts`, `runner.test.ts`) | S0 |
 | S3 | Heartbeat during delivery; delivery bound from the deadline | 5 | a completion failing 503 is retried while heartbeats keep arriving on the grid, and stops at `deadline.at`; the rewrite of `runner.test.ts:268` | S1, S2 |
 | S4 | `withFileLockAsync` and the async request-path writes | 3 | the event-loop lateness probe (§5.1) | S2 |
 | S5 | Acknowledge before reservation, the in-flight id set, member-limit and definite capacity checks before the gate, the gate with the **capacity** cause, the hold registry, `queued` step, `slots` minus waiters | 2 | per cause test A below; the concurrency/FIFO test of §4.4; a full target with an exhausted pool declines `no_capacity` at once and a member past the limit declines `member_limit` at once, neither held (red today: both `busy`) | S1, S2, S4 |
@@ -651,7 +632,7 @@ lane (G2).
 | S8 | Owner boundary deadline and the queued first message | 4 | test E; the rewrite of `ownerTier.test.ts:246` | S2, S5 (`queued` step) |
 
 Per-cause tests (`runner.test.ts`, with the stub CLI and `startTestRelay`; the
-short window comes from `deadline_at = claimed_at + 13 s`, so `declineAt` is
+short window comes from `deadline_at = receipt + 13 s`, so `declineAt` is
 3 s after receipt):
 
 - **A (capacity).** Limit 1. A runs. B is claimed: heartbeats `accepted`, then
@@ -772,17 +753,15 @@ not touched. `src/lib/viewerInstrumentation.ts` gains one awaited call in
 
 ## Notes for the paired service's seat
 
-1. Hold the deploy of PR #3597 until this install runs S0 (G2), or deploy it
-   with `RELAY_CLAIM_WINDOW_SECONDS` of 60 or less and a stall window that
-   never goes below 10. Otherwise every relayed request is declined
-   `invalid_request`: a claim window above 60 refuses every request, and a
-   remaining-budget stall window below 10 refuses requests claimed in their
-   last ten seconds.
-2. `deadline_at` (arrival + 120 s, RFC 3339 UTC) is read from the top level
-   of the claimed request, the provisional place. Tell us the reviewed name
-   and place; on our side it is one constant (§3.1). An absent, unparseable,
-   past or far value falls back to our receipt + 120 s and never refuses the
-   request (§3.2).
+1. Hold the deploy of PR #3597 until the tolerant claim-window parser runs
+   on this install, or use `RELAY_CLAIM_WINDOW_SECONDS` of 60 or less. The
+   final stall floor of 10 already satisfies the earlier install parser.
+2. Claim negotiation announces `request_deadline`. Answer requests may carry
+   optional `request.deadline_at`, original `created_at` + 120 s, RFC 3339 UTC
+   ending in `Z`; compact claims omit it. Absent and malformed values use
+   receipt + 120 s. A past value also gives delivery that fixed fallback
+   budget, and the install sends `declined` / `busy` immediately. Stall
+   handling uses the supplied `max(10, ceil(remaining seconds))` duration.
 3. Add `queued` to `RelayStep` and a «у черзі» variant to `relay-step`; until
    then those heartbeats show nothing and stay valid (G3).
 4. After S1 (the fixed heartbeat grid) runs on this install, the gaps we
@@ -803,3 +782,10 @@ progress step, so a two-second regular heartbeat grid can show it. Existing
 step ids keep their debounce from every heartbeat. The progress runner test
 now allows regular null heartbeats between its five existing steps; the dated
 capture stays as the record of the earlier schedule.
+
+Final-contract regressions reproduce missing negotiation, transit-based
+renewal and a past deadline still starting work before the correction. They
+cover present, absent, malformed and past fields, UTC `Z` validation, compact
+claims without the field, and supplied shrinking stall windows. Earlier dated
+wire captures stay intact; comparisons account for the single added
+`request_deadline` negotiation feature.

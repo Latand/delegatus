@@ -263,7 +263,7 @@ for (const phase of ["launch", "queued", "observation"] as const) test(`unconfir
     return { status: 202, body: { conversationId: "conversation_pending", initialMessage: "queued" } }; },
     observe: async () => { if (phase === "observation") await gate; return { state: "running", firstMessagePending: true }; },
     stop: async (_id, action) => { stops.push(action); }, pollMs: 5 };
-  const deadline = relayRequestDeadline({ claimed_at: "2026-10-13T12:00:00Z", deadline_at: "2026-10-13T12:00:10.100Z" });
+  const deadline = relayRequestDeadline({ claimed_at: "2026-10-13T12:00:00Z", deadline_at: new Date(Date.now() + 10100).toISOString() });
   const started = performance.now(); const run = start(ports, 1000, () => {}, deadline);
   try {
     expect(await run.done).toMatchObject({ status: "failed" });
@@ -275,7 +275,7 @@ for (const phase of ["launch", "queued", "observation"] as const) test(`unconfir
 
 test("confirmed owner work retains its hard cap after the admission deadline", async () => {
   const stops: string[] = [];
-  const deadline = relayRequestDeadline({ claimed_at: "2026-10-13T12:00:00Z", deadline_at: "2026-10-13T12:00:10.050Z" });
+  const deadline = relayRequestDeadline({ claimed_at: "2026-10-13T12:00:00Z", deadline_at: new Date(Date.now() + 10050).toISOString() });
   const run = start({ launch, observe: async () => ({ state: "running", firstMessagePending: false }),
     stop: async (_id, action) => { stops.push(action); }, pollMs: 5 }, 150, () => {}, deadline);
   expect(await run.done).toMatchObject({ status: "timeout" }); expect(stops).toEqual(["interrupt"]);

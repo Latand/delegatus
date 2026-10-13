@@ -3378,12 +3378,18 @@ instead of invoking its hosted assistant. An agent's explicit hand-off still
 returns the request to that assistant. This supersedes the earlier L1 rule
 for a service that enforces a total deadline.
 
-The install reads the provisional additive `deadline_at` from the raw claim.
-It maps `deadline_at - claimed_at` onto its receipt time, avoiding clock skew.
-An absent, malformed, past or more than 600 s distant value uses receipt +
-120 s; the request remains valid. The deadline is fixed through every wait.
-Busy holds end ten seconds before it. Completion retries end at it, including
-invalid compact claims. Valid compact requests retain their own lifecycle.
+The install announces `request_deadline` in claim negotiation. Answer claims
+may carry optional `request.deadline_at`, original `created_at` + 120 s,
+RFC 3339 UTC ending in `Z`. The install reads it from the raw request and
+uses that absolute timestamp. Older peers omit it; compact claims omit it.
+Absent or malformed fields use one fixed receipt + 120 s budget. Past values
+use that same fallback delivery budget and complete `declined` / `busy`
+immediately without holding. The field stays outside request validation.
+The service sends `request.liveness.stall_window_s` as
+`max(10, ceil(remaining seconds at response preparation))`; local stall
+handling uses the supplied duration. Busy holds end ten seconds before the
+fixed deadline. Completion retries end at it, including invalid compact
+claims. Valid compact requests retain their own lifecycle.
 See [relay-request-deadline.md](relay-request-deadline.md) for the wait rules.
 
 Answer admission acknowledges before reserving execution capacity. Drain, full

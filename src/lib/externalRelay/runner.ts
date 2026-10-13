@@ -290,6 +290,7 @@ export async function runClaimedRequest(
           : "invalid_request",
       ),
     );
+  if (deadline.fallback === "past") return finish(declined(leaseId, "busy"));
   const target = relay.targets.find((item) => item.id === request.target_id);
   if (!target || !target.engine || !target.model)
     return finish(declined(leaseId, "not_configured"));

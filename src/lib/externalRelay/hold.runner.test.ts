@@ -34,8 +34,8 @@ function paired(api_base: string): PairedRelay {
     paused: false, limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
     targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "none", enabled: true, engine: "codex", model: "gpt-6-sol", effort: "low", project: null, concurrency: 1, hardCapMinutes: 1, memberLimitPerHour: 0 }] };
 }
-const claim = (id: string, budget = 14000) => ({ ...contextRequest, request_id: id, claimed_at: "2026-10-13T12:00:00Z",
-  deadline_at: new Date(Date.parse("2026-10-13T12:00:00Z") + budget).toISOString(), chat: { key: "ck_3Rw9TtYqL0pZx7VbN2mD4e" },
+const claim = (id: string, budget = 14000) => ({ ...contextRequest, request_id: id, claimed_at: new Date(Date.now() - 500).toISOString(),
+  deadline_at: new Date(Date.now() + budget).toISOString(), chat: { key: "ck_3Rw9TtYqL0pZx7VbN2mD4e" },
   input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, key: String(contextRequest.input.requester.key), is_admin: false, is_owner: false } } });
 function blocker(relay: PairedRelay, id: string) {
   return { requestId: id, leaseId: "fixture-lease", relayId: relay.id, targetId: "target_1", childPid: null, childIdentity: null,
@@ -116,13 +116,41 @@ fs.rmSync(${JSON.stringify(path.join(live, id))});await Bun.write(a[a.indexOf('-
   } finally { for (const file of releaseFiles) fs.writeFileSync(file, "go"); await Promise.all(pending); clearInterval(probe); await server.close(); }
 }, 15000);
 
-for (const value of ["unparseable", "past", "absent", "valid-late"] as const) test(`raw deadline ${value} and service windows still answer`, async () => {
+for (const value of ["unparseable", "past", "absent", "valid-late"] as const) test(`raw deadline ${value} and shrinking service stall windows`, async () => {
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const request = claim(`raw-${value}`);
   const raw = { ...request, deadline_at: value === "unparseable" ? "tomorrow" : value === "past" ? request.claimed_at : value === "absent" ? undefined : request.deadline_at,
-    liveness: { ...request.liveness, claim_window_s: 120, stall_window_s: 4 } };
-  try { expect(await runClaimedRequest(paired(`${server.origin}/v1`), raw, undefined, { command })).toMatchObject({ outcome: "answered" }); }
+    liveness: { ...request.liveness, claim_window_s: 120, stall_window_s: value === "valid-late" ? 14 : 120 } };
+  try {
+    const start = performance.now();
+    expect(await runClaimedRequest(paired(`${server.origin}/v1`), raw, undefined, { command })).toMatchObject(
+      value === "past" ? { outcome: "declined", reason: "busy" } : { outcome: "answered" });
+    if (value === "past") { expect(performance.now() - start).toBeLessThan(500); expect(readRunLedger().runs.some(r => r.requestId === raw.request_id)).toBe(false); }
+  }
   finally { await server.close(); }
+});
+
+for (const stallSeconds of [14, 10]) test(`shrinking stall window ${stallSeconds}s bounds unacknowledged admission`, async () => {
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  let completions = 0;
+  const server = await startTestRelay(req => {
+    if (req.url?.endsWith("/heartbeat")) {
+      now += 11000;
+      return { status: 503, body: { error: { code: "unavailable" } } };
+    }
+    completions++;
+    return { body: { status: "ok" } };
+  });
+  const relay = paired(`${server.origin}/v1`);
+  reserveRun(blocker(relay, "stall-blocker"));
+  try {
+    const result = await runClaimedRequest(relay, { ...claim(`stall-${stallSeconds}`),
+      liveness: { ...contextRequest.liveness, stall_window_s: stallSeconds } }, undefined, { command });
+    if (stallSeconds === 10) { expect(result).toBeNull(); expect(completions).toBe(0); }
+    else { expect(result).toMatchObject({ outcome: "declined", reason: "busy" }); expect(completions).toBe(1); }
+    expect(runningCount(relay.id, "target_1")).toBe(0);
+  } finally { dropRun("stall-blocker"); clock.mockRestore(); await server.close(); }
 });
 
 for (const outcome of ["no_capacity", "member_limit"] as const) test(`${outcome} is explicit before a drain hold and after capacity returns`, async () => {

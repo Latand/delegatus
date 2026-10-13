@@ -46,3 +46,10 @@ export async function startTestRelay(
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }
+
+/** Apply the additive negotiation feature to earlier dated wire captures. */
+export function deadlineNegotiatedCapture(text: string): string {
+  const capture = JSON.parse(text);
+  capture.claim_body.features.splice(3, 0, "request_deadline");
+  return JSON.stringify(capture, null, 2) + "\n";
+}
