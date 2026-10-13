@@ -9,7 +9,7 @@ import { activeCopilotAccountId, copilotAccountContext, copilotAccountForSpawn, 
 import { copilotLoginSupervisor } from "./copilotLogin";
 import type { AccountContext, AccountEngineName, AccountManager, AccountSummary, CopilotAccountSummary, ProjectSpawnRequest, ProjectSpawnResolution } from "./contracts";
 import { unavailableLimits } from "./contracts";
-import { accountProbeSnapshot, accountProbeIdentity, AccountAdmissionChangedError, isAccountAdmissionRetryable, withAccountMutationLockAsync } from "./accountMutation";
+import { afterAccountMutationAdmission, accountProbeSnapshot, accountProbeIdentity, AccountAdmissionChangedError, isAccountAdmissionRetryable, withAccountMutationLockAsync } from "./accountMutation";
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
 import { AccountProjectBindingsUnreadableError, accountProjectBindings, allowedAccountIdsForProject, projectAccountRefusalDetail, type AccountProjectBinding } from "./projectBindings";
 import { selectProjectAccount } from "./projectSelection";
@@ -584,8 +584,10 @@ export const accountManager: AccountManager = {
   },
   async add(engine, label) {
     if (engine === "copilot") return copilotSummary(createManagedCopilotAccount(label).id);
-    const item = engine === "claude" ? createManagedClaudeAccount(label) : createManagedCodexAccount(label);
-    return summary(engine, item.id);
+    return await afterAccountMutationAdmission(() => {
+      const item = engine === "claude" ? createManagedClaudeAccount(label) : createManagedCodexAccount(label);
+      return summary(engine, item.id);
+    });
   },
   async select(engine, id) { return selectAccount(engine, id); },
   async status(engine, id) { return summary(engine, id); },

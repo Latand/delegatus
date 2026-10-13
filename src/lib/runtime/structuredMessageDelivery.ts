@@ -628,7 +628,7 @@ async function holdDuringRuntimeSynchronization(
     const needsAccountReseat = activeAccountId && generation?.accountId && generation.accountId !== activeAccountId;
     /* The registry write lock is waited for off the event loop. */
     const place = async (): Promise<HeldDelivery> => {
-      const written = await registry.accountMutationWrite("send admission", () => registry.holdDelivery(
+      const held = await registry.holdDeliveryOffLoop(
         conversation.id,
         deliveryText,
         idempotencyKey,
@@ -638,9 +638,9 @@ async function holdDuringRuntimeSynchronization(
         commandInput(request),
         { recoveryIntent: allowReclaimed ? "reclaimed-host" : null, admissionGuard: request.admissionGuard,
           ...(needsAccountReseat ? { reseatToActiveAccount: { launchId: request.launchId } } : {}) },
-      ));
-      if (!written.acquired) throw new Error(REGISTRY_WRITER_BUSY);
-      return written.value;
+      );
+      if (!held) throw new Error(REGISTRY_WRITER_BUSY);
+      return held;
     };
     /* Publication and reservation are one section per key, as on the live
        path: two racing attempts under the same client message id see a durable
@@ -1498,7 +1498,7 @@ export async function enqueueStructuredMessage(
        write (incident 2026-10-06); one another writer keeps past its
        deadline reserves nothing and refuses the send. */
     const admit = async (): Promise<HeldDelivery> => {
-      const written = await registry.accountMutationWrite("send admission", () => registry.holdDelivery(
+      const held = await registry.holdDeliveryOffLoop(
         conversation.id,
         content.content.text,
         idempotencyKey,
@@ -1508,9 +1508,9 @@ export async function enqueueStructuredMessage(
         commandInput(request),
         { admissionGuard: request.admissionGuard,
           ...(needsAccountReseat && request.kind !== "inject" ? { reseatToActiveAccount: { launchId: request.launchId } } : {}) },
-      ));
-      if (!written.acquired) throw new Error(REGISTRY_WRITER_BUSY);
-      return written.value;
+      );
+      if (!held) throw new Error(REGISTRY_WRITER_BUSY);
+      return held;
     };
     return rawImages.length && dependencies.withImageAdmissionLock ? dependencies.withImageAdmissionLock(admit) : admit();
   });

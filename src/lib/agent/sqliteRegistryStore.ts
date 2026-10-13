@@ -2584,10 +2584,10 @@ export class SqliteAgentRegistryStore {
    * caller's correlation. For writes made inside another synchronous lock,
    * where neither a spin nor an `await` is safe.
    */
-  tryWriter<T>(operation: () => T): { acquired: true; value: T } | { acquired: false } {
+  tryWriter<T>(operation: () => T, options: { recordRefusal?: boolean } = {}): { acquired: true; value: T } | { acquired: false } {
     const startedAt = performance.now();
     if (!this.tryBeginWrite()) {
-      recordBlockingWait({ site: "registry-lock-async", durationMs: performance.now() - startedAt, synchronous: false, subject: "agent-registry", refused: true });
+      if (options.recordRefusal !== false) recordBlockingWait({ site: "registry-lock-async", durationMs: performance.now() - startedAt, synchronous: false, subject: "agent-registry", refused: true });
       return { acquired: false };
     }
     this.writerHeld = true;

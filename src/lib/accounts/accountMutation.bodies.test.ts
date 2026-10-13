@@ -186,3 +186,27 @@ test("selection discovers credentials outside its commit and rejects a removed p
     probe.check();
   } finally { credentialSpy.mockRestore(); }
 });
+
+test.each(["claude", "codex"] as const)("%s manager creation waits for a competing account mutation before preparing", async engine => {
+  const { withAccountMutationLockAsync } = await import("./accountMutation");
+  let enter!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { enter = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const blocker = withAccountMutationLockAsync(async () => { enter(); await held; });
+  await ready;
+  let settled = false;
+  const adding = accountManager.add(engine, "Queued manager account").then(
+    account => { settled = true; return { account, error: undefined }; },
+    error => { settled = true; return { account: undefined, error }; },
+  );
+  try {
+    await Bun.sleep(10);
+    expect(settled).toBe(false);
+    release();
+    await blocker;
+    const result = await adding;
+    expect(result.error).toBeUndefined();
+    expect(result.account).toBeDefined();
+    expect(persistedAccountRegistry(engine).accounts).toHaveLength(1);
+  } finally { release(); await blocker; await adding; }
+});

@@ -52,7 +52,7 @@
       "id": 2,
       "body": "src/lib/agent/spawnAdmission.ts:recordSpawnAdmissionRejection:1",
       "baseLine": 224,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 9,
         "heldSamples": 9,
@@ -97,7 +97,7 @@
       "id": 3,
       "body": "src/lib/agent/transcriptHost.ts:decide:1",
       "baseLine": 490,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 12,
         "heldSamples": 12,
@@ -177,9 +177,9 @@
       "baseLine": 5779,
       "observation": "Synchronous registry-writer wait. Probe both leases without waiting; sleep outside; recheck guards on every attempt.",
       "before": {
-        "samples": 58,
-        "heldSamples": 58,
-        "heldMedianMs": 8.864,
+        "samples": 60,
+        "heldSamples": 60,
+        "heldMedianMs": 8.823,
         "heldMaxMs": 421.402,
         "outsideSamples": 0,
         "tests": [
@@ -189,6 +189,7 @@
           "src/lib/accounts/migration/quotaController.test.ts",
           "src/lib/agent/spawnCommand.contention.test.ts",
           "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/pipelines/engine.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts",
           "src/lib/runtime/structuredRecovery.test.ts"
@@ -198,9 +199,9 @@
         "src/lib/agent/registry.ts:accountMutationWrite:1"
       ],
       "after": {
-        "samples": 345,
-        "heldSamples": 345,
-        "heldMedianMs": 1.129,
+        "samples": 582,
+        "heldSamples": 582,
+        "heldMedianMs": 0.706,
         "heldMaxMs": 66.073,
         "outsideSamples": 0,
         "tests": [
@@ -210,17 +211,20 @@
           "src/lib/accounts/migration/quotaController.test.ts",
           "src/lib/agent/spawnCommand.contention.test.ts",
           "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/flows/engine.test.ts",
           "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts",
           "src/lib/runtime/structuredRecovery.test.ts",
           "src/lib/telegram/bot/reportReplies.test.ts"
         ]
       },
       "originalBodyAfter": {
-        "samples": 56,
-        "heldSamples": 56,
-        "heldMedianMs": 8.313,
+        "samples": 57,
+        "heldSamples": 57,
+        "heldMedianMs": 8.075,
         "heldMaxMs": 37.263,
         "outsideSamples": 0,
         "tests": [
@@ -230,6 +234,7 @@
           "src/lib/accounts/migration/quotaController.test.ts",
           "src/lib/agent/spawnCommand.contention.test.ts",
           "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/pipelines/engine.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts",
           "src/lib/runtime/structuredRecovery.test.ts"
@@ -240,11 +245,11 @@
       "id": 6,
       "body": "src/lib/agent/registry.ts:beginSpawnRequest:1",
       "baseLine": 5786,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
-        "samples": 347,
-        "heldSamples": 347,
-        "heldMedianMs": 1.819,
+        "samples": 357,
+        "heldSamples": 357,
+        "heldMedianMs": 1.818,
         "heldMaxMs": 406.948,
         "outsideSamples": 0,
         "tests": [
@@ -262,9 +267,12 @@
           "src/lib/agent/registry.test.ts",
           "src/lib/agent/spawnCommand.contention.test.ts",
           "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/flows/engine.test.ts",
           "src/lib/orchestrator/seatCommand.test.ts",
           "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts",
           "src/lib/runtime/structuredRecovery.test.ts"
         ]
@@ -273,10 +281,10 @@
         "src/lib/agent/registry.ts:beginSpawnRequest:1"
       ],
       "after": {
-        "samples": 380,
-        "heldSamples": 380,
-        "heldMedianMs": 1.615,
-        "heldMaxMs": 18.585,
+        "samples": 373,
+        "heldSamples": 373,
+        "heldMedianMs": 1.471,
+        "heldMaxMs": 48.253,
         "outsideSamples": 0,
         "tests": [
           "src/app/api/accounts/claude/route.test.ts",
@@ -294,18 +302,21 @@
           "src/lib/agent/registry.test.ts",
           "src/lib/agent/spawnCommand.contention.test.ts",
           "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/flows/engine.test.ts",
           "src/lib/orchestrator/seatCommand.test.ts",
           "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts",
           "src/lib/runtime/structuredRecovery.test.ts"
         ]
       },
       "originalBodyAfter": {
-        "samples": 380,
-        "heldSamples": 380,
-        "heldMedianMs": 1.615,
-        "heldMaxMs": 18.585,
+        "samples": 373,
+        "heldSamples": 373,
+        "heldMedianMs": 1.471,
+        "heldMaxMs": 48.253,
         "outsideSamples": 0,
         "tests": [
           "src/app/api/accounts/claude/route.test.ts",
@@ -323,9 +334,12 @@
           "src/lib/agent/registry.test.ts",
           "src/lib/agent/spawnCommand.contention.test.ts",
           "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/flows/engine.test.ts",
           "src/lib/orchestrator/seatCommand.test.ts",
           "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts",
           "src/lib/runtime/structuredRecovery.test.ts"
         ]
@@ -385,9 +399,9 @@
       "baseLine": 8585,
       "observation": "JSON registry writer could wait for seconds. Preserve the legacy synchronous wait before the account lease; nested commits refuse a busy writer.",
       "before": {
-        "samples": 89,
-        "heldSamples": 89,
-        "heldMedianMs": 1.055,
+        "samples": 140,
+        "heldSamples": 140,
+        "heldMedianMs": 0.954,
         "heldMaxMs": 8525.213,
         "outsideSamples": 0,
         "tests": [
@@ -403,17 +417,20 @@
           "src/lib/accounts/migration/quotaController.test.ts",
           "src/lib/accounts/removal.writerWait.test.ts",
           "src/lib/agent/registry.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/flows/engine.test.ts",
-          "src/lib/pipelines/engine.test.ts"
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts"
         ]
       },
       "afterBodies": [
         "src/lib/agent/registry.ts:setEngineRouting:1"
       ],
       "after": {
-        "samples": 87,
-        "heldSamples": 87,
-        "heldMedianMs": 0.847,
+        "samples": 138,
+        "heldSamples": 138,
+        "heldMedianMs": 0.76,
         "heldMaxMs": 16.578,
         "outsideSamples": 0,
         "tests": [
@@ -429,14 +446,17 @@
           "src/lib/accounts/migration/quotaController.test.ts",
           "src/lib/accounts/removal.writerWait.test.ts",
           "src/lib/agent/registry.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/flows/engine.test.ts",
-          "src/lib/pipelines/engine.test.ts"
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts"
         ]
       },
       "originalBodyAfter": {
-        "samples": 87,
-        "heldSamples": 87,
-        "heldMedianMs": 0.847,
+        "samples": 138,
+        "heldSamples": 138,
+        "heldMedianMs": 0.76,
         "heldMaxMs": 16.578,
         "outsideSamples": 0,
         "tests": [
@@ -452,8 +472,11 @@
           "src/lib/accounts/migration/quotaController.test.ts",
           "src/lib/accounts/removal.writerWait.test.ts",
           "src/lib/agent/registry.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/flows/engine.test.ts",
-          "src/lib/pipelines/engine.test.ts"
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts"
         ]
       }
     },
@@ -461,7 +484,7 @@
       "id": 9,
       "body": "src/lib/agent/registry.ts:retireAccount:1",
       "baseLine": 8620,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 5,
         "heldSamples": 5,
@@ -479,8 +502,8 @@
       "after": {
         "samples": 5,
         "heldSamples": 5,
-        "heldMedianMs": 1.596,
-        "heldMaxMs": 1.872,
+        "heldMedianMs": 1.356,
+        "heldMaxMs": 1.804,
         "outsideSamples": 0,
         "tests": [
           "src/lib/accounts/accountMutation.callers.test.ts",
@@ -490,8 +513,8 @@
       "originalBodyAfter": {
         "samples": 5,
         "heldSamples": 5,
-        "heldMedianMs": 1.596,
-        "heldMaxMs": 1.872,
+        "heldMedianMs": 1.356,
+        "heldMaxMs": 1.804,
         "outsideSamples": 0,
         "tests": [
           "src/lib/accounts/accountMutation.callers.test.ts",
@@ -503,11 +526,11 @@
       "id": 10,
       "body": "src/lib/agent/registry.ts:retireAccountNow:1",
       "baseLine": 8638,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
-        "samples": 107,
-        "heldSamples": 107,
-        "heldMedianMs": 1.617,
+        "samples": 112,
+        "heldSamples": 112,
+        "heldMedianMs": 1.61,
         "heldMaxMs": 12.033,
         "outsideSamples": 0,
         "tests": [
@@ -527,9 +550,9 @@
         "src/lib/agent/registry.ts:retireAccountNow:1"
       ],
       "after": {
-        "samples": 95,
-        "heldSamples": 95,
-        "heldMedianMs": 1.534,
+        "samples": 90,
+        "heldSamples": 90,
+        "heldMedianMs": 1.553,
         "heldMaxMs": 10.455,
         "outsideSamples": 0,
         "tests": [
@@ -546,9 +569,9 @@
         ]
       },
       "originalBodyAfter": {
-        "samples": 95,
-        "heldSamples": 95,
-        "heldMedianMs": 1.534,
+        "samples": 90,
+        "heldSamples": 90,
+        "heldMedianMs": 1.553,
         "heldMaxMs": 10.455,
         "outsideSamples": 0,
         "tests": [
@@ -569,7 +592,7 @@
       "id": 11,
       "body": "src/lib/agent/registry.ts:rewriteAccountPaths:1",
       "baseLine": 8722,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 14,
         "heldSamples": 14,
@@ -617,11 +640,11 @@
       "id": 12,
       "body": "src/lib/agent/registry.ts:commitMigrationIntent:1",
       "baseLine": 8758,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
-        "samples": 11,
-        "heldSamples": 11,
-        "heldMedianMs": 2.508,
+        "samples": 19,
+        "heldSamples": 19,
+        "heldMedianMs": 1.478,
         "heldMaxMs": 109.038,
         "outsideSamples": 0,
         "tests": [
@@ -629,8 +652,10 @@
           "src/app/api/accounts/codex/route.test.ts",
           "src/lib/accounts/accountMutation.callers.test.ts",
           "src/lib/agent/registry.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/flows/engine.test.ts",
           "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts"
         ]
       },
@@ -638,9 +663,9 @@
         "src/lib/agent/registry.ts:commitMigrationIntent:1"
       ],
       "after": {
-        "samples": 12,
-        "heldSamples": 12,
-        "heldMedianMs": 1.859,
+        "samples": 20,
+        "heldSamples": 20,
+        "heldMedianMs": 1.147,
         "heldMaxMs": 5.894,
         "outsideSamples": 0,
         "tests": [
@@ -648,15 +673,17 @@
           "src/app/api/accounts/codex/route.test.ts",
           "src/lib/accounts/accountMutation.callers.test.ts",
           "src/lib/agent/registry.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/flows/engine.test.ts",
           "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts"
         ]
       },
       "originalBodyAfter": {
-        "samples": 12,
-        "heldSamples": 12,
-        "heldMedianMs": 1.859,
+        "samples": 20,
+        "heldSamples": 20,
+        "heldMedianMs": 1.147,
         "heldMaxMs": 5.894,
         "outsideSamples": 0,
         "tests": [
@@ -664,8 +691,10 @@
           "src/app/api/accounts/codex/route.test.ts",
           "src/lib/accounts/accountMutation.callers.test.ts",
           "src/lib/agent/registry.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/flows/engine.test.ts",
           "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts"
         ]
       }
@@ -674,7 +703,7 @@
       "id": 13,
       "body": "src/lib/agent/registry.ts:restoreSnapshot:1",
       "baseLine": 9965,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 11,
         "heldSamples": 11,
@@ -728,7 +757,7 @@
       "id": 14,
       "body": "src/lib/agent/spawnCommand.ts:fenceSpawnAdmissionRejection:1",
       "baseLine": 214,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 6,
         "heldSamples": 6,
@@ -809,7 +838,7 @@
       "id": 16,
       "body": "src/app/api/accounts/copilot/route.ts:POST:1",
       "baseLine": 85,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 2,
         "heldSamples": 2,
@@ -848,7 +877,7 @@
       "id": 17,
       "body": "src/app/api/accounts/copilot/route.ts:POST:2",
       "baseLine": 90,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 3,
         "heldSamples": 3,
@@ -887,7 +916,7 @@
       "id": 18,
       "body": "src/app/api/accounts/copilot/route.ts:POST:3",
       "baseLine": 94,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 3,
         "heldSamples": 3,
@@ -1003,7 +1032,7 @@
       "id": 21,
       "body": "src/app/api/accounts/claude/route.ts:PATCH:1",
       "baseLine": 49,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 14,
         "heldSamples": 14,
@@ -1057,9 +1086,9 @@
         "src/lib/accounts/claude.ts:createManagedClaudeAccount:2"
       ],
       "after": {
-        "samples": 296,
-        "heldSamples": 296,
-        "heldMedianMs": 1.787,
+        "samples": 287,
+        "heldSamples": 287,
+        "heldMedianMs": 1.78,
         "heldMaxMs": 6.158,
         "outsideSamples": 0,
         "tests": [
@@ -1090,7 +1119,7 @@
       "id": 23,
       "body": "src/app/api/accounts/claude/route.ts:POST:2",
       "baseLine": 102,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 2,
         "heldSamples": 2,
@@ -1188,9 +1217,9 @@
         "src/lib/accounts/claude.ts:recoverRemovalsLocked:1"
       ],
       "after": {
-        "samples": 230,
-        "heldSamples": 230,
-        "heldMedianMs": 2.766,
+        "samples": 213,
+        "heldSamples": 213,
+        "heldMedianMs": 2.843,
         "heldMaxMs": 28.88,
         "outsideSamples": 0,
         "tests": [
@@ -1239,9 +1268,9 @@
         "src/lib/accounts/claude.ts:recoverRemovalsLocked:1"
       ],
       "after": {
-        "samples": 230,
-        "heldSamples": 230,
-        "heldMedianMs": 2.766,
+        "samples": 213,
+        "heldSamples": 213,
+        "heldMedianMs": 2.843,
         "heldMaxMs": 28.88,
         "outsideSamples": 0,
         "tests": [
@@ -1348,7 +1377,7 @@
       "id": 29,
       "body": "src/lib/orchestrator/seatCommand.ts:seatStoreReleased:1",
       "baseLine": 872,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 11,
         "heldSamples": 11,
@@ -1387,7 +1416,7 @@
       "id": 30,
       "body": "src/app/api/accounts/codex/route.ts:POST:1",
       "baseLine": 24,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 1,
         "heldSamples": 1,
@@ -1441,9 +1470,9 @@
         "src/lib/accounts/codex.ts:createManagedCodexAccount:2"
       ],
       "after": {
-        "samples": 164,
-        "heldSamples": 164,
-        "heldMedianMs": 1.861,
+        "samples": 155,
+        "heldSamples": 155,
+        "heldMedianMs": 1.843,
         "heldMaxMs": 25.4,
         "outsideSamples": 0,
         "tests": [
@@ -1492,9 +1521,9 @@
         "src/lib/accounts/codex.ts:recoverRemovalsLocked:1"
       ],
       "after": {
-        "samples": 200,
-        "heldSamples": 200,
-        "heldMedianMs": 3.163,
+        "samples": 186,
+        "heldSamples": 186,
+        "heldMedianMs": 3.148,
         "heldMaxMs": 28.88,
         "outsideSamples": 0,
         "tests": [
@@ -1543,9 +1572,9 @@
         "src/lib/accounts/codex.ts:recoverRemovalsLocked:1"
       ],
       "after": {
-        "samples": 200,
-        "heldSamples": 200,
-        "heldMedianMs": 3.163,
+        "samples": 186,
+        "heldSamples": 186,
+        "heldMedianMs": 3.148,
         "heldMaxMs": 28.88,
         "outsideSamples": 0,
         "tests": [
@@ -1576,7 +1605,7 @@
       "id": 34,
       "body": "src/lib/orchestrator/seats.ts:beginOrchestratorSeatIntent:1",
       "baseLine": 791,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 317,
         "heldSamples": 317,
@@ -1717,7 +1746,7 @@
       "id": 37,
       "body": "src/lib/orchestrator/seats.ts:repairOrchestratorSeatRuntimeIdentity:1",
       "baseLine": 959,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 169,
         "heldSamples": 169,
@@ -1759,7 +1788,7 @@
       "id": 38,
       "body": "src/lib/orchestrator/seats.ts:failOrchestratorSeatIntent:1",
       "baseLine": 997,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 88,
         "heldSamples": 88,
@@ -1894,7 +1923,7 @@
       "id": 41,
       "body": "src/lib/orchestrator/seats.ts:rekeyOrchestratorSeatPaths:1",
       "baseLine": 1212,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 5,
         "heldSamples": 5,
@@ -1939,7 +1968,7 @@
       "id": 42,
       "body": "src/lib/orchestrator/deputyCommand.ts:askOnce:1",
       "baseLine": 199,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 18,
         "heldSamples": 18,
@@ -1978,7 +2007,7 @@
       "id": 43,
       "body": "src/lib/orchestrator/deputyCommand.ts:askOnce:2",
       "baseLine": 233,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 1,
         "heldSamples": 1,
@@ -2017,7 +2046,7 @@
       "id": 44,
       "body": "src/lib/orchestrator/deputyCommand.ts:askOnce:3",
       "baseLine": 247,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 1,
         "heldSamples": 1,
@@ -2056,7 +2085,7 @@
       "id": 45,
       "body": "src/lib/orchestrator/deputyCommand.ts:askOnce:4",
       "baseLine": 251,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 1,
         "heldSamples": 1,
@@ -2095,7 +2124,7 @@
       "id": 46,
       "body": "src/lib/orchestrator/deputyCommand.ts:askOnce:5",
       "baseLine": 273,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 11,
         "heldSamples": 11,
@@ -2134,7 +2163,7 @@
       "id": 47,
       "body": "src/lib/orchestrator/deputyCommand.ts:askOnce:6",
       "baseLine": 298,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 1,
         "heldSamples": 1,
@@ -2173,7 +2202,7 @@
       "id": 48,
       "body": "src/lib/orchestrator/deputyCommand.ts:askOnce:7",
       "baseLine": 302,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 8,
         "heldSamples": 8,
@@ -2212,7 +2241,7 @@
       "id": 49,
       "body": "src/lib/orchestrator/deputies.ts:mutateDeputies:1",
       "baseLine": 275,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 96,
         "heldSamples": 96,
@@ -2260,7 +2289,7 @@
       "id": 50,
       "body": "src/lib/orchestrator/deputySweep.ts:finishDeputy:1",
       "baseLine": 158,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 8,
         "heldSamples": 8,
@@ -2299,7 +2328,7 @@
       "id": 51,
       "body": "src/lib/orchestrator/deputySweep.ts:finishDeputy:2",
       "baseLine": 177,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 7,
         "heldSamples": 7,
@@ -2340,9 +2369,9 @@
       "baseLine": 300,
       "observation": "Engine guard acquisition could sleep for five seconds under the shared lock. Guard acquired first, without waiting; only catalog commits use the shared lease.",
       "before": {
-        "samples": 235,
-        "heldSamples": 235,
-        "heldMedianMs": 9.82,
+        "samples": 250,
+        "heldSamples": 250,
+        "heldMedianMs": 10.365,
         "heldMaxMs": 197.839,
         "outsideSamples": 0,
         "tests": [
@@ -2392,7 +2421,7 @@
       "id": 53,
       "body": "src/lib/accounts/codex.ts:withManagedCodexLogin:1",
       "baseLine": 454,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 22,
         "heldSamples": 22,
@@ -2434,7 +2463,7 @@
       "id": 54,
       "body": "src/lib/accounts/codex.ts:withManagedCodexLogin:2",
       "baseLine": 469,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 23,
         "heldSamples": 23,
@@ -2476,11 +2505,11 @@
       "id": 55,
       "body": "src/lib/accounts/codex.ts:setActiveCodexAccount:1",
       "baseLine": 510,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
-        "samples": 30,
-        "heldSamples": 30,
-        "heldMedianMs": 3.983,
+        "samples": 35,
+        "heldSamples": 35,
+        "heldMedianMs": 3.898,
         "heldMaxMs": 406.343,
         "outsideSamples": 0,
         "tests": [
@@ -2495,10 +2524,10 @@
         "src/lib/accounts/codex.ts:setActiveCodexAccount:1"
       ],
       "after": {
-        "samples": 30,
-        "heldSamples": 30,
-        "heldMedianMs": 2.715,
-        "heldMaxMs": 7.558,
+        "samples": 22,
+        "heldSamples": 22,
+        "heldMedianMs": 2.428,
+        "heldMaxMs": 4.292,
         "outsideSamples": 0,
         "tests": [
           "src/lib/accounts/accountMutation.bodies.test.ts",
@@ -2509,10 +2538,10 @@
         ]
       },
       "originalBodyAfter": {
-        "samples": 30,
-        "heldSamples": 30,
-        "heldMedianMs": 2.715,
-        "heldMaxMs": 7.558,
+        "samples": 22,
+        "heldSamples": 22,
+        "heldMedianMs": 2.428,
+        "heldMaxMs": 4.292,
         "outsideSamples": 0,
         "tests": [
           "src/lib/accounts/accountMutation.bodies.test.ts",
@@ -2529,10 +2558,10 @@
       "baseLine": 563,
       "observation": "Home/link preparation and interrupted-removal recovery. Prepare under engine guard; commit against current catalog.",
       "before": {
-        "samples": 177,
-        "heldSamples": 177,
-        "heldMedianMs": 8.503,
-        "heldMaxMs": 166.55,
+        "samples": 189,
+        "heldSamples": 189,
+        "heldMedianMs": 9.016,
+        "heldMaxMs": 183.687,
         "outsideSamples": 0,
         "tests": [
           "src/app/api/accounts/codex/route.test.ts",
@@ -2551,9 +2580,9 @@
         "src/lib/accounts/codex.ts:createManagedCodexAccount:2"
       ],
       "after": {
-        "samples": 164,
-        "heldSamples": 164,
-        "heldMedianMs": 1.861,
+        "samples": 155,
+        "heldSamples": 155,
+        "heldMedianMs": 1.843,
         "heldMaxMs": 25.4,
         "outsideSamples": 0,
         "tests": [
@@ -2570,11 +2599,11 @@
         ]
       },
       "originalBodyAfter": {
-        "samples": 166,
+        "samples": 157,
         "heldSamples": 1,
         "heldMedianMs": 7.249,
         "heldMaxMs": 7.249,
-        "outsideSamples": 165,
+        "outsideSamples": 156,
         "tests": [
           "src/app/api/accounts/codex/route.test.ts",
           "src/lib/accounts/accountMutation.bodies.test.ts",
@@ -2595,10 +2624,10 @@
       "baseLine": 644,
       "observation": "Recursive archive scrubbing. Engine guard keeps recovery exclusive; shared lease covers journal/retirement commits.",
       "before": {
-        "samples": 15,
-        "heldSamples": 15,
-        "heldMedianMs": 7.794,
-        "heldMaxMs": 158.847,
+        "samples": 16,
+        "heldSamples": 16,
+        "heldMedianMs": 8.353,
+        "heldMaxMs": 162.243,
         "outsideSamples": 0,
         "tests": [
           "src/lib/accounts/accountMutation.bodies.test.ts",
@@ -2612,9 +2641,9 @@
         "src/lib/accounts/codex.ts:recoverRemovalsLocked:1"
       ],
       "after": {
-        "samples": 200,
-        "heldSamples": 200,
-        "heldMedianMs": 3.163,
+        "samples": 186,
+        "heldSamples": 186,
+        "heldMedianMs": 3.148,
         "heldMaxMs": 28.88,
         "outsideSamples": 0,
         "tests": [
@@ -2630,11 +2659,11 @@
         ]
       },
       "originalBodyAfter": {
-        "samples": 14,
+        "samples": 13,
         "heldSamples": 0,
         "heldMedianMs": null,
         "heldMaxMs": null,
-        "outsideSamples": 14,
+        "outsideSamples": 13,
         "tests": [
           "src/lib/accounts/accountMutation.bodies.test.ts",
           "src/lib/accounts/codex.test.ts"
@@ -2647,10 +2676,10 @@
       "baseLine": 680,
       "observation": "Removal recovery and archive scrubbing. Revalidate account identity, login and liveness before retirement; scrub after commit.",
       "before": {
-        "samples": 20,
-        "heldSamples": 20,
-        "heldMedianMs": 22.232,
-        "heldMaxMs": 191.072,
+        "samples": 21,
+        "heldSamples": 21,
+        "heldMedianMs": 25.779,
+        "heldMaxMs": 194.636,
         "outsideSamples": 0,
         "tests": [
           "src/app/api/accounts/codex/route.test.ts",
@@ -2667,9 +2696,9 @@
         "src/lib/accounts/codex.ts:recoverRemovalsLocked:1"
       ],
       "after": {
-        "samples": 200,
-        "heldSamples": 200,
-        "heldMedianMs": 3.163,
+        "samples": 186,
+        "heldSamples": 186,
+        "heldMedianMs": 3.148,
         "heldMaxMs": 28.88,
         "outsideSamples": 0,
         "tests": [
@@ -2685,11 +2714,11 @@
         ]
       },
       "originalBodyAfter": {
-        "samples": 19,
+        "samples": 18,
         "heldSamples": 1,
         "heldMedianMs": 34.406,
         "heldMaxMs": 34.406,
-        "outsideSamples": 18,
+        "outsideSamples": 17,
         "tests": [
           "src/app/api/accounts/codex/route.test.ts",
           "src/lib/accounts/accountMutation.bodies.test.ts",
@@ -2703,7 +2732,7 @@
       "id": 59,
       "body": "src/lib/accounts/codex.ts:hideLegacyCodexAccount:1",
       "baseLine": 711,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 6,
         "heldSamples": 6,
@@ -2748,7 +2777,7 @@
       "id": 60,
       "body": "src/lib/accounts/codex.ts:restoreLegacyCodexAccount:1",
       "baseLine": 726,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 2,
         "heldSamples": 2,
@@ -2792,9 +2821,9 @@
       "baseLine": 754,
       "observation": "Recursive account/history inventory and scrubbing. Scan outside; revalidate retirement against current catalog.",
       "before": {
-        "samples": 14,
-        "heldSamples": 14,
-        "heldMedianMs": 16.078,
+        "samples": 15,
+        "heldSamples": 15,
+        "heldMedianMs": 16.22,
         "heldMaxMs": 197.703,
         "outsideSamples": 0,
         "tests": [
@@ -2810,9 +2839,9 @@
         "src/lib/accounts/codex.ts:recoverRemovalsLocked:1"
       ],
       "after": {
-        "samples": 200,
-        "heldSamples": 200,
-        "heldMedianMs": 3.163,
+        "samples": 186,
+        "heldSamples": 186,
+        "heldMedianMs": 3.148,
         "heldMaxMs": 28.88,
         "outsideSamples": 0,
         "tests": [
@@ -2828,11 +2857,11 @@
         ]
       },
       "originalBodyAfter": {
-        "samples": 13,
+        "samples": 12,
         "heldSamples": 0,
         "heldMedianMs": null,
         "heldMaxMs": null,
-        "outsideSamples": 13,
+        "outsideSamples": 12,
         "tests": [
           "src/app/api/accounts/codex/route.test.ts",
           "src/lib/accounts/accountMutation.bodies.test.ts",
@@ -2844,7 +2873,7 @@
       "id": 62,
       "body": "src/lib/accounts/codex.ts:setCodexAccountLoginPane:1",
       "baseLine": 808,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 1,
         "heldSamples": 1,
@@ -2883,7 +2912,7 @@
       "id": 63,
       "body": "src/lib/accounts/projectBindings.ts:inRecordTransaction:1",
       "baseLine": 293,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 36,
         "heldSamples": 36,
@@ -2934,7 +2963,7 @@
       "id": 64,
       "body": "src/lib/accounts/projectBindings.ts:forgetAccountProjectBindings:1",
       "baseLine": 410,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 19,
         "heldSamples": 19,
@@ -3018,7 +3047,7 @@
       "id": 66,
       "body": "src/lib/accounts/codexRuntime.ts:probeQuota:1",
       "baseLine": 403,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 4,
         "heldSamples": 4,
@@ -3057,7 +3086,7 @@
       "id": 67,
       "body": "src/lib/accounts/codexRuntime.ts:recheck:1",
       "baseLine": 436,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 8,
         "heldSamples": 8,
@@ -3096,7 +3125,7 @@
       "id": 68,
       "body": "src/lib/accounts/codexRuntime.ts:record:1",
       "baseLine": 478,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 60,
         "heldSamples": 60,
@@ -3138,7 +3167,7 @@
       "id": 69,
       "body": "src/lib/accounts/codexRuntime.ts:drain:1",
       "baseLine": 517,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 5,
         "heldSamples": 5,
@@ -3177,7 +3206,7 @@
       "id": 70,
       "body": "src/lib/accounts/copilot.ts:setActiveCopilotAccount:1",
       "baseLine": 200,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 6,
         "heldSamples": 6,
@@ -3222,7 +3251,7 @@
       "id": 71,
       "body": "src/lib/accounts/copilot.ts:createManagedCopilotAccount:1",
       "baseLine": 211,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 27,
         "heldSamples": 27,
@@ -3267,7 +3296,7 @@
       "id": 72,
       "body": "src/lib/accounts/copilot.ts:removeCopilotAccount:1",
       "baseLine": 264,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 4,
         "heldSamples": 4,
@@ -3306,7 +3335,7 @@
       "id": 73,
       "body": "src/lib/accounts/copilot.ts:restoreLegacyCopilotAccount:1",
       "baseLine": 303,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 2,
         "heldSamples": 2,
@@ -3360,8 +3389,8 @@
         "src/lib/accounts/accountMutation.ts:accountProbeSnapshot:2"
       ],
       "after": {
-        "samples": 246,
-        "heldSamples": 246,
+        "samples": 245,
+        "heldSamples": 245,
         "heldMedianMs": 0.036,
         "heldMaxMs": 5.245,
         "outsideSamples": 0,
@@ -3429,7 +3458,7 @@
       "id": 76,
       "body": "src/lib/accounts/spawnHealth.ts:fencedLiveValidityProbe:1",
       "baseLine": 223,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 79,
         "heldSamples": 79,
@@ -3468,7 +3497,7 @@
       "id": 77,
       "body": "src/lib/accounts/accountMutation.ts:accountProbeSnapshot:1",
       "baseLine": 429,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 1,
         "heldSamples": 1,
@@ -3507,7 +3536,7 @@
       "id": 78,
       "body": "src/lib/accounts/accountMutation.ts:accountProbeSnapshot:2",
       "baseLine": 433,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 212,
         "heldSamples": 212,
@@ -3527,8 +3556,8 @@
         "src/lib/accounts/accountMutation.ts:accountProbeSnapshot:2"
       ],
       "after": {
-        "samples": 246,
-        "heldSamples": 246,
+        "samples": 245,
+        "heldSamples": 245,
         "heldMedianMs": 0.036,
         "heldMaxMs": 5.245,
         "outsideSamples": 0,
@@ -3545,8 +3574,8 @@
         ]
       },
       "originalBodyAfter": {
-        "samples": 246,
-        "heldSamples": 246,
+        "samples": 245,
+        "heldSamples": 245,
         "heldMedianMs": 0.036,
         "heldMaxMs": 5.245,
         "outsideSamples": 0,
@@ -3567,7 +3596,7 @@
       "id": 79,
       "body": "src/lib/accounts/claudeLogin.ts:persist:1",
       "baseLine": 358,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 262,
         "heldSamples": 262,
@@ -3609,7 +3638,7 @@
       "id": 80,
       "body": "src/lib/accounts/claudeLogin.ts:drain:1",
       "baseLine": 371,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 1,
         "heldSamples": 1,
@@ -3648,7 +3677,7 @@
       "id": 81,
       "body": "src/lib/accounts/migration/quotaController.ts:tick:1",
       "baseLine": 287,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 19,
         "heldSamples": 19,
@@ -3687,7 +3716,7 @@
       "id": 82,
       "body": "src/lib/accounts/migration/quotaController.ts:tick:2",
       "baseLine": 319,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 19,
         "heldSamples": 19,
@@ -3728,9 +3757,9 @@
       "baseLine": 566,
       "observation": "Catalog/credential discovery may launch Keychain. Snapshot outside; compare catalog revision and credential-file identity; bounded re-read on a competing selection.",
       "before": {
-        "samples": 12,
-        "heldSamples": 12,
-        "heldMedianMs": 170.917,
+        "samples": 13,
+        "heldSamples": 13,
+        "heldMedianMs": 173.91,
         "heldMaxMs": 536.964,
         "outsideSamples": 0,
         "tests": [
@@ -3768,10 +3797,10 @@
       "baseLine": 580,
       "observation": "Nested creation and credential-backed summary. Remove outer lease; creation owns its revalidated commit.",
       "before": {
-        "samples": 2,
-        "heldSamples": 2,
+        "samples": 6,
+        "heldSamples": 6,
         "heldMedianMs": 160.291,
-        "heldMaxMs": 167.416,
+        "heldMaxMs": 186.99,
         "outsideSamples": 0,
         "tests": [
           "src/lib/accounts/accountMutation.bodies.test.ts"
@@ -3782,9 +3811,9 @@
         "src/lib/accounts/codex.ts:createManagedCodexAccount:2"
       ],
       "after": {
-        "samples": 460,
-        "heldSamples": 460,
-        "heldMedianMs": 1.815,
+        "samples": 442,
+        "heldSamples": 442,
+        "heldMedianMs": 1.801,
         "heldMaxMs": 25.4,
         "outsideSamples": 0,
         "tests": [
@@ -3807,19 +3836,21 @@
         ]
       },
       "originalBodyAfter": {
-        "samples": 0,
+        "samples": 4,
         "heldSamples": 0,
         "heldMedianMs": null,
         "heldMaxMs": null,
-        "outsideSamples": 0,
-        "tests": []
+        "outsideSamples": 4,
+        "tests": [
+          "src/lib/accounts/accountMutation.bodies.test.ts"
+        ]
       }
     },
     {
       "id": 85,
       "body": "src/lib/accounts/migration/controller.ts:syncCompatibilityRouting:1",
       "baseLine": 75,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 5,
         "heldSamples": 5,
@@ -3866,10 +3897,10 @@
       "baseLine": 285,
       "observation": "Engine guard acquisition could sleep for five seconds under the shared lock. Guard acquired first, without waiting; only catalog commits use the shared lease.",
       "before": {
-        "samples": 457,
-        "heldSamples": 457,
-        "heldMedianMs": 4.165,
-        "heldMaxMs": 196.732,
+        "samples": 475,
+        "heldSamples": 475,
+        "heldMedianMs": 4.298,
+        "heldMaxMs": 224.533,
         "outsideSamples": 0,
         "tests": [
           "src/app/api/accounts/claude/route.test.ts",
@@ -3916,11 +3947,11 @@
       "id": 87,
       "body": "src/lib/accounts/claude.ts:setActiveClaudeAccount:1",
       "baseLine": 360,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
-        "samples": 22,
-        "heldSamples": 22,
-        "heldMedianMs": 3.392,
+        "samples": 28,
+        "heldSamples": 28,
+        "heldMedianMs": 3.431,
         "heldMaxMs": 10.055,
         "outsideSamples": 0,
         "tests": [
@@ -3935,9 +3966,9 @@
         "src/lib/accounts/claude.ts:setActiveClaudeAccount:1"
       ],
       "after": {
-        "samples": 16,
-        "heldSamples": 16,
-        "heldMedianMs": 2.786,
+        "samples": 12,
+        "heldSamples": 12,
+        "heldMedianMs": 2.666,
         "heldMaxMs": 6.908,
         "outsideSamples": 0,
         "tests": [
@@ -3949,9 +3980,9 @@
         ]
       },
       "originalBodyAfter": {
-        "samples": 16,
-        "heldSamples": 16,
-        "heldMedianMs": 2.786,
+        "samples": 12,
+        "heldSamples": 12,
+        "heldMedianMs": 2.666,
         "heldMaxMs": 6.908,
         "outsideSamples": 0,
         "tests": [
@@ -3969,9 +4000,9 @@
       "baseLine": 511,
       "observation": "Keychain credential discovery and recursive capability copy. Prepare home under engine guard; commit against current catalog.",
       "before": {
-        "samples": 340,
-        "heldSamples": 340,
-        "heldMedianMs": 3.792,
+        "samples": 354,
+        "heldSamples": 354,
+        "heldMedianMs": 3.893,
         "heldMaxMs": 189.274,
         "outsideSamples": 0,
         "tests": [
@@ -3991,9 +4022,9 @@
         "src/lib/accounts/claude.ts:createManagedClaudeAccount:2"
       ],
       "after": {
-        "samples": 296,
-        "heldSamples": 296,
-        "heldMedianMs": 1.787,
+        "samples": 287,
+        "heldSamples": 287,
+        "heldMedianMs": 1.78,
         "heldMaxMs": 6.158,
         "outsideSamples": 0,
         "tests": [
@@ -4010,11 +4041,11 @@
         ]
       },
       "originalBodyAfter": {
-        "samples": 299,
+        "samples": 290,
         "heldSamples": 2,
         "heldMedianMs": 7.458,
         "heldMaxMs": 7.517,
-        "outsideSamples": 297,
+        "outsideSamples": 288,
         "tests": [
           "src/app/api/accounts/claude/route.test.ts",
           "src/lib/accounts/accountMutation.bodies.test.ts",
@@ -4033,7 +4064,7 @@
       "id": 89,
       "body": "src/lib/accounts/claude.ts:updateProviderClaudeAccount:1",
       "baseLine": 547,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 27,
         "heldSamples": 27,
@@ -4077,10 +4108,10 @@
       "baseLine": 690,
       "observation": "Recursive archive scrubbing. Engine guard keeps recovery exclusive; shared lease covers journal/retirement commits.",
       "before": {
-        "samples": 15,
-        "heldSamples": 15,
-        "heldMedianMs": 7.057,
-        "heldMaxMs": 159.035,
+        "samples": 16,
+        "heldSamples": 16,
+        "heldMedianMs": 7.268,
+        "heldMaxMs": 180.294,
         "outsideSamples": 0,
         "tests": [
           "src/lib/accounts/accountMutation.bodies.test.ts",
@@ -4095,9 +4126,9 @@
         "src/lib/accounts/claude.ts:recoverRemovalsLocked:1"
       ],
       "after": {
-        "samples": 230,
-        "heldSamples": 230,
-        "heldMedianMs": 2.766,
+        "samples": 213,
+        "heldSamples": 213,
+        "heldMedianMs": 2.843,
         "heldMaxMs": 28.88,
         "outsideSamples": 0,
         "tests": [
@@ -4113,11 +4144,11 @@
         ]
       },
       "originalBodyAfter": {
-        "samples": 14,
+        "samples": 13,
         "heldSamples": 0,
         "heldMedianMs": null,
         "heldMaxMs": null,
-        "outsideSamples": 14,
+        "outsideSamples": 13,
         "tests": [
           "src/lib/accounts/accountMutation.bodies.test.ts",
           "src/lib/accounts/claude.test.ts",
@@ -4131,10 +4162,10 @@
       "baseLine": 714,
       "observation": "Removal recovery, archive scrubbing and sidecar cleanup. Revalidate account identity, login and liveness before retirement; scrub after commit.",
       "before": {
-        "samples": 40,
-        "heldSamples": 40,
-        "heldMedianMs": 17.964,
-        "heldMaxMs": 196.649,
+        "samples": 42,
+        "heldSamples": 42,
+        "heldMedianMs": 17.997,
+        "heldMaxMs": 224.385,
         "outsideSamples": 0,
         "tests": [
           "src/app/api/accounts/claude/route.test.ts",
@@ -4151,9 +4182,9 @@
         "src/lib/accounts/claude.ts:recoverRemovalsLocked:1"
       ],
       "after": {
-        "samples": 230,
-        "heldSamples": 230,
-        "heldMedianMs": 2.766,
+        "samples": 213,
+        "heldSamples": 213,
+        "heldMedianMs": 2.843,
         "heldMaxMs": 28.88,
         "outsideSamples": 0,
         "tests": [
@@ -4169,11 +4200,11 @@
         ]
       },
       "originalBodyAfter": {
-        "samples": 32,
+        "samples": 30,
         "heldSamples": 0,
         "heldMedianMs": null,
         "heldMaxMs": null,
-        "outsideSamples": 32,
+        "outsideSamples": 30,
         "tests": [
           "src/app/api/accounts/claude/route.test.ts",
           "src/lib/accounts/accountMutation.bodies.test.ts",
@@ -4187,7 +4218,7 @@
       "id": 92,
       "body": "src/lib/accounts/claude.ts:hideLegacyClaudeAccount:1",
       "baseLine": 745,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 6,
         "heldSamples": 6,
@@ -4229,7 +4260,7 @@
       "id": 93,
       "body": "src/lib/accounts/claude.ts:restoreLegacyClaudeAccount:1",
       "baseLine": 760,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 4,
         "heldSamples": 4,
@@ -4273,10 +4304,10 @@
       "baseLine": 788,
       "observation": "Recursive account/history inventory, scrubbing and sidecar cleanup. Scan outside; revalidate retirement against current catalog.",
       "before": {
-        "samples": 25,
-        "heldSamples": 25,
-        "heldMedianMs": 3.417,
-        "heldMaxMs": 189.158,
+        "samples": 26,
+        "heldSamples": 26,
+        "heldMedianMs": 3.504,
+        "heldMaxMs": 203.548,
         "outsideSamples": 0,
         "tests": [
           "src/app/api/accounts/claude/route.test.ts",
@@ -4291,9 +4322,9 @@
         "src/lib/accounts/claude.ts:recoverRemovalsLocked:1"
       ],
       "after": {
-        "samples": 230,
-        "heldSamples": 230,
-        "heldMedianMs": 2.766,
+        "samples": 213,
+        "heldSamples": 213,
+        "heldMedianMs": 2.843,
         "heldMaxMs": 28.88,
         "outsideSamples": 0,
         "tests": [
@@ -4309,11 +4340,11 @@
         ]
       },
       "originalBodyAfter": {
-        "samples": 18,
+        "samples": 17,
         "heldSamples": 0,
         "heldMedianMs": null,
         "heldMaxMs": null,
-        "outsideSamples": 18,
+        "outsideSamples": 17,
         "tests": [
           "src/app/api/accounts/claude/route.test.ts",
           "src/lib/accounts/accountMutation.bodies.test.ts",
@@ -4327,12 +4358,13 @@
       "baseLine": 443,
       "observation": "Async account authorization and registry-writer acquisition. Authorize first; recheck authority, recovery admission and request guards on every writer attempt.",
       "before": {
-        "samples": 30,
-        "heldSamples": 30,
-        "heldMedianMs": 8.285,
+        "samples": 32,
+        "heldSamples": 32,
+        "heldMedianMs": 8.163,
         "heldMaxMs": 100.457,
         "outsideSamples": 0,
         "tests": [
+          "src/lib/delivery.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts",
           "src/lib/runtime/structuredRecovery.test.ts"
         ]
@@ -4341,9 +4373,9 @@
         "src/lib/agent/registry.ts:accountMutationWrite:1"
       ],
       "after": {
-        "samples": 345,
-        "heldSamples": 345,
-        "heldMedianMs": 1.129,
+        "samples": 582,
+        "heldSamples": 582,
+        "heldMedianMs": 0.706,
         "heldMaxMs": 66.073,
         "outsideSamples": 0,
         "tests": [
@@ -4353,8 +4385,11 @@
           "src/lib/accounts/migration/quotaController.test.ts",
           "src/lib/agent/spawnCommand.contention.test.ts",
           "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/flows/engine.test.ts",
           "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts",
           "src/lib/runtime/structuredRecovery.test.ts",
           "src/lib/telegram/bot/reportReplies.test.ts"
@@ -4388,9 +4423,9 @@
         "src/lib/agent/registry.ts:accountMutationWrite:1"
       ],
       "after": {
-        "samples": 345,
-        "heldSamples": 345,
-        "heldMedianMs": 1.129,
+        "samples": 582,
+        "heldSamples": 582,
+        "heldMedianMs": 0.706,
         "heldMaxMs": 66.073,
         "outsideSamples": 0,
         "tests": [
@@ -4400,8 +4435,11 @@
           "src/lib/accounts/migration/quotaController.test.ts",
           "src/lib/agent/spawnCommand.contention.test.ts",
           "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/flows/engine.test.ts",
           "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts",
           "src/lib/runtime/structuredRecovery.test.ts",
           "src/lib/telegram/bot/reportReplies.test.ts"
@@ -4422,14 +4460,16 @@
       "baseLine": 1518,
       "observation": "Image publication/collection plus registry-writer wait. Publish first; reserve after repeating durable payload/admission checks.",
       "before": {
-        "samples": 75,
-        "heldSamples": 75,
+        "samples": 125,
+        "heldSamples": 125,
         "heldMedianMs": 1.515,
-        "heldMaxMs": 7.437,
+        "heldMaxMs": 499.773,
         "outsideSamples": 0,
         "tests": [
           "src/lib/flows/engine.test.ts",
           "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts",
           "src/lib/telegram/bot/reportReplies.test.ts"
         ]
@@ -4438,9 +4478,9 @@
         "src/lib/agent/registry.ts:accountMutationWrite:1"
       ],
       "after": {
-        "samples": 345,
-        "heldSamples": 345,
-        "heldMedianMs": 1.129,
+        "samples": 582,
+        "heldSamples": 582,
+        "heldMedianMs": 0.706,
         "heldMaxMs": 66.073,
         "outsideSamples": 0,
         "tests": [
@@ -4450,8 +4490,11 @@
           "src/lib/accounts/migration/quotaController.test.ts",
           "src/lib/agent/spawnCommand.contention.test.ts",
           "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/flows/engine.test.ts",
           "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts",
           "src/lib/runtime/structuredRecovery.test.ts",
           "src/lib/telegram/bot/reportReplies.test.ts"
@@ -4472,12 +4515,14 @@
       "baseLine": 1519,
       "observation": "Image publication/collection plus registry-writer wait. Publish first; reserve after repeating durable payload/admission checks.",
       "before": {
-        "samples": 17,
-        "heldSamples": 17,
-        "heldMedianMs": 1.837,
+        "samples": 20,
+        "heldSamples": 20,
+        "heldMedianMs": 1.717,
         "heldMaxMs": 199.451,
         "outsideSamples": 0,
         "tests": [
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts"
         ]
       },
@@ -4485,9 +4530,9 @@
         "src/lib/agent/registry.ts:accountMutationWrite:1"
       ],
       "after": {
-        "samples": 345,
-        "heldSamples": 345,
-        "heldMedianMs": 1.129,
+        "samples": 582,
+        "heldSamples": 582,
+        "heldMedianMs": 0.706,
         "heldMaxMs": 66.073,
         "outsideSamples": 0,
         "tests": [
@@ -4497,8 +4542,11 @@
           "src/lib/accounts/migration/quotaController.test.ts",
           "src/lib/agent/spawnCommand.contention.test.ts",
           "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/flows/engine.test.ts",
           "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts",
           "src/lib/runtime/structuredRecovery.test.ts",
           "src/lib/telegram/bot/reportReplies.test.ts"
@@ -4519,12 +4567,14 @@
       "baseLine": 1520,
       "observation": "Image publication/collection plus registry-writer wait. Publish first; reserve after repeating durable payload/admission checks.",
       "before": {
-        "samples": 17,
-        "heldSamples": 17,
-        "heldMedianMs": 1.868,
+        "samples": 20,
+        "heldSamples": 20,
+        "heldMedianMs": 1.747,
         "heldMaxMs": 199.496,
         "outsideSamples": 0,
         "tests": [
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts"
         ]
       },
@@ -4532,9 +4582,9 @@
         "src/lib/agent/registry.ts:accountMutationWrite:1"
       ],
       "after": {
-        "samples": 345,
-        "heldSamples": 345,
-        "heldMedianMs": 1.129,
+        "samples": 582,
+        "heldSamples": 582,
+        "heldMedianMs": 0.706,
         "heldMaxMs": 66.073,
         "outsideSamples": 0,
         "tests": [
@@ -4544,8 +4594,11 @@
           "src/lib/accounts/migration/quotaController.test.ts",
           "src/lib/agent/spawnCommand.contention.test.ts",
           "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/flows/engine.test.ts",
           "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts",
           "src/lib/runtime/structuredRecovery.test.ts",
           "src/lib/telegram/bot/reportReplies.test.ts"
@@ -4564,7 +4617,7 @@
       "id": 100,
       "body": "src/lib/telegram/bot/reportReplies.ts:module:1",
       "baseLine": 67,
-      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "observation": "Fixed state reads or commits; no child process, RPC or recursive scan. Any nested state/registry writer contention now refuses promptly instead of sleeping under the account lease.",
       "before": {
         "samples": 4,
         "heldSamples": 4,
@@ -4621,9 +4674,9 @@
         "src/lib/agent/registry.ts:accountMutationWrite:1"
       ],
       "after": {
-        "samples": 345,
-        "heldSamples": 345,
-        "heldMedianMs": 1.129,
+        "samples": 582,
+        "heldSamples": 582,
+        "heldMedianMs": 0.706,
         "heldMaxMs": 66.073,
         "outsideSamples": 0,
         "tests": [
@@ -4633,8 +4686,11 @@
           "src/lib/accounts/migration/quotaController.test.ts",
           "src/lib/agent/spawnCommand.contention.test.ts",
           "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/delivery.test.ts",
           "src/lib/flows/engine.test.ts",
           "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
           "src/lib/runtime/structuredMessageDelivery.test.ts",
           "src/lib/runtime/structuredRecovery.test.ts",
           "src/lib/telegram/bot/reportReplies.test.ts"
@@ -4652,29 +4708,6 @@
   ],
   "newBodies": [
     {
-      "body": "src/lib/agent/registry.ts:accountMutationWrite:1",
-      "stats": {
-        "samples": 345,
-        "heldSamples": 345,
-        "heldMedianMs": 1.129,
-        "heldMaxMs": 66.073,
-        "outsideSamples": 0,
-        "tests": [
-          "src/app/api/accounts/codex/route.test.ts",
-          "src/lib/accounts/accountMutation.writer.test.ts",
-          "src/lib/accounts/migration/controller.routing.test.ts",
-          "src/lib/accounts/migration/quotaController.test.ts",
-          "src/lib/agent/spawnCommand.contention.test.ts",
-          "src/lib/agent/transcriptHost.test.ts",
-          "src/lib/flows/engine.test.ts",
-          "src/lib/pipelines/engine.test.ts",
-          "src/lib/runtime/structuredMessageDelivery.test.ts",
-          "src/lib/runtime/structuredRecovery.test.ts",
-          "src/lib/telegram/bot/reportReplies.test.ts"
-        ]
-      }
-    },
-    {
       "body": "src/lib/orchestrator/seatCommand.ts:reconcileAuthorityProjections:1",
       "stats": {
         "samples": 166,
@@ -4688,60 +4721,32 @@
       }
     },
     {
-      "body": "src/lib/runtime/structuredMessageDelivery.ts:place:1",
-      "stats": {
-        "samples": 25,
-        "heldSamples": 25,
-        "heldMedianMs": 1.248,
-        "heldMaxMs": 5.82,
-        "outsideSamples": 0,
-        "tests": [
-          "src/lib/flows/engine.test.ts",
-          "src/lib/runtime/structuredMessageDelivery.test.ts"
-        ]
-      }
-    },
-    {
-      "body": "src/lib/runtime/structuredMessageDelivery.ts:admit:1",
-      "stats": {
-        "samples": 94,
-        "heldSamples": 94,
-        "heldMedianMs": 1.462,
-        "heldMaxMs": 7.503,
-        "outsideSamples": 0,
-        "tests": [
-          "src/lib/flows/engine.test.ts",
-          "src/lib/pipelines/engine.test.ts",
-          "src/lib/runtime/structuredMessageDelivery.test.ts",
-          "src/lib/telegram/bot/reportReplies.test.ts"
-        ]
-      }
-    },
-    {
       "body": "src/lib/accounts/accountMutation.ts:afterAccountMutationAdmission:1",
       "stats": {
-        "samples": 53,
-        "heldSamples": 53,
+        "samples": 55,
+        "heldSamples": 55,
         "heldMedianMs": 0.003,
         "heldMaxMs": 0.027,
         "outsideSamples": 0,
         "tests": [
           "src/app/api/accounts/claude/route.test.ts",
-          "src/app/api/accounts/codex/route.test.ts"
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts"
         ]
       }
     },
     {
       "body": "src/lib/accounts/accountMutation.ts:afterAccountMutationAdmission:2",
       "stats": {
-        "samples": 14,
-        "heldSamples": 14,
+        "samples": 16,
+        "heldSamples": 16,
         "heldMedianMs": 0.007,
         "heldMaxMs": 0.049,
         "outsideSamples": 0,
         "tests": [
           "src/app/api/accounts/claude/route.test.ts",
           "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
           "src/lib/accounts/manager.interprocess.test.ts"
         ]
       }
@@ -4749,9 +4754,9 @@
     {
       "body": "src/lib/accounts/removal.ts:removeManagedAccountIntoArchive:1",
       "stats": {
-        "samples": 60,
-        "heldSamples": 60,
-        "heldMedianMs": 9.592,
+        "samples": 55,
+        "heldSamples": 55,
+        "heldMedianMs": 9.915,
         "heldMaxMs": 28.88,
         "outsideSamples": 0,
         "tests": [
@@ -4770,9 +4775,9 @@
     {
       "body": "src/lib/accounts/removal.ts:recoverManagedAccountRemoval:1",
       "stats": {
-        "samples": 40,
-        "heldSamples": 40,
-        "heldMedianMs": 2.146,
+        "samples": 38,
+        "heldSamples": 38,
+        "heldMedianMs": 2.292,
         "heldMaxMs": 12.337,
         "outsideSamples": 0,
         "tests": [
@@ -4789,9 +4794,9 @@
     {
       "body": "src/lib/accounts/claude.ts:createManagedClaudeAccount:2",
       "stats": {
-        "samples": 296,
-        "heldSamples": 296,
-        "heldMedianMs": 1.787,
+        "samples": 287,
+        "heldSamples": 287,
+        "heldMedianMs": 1.78,
         "heldMaxMs": 6.158,
         "outsideSamples": 0,
         "tests": [
@@ -4811,9 +4816,9 @@
     {
       "body": "src/lib/accounts/claude.ts:writeJournal:1",
       "stats": {
-        "samples": 126,
-        "heldSamples": 126,
-        "heldMedianMs": 2.215,
+        "samples": 116,
+        "heldSamples": 116,
+        "heldMedianMs": 2.34,
         "heldMaxMs": 5.869,
         "outsideSamples": 0,
         "tests": [
@@ -4841,9 +4846,9 @@
     {
       "body": "src/lib/accounts/codex.ts:createManagedCodexAccount:2",
       "stats": {
-        "samples": 164,
-        "heldSamples": 164,
-        "heldMedianMs": 1.861,
+        "samples": 155,
+        "heldSamples": 155,
+        "heldMedianMs": 1.843,
         "heldMaxMs": 25.4,
         "outsideSamples": 0,
         "tests": [
@@ -4863,9 +4868,9 @@
     {
       "body": "src/lib/accounts/codex.ts:writeJournal:1",
       "stats": {
-        "samples": 96,
-        "heldSamples": 96,
-        "heldMedianMs": 2.333,
+        "samples": 89,
+        "heldSamples": 89,
+        "heldMedianMs": 2.265,
         "heldMaxMs": 18.637,
         "outsideSamples": 0,
         "tests": [
@@ -4901,6 +4906,48 @@
         "tests": [
           "src/app/api/accounts/claude/route.test.ts",
           "src/lib/accounts/claudeLogin.test.ts"
+        ]
+      }
+    },
+    {
+      "body": "src/lib/agent/registry.ts:accountMutationWrite:1",
+      "stats": {
+        "samples": 582,
+        "heldSamples": 582,
+        "heldMedianMs": 0.706,
+        "heldMaxMs": 66.073,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts",
+          "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/delivery.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "src/lib/runtime/structuredRecovery.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      }
+    },
+    {
+      "body": "src/lib/agent/registry.ts:holdDeliveryOffLoop:1",
+      "stats": {
+        "samples": 230,
+        "heldSamples": 230,
+        "heldMedianMs": 1.168,
+        "heldMaxMs": 13.974,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/delivery.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.accountReseat.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts"
         ]
       }
     }

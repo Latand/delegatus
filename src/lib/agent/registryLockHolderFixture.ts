@@ -132,19 +132,26 @@ export function holdBeforeEachWrite(
 ): { unwrapped: string[]; restore: () => void } {
   type Internals = {
     whenWriterHeld: (correlation: unknown, operation: () => unknown, correlate?: unknown) => Promise<unknown>;
+    accountMutationWrite: (label: string, operation: () => unknown, guard?: () => void, options?: Parameters<AgentRegistry["accountMutationWrite"]>[3]) => Promise<unknown>;
     mutate: (fn: unknown, options?: unknown) => unknown;
   };
   const internals = registry as unknown as Internals;
   const whenWriterHeld = internals.whenWriterHeld;
+  const accountMutationWrite = internals.accountMutationWrite;
   const mutate = internals.mutate;
   const unwrapped: string[] = [];
   let inside = 0;
+  const tracked = (operation: () => unknown) => () => {
+    inside += 1;
+    try { return operation(); } finally { inside -= 1; }
+  };
   internals.whenWriterHeld = async function (this: unknown, correlation, operation, correlate) {
     await holder.hold(holdMs);
-    return whenWriterHeld.call(registry, correlation, () => {
-      inside += 1;
-      try { return operation(); } finally { inside -= 1; }
-    }, correlate);
+    return whenWriterHeld.call(registry, correlation, tracked(operation), correlate);
+  };
+  internals.accountMutationWrite = async function (this: unknown, label, operation, guard, options) {
+    await holder.hold(holdMs);
+    return accountMutationWrite.call(registry, label, tracked(operation), guard, options);
   };
   internals.mutate = function (this: unknown, fn, options) {
     const stack = new Error().stack ?? "";
@@ -157,6 +164,7 @@ export function holdBeforeEachWrite(
     unwrapped,
     restore: () => {
       internals.whenWriterHeld = whenWriterHeld;
+      internals.accountMutationWrite = accountMutationWrite;
       internals.mutate = mutate;
     },
   };

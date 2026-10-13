@@ -1,5 +1,5 @@
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
-import { withWaitCorrelation } from "@/lib/blockingWaits";
+import { recordBlockingWait, withWaitCorrelation, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
 import crypto from "node:crypto";
 import { parseRuntimeIdleKillFence } from "@/lib/runtime/commands";
 import fs from "node:fs";
@@ -19,7 +19,7 @@ import {
   type ProcessIdentity,
 } from "@/lib/processIdentity";
 import { durableSemanticTitle, firstMeaningfulPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
-import { withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { ACCOUNT_MUTATION_ADMISSION_WAIT_MS, withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { accountMutationHeld } from "@/lib/accounts/accountMutationContext";
 import { readRetiredAccountIds, retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -5462,11 +5462,12 @@ export class AgentRegistry {
   deliveryWriteNow<T>(
     correlation: { label: string; operationId?: string | null },
     write: () => T,
+    options: { recordRefusal?: boolean } = {},
   ): { acquired: true; value: T } | { acquired: false } {
     if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") {
       return { acquired: true, value: withWaitCorrelation(correlation, write) };
     }
-    return withWaitCorrelation(correlation, () => this.sqliteStore!.tryWriter(write));
+    return withWaitCorrelation(correlation, () => this.sqliteStore!.tryWriter(write, options));
   }
 
   /** Shared process-local snapshot for projections that never mutate registry
@@ -5793,18 +5794,41 @@ export class AgentRegistry {
 
   /** Acquire each writer without waiting while the other is held. A failed
    * probe runs no mutation; its bounded retry waits outside both leases. */
-  async accountMutationWrite<T>(label: string, write: () => T, guard?: () => void): Promise<{ acquired: true; value: T } | { acquired: false }> {
+  async accountMutationWrite<T>(label: string, write: () => T, guard?: () => void, options: {
+    operationId?: string | null;
+    correlate?: (value: T) => BlockingWaitCorrelation | null;
+    waitMs?: number;
+  } = {}): Promise<{ acquired: true; value: T } | { acquired: false }> {
     const inherited = accountMutationHeld();
-    const deadline = performance.now() + (this.writerDeadlineMs ?? 2_000);
-    for (;;) {
-      const result = await withAccountMutationLockAsync(() => {
-        guard?.();
-        return this.deliveryWriteNow({ label }, write);
-      }, {
-        holder: label, caller: label, waitMs: Math.max(0, deadline - performance.now()),
-      });
-      if (result.acquired || inherited || performance.now() >= deadline) return result;
-      await new Promise<void>(resolve => setTimeout(resolve, 5));
+    const startedAt = performance.now();
+    const deadline = startedAt + (options.waitMs ?? this.writerDeadlineMs ?? 2_000);
+    let waited = false;
+    let refused = false;
+    let acquiredAt: number | undefined;
+    let correlation: BlockingWaitCorrelation = { label, operationId: options.operationId };
+    try {
+      for (;;) {
+        const result = await withAccountMutationLockAsync(() => {
+          guard?.();
+          // Publish one correlated wait after admission supplies its operation
+          // id; individual failed probes are part of this same wait.
+          return this.deliveryWriteNow(correlation, () => { acquiredAt = performance.now(); refused = false; return write(); }, { recordRefusal: false });
+        }, {
+          holder: label, caller: label,
+          waitMs: Math.min(ACCOUNT_MUTATION_ADMISSION_WAIT_MS, Math.max(0, deadline - performance.now())),
+        });
+        if (result.acquired) {
+          correlation = options.correlate?.(result.value) ?? correlation;
+          return result;
+        }
+        refused = true;
+        if (inherited || performance.now() >= deadline) return result;
+        waited = true;
+        await new Promise<void>(resolve => setTimeout(resolve, 5));
+      }
+    } finally {
+      if (waited || refused) recordBlockingWait({ site: "registry-lock-async", synchronous: false,
+        durationMs: (acquiredAt ?? performance.now()) - startedAt, correlation, subject: "agent-registry", refused });
     }
   }
 
@@ -9696,11 +9720,11 @@ export class AgentRegistry {
       and kept for the write, correlated with the operation it admits. Null
       when the lock stayed held past its deadline: nothing was reserved. */
   async holdDeliveryOffLoop(...admission: Parameters<AgentRegistry["holdDelivery"]>): Promise<HeldDelivery | null> {
-    const write = await this.whenWriterHeld(
-      { label: "delivery.admit", operationId: admission[6]?.operationId ?? null },
-      () => this.holdDelivery(...admission),
-      (held) => ({ label: "delivery.admit", operationId: held.command.operationId }),
-    );
+    const write = await this.accountMutationWrite("delivery.admit", () => this.holdDelivery(...admission), undefined, {
+      operationId: admission[6]?.operationId ?? null,
+      correlate: held => ({ label: "delivery.admit", operationId: held.command.operationId }),
+      waitMs: this.writerDeadlineMs ?? 5_000,
+    });
     return write.acquired ? write.value : null;
   }
 
