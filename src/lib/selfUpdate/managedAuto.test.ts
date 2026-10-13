@@ -22,6 +22,107 @@ const OLD = "b".repeat(40);
 const TARGET = "a".repeat(40);
 const revision = (sha: string): Revision => ({ sha, short: sha.slice(0, 7), version: "1", date: "" });
 
+test("automatic waiting admits launches at the ten-minute bound and persists its deferral", async () => {
+  const h = scenario();
+  h.deps.quiet!.controllerBusyReason = async () => "pipeline-controller";
+  let service = h.service();
+  const hold = () => activeDrain(join(h.dir, "auto-drain.json"), h.deps.now());
+  try {
+    await service.autoTick();
+    expect(hold()).not.toBeNull();
+    h.advance(DRAIN_LEASE_MS - 1);
+    expect(hold()).not.toBeNull();
+    h.advance(1);
+    expect(hold()).toBeNull(); // The controller need not tick for admission to reopen.
+    await service.autoTick();
+    expect(h.requests).toHaveLength(0);
+    expect((await service.snapshot()).auto?.deferred).toMatchObject({ reason: "launch-hold-expired" });
+    service.stop(); service = h.service();
+    await service.autoTick();
+    expect(hold()).toBeNull();
+    expect((await service.snapshot()).auto?.deferred).toMatchObject({ reason: "launch-hold-expired" });
+    h.advance(DRAIN_LEASE_MS);
+    await service.autoTick();
+    expect(hold()).not.toBeNull();
+  } finally { service.stop(); }
+});
+
+test("automatic waiting admits an update after two minutes with no new starts on a busy machine", async () => {
+  const h = scenario();
+  h.setTurns(1); h.setStages(1);
+  const service = h.service();
+  try {
+    await service.autoTick();
+    h.advance(2 * 60_000 - 1);
+    await service.autoTick();
+    expect(h.requests).toHaveLength(0);
+    h.advance(1);
+    await service.autoTick();
+    expect(h.requests).toHaveLength(1);
+    expect(h.requests[0]?.revision).toBe(TARGET);
+    expect((await service.snapshot()).auto?.blockers).toBeNull();
+  } finally { service.stop(); }
+});
+
+test.each(["launch", "turn", "operator", "memory", "unreadable", "controller", "checks"] as const)("the busy window still refuses %s", async (change) => {
+  const h = scenario();
+  let starts = "first", turn = "first";
+  h.deps.quiet!.dispatchVersion = () => starts;
+  h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "conversation_busy", host: "hosted", turn: "running", activeTurnId: turn }] }) as never;
+  const service = h.service();
+  try {
+    await service.autoTick(); h.advance(2 * 60_000);
+    if (change === "launch") starts = "second";
+    if (change === "turn") turn = "second";
+    if (change === "operator") h.deps.quiet!.presence = () => [{ viewSessionId: "operator", lastInteractionAt: h.deps.now() }] as never;
+    if (change === "memory") h.deps.quiet!.memoryAvailableMb = () => 1_000;
+    if (change === "unreadable") h.deps.quiet!.runtimeSnapshot = async () => { throw new Error("unreadable fixture"); };
+    if (change === "controller") h.deps.quiet!.controllerBusyReason = async () => "pipeline-controller";
+    if (change === "checks") h.setGreen("red");
+    await service.autoTick(); expect(h.requests).toHaveLength(0);
+    if (change === "launch" || change === "turn") {
+      h.advance(2 * 60_000); await service.autoTick(); expect(h.requests).toHaveLength(1);
+    }
+  } finally { service.stop(); }
+});
+
+test("the busy window survives reconstruction and refuses a late start at final admission", async () => {
+  const h = scenario(); h.setTurns(1);
+  let starts = "first";
+  h.deps.quiet!.dispatchVersion = () => starts;
+  let service = h.service();
+  try {
+    await service.autoTick(); service.stop(); service = h.service();
+    h.advance(2 * 60_000);
+    const green = h.deps.green!;
+    h.deps.green = { read: async (...args: Parameters<NonNullable<ServiceDeps["green"]>["read"]>) => {
+      starts = "second";
+      return green.read(...args);
+    } } as ServiceDeps["green"];
+    service.stop(); service = h.service();
+    await service.autoTick(); expect(h.requests).toHaveLength(0);
+    await service.autoTick(); h.advance(2 * 60_000);
+    await service.autoTick(); expect(h.requests).toHaveLength(1);
+  } finally { service.stop(); }
+});
+
+test("a slow final check cannot admit after the waiting deadline", async () => {
+  const h = scenario(); h.setTurns(1);
+  const green = h.deps.green!;
+  let expire = false;
+  h.deps.green = { read: async (...args: Parameters<NonNullable<ServiceDeps["green"]>["read"]>) => {
+    if (expire) h.advance(DRAIN_LEASE_MS);
+    return green.read(...args);
+  } } as ServiceDeps["green"];
+  const service = h.service();
+  try {
+    await service.autoTick(); h.advance(2 * 60_000); expire = true;
+    await service.autoTick();
+    expect(h.requests).toHaveLength(0);
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
+  } finally { service.stop(); }
+});
+
 function scenario(enabled = true) {
   const dir = mkdtempSync(join(root, "run-"));
   let now = Date.parse("2026-01-01T00:00:00Z");
@@ -301,33 +402,23 @@ test("managed availability permits deployment and explains missing prerequisites
   withoutGithub.stop();
 });
 
-test("a busy managed install holds immediately and retains its cohort through six hours", async () => {
-  const h = scenario();
-  h.setTurns(1);
+test("a deferred busy managed install retains its target and resumes after the cooldown", async () => {
+  const h = scenario(); h.setTurns(1);
   let service = h.service();
   try {
     await service.autoTick();
     const since = (await service.snapshot()).auto!.waitingSince;
-    expect((await service.snapshot()).auto).toMatchObject({ longWait: false, drain: { state: "draining" } });
     const hold = activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())!;
     const next = "c".repeat(40);
     h.deps.check = async () => ({ ok: true, installed: revision(OLD), available: revision(next), relation: "behind", ahead: 0, behind: 2, delta: null });
-    await service.check();
-    await Bun.sleep(0);
-    h.advance(3 * 60 * 60_000);
-    await service.autoTick();
-    expect((await service.snapshot()).auto).toMatchObject({ waitingSince: since, longWait: false, target: { sha: TARGET } });
-    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(hold.id);
-    service.stop();
-    service = h.service();
-    h.advance(3 * 60 * 60_000);
-    await service.autoTick();
-    expect((await service.snapshot()).auto).toMatchObject({ longWait: true, drain: { state: "overran" }, decision: { id: hold.id } });
-    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
-    h.setTurns(0);
-    await service.autoTick();
-    h.advance(60_000);
-    await service.autoTick();
+    await service.check(); await Bun.sleep(0);
+    h.advance(DRAIN_NOTICE_MS); await service.autoTick();
+    expect((await service.snapshot()).auto).toMatchObject({ waitingSince: since, longWait: true, target: { sha: TARGET },
+      deferred: { reason: "launch-hold-expired" }, decision: { id: hold.id } });
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
+    service.stop(); service = h.service(); h.setTurns(0);
+    h.advance(DRAIN_LEASE_MS); await service.autoTick();
+    h.advance(60_000); await service.autoTick();
     expect(h.requests).toHaveLength(1);
     expect(h.requests[0]?.revision).toBe(TARGET);
   } finally { service.stop(); }
@@ -379,8 +470,8 @@ test.each(["enabled", "switch-off"] as const)("cold recovery reconciles a hold p
       expect(readAuto(autoFile).drain).toMatchObject({ id: "orphan-first-hold", target: { sha: TARGET }, since });
       service.stop(); service = h.service(); h.advance(DRAIN_NOTICE_MS); await service.autoTick();
       expect((await service.snapshot()).auto?.decision?.id).toBe("orphan-first-hold");
-      expect(activeDrain(holdFile, h.deps.now())?.id).toBe("orphan-first-hold");
-      expect(h.requests).toHaveLength(0); expect(ticks).toBe(0);
+      expect(activeDrain(holdFile, h.deps.now())).toBeNull();
+      expect(h.requests).toHaveLength(0); expect(ticks).toBe(1);
     }
   } finally { service.stop(); }
 });
@@ -428,7 +519,7 @@ test("disabling during the green read cannot publish a new launch hold", async (
   service.stop();
 });
 
-test.each([false, true])("a red unaccepted drain advances to green main with continuous custody (restart=%s)", async (restart) => {
+test.each([false, true])("a red unaccepted drain advances to green main with bounded custody (restart=%s)", async (restart) => {
   const h = scenario();
   const newer = "c".repeat(40);
   const autoFile = join(h.dir, "auto.json");
@@ -447,14 +538,14 @@ test.each([false, true])("a red unaccepted drain advances to green main with con
     await service.autoTick();
     const original = readAuto(autoFile);
     expect(original.managedPending).toBeNull();
-    h.advance(DRAIN_NOTICE_MS);
+    h.advance(30_000);
     await service.autoTick();
     const cohort = readAuto(autoFile).drain!;
     expectedHold = { id: cohort.id, since: cohort.since };
-    expect(cohort.overranAt).not.toBeNull();
+    expect(cohort.overranAt).toBeNull();
     if (restart) {
       service.stop();
-      h.advance(DRAIN_LEASE_MS + 1);
+      h.advance(1_000);
       service = h.service();
       await service.autoTick();
       expect(held()).toMatchObject({ ...expectedHold, target: TARGET });
@@ -468,7 +559,7 @@ test.each([false, true])("a red unaccepted drain advances to green main with con
     if (restart) {
       unsubscribe();
       service.stop();
-      h.advance(DRAIN_LEASE_MS + 1);
+      h.advance(1_000);
       service = h.service();
     }
     await service.autoTick();
@@ -623,9 +714,9 @@ test("a drain whose journal holds only dead-host and unresolved turns deploys an
   await service.autoTick();
   /* The update holds launches at once, and names the one row it cannot resolve. */
   expect(held()).not.toBeNull();
-  expect(blockers()).toMatchObject({ turns: 1, stages: 0, discounted: 92, unresolved: 1, unresolvedBlocking: 1 });
+  expect(blockers()).toMatchObject({ turns: 0, stages: 0, discounted: 92, unresolved: 1, unresolvedBlocking: 1 });
   expect(launchHoldRefusal(held()!, blockers()).error)
-    .toBe("new launches are held while the automatic update waits for 1 running turn to finish (1 turn has no liveness record and stops counting within 5 minutes)");
+    .toBe("new launches are held while the automatic update waits for liveness evidence for 1 unverified launches (up to 5 minutes); no verified turn is running");
   h.advance(UNRESOLVED_TURN_GRACE_MS - 1);
   await service.autoTick();
   expect(h.requests).toHaveLength(0);
@@ -645,19 +736,17 @@ test("a drain whose journal holds only dead-host and unresolved turns deploys an
   service.stop();
 });
 
-test("a turn that is really running holds the drain for as long as it runs (#2515)", async () => {
+test("a verified running turn counts until the stable busy window admits the update", async () => {
   const h = scenario();
   h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "conversation_work", sessionKey: { engine: "codex" }, cwd: null, host: "hosted", turn: "running" }] }) as never;
-  h.deps.quiet!.owners = owners();
   const service = h.service();
-  for (const wait of [0, UNRESOLVED_TURN_GRACE_MS, 60_000, 3 * 60 * 60_000]) {
-    h.advance(wait);
+  try {
     await service.autoTick();
-    expect(h.requests).toHaveLength(0);
-    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
     expect(readAuto(join(h.dir, "auto.json")).lastBlockers).toMatchObject({ turns: 1, discounted: 0, unresolved: 0 });
-  }
-  service.stop();
+    expect(h.requests).toHaveLength(0);
+    h.advance(2 * 60_000); await service.autoTick();
+    expect(h.requests).toHaveLength(1);
+  } finally { service.stop(); }
 });
 
 test("a fresh red check at the end of the quiet minute vetoes managed deployment", async () => {
@@ -858,6 +947,7 @@ test("an undelivered intent yields to a newer main after fresh admission and a w
   await service.autoTick();
   expect(h.requests).toHaveLength(1);
   h.setTurns(0);
+  h.advance(DRAIN_LEASE_MS);
   await service.autoTick();
   h.advance(59_000);
   await service.autoTick();

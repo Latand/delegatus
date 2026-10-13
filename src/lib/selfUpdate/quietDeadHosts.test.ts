@@ -130,6 +130,35 @@ async function agentActivity(conversationId: string) {
 const row = (fixture: { conversation: { id: string }; artifactPath: string }, host: string, turn = "running") =>
   ({ conversationId: fixture.conversation.id, sessionKey: { engine: "codex" }, cwd: null, artifactPath: fixture.artifactPath, host, turn, activeTurnId: "turn" });
 
+test.each(["dead", "idle", "stalled", "unknown", "ownerless", "live"] as const)("automatic drain counts only verified live turns: %s", async (state) => {
+  const now = Date.now();
+  const fixture = state === "dead" ? ended("open") : hosted(state === "idle" ? "settled" : "open", captureProcessIdentity(process.pid)!);
+  if (state === "stalled" || state === "ownerless") {
+    const at = new Date(now - 11 * 60_000).toISOString();
+    writeFileSync(fixture.artifactPath, readFileSync(fixture.artifactPath, "utf8").trim().split("\n")
+      .map(line => JSON.stringify({ ...JSON.parse(line), timestamp: at })).join("\n") + "\n");
+  }
+  if (state === "ownerless") {
+    const entry = registry.readOnlySnapshot().entries[`codex:${fixture.key.sessionId}`]!;
+    registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, process: null } });
+  }
+  if (state === "stalled") expect(await agentActivity(fixture.conversation.id)).toMatchObject([
+    { lifecycle: "stalled", reason: "host_alive_transcript_silent", host: { state: "alive" } },
+  ]);
+  const sessions = state === "unknown" ? [{ conversationId: "conversation_unknown_auto", host: "hosted", turn: "running" }] : [row(fixture, "hosted")];
+  const conversationId = state === "unknown" ? "conversation_unknown_auto" : fixture.conversation.id;
+  const p = ports(sessions, [{ id: "pipeline_liveness", state: "running", cursor: { stageId: "build", state: "running" },
+    runs: [{ stageId: "build", attempts: [{ n: 1, conversationId }] }] }]);
+  const result = await probeQuiet(snapshot, p, now, true, "live");
+  expect(result.blockers.turns).toBe(state === "live" ? 1 : 0);
+  expect(result.blockers.stages).toBe(state === "live" || state === "unknown" ? 1 : 0);
+  expect(result.quiet).toBe(state !== "unknown" && state !== "live");
+  if (state === "unknown") {
+    expect(result.blockers).toMatchObject({ unresolved: 1, unresolvedBlocking: 1 });
+    expect((await probeQuiet(snapshot, p, now + FIVE_MINUTES, true, "live")).quiet).toBe(true);
+  }
+});
+
 test("a conversation whose host died with its turn open does not block the drain", async () => {
   const dead = ended("open");
   expect(await agentActivity(dead.conversation.id)).toMatchObject([{ lifecycle: "stalled", reason: "host_gone_turn_open", turnState: "busy", host: { state: "gone" } }]);

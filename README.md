@@ -96,10 +96,18 @@ version that names the commit it was packed from; for a version published
 without one (every version up to 1.9.0) it names the version and asks for
 `bunx delegatus-cli@latest`.
 
-**Automatic updates**, off by default, waits for green checks and holds new work
-while the current cohort finishes. The dialog shows the work it awaits and asks
-for a decision when the drain overruns. A failed automatic apply rolls back and
-turns the switch off.
+**Automatic updates**, off by default, waits for green checks and a quiet minute.
+On a busy machine it can apply after two minutes without new starts, using the
+supervised restart that reconnects or resumes running work. Operator activity,
+busy controllers, unreadable evidence, low memory and failing checks still block
+admission. Only verified live turns count; a host silent for ten minutes stops
+blocking. Unverified launches have a separate five-minute grace period.
+
+Waiting holds new launches for at most ten minutes, then admits them for ten
+minutes before retrying. The Update dialog and `auto_updates.deferred` show the
+reason and retry time. Once a deployment is accepted, its custody stays until
+success or observed rollback. A failed automatic apply rolls back and turns the
+switch off.
 
 ## What it does
 

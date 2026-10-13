@@ -41,7 +41,11 @@ export interface AutoState {
   lastBlockers: QuietBlockers | null;
   quietSince: string | null;
   noticeAt: string | null;
-  drain: { id: string; target: Revision; since: string; overranAt: string | null; blockers: QuietBlockers | null; admitted?: boolean; acknowledgedAt?: string; force?: boolean } | null;
+  deferred?: { at: string; until: string; reason: "launch-hold-expired" } | null;
+  drain: { id: string; target: Revision; since: string; overranAt: string | null; blockers: QuietBlockers | null; admitted?: boolean; acknowledgedAt?: string; force?: boolean;
+    holdSince?: string;
+    /** Starts must stay unchanged across the busy-machine window and final admission. */
+    window?: { since: string; version: string; work: string[] } } | null;
   rollback: { target: string | null } | null;
   pending: AutoPending | null;
   /** Written before asking the runtime host; an accepted id fences request
@@ -66,6 +70,7 @@ export interface AutoView {
   decision?: { id: string; at: string; project: string; blockers: QuietBlockers | null } | null;
   changedAt?: string | null;
   changedBy?: AutoWriter | null;
+  deferred?: AutoState["deferred"];
 }
 export function initialAuto(): AutoState {
   return { version: 1, enabled: false, changedAt: null, changedBy: null, off: null, green: {}, waitingSince: null, waitingTarget: null, lastBlockers: null, quietSince: null, noticeAt: null, drain: null, pending: null, managedPending: null, rollbackPointer: null, rollbackCaptured: false, rollback: null };

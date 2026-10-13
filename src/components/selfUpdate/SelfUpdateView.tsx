@@ -414,6 +414,7 @@ function AutoSection({ s, state, actions, t, locale }: { s: Snapshot; state: Vie
   const failed = auto.off?.stage === "build" ? s.update.steps.find((step) => step.state === "failed") : null;
   const offReason = failed ? `${stepName(failed.name, t)}: ${stepFailureText(failed, t) ?? auto.off!.reason}` : auto.off?.reason ?? "";
   const phase = auto.off ? t(s.mode === "managed" ? "selfUpdate.auto.offReasonManaged" : "selfUpdate.auto.offReason", { reason: offReason, sha: auto.target?.short ?? auto.off.target.slice(0, 7) })
+    : auto.enabled && auto.deferred ? t("selfUpdate.auto.deferred", { time: clock(auto.deferred.until, locale) })
     : auto.phase === "waiting" ? t(s.mode === "managed" ? "selfUpdate.auto.waitingManaged" : "selfUpdate.auto.waiting", { sha: auto.target?.short ?? "" })
     : auto.phase === "building" ? t("selfUpdate.auto.building", { sha: auto.target?.short ?? "" })
     : auto.phase === "deploying" ? t("selfUpdate.auto.deploying", { sha: auto.target?.short ?? "" })

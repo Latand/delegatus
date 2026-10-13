@@ -1,6 +1,6 @@
 /* Restart admission is read afresh for each role, including after web swaps. */
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
-import { STARTING_GRACE_MS } from "@/lib/lifecycle/liveness";
+import { DEFAULT_STALL_AFTER_MS, evaluateLiveness, STARTING_GRACE_MS } from "@/lib/lifecycle/liveness";
 import type { OwnerReference, OwnerRole } from "@/lib/lifecycle/owners";
 import type { RuntimeSession, RuntimeSnapshot } from "@/lib/runtime/contracts";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -42,8 +42,9 @@ export interface QuietBlockers {
       recorded process and no proved work, a row that claims a host and records
       no process, and a journal row or stage the registry knows nothing about. */
   unresolved?: number;
-  /** The part of `unresolved` still inside `unresolvedGraceMs`; these are also
-      counted in `turns`, or in `stages` when only a stage names them. */
+  /** The part of `unresolved` still inside `unresolvedGraceMs`. Automatic
+      waiting keeps this separate from verified `turns`; custody readers also
+      include it in `turns`, or in `stages` when only a stage names it. */
   unresolvedBlocking?: number;
   /** How long an unresolved id blocks, counted from the first probe that saw it.
       A settled stage holds for the same time. */
@@ -279,7 +280,7 @@ const emptyCensus: OwnerCensusReading = {
   owners: [], ownerless: [], bound: () => [], names: () => false, tail: async () => null,
 };
 
-export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: number, draining = false): Promise<{ quiet: boolean; blockers: QuietBlockers; work: string[] }> {
+export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: number, draining = false, turnPolicy: "custody" | "live" = "custody"): Promise<{ quiet: boolean; blockers: QuietBlockers; work: string[] }> {
   const busyReason: BusyReason | null = snapshot.busy === "update" ? "update"
     : snapshot.busy === "restart-web" || snapshot.processes.web.state !== "healthy" ? "web"
     : snapshot.busy === "restart-runtime-host" || snapshot.processes.runtimeHost.state !== "healthy" ? "runtime-host" : null;
@@ -341,12 +342,26 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     const launchPastBound = (item: OwnerlessReading): boolean =>
       pastBound(`ownerless:${item.id}:${item.artifactPath ?? ""}`, "unresolved",
         expired(item) ? item.updatedAt : item.tail?.lastRecordAt ?? null, displayId(item));
+    // Automatic waiting uses the same host/turn/silence verdict as activity.
+    // Custody readers still retain every answering owner until settlement.
+    const liveOwner = (owner: OwnerReading): boolean => {
+      if (ownerVerdict(owner).verdict === "released") return false;
+      if (owner.role !== "host") return true;
+      const last = owner.tail?.lastRecordAt;
+      if (last == null || !Number.isFinite(last) || owner.tail?.turn === "unknown") {
+        pastBound(`unverified:${owner.id}`, "unresolved", Number.isFinite(last) ? last! : null, displayId(owner));
+        return false;
+      }
+      return evaluateLiveness({ host: { state: owner.process === "alive" ? "alive" : "gone" },
+        turnState: owner.tail!.turn, silentForMs: Math.max(0, now - last), stallAfterMs: DEFAULT_STALL_AFTER_MS }).lifecycle === "running";
+    };
     /* What a stage reference says, from the set of owners bound to it (R10). */
     const judgeStageOwner = async (owner: StageOwner): Promise<{ verdict: "blocks" | "released" | "pending" | "settled" | "unresolved"; since: number | null }> => {
       const reference = { conversationId: owner.conversationId, artifactPath: owner.artifactPath ?? journalPaths.get(owner.conversationId) ?? null };
       const bound = census.bound(reference);
-      if (bound.some((item) => isOwner(item) && item.process === "alive")) return { verdict: "blocks", since: null };
-      if (bound.some((item) => !isOwner(item) && item.tail?.turn === "busy")) return { verdict: "blocks", since: null };
+      if (bound.some((item) => isOwner(item) && (turnPolicy === "live" ? liveOwner(item) : item.process === "alive"))) return { verdict: "blocks", since: null };
+      if (turnPolicy === "custody" && bound.some((item) => !isOwner(item) && item.tail?.turn === "busy")) return { verdict: "blocks", since: null };
+      if (turnPolicy === "live" && bound.some(isOwner)) return { verdict: "released", since: null };
       // A launch marker has no process of its own: proof that the reviewer
       // the round records is gone releases its stage.
       if (bound.some((item) => isOwner(item) && item.role === "reviewer")) return { verdict: "released", since: null };
@@ -430,6 +445,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     provenTurns.set(ports, proven);
     for (const id of proven.keys()) if (!census.owners.some((owner) => owner.id === id)) proven.delete(id);
     for (const owner of census.owners) {
+      if (turnPolicy === "live" && !liveOwner(owner)) continue;
       const { verdict, reason } = ownerVerdict(owner);
       // Keep the observed reason while evidence is missing. Only the common
       // owner verdict can release it after newer settlement or proven death.
@@ -444,11 +460,12 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       holding.set(owner.id, { item: owner, reason, unresolved: false });
     }
     for (const record of census.ownerless) {
-      if (record.tail?.turn === "busy") {
+      if (turnPolicy === "custody" && record.tail?.turn === "busy") {
         holding.set(record.id, { item: record, reason: "turn-open", unresolved: false });
         continue;
       }
       if (launchPastBound(record)) continue;
+      if (turnPolicy === "live") continue;
       holding.set(record.id, { item: record, reason: "launch-unproven", unresolved: true });
     }
     const seats = ports.seats?.() ?? [];
@@ -482,7 +499,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       if (!bound.length && !census.names(reference)) {
         if (!sessionClaimsOpenTurn(session)) continue;
         const transcript = session.artifactPath ? await census.tail({ artifactPath: session.artifactPath }) : null;
-        if (!pastBound(session.conversationId, "unresolved", transcript?.lastRecordAt ?? null)) {
+        if (!pastBound(session.conversationId, "unresolved", transcript?.lastRecordAt ?? null) && turnPolicy === "custody") {
           group(session.conversationId, session.sessionKey?.engine, session.cwd, "unresolved", true);
         }
         continue;
@@ -499,6 +516,9 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     blockers.unresolvedBlocking = held.size;
     blockers.turns = turns.length;
     work.push(...turns.map((turn) => `turn:${turn.conversationId}`));
+    if (turnPolicy === "live") work.push(...runtime.sessions
+      .filter(session => groups.has(session.conversationId) && session.activeTurnId)
+      .map(session => `start:${session.conversationId}:${session.activeTurnId}`));
     blockers.turnList = turns.slice(0, 20);
     const controller = ports.controllerBusyReason ? await ports.controllerBusyReason()
       : ports.controllerIdle && !await ports.controllerIdle() ? "pipeline-controller" : null;
@@ -508,7 +528,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
   } catch (error) {
     blockers.unreadable = error instanceof Error ? error.message : String(error);
   }
-  return { quiet: !blockers.turns && !blockers.stages && !blockers.operatorActiveAt && !blockers.busy && !blockers.unreadable && blockers.memoryMb === null, blockers, work };
+  return { quiet: !blockers.turns && !blockers.stages && !(turnPolicy === "live" && blockers.unresolvedBlocking) && !blockers.operatorActiveAt && !blockers.busy && !blockers.unreadable && blockers.memoryMb === null, blockers, work };
 }
 
 /**

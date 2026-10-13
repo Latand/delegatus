@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { realExec } from "@/lib/workflows/provision";
 
 import { cancelUntakenRequest, DIALOG_WRITER, readAuto, requestAutoRestart, restorePointer, writeAuto, pruneReleaseWorktrees, type AutoState, type AutoView, type AutoWriter } from "./auto";
-import { activeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS, releaseDrain, writeDrain } from "./drain";
+import { activeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS, DRAIN_START_WINDOW_MS, releaseDrain, writeDrain } from "./drain";
 import { GreenReader, type GreenVerdict } from "./green";
 import { appendHistory, findAutoSwitchRequest, readHistory, storeAutoSwitchResponse } from "./history";
 import { probeQuiet, quietDispatchVersion, type QuietBlockers, type QuietPorts } from "./quiet";
@@ -398,9 +398,10 @@ export class SelfUpdateService {
       : sha && !auto.green[sha] ? "checks" : "idle";
     return { availability: (await this.autoAvailability(decision)), enabled: auto.enabled, off: auto.off, phase, target, green: sha ? auto.green[sha] ?? null : null,
       blockers: phase === "waiting" ? this.autoBlockers ?? auto.lastBlockers : null,
+      deferred: auto.deferred ?? null,
       waitingSince: auto.waitingSince, longWait: auto.enabled && !auto.drain?.admitted && !!auto.waitingSince && this.deps.now() - Date.parse(auto.waitingSince) >= DRAIN_NOTICE_MS,
       decision: auto.enabled && !auto.drain?.admitted && auto.drain?.overranAt && !auto.drain.acknowledgedAt ? { id: auto.drain.id, at: auto.drain.overranAt, project: this.deps.updateProject?.() ?? "Delegatus", blockers: auto.lastBlockers ?? auto.drain.blockers } : null,
-      drain: auto.enabled && auto.waitingSince ? auto.drain
+      drain: auto.enabled && auto.waitingSince && !auto.deferred ? auto.drain
         ? auto.drain.overranAt ? { state: "overran", at: auto.drain.overranAt, ...(auto.drain.acknowledgedAt ? { choice: auto.drain.force ? "deploy-now" as const : "keep-waiting" as const } : {}) }
           : { state: "draining", at: auto.drain.since }
         : null : null,
@@ -410,8 +411,8 @@ export class SelfUpdateService {
   /** Re-read durable facts on every pass. A web restart replaces this object
       between the two restart requests, so no in-memory phase is authoritative. */
   async autoTick(): Promise<void> {
-    // Timer ticks keep admission held even while an earlier GitHub or host
-    // observation waits. Its asynchronous work must not consume the lease.
+    // Renew accepted custody, or expire waiting, even while an earlier
+    // GitHub or host observation awaits. I/O cannot extend the waiting bound.
     try { this.refreshDrain(); }
     catch (error) {
       console.error("[self-update] drain renewal failed", error instanceof Error ? error.name : "unknown");
@@ -610,7 +611,7 @@ export class SelfUpdateService {
         return;
       }
       const finalSnapshot = await this.snapshot();
-      const finalProbe = await probeQuiet(finalSnapshot, quiet, this.deps.now(), this.draining());
+      const finalProbe = await probeQuiet(finalSnapshot, quiet, this.deps.now(), this.draining(), "live");
       this.autoBlockers = finalProbe.blockers;
       if (!this.quietAdmits(finalProbe) || finalSnapshot.installed.sha !== target.sha || existsSync(record.requestFile)) {
         this.auto = { ...this.auto, quietSince: null, lastBlockers: finalProbe.blockers };
@@ -633,7 +634,7 @@ export class SelfUpdateService {
         || admissionDecision.record.launcher.pid !== record.launcher.pid
         || admissionDecision.record.launcher.startIdentity !== record.launcher.startIdentity) return;
       const admissionSnapshot = await this.snapshot();
-      const admissionProbe = await probeQuiet(admissionSnapshot, quiet, this.deps.now(), this.draining());
+      const admissionProbe = await probeQuiet(admissionSnapshot, quiet, this.deps.now(), this.draining(), "live");
       this.autoBlockers = admissionProbe.blockers;
       const recordFile = this.deps.env[LAUNCHER_RECORD_ENV]?.trim();
       const admissionRecord = readLauncherRecord(recordFile || launcherControlFile(record.requestFile, "launcher")) ?? (recordFile ? null : admissionDecision.record);
@@ -706,6 +707,7 @@ export class SelfUpdateService {
 
   private async waitForAutoQuiet(snapshot: Snapshot, target: string, now: number): Promise<boolean> {
     if (!this.auto.enabled && !this.hasAutoCustody()) return false;
+    if (!this.hasAutoCustody() && this.auto.deferred && now < Date.parse(this.auto.deferred.until)) return false;
     const at = new Date(now).toISOString();
     if (!this.auto.waitingSince) {
       this.auto = { ...this.auto, waitingSince: at, waitingTarget: target };
@@ -723,13 +725,23 @@ export class SelfUpdateService {
         const drain = { id: randomUUID(), target: revision, since: at, overranAt: null, blockers: null };
         // Checkpoint ownership before publishing persistent admission. Both
         // writes finish before the next asynchronous observation can launch work.
-        this.auto = { ...this.auto, drain, quietSince: null };
+        this.auto = { ...this.auto, drain, quietSince: null, deferred: null };
         this.saveAuto();
-        writeDrain(this.drainFile, { id: drain.id, target, since: at, until: now + DRAIN_LEASE_MS, persistent: true });
+        this.refreshDrain();
       }
     }
     if (!this.deps.quiet) return false;
-    const probe = await probeQuiet(snapshot, this.deps.quiet, now, this.draining());
+    const hold = this.auto.drain;
+    const version = quietDispatchVersion(this.deps.quiet, now);
+    const probe = await probeQuiet(snapshot, this.deps.quiet, now, this.draining(), "live");
+    if (hold?.id !== this.auto.drain?.id || hold?.holdSince !== this.auto.drain?.holdSince || this.auto.deferred) return false;
+    const stable = version !== null && version === quietDispatchVersion(this.deps.quiet, this.deps.now());
+    const window = this.auto.drain?.window;
+    if (this.auto.drain && (!stable || !window || window.version !== version || probe.work.some(id => !window.work.includes(id)))) {
+      this.auto = { ...this.auto, drain: { ...this.auto.drain,
+        window: stable ? { since: at, version, work: probe.work } : undefined } };
+      this.saveAuto();
+    }
     this.autoBlockers = probe.blockers;
     if (JSON.stringify(this.auto.lastBlockers) !== JSON.stringify(probe.blockers)) {
       this.auto = { ...this.auto, lastBlockers: probe.blockers };
@@ -742,6 +754,7 @@ export class SelfUpdateService {
     }
     this.changes.emit();
     if (this.auto.drain?.force && this.quietAdmits(probe)) return true;
+    if (this.busyWindowAdmits(probe)) return true;
     if (!probe.quiet) {
       if (this.auto.quietSince) { this.auto = { ...this.auto, quietSince: null }; this.saveAuto(); }
       return false;
@@ -880,7 +893,7 @@ export class SelfUpdateService {
     green = await this.refreshGreen(target.sha, repo, green);
     if (green.state !== "green") { this.auto = { ...this.auto, quietSince: null }; this.saveAuto(); return; }
     const finalSnapshot = await this.snapshot();
-    const finalProbe = this.deps.quiet ? await probeQuiet(finalSnapshot, this.deps.quiet, this.deps.now(), this.draining()) : null;
+    const finalProbe = this.deps.quiet ? await probeQuiet(finalSnapshot, this.deps.quiet, this.deps.now(), this.draining(), "live") : null;
     this.autoBlockers = finalProbe?.blockers ?? null;
     if (!this.quietAdmits(finalProbe) || (!this.draining() && finalSnapshot.available?.sha !== target.sha) || finalSnapshot.installed.sha === target.sha
       || this.checking || finalSnapshot.check.state === "checking" || !this.auto.enabled) {
@@ -904,7 +917,7 @@ export class SelfUpdateService {
       // on main. Fetch afresh inside the admission gate, then re-read quiet.
       const reachable = await this.targetOnBranch(repo, target.sha);
       const admissionSnapshot = await this.snapshot();
-      const admissionProbe = this.deps.quiet ? await probeQuiet(admissionSnapshot, this.deps.quiet, this.deps.now(), this.draining()) : null;
+      const admissionProbe = this.deps.quiet ? await probeQuiet(admissionSnapshot, this.deps.quiet, this.deps.now(), this.draining(), "live") : null;
       this.autoBlockers = admissionProbe?.blockers ?? null;
       if (activeRestartGate(gateFile, this.deps.now()) !== gateId || !reachable || green.state !== "green" || !this.quietAdmits(admissionProbe) || !this.auto.enabled || this.checking || this.active()
         || admissionSnapshot.check.state === "checking" || admissionSnapshot.installed.sha === target.sha
@@ -956,7 +969,7 @@ export class SelfUpdateService {
       const green = await this.refreshGreen(apply.target, record.checkout, this.auto.green[apply.target] ?? { state: "unknown" });
       const reachable = await this.targetOnBranch(record.checkout, apply.target);
       const snapshot = await this.snapshot();
-      const quiet = this.deps.quiet ? await probeQuiet({ ...snapshot, busy: null }, this.deps.quiet, this.deps.now(), true) : null;
+      const quiet = this.deps.quiet ? await probeQuiet({ ...snapshot, busy: null }, this.deps.quiet, this.deps.now(), true, "live") : null;
       // An operator's override lets go of the work the admission saw. A turn
       // or a stage that began after the request was filed was never let go.
       const admitted = this.admittedWork?.gateId === gateId ? this.admittedWork.ids : new Set<string>();
@@ -1000,7 +1013,7 @@ export class SelfUpdateService {
     const availability = await this.autoAvailability(decision);
     const current = await this.decide();
     const snapshot = await this.snapshot();
-    const quiet = this.deps.quiet ? await probeQuiet(snapshot, this.deps.quiet, this.deps.now(), this.draining()) : null;
+    const quiet = this.deps.quiet ? await probeQuiet(snapshot, this.deps.quiet, this.deps.now(), this.draining(), "live") : null;
     // Every asynchronous observation precedes the final admission fence. A
     // replacement request or controller activity must never admit this request.
     if (JSON.stringify(this.auto.pending) !== JSON.stringify(pending)) return false;
@@ -1035,9 +1048,26 @@ export class SelfUpdateService {
 
   /** An operator may override running turns; the transaction still needs
       healthy processes, readable evidence and idle state controllers. */
-  private quietAdmits(probe: { quiet: boolean; blockers: QuietBlockers } | null): boolean {
-    return !!probe && (probe.quiet || this.auto.drain?.force === true
+  private quietAdmits(probe: { quiet: boolean; blockers: QuietBlockers; work: string[] } | null): boolean {
+    if (!this.hasAutoCustody() && (!this.auto.drain || this.auto.deferred || this.deps.now() >= Date.parse(this.auto.drain.holdSince ?? this.auto.drain.since) + DRAIN_LEASE_MS)) return false;
+    return !!probe && (probe.quiet || this.busyWindowAdmits(probe) || this.auto.drain?.force === true
       && !probe.blockers.busy && !probe.blockers.unreadable && probe.blockers.memoryMb === null);
+  }
+
+  /** Let a stable cohort cross the existing supervised restart boundary.
+      New starts, active controllers, operator input and unavailable evidence
+      still refuse admission, including on the launcher's final reread. */
+  private busyWindowAdmits(probe: { blockers: QuietBlockers; work: string[] }): boolean {
+    const drain = this.auto.drain;
+    const window = drain?.window;
+    const now = this.deps.now();
+    return !!window && (probe.blockers.turns > 0 || probe.blockers.stages > 0)
+      && (this.hasAutoCustody() || !this.auto.deferred && now < Date.parse(drain!.holdSince ?? drain!.since) + DRAIN_LEASE_MS)
+      && now - Date.parse(window.since) >= DRAIN_START_WINDOW_MS
+      && window.version === quietDispatchVersion(this.deps.quiet, now)
+      && probe.work.every(id => window.work.includes(id))
+      && !probe.blockers.busy && !probe.blockers.unreadable && !probe.blockers.operatorActiveAt
+      && !probe.blockers.unresolvedBlocking && probe.blockers.memoryMb === null;
   }
 
   private get drainFile(): string { return join(this.deps.dir, "auto-drain.json"); }
@@ -1056,7 +1086,7 @@ export class SelfUpdateService {
     };
     // The short gate fences this write. Persist renewable custody before the
     // request can be accepted and outlive that gate or this service instance.
-    this.auto = { ...this.auto, drain: { ...drain, admitted: true } };
+    this.auto = { ...this.auto, drain: { ...drain, admitted: true }, deferred: null };
     this.saveAuto();
     writeDrain(this.drainFile, { id: drain.id, target: target.sha, since: drain.since, until: this.deps.now() + DRAIN_LEASE_MS, persistent: true });
   }
@@ -1078,8 +1108,32 @@ export class SelfUpdateService {
 
   private refreshDrain(): void {
     this.recoverDrainOwner();
-    const drain = this.auto.drain;
-    if ((this.auto.enabled || this.hasAutoCustody()) && drain) writeDrain(this.drainFile, { id: drain.id, target: drain.target.sha, since: drain.since, until: this.deps.now() + DRAIN_LEASE_MS, persistent: true });
+    let drain = this.auto.drain;
+    if (!drain || (!this.auto.enabled && !this.hasAutoCustody())) return;
+    const now = this.deps.now();
+    const custody = this.hasAutoCustody() || !!(this.managed?.trigger === "operator"
+      && Date.parse(this.managed.requestedAt) >= Date.parse(drain.since)
+      && (managedActive(this.managed) || this.managed.phase === "succeeded"));
+    if (!custody && this.auto.deferred) {
+      if (now < Date.parse(this.auto.deferred.until)) return;
+      drain = { ...drain, holdSince: new Date(now).toISOString(), window: undefined };
+      this.auto = { ...this.auto, drain, deferred: null, quietSince: null };
+      this.saveAuto();
+    }
+    const waitingUntil = Date.parse(drain.holdSince ?? drain.since) + DRAIN_LEASE_MS;
+    if (!custody && now >= waitingUntil) {
+      this.auto = { ...this.auto, drain: { ...drain, window: undefined,
+        ...(now - Date.parse(drain.since) >= DRAIN_NOTICE_MS && !drain.overranAt ? { overranAt: new Date(now).toISOString(), blockers: this.auto.lastBlockers } : {}) }, quietSince: null, deferred: {
+        at: new Date(waitingUntil).toISOString(), until: new Date(now + DRAIN_LEASE_MS).toISOString(), reason: "launch-hold-expired",
+      } };
+      this.saveAuto();
+      releaseDrain(this.drainFile, drain.id);
+      this.wakeLaunches();
+      this.changes.emit();
+      return;
+    }
+    writeDrain(this.drainFile, { id: drain.id, target: drain.target.sha, since: drain.since,
+      until: now + DRAIN_LEASE_MS, persistent: true, ...(!custody ? { waitingUntil } : {}) });
   }
 
   private endDrain(): void {
@@ -1087,8 +1141,12 @@ export class SelfUpdateService {
     const drain = this.auto.drain;
     if (!drain) return;
     releaseDrain(this.drainFile, drain.id);
-    this.auto = { ...this.auto, drain: null };
+    this.auto = { ...this.auto, drain: null, deferred: null };
     this.saveAuto();
+    this.wakeLaunches();
+  }
+
+  private wakeLaunches(): void {
     this.deps.requestPipelineTick?.();
     const failed = (error: unknown) => console.error("[self-update] delivery wake after the drain failed", error instanceof Error ? error.name : "unknown");
     try { void Promise.resolve(this.deps.kickDeliveryQueue?.()).catch(failed); } catch (error) { failed(error); }
@@ -1111,13 +1169,15 @@ export class SelfUpdateService {
   }
 
   /** Only the operator route accepts this decision; the drain identity fences
-      an old tab from forcing a newer update. Keep waiting preserves custody. */
+      an old tab from forcing a newer update. Keep waiting retains its cooldown. */
   async decideDrain(id: string, choice: "deploy-now" | "keep-waiting"): Promise<ActionResult> {
     const drain = this.auto.drain;
     if (!this.auto.enabled || !drain || drain.id !== id || !drain.overranAt || drain.acknowledgedAt || drain.admitted) {
       return refuse(409, "auto-switch-superseded", "This automatic update decision is no longer pending");
     }
-    this.auto = { ...this.auto, drain: { ...drain, acknowledgedAt: new Date(this.deps.now()).toISOString(), force: choice === "deploy-now" } };
+    this.auto = { ...this.auto, ...(choice === "deploy-now" ? { deferred: null } : {}),
+      drain: { ...drain, acknowledgedAt: new Date(this.deps.now()).toISOString(), force: choice === "deploy-now",
+        ...(choice === "deploy-now" ? { holdSince: new Date(this.deps.now()).toISOString(), window: undefined } : {}) } };
     this.saveAuto();
     if (choice === "deploy-now") await this.autoTick();
     return { ok: true };
@@ -1716,6 +1776,7 @@ export class SelfUpdateService {
     }
     this.managed = record;
     this.saveManaged();
+    this.refreshDrain();
     this.watchDeployment();
     this.changes.emit();
     return { ok: true };

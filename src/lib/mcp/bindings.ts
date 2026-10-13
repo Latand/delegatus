@@ -4772,6 +4772,7 @@ function autoUpdatesAnswer(snapshot: Record<string, unknown>): McpToolPayload {
       stageList: Array.isArray(auto.blockers.stageList) ? auto.blockers.stageList.slice(0, 20) : [],
     } : null,
     waitingSince: auto.waitingSince ?? null,
+    deferred: auto.deferred ?? null,
     longWait: auto.longWait === true,
     drain: auto.drain ?? null,
     decision: objectRecord(auto.decision) ? { id: auto.decision.id, at: auto.decision.at, project: auto.decision.project } : null,

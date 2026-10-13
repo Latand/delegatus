@@ -161,6 +161,16 @@ const section = (el: HTMLElement, name: string) => el.querySelector<HTMLElement>
 const button = (el: HTMLElement, action: string) => el.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
 
 describe("automatic updates", () => {
+  test.each(["en", "uk"] as const)("the expired hold explains admitted launches and retry time in %s", locale => {
+    setLocale(locale);
+    const s = snapshot();
+    s.auto = { availability: "available", enabled: true, off: null, phase: "waiting", target: NEW_REV,
+      green: { state: "green" }, blockers: null, waitingSince: AT, longWait: false, drain: null,
+      deferred: { at: AT, until: NEXT, reason: "launch-hold-expired" } };
+    const copy = text(section(render(s), "auto"));
+    expect(copy).toContain(locale === "en" ? "New work can start" : "Нову роботу можна запускати");
+    expect(copy).toContain(locale === "en" ? "try again at" : "повторить спробу о");
+  });
   test.each(["en", "uk"] as const)("named draining and overrun states in %s", (locale) => {
     setLocale(locale);
     const s = snapshot();
@@ -169,8 +179,8 @@ describe("automatic updates", () => {
         turnList: [{ conversationId: "conversation_worker", engine: "codex", project: "Example", seat: false, stage: null }],
         stageList: [{ pipelineId: "pipeline_example", stageId: "build", task: "Finish the feature", cursor: "running", conversationId: "conversation_builder" }] },
       waitingSince: AT, longWait: true, drain: { state: "draining", at: AT } };
-    for (const [state, phrase] of [["draining", locale === "en" ? "Draining since" : "Очікуємо завершення від"],
-      ["overran", locale === "en" ? "held the update for 6 h" : "оновлення вже 6 год"]] as const) {
+    for (const [state, phrase] of [["draining", locale === "en" ? "Waiting since" : "Очікуємо від"],
+      ["overran", locale === "en" ? "waited for 6 h" : "Оновлення очікує вже 6 год"]] as const) {
       s.auto.drain = { state, at: AT };
       const copy = text(section(render(s), "auto"));
       expect(copy).toContain(phrase);
