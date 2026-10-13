@@ -265,6 +265,59 @@ test("heartbeat 1 acknowledges the claim before account selection and a held own
   }
 });
 
+test("an early decline stops heartbeats so failed completions reach the retry deadline", async () => {
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  let heartbeatCount = 0, completionCount = 0, acceptCompletion = false, settled = false;
+  const heartbeatWaiters: (() => void)[] = [];
+  const server = await startTestRelay(async req => {
+    if (req.url?.endsWith("/heartbeat")) {
+      heartbeatCount++;
+      heartbeatWaiters.splice(0).forEach(resolve => resolve());
+      return { body: { status: "ok" } };
+    }
+    if (req.url?.endsWith("/complete")) {
+      completionCount++;
+      if (acceptCompletion) return { body: { status: "accepted", duplicate: false } };
+      now += 46_000;
+      await Promise.race([
+        new Promise<void>(resolve => heartbeatWaiters.push(resolve)),
+        Bun.sleep(1200),
+      ]);
+      return { status: 503, body: { error: { code: "unavailable" } } };
+    }
+    return { status: 404 };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  const previousSelection = accountManager.resolveHeadlessSpawn;
+  accountManager.resolveHeadlessSpawn = (() => ({ kind: "exhausted", resetsAt: null })) as typeof previousSelection;
+  const request = { ...sampleRequest, request_id: "early_decline_completion_retry",
+    liveness: { ...sampleRequest.liveness, heartbeat_interval_s: 10, stall_window_s: 120 } };
+  const pending = runClaimedRequest(paired, request).then(outcome => { settled = true; return outcome; });
+  try {
+    const firstResult = await Promise.race([
+      pending.then(outcome => ({ kind: "settled" as const, outcome })),
+      Bun.sleep(2500).then(() => ({ kind: "timeout" as const })),
+    ]);
+    expect(firstResult.kind).toBe("settled");
+    if (firstResult.kind === "settled") {
+      expect(firstResult.outcome).toMatchObject({ outcome: "declined", reason: "no_capacity" });
+    }
+    expect(completionCount).toBeGreaterThan(0);
+    expect(heartbeatCount).toBe(1);
+    expect(readAnswerRecord(paired.id, "target_1", request.request_id)?.delivery).toBe("unconfirmed");
+    expect(readRunLedger().runs.some(run => run.requestId === request.request_id)).toBe(false);
+    expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 1 }]);
+  } finally {
+    acceptCompletion = true;
+    heartbeatWaiters.splice(0).forEach(resolve => resolve());
+    if (!settled) await Promise.race([pending, Bun.sleep(7000)]);
+    accountManager.resolveHeadlessSpawn = previousSelection;
+    clock.mockRestore();
+    await server.close();
+  }
+});
+
 test("heartbeat journal records attempts, step ids and failures without credential or note content", async () => {
   const logs: unknown[][] = [];
   const logger = spyOn(console, "info").mockImplementation((...args) => { logs.push(args); });

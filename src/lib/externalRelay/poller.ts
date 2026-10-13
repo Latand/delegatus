@@ -270,9 +270,17 @@ export function refreshRelayDescriptorFeatures(id: string, minIntervalMs = 0, op
     if (forced?.running) return forced.running;
     if (forced && now - forced.at < DESCRIPTOR_REFRESH_ON_UNKNOWN_FEATURE_MS)
       return Promise.resolve("skipped");
+    const prior = descriptorRefreshes.get(id);
     const entry: TargetRefresh = { at: now, running: null };
     forcedDescriptorRefreshes.set(id, entry);
-    entry.running = refreshRelayDescriptorFeaturesNow(id, options).finally(() => { entry.running = null; });
+    entry.running = (async () => {
+      // The ordinary response may be stale by the time this forced refresh is
+      // requested. Let it commit first, then read the descriptor again so it
+      // cannot overwrite the feature list learned by this refresh.
+      if (prior?.running) await prior.running;
+      entry.at = Date.now();
+      return refreshRelayDescriptorFeaturesNow(id, options);
+    })().finally(() => { entry.running = null; });
     return entry.running;
   }
   const forced = forcedDescriptorRefreshes.get(id);

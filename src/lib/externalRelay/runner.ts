@@ -218,8 +218,12 @@ export async function runClaimedRequest(
   let allowOwnerReply: (() => boolean) | undefined;
   let rounds = 0;
   let loop: ReturnType<typeof createToolLoop> | null = null;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let pendingBeat: Promise<void> | null = null;
   const loopRecord = () => loop ? { rounds, toolCalls: loop.records } : {};
   const finish = async (body: ExternalRelayCompletion, stallMs = 45_000) => {
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    if (pendingBeat) await pendingBeat;
     // Persist the local decision before any delivery wait: a restart must
     // leave the generated answer and early declines inspectable.
     if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
@@ -271,7 +275,6 @@ export async function runClaimedRequest(
   let duplicate = false;
   let run: ReturnType<typeof runEphemeralAgent> | null = null;
   let runFinished = false;
-  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   const callAbort = new AbortController();
   const identityTimers: ReturnType<typeof setTimeout>[] = [];
   let owner: ReturnType<typeof ownerTierFor> = null;
@@ -304,7 +307,6 @@ export async function runClaimedRequest(
     let pendingServiceTools = 0;
     let leaseUnavailable = false;
     let beatBusy = false;
-    let pendingBeat: Promise<void> | null = null;
     let seq = 0;
     let nextBeatAt = 0;
     let acked = false;

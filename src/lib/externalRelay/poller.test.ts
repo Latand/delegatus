@@ -21,6 +21,7 @@ import { noteRelayOutcome, noteRelayProgress } from "./activity";
 import { sampleRequest } from "./request.fixture";
 import { answerRecorder, pruneAnswerRecords, readAnswerRecord, relayAnswersRoot } from "./answers";
 import { setRelaySwitch } from "./switches";
+import { createRelaySteps } from "./progressSteps";
 const root = fs.mkdtempSync(path.join(externalRelayTempRoot(), "relay-poller-test-"));
 process.env.LLV_STATE_DIR = root;
 const runDirs: string[] = [];
@@ -230,6 +231,64 @@ test("F4 requires the local switch and latest descriptor, and refresh removes wi
     expect(current.features).toEqual(features);
     expect(relayClaimCapabilities(current).features).not.toContain("relay_owner_tools");
   } finally { setRelaySwitch("relay:owner_tools:enabled", false); await server.close(); }
+});
+
+test("a forced descriptor refresh preserves newly discovered features after an older read completes", async () => {
+  const previous = readRelayStore().relays;
+  let descriptorReads = 0;
+  let releaseOrdinary!: () => void;
+  let releaseForced!: () => void;
+  let ordinaryStarted!: () => void;
+  let forcedStarted!: () => void;
+  const ordinaryGate = new Promise<void>(resolve => { releaseOrdinary = resolve; });
+  const forcedGate = new Promise<void>(resolve => { releaseForced = resolve; });
+  const ordinarySeen = new Promise<void>(resolve => { ordinaryStarted = resolve; });
+  const forcedSeen = new Promise<void>(resolve => { forcedStarted = resolve; });
+  const server = await startTestRelay(async req => {
+    if (req.url !== "/.well-known/delegatus-relay.json") return { status: 404 };
+    descriptorReads++;
+    if (descriptorReads === 1) {
+      ordinaryStarted();
+      await ordinaryGate;
+      return { body: { protocol: "delegatus-relay", versions: [1], name: "Test", description: "",
+        api_base: `${server.origin}/v1`, kinds: ["answer"], liveness: sampleRequest.liveness,
+        limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, features: [] } };
+    }
+    forcedStarted();
+    await forcedGate;
+    return { body: { protocol: "delegatus-relay", versions: [1], name: "Test", description: "",
+      api_base: `${server.origin}/v1`, kinds: ["answer"], liveness: sampleRequest.liveness,
+      limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 }, features: ["progress_steps"] } };
+  });
+  const relay: PairedRelay = { id: "descriptor_overlap", origin: server.origin, api_base: `${server.origin}/v1`, name: "Test",
+    description: "", credential: "x".repeat(43), owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+    pairedAt: "2026-01-01T00:00:00Z", paused: true, targets: [], features: [],
+    limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 } };
+  try {
+    setRelaySwitch("relay:owner_tools:enabled", false);
+    updateRelayStore(store => ({ ...store, relays: [relay] }));
+    const ordinary = refreshRelayDescriptorFeatures(relay.id);
+    await ordinarySeen;
+    const forced = refreshRelayDescriptorFeatures(relay.id, 0, { force: true });
+    await Bun.sleep(20);
+    expect(descriptorReads).toBe(1);
+    releaseOrdinary();
+    await ordinary;
+    await forcedSeen;
+    releaseForced();
+    await forced;
+
+    const current = readRelayStore().relays[0]!;
+    expect(descriptorReads).toBe(2);
+    expect(current.features).toEqual(["progress_steps"]);
+    expect(createRelaySteps(current.features)).not.toBeNull();
+    expect(relayClaimCapabilities(current).features).not.toContain("relay_owner_tools");
+  } finally {
+    releaseOrdinary();
+    releaseForced();
+    updateRelayStore(store => ({ ...store, relays: previous }));
+    await server.close();
+  }
 });
 
 test("the real claim loop adds F4 after descriptor refresh only while the local switch is ON", async () => {
