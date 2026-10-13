@@ -1,9 +1,9 @@
-# Registry snapshot refresh on current main
+# Registry snapshot refresh: current and historical measurements
 
-Measured on 2026-10-13 from main at
-`8f103d02ec68ecae135c5a60d8bb14430ca207b7`, on the same machine and in the same
-session as the verification below. No timing from the interrupted lane is
-used here.
+Initial measurements were made on 2026-10-13 from main at
+`8f103d02ec68ecae135c5a60d8bb14430ca207b7`. The historical/current pair below
+was measured in a later session that day, with both implementations run on
+this machine during that session. No timing from the interrupted lane is used.
 
 ## What step one found
 
@@ -29,7 +29,139 @@ diagnostic. Medians were 3.2–4.0 ms. Foreign conversation writes re-decided
 3 rows at the median, receipts 2, and entries 1. The all-hot diagnostic
 control below exercises the old breadth using the existing fallback.
 
-## Method
+## Historical/current pair measured in the fix session
+
+The actual historical implementation was measured on this machine on
+2026-10-13, together with the reviewed implementation:
+
+- Historical store and archive: `6ced7a3a5577de0ad325f3d0648911300cc13826`,
+  the parent of #2762's `8f1cfd53081315f07780328c46e0d9c2278a153e`.
+- Reviewed source and common harness: `c5db12d42e5c39e0a935b1addd45b4003f565903`.
+  Its product source is unchanged from this lane's starting main.
+
+Both exports use the same application, normalizer, grant policy, dataset,
+Bun 1.4.0 and default gate limits. The historical export uses the complete
+historical `sqliteRegistryStore.ts` and `registryArchive.ts`. The store's
+original bytes remain intact before seven compatibility exports for the
+common application's newer callers. Those helpers use the historical path
+reader or enumeration; they add no cache or dependency tracking. This keeps
+the historical owner lookup, collection ordering and cold-view paths in the
+measurement. The surrounding application and its newer callers remain at
+the reviewed revision.
+
+Both isolated production builds passed. The final gate pair ran sequentially
+at 05:48–05:54 UTC and the focused refresh pair at 05:54–05:55 UTC, in this
+session. The actual diagnostic processes reported `cpu.max = 60000 20000`
+and `memory.max = 8589934592` (three CPUs, 8 GiB).
+
+[Recorded results and source hashes](../../evidence/registry-refresh/historical-current.json)
+include both implementations, all three gate attempts per implementation,
+their refusals and the historical process report. The
+[reproduction instructions](registry-snapshot-refresh-reproduction.md)
+contain the exact compatibility helpers and measurement harness.
+
+### Refresh timing on an identical database
+
+A single dataset was built with the reviewed factory and closed. Each
+implementation opened its own copy of those exact SQLite bytes: 30,036 rows,
+27,836 cold rows. Both copies have SHA-256
+`64ef533af23fed7caba5f72d0d3c03a1faf31444fea8fc17e5e50f46c171bc11`.
+The independently hashed row keys and hot/cold assignments also match.
+
+Each mode has one warmup round and five measured rounds per row kind. The
+same SQL transaction writes the selected row, revives an archived row when
+needed, runs the production journal triggers and advances the revision.
+The refresh timer starts after commit and ends when `readOnlySnapshot()`
+returns. Deferred row access is checked afterward. Every returned field
+matched its write. This isolates refresh cost; normal mutation APIs remain
+exercised by the full gate. With five samples, p95 equals the maximum, so the
+table reports the median and maximum directly.
+
+| Connection / row | Historical p50 / max ms | Reviewed p50 / max ms | Decisions p50: historical / reviewed |
+| --- | ---: | ---: | ---: |
+| Second connection / conversations | 1298.737 / 1364.694 | 3.945 / 5.57 | 88 / 3 |
+| Second connection / receipts | 1331.019 / 1427.097 | 5.014 / 6.479 | 88 / 2 |
+| Second connection / entries | 119.187 / 137.631 | 3.985 / 5.71 | 1 / 1 |
+| Same connection / conversations | 1513.018 / 1728.676 | 5.73 / 5.87 | 88 / 3 |
+| Same connection / receipts | 1484.609 / 1554.433 | 4.25 / 5.617 | 88 / 2 |
+| Same connection / entries | 130.984 / 166.727 | 4.268 / 4.584 | 1 / 1 |
+
+The reviewed conversation maximum was 12 decisions and its receipt maximum
+was two; the historical conversation and receipt counts were always 88.
+Each entry refresh made one decision in both implementations. These timings
+cover the complete historical refresh path, including the older lookup and
+collection handling. The earlier all-hot ablation remains separately labelled
+below and isolates a narrower change.
+
+The 10 ms diagnostic timer covers writes, refreshes, deferred access and
+warmup. Its measured p95/max lateness was:
+
+| Connection | Historical p95 / max ms | Reviewed p95 / max ms |
+| --- | ---: | ---: |
+| Second | 1370.603 / 1423.355 | 10.283 / 10.605 |
+| Same | 1658.482 / 1736.789 | 10.310 / 12.018 |
+
+### Gate load, including the historical failure
+
+Both gates use the full dataset, two releases, four workers, two writers,
+eight board scopes and the production browser phase. Their workload,
+deadlines and acceptance bounds are unchanged. The common diagnostic harness
+persists new maxima from its existing boot timer, retains that timer on a
+Viewer error and copies existing process reports before cleanup. The
+historical release cannot reach the later phases; its actual failure is part
+of the result.
+
+| Reading | Historical | Reviewed |
+| --- | ---: | ---: |
+| First snapshot, ms | 83445.763 | 339 |
+| Boot event-loop maximum, ms | 83462.273 | 391 |
+| Warm event-loop p95 / max, ms | No sample: startup failed | 6.8 / 294.9 |
+| Browser operating p95 / max, ms | Not reached | 7.9 / 171.5 |
+| Full verdict | Refused: first projection timed out | Refused: projection and browser opening |
+
+The historical snapshot's synchronous 83.4-second span is measured directly.
+Its first projection then exceeded the existing worker deadline and release A
+never became ready. No historical warm-window delay is estimated. The boot
+comparison uses the same timer window on both implementations; the focused
+timer comparison above also contains actual samples from both.
+
+The reviewed warm maximum leaves **205.1 ms (41.0%)** below the 500 ms bound.
+It recorded zero grant mismatches, write failures, SQLite-busy failures and
+runtime-host timeouts. All four workers were re-hosted and answering.
+Its complete-gate refusals were:
+
+- Warm projection build maximum 2184 ms exceeds 2000 ms.
+- Browser-opening server event-loop maximum 1580.7 ms exceeds 1000 ms.
+
+The two preceding reviewed gate runs in this session measured warm p95/max
+8.6/193.2 ms and 7.8/349.7 ms. The first was refused for a 1175.4 ms
+browser-opening delay; the second passed every bound. Across all three,
+the largest warm maximum was 349.7 ms, leaving 150.3 ms of margin. The two
+preceding historical runs also failed before readiness: one timed out in its
+first projection; the other hit the child deadline without a fresh final
+process report and its owned runner reaped a surviving child. The final
+streamed boot report above supplies the missing numerical historical reading.
+
+### Failing-first checks and incomplete preparations
+
+The existing mixed-refresh test file ran first against the historical export:
+all four cases failed. Two observed 73 grant decisions against the limit of
+nine; two observed grants remaining denied after the absent parent returned.
+The reviewed export then passed all four cases with 100 assertions. The
+artifact check verifies distinct source revisions, matching seed/layout
+hashes, five samples per cell, and actual event-loop readings from both.
+
+Preparations are retained in the evidence record. A build under `node_modules`
+failed in webpack's loaders and passed after moving both exports into
+`.artifacts`. The initial historical `mutate()` diagnostic was stopped after
+446 seconds in its first warmup round, before any retained refresh sample;
+its complete mutation path overwhelmed that experiment. Two SQL-probe attempts
+then stopped before refresh timing because Bun's `.run().changes` includes
+trigger writes. A small trigger fixture reproduced that distinction; the
+final probe checks SQLite's `changes()` plus the returned field. None of
+those incomplete attempts contributes a timing sample to the pair.
+
+## Earlier measurement method
 
 Bun 1.4.0, Linux x64, Next.js 16.3.8, a fresh production build, and the
 candidate gate's unchanged full dataset: 30,036 rows, 27,836 cold rows,
@@ -77,10 +209,10 @@ The initial diagnostic overlapped the production build in a separate gate
 service. The repeated diagnostic below is confirmation of the same product
 code; differences between samples are not a speed-up introduced here.
 
-## Repeated diagnostic and all-hot control
+## Earlier ablation: repeated diagnostic and all-hot control
 
-These were measured after the full-run series, in the same session and
-through the same isolated runner. The product implementation is identical
+These were measured after the original full-run series, in that earlier
+session and through the same isolated runner. The product implementation is identical
 before and after the added tests. The control forces the existing all-hot
 fallback on every refresh; all other #2762 optimizations remain active.
 
@@ -129,7 +261,7 @@ The traced full gate was refused for a 2165.9 ms warm projection and a
 1298.5 ms server-loop delay while browser views opened. Those broader costs
 remain outside this branch's refresh verification.
 
-## Five complete gate runs
+## Earlier five complete gate runs
 
 | Run | Warm Viewer p95 / max ms | Browser operating p95 / max ms | Browser opening max ms | Projection max ms | Full verdict |
 | --- | ---: | ---: | ---: | ---: | --- |
