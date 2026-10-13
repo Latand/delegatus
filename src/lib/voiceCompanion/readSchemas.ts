@@ -19,11 +19,12 @@ const cursor = optionalText(3000);
 const project = { ...optionalText(200), description: "Project name or handle; null uses the project currently in view. Ambiguous names are refused." };
 const handle: ToolProperty = { type: "string", minLength: 1, maxLength: 128 };
 const messages = { roles: optionalSet(["user", "assistant"]), since: optionalText(40), cursor, limit };
+const boardQuery = { ...optionalText(120), description: "Text query or whole PR reference (2800, #2800, PR 2800, pull request 2800). PR references match stored associations and linked tasks. Finished work is included unless status or state filters exclude it." };
 export const READ_SCHEMAS: Record<string, Record<string, ToolProperty>> = {
   list_tasks: { project, statuses: optionalSet(["inbox", "assigned", "blocked", "done"]), openOnly: { type: ["boolean", "null"] },
-    query: optionalText(120), ids: optionalSet(), cursor, limit },
+    query: boardQuery, ids: optionalSet(), cursor, limit },
   get_task: { project, taskId: handle },
-  list_pipelines: { project, state: optionalSet(["open", "draft", "provisioning", "running", "paused", "needs_decision", "needs_review", "completed", "closed"]), includeClosed: { type: ["boolean", "null"], description: "Set true to include closed history, including when state contains closed." }, ids: optionalSet(), query: optionalText(120), cursor, limit },
+  list_pipelines: { project, state: optionalSet(["open", "draft", "provisioning", "running", "paused", "needs_decision", "needs_review", "completed", "closed"]), includeClosed: { type: ["boolean", "null"], description: "Set true to include closed history, including when state contains closed." }, ids: optionalSet(), query: boardQuery, cursor, limit },
   get_pipeline: { project, pipelineId: handle, stageId: optionalText(128) },
   agent_fleet: { project, detail: { type: ["boolean", "null"] }, conversationId: optionalText(128), pipelineId: optionalText(128),
     engine: { type: ["string", "null"], enum: ["claude", "codex", "copilot", null] }, model: optionalText(128), effort: optionalText(128), account: optionalText(128),

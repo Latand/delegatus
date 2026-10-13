@@ -4078,7 +4078,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Compact by default; false restores the previous board-card projection. Each row is id, task (first line), state, cursor, stateDetail and per stage {id, latestAttempt: {n, state, verdict}}."),
     cursor: z.unknown().optional().describe("Pass nextCursor unchanged with the same filters and a fresh clientRequestId. Invalid cursors restart with cursorReset:true."),
     ids: z.unknown().optional().describe("Only these durable ids (array or comma-separated string). Unknown ids match no records."),
-    query: z.string().optional().describe("Case-insensitive substring in task text/title."),
+    query: z.string().optional().describe("Case-insensitive text query, or whole PR reference (2800, #2800, PR 2800, pull request 2800). PR references match stored links and linked pipelines on tasks. A designated seat reads only its own project; omission uses its designation."),
     updatedSince: z.unknown().optional().describe("Inclusive ISO timestamp. Invalid timestamps are ignored. Tasks use updatedAt; pipelines use createdAt."),
   }).passthrough(),
   conversation_action: z.object({
@@ -4146,7 +4146,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     limit: boundedNumericInput("list_tasks", "limit"),
     cursor: z.unknown().optional().describe("Pass nextCursor unchanged with the same filters and a fresh clientRequestId. Invalid cursors restart with cursorReset:true."),
     ids: z.unknown().optional().describe("Only these durable ids (array or comma-separated string). Unknown ids match no records."),
-    query: z.string().optional().describe("Case-insensitive substring in task text/title."),
+    query: z.string().optional().describe("Case-insensitive text query, or whole PR reference (2800, #2800, PR 2800, pull request 2800). PR references match stored links and linked pipelines on tasks. A designated seat reads only its own project; omission uses its designation."),
     updatedSince: z.unknown().optional().describe("Inclusive ISO timestamp. Invalid timestamps are ignored. Tasks use updatedAt; pipelines use createdAt."),
   }).passthrough(),
   get_task: z.object({
