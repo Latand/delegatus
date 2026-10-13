@@ -211,6 +211,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The refusal subjects are synthetic; they need no Viewer build.
+          # Keep both verdicts before accepting the rest of the runtime job.
+          bun scripts/verify-bun-runtime-controls.ts > "$RUNNER_TEMP/red-controls.log" 2>&1 &
+          controls_pid=$!
+          trap 'if kill -0 "$controls_pid" 2>/dev/null; then kill "$controls_pid"; fi; wait "$controls_pid"' EXIT
           held=(
             scripts/bun-runtime-workflow.test.ts
             scripts/verify-viewer-runtime.test.ts
@@ -234,6 +239,12 @@ jobs:
             echo "the run did not cover all ${#held[@]} files that hold these verdicts" >&2
             exit 1
           fi
+          if ! wait "$controls_pid"; then
+            cat "$RUNNER_TEMP/red-controls.log"
+            exit 1
+          fi
+          trap - EXIT
+          cat "$RUNNER_TEMP/red-controls.log"
 
       # The same environment the image's build stage sets. NODE_ENV belongs to
       # the build and not to the install above, which needs the dev
@@ -271,11 +282,6 @@ jobs:
       # took exits non-zero here.
       - name: Rehearse the runtime host under the pinned Bun
         run: bun scripts/verify-runtime-host.ts
-
-      # Shared with local pre-push; every failure subject lives in a private
-      # temporary tree, including the unloadable Next runtime module.
-      - name: Prove each check goes red when its subject does not hold
-        run: bun scripts/verify-bun-runtime-controls.ts
 
   runtime-gate:
     needs: [bun-runtime, native-codex-runtime]
