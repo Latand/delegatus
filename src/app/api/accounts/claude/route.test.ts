@@ -714,3 +714,107 @@ test("a live agent on Main refuses its removal and the answer names the conversa
   });
   expect(listClaudeAccounts().map((account) => account.id)).toContain("default");
 });
+
+test("a Main retry accepted between removal preparation and commit blocks deletion across processes", async () => {
+  const { BINDINGS_SOURCE, writeAccountSource } = await import("@/lib/accounts/accountsStore");
+  const { accountProjectBindings } = await import("@/lib/accounts/projectBindings");
+  const { withAccountMutationLock } = await import("@/lib/accounts/accountMutation");
+  const peer = createManagedClaudeAccount("Main fallback");
+  agentRegistry().setEngineRouting("claude", "default");
+  withAccountMutationLock(() => writeAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [
+    { engine: "claude", accountId: "default", project: "fixture-project", createdAt: new Date(0).toISOString() },
+    { engine: "claude", accountId: peer.id, project: "fixture-project", createdAt: new Date(0).toISOString() },
+  ] }));
+  const routing = agentRegistry().engineRouting("claude");
+  const bindings = accountProjectBindings();
+  const marker = path.join(sandbox, `continue-removal-${crypto.randomUUID()}`);
+  const script = `
+    import fs from "node:fs";
+    import { EventEmitter } from "node:events";
+    import { spyOn } from "bun:test";
+    import { NextRequest } from "next/server";
+    import * as accounts from "./src/lib/accounts/claude";
+    import { accountMutationHeld } from "./src/lib/accounts/accountMutationContext";
+    import { ClaudeLoginSupervisor, setClaudeLoginSupervisorForTests } from "./src/lib/accounts/claudeLogin";
+    import { DELETE, POST } from "./src/app/api/accounts/claude/route";
+    const emit = body => process.stdout.write("fixture:" + JSON.stringify(body) + "\\n");
+    const child = new EventEmitter();
+    Object.assign(child, { pid: process.pid, stdout: new EventEmitter(), stderr: new EventEmitter(), stdin: { write: () => true, end() {} } });
+    const supervisor = new ClaudeLoginSupervisor({
+      spawn: () => child, kill() {}, pidStartToken: () => "fixture-start", isExpectedClaude: () => true,
+      waitForExit: async () => true, observeSignedIn: async () => {},
+      status: async () => ({ loggedIn: false, method: null, email: null, plan: null }),
+      now: Date.now,
+      setTimeout: () => ({}), clearTimeout() {},
+    });
+    setClaudeLoginSupervisorForTests(supervisor);
+    const removing = process.argv[1] === "delete";
+    if (removing) {
+      const hide = accounts.hideLegacyClaudeAccount;
+      spyOn(accounts, "hideLegacyClaudeAccount").mockImplementation(() => {
+        emit({ paused: true, held: accountMutationHeld() });
+        const deadline = performance.now() + 5000;
+        while (!fs.existsSync(process.argv[2])) {
+          if (performance.now() >= deadline) throw new Error("removal barrier timed out");
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+        }
+        return hide();
+      });
+    }
+    const method = removing ? "DELETE" : "POST";
+    const response = await (removing ? DELETE : POST)(new NextRequest("http://127.0.0.1/api/accounts/claude", {
+      method, headers: { host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify(removing ? { id: "default" } : { action: "retry", id: "default" }),
+    }));
+    emit({ status: response.status, body: await response.json() });
+    if (!removing) await Bun.stdin.text();
+  `;
+  function launch(role: string) {
+    const child = Bun.spawn([process.execPath, "-e", script, role, marker], { cwd: process.cwd(), env: process.env, stdin: "pipe", stdout: "pipe", stderr: "inherit" });
+    const reader = child.stdout.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    async function next() {
+      for (;;) {
+        const end = buffer.indexOf("\n");
+        if (end >= 0) {
+          const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
+          if (line.startsWith("fixture:")) return JSON.parse(line.slice(8));
+          continue;
+        }
+        const { value, done } = await reader.read();
+        if (done) throw new Error(`route child ended before ${role} evidence`);
+        buffer += decoder.decode(value);
+      }
+    }
+    return { child, async next() {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try { return await Promise.race([next(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${role} evidence timed out`)), 6000); })]); }
+      finally { clearTimeout(timer); }
+    } };
+  }
+  const deleting = launch("delete");
+  let retrying: ReturnType<typeof launch> | undefined;
+  try {
+    expect(await deleting.next()).toEqual({ paused: true, held: false });
+    retrying = launch("retry");
+    expect(await retrying.next()).toMatchObject({ status: 202, body: { login: { phase: "awaiting_browser" } } });
+    fs.writeFileSync(marker, "continue");
+    const answer = await deleting.next();
+    expect(answer).toMatchObject({ status: 409, body: { code: "account_removal_blocked", blockers: ["login_pending"] } });
+    expect(persistedAccountRegistry("claude").legacyHidden).toBeUndefined();
+    expect(listClaudeAccounts().map(account => account.id)).toContain("default");
+    expect(agentRegistry().engineRouting("claude")).toEqual(routing);
+    expect(accountProjectBindings()).toEqual(bindings);
+    const { claudeLoginSupervisor } = await import("@/lib/accounts/claudeLogin");
+    expect(claudeLoginSupervisor.forAccount("default")?.phase).toBe("awaiting_browser");
+  } finally {
+    fs.writeFileSync(marker, "continue");
+    for (const run of [deleting, retrying]) if (run) {
+      run.child.stdin.end();
+      run.child.kill();
+      await run.child.exited;
+    }
+    fs.rmSync(marker, { force: true });
+  }
+}, 15000);

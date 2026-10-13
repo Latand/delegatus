@@ -9,7 +9,7 @@ import { CLAUDE_ACCOUNTS_SOURCE, CLAUDE_LOGIN_SOURCE, readAccountSource, writeAc
 import { claudeCredentialFileState, readClaudeCredentials, type ClaudeCredentialRead } from "./claudeCredentials";
 import { AccountMutationBusyError, withAccountMutationLock } from "./accountMutation";
 import { providerSecretsAtHome, retainProviderRedactionSecrets } from "./providerSecretRedaction";
-import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, cleanupAccountProviderSidecars, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retireAccountInPlace, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
+import { AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, cleanupAccountProviderSidecars, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retireAccountInPlace, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
 import type { AccountPathRewrite, AccountRetirementReport } from "@/lib/agent/registry";
 
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -767,6 +767,12 @@ export function hideLegacyClaudeAccount(): AccountRetirementReport {
   return withRegistryLock(() => {
     const registry = mutable();
     if (registry.legacyHidden) throw new UnknownClaudeAccountError(DEFAULT_ID);
+    // Re-read durable sign-in under the commit lease: a retry may have won
+    // since the route prepared its blockers. No supervisor or child work runs.
+    const login = readAccountSource(CLAUDE_LOGIN_SOURCE);
+    if (login.kind === "gap") throw new Error("Claude sign-in state is unavailable");
+    if (login.kind === "collection" && Array.isArray(login.body) && login.body.some(item => item?.accountId === DEFAULT_ID && ["starting", "awaiting_browser", "awaiting_code", "verifying", "canceling"].includes(item.phase)))
+      throw new AccountRemovalBlockedError(["login_pending"]);
     const fallback = fallbackAccountId(registry, DEFAULT_ID);
     return retireAccountInPlace({
       engine: "claude",

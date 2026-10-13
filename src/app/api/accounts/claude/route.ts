@@ -216,7 +216,7 @@ export async function DELETE(req: NextRequest) {
         return NextResponse.json({ ...removalResponse(account.id, removal), ...bindingsCleared });
       } catch (error) {
         if (error instanceof AccountRemovalBlockedError) {
-          return NextResponse.json({ error: "Claude account has active sessions or conversations", code: "account_removal_blocked", blockers: error.blockers, ...accountRemovalLiveWork("claude", account.id) }, { status: 409 });
+          return NextResponse.json({ error: "Claude account has active sessions, conversations, or sign-in", code: "account_removal_blocked", blockers: error.blockers, ...accountRemovalLiveWork("claude", account.id) }, { status: 409 });
         }
         if (error instanceof AccountArchiveUnavailableError) {
           return NextResponse.json({ error: error.message, code: "archive_unavailable", archive: error.archive }, { status: 409 });

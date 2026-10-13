@@ -35,6 +35,22 @@ account admission. The complete 101-body inventory, before/after timings and
 stimulus paths are recorded in
 [`evidence/account-mutation-lock/bodies.json`](../../evidence/account-mutation-lock/bodies.json).
 
+Review corrections on 2026-10-13 extend the writer probe to the JSON lock in
+`off` and `dual-write` modes. Admission acquires that writer before calling a
+mutation, lends the claim to its synchronous writes, and releases it before
+any bounded retry delay. Guard changes and deadline exhaustion run no mutation;
+an exception after a write propagates without replaying the callback.
+`accountMutation.writer.test.ts` reproduces six spawn/resume/send failures on
+the reviewed head and passes those cases after the correction. Its isolated
+contention fixtures measured account lease holds below 16 ms after the fix.
+
+Claude Main removal also rereads durable login rows inside its short commit
+lease before retiring routing or hiding Main. In the separate-process regression
+in `src/app/api/accounts/claude/route.test.ts`, DELETE pauses after its initial
+blocker read while POST accepts a retry. DELETE then returns 409 with
+`login_pending`, Main stays visible, and routing and project bindings retain
+their prior values. The preparation barrier holds no account lease.
+
 | Caller | File:line | Foreign holder | Why | Local holder or local waiter |
 | --- | --- | --- | --- | --- |
 | `runIdentityWaveMigrationAtStartup` | `src/lib/agent/identityWaveStartup.ts:196` | 25 ms wait | Boot needs a completed migration result; rerunning the outer startup later remains idempotent. | The Viewer startup wrapper (`src/lib/viewerInstrumentation.ts:573`) yields and retries up to three total attempts, with 5 s and 10 s pauses by default. Exhaustion logs diagnostics and leaves the migration for a later startup. The direct synchronous API raises safe AccountMutationBusyError. |

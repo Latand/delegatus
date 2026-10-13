@@ -4510,6 +4510,8 @@ export class AgentRegistry {
   private readonly writerDeadlineMs: number | undefined;
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   private readonly sqliteStore: SqliteAgentRegistryStore | null;
+  /** Synchronous writer admission lends its JSON claim to the mutation. */
+  private admittedJsonWriter: RegistryLockClaim | null = null;
   private readonly beforeDualWriteMutationReplace: (() => void) | undefined;
   private readOnlyCache: { signature: string; snapshot: RegistryFile } | null = null;
   private readonly mirrorCheckpointMs: number;
@@ -5338,7 +5340,8 @@ export class AgentRegistry {
       return mutation.result;
     }
     const lock = `${this.filename}.write-lock`;
-    const claim = this.acquireLock(lock, captureProcessIdentity(process.pid));
+    const admitted = this.admittedJsonWriter;
+    const claim = admitted ?? this.acquireLock(lock, captureProcessIdentity(process.pid));
     try {
       const sqlite = this.sqliteMode === "dual-write" ? this.sqliteStore!.snapshot() : null;
       const original = readFileWithPayload(this.filename, this.mcpGrantPolicy);
@@ -5389,7 +5392,7 @@ export class AgentRegistry {
       }
       return result;
     } finally {
-      this.releaseLock(claim);
+      if (!admitted) this.releaseLock(claim);
     }
   }
 
@@ -5465,7 +5468,18 @@ export class AgentRegistry {
     options: { recordRefusal?: boolean } = {},
   ): { acquired: true; value: T } | { acquired: false } {
     if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") {
-      return { acquired: true, value: withWaitCorrelation(correlation, write) };
+      if (this.admittedJsonWriter) return { acquired: true, value: withWaitCorrelation(correlation, write) };
+      const lock = `${this.filename}.write-lock`;
+      fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+      const claim = this.tryAcquireLock(lock, captureProcessIdentity(process.pid));
+      if (!claim) {
+        if (options.recordRefusal !== false) recordBlockingWait({ site: "registry-lock-async", synchronous: false,
+          durationMs: 0, correlation, subject: "agent-registry", refused: true });
+        return { acquired: false };
+      }
+      this.admittedJsonWriter = claim;
+      try { return { acquired: true, value: withWaitCorrelation(correlation, write) }; }
+      finally { this.admittedJsonWriter = null; this.releaseLock(claim); }
     }
     return withWaitCorrelation(correlation, () => this.sqliteStore!.tryWriter(write, options));
   }

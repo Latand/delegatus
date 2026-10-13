@@ -9,7 +9,7 @@ import type { AgentEngine } from "@/lib/agent/cli";
 import { agentRegistry, RegistryWriterBusyError, type AccountPathRewrite, type AccountRetirementReport } from "@/lib/agent/registry";
 
 export type { ManagedAccountEngine };
-export type AccountRemovalBlocker = "live_sessions" | "queued_pin" | "current_conversations";
+export type AccountRemovalBlocker = "live_sessions" | "queued_pin" | "current_conversations" | "login_pending";
 
 export type AccountInventoryArtifact =
   | { path: string; classification: "owned"; history: boolean }
