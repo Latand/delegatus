@@ -447,19 +447,21 @@ export function ownerCensusReader(
         if (!alive && owner.entryKey) for (const identity of owner.identities) gone.push({ key: owner.entryKey, identity });
         if (alive && owner.role === "host") {
           let handle: "busy" | "idle" | null = null;
+          const claims = new Map<string, number | null>();
           if (owner.structuredHost && owner.entryKey && held.has(owner.entryKey)) {
             const state = await health(owner.entryKey);
             if (state && state.pid === owner.pid && state.processStartIdentity !== null
               && owner.identities.some((identity) => identity.pid === state.pid && identity.startIdentity !== null
                 && identity.startIdentity === state.processStartIdentity)) {
               handle = handleTurn(state);
+              if (handle === "busy") claims.set(state.activeTurnRef ?? "handle", null);
               spoken.add(owner.entryKey);
             }
           }
           reading.handle = handle;
           reading.rowReference = !!owner.entry && !owner.entry.host && !!owner.entry.structuredHost?.activeTurnRef && owner.structuredHost;
+          if (reading.rowReference) claims.set(owner.entry!.structuredHost!.activeTurnRef!, null);
           reading.tail = await tail(owner.artifactPath, owner.engine);
-          reading.workProcesses = reading.tail && reading.tail.turn !== "idle" ? workProcesses(owner.pid) : [];
           if (owner.writerEpoch !== null) {
             const rows = await rowsFor(owner);
             const history = await events();
@@ -491,18 +493,39 @@ export function ownerCensusReader(
                 // Engine cursors cannot cover native admission order. The
                 // journal retains these obligations until their own terminal,
                 // even when both their start and display receipt are pruned.
-                if (current.nativeTurnClaims?.some((claim) => rowKeyId(claim.sessionKey) === owner.entryKey
-                  && (claim.writerClaim === null || fenceEpoch(claim.writerClaim) === owner.writerEpoch))) {
+                const native = current.nativeTurnClaims?.filter((claim) => rowKeyId(claim.sessionKey) === owner.entryKey
+                  && (claim.writerClaim === null || fenceEpoch(claim.writerClaim) === owner.writerEpoch));
+                if (native?.length) {
+                  for (const claim of native) claims.set(claim.turnId ?? `native:${current.conversationId}:${claim.revision}`, null);
                   reading.journal = "claimed";
                   break;
                 }
               }
+            }
+            if (reading.journal === "claimed") {
+              for (const row of rows) {
+                const mark = row.writerStatus;
+                if (mark && rowKeyId(mark.sessionKey) === owner.entryKey && fenceEpoch(mark.writerClaim) === owner.writerEpoch
+                  && sessionClaimsOpenTurn(mark)) claims.set(mark.activeTurnId ?? `journal:${row.conversationId}`, null);
+                for (const claim of row.nativeTurnClaims ?? []) if (rowKeyId(claim.sessionKey) === owner.entryKey
+                  && (claim.writerClaim === null || fenceEpoch(claim.writerClaim) === owner.writerEpoch)) {
+                  claims.set(claim.turnId ?? `native:${row.conversationId}:${claim.revision}`, null);
+                }
+              }
+              if (!claims.size) claims.set("journal", null);
+            }
+            for (const event of history.events) if (event.kind === "turn-started" && event.scope.type === "session"
+              && ownConversationIds.has(event.scope.id) && typeof event.payload.turnId === "string" && claims.has(event.payload.turnId)) {
+              const at = Date.parse(event.occurredAt);
+              if (Number.isFinite(at)) claims.set(event.payload.turnId, Math.min(claims.get(event.payload.turnId) ?? at, at));
             }
           } else if (owner.entry && ["starting", "live", "handoff"].includes(owner.entry.status)) {
             // Another prompt can be accepted without changing updatedAt or
             // the tail. Only this owner's idle state or death ends ambiguity.
             reading.standaloneClaim = true;
           }
+          reading.turnClaims = [...claims].map(([id, acceptedAt]) => ({ id, acceptedAt }));
+          reading.workProcesses = claims.size || reading.tail?.turn !== "idle" ? workProcesses(owner.pid) : [];
         }
         owners.push(reading);
       });
@@ -528,6 +551,7 @@ export function ownerCensusReader(
         owners.push({ id: `handle:${key}:${state.pid ?? ""}`, binding, artifactPath: entry?.artifactPath ?? null, entryKey: key,
           launchId: null, engine: entry?.key.engine ?? null, cwd: entry?.cwd ?? null,
           role: "host", process: "alive", handle: turn, rowReference: false, journal: null,
+          turnClaims: turn === "busy" ? [{ id: state.activeTurnRef ?? "handle", acceptedAt: null }] : [],
           workProcesses: state.pid === null || turn !== "busy" ? [] : workProcesses(state.pid),
           tail: await tail(entry?.artifactPath ?? null, entry?.key.engine) });
       });
@@ -618,6 +642,13 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
     kickDeliveryQueue: kickStructuredDeliveryQueue,
     updateProject: () => viewerOwnProjectKeys()[0] ?? "Delegatus",
     quiet: {
+      admissionStarts: () => {
+        const [records, receipts] = registryAdmissionEvidence(agentRegistry().readOnlySnapshot());
+        return [...records[0].flatMap(([id, epoch, pending]) => [JSON.stringify(["entry", id, epoch]),
+          ...(pending == null ? [] : [JSON.stringify(["pending", id, pending])])]),
+          ...receipts.flatMap(([id, conversation, , path, admission, host, pane]) => [JSON.stringify(["receipt", id, conversation, path]),
+            ...[admission, host, pane].flatMap((owner, index) => owner == null ? [] : [JSON.stringify(["receipt-owner", id, index, owner])])])];
+      },
       // Admitted work by identity. The journal is left out on purpose: every
       // event of a turn already running moves it, so it cannot fence new work.
       dispatchVersion: () => createHash("sha256")

@@ -68,6 +68,34 @@ test("automatic waiting protects busy turns until the cohort finishes", async ()
   } finally { service.stop(); }
 });
 
+test.each((["pipeline", "flow"] as const).flatMap(kind => [2 * 60_000, DRAIN_LEASE_MS - 30_000].flatMap(elapsed =>
+  (["completed", "removed"] as const).map(ending => ({ kind, elapsed, ending })))))(
+"a $ending $kind admits at the safe boundary after $elapsed ms without starts", async ({ kind, elapsed, ending }) => {
+  const h = scenario(); h.setTurns(1);
+  let completed = false;
+  h.deps.quiet!.dispatchVersion = () => "same-admissions";
+  if (ending === "removed") {
+    h.deps.quiet!.admissionStarts = () => completed ? [] : ["cohort-launch"];
+    h.deps.quiet!.dispatchVersion = () => completed ? "completed-owners" : "running-owners";
+  }
+  h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: completed ? [] : [{ conversationId: "conversation_0", host: "hosted", turn: "running", activeTurnId: "cohort-turn" }] }) as never;
+  h.deps.quiet!.owners = owners(() => completed ? "gone" : "alive");
+  h.deps.quiet!.pipelines = () => kind === "pipeline" && !(completed && ending === "removed") ? [{ id: "cohort", state: completed ? "completed" : "running",
+    cursor: { stageId: "build", state: completed ? "completed" : "running" },
+    runs: [{ stageId: "build", attempts: [{ n: 1, conversationId: "conversation_0", launchId: "cohort-launch" }] }] }] as never : [];
+  h.deps.quiet!.flows = () => kind === "flow" && !(completed && ending === "removed") ? [{ id: "cohort-flow", state: completed ? "completed" : "reviewing",
+    rounds: [{ n: 1, reviewerConversationId: "conversation_0", launchId: "cohort-review" }] }] as never : [];
+  const service = h.service();
+  try {
+    await service.autoTick();
+    h.advance(elapsed);
+    completed = true; h.setTurns(0);
+    await service.autoTick();
+    expect(h.requests).toHaveLength(1);
+    expect(h.requests[0]?.revision).toBe(TARGET);
+  } finally { service.stop(); }
+});
+
 test.each(["launch", "turn", "operator", "memory", "unreadable", "controller", "checks"] as const)("the busy window still refuses %s", async (change) => {
   const h = scenario();
   let starts = "first", turn = "first", running = true;
@@ -96,6 +124,25 @@ test.each(["launch", "turn", "operator", "memory", "unreadable", "controller", "
     h.deps.quiet!.controllerBusyReason = async () => null;
     h.setGreen("green");
     await service.autoTick(); h.advance(60_000); await service.autoTick();
+    expect(h.requests).toHaveLength(1);
+  } finally { service.stop(); }
+});
+
+test("an admission during a quiet probe restarts the ordinary quiet minute", async () => {
+  const h = scenario();
+  let starts = "first", interrupt = false;
+  h.deps.quiet!.dispatchVersion = () => starts;
+  h.deps.quiet!.runtimeSnapshot = async () => {
+    if (interrupt) { starts = "second"; interrupt = false; }
+    return { sessions: [] };
+  };
+  const service = h.service();
+  try {
+    await service.autoTick(); h.advance(30_000);
+    interrupt = true; await service.autoTick();
+    h.advance(30_000); await service.autoTick();
+    expect(h.requests).toHaveLength(0);
+    h.advance(60_000); await service.autoTick();
     expect(h.requests).toHaveLength(1);
   } finally { service.stop(); }
 });

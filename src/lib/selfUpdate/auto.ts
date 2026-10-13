@@ -44,8 +44,8 @@ export interface AutoState {
   deferred?: { at: string; until: string; reason: "launch-hold-expired" } | null;
   drain: { id: string; target: Revision; since: string; overranAt: string | null; blockers: QuietBlockers | null; admitted?: boolean; acknowledgedAt?: string; force?: boolean;
     holdSince?: string;
-    /** Starts must stay unchanged across the busy-machine window and final admission. */
-    window?: { since: string; version: string; work: string[] } } | null;
+    /** Keep the no-start age across completion; version fences the last stable probe. */
+    window?: { since: string; version: string; work: string[]; starts?: string[] } } | null;
   rollback: { target: string | null } | null;
   pending: AutoPending | null;
   /** Written before asking the runtime host; an accepted id fences request

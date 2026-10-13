@@ -199,27 +199,43 @@ test.each(["codex", "claude", "child"] as const)("automatic drain protects a ver
   } finally { child.kill(); await child.exited; }
 });
 
-test.each(["reference", "handle", "journal"] as const)("automatic drain protects a new %s turn over the prior idle tail", async (source) => {
+test.each((["reference", "handle", "journal"] as const).flatMap(source =>
+  (["idle", "unknown", "missing"] as const).map(tail => ({ source, tail }))))(
+"automatic drain bounds a silent $source claim over the prior $tail tail and protects its replacement", async ({ source, tail }) => {
   const identity = captureProcessIdentity(process.pid)!;
   const fixture = hosted("settled", identity);
+  const completedTranscript = readFileSync(fixture.artifactPath, "utf8");
+  if (tail === "unknown") writeFileSync(fixture.artifactPath, JSON.stringify({ timestamp: new Date().toISOString(), type: "session_meta", payload: { id: fixture.key.sessionId, cwd: directory } }) + "\n");
+  if (tail === "missing") rmSync(fixture.artifactPath);
   const entry = registry.readOnlySnapshot().entries[`codex:${fixture.key.sessionId}`]!;
   registry.upsert({ ...entry, status: "live", structuredHost: { ...entry.structuredHost!, activeTurnRef: source === "reference" ? "new-turn" : null } });
   const session = { ...row(fixture, "hosted"), sessionKey: fixture.key, writerClaim: "structured-host:fixture:0",
     writerStatus: source === "journal" ? { sessionKey: fixture.key, writerClaim: "structured-host:fixture:0", host: "hosted", turn: "running", activeTurnId: "new-turn" as string | null } : undefined };
   const p = ports([session]);
   let handleBusy = true;
+  let turnId = "new-turn";
   if (source === "handle") p.owners = read(productionLivenessSources, {
     readEvents: async () => ({ reset: false, floorSeq: 0, events: [] }), readSession: async () => null,
-    heldHosts: () => new Map([[`codex:${fixture.key.sessionId}`, { health: async () => ({ pid: identity.pid, processStartIdentity: identity.startIdentity, status: handleBusy ? "active" : "idle", activeTurnRef: handleBusy ? "new-turn" : null }) } as never]]),
+    heldHosts: () => new Map([[`codex:${fixture.key.sessionId}`, { health: async () => ({ pid: identity.pid, processStartIdentity: identity.startIdentity, status: handleBusy ? "active" : "idle", activeTurnRef: handleBusy ? turnId : null }) } as never]]),
   });
   const census = await p.owners!([session] as never, {});
-  expect(census.bound({ conversationId: fixture.conversation.id })[0]).toMatchObject({ process: "alive", tail: { turn: "idle" } });
-  expect((await probeQuiet(snapshot, p, Date.now(), true, "live")).blockers.turnList).toContainEqual(expect.objectContaining({ conversationId: fixture.conversation.id }));
+  expect(census.bound({ conversationId: fixture.conversation.id })[0]).toMatchObject({ process: "alive", tail: tail === "missing" ? null : { turn: tail } });
+  const now = Date.now();
+  expect((await probeQuiet(snapshot, p, now, true, "live")).blockers.turnList).toContainEqual(expect.objectContaining({ conversationId: fixture.conversation.id }));
+  expect((await probeQuiet(snapshot, p, now + FIVE_MINUTES - 1, true, "live")).blockers.turns).toBe(1);
+  expect(await probeQuiet(snapshot, p, now + FIVE_MINUTES, true, "live")).toMatchObject({ quiet: true, blockers: { turns: 0, unresolved: 1, unresolvedBlocking: 0 } });
+  expect(await probeQuiet(snapshot, p, now + 11 * 60_000, true, "live")).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+  turnId = "replacement-turn";
+  registry.upsert({ ...entry, status: "live", structuredHost: { ...entry.structuredHost!, activeTurnRef: source === "reference" ? turnId : null } });
+  if (session.writerStatus) session.writerStatus = { ...session.writerStatus, activeTurnId: turnId };
+  expect(await probeQuiet(snapshot, p, now + 11 * 60_000, true, "live")).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+  expect(await probeQuiet(snapshot, p, now + 16 * 60_000, true, "live")).toMatchObject({ quiet: true, blockers: { turns: 0 } });
   // The same owner's completion releases the hold.
   handleBusy = false;
   registry.upsert({ ...entry, status: "idle", structuredHost: { ...entry.structuredHost!, activeTurnRef: null } });
   if (session.writerStatus) session.writerStatus = { ...session.writerStatus, turn: "idle", activeTurnId: null };
-  expect(await probeQuiet(snapshot, p, Date.now(), true, "live")).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+  writeFileSync(fixture.artifactPath, completedTranscript);
+  expect(await probeQuiet(snapshot, p, now + 16 * 60_000, true, "live")).toMatchObject({ quiet: true, blockers: { turns: 0 } });
 });
 
 test("a stale active reference still releases a truly stalled open turn", async () => {
@@ -230,6 +246,35 @@ test("a stale active reference still releases a truly stalled open turn", async 
   writeFileSync(fixture.artifactPath, readFileSync(fixture.artifactPath, "utf8").trim().split("\n")
     .map(line => JSON.stringify({ ...JSON.parse(line), timestamp: at })).join("\n") + "\n");
   expect(await probeQuiet(snapshot, ports([row(fixture, "hosted")]), now, true, "live")).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+});
+
+test("a silent journal claim uses its retained acceptance time on a cold probe", async () => {
+  const fixture = hosted("settled", captureProcessIdentity(process.pid)!);
+  const now = Date.now(), acceptedAt = now - 11 * 60_000;
+  const session = { ...row(fixture, "hosted"), sessionKey: fixture.key, writerClaim: "structured-host:fixture:0",
+    writerStatus: { sessionKey: fixture.key, writerClaim: "structured-host:fixture:0", host: "hosted", turn: "running", activeTurnId: "silent-turn" } };
+  const p = ports([session]);
+  p.owners = read(productionLivenessSources, { readEvents: async after => ({ reset: false, floorSeq: 0, events: after ? [] : [{
+    schemaVersion: 1, seq: 1, revision: 1, eventId: "silent-acceptance", scope: { type: "session", id: fixture.conversation.id },
+    kind: "turn-started", occurredAt: new Date(acceptedAt).toISOString(), recordedAt: new Date(acceptedAt).toISOString(),
+    producer: { kind: "codex-app-server", eventKey: `engine-host:codex:${fixture.key.sessionId}:1` },
+    causationId: null, correlationId: null, payload: { turnId: "silent-turn" },
+  }] }) });
+  const census = await p.owners!([session] as never, {});
+  expect(census.bound({ conversationId: fixture.conversation.id })[0]).toMatchObject({ turnClaims: [{ id: "silent-turn", acceptedAt }] });
+  expect(await probeQuiet(snapshot, p, now, true, "live")).toMatchObject({ quiet: true, blockers: { turns: 0, unresolved: 1, unresolvedBlocking: 0 } });
+});
+
+test("a claimed turn with an idle tail retains a verified child check past the grace", async () => {
+  const child = Bun.spawn([process.execPath, "-e", 'const child = Bun.spawn(["sleep", "900"]); process.on("SIGTERM", async () => { child.kill(); await child.exited; process.exit(0); }); console.log("ready"); setInterval(() => {}, 1000);'], { stdout: "pipe" });
+  const reader = child.stdout.getReader(); await reader.read(); reader.releaseLock();
+  try {
+    const fixture = hosted("settled", captureProcessIdentity(child.pid)!);
+    const entry = registry.readOnlySnapshot().entries[`codex:${fixture.key.sessionId}`]!;
+    registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!, activeTurnRef: "child-check-turn" } });
+    const p = ports([row(fixture, "hosted")]);
+    expect(await probeQuiet(snapshot, p, Date.now() + 11 * 60_000, true, "live")).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+  } finally { child.kill(); await child.exited; }
 });
 
 test("a conversation whose host died with its turn open does not block the drain", async () => {

@@ -117,6 +117,9 @@ export interface OwnerReading extends OwnerPlace {
   workProcesses?: AgentActivityFacts["workProcesses"];
   rowReference?: boolean;
   journal?: "claimed" | "idle" | "unattributed" | null;
+  /** Current own acceptances; timestamps come from their retained start events.
+      Without a retained event, the first observation of this identity ages it. */
+  turnClaims?: readonly { id: string; acceptedAt: number | null }[];
   /** A standalone entry still claims work with no per-prompt acceptance boundary. */
   standaloneClaim?: boolean;
   tail?: TailReading | null;
@@ -150,6 +153,8 @@ export interface OwnerCensusReading {
 export type OwnerRead = <T>(reference: OwnerReference, read: () => Promise<T>) => Promise<T>;
 
 export interface QuietPorts {
+  /** Admission identities, excluding completion and controller activity. */
+  admissionStarts?(): readonly string[];
   /** Synchronous durable admission/start evidence; changing it invalidates an awaited probe. */
   dispatchVersion?(): string;
   runtimeSnapshot(): Promise<Pick<RuntimeSnapshot, "sessions">>;
@@ -350,10 +355,18 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     const liveOwner = (owner: OwnerReading): boolean => {
       if (ownerVerdict(owner).verdict === "released") return false;
       if (owner.role !== "host") return true;
-      // An own current claim can precede its transcript start. The previous
-      // turn's idle tail cannot settle or age this newer work. Once the tail
-      // records the open turn, its activity evidence supplies the stall clock.
-      if (owner.tail?.turn !== "busy" && (owner.handle === "busy" || owner.rowReference || owner.journal === "claimed")) return true;
+      // An acceptance can precede its first transcript record. Age that
+      // acceptance independently of the previous turn's tail and heartbeats.
+      if (owner.tail?.turn !== "busy" && (owner.handle === "busy" || owner.rowReference || owner.journal === "claimed")) {
+        const last = owner.tail?.lastRecordAt;
+        const activity = evaluateActivityLiveness({ host: { state: owner.process }, now, turnState: "unknown",
+          silentForMs: last == null ? null : Math.max(0, now - last), stallAfterMs: DEFAULT_STALL_AFTER_MS,
+          activityFacts: owner.tail?.activityFacts, workProcesses: owner.workProcesses });
+        if (activity.verified && activity.activity?.state === "checking") return true;
+        const claims = owner.turnClaims?.length ? owner.turnClaims : [{ id: "unidentified", acceptedAt: null }];
+        const expired = claims.map(claim => pastBound(`claim:${owner.id}:${claim.id}`, "unresolved", claim.acceptedAt, displayId(owner)));
+        return expired.some(value => !value);
+      }
       const last = owner.tail?.lastRecordAt;
       if (last == null || !Number.isFinite(last)) {
         pastBound(`unverified:${owner.id}`, "unresolved", Number.isFinite(last) ? last! : null, displayId(owner));
@@ -532,6 +545,9 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     if (turnPolicy === "live") work.push(...runtime.sessions
       .filter(session => groups.has(session.conversationId) && session.activeTurnId)
       .map(session => `start:${session.conversationId}:${session.activeTurnId}`));
+    if (turnPolicy === "live") for (const owner of census.owners) if (holding.has(owner.id)) {
+      work.push(...(owner.turnClaims ?? []).map(claim => `claim-start:${owner.id}:${claim.id}`));
+    }
     blockers.turnList = turns.slice(0, 20);
     const controller = ports.controllerBusyReason ? await ports.controllerBusyReason()
       : ports.controllerIdle && !await ports.controllerIdle() ? "pipeline-controller" : null;
@@ -559,6 +575,27 @@ export function registryAdmissionEvidence(registry: RegistryFile): [records: Non
     receipt.admissionOwner, receipt.verifiedHost?.agent, receipt.pane?.panePid,
   ]).sort((left, right) => String(left[0]).localeCompare(String(right[0])));
   return [records, receiptOwners];
+}
+
+/** Starts may disappear after settlement; only an added identity restarts the
+    no-start clock. The final dispatch fence still compares all state changes. */
+export function quietStartEvidence(ports: QuietPorts): string[] | null {
+  try {
+    const starts = [...(ports.admissionStarts?.() ?? [`dispatch:${ports.dispatchVersion?.() ?? ""}`])];
+    const add = (identity: unknown[], fields: unknown[]) => {
+      for (const [index, field] of fields.entries()) if (field != null) starts.push(JSON.stringify([...identity, index, field]));
+    };
+    for (const pipeline of ports.pipelines()) for (const run of pipeline.runs ?? []) for (const attempt of run.attempts) {
+      add(["pipeline", pipeline.id, run.stageId, attempt.n], [attempt.launchId, attempt.conversationId, attempt.agentPath, attempt.flowId]);
+    }
+    for (const flow of ports.flows?.() ?? []) {
+      add(["flow", flow.id], [flow.implementerConversationId, flow.implementerPath]);
+      for (const round of flow.rounds ?? []) add(["round", flow.id, round.n],
+        [round.launchId, round.sessionId, round.spawnStartedAt, round.reviewerConversationId, round.reviewerPath,
+          round.reviewerPid, round.reviewerIdentity, round.relayStartedAt]);
+    }
+    return starts;
+  } catch { return null; }
 }
 
 /** What a synchronous fence compares across an awaited read: the stages and

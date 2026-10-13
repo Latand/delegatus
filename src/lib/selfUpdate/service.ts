@@ -22,7 +22,7 @@ import { cancelUntakenRequest, DIALOG_WRITER, readAuto, requestAutoRestart, rest
 import { activeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS, DRAIN_START_WINDOW_MS, releaseDrain, writeDrain } from "./drain";
 import { GreenReader, type GreenVerdict } from "./green";
 import { appendHistory, findAutoSwitchRequest, readHistory, storeAutoSwitchResponse } from "./history";
-import { probeQuiet, quietDispatchVersion, type QuietBlockers, type QuietPorts } from "./quiet";
+import { probeQuiet, quietDispatchVersion, quietStartEvidence, type QuietBlockers, type QuietPorts } from "./quiet";
 import { ObservedWork } from "./workEvidence";
 import type { ObservedReads } from "./workReads";
 import { activeRestartGate, ownsRestartGate, beginRestartGate, endRestartGate, restartGateFile } from "./restartGate";
@@ -733,14 +733,27 @@ export class SelfUpdateService {
     if (!this.deps.quiet) return false;
     const hold = this.auto.drain;
     const version = quietDispatchVersion(this.deps.quiet, now);
+    const starts = quietStartEvidence(this.deps.quiet);
     const probe = await probeQuiet(snapshot, this.deps.quiet, now, this.draining(), "live");
     if (hold?.id !== this.auto.drain?.id || hold?.holdSince !== this.auto.drain?.holdSince || this.auto.deferred) return false;
     const stable = version !== null && version === quietDispatchVersion(this.deps.quiet, this.deps.now());
+    const currentStarts = quietStartEvidence(this.deps.quiet);
+    const currentStartSet = new Set(currentStarts);
+    const startsStable = starts !== null && currentStarts !== null
+      && starts.length === currentStarts.length && starts.every(id => currentStartSet.has(id));
     const window = this.auto.drain?.window;
-    if (this.auto.drain && (!stable || !window || window.version !== version || probe.work.some(id => !window.work.includes(id)))) {
-      this.auto = { ...this.auto, drain: { ...this.auto.drain,
-        window: stable ? { since: at, version, work: probe.work } : undefined } };
-      this.saveAuto();
+    if (this.auto.drain) {
+      const previousStarts = new Set(window?.starts);
+      const previousWork = new Set(window?.work);
+      const added = !window?.starts || starts?.some(id => !previousStarts.has(id))
+        || probe.work.some(id => !previousWork.has(id));
+      const nextWindow = startsStable ? { since: added ? at : window!.since,
+        version: stable ? version : window?.version ?? "", starts: [...new Set([...(added ? [] : window!.starts!), ...starts])],
+        work: [...new Set([...(added ? [] : window!.work), ...probe.work])] } : undefined;
+      if (JSON.stringify(window) !== JSON.stringify(nextWindow)) {
+        this.auto = { ...this.auto, drain: { ...this.auto.drain, window: nextWindow } };
+        this.saveAuto();
+      }
     }
     this.autoBlockers = probe.blockers;
     if (JSON.stringify(this.auto.lastBlockers) !== JSON.stringify(probe.blockers)) {
@@ -753,6 +766,10 @@ export class SelfUpdateService {
       this.saveAuto();
     }
     this.changes.emit();
+    if (!stable) {
+      if (this.auto.quietSince) { this.auto = { ...this.auto, quietSince: null }; this.saveAuto(); }
+      return false;
+    }
     if (this.auto.drain?.force && this.quietAdmits(probe)) return true;
     if (this.busyWindowAdmits(probe)) return true;
     if (!probe.quiet) {

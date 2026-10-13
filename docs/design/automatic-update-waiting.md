@@ -11,6 +11,12 @@ verified descendant checks retain their protection. The evidence belongs to the
 owner's own transcript and process. A current busy handle, active turn reference
 or own journal claim protects a newly accepted turn before its transcript start;
 the previous turn's idle tail supplies no age or completion for that new turn.
+Without a first turn record or verified check, that acceptance has a five-minute
+grace. Its own retained start event supplies the clock; when that event is
+unavailable, the first probe of the current owner and acceptance identity does.
+Unchanged handles, references and journal heartbeats cannot renew it. A new
+acceptance gets its own grace; an aged silent claim remains diagnosed as
+`unresolved` and contributes zero blocking turns.
 Once an open turn is recorded, its activity supplies the shared stall clock.
 Missing owner or tail evidence is reported separately as `unresolved`, with a
 five-minute launch grace. It never inflates `turns`. A stale pipeline cursor
@@ -28,8 +34,10 @@ six-hour operator decision survive the cooldown and Viewer reconstruction.
 A minute with no work admits normally. On a busy machine, holding new starts
 lets the current cohort finish. After two minutes without new starts, the update
 can proceed at that safe boundary without another quiet minute. The observed
-dispatch version and complete set of work identities must stay unchanged or
-shrink. Turn ids catch a new turn in an existing conversation. Both managed
+admission identities and complete set of work identities must stay unchanged or
+shrink. Completion and removal preserve the cohort's no-start age. Turn and
+acceptance ids catch new work in an existing conversation. The stronger dispatch
+fingerprint still fences every awaited final-admission read. Both managed
 admission and the launcher's final reread require zero live turns and stages;
 the timer never authorizes interrupting running work. Only the explicit operator
 choice to deploy now retains that override. If work stays live through the
