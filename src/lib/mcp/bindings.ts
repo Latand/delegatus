@@ -169,7 +169,7 @@ import { listFiles } from "@/lib/scanner";
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { describe, projectForCwd, reprojectFileDescription } from "@/lib/scanner/describe";
 import { pathAllowed, scanRootEntries } from "@/lib/scanner/roots";
-import { completedFileScan } from "@/lib/scanner/scanCache";
+import { completedFileScan, lastScannedFiles, lastScannedProjectCatalog, type FileScanSnapshot } from "@/lib/scanner/scanCache";
 import { completedScanForMcp } from "./completedScan";
 import { readCachedResourceSessions, readResources, readResourcesWithDiagnostic } from "@/lib/resources";
 import { adoptLiveRootSession, conversationRole, liveRootSession, type RootSessionSource } from "@/lib/root/adopt";
@@ -765,6 +765,10 @@ export interface ViewerMcpDomainDependencies {
       harnesses fall back to the production resolver. */
   selectedContext?: SelectedContextTargetDependencies;
   completedFileScan(options?: Parameters<typeof completedFileScan>[0]): ReturnType<typeof completedFileScan>;
+  /** The last completed catalog generation, read without starting or joining
+      a scan; null before any generation completed. Absent in harnesses that
+      inject their own complete scan. */
+  lastCompletedCatalog?(): { projectCatalog: FileScanSnapshot["projectCatalog"]; files: readonly FileScanSnapshot["files"][number][] } | null;
   registrySnapshot(): RegistrySnapshot;
   boardFor(project: string): ReturnType<typeof boardFor>;
   applyBoardCommand(input: unknown, snapshot: RegistrySnapshot): ReturnType<typeof applyBoardCommand>;
@@ -1270,6 +1274,11 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
     voiceUtteranceContext: productionVoiceUtteranceContext,
   },
   completedFileScan: completedScanForMcp,
+  lastCompletedCatalog: () => {
+    const projectCatalog = lastScannedProjectCatalog();
+    const files = lastScannedFiles();
+    return projectCatalog && files ? { projectCatalog, files } : null;
+  },
   registrySnapshot: () => agentRegistry().readOnlySnapshot(),
   readSpawnAdmissionFence,
   validateSpawnAdmission: (body, context) => productionViewerControlDependencies().post(
@@ -4132,6 +4141,20 @@ async function resolveOrchestratorToolProject(named: string, dependencies: Viewe
     if (project) add(project);
   }
   if (keys.has(canonical)) return canonical;
+  /* A designated seat is addressed from durable records. Every transcript
+     born on a busy machine reopens the catalog generation, so requiring a
+     complete one here refused seat-to-seat messages for as long as agents
+     kept starting. The last completed generation proves a key it lists and
+     otherwise only adds candidates: one known project with that name and an
+     active seat is the recipient, while a shared name, an unknown name and a
+     project with no seat still wait for the complete catalog, which alone
+     can prove absence. */
+  const last = dependencies.lastCompletedCatalog?.() ?? null;
+  for (const entry of last?.projectCatalog ?? []) add(entry.project, entry.displayName);
+  for (const entry of last?.files ?? []) add(entry.project, entry.projectName);
+  if (keys.has(canonical)) return canonical;
+  const known = [...(names.get(named.trim()) ?? [])];
+  if (known.length === 1 && orchestratorSeatFor(known[0]!).active) return known[0]!;
   const scan = await dependencies.completedFileScan();
   for (const entry of scan.snapshot.projectCatalog) add(entry.project, entry.displayName);
   for (const entry of scan.snapshot.files) add(entry.project, entry.projectName);

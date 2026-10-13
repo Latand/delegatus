@@ -5,8 +5,10 @@ import path from "node:path";
 
 import { agentRegistry } from "@/lib/agent/registry";
 import { statePath } from "@/lib/configDir";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { persistProjectAliases } from "@/lib/projects/aliases";
 import { completedFileScan, resetFilesRouteCacheForTests, setFileCatalogMembershipProbeForTests, setFileScanRunnerForTests } from "@/lib/scanner/scanCache";
-import { productionDomainDependencies, viewerMcpBindings, viewerMcpRecoverableTools, type ViewerMcpDomainDependencies } from "./bindings";
+import { productionDomainDependencies, viewerMcpBindings, viewerMcpRecoverableTools, type ViewerControlDependencies, type ViewerMcpDomainDependencies } from "./bindings";
 import { createMcpToolService, MemoryMcpReceiptStore, SqliteMcpReceiptStore } from "./server";
 
 afterEach(() => {
@@ -79,6 +81,115 @@ test("an incomplete scan refuses a cross-project seat send retryably before clai
     receipts.close();
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+/** A seat caller of `source-project` addressing another project by its display
+    name, with the control plane recorded instead of reached. */
+function seatSendHarness() {
+  const registry = agentRegistry();
+  const caller = registry.ensureConversation("codex", "/sessions/source.jsonl", null);
+  const domain: ViewerMcpDomainDependencies = {
+    ...productionDomainDependencies,
+    registrySnapshot: () => registry.readOnlySnapshot(),
+    authorizedSeats: () => [{ conversationId: caller.id, path: "/sessions/source.jsonl", project: "source-project" }],
+    attentionAuthority: () => ({ kind: "worker" as const, conversationId: caller.id, role: "builder" }),
+    callerAttribution: () => ({ kind: "agent", conversationId: caller.id, role: "orchestrator" }),
+    recoveryPredecessors: () => [],
+  };
+  const posts: { pathname: string; body: Record<string, unknown> }[] = [];
+  const control: ViewerControlDependencies = {
+    post: async (pathname, body) => {
+      posts.push({ pathname, body });
+      return { ok: true, outcome: "delivered", operationId: "fixture-operation" };
+    },
+  };
+  const service = createMcpToolService(viewerMcpBindings(undefined, control, domain), new MemoryMcpReceiptStore(), undefined, {
+    recovery: viewerMcpRecoverableTools(domain),
+  });
+  return { posts, service };
+}
+
+function designateSeat(project: string, displayName: string, conversationId: string): void {
+  expect(persistProjectAliases([{ source: `${project}-older-key`, target: project, displayName }])).toBe(true);
+  const at = "2026-10-13T00:00:00.000Z";
+  beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId: `seed-${project}`, mode: "spawn", promptVersion: null, now: at });
+  completeOrchestratorSeatIntent({ project, clientRequestId: `seed-${project}`, conversationId, path: null, now: at });
+}
+
+test("a seat send by display name reaches the designated seat while the cold scan is still running", async () => {
+  resetFilesRouteCacheForTests();
+  setFileCatalogMembershipProbeForTests(async () => "fixture");
+  setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: false }));
+  const seated = "conversation_11111111-1111-4111-8111-111111111111";
+  designateSeat("cold-target-project", "Cold target", seated);
+  const { posts, service } = seatSendHarness();
+  const args = { project: "Cold target", text: "Synthetic status", clientRequestId: "cold-named-send" };
+  const result = await service.callTool("send_message_to_orchestrator", args);
+  expect(result).toMatchObject({ ok: true, project: "cold-target-project", conversationId: seated, created: false });
+  expect(posts).toHaveLength(1);
+  expect(posts[0]).toMatchObject({
+    pathname: "/api/orchestrator/message",
+    body: { project: "cold-target-project", conversationId: seated },
+  });
+  expect(orchestratorSeatFor("cold-target-project").active?.conversationId).toBe(seated);
+  // The same key replays its receipt: the scan state never causes a second delivery.
+  expect(await service.callTool("send_message_to_orchestrator", args)).toMatchObject({ ok: true, replayed: true, conversationId: seated });
+  expect(posts).toHaveLength(1);
+});
+
+test("a transcript born after a completed scan does not refuse a seat send by display name", async () => {
+  resetFilesRouteCacheForTests();
+  setFileCatalogMembershipProbeForTests(async () => "initial");
+  setFileScanRunnerForTests(async () => ({
+    files: [], complete: true,
+    projectCatalog: [{ project: "born-target-project", displayName: "Born target", smt: 1, conversations: 1 }],
+  }));
+  await completedFileScan();
+  const seated = "conversation_22222222-2222-4222-8222-222222222222";
+  designateSeat("born-target-project", "Born target", seated);
+  // Every later birth changes the membership key before the trailing scan can bless it.
+  let births = 0;
+  setFileCatalogMembershipProbeForTests(async () => `birth-${births += 1}`);
+  setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: false }));
+  const { posts, service } = seatSendHarness();
+  for (const attempt of [1, 2, 3]) {
+    const result = await service.callTool("send_message_to_orchestrator", {
+      project: "Born target", text: "Synthetic status", clientRequestId: `born-named-send-${attempt}`,
+    });
+    expect(result).toMatchObject({ ok: true, project: "born-target-project", conversationId: seated, created: false });
+  }
+  expect(posts.map((post) => post.body.conversationId)).toEqual([seated, seated, seated]);
+});
+
+test("a name another project of the last completed catalog shares still waits for the complete scan", async () => {
+  resetFilesRouteCacheForTests();
+  setFileCatalogMembershipProbeForTests(async () => "initial");
+  setFileScanRunnerForTests(async () => ({
+    files: [], complete: true,
+    projectCatalog: [{ project: "homonym-other-project", displayName: "Homonym target", smt: 1, conversations: 1 }],
+  }));
+  await completedFileScan();
+  designateSeat("homonym-seated-project", "Homonym target", "conversation_33333333-3333-4333-8333-333333333333");
+  setFileCatalogMembershipProbeForTests(async () => "changed");
+  setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: false }));
+  const { posts, service } = seatSendHarness();
+  expect(await service.callTool("send_message_to_orchestrator", {
+    project: "Homonym target", text: "Synthetic status", clientRequestId: "homonym-named-send",
+  })).toMatchObject({ ok: false, code: "scan_incomplete", retryable: true });
+  expect(posts).toHaveLength(0);
+});
+
+test("a known name without a designated seat designates nothing from a partial catalog", async () => {
+  resetFilesRouteCacheForTests();
+  setFileCatalogMembershipProbeForTests(async () => "fixture");
+  setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: false }));
+  expect(persistProjectAliases([{ source: "seatless-older-key", target: "seatless-project", displayName: "Seatless target" }])).toBe(true);
+  const { posts, service } = seatSendHarness();
+  expect(await service.callTool("send_message_to_orchestrator", {
+    project: "Seatless target", text: "Synthetic status", clientRequestId: "seatless-named-send",
+  })).toMatchObject({ ok: false, code: "scan_incomplete", retryable: true });
+  expect(posts).toHaveLength(0);
+  expect(orchestratorSeatFor("seatless-project").active).toBeNull();
 });
 
 for (const [tool, args] of [
