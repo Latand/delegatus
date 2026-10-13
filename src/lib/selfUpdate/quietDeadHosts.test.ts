@@ -169,7 +169,7 @@ test.each(["codex", "claude", "child"] as const)("automatic drain protects a ver
     const fixture = hosted("open", captureProcessIdentity(child.pid)!);
     const now = Date.now(), at = new Date(now - 11 * 60_000).toISOString();
     if (kind === "claude") {
-      const project = join(process.env.HOME!, ".claude", "projects", "fixture");
+      const project = join(process.env.LLV_CLAUDE_HOME || join(process.env.HOME!, ".claude"), "projects", "fixture");
       mkdirSync(project, { recursive: true });
       const file = join(project, `${randomUUID()}.jsonl`);
       writeFileSync(file, [

@@ -1060,7 +1060,7 @@ export class SelfUpdateService {
     const drain = this.auto.drain;
     const window = drain?.window;
     const now = this.deps.now();
-    return !!window && probe.blockers.turns === 0 && probe.blockers.stages === 0
+    return !!window && window.work.length > 0 && probe.blockers.turns === 0 && probe.blockers.stages === 0
       && (this.hasAutoCustody() || !this.auto.deferred && now < Date.parse(drain!.holdSince ?? drain!.since) + DRAIN_LEASE_MS)
       && now - Date.parse(window.since) >= DRAIN_START_WINDOW_MS
       && window.version === quietDispatchVersion(this.deps.quiet, now)

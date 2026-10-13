@@ -70,12 +70,14 @@ test("automatic waiting protects busy turns until the cohort finishes", async ()
 
 test.each(["launch", "turn", "operator", "memory", "unreadable", "controller", "checks"] as const)("the busy window still refuses %s", async (change) => {
   const h = scenario();
-  let starts = "first", turn = "first";
+  let starts = "first", turn = "first", running = true;
   h.deps.quiet!.dispatchVersion = () => starts;
-  h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "conversation_busy", host: "hosted", turn: "running", activeTurnId: turn }] }) as never;
+  const runtimeSnapshot = async () => ({ sessions: running ? [{ conversationId: "conversation_busy", host: "hosted", turn: "running", activeTurnId: turn }] : [] }) as never;
+  h.deps.quiet!.runtimeSnapshot = runtimeSnapshot;
   const service = h.service();
   try {
     await service.autoTick(); h.advance(2 * 60_000);
+    running = change === "launch" || change === "turn";
     if (change === "launch") starts = "second";
     if (change === "turn") turn = "second";
     if (change === "operator") h.deps.quiet!.presence = () => [{ viewSessionId: "operator", lastInteractionAt: h.deps.now() }] as never;
@@ -87,6 +89,14 @@ test.each(["launch", "turn", "operator", "memory", "unreadable", "controller", "
     if (change === "launch" || change === "turn") {
       h.advance(2 * 60_000); await service.autoTick(); expect(h.requests).toHaveLength(0);
     }
+    running = false;
+    h.deps.quiet!.runtimeSnapshot = runtimeSnapshot;
+    h.deps.quiet!.presence = () => [];
+    h.deps.quiet!.memoryAvailableMb = () => 8_192;
+    h.deps.quiet!.controllerBusyReason = async () => null;
+    h.setGreen("green");
+    await service.autoTick(); h.advance(60_000); await service.autoTick();
+    expect(h.requests).toHaveLength(1);
   } finally { service.stop(); }
 });
 
@@ -98,9 +108,11 @@ test("the busy window survives reconstruction and refuses a late start at final 
   try {
     await service.autoTick(); service.stop(); service = h.service();
     h.advance(2 * 60_000);
+    h.setTurns(0);
     const green = h.deps.green!;
+    let started = false;
     h.deps.green = { read: async (...args: Parameters<NonNullable<ServiceDeps["green"]>["read"]>) => {
-      starts = "second";
+      if (!started) { starts = "second"; h.setTurns(1); started = true; }
       return green.read(...args);
     } } as ServiceDeps["green"];
     service.stop(); service = h.service();
