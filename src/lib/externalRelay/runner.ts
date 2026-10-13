@@ -241,7 +241,10 @@ export async function runClaimedRequest(
   const finish = async (body: ExternalRelayCompletion, stallMs = 45_000) => {
     leaveRelayHold(requestId);
     try {
-      if (pendingBeat) await pendingBeat;
+      if (pendingBeat) {
+        if (releaseRequested) void pendingBeat.catch(() => console.error("External relay heartbeat refresh failed during demotion"));
+        else await pendingBeat;
+      }
       // Persist the local decision before any delivery wait: a restart must
       // leave the generated answer and early declines inspectable.
       if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");

@@ -223,18 +223,22 @@ test("capacity returning at the admission cutoff cannot start expired waiting wo
 
 test("demotion sends one explicit busy attempt and respects its own bounded exit", async () => {
   let attempts = 0;
-  const server = await startTestRelay(async req => {
+  const server = await startTestRelay(async (req, body) => {
+    if (req.url?.includes("slow-demotion") && req.url.endsWith("/heartbeat") && (body as { seq: number }).seq > 1) await Bun.sleep(1000);
     if (req.url?.endsWith("/complete")) { attempts++; await Bun.sleep(800); return { status: 503, body: { error: { code: "unavailable" } } }; }
     return { body: { status: "ok" } };
   });
   const relay = paired(`${server.origin}/v1`);
   writeDrain(drainFile(), { id: "demotion", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
-  const pending = runClaimedRequest(relay, claim("demotion", 30000), undefined, { command });
+  const pending = Promise.all([
+    runClaimedRequest(relay, claim("demotion", 30000), undefined, { command }),
+    runClaimedRequest(relay, claim("slow-demotion", 30000), undefined, { command }),
+  ]);
   try {
-    await Bun.sleep(200);
+    await Bun.sleep(3300);
     const start = performance.now(); await declineHeldRelayRequests(500);
     expect(performance.now() - start).toBeLessThan(600);
-    expect(attempts).toBe(1);
-    expect(await pending).toMatchObject({ outcome: "declined", reason: "busy" });
+    expect(attempts).toBe(2);
+    expect(await pending).toMatchObject([{ outcome: "declined", reason: "busy" }, { outcome: "declined", reason: "busy" }]);
   } finally { releaseDrain(drainFile(), "demotion"); await pending; await server.close(); }
 }, 10000);
