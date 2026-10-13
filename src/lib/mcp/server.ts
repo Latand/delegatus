@@ -3710,7 +3710,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     reviews: z.string().optional(),
     parentConversationId: z.string().optional(),
     project: z.string().optional()
-      .describe("Optional. The target project is resolved server-side from cwd; a value that contradicts it is refused before anything is claimed or dispatched."),
+      .describe("Optional project key, display name or repository name, in any letter case with surrounding whitespace. Must agree with cwd; unknown, ambiguous or contradictory values refuse before claim or dispatch."),
     allowSubagents: z.boolean().optional(),
     crossProjectRequest: z.string().optional()
       .describe("Only for a designated orchestrator seat acting on ANOTHER project's board, which is refused by default: hand the work to that project's seat with send_message_to_orchestrator. When the operator explicitly asked you to act on that project directly, quote their request here."),
@@ -3740,7 +3740,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     findingKey: z.string().max(400).refine(value => [...value].length <= 200).optional()
       .describe("Opaque finding identity, at most 200 characters, unique among this project's open tasks. A recurring create increments count and lastSeenAt, replaces note (omitted clears it), preserves text, and answers the existing id with matched:true. After Done a new task links through finding.previousTaskId. Local to this install; never synced."),
     note: z.string().nullable().optional().describe("Current situation for a keyed finding, at most 280 characters. Author and time are server-derived; omitted clears the previous note on a match."),
-    project: z.string().min(1),
+    project: z.string().min(1).describe("Known project key, display name or repository name; case and surrounding whitespace are ignored. Unknown or ambiguous names refuse immediately without waiting for a catalog scan."),
     crossProjectRequest: z.string().optional()
       .describe("Only for a designated orchestrator seat acting on ANOTHER project's board, which is refused by default: hand the work to that project's seat with send_message_to_orchestrator. When the operator explicitly asked you to act on that project directly, quote their request here."),
     text: z.string().min(1).describe("The HUMAN part of the card: a title of 3 to 10 words on the first line, then at most a few plain sentences about the outcome. Agent context belongs in details."),
@@ -3834,6 +3834,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     crossProjectRequest: z.string().optional()
       .describe("Only for a designated orchestrator seat acting on ANOTHER project's board, which is refused by default: hand the work to that project's seat with send_message_to_orchestrator. When the operator explicitly asked you to act on that project directly, quote their request here."),
     repoDir: z.string().min(1).describe("Absolute path of the existing git repository the pipeline worktree is cut from."),
+    project: z.string().optional().describe("Optional project key, display name or repository name, in any letter case with surrounding whitespace. Must agree with repoDir; unknown, ambiguous or contradictory values refuse before claim or dispatch."),
     baseBranch: z.string().optional().describe("Branch the worktree is based on. A draft that pins this must also pass baseRef."),
     baseRef: z.string().optional().describe("Commit the pipeline is pinned to. Required when a draft (autoStart:false) pins baseBranch — resolve the SHA yourself."),
     stages: z.array(pipelineStageSchema).describe(
@@ -4302,12 +4303,12 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   get_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema.optional(),
-    project: z.string().min(1).describe("Project key whose designated orchestrator to report on."),
+    project: z.string().min(1).describe("Project key, display name or repository name whose designated orchestrator to report on. Case and surrounding whitespace are ignored; lookup never waits for a completed catalog scan."),
     full: z.boolean().optional().describe("Compact by default: the seat without its mandate and role table, and counts for intentHistory and lineage. true returns every record whole."),
   }).passthrough(),
   create_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema,
-    project: z.string().min(1).describe("Project key this orchestrator will own."),
+    project: z.string().min(1).describe("Known project key, display name or repository name this orchestrator will own. Case and surrounding whitespace are ignored."),
     conversationId: z.string().regex(/^conversation_/).optional().describe("Existing registered conversation to adopt. Delegatus validates its project, cwd, transcript, lifecycle, and operator authority before seating it."),
     mandate: z.string().optional().describe("Edited mandate text; defaults to the approved versioned orchestrator prompt."),
     cwd: z.string().optional().describe("Working directory; defaults to Delegatus's own checkout."),
@@ -4319,18 +4320,18 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   send_message_to_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema,
     recoveryOnly: recoveryOnlySchema,
-    project: z.string().min(1).describe("Project whose selected orchestrator receives the message."),
+    project: z.string().min(1).describe("Known project key, display name or repository name whose selected orchestrator receives the message. Case and surrounding whitespace are ignored; ambiguous and unknown names refuse immediately with candidates or close matches."),
     machine: z.string().min(1).optional().describe("Linked machine label, install id or 8-hex prefix for this shared project; omit for the local seat."),
     text: z.string().min(1).describe("The message. The recipient is resolved server-side; a dead session is resumed, a missing one created first."),
   }).passthrough(),
   ask_orchestrator_in_parallel: z.object({
     clientRequestId: clientRequestIdSchema,
-    project: z.string().min(1).describe("Project whose busy orchestrator seat takes the side ask in parallel."),
+    project: z.string().min(1).describe("Known project key, display name or repository name whose busy orchestrator seat takes the side ask in parallel. Case and surrounding whitespace are ignored."),
     text: z.string().min(1).describe("The side ask, exactly as the operator gave it."),
   }).passthrough(),
   rotate_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema,
-    project: z.string().min(1).describe("Project whose orchestrator seat rotates to a fresh successor."),
+    project: z.string().min(1).describe("Known project key, display name or repository name whose orchestrator seat rotates to a fresh successor. Case and surrounding whitespace are ignored."),
     mandate: z.string().optional().describe("Successor mandate. Omitted: the incumbent's own mandate when it is based on the current default version or is bespoke; the current built-in default when the incumbent's is based on an older version (get_orchestrator reports both versions)."),
     keepIncumbentMandate: z.boolean().optional().describe("Carry the incumbent's mandate forward even when it is based on an older default version. Ignored when mandate is given."),
     handoffNotes: z.string().optional().describe("Bounded free-text handoff notes appended for the successor."),

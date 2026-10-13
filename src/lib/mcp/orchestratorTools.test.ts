@@ -107,33 +107,27 @@ function gatedControlStub() {
   return { designations, rotations, control };
 }
 
-function bindingsWith(control: ViewerControlDependencies) {
+function bindingsWith(control: ViewerControlDependencies, projectHasSeat = true) {
   return viewerMcpBindings(undefined, control, {
     registrySnapshot: () => ({ conversations: {}, conversationAliases: {} }),
     callerAttribution: () => ({ kind: "gateway", conversationId: "conversation_gateway", role: null }),
-    completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: [{ project: "proj-a", displayName: "Example project", smt: 1, conversations: 0 }], complete: true } }),
+    authorizedSeats: () => projectHasSeat ? [{ project: "proj-a", conversationId: SEATED_ID, path: null }] : [],
+    lastCompletedCatalog: () => ({ files: [], projectCatalog: [{ project: "proj-a", displayName: "Example project", smt: 1, conversations: 0 }] }),
   } as never);
 }
 
 test("get_orchestrator with nothing designated says so and names the current default prompt version", async () => {
   const { control } = controlStub();
-  const result = await bindingsWith(control).get_orchestrator({ clientRequestId: "get-1", project: "proj-a" });
-  expect(result).toMatchObject({
-    project: "proj-a",
-    designated: false,
-    seat: null,
-    health: null,
-    rotation: null,
-    defaultPromptVersion: ORCHESTRATOR_PROMPT_VERSION,
-    pendingIntent: null,
-    intentHistoryCount: 0,
-    lineageCount: 0,
-  });
+  await expect(bindingsWith(control, false).get_orchestrator({ clientRequestId: "get-1", project: "proj-a" }))
+    .rejects.toMatchObject({ details: { code: "unknown_project", retryable: false } });
+  await expect(bindingsWith(control, false).get_orchestrator({ clientRequestId: "get-1", project: "proj-a" }))
+    .rejects.toThrow('no such project "proj-a"; no close matches; pass a known project key, display name or repository name');
 });
 
 /* #2146: the seat reads its project's Bridge reports switch beside the merge
    setting, on by default and in both the compact and the full answer. */
 test("get_orchestrator carries the project's bridge reports setting", async () => {
+  seatActive("proj-a", SEATED_ID, null);
   const { control } = controlStub();
   expect(await bindingsWith(control).get_orchestrator({ clientRequestId: "get-br-1", project: "proj-a" })).toMatchObject({ mergeOnReview: false, bridgeReports: true });
   setBridgeReports("proj-a", false, "operator");
@@ -335,23 +329,13 @@ test("send_message_to_orchestrator resolves the seat server-side and delivers wi
   expect(result).toMatchObject({ conversationId: SEATED_ID, created: false });
 });
 
-test("send_message_to_orchestrator with nothing designated creates one first, then delivers — with derived keys and visible lineage", async () => {
-  const { posts, control } = controlStub({
-    "/api/orchestrator/seat": {
-      ok: true,
-      conversationId: SEATED_ID,
-      seat: { conversationId: SEATED_ID, path: "/tmp/fresh.jsonl", seatEpoch: 1, predecessorConversationId: null },
-    },
-  });
-  const result = await bindingsWith(control).send_message_to_orchestrator({ clientRequestId: "send-2", project: "proj-a", text: "kick off" });
-
-  expect(posts.map((post) => post.pathname)).toEqual(["/api/orchestrator/seat", "/api/orchestrator/message"]);
-  /* The creation key derives from the caller's, so a retried call replays both
-     side effects instead of creating a second orchestrator. */
-  expect(posts[0]!.body.clientRequestId).not.toBe("send-2");
-  expect(posts[0]!.body).toMatchObject({ mandate: ORCHESTRATOR_SYSTEM_PROMPT, promptVersion: ORCHESTRATOR_PROMPT_VERSION });
-  expect(posts[1]!.body).toMatchObject({ conversationId: SEATED_ID, clientMessageId: expect.stringMatching(/^mcp_orchestrator_/), text: "kick off" });
-  expect(result).toMatchObject({ created: true, conversationId: SEATED_ID, seatEpoch: 1 });
+test("send_message_to_orchestrator refuses a project without an active seat before dispatch", async () => {
+  const { posts, control } = controlStub();
+  await expect(bindingsWith(control, false).send_message_to_orchestrator({ clientRequestId: "send-2", project: "proj-a", text: "kick off" }))
+    .rejects.toMatchObject({ details: { code: "unknown_project", retryable: false } });
+  await expect(bindingsWith(control, false).send_message_to_orchestrator({ clientRequestId: "send-2", project: "proj-a", text: "kick off" }))
+    .rejects.toThrow('no such project "proj-a"; no close matches; pass a known project key, display name or repository name');
+  expect(posts).toEqual([]);
 });
 
 /* ── BLOCKING 1: designation is an OPERATION contract, not self-service ──── */
@@ -530,8 +514,11 @@ function projectService(control: ViewerControlDependencies, projects = [
     registrySnapshot: () => ({ conversations: { conversation_caller: { id: "conversation_caller", projectOwnership: { project: "caller-project" }, generations: [], continuityPaths: [] } }, conversationAliases: {} }),
     callerAttribution: () => ({ kind: "agent", role: "orchestrator", conversationId: "conversation_caller" }),
     attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_caller" }),
-    authorizedSeats: () => [{ project: "caller-project", conversationId: "conversation_caller", path: null }],
-    completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: projects.map(project => ({ ...project, smt: 1, conversations: 1 })), complete: true } }),
+    authorizedSeats: () => [
+      { project: "caller-project", conversationId: "conversation_caller", path: null },
+      ...projects.map((project) => ({ project: project.project, conversationId: `conversation_${project.project}`, path: null })),
+    ],
+    lastCompletedCatalog: () => ({ files: [], projectCatalog: projects.map(project => ({ ...project, smt: 1, conversations: 1 })) }),
     ...overrides,
   } as unknown as ViewerMcpDomainDependencies;
   const receipts = new MemoryMcpReceiptStore();
@@ -642,7 +629,7 @@ test("unknown orchestrator project is refused before claiming or dispatching", a
   const { service, receipts } = projectService(control);
   const result = await service.callTool("send_message_to_orchestrator", { clientRequestId: "unknown-send", project: "Missing project", text: "status?" });
   expect(result).toMatchObject({ ok: false, code: "unknown_project", details: { outcome: "not-executed", nextAction: "new-request-permitted" } });
-  expect(result.error).toContain('unknown project "Missing project"');
+  expect(result.error).toContain('no such project "Missing project"');
   expect(result.error).toContain("project key");
   expect(posts).toEqual([]);
   expect(receipts.lookup("send_message_to_orchestrator:unknown-send")).toBeNull();
@@ -1068,13 +1055,14 @@ test("owner relay admits orchestrator messages only while its recorded run and s
     callerAttribution: () => ({ kind: "agent", conversationId: caller, role: null }),
     attentionAuthority: () => ({ kind: "worker", conversationId: caller, role: null }),
     authorizedSeats: () => [],
-    completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: [{ project: "proj-a", displayName: "Example project", smt: 1, conversations: 0 }], complete: true } }),
+    lastCompletedCatalog: () => ({ files: [], projectCatalog: [{ project: "proj-a", displayName: "Example project", smt: 1, conversations: 0 }] }),
   } as never;
   const service = createMcpToolService(viewerMcpBindings(undefined, control, domain), new MemoryMcpReceiptStore(), undefined, { recovery: viewerMcpRecoverableTools(domain) });
   let sequence = 0;
   const send = () => service.callTool("send_message_to_orchestrator", { clientRequestId: `owner-send-${++sequence}`, project: "proj-a", text: "Start the requested work" });
   const run = { requestId: "owner_request", relayId: "relay", targetId: "target", conversationId: caller,
-    ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null };
+    ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid), childPid: null, childIdentity: null,
+    ownerTurn: { request: { text: "Hand this request to the seat", requestText: null } } };
   const store = { v: 1, relays: [{ id: "relay", paused: false, targets: [{ id: "target", enabled: true, ownerTier: true }] }] };
   const ledger = (runs: unknown[]) => writeRelayFile(externalRelayFile("runs"), { v: 1, runs });
   writeRelayFile(externalRelayFile("relays"), store);
