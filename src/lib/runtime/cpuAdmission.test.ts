@@ -3,12 +3,14 @@ import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { PrePollCpuAdmissionQueue } from "./cpuAdmission.prePoll.fixture";
 import { CpuAdmissionQueue, cpuAdmissionFile, CPU_QUEUE_ABANDONED_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS, CPU_QUEUE_STALE_GRACE_MS, CPU_QUEUE_UNPOLLED_MS } from "./cpuAdmission";
 import { cpuQueueDetail, ordinal, parseCpuQueueDetail } from "./cpuQueueText";
 import { captureProcessIdentity } from "../processIdentity";
 
 const directories: string[] = [];
-const queues: CpuAdmissionQueue[] = [];
+const queues: { close(): void }[] = [];
 afterEach(() => { for (const q of queues.splice(0)) q.close(); for (const dir of directories.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 /* The ordering cases below move a fake clock across minutes between checks, so
    their tickets stand for waiters that poll throughout: `unpolledMs` is
@@ -217,65 +219,204 @@ test("a stage released from a long hold is ahead of later work before its own ne
   expect(q.check("stage:one", false)).toBeNull();
 });
 
-/* The checker of a release that predates polls, statement for statement: it
-   shares the file with the current one for as long as that release serves. */
-function olderRelease(file: string, clock: () => number) {
-  const db = new Database(file, { create: true });
-  db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;");
-  db.exec("CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, since INTEGER NOT NULL, owner TEXT); CREATE TABLE IF NOT EXISTS suspended (key TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS admission (id INTEGER PRIMARY KEY, last INTEGER); INSERT OR IGNORE INTO admission VALUES (1, NULL);");
-  db.exec("CREATE TABLE IF NOT EXISTS stage_admissions (key TEXT PRIMARY KEY);");
-  const check = (key: string, owner?: ReturnType<typeof captureProcessIdentity>) => db.transaction(() => {
-    db.query("INSERT OR IGNORE INTO tickets (key, since, owner) VALUES (?, ?, ?)").run(key, clock(), owner ? JSON.stringify(owner) : null);
-    db.query("DELETE FROM suspended WHERE key = ?").run(key);
-    db.query("DELETE FROM stage_admissions WHERE key = ?").run(key);
-    const ticket = db.query<{ seq: number }, [string]>("SELECT * FROM tickets WHERE key = ?").get(key)!;
-    return db.query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM tickets WHERE seq <= ? AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)").get(ticket.seq)!.n;
-  }).immediate();
-  const row = (key: string) => db.query<{ seq: number; since: number }, [string]>("SELECT seq, since FROM tickets WHERE key = ?").get(key);
-  return { check, row, close: () => db.close() };
+/* A release that predates polls shares the file with the current one for as
+   long as it serves. These cases run its own queue class beside the current
+   one, on one file and one clock. */
+function mixed() {
+  const f = fixture(CPU_QUEUE_UNPOLLED_MS);
+  let now = 0;
+  const older = () => { const q = new PrePollCpuAdmissionQueue(f.file, () => now); queues.push(q); return q; };
+  const read = <T>(sql: string) => { const db = new Database(f.file, { readonly: true }); try { return db.query<T, []>(sql).all(); } finally { db.close(); } };
+  const row = (key: string) => read<{ key: string; seq: number; since: number }>("SELECT key, seq, since FROM tickets").find(ticket => ticket.key === key) ?? null;
+  return { ...f, older, read, row, clock: () => now, at: (value: number) => { now = value; f.at(value); } };
 }
 
 test("a stage an older release keeps polling holds its place against a current checker", () => {
-  const f = fixture(CPU_QUEUE_UNPOLLED_MS);
-  let now = 0;
-  const older = olderRelease(f.file, () => now), q = f.open();
-  const at = (value: number) => { now = value; f.at(value); };
-  try {
-    // An orphan at the head, then the older release's stage under pressure.
-    q.check(FOREIGN, false);
-    expect(older.check(LIVE)).toBe(2);
-    const first = older.row(LIVE)!;
-    for (let tick = 5_000; tick <= CPU_QUEUE_UNPOLLED_MS + 5_000; tick += 5_000) { at(tick); older.check(LIVE); }
-    // The orphan is passed over; the polled stage is not, so later work waits behind it.
-    expect(q.check("stage:later", true)).toMatchObject({ since: CPU_QUEUE_UNPOLLED_MS + 5_000, position: 2 });
-    expect(q.check("command:push", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 3 });
-    expect(older.row(LIVE)).toEqual(first);
-    // Its release stops: within the bound of its last poll it is passed over too.
-    at(now + CPU_QUEUE_UNPOLLED_MS + 1);
-    expect(q.check("stage:later", true)).toBeNull();
-    expect(q.check("command:push", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 1 }); // spacing still separates the two starts
-    expect(older.row(LIVE)).toEqual(first);
-    // Back again, the older release finds its stage where it left it.
-    expect(older.check(LIVE)).toBe(2);
-    expect(q.check("command:push", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
-  } finally { older.close(); }
+  const m = mixed(), older = m.older(), q = m.open();
+  // An orphan at the head, then the older release's stage under pressure.
+  q.check(FOREIGN, false);
+  expect(older.check(LIVE, false)).toMatchObject({ position: 2 });
+  const first = m.row(LIVE)!;
+  for (let tick = 5_000; tick <= CPU_QUEUE_UNPOLLED_MS + 5_000; tick += 5_000) { m.at(tick); older.check(LIVE, false); }
+  // The orphan is passed over; the polled stage is not, so later work waits behind it.
+  expect(q.check("stage:later", true)).toMatchObject({ since: CPU_QUEUE_UNPOLLED_MS + 5_000, position: 2 });
+  expect(q.check("command:push", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 3 });
+  expect(m.row(LIVE)).toEqual(first);
+  // Its release stops: within the bound of its last poll it is passed over too.
+  m.at(m.clock() + CPU_QUEUE_UNPOLLED_MS + 1);
+  expect(q.check("stage:later", true)).toBeNull();
+  expect(q.check("command:push", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 1 }); // spacing still separates the two starts
+  expect(m.row(LIVE)).toEqual(first);
+  // Back again, the older release finds its stage where it left it, ahead of the command.
+  expect(older.check(LIVE, false)).toMatchObject({ since: 0, position: 1 });
+  expect(q.check("command:push", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
 });
 
 test("a stage an older release polls for more than a day behind a live command keeps its row", () => {
-  const f = fixture(CPU_QUEUE_UNPOLLED_MS);
-  let now = 0;
-  const older = olderRelease(f.file, () => now), q = f.open(), owner = captureProcessIdentity(process.pid);
-  const at = (value: number) => { now = value; f.at(value); };
-  try {
-    expect(older.check("command:long", owner)).toBe(1);
-    expect(older.check(LIVE)).toBe(2);
-    const first = older.row(LIVE)!;
-    for (const tick of [5_000, CPU_QUEUE_UNPOLLED_MS, CPU_QUEUE_ABANDONED_MS - 5_000, CPU_QUEUE_ABANDONED_MS + 5_000]) { at(tick); older.check(LIVE); }
-    at(CPU_QUEUE_ABANDONED_MS + 10_000);
-    expect(q.check("stage:later", true)).toMatchObject({ position: 3 });
-    expect(older.row(LIVE)).toEqual(first);
-    expect(older.check(LIVE)).toBe(2);
-  } finally { older.close(); }
+  const m = mixed(), older = m.older(), q = m.open(), owner = captureProcessIdentity(process.pid);
+  expect(older.check("command:long", true, owner, false)).toBeNull();
+  expect(older.check(LIVE, true)).toMatchObject({ position: 2 });
+  const first = m.row(LIVE)!;
+  for (const tick of [5_000, CPU_QUEUE_UNPOLLED_MS, CPU_QUEUE_ABANDONED_MS - 5_000, CPU_QUEUE_ABANDONED_MS + 5_000]) { m.at(tick); older.check(LIVE, true); }
+  m.at(CPU_QUEUE_ABANDONED_MS + 10_000);
+  expect(q.check("stage:later", true)).toMatchObject({ position: 3 });
+  expect(m.row(LIVE)).toEqual(first);
+  expect(older.check(LIVE, true)).toMatchObject({ since: 0, position: 2 });
+});
+
+test("an orphan at the head stops holding an older release's live stage and a later command", () => {
+  const m = mixed(), older = m.older(), q = m.open(), owner = captureProcessIdentity(process.pid);
+  // The incident with two releases serving: the orphan, the older release's
+  // stage, a command of the current one. Each waiter checks every five seconds.
+  older.check(FOREIGN, false);
+  const orphan = m.row(FOREIGN)!;
+  const admitted: Record<string, number> = {};
+  for (let tick = 0; tick <= CPU_QUEUE_UNPOLLED_MS + 20_000; tick += 5_000) {
+    m.at(tick);
+    if (!(LIVE in admitted)) {
+      const wait = older.check(LIVE, true);
+      if (!wait) admitted[LIVE] = tick;
+      else if (tick <= CPU_QUEUE_UNPOLLED_MS) expect(wait).toMatchObject({ since: 0, position: 2 }); // within the bound the orphan counts
+    }
+    if (!("command" in admitted)) {
+      const wait = q.check("command:later", true, owner);
+      if (!wait) admitted.command = tick;
+      else if (!(LIVE in admitted)) expect(wait).toMatchObject({ position: tick <= CPU_QUEUE_UNPOLLED_MS ? 3 : 2 }); // never ahead of the live stage
+    }
+  }
+  // The first current check past the bound passes the orphan over for both
+  // releases; the stage starts at its next tick and the command one tick later.
+  expect(admitted).toEqual({ [LIVE]: CPU_QUEUE_UNPOLLED_MS + 10_000, command: CPU_QUEUE_UNPOLLED_MS + 15_000 });
+  expect(m.row(FOREIGN)).toEqual(orphan);
+  // Its instance was only restarting: its own check returns it to its place and age.
+  expect(older.check(FOREIGN, false)).toMatchObject({ since: 0, position: 1 });
+  expect(m.read("SELECT key FROM unpolled")).toEqual([]);
+});
+
+test("an older release's reconcile cannot return a passed-over ticket to the head, and removes it whole", () => {
+  const m = mixed(), older = m.older(), q = m.open(), owner = captureProcessIdentity(process.pid);
+  const orphan = "stage:orphan";
+  older.check(orphan, false);
+  m.at(CPU_QUEUE_UNPOLLED_MS + 1);
+  expect(q.check("command:first", true, owner)).toBeNull();
+  // Reconciling the ticket as eligible polls nothing, so it stays passed over.
+  for (const tick of [70_000, 75_000, 80_000]) { m.at(tick); older.reconcile("stage:", new Set([orphan])); }
+  expect(older.check(LIVE, true)).toBeNull();
+  // A fence's hold replaces the passing over, and the release ends it once.
+  older.reconcile("stage:", new Set([orphan]), new Set());
+  expect(m.read("SELECT key FROM unpolled")).toEqual([]);
+  expect(m.read("SELECT key FROM suspended")).toEqual([{ key: orphan }]);
+  m.at(CPU_QUEUE_UNPOLLED_MS * 3);
+  expect(q.check("command:second", true, owner)).toBeNull(); // held: it does not count
+  older.reconcile("stage:", new Set([orphan]));
+  m.at(CPU_QUEUE_UNPOLLED_MS * 3 + CPU_QUEUE_SPACING_MS);
+  expect(q.check("command:third", true, owner)).toMatchObject({ position: 2 });
+  m.at(CPU_QUEUE_UNPOLLED_MS * 4 + CPU_QUEUE_SPACING_MS + 1);
+  expect(q.check("command:third", true, owner)).toBeNull();
+  expect(m.read("SELECT key FROM unpolled")).toEqual([{ key: orphan }]);
+  // The stage is gone for its release: nothing of the ticket stays behind.
+  older.reconcile("stage:", new Set());
+  expect(m.read("SELECT key FROM tickets UNION ALL SELECT key FROM suspended UNION ALL SELECT key FROM unpolled")).toEqual([]);
+});
+
+test("a stage an older release releases from a hold is ahead of later work before its next check", () => {
+  const m = mixed(), older = m.older(), q = m.open(), active = new Set([LIVE]);
+  older.check(LIVE, false);
+  const first = m.row(LIVE)!;
+  m.at(5_000);
+  older.check(LIVE, false);
+  older.reconcile("stage:", active, new Set()); // another fence holds it
+  m.at(CPU_QUEUE_UNPOLLED_MS + 5_001);
+  older.reconcile("stage:", active); // the hold ends; the stage has not ticked yet
+  expect(q.check("command:later", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
+  expect(older.check(LIVE, false)).toMatchObject({ since: 0, position: 1 });
+  expect(m.row(LIVE)).toEqual(first);
+});
+
+test("a stage an older release held for more than a day keeps its row and its place at the release", () => {
+  const m = mixed(), older = m.older(), q = m.open(), active = new Set([LIVE]), owner = captureProcessIdentity(process.pid);
+  older.check(LIVE, false);
+  const first = m.row(LIVE)!;
+  m.at(5_000);
+  older.reconcile("stage:", active, new Set());
+  m.at(CPU_QUEUE_ABANDONED_MS + 10_000);
+  expect(q.check("command:probe", true, owner)).toBeNull(); // held: passed, and kept
+  expect(m.row(LIVE)).toEqual(first);
+  m.at(CPU_QUEUE_ABANDONED_MS + 15_000);
+  older.reconcile("stage:", active);
+  expect(q.check("command:later", true, owner)).toMatchObject({ position: 2 });
+  expect(m.row(LIVE)).toEqual(first);
+  expect(older.check(LIVE, false)).toBeNull(); // first in line and long past its own bound
+  expect(q.check("command:later", true, owner)).toMatchObject({ position: 1 }); // spacing behind the stage
+});
+
+/* A second process that opens the file and checks at the moment the first one
+   reads its clock, which the first cut of this change did between adding the
+   column and giving the queued tickets their bound. */
+function checkInAnotherProcess(file: string, clock: number, key: string, owner: ReturnType<typeof captureProcessIdentity>) {
+  const script = `const { CpuAdmissionQueue } = await import(process.argv[1]); const q = new CpuAdmissionQueue(process.argv[2], () => Number(process.argv[3])); process.stdout.write(JSON.stringify(q.check(process.argv[4], true, JSON.parse(process.argv[5])))); q.close();`;
+  const child = spawnSync(process.execPath, ["-e", script, path.join(import.meta.dir, "cpuAdmission.ts"), file, String(clock), key, JSON.stringify(owner)], { encoding: "utf8", timeout: 30_000 });
+  if (child.status !== 0) throw new Error(`second checker failed: ${child.stderr}`);
+  return JSON.parse(child.stdout) as { position: number } | null;
+}
+
+test("two releases opening an older queue at once never remove a live, just-polled stage", () => {
+  const m = mixed(), older = m.older(), owner = captureProcessIdentity(process.pid);
+  expect(older.check("command:long", true, owner, false)).toBeNull();
+  expect(older.check(LIVE, true)).toMatchObject({ since: 0, position: 2 });
+  const first = m.row(LIVE)!, day = 2 * CPU_QUEUE_ABANDONED_MS;
+  m.at(day);
+  older.check(LIVE, true);
+  let other: ReturnType<typeof checkInAnotherProcess> | undefined;
+  const q = new CpuAdmissionQueue(m.file, () => {
+    if (other === undefined) other = checkInAnotherProcess(m.file, day, "command:later", owner);
+    return m.clock();
+  }, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_UNPOLLED_MS);
+  queues.push(q);
+  expect(other).toMatchObject({ position: 3 });
+  expect(m.row(LIVE)).toEqual(first);
+  expect(q.check("command:later", true, owner)).toMatchObject({ position: 3 });
+  expect(older.check(LIVE, true)).toMatchObject({ since: 0, position: 2 });
+});
+
+test("releases racing to open an older queue describe it once and keep its live stage", async () => {
+  const m = mixed(), older = m.older(), owner = captureProcessIdentity(process.pid);
+  expect(older.check("command:long", true, owner, false)).toBeNull();
+  older.check(LIVE, true);
+  const first = m.row(LIVE)!, day = 2 * CPU_QUEUE_ABANDONED_MS;
+  m.at(day);
+  older.check(LIVE, true);
+  const script = `const { CpuAdmissionQueue } = await import(process.argv[1]); const q = new CpuAdmissionQueue(process.argv[2], () => Number(process.argv[3])); process.stdout.write(JSON.stringify(q.check(process.argv[4], true, JSON.parse(process.argv[5])))); q.close();`;
+  const children = Array.from({ length: 6 }, (_, index) => Bun.spawn([process.execPath, "-e", script, path.join(import.meta.dir, "cpuAdmission.ts"), m.file, String(day), `command:racer-${index}`, JSON.stringify(owner)], { stdout: "pipe", stderr: "pipe" }));
+  const waits = await Promise.all(children.map(async child => {
+    const [out, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    if (code !== 0) throw new Error(`racing checker failed: ${error}`);
+    return (JSON.parse(out) as { position: number }).position;
+  }));
+  // Every racer queued behind the command and the live stage, none in its place.
+  expect(waits.sort()).toEqual([3, 4, 5, 6, 7, 8]);
+  expect(m.row(LIVE)).toEqual(first);
+  expect(m.read<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'")).toEqual([{ n: 6 }]);
+  expect(older.check(LIVE, true)).toMatchObject({ since: 0, position: 2 });
+});
+
+test("a queue the first cut of this change left half-described keeps its live tickets", () => {
+  const m = mixed(), older = m.older();
+  older.check(LIVE, false);
+  const first = m.row(LIVE)!;
+  // The column and the single trigger of that cut, and no bound on the ticket.
+  const cut = new Database(m.file);
+  cut.exec("ALTER TABLE tickets ADD COLUMN polled INTEGER");
+  cut.exec("CREATE TRIGGER tickets_polled BEFORE INSERT ON tickets BEGIN UPDATE tickets SET polled = NEW.since WHERE key = NEW.key; END");
+  cut.close();
+  m.at(2 * CPU_QUEUE_ABANDONED_MS);
+  const q = m.open();
+  expect(q.check("stage:later", true)).toMatchObject({ position: 2 });
+  expect(m.row(LIVE)).toEqual(first);
+  expect(m.read("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name")).toEqual(
+    ["suspended_hold", "suspended_keep", "suspended_release", "tickets_gone", "tickets_poll", "tickets_queued"].map(name => ({ name })));
+  m.at(2 * CPU_QUEUE_ABANDONED_MS + CPU_QUEUE_UNPOLLED_MS + 1);
+  expect(q.check("stage:later", true)).toBeNull();
 });
 
 test("a queue written before polls were recorded gives its tickets one bound from the first current open", () => {

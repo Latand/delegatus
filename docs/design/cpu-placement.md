@@ -174,11 +174,20 @@ A stage ticket has no process behind it, so every check records its poll. An
 ownerless ticket nobody has polled for 60 seconds is passed over by every
 checker. Its row stays, so an instance that was only restarting returns to its
 sequence and age with its next check, and the spacing between admissions still
-holds. After 24 hours without a poll, a ticket no fence holds is removed. The
-poll is recorded by a trigger on the insert every check repeats, so a release
-that predates polls and shares the file keeps its stages in place for as long
-as it checks them; tickets already queued when the first current release opens
-the file get one 60-second bound from that moment. On
+holds. After 24 hours without a poll, a ticket no fence holds is removed.
+
+A release that predates polls shares the file for as long as it serves, and
+its statements are fixed, so the queue keeps this state where that release
+already looks. A passed-over ticket gets a row in `suspended`, which every
+release skips, and one in `unpolled`, which tells it from a fence's hold and
+lets the 24-hour removal reach it. Triggers in the file record the rest for
+every connection: the insert each check repeats records the poll and ends the
+passing over; a fence's hold replaces the passing over, and its release gives
+the ticket one fresh 60-second bound; a reconcile leaves the passing over in
+place and the ticket's own check ends it; a removed ticket takes its rows along. The
+column, the table, the triggers and the first bound of the tickets already
+queued commit in one writer transaction that reads the schema under its lock,
+so two releases opening the file together never see part of it. On
 2026-10-13 two stage tickets left by a test's child processes held the head of
 the machine queue for 1 h 45 min; nothing reconciled them, because each
 release reconciles only its own namespace.
