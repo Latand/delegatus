@@ -1,5 +1,5 @@
 {
-  "commit": "630af142b8d3085e9fa600e4dfb094a9fc0d7e9e",
+  "commit": "2240ab47b210501d930f9511e4ad971cb990693a",
   "frames": {
     "1440-en-off": {
       "overflow": 0,
@@ -281,7 +281,7 @@
         "height": 276
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Claude agent\nharbor-billing · Codex agent\nharbor-billing · orchestrator\nThe pipeline controller is working.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Claude agent\nharbor-billing · Codex agent\nharbor-billing · orchestrator\nThe pipeline controller is working.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "1440-en-light-draining-counts": {
       "blockerRows": [
@@ -322,7 +322,7 @@
         "height": 222
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nPipeline stages running: 1\nAgent turns running: 2\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nPipeline stages running: 1\nAgent turns running: 2\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "1440-en-light-deferred": {
       "blockerRows": [
@@ -707,7 +707,7 @@
         "height": 222
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · orchestrator\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · orchestrator\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "1440-en-dark-draining": {
       "blockerRows": [
@@ -769,7 +769,7 @@
         "height": 276
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Claude agent\nharbor-billing · Codex agent\nharbor-billing · orchestrator\nThe pipeline controller is working.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Claude agent\nharbor-billing · Codex agent\nharbor-billing · orchestrator\nThe pipeline controller is working.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "1440-en-dark-draining-counts": {
       "blockerRows": [
@@ -810,7 +810,7 @@
         "height": 222
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nPipeline stages running: 1\nAgent turns running: 2\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nPipeline stages running: 1\nAgent turns running: 2\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "1440-en-dark-deferred": {
       "blockerRows": [
@@ -1195,7 +1195,7 @@
         "height": 222
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · orchestrator\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · orchestrator\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "1440-uk-light-draining": {
       "blockerRows": [
@@ -1254,10 +1254,10 @@
         "x": 185,
         "y": 237,
         "width": 1070,
-        "height": 294
+        "height": 276
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Агент Claude\nharbor-billing · Агент Codex\nharbor-billing · оркестратор\nКонтролер пайплайнів працює.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Агент Claude\nharbor-billing · Агент Codex\nharbor-billing · оркестратор\nКонтролер пайплайнів працює.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "1440-uk-light-draining-counts": {
       "blockerRows": [
@@ -1295,10 +1295,10 @@
         "x": 185,
         "y": 237,
         "width": 1070,
-        "height": 240
+        "height": 222
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють етапи пайплайна: 1\nПрацюють ходи агентів: 2\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють етапи пайплайна: 1\nПрацюють ходи агентів: 2\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "1440-uk-light-deferred": {
       "blockerRows": [
@@ -1680,10 +1680,10 @@
         "x": 185,
         "y": 237,
         "width": 1070,
-        "height": 240
+        "height": 222
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · оркестратор\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · оркестратор\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "1440-uk-dark-draining": {
       "blockerRows": [
@@ -1742,10 +1742,10 @@
         "x": 185,
         "y": 237,
         "width": 1070,
-        "height": 294
+        "height": 276
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Агент Claude\nharbor-billing · Агент Codex\nharbor-billing · оркестратор\nКонтролер пайплайнів працює.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Агент Claude\nharbor-billing · Агент Codex\nharbor-billing · оркестратор\nКонтролер пайплайнів працює.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "1440-uk-dark-draining-counts": {
       "blockerRows": [
@@ -1783,10 +1783,10 @@
         "x": 185,
         "y": 237,
         "width": 1070,
-        "height": 240
+        "height": 222
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють етапи пайплайна: 1\nПрацюють ходи агентів: 2\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють етапи пайплайна: 1\nПрацюють ходи агентів: 2\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "1440-uk-dark-deferred": {
       "blockerRows": [
@@ -2168,10 +2168,10 @@
         "x": 185,
         "y": 237,
         "width": 1070,
-        "height": 240
+        "height": 222
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · оркестратор\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · оркестратор\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "1000-en-light-draining": {
       "blockerRows": [
@@ -2230,10 +2230,10 @@
         "x": 73,
         "y": 237,
         "width": 854,
-        "height": 294
+        "height": 276
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Claude agent\nharbor-billing · Codex agent\nharbor-billing · orchestrator\nThe pipeline controller is working.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Claude agent\nharbor-billing · Codex agent\nharbor-billing · orchestrator\nThe pipeline controller is working.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "1000-en-light-draining-counts": {
       "blockerRows": [
@@ -2271,10 +2271,10 @@
         "x": 73,
         "y": 237,
         "width": 854,
-        "height": 240
+        "height": 222
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nPipeline stages running: 1\nAgent turns running: 2\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nPipeline stages running: 1\nAgent turns running: 2\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "1000-en-light-deferred": {
       "blockerRows": [
@@ -2656,10 +2656,10 @@
         "x": 73,
         "y": 237,
         "width": 854,
-        "height": 240
+        "height": 222
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · orchestrator\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · orchestrator\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "1000-en-dark-draining": {
       "blockerRows": [
@@ -2718,10 +2718,10 @@
         "x": 73,
         "y": 237,
         "width": 854,
-        "height": 294
+        "height": 276
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Claude agent\nharbor-billing · Codex agent\nharbor-billing · orchestrator\nThe pipeline controller is working.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Claude agent\nharbor-billing · Codex agent\nharbor-billing · orchestrator\nThe pipeline controller is working.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "1000-en-dark-draining-counts": {
       "blockerRows": [
@@ -2759,10 +2759,10 @@
         "x": 73,
         "y": 237,
         "width": 854,
-        "height": 240
+        "height": 222
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nPipeline stages running: 1\nAgent turns running: 2\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nPipeline stages running: 1\nAgent turns running: 2\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "1000-en-dark-deferred": {
       "blockerRows": [
@@ -3144,10 +3144,10 @@
         "x": 73,
         "y": 237,
         "width": 854,
-        "height": 240
+        "height": 222
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · orchestrator\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · orchestrator\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "1000-uk-light-draining": {
       "blockerRows": [
@@ -3206,10 +3206,10 @@
         "x": 73,
         "y": 237,
         "width": 854,
-        "height": 294
+        "height": 276
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Агент Claude\nharbor-billing · Агент Codex\nharbor-billing · оркестратор\nКонтролер пайплайнів працює.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Агент Claude\nharbor-billing · Агент Codex\nharbor-billing · оркестратор\nКонтролер пайплайнів працює.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "1000-uk-light-draining-counts": {
       "blockerRows": [
@@ -3247,10 +3247,10 @@
         "x": 73,
         "y": 237,
         "width": 854,
-        "height": 240
+        "height": 222
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють етапи пайплайна: 1\nПрацюють ходи агентів: 2\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють етапи пайплайна: 1\nПрацюють ходи агентів: 2\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "1000-uk-light-deferred": {
       "blockerRows": [
@@ -3632,10 +3632,10 @@
         "x": 73,
         "y": 237,
         "width": 854,
-        "height": 240
+        "height": 222
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · оркестратор\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · оркестратор\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "1000-uk-dark-draining": {
       "blockerRows": [
@@ -3694,10 +3694,10 @@
         "x": 73,
         "y": 237,
         "width": 854,
-        "height": 294
+        "height": 276
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Агент Claude\nharbor-billing · Агент Codex\nharbor-billing · оркестратор\nКонтролер пайплайнів працює.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Агент Claude\nharbor-billing · Агент Codex\nharbor-billing · оркестратор\nКонтролер пайплайнів працює.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "1000-uk-dark-draining-counts": {
       "blockerRows": [
@@ -3735,10 +3735,10 @@
         "x": 73,
         "y": 237,
         "width": 854,
-        "height": 240
+        "height": 222
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють етапи пайплайна: 1\nПрацюють ходи агентів: 2\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють етапи пайплайна: 1\nПрацюють ходи агентів: 2\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "1000-uk-dark-deferred": {
       "blockerRows": [
@@ -4120,10 +4120,10 @@
         "x": 73,
         "y": 237,
         "width": 854,
-        "height": 240
+        "height": 222
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · оркестратор\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · оркестратор\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "390-en-light-draining": {
       "blockerRows": [
@@ -4185,7 +4185,7 @@
         "height": 365.5
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Claude agent\nharbor-billing · Codex agent\nharbor-billing · orchestrator\nThe pipeline controller is working.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Claude agent\nharbor-billing · Codex agent\nharbor-billing · orchestrator\nThe pipeline controller is working.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "390-en-light-draining-counts": {
       "blockerRows": [
@@ -4226,7 +4226,7 @@
         "height": 311.5
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nPipeline stages running: 1\nAgent turns running: 2\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nPipeline stages running: 1\nAgent turns running: 2\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "390-en-light-deferred": {
       "blockerRows": [
@@ -4611,7 +4611,7 @@
         "height": 365.5
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · orchestrator\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · orchestrator\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "390-en-dark-draining": {
       "blockerRows": [
@@ -4673,7 +4673,7 @@
         "height": 365.5
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Claude agent\nharbor-billing · Codex agent\nharbor-billing · orchestrator\nThe pipeline controller is working.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Claude agent\nharbor-billing · Codex agent\nharbor-billing · orchestrator\nThe pipeline controller is working.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "390-en-dark-draining-counts": {
       "blockerRows": [
@@ -4714,7 +4714,7 @@
         "height": 311.5
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nPipeline stages running: 1\nAgent turns running: 2\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nPipeline stages running: 1\nAgent turns running: 2\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "390-en-dark-deferred": {
       "blockerRows": [
@@ -5099,7 +5099,7 @@
         "height": 365.5
       },
       "controlVisible": true,
-      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · orchestrator\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. The update can apply after 2 minutes without new starts; running work may reconnect or resume.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
+      "text": "Automatic updates\nTurn off\n\nbbbbbbb is built and waiting for a quiet moment.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · orchestrator\nA person was active in Delegatus recently.\n\nWaiting since 2 Jan 2026 02:00. New launches pause for up to 10 minutes. Running work finishes before the update starts.\n\nBuilt bbbbbbb; web serves aaaaaaa and the runtime host serves aaaaaaa."
     },
     "390-uk-light-draining": {
       "blockerRows": [
@@ -5158,10 +5158,10 @@
         "x": 16,
         "y": 255,
         "width": 358,
-        "height": 383.5
+        "height": 365.5
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Агент Claude\nharbor-billing · Агент Codex\nharbor-billing · оркестратор\nКонтролер пайплайнів працює.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Агент Claude\nharbor-billing · Агент Codex\nharbor-billing · оркестратор\nКонтролер пайплайнів працює.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "390-uk-light-draining-counts": {
       "blockerRows": [
@@ -5199,10 +5199,10 @@
         "x": 16,
         "y": 255,
         "width": 358,
-        "height": 329.5
+        "height": 311.5
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють етапи пайплайна: 1\nПрацюють ходи агентів: 2\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють етапи пайплайна: 1\nПрацюють ходи агентів: 2\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "390-uk-light-deferred": {
       "blockerRows": [
@@ -5584,10 +5584,10 @@
         "x": 16,
         "y": 255,
         "width": 358,
-        "height": 383.5
+        "height": 365.5
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · оркестратор\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · оркестратор\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "390-uk-dark-draining": {
       "blockerRows": [
@@ -5646,10 +5646,10 @@
         "x": 16,
         "y": 255,
         "width": 358,
-        "height": 383.5
+        "height": 365.5
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Агент Claude\nharbor-billing · Агент Codex\nharbor-billing · оркестратор\nКонтролер пайплайнів працює.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · Ship the billing export for March\nreview · Review the invoice rounding fix\nharbor-billing · Агент Claude\nharbor-billing · Агент Codex\nharbor-billing · оркестратор\nКонтролер пайплайнів працює.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "390-uk-dark-draining-counts": {
       "blockerRows": [
@@ -5687,10 +5687,10 @@
         "x": 16,
         "y": 255,
         "width": 358,
-        "height": 329.5
+        "height": 311.5
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють етапи пайплайна: 1\nПрацюють ходи агентів: 2\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nПрацюють етапи пайплайна: 1\nПрацюють ходи агентів: 2\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     },
     "390-uk-dark-deferred": {
       "blockerRows": [
@@ -6072,10 +6072,10 @@
         "x": 16,
         "y": 255,
         "width": 358,
-        "height": 383.5
+        "height": 365.5
       },
       "controlVisible": true,
-      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · оркестратор\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення можливе після 2 хвилин без нових запусків; поточна робота може перепідключитися або відновитися.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
+      "text": "Автооновлення\nВимкнути\n\nbbbbbbb зібрано; чекаю на тиху хвилину.\n\nbuild · TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT\nProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectProjectName · оркестратор\nНещодавно хтось працював у Delegatus.\n\nОчікуємо від 2 січ. 2026 р. 02:00. Нові запуски призупинено щонайбільше на 10 хвилин. Оновлення почнеться після завершення поточної роботи.\n\nЗібрано bbbbbbb; веб обслуговує aaaaaaa, runtime host — aaaaaaa."
     }
   },
   "failures": []
