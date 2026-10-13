@@ -2,9 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { writePrivate, type StoredSession } from "./storage";
+import { validCallSummary, type CallSummary } from "./callMemoryTypes";
 import type { CompanionUsage } from "./contract";
 
-export type TranscriptKind = "session_start" | "session_end" | "utterance" | "reply" | "delegation" | "tool" | "handoff" | "request" | "report";
+export type TranscriptKind = "session_start" | "session_end" | "utterance" | "reply" | "delegation" | "tool" | "handoff" | "request" | "report" | "summary";
 /** Page contract. Times are milliseconds from session start; speech also
  * carries the provider's timeline and each fragment's [start, end] pair.
  * Tool arguments and results are cleaned, bounded pretty JSON strings. */
@@ -18,7 +19,7 @@ export interface TranscriptEntry {
 }
 export interface SessionTranscriptRecord { entries: TranscriptEntry[]; truncated: boolean; usage?: CompanionUsage }
 const MAX_BYTES = 4 * 1024 * 1024;
-const CLOSE_RESERVE = 2048;
+const CLOSE_RESERVE = 8192;
 const validId = (id: string) => /^[A-Za-z0-9_-]{1,200}$/u.test(id);
 interface Held { entries: Map<string, TranscriptEntry>; persisted: Set<string>; bytes: number; truncated: boolean }
 
@@ -59,7 +60,7 @@ export class CompanionTranscriptRecords {
     entry = { ...entry, order: old?.order ?? held.entries.size };
     if (entry.kind === "session_end") entry = { ...entry, data: { ...entry.data, truncated: held.truncated } };
     const bytes = held.bytes - (old ? this.size(old) : 0) + this.size(entry);
-    if (bytes > MAX_BYTES - (entry.kind === "session_end" ? 0 : CLOSE_RESERVE)) { held.truncated = true; return; }
+    if (bytes > MAX_BYTES - (entry.kind === "session_end" ? 0 : entry.kind === "summary" ? 2048 : CLOSE_RESERVE)) { held.truncated = true; return; }
     held.entries.set(entry.id, entry); held.bytes = bytes;
     if (!settled) return;
     fs.mkdirSync(this.directory(), { recursive: true, mode: 0o700 });
@@ -77,6 +78,19 @@ export class CompanionTranscriptRecords {
     const held = this.active.get(id) ?? this.load(id);
     // Insertion order preserves the first occurrence of an updated segment.
     return { entries: structuredClone([...held.entries.values()].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))), truncated: held.truncated };
+  }
+  summary(id: string): CallSummary | null {
+    const value = this.read(id).entries.find(entry => entry.kind === "summary")?.data;
+    if (!value) return null;
+    if (!validCallSummary(value)) throw new Error("TRANSCRIPT_UNAVAILABLE");
+    return value;
+  }
+  writeSummary(id: string, summary: CallSummary): void {
+    if (!validCallSummary(summary)) throw new Error("TRANSCRIPT_UNAVAILABLE");
+    // A pruned journal must stay pruned, even when its request returns late.
+    if (!fs.existsSync(this.file(id))) return;
+    this.put(id, { id: "summary", kind: "summary", atMs: Math.max(0, (summary.endedAt ?? summary.startedAt) - summary.startedAt), data: { ...summary } }, true);
+    if (this.read(id).entries.some(entry => entry.kind === "session_end")) this.finish(id);
   }
   finish(id: string): void {
     const held = this.active.get(id);

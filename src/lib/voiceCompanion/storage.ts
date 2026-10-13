@@ -13,6 +13,7 @@ import type { OperatorInput } from "./gate";
 export type CompanionBackend = "api" | "codex";
 export interface CompanionSettings {
   enabled: boolean;
+  callMemory: boolean;
   backend: CompanionBackend;
   monthlyCapUsd: number;
   keySource: "env" | "file" | "missing";
@@ -107,7 +108,7 @@ export interface StoredSession {
 interface Charge { month: string; usd: number; observedUsd?: number; reserved: boolean; incomplete: boolean }
 export interface CompanionDocument {
   version: 1;
-  settings: Pick<CompanionSettings, "enabled" | "monthlyCapUsd"> & { backend?: CompanionBackend };
+  settings: Pick<CompanionSettings, "enabled" | "monthlyCapUsd"> & { backend?: CompanionBackend; callMemory?: boolean };
   charges: Record<string, Charge>;
   sessions: Record<string, StoredSession>;
 }
@@ -201,6 +202,7 @@ export class CompanionStorage {
       const value = JSON.parse(fs.readFileSync(this.file(), "utf8")) as CompanionDocument;
       if (!record(value) || value.version !== 1 || !record(value.settings) || !record(value.charges) || !record(value.sessions)
         || typeof value.settings.enabled !== "boolean"
+        || (value.settings.callMemory !== undefined && typeof value.settings.callMemory !== "boolean")
         || !Number.isFinite(value.settings.monthlyCapUsd) || value.settings.monthlyCapUsd < 0
         || Object.values(value.charges).some(charge => !charge || !Number.isFinite(charge.usd) || charge.usd < 0
           || !/^\d{4}-\d{2}$/.test(charge.month) || typeof charge.reserved !== "boolean" || typeof charge.incomplete !== "boolean"
@@ -243,7 +245,7 @@ export class CompanionStorage {
     const last = latest(Object.values(document.sessions).filter(session => session.closed && session.backend !== "codex" && document.charges[session.id]));
     const lastCodex = latest(Object.values(document.sessions).filter(session => session.closed && session.backend === "codex"));
     const lastCharge = last ? document.charges[last.session.id] : undefined;
-    return { ...document.settings, backend: document.settings.backend ?? "api", keySource: this.keySource(), keyEnvironment: "OPENAI_API_KEY", month,
+    return { ...document.settings, callMemory: document.settings.callMemory ?? true, backend: document.settings.backend ?? "api", keySource: this.keySource(), keyEnvironment: "OPENAI_API_KEY", month,
       usageUsd: charges.reduce((sum, charge) => sum + (charge.reserved ? charge.observedUsd ?? 0 : charge.usd), 0),
       reservedUsd: charges.filter(charge => charge.reserved).reduce((sum, charge) => sum + charge.usd - (charge.observedUsd ?? 0), 0),
       incomplete: charges.some(charge => charge.incomplete),
@@ -293,8 +295,9 @@ export class CompanionStorage {
     });
     return this.settings();
   }
-  updateSettings(update: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd" | "backend">>): CompanionSettings {
-    if (Object.keys(update).some(key => key !== "enabled" && key !== "monthlyCapUsd" && key !== "backend")
+  updateSettings(update: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd" | "backend" | "callMemory">>): CompanionSettings {
+    if (Object.keys(update).some(key => key !== "enabled" && key !== "monthlyCapUsd" && key !== "backend" && key !== "callMemory")
+      || (update.callMemory !== undefined && typeof update.callMemory !== "boolean")
       || (update.enabled !== undefined && typeof update.enabled !== "boolean")
       || (update.backend !== undefined && update.backend !== "api" && update.backend !== "codex")
       || (update.monthlyCapUsd !== undefined && (!Number.isFinite(update.monthlyCapUsd) || update.monthlyCapUsd < 0 || update.monthlyCapUsd > 10_000))) throw new Error("INVALID_SETTINGS");

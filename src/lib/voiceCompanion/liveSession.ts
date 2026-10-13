@@ -1,3 +1,4 @@
+import type { CallMemory } from "./callMemory";
 import type { OwnerHistoryRead } from "@/lib/externalRelay/ownerHistory";
 import { createHash, randomUUID } from "node:crypto";
 import { reportHeaderName } from "@/lib/projects/settings";
@@ -74,12 +75,14 @@ interface ActiveSession {
   codexTurns: Map<string, CodexTurnContext>;
   /** A private owner-history result remains in provider context for the life of the session. */
   privateHistory?: boolean;
+  memory?: string;
   /** The paying account's plan ran out: the call says so once and ends with reason limit. */
   limitReached?: boolean;
   /** The latest handoff: the operator turn then latest, the turn it was given, and whether the voice spoke since. */
   lastHandoff?: { latest?: number; turn?: number; replied: boolean; attempt: string };
 }
 interface Options {
+  memory?: CallMemory;
   ownerHistory?: OwnerHistoryRead;
   key?(): string; now?(): number; closeTimeoutMs?: number; timers?: boolean;
   /** The API provider beside a Codex one: new calls when the settings choose
@@ -196,12 +199,18 @@ export class CompanionLiveSessions {
       || !input.sdp.trim() || input.sdp.length > 96_000) throw new Error("INVALID_REQUEST");
     const session = this.admission.create({ project: input.project, locale: input.locale, authority: "live-model", startedBy: input.startedBy });
     const id = session.id;
+    if (this.options.memory) {
+      const start = this.admission.transcriptRecord(id).entries.find(row => row.kind === "session_start")!;
+      this.admission.record(id, { ...start, data: { ...start.data, memoryVersion: settings.callMemory ? 1 : 0 } });
+    }
     try {
       this.storage.change(document => {
         if (Object.values(document.sessions).some(row => row.id !== id && row.mintRequestId === requestId)) throw new Error("SESSION_CLOSED");
         Object.assign(document.sessions[id], { mintRequestId: requestId, mintDigest: digest, owner: { pid: process.pid, instance: this.instance } });
       });
     } catch (error) { this.admission.retire(id); throw error; }
+    const memory = this.options.memory?.block(input.startedBy) ?? "";
+    this.options.memory?.retry(input.startedBy);
     const provider = this.providerFor(settings.backend);
     const codex = provider.backend === "codex";
     try { if (!codex) this.storage.reserve(id, VOICE_SESSION_RESERVE_USD, SESSION_START_ROOM_USD); }
@@ -213,7 +222,7 @@ export class CompanionLiveSessions {
     // Subscription auth never uses the API key. Transcript masking still
     // protects any credential the installation holds, even in short pieces.
     const secrets = [...new Set([key.trim(), ...this.storage.credentials()])].filter(Boolean);
-    const active: ActiveSession = { id, providerId: "", transcript: new LiveTranscript(secrets), provider, codex, key, secrets, queue: [], seen: new Set(),
+    const active: ActiveSession = { id, memory, providerId: "", transcript: new LiveTranscript(secrets), provider, codex, key, secrets, queue: [], seen: new Set(),
       delegations: new Set(), reads: new Map(), reading: new Map(), backend: new Set(), abort: new AbortController(), timers: [], ended: false, endRequested: false, lastSeen: this.now(),
       createdAt: this.now(), voiceAllowanceSeconds: LIVE_SESSION_LIMIT_MS / 1_000, codexTurns: new Map() };
     this.active.set(id, active);
@@ -223,7 +232,7 @@ export class CompanionLiveSessions {
     let refused = false;
     let hungUpUnnamed = false;
     try {
-      const minted = await provider.create(key, input.locale, input.sdp, withoutLocalPaths(withoutCredentials(reportHeaderName(input.project, input.locale), secrets)), input.project).catch(error => {
+      const minted = await provider.create(key, input.locale, input.sdp, withoutLocalPaths(withoutCredentials(reportHeaderName(input.project, input.locale), secrets)), input.project, memory).catch(error => {
         refused = codex || error instanceof Error && error.message === "PROVIDER_REFUSED";
         throw error;
       });
@@ -263,7 +272,7 @@ export class CompanionLiveSessions {
           const chargeMonth = this.storage.read().charges[id]?.month;
           if (!settings.enabled || (!codex && (chargeMonth !== settings.month || settings.monthlyCapUsd < settings.usageUsd + settings.reservedUsd)) || this.now() - active.lastSeen > 30_000)
             void this.close(id, settings.enabled ? "cap" : "operator");
-          else this.renewVoice(active);
+          else { this.renewVoice(active); this.options.memory?.checkpoint(id); }
         } catch { void this.forceHangup(active); } }, 5_000);
         active.timers.push(watchdog);
       }
@@ -447,7 +456,7 @@ export class CompanionLiveSessions {
       const scrub = (text: string) => withoutLocalPaths(withoutCredentials(text, active.secrets));
       const awaitingList = awaiting.map(request => scrub(`- ${request.handle}, project ${JSON.stringify(reportHeaderName(request.project, stored.locale))}, sent ${request.sentMinutesAgo} min ago, ${request.progressReports} progress report(s)${request.askedBack ? ", the orchestrator asked back" : ""}: ${JSON.stringify(request.instruction)}`)).join("\n").slice(-3000);
       const latest = (sourceTurn === undefined ? stored.inputs.slice(-1) : stored.inputs.filter(row => row.turn === sourceTurn)).map(row => row.text).join(" ").slice(-2_000);
-      const input: BackendItem[] = [{ role: "user", content: `Project currently in view: ${projectLabel}. Default reads and sends to this project; a named project overrides it.\nReads earlier in this call, newest last:\n${previousReads || "(none)"}\n\nRequests sent to the orchestrator in this call that still wait for its report:\n${awaitingList || "(none)"}\nAn ask that repeats or rephrases one of these passes its handle as pending_request. orchestrator_reports reads what came back.\n\nThe conversation so far, oldest first:\n${record || "(no transcript yet)"}\n\nThe operator's latest turn, which this delegation answers: ${latest ? JSON.stringify(scrub(latest)) : "(not transcribed yet)"}\nAct on that turn alone. Earlier questions are context; never put them into a send.\n\nThe voice delegated here. Answer it with the registry tools, or send the operator's explicit orchestrator request.${waiting
+      const input: BackendItem[] = [...(active.memory ? [{ role: "developer", content: active.memory }] : []), { role: "user", content: `Project currently in view: ${projectLabel}. Default reads and sends to this project; a named project overrides it.\nReads earlier in this call, newest last:\n${previousReads || "(none)"}\n\nRequests sent to the orchestrator in this call that still wait for its report:\n${awaitingList || "(none)"}\nAn ask that repeats or rephrases one of these passes its handle as pending_request. orchestrator_reports reads what came back.\n\nThe conversation so far, oldest first:\n${record || "(no transcript yet)"}\n\nThe operator's latest turn, which this delegation answers: ${latest ? JSON.stringify(scrub(latest)) : "(not transcribed yet)"}\nAct on that turn alone. Earlier questions are context; never put them into a send.\n\nThe voice delegated here. Answer it with the registry tools, or send the operator's explicit orchestrator request.${waiting
         ? `\n\nA request to the orchestrator is waiting for the operator's answer and has not been sent: "${waiting.instruction}". When the operator has just answered it, pass that answer on with resolve_orchestrator_confirmation.` : ""}` }];
       const calls = new Set<string>();
       // Tool rounds, then one answer with tools off, so what the reads returned is still spoken.
@@ -698,6 +707,7 @@ export class CompanionLiveSessions {
    * it may have run. */
   async recover(): Promise<void> {
     for (const row of this.orphans()) await this.reap(row.id);
+    this.options.memory?.recover();
   }
   /** Stored voice sessions this service must close: still open here or at the
    * provider, and owned by no session in memory and no other living process. */
@@ -750,7 +760,7 @@ export class CompanionLiveSessions {
           if (confirmed) delete document.sessions[id].mintUncertain;
         });
         if (confirmed) this.retrying.delete(id); else this.retryHangup(id);
-        if (!session.closed) { this.admission.emit(id, { type: "session.closed", reason: "transport", incomplete: true }); this.admission.retire(id); }
+        if (!session.closed) { this.admission.emit(id, { type: "session.closed", reason: "transport", incomplete: true }); this.admission.retire(id); this.options.memory?.trigger(id); }
         return;
       }
       const remote = !!session.providerId && (session.remoteOpen ?? !session.closed);
@@ -774,6 +784,7 @@ export class CompanionLiveSessions {
         this.storage.settle(id, null);
         this.admission.emit(id, { type: "session.closed", reason: "transport", incomplete: true });
         this.admission.retire(id);
+        this.options.memory?.trigger(id);
       }
       if (remote) this.chargeOpenTime(id);
       if (uncertain) this.chargeOpenTime(id);
@@ -869,6 +880,11 @@ export class CompanionLiveSessions {
     try {
       if (active.providerClosed || active.hungUp) this.storage.change(document => { if (document.sessions[active.id]) document.sessions[active.id].remoteOpen = false; });
       if (this.admission.session(active.id).closed) return;
+      if (this.options.memory) {
+        const start = this.admission.transcriptRecord(active.id).entries.find(row => row.kind === "session_start")!;
+        const memoryVersion = this.storage.settings().callMemory ? 1 : 0;
+        if (start.data.memoryVersion !== memoryVersion) this.admission.record(active.id, { ...start, data: { ...start.data, memoryVersion } });
+      }
       this.transcript(active, active.transcript.finish());
       if (active.codex) this.storage.change(document => {
         const usage = document.sessions[active.id].usage!;
@@ -882,6 +898,7 @@ export class CompanionLiveSessions {
       // own clock and its plan holds no reservation to keep.
       this.admission.emit(active.id, { type: "session.closed", reason: active.reason ?? (finalized ? "operator" : "transport"), incomplete: !active.codex && !complete });
       this.admission.retire(active.id);
+      this.options.memory?.trigger(active.id);
     } finally {
       for (const timer of active.timers) clearTimeout(timer);
       active.connection?.dispose(); active.resolveClose?.();

@@ -503,3 +503,41 @@ the settings section and test 8.
 - The latency and token figures here are estimates from the profile's
   measurements and the stored calls' sizes. The PR's measured run replaces
   them.
+
+## Implementation verification
+
+The implementation keeps the call journal as the sole memory store. A new
+call's `session_start` carries `memoryVersion: 1`; older closed calls remain
+outside recovery. A summary admission persists `pending: true` and its attempt
+before the provider request. Recovery can therefore repair a restart between
+call closure and admission, or during the request, without resetting its retry
+ceiling. A clear tombstone wins over an in-flight result. A checkpoint never
+advances past growing speech whose final text will retain the same order.
+
+The real Messages endpoint rejects `maxItems` in a structured-output schema.
+The wire schema carries the object and list types, as the existing memory
+profile does; the prompt requests length limits and server validation enforces
+the four-item, 160-character and 600-character ceilings.
+
+One synthetic measurement on 2026-10-13 used the production direct caller and
+journal writer under isolated state. No real conversation text was used.
+
+| Invented call | Operator turns | Speech characters | Reports | Call end to durable summary | Request | Input tokens | Output tokens | API list-price equivalent |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Typical | 20 | 5,371 | 3 | 4.439 s | 4.427 s | 2,475 | 566 | $0.0005305 |
+| Large | 58 | 15,589 | 3 | 2.509 s | 2.501 s | 5,915 | 163 | $0.0006730 |
+
+These are single observations, including token counts from the response's
+usage block; output usage includes thinking. The request ran on a managed
+Claude subscription, so these amounts express an API equivalent. The fixed
+subscription remains the billing source. The official
+[Haiku model pricing](https://platform.claude.com/docs/en/models/haiku-5-5/overview)
+was fetched on the measurement day: $0.10 per million input tokens and $0.50
+per million output tokens for prompts up to 100,000 tokens.
+
+The installed Codex accepted a real V3 start with the full 2,400-character
+block (9,242 characters including the persona), returned the SDP answer in
+2.019 seconds, and the probe closed its own call. The settings driver covers
+32 scenes: 1440 and 390 pixels, both themes and languages, empty memory,
+three calls, provider failure and a 600-character summary. Its record is
+`evidence/voice-companion/call-memory.json`; every displayed summary is invented.

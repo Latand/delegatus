@@ -8,7 +8,7 @@ export interface VoiceCompanionSettingsHook {
   busy: boolean;
   error: string | null;
   refresh(): Promise<void>;
-  update(value: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd" | "backend">> | { releaseUncertainSession: true }): Promise<boolean>;
+  update(value: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd" | "backend" | "callMemory">> | { releaseUncertainSession: true }): Promise<boolean>;
   /** The caller clears its input after success. The hook never stores a key. */
   saveKey(key: string): Promise<boolean>;
 }

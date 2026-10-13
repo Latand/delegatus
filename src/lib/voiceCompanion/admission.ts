@@ -118,7 +118,7 @@ export type DelegationOutcome =
   | { state: "refused"; code: DelegationCode };
 type Admit = { proposalId: string; decision: "send" | "cancel"; via: "auto" | "tap" | "speech"; sourceTurn?: number };
 export class CompanionAdmission {
-  private readonly records = new CompanionTranscriptRecords();
+  readonly records = new CompanionTranscriptRecords();
   private readonly sending = new Map<string, Promise<void>>();
   private readonly secrets = new Set<string>();
   /** Requests awaiting a report that the backend was shown, per session and delegation. */
