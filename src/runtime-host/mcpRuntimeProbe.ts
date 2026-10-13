@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
 import { MCP_HEALTH_PROBE_CAPABILITY_ENV } from "@/lib/mcp/healthProbeAdmission";
 import { MCP_TOOL_NAMES } from "@/lib/mcp/server";
@@ -28,6 +29,9 @@ export interface McpRuntimeProbeOptions {
   healthProbeCapability?: string;
   healthProbeAdmissions?: McpHealthProbeAdmissionConsumer;
   timeoutMs?: number;
+  /** Absolute warmup budget for the required catalog read, never renewed by
+      another incomplete generation. The usual request timeout still applies. */
+  readinessTimeoutMs?: number;
   onProcessReady?: (pid: number) => void;
 }
 
@@ -69,6 +73,16 @@ export function mcpToolCallRefusalCode(value: unknown): string | null {
   if (!structured || typeof structured !== "object") return null;
   const code = (structured as { code?: unknown }).code;
   return typeof code === "string" && code.trim() ? code.trim().slice(0, 64) : null;
+}
+
+function catalogRetryDelay(value: unknown): number | null {
+  if (mcpToolCallRefusalCode(value) !== "scan_incomplete") return null;
+  const result = value as { structuredContent?: { retryable?: unknown; details?: { retryAfterSeconds?: unknown } } };
+  const failure = result.structuredContent;
+  if (failure?.retryable !== true) return null;
+  const seconds = failure.details?.retryAfterSeconds;
+  return typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0
+    ? Math.max(50, Math.ceil(seconds * 1_000)) : 1_000;
 }
 
 /* How much of a refusal the durable record keeps. The record outlives the
@@ -177,10 +191,40 @@ export async function probeMcpRuntime(options: McpRuntimeProbeOptions): Promise<
       arguments: { clientRequestId: `deployment-probe-${requestId}`, limit: 1 },
     }, undefined, { timeout });
     deploymentStatus = successfulToolCall(deployment);
-    const board = await client.callTool({
-      name: "board_snapshot",
-      arguments: { clientRequestId: `board-probe-${requestId}`, limit: 1 },
-    }, undefined, { timeout });
+    const configuredReadiness = options.readinessTimeoutMs;
+    const readinessBudget = typeof configuredReadiness === "number" && Number.isFinite(configuredReadiness)
+      ? Math.min(60_000, Math.max(1, configuredReadiness)) : 60_000;
+    const readinessDeadline = performance.now() + readinessBudget;
+    let board: unknown;
+    let boardAttempt = 0;
+    while (true) {
+      try {
+        board = await client.callTool({
+          name: "board_snapshot",
+          // Read receipts can retain a refusal. Each readiness observation asks
+          // again in this same process under its own read id.
+          arguments: { clientRequestId: `board-probe-${requestId}-${boardAttempt++}`, limit: 1 },
+        }, undefined, { timeout: Math.min(timeout, Math.max(1, readinessDeadline - performance.now())) });
+      } catch (error) {
+        // Preserve the last catalog refusal when the last remaining slice
+        // expires. A transport failure within the budget remains a failure.
+        if (board && catalogRetryDelay(board) !== null && performance.now() >= readinessDeadline
+          && error instanceof Error && "code" in error && error.code === ErrorCode.RequestTimeout) break;
+        throw error;
+      }
+      if (performance.now() > readinessDeadline) {
+        if (successfulToolCall(board)) {
+          board = { structuredContent: { ok: false, code: "catalog_readiness_timeout", error: "catalog read completed after its readiness deadline" } };
+        }
+        break;
+      }
+      if (successfulToolCall(board) || !deploymentStatus) break;
+      const delay = catalogRetryDelay(board);
+      const remaining = readinessDeadline - performance.now();
+      if (delay === null || remaining <= 0) break;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(delay, remaining)));
+      if (performance.now() >= readinessDeadline) break;
+    }
     boardSnapshot = successfulToolCall(board);
     const missing = REQUIRED_TOOLS.filter((tool) => !tools.includes(tool));
     const ok = missing.length === 0 && deploymentStatus && boardSnapshot;

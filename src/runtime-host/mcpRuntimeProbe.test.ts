@@ -30,6 +30,73 @@ function candidateControl() {
   });
 }
 
+async function coldCatalogProbe(mode: "warming" | "never-ready" | "permanent") {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-catalog-ready-"));
+  const worker = path.join(sandbox, "probe.mjs");
+  const attempts = path.join(sandbox, "attempts.jsonl");
+  const serverModule = require.resolve("@modelcontextprotocol/sdk/server/index.js");
+  const transportModule = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
+  const typesModule = require.resolve("@modelcontextprotocol/sdk/types.js");
+  fs.writeFileSync(worker, `
+    import fs from "node:fs";
+    import { Server } from ${JSON.stringify(serverModule)};
+    import { StdioServerTransport } from ${JSON.stringify(transportModule)};
+    import { CallToolRequestSchema, ListToolsRequestSchema } from ${JSON.stringify(typesModule)};
+    const server = new Server({name:"catalog-warmup-fixture",version:"1"},{capabilities:{tools:{}}});
+    server.setRequestHandler(ListToolsRequestSchema,()=>({tools:${JSON.stringify(MCP_TOOL_NAMES)}.map(name=>({name,inputSchema:{type:"object"}}))}));
+    let reads=0;
+    server.setRequestHandler(CallToolRequestSchema,request=>{
+      fs.appendFileSync(${JSON.stringify(attempts)}, JSON.stringify(request.params)+"\\n");
+      const board=request.params.name==="board_snapshot";
+      if(board) reads++;
+      const waiting=board && (${JSON.stringify(mode)}!=="warming" || reads<3);
+      const code=${JSON.stringify(mode)}==="permanent" ? "tool_failed" : "scan_incomplete";
+      const result=waiting ? {ok:false,code,retryable:true,error:"catalog fixture is warming",details:{retryAfterSeconds:0.001}}
+        : {ok:true,payload:{conversations:[]}};
+      return {isError:waiting,structuredContent:result,content:[{type:"text",text:JSON.stringify(result)}]};
+    });
+    await server.connect(new StdioServerTransport());
+  `);
+  let pid: number | null = null;
+  try {
+    const evidence = await probeMcpRuntime({
+      command: process.execPath, args: [worker], cwd: process.cwd(),
+      env: { [VIEWER_CONTROL_URL_ENV]: "http://127.0.0.1:19106" },
+      runtime: { source: "managed", revision: "7".repeat(40), releaseId: "catalog-ready", artifactDigest: "a".repeat(64), stagedAt: "2026-10-13T12:00:00.000Z" },
+      timeoutMs: 2_000,
+      readinessTimeoutMs: mode === "never-ready" ? 150 : 2_000,
+      onProcessReady: (value) => { pid = value; },
+    });
+    const calls = fs.readFileSync(attempts, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { name: string; arguments: { clientRequestId: string } });
+    expect(pid).not.toBeNull();
+    expect(() => process.kill(pid!, 0)).toThrow();
+    return { evidence, calls };
+  } finally {
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+}
+
+test("a cold MCP catalog becomes healthy in the same probe process with fresh read ids", async () => {
+  const { evidence, calls } = await coldCatalogProbe("warming");
+  expect(evidence).toMatchObject({ ok: true, calls: { deploymentStatus: true, boardSnapshot: true } });
+  const boards = calls.filter((call) => call.name === "board_snapshot");
+  expect(boards).toHaveLength(3);
+  expect(new Set(boards.map((call) => call.arguments.clientRequestId)).size).toBe(3);
+  expect(evidence.callFailures).toBeUndefined();
+});
+
+test("a catalog that never finishes still fails the bounded MCP health gate", async () => {
+  const { evidence, calls } = await coldCatalogProbe("never-ready");
+  expect(evidence).toMatchObject({ ok: false, processReady: true, calls: { boardSnapshot: false }, callFailures: [{ tool: "board_snapshot", code: "scan_incomplete" }] });
+  expect(calls.filter((call) => call.name === "board_snapshot").length).toBeGreaterThan(1);
+});
+
+test("ordinary MCP failures are refused without a catalog warmup retry", async () => {
+  const { evidence, calls } = await coldCatalogProbe("permanent");
+  expect(evidence).toMatchObject({ ok: false, callFailures: [{ tool: "board_snapshot", code: "tool_failed" }] });
+  expect(calls.filter((call) => call.name === "board_snapshot")).toHaveLength(1);
+});
+
 async function healthPolicyCalls(
   environment: Record<string, string>,
   capability?: string,
@@ -49,9 +116,17 @@ async function healthPolicyCalls(
   try {
     await client.connect(transport, { timeout: 2_000 });
     for (const name of ["deployment_status", "board_snapshot"]) {
-      const result = await client.callTool({ name, arguments: { limit: 1 } }, undefined, { timeout: 2_000 });
-      expect(result.isError).not.toBe(true);
-      expect(result.structuredContent).toMatchObject({ ok: true });
+      let result;
+      for (let attempt = 0; attempt < 20; attempt++) {
+        result = await client.callTool({ name, arguments: { limit: 1, clientRequestId: `policy-read-${name}-${attempt}` } }, undefined, { timeout: 2_000 });
+        if ((result.structuredContent as { code?: unknown } | undefined)?.code !== "scan_incomplete") break;
+        // This fixture grades tool admission after the empty catalog warms.
+        // Other refusals still reach the policy assertion immediately.
+        await Bun.sleep(20);
+      }
+      expect(result).toBeDefined();
+      expect(result!.isError).not.toBe(true);
+      expect(result!.structuredContent).toMatchObject({ ok: true });
     }
     return await client.callTool({ name: "list_tasks", arguments: { limit: 1 } }, undefined, { timeout: 2_000 });
   } finally {
