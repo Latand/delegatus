@@ -805,6 +805,125 @@ test("completion retry reuses the identical body after a lost response", async (
     await server.close();
   }
 });
+test("accepted completion stays terminal if local settlement contends", async () => {
+  const completions: unknown[] = [];
+  const requestId = "rq_settlement_contention";
+  const requestLock = `${externalRelayFile("requests")}.lock`;
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) {
+      completions.push(body);
+      fs.writeFileSync(requestLock, JSON.stringify({ pid: process.pid, identity: procBackend.processIdentity(process.pid) }), { flag: "wx" });
+      setTimeout(() => fs.rmSync(requestLock, { force: true }), 6200);
+    }
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  try {
+    const result = await runClaimedRequest(paired, { ...sampleRequest, request_id: requestId,
+      deadline_at: new Date(Date.now() + 30000).toISOString() }, undefined,
+      { command: stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`) });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Done" } });
+    expect(completions).toHaveLength(1);
+    dropRun(requestId);
+    expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: requestId,
+      deadline_at: new Date(Date.now() + 30000).toISOString() })).toMatchObject({ outcome: "answered", answer: { text: "Done" } });
+    expect(completions).toHaveLength(1);
+  } finally {
+    fs.rmSync(requestLock, { force: true });
+    await server.close();
+  }
+}, 15000);
+
+test("claim identity contention waits within the request budget", async () => {
+  const heartbeats: unknown[] = [];
+  const completions: unknown[] = [];
+  const requestLock = `${externalRelayFile("requests")}.lock`;
+  fs.mkdirSync(path.dirname(requestLock), { recursive: true });
+  fs.writeFileSync(requestLock, JSON.stringify({ pid: process.pid, identity: procBackend.processIdentity(process.pid) }), { flag: "wx" });
+  const release = setTimeout(() => fs.rmSync(requestLock, { force: true }), 6200);
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/heartbeat")) heartbeats.push(body);
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  try {
+    const started = Date.now();
+    const result = await runClaimedRequest(relay(`${server.origin}/v1`), { ...sampleRequest,
+      request_id: "rq_claim_contention", deadline_at: new Date(started + 30000).toISOString() }, undefined,
+      { command: stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`) });
+    expect(result?.outcome).toBe("answered");
+    expect(Date.now() - started).toBeGreaterThanOrEqual(6000);
+    expect(heartbeats.length).toBeGreaterThan(0);
+    expect(completions).toHaveLength(1);
+  } finally {
+    clearTimeout(release);
+    fs.rmSync(requestLock, { force: true });
+    await server.close();
+  }
+}, 15000);
+
+test("an immediately available last-ten-seconds request may answer", async () => {
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  try {
+    const deadlineAt = Date.now() + 5000;
+    const result = await runClaimedRequest(relay(`${server.origin}/v1`), { ...sampleRequest,
+      request_id: "rq_last_ten_seconds", deadline_at: new Date(deadlineAt).toISOString() }, undefined,
+      { command: stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`) });
+    expect(result?.outcome).toBe("answered");
+    expect(Date.now()).toBeLessThan(deadlineAt);
+    expect(completions).toHaveLength(1);
+  } finally { await server.close(); }
+}, 10000);
+
+test("an immediately admitted owner can answer in the final ten seconds", async () => {
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  try {
+    const deadlineAt = Date.now() + 5000;
+    const result = await runClaimedRequest(paired, { ...contextRequest, request_id: "rq_owner_final_ten_seconds",
+      deadline_at: new Date(deadlineAt).toISOString(), answer: { ...contextRequest.answer, max_chars: 1000, progress: "none" },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { ownerPorts: {
+        launch: async () => ({ status: 202, body: { conversationId: "conversation_deadline", initialMessage: "delivered" } }),
+        observe: async () => ({ state: "ended", finalText: "Done" }),
+        stop: async () => {}, pollMs: 5,
+      } });
+    expect(result?.outcome).toBe("answered");
+    expect(Date.now()).toBeLessThan(deadlineAt);
+    expect(completions).toHaveLength(1);
+  } finally { await server.close(); }
+}, 10000);
+
+test("claim contention through the deadline returns an explicit busy completion", async () => {
+  const completions: unknown[] = [];
+  const requestLock = `${externalRelayFile("requests")}.lock`;
+  fs.mkdirSync(path.dirname(requestLock), { recursive: true });
+  fs.writeFileSync(requestLock, JSON.stringify({ pid: process.pid, identity: procBackend.processIdentity(process.pid) }), { flag: "wx" });
+  const release = setTimeout(() => fs.rmSync(requestLock, { force: true }), 5000);
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  try {
+    const result = await runClaimedRequest(relay(`${server.origin}/v1`), { ...sampleRequest,
+      request_id: "rq_claim_contention_expired", deadline_at: new Date(Date.now() + 3000).toISOString() });
+    expect(result).toMatchObject({ outcome: "declined", reason: "busy" });
+    expect(completions).toHaveLength(1);
+  } finally {
+    clearTimeout(release);
+    fs.rmSync(requestLock, { force: true });
+    await server.close();
+  }
+}, 10000);
 test("unknown request kind is declined as unsupported", async () => {
   const completions: unknown[] = [];
   const server = await startTestRelay((_req, body) => {

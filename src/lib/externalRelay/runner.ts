@@ -219,7 +219,14 @@ export async function runClaimedRequest(
   const claimOwnerPid = process.pid;
   const claimOwnerIdentity = procBackend.processIdentity(claimOwnerPid);
   if (!claimOwnerIdentity) return null;
-  const requestClaim = await claimRelayRequestAsync(requestId, leaseId, deadline.at);
+  let requestClaim: Awaited<ReturnType<typeof claimRelayRequestAsync>>;
+  try {
+    requestClaim = await claimRelayRequestAsync(requestId, leaseId, deadline.at);
+  } catch (error) {
+    if (!(error instanceof RelayStoreBusy)) throw error;
+    return (await completeRelayRequest(relay, requestId, declined(leaseId, "busy"), () => deadline.at,
+      undefined, runtime?.onUnknownFeature)).body;
+  }
   if (requestClaim.kind === "duplicate") return null;
   if (requestClaim.kind === "terminal")
     return requestClaim.completion ? { ...requestClaim.completion, lease_id: leaseId } : null;
@@ -249,14 +256,19 @@ export async function runClaimedRequest(
   const released = new Promise<void>(resolve => { deliverySettled = resolve; });
   let allowOwnerReply: (() => boolean) | undefined;
   let leaseUnavailable = false;
+  let admissionHeld = false;
+  const admissionCutoff = () => admissionHeld ? deadline.declineAt : deadline.at;
   let rounds = 0;
   let loop: ReturnType<typeof createToolLoop> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let cadenceTimer: ReturnType<typeof setTimeout> | null = null;
   let heartbeatStopped = false;
   let pendingBeat: Promise<void> | null = null;
+  let finishing: Promise<ExternalRelayCompletion> | null = null;
   const loopRecord = () => loop ? { rounds, toolCalls: loop.records } : {};
-  const finish = async (body: ExternalRelayCompletion) => {
+  const finish = (body: ExternalRelayCompletion): Promise<ExternalRelayCompletion> => {
+    if (finishing) return finishing;
+    finishing = (async () => {
     leaveRelayHold(requestId);
     try {
       if (pendingBeat) {
@@ -286,7 +298,11 @@ export async function runClaimedRequest(
       const completion = sent.body;
       claimTerminal = sent.delivery !== "refused";
       terminalCompletion = claimTerminal ? completion : null;
-      await settleClaim(claimTerminal ? "terminal" : "release");
+      try { await settleClaim(claimTerminal ? "terminal" : "release"); }
+      catch (error) {
+        if (!claimTerminal) throw error;
+        console.error("External relay terminal claim settlement pending");
+      }
       recorder?.recordDelivery({
         outcome: completion.outcome === "answered" ? "answered" : `${completion.outcome}:${completion.reason}`,
         delivery: sent.delivery,
@@ -300,9 +316,23 @@ export async function runClaimedRequest(
         try { await settleClaim(claimTerminal ? "terminal" : "release", deadline.at); }
         catch { console.error("External relay request claim cleanup failed"); }
       }
+      if (!claimSettled && claimTerminal) void (async () => {
+        while (!claimSettled) {
+          try { await settleClaim("terminal", Date.now() + 5000); }
+          catch (error) {
+            if (!(error instanceof RelayStoreBusy)) {
+              console.error("External relay terminal claim custody unavailable");
+              return;
+            }
+            await new Promise(resolve => setTimeout(resolve, 250));
+          }
+        }
+      })();
       inflight.delete(requestId);
       deliverySettled();
     }
+    })();
+    return finishing;
   };
   if (!request)
     return finish(
@@ -430,7 +460,7 @@ export async function runClaimedRequest(
     }, 1000);
     heartbeatTimer.unref();
     if (leaseUnavailable) return null;
-    if (Date.now() >= deadline.declineAt) return await finish(declined(leaseId, "busy"));
+    if (Date.now() >= deadline.at) return await finish(declined(leaseId, "busy"));
     // The member limit (§B.8): a member past it is declined, and the service's
     // fallback setting decides whether its own agent answers instead.
     const requester = request.input.requester;
@@ -502,10 +532,12 @@ export async function runClaimedRequest(
     const admit = async (): Promise<boolean> => {
       let lastCause: RelayHoldCause | null = null;
       while (!leaseUnavailable) {
-        if (Date.now() >= deadline.declineAt) {
+        if (Date.now() >= admissionCutoff()) {
           admissionDecline = declined(leaseId, "busy", null, lastCause === "chat" ? "chat busy" : null);
           return false;
         }
+        if (usesConversation)
+          await sweepConversationsAsync([relay], Date.now(), admissionCutoff(), relay.id);
         const liveRuns = usesConversation ? readRunLedger().runs : [];
         let cause: RelayHoldCause | null = activeDrain() ? "drain" : usesConversation && readConversations().some(r =>
           r.relayId === relay.id && r.targetId === target.id && r.chatKey === request.chat!.key && r.state === "running" && liveRuns.some(run => run.requestId === r.runningRequestId)) ? "chat" :
@@ -513,18 +545,18 @@ export async function runClaimedRequest(
         if (releaseRequested || releasingRelayHolds()) { admissionDecline = declined(leaseId, "busy", null, cause === "chat" ? "chat busy" : null); releaseRequested = true; return false; }
         if (!cause) {
           try {
-            const admission = await reserveRunAsync(record, target.concurrency, deadline.declineAt);
+            const admission = await reserveRunAsync(record, target.concurrency, admissionCutoff());
             if (admission === "duplicate") { duplicate = true; return false; }
             if (admission === "full") cause = "capacity";
             else {
               recorded = true; markActive(relay, target);
               if (usesConversation) {
-                await sweepConversationsAsync([relay], Date.now(), deadline.declineAt, relay.id);
-                const reserved = await reserveConversationsAsync(relay, target, request.chat!.key, requestId, [context!], deadline.declineAt);
+                await sweepConversationsAsync([relay], Date.now(), admissionCutoff(), relay.id);
+                const reserved = await reserveConversationsAsync(relay, target, request.chat!.key, requestId, [context!], admissionCutoff());
                 if (!reserved) { await releaseAdmission(); cause = "chat"; }
                 else conversation = reserved[0]!;
               }
-              if (Date.now() >= deadline.declineAt) {
+              if (Date.now() >= admissionCutoff()) {
                 await releaseAdmission();
                 admissionDecline = declined(leaseId, "busy", null, lastCause === "chat" ? "chat busy" : null);
                 return false;
@@ -532,7 +564,7 @@ export async function runClaimedRequest(
             }
           } catch (error) {
             if (!(error instanceof RelayStoreBusy)) throw error;
-            await releaseAdmission(); cause = "capacity";
+            await releaseAdmission(); cause = "capacity"; admissionHeld = true;
           }
         }
         if (leaseUnavailable) return false;
@@ -551,12 +583,13 @@ export async function runClaimedRequest(
           return true;
         }
         lastCause = cause;
+        admissionHeld = true;
         enterRelayHold({ requestId, relayId: relay.id, targetId: target.id, cause, deadline,
           release: () => { releaseRequested = true; wakeHold?.(); return released; } });
         steps?.observe({ queued: true });
-        if (Date.now() >= deadline.declineAt) { admissionDecline = declined(leaseId, "busy", null, cause === "chat" ? "chat busy" : null); return false; }
+        if (Date.now() >= admissionCutoff()) { admissionDecline = declined(leaseId, "busy", null, cause === "chat" ? "chat busy" : null); return false; }
         await new Promise<void>(resolve => {
-          const timer = setTimeout(() => { wakeHold = null; resolve(); }, Math.min(1000, deadline.declineAt - Date.now()));
+          const timer = setTimeout(() => { wakeHold = null; resolve(); }, Math.min(1000, admissionCutoff() - Date.now()));
           timer.unref();
           wakeHold = () => { clearTimeout(timer); wakeHold = null; resolve(); };
         });
@@ -564,7 +597,7 @@ export async function runClaimedRequest(
       return false;
     };
     if (!await admit()) return admissionDecline ? await finish(admissionDecline) : null;
-    if (Date.now() >= deadline.declineAt) {
+    if (Date.now() >= deadline.at || (admissionHeld && Date.now() >= deadline.declineAt)) {
       await releaseAdmission();
       return await finish(declined(leaseId, "busy"));
     }
@@ -594,6 +627,7 @@ export async function runClaimedRequest(
     let result: Awaited<ReturnType<typeof runEphemeralAgent>["done"]> | null = null;
     let completion: ExternalRelayDecision | null = null;
     for (rounds = 1; rounds <= (loop ? 8 : 1); rounds++) {
+      if (Date.now() >= deadline.at) return await finish(declined(leaseId, "busy"));
       const final = rounds === 8 || !!loop && loop.callsLeft() === 0;
       runFinished = false;
       try {
@@ -613,7 +647,7 @@ export async function runClaimedRequest(
           authorize: () => { if (!allowOwnerReply!()) throw new Error("owner relay authorization revoked"); },
           credentials: [relay.credential],
           request, owner, target, deadline, accountId: selectedAccount().accountId,
-          hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
+          hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity, deadline.at - Date.now()), ports: runtime?.ownerPorts,
           onConversation: async (conversationId) => {
             await changeRunAsync(requestId, current => ({ ...current, conversationId }), Date.now() + 5000);
             recorder?.bindConversation(conversationId);
@@ -671,7 +705,19 @@ export async function runClaimedRequest(
           identityTimers.push(timer);
         }
       if (leaseUnavailable) launchedRun.cancel();
-      result = await launchedRun.done;
+      let requestDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
+      const requestDeadline = new Promise<null>(resolve => {
+        requestDeadlineTimer = setTimeout(() => resolve(null), Math.max(0, deadline.at - Date.now()));
+        requestDeadlineTimer.unref();
+      });
+      const boundedResult = await Promise.race([launchedRun.done, requestDeadline]);
+      if (requestDeadlineTimer) clearTimeout(requestDeadlineTimer);
+      if (boundedResult === null) {
+        launchedRun.cancel();
+        await launchedRun.done;
+        return await finish(declined(leaseId, "busy"));
+      }
+      result = boundedResult;
       if (conversation) {
         if (result.sessionId) conversation.sessionId = result.sessionId;
         else { conversationBroken = true; if (result.status === "done") result = { ...result, status: "failed" }; }

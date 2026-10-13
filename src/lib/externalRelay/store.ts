@@ -251,7 +251,7 @@ export async function withFileLockAsync<T>(file: string, action: () => T, until:
   const lock = `${file}.lock`;
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   let fd: number | null = null;
-  const deadline = Math.min(Date.now() + 5_000, until);
+  const deadline = until;
   let firstAttempt = true;
   while (fd === null) {
     if (!firstAttempt && Date.now() >= deadline) throw new RelayStoreBusy();
