@@ -4,7 +4,9 @@ import fs from "node:fs";
 
 import { POST } from "@/app/api/pipelines/tick/route";
 import { statePath } from "@/lib/configDir";
-import { resetFilesRouteCacheForTests, setFileCatalogMembershipProbeForTests, setFileScanRunnerForTests } from "@/lib/scanner/scanCache";
+import { completedFileScan, fileScanCacheStatus, resetFilesRouteCacheForTests, setFileCatalogMembershipProbeForTests, setFileScanRunnerForTests } from "@/lib/scanner/scanCache";
+import { productionDomainDependencies, viewerMcpBindings, viewerMcpRecoverableTools } from "@/lib/mcp/bindings";
+import { createMcpToolService, MemoryMcpReceiptStore } from "@/lib/mcp/server";
 import { controllerFileScan, FlowPipelineController } from "./controller";
 
 afterEach(() => {
@@ -96,4 +98,81 @@ test("a failed scan unrelated to incomplete derivation remains a controller fail
   await new Promise<void>((resolve) => setTimeout(resolve, 20));
   await expect(controllerFileScan()).rejects.toThrow("fixture scanner unavailable");
   await new Promise<void>((resolve) => setTimeout(resolve, 20));
+});
+
+test("a cancelled cold-scan reader does not poison ticks or retryable MCP admission during replacement", async () => {
+  resetFilesRouteCacheForTests();
+  setFileCatalogMembershipProbeForTests(async () => "fixture");
+  let scans = 0;
+  let releaseReplacement!: () => void;
+  const replacement = new Promise<void>((resolve) => { releaseReplacement = resolve; });
+  setFileScanRunnerForTests(async (_roots, _options, signal) => {
+    scans += 1;
+    if (scans === 1) {
+      await new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    } else if (scans === 2) {
+      await replacement;
+    }
+    return { files: [], projectCatalog: [], complete: true };
+  });
+
+  const reader = new AbortController();
+  const cancelledRead = completedFileScan({ signal: reader.signal });
+  for (let attempt = 0; attempt < 100 && scans === 0; attempt += 1) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+  expect(scans).toBe(1);
+  reader.abort();
+  await expect(cancelledRead).rejects.toMatchObject({ name: "AbortError" });
+  for (let attempt = 0; attempt < 100 && fileScanCacheStatus().inFlight; attempt += 1) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+  expect(fileScanCacheStatus().inFlight).toBe(false);
+
+  const messages: string[] = [];
+  let pipelines = 0;
+  let flows = 0;
+  const controller = new FlowPipelineController({
+    scan: controllerFileScan,
+    tickPipelines: async () => { pipelines += 1; return { changed: false }; },
+    tickFlows: async () => { flows += 1; return { changed: false }; },
+    log: (message) => { messages.push(message); },
+  }, { maxPasses: 1 });
+  const firstTick = await POST.withDependencies(request(), () => controller.tick());
+  const secondTick = await POST.withDependencies(request(), () => controller.tick("watchdog"));
+  expect(firstTick.status).toBe(200);
+  expect(secondTick.status).toBe(200);
+  expect(pipelines).toBe(2);
+  expect(flows).toBe(0);
+  expect(messages.some((message) => message.includes("scan phase failed"))).toBe(false);
+  expect(fileScanCacheStatus().inFlight).toBe(true);
+
+  const service = createMcpToolService(viewerMcpBindings(undefined, undefined, productionDomainDependencies), new MemoryMcpReceiptStore(), undefined, {
+    recovery: viewerMcpRecoverableTools(productionDomainDependencies),
+  });
+  const args = { project: "unknown-project", clientRequestId: "cancelled-cold-create" };
+  const retryable = await service.callTool("create_orchestrator", args);
+  expect(retryable).toMatchObject({
+    ok: false,
+    code: "scan_incomplete",
+    retryable: true,
+    details: { retryAfterSeconds: 5, nextAction: "retry-same-key", resend: "safe" },
+  });
+  expect("error" in retryable && retryable.error).toContain("still scanning, retry in 5 s");
+
+  releaseReplacement();
+  for (let attempt = 0; attempt < 100 && fileScanCacheStatus().inFlight; attempt += 1) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+  expect(fileScanCacheStatus().inFlight).toBe(false);
+  expect(await service.callTool("create_orchestrator", args)).toMatchObject({
+    ok: false,
+    code: "unknown_project",
+    retryable: false,
+  });
+  await controller.tick("watchdog");
+  expect(flows).toBe(1);
+  expect(scans).toBe(2);
 });

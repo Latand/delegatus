@@ -515,10 +515,17 @@ async function instrumentFileScan(
     slot.lastScan = { generation, reason, status: "complete", durationMs: performance.now() - startedAt };
     return snapshot;
   } catch (error) {
-    slot.lastScanError = error;
+    // The final subscriber intentionally aborts a shared generation. That
+    // cancellation is local to its readers and must not poison later reads
+    // while a replacement generation is running.
+    if (!isAbortError(error)) slot.lastScanError = error;
     slot.lastScan = { generation, reason, status: "failed", durationMs: performance.now() - startedAt };
     throw error;
   }
+}
+
+function isAbortError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "name" in error && error.name === "AbortError";
 }
 
 function fileScanRefreshPromise(
