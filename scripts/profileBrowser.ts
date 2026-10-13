@@ -833,6 +833,8 @@ export async function armDocuments(cdp: Cdp): Promise<void> {
  * exist only in a child with an invented home and a loopback ephemeral listener.
  * Usage: bun scripts/profileBrowser.ts --server-memory [--seconds 30]
  *   [--corpus 128,2048] [--snapshots] [--out aggregate.json]
+ *   --history uses the candidate gate's retained registry and a foreign writer.
+ *   --assert-bounded checks collected history-view roots in the compiled Viewer.
  * The board cases replay HTTP routes; they do not claim browser measurements.
  */
 async function serverMemoryProfile(childMode: boolean): Promise<void> {
@@ -861,13 +863,33 @@ async function serverMemoryProfile(childMode: boolean): Promise<void> {
     };
     const require = createRequire(path.join(repo, "package.json"));
     const next = require("next") as typeof import("next").default;
+    const views: WeakRef<import("@/lib/agent/registry").RegistryFile>[] = [];
+    const seenViews = new WeakSet<import("@/lib/agent/registry").RegistryFile>();
     const server = createServer(async (request, response) => {
       if (request.url?.startsWith("/__memory")) {
         const action = new URL(request.url, "http://localhost").searchParams.get("action");
+        let registryViewMs: number | undefined;
+        if (action === "view") {
+          // Exercise the registry the compiled Viewer already owns. Importing
+          // the source store here would measure a second module's cache.
+          const registry = (process as typeof process & { __llvAgentRegistry?: {
+            readOnlySnapshot(): import("@/lib/agent/registry").RegistryFile;
+          } }).__llvAgentRegistry;
+          if (!registry) throw new Error("the compiled Viewer has not opened its registry");
+          const started = performance.now();
+          const view = registry.readOnlySnapshot();
+          for (const collection of ["entries", "receipts", "conversations", "heldDeliveries"] as const) Object.keys(view[collection]);
+          registryViewMs = performance.now() - started;
+          if (!seenViews.has(view)) {
+            seenViews.add(view);
+            views.push(new WeakRef(view));
+          }
+        }
         if (action === "gc") fullGC();
         if (action === "snapshot") fs.writeFileSync(path.join(root, `heap-${Date.now()}.heapsnapshot`), Bun.generateHeapSnapshot("v8"));
         response.setHeader("content-type", "application/json");
-        response.end(JSON.stringify(gauge()));
+        response.end(JSON.stringify({ ...gauge(), registryViewMs,
+          ...(action === "views" ? { observedViews: views.length, retainedViews: views.filter(view => view.deref()).length } : {}) }));
         return;
       }
       await handle(request, response);
@@ -886,7 +908,7 @@ async function serverMemoryProfile(childMode: boolean): Promise<void> {
 
   if (process.platform !== "linux") throw new Error("server-memory PID and descriptor measurements require Linux");
   const seconds = Number(args.get("seconds") ?? 30);
-  const counts = (args.get("corpus") ?? "128,2048").split(",").map(Number);
+  const counts = args.has("history") ? [320] : (args.get("corpus") ?? "128,2048").split(",").map(Number);
   if (!Number.isFinite(seconds) || seconds < 1 || seconds > 300 || counts.some(count => !Number.isSafeInteger(count) || count < 1 || count > 12000)) {
     throw new Error("seconds must be 1..300; corpus counts must be 1..12000");
   }
@@ -895,12 +917,24 @@ async function serverMemoryProfile(childMode: boolean): Promise<void> {
   const results: unknown[] = [];
   for (const count of counts) {
     const root = path.join(scratch, String(count));
-    const env = { ...seededEnvironment(root, { nodeEnv: "production" }),
+    const env: NodeJS.ProcessEnv = { ...seededEnvironment(root, { nodeEnv: "production" }),
       LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_STRUCTURED_HOSTS: "0", LLV_RUNTIME_EVENTS: "0", DELEGATUS_TELEMETRY: "0" };
     const cwd = path.join(root, "home/fixture");
     fs.mkdirSync(cwd, { recursive: true });
     const paths: string[] = [];
-    for (let index = 0; index < count; index++) {
+    let history: import("@/lib/agent/registryPerformanceDataset").RegistryPerformanceDataset | undefined;
+    let writer: import("@/lib/agent/sqliteRegistryStore").SqliteAgentRegistryStore | undefined;
+    if (args.has("history")) {
+      const { buildRegistryPerformanceDataset } = await import("@/lib/agent/registryPerformanceDataset");
+      const { SqliteAgentRegistryStore } = await import("@/lib/agent/sqliteRegistryStore");
+      const { normalizeRegistry } = await import("@/lib/agent/registry");
+      history = buildRegistryPerformanceDataset(env.LLV_STATE_DIR!, undefined,
+        { sessionsRoot: path.join(env.HOME!, ".codex/sessions") });
+      paths.push(...history.conversationPaths);
+      writer = new SqliteAgentRegistryStore(history.filename, { normalize: normalizeRegistry,
+        initialSnapshot: () => { throw new Error("history seed is missing"); } });
+    }
+    for (let index = 0; !history && index < count; index++) {
       const id = `00000000-0000-4000-8000-${(index + 1).toString(16).padStart(12, "0")}`;
       const codex = index % 2 === 0;
       const directory = path.join(root, "home", codex ? ".codex/sessions/2026/10/05" : ".claude/projects/fixture");
@@ -951,6 +985,67 @@ async function serverMemoryProfile(childMode: boolean): Promise<void> {
         if (!response.ok) throw new Error(`${route.split("?")[0]} returned ${response.status}`);
         return response.json();
       };
+      if (history && writer) {
+        const dataset = history;
+        const foreign = writer;
+        const scan = await request("/api/files");
+        const project = scan.files?.[0]?.project;
+        if (!project) throw new Error("history fixture returned no files");
+        const deliveryKeys = foreign.read((file) => Object.keys(file.heldDeliveries));
+        const conversationKeys = foreign.read((file) => Object.keys(file.conversations).slice(-24));
+        const write = (index: number) => foreign.mutate((file) => {
+          const subject = dataset.grantSubjects[index % dataset.grantSubjects.length]!;
+          const stamp = new Date(1_791_800_000_000 + index * 1000).toISOString();
+          if (index % 3 === 0) {
+            if (subject.collection === "entries") file.entries[subject.key]!.updatedAt = stamp;
+            else file.receipts[subject.key]!.createdAt = stamp;
+          } else if (index % 3 === 1) file.conversations[conversationKeys[index % conversationKeys.length]!]!.updatedAt = stamp;
+          else file.heldDeliveries[deliveryKeys[index % deliveryKeys.length]!]!.deliveredAt = stamp;
+        }, false);
+        const read = async () => {
+          const view = await request("/__memory?action=view");
+          await request(`/api/board?project=${encodeURIComponent(project)}`);
+          return view.registryViewMs as number;
+        };
+        for (let i = 0; i < 10; i++) { write(i); await read(); }
+        const before = await request("/__memory?action=gc");
+        const readings: Array<{ elapsedMs: number; rss: number; anon: number; descriptors: Record<string, number> }> = [];
+        const started = performance.now();
+        const sample = () => {
+          const status = fs.readFileSync(`/proc/${child.pid}/status`, "utf8");
+          const bytes = (key: string) => Number(new RegExp(`^${key}:\\s+(\\d+)`, "m").exec(status)?.[1]) * 1024;
+          const descriptors: Record<string, number> = {};
+          for (const fd of fs.readdirSync(`/proc/${child.pid}/fd`)) {
+            try {
+              const name = path.basename(fs.readlinkSync(`/proc/${child.pid}/fd/${fd}`));
+              if (/\.sqlite(?:-wal|-shm)?$/.test(name)) descriptors[name] = (descriptors[name] ?? 0) + 1;
+            } catch { /* A short-lived connection closed during enumeration. */ }
+          }
+          readings.push({ elapsedMs: performance.now() - started, rss: bytes("VmRSS"), anon: bytes("RssAnon"), descriptors });
+        };
+        sample();
+        const sampler = setInterval(sample, 500);
+        let writes = 0;
+        const registryViewMs: number[] = [];
+        try {
+          while (performance.now() - started < seconds * 1000) {
+            write(10 + writes++);
+            registryViewMs.push(await read());
+            await Bun.sleep(250);
+          }
+        } finally { clearInterval(sampler); sample(); }
+        const natural = await request("/__memory");
+        await request("/__memory?action=gc");
+        const afterGC = await request("/__memory?action=gc");
+        const { observedViews, retainedViews } = await request("/__memory?action=views");
+        if (args.has("snapshots")) await request("/__memory?action=snapshot");
+        const result = { phase: "registry-history", rows: dataset.rows, coldRows: dataset.coldRows,
+          payloadBytes: dataset.payloadBytes, seconds, writes, before, natural, afterGC, readings, registryViewMs,
+          observedViews, retainedViews };
+        results.push(result);
+        console.log(JSON.stringify({ ...result, readings: readings.length, registryViewMs: registryViewMs.length }));
+        continue;
+      }
       const phases = async (name: string, routes: string[], interval: number) => {
         const before = await request("/__memory?action=gc");
         const started = Date.now();
@@ -982,8 +1077,12 @@ async function serverMemoryProfile(childMode: boolean): Promise<void> {
       await phases("transcript", [`/api/log?path=${encodeURIComponent(paths[0]!)}&before=999999999&bytes=4194304`], 250);
       await phases("cooldown", [], 1000);
     } finally {
-      clearInterval(recorder);
+      writer?.close();
       if (child.pid) discoverChildren(child.pid);
+      // Stop the Viewer before its workers: a running Viewer can replace a
+      // worker we just stopped, leaving a new child outside the recorded set.
+      await stop(child);
+      clearInterval(recorder);
       for (const [pid, token] of [...owned].reverse()) {
         if (identity(pid) !== token) continue;
         try { process.kill(pid, "SIGTERM"); } catch { continue; }
@@ -991,12 +1090,19 @@ async function serverMemoryProfile(childMode: boolean): Promise<void> {
         while (identity(pid) === token && Date.now() < deadline) await Bun.sleep(100);
         if (identity(pid) === token) { try { process.kill(pid, "SIGKILL"); } catch { /* Already exited. */ } }
       }
-      if (child.exitCode === null && child.signalCode === null) await stop(child);
       fs.writeFileSync(path.join(root, "server.log"), logs());
     }
   }
   const output = JSON.stringify({ runtime: Bun.version, next: JSON.parse(fs.readFileSync(path.join(repo, "node_modules/next/package.json"), "utf8")).version, results }, null, 2) + "\n";
   fs.writeFileSync(args.get("out") ?? path.join(scratch, "aggregate.json"), output);
+  if (args.has("assert-bounded")) {
+    if (!args.has("history")) throw new Error("--assert-bounded requires --history");
+    for (const result of results as Array<{ observedViews: number; retainedViews: number }>) {
+      if (result.observedViews < 3 || result.retainedViews > 2) {
+        throw new Error(`compiled Viewer retained ${result.retainedViews} of ${result.observedViews} history views`);
+      }
+    }
+  }
 }
 
 /** Cross-connection deletion case; writes only an invented registry. Keeping

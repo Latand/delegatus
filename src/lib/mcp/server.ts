@@ -13,10 +13,9 @@ import { FOCUS_TARGET_SHAPES } from "@/lib/attention/targets";
 import { statePath } from "@/lib/configDir";
 import { openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
-import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/liveness";
+import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/limits";
 import { operatorLocale } from "@/lib/operator/settings";
-import { MEMORY_KINDS } from "@/lib/memory/parsers";
-import { PIPELINE_LIST_DEFAULT_LIMIT, PIPELINE_LIST_MAX_LIMIT } from "@/lib/pipelines/listProjection";
+import { MEMORY_KINDS } from "@/lib/memory/kinds";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -28,13 +27,15 @@ import {
   MAX_STAGE_REPORT_FINDINGS,
   MAX_STAGE_REPORT_SUMMARY_CHARS,
   MIN_STARTED_PIPELINE_STAGES,
+  PIPELINE_LIST_DEFAULT_LIMIT,
+  PIPELINE_LIST_MAX_LIMIT,
 } from "@/lib/pipelines/limits";
 import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, STAGE_FINDING_SEVERITIES } from "@/lib/pipelines/types";
 import { procBackend } from "@/lib/proc";
 import { parseMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, PROBLEM_MAX_CHARS, PROBLEM_EVIDENCE_MAX_CHARS } from "@/lib/memory/roleTypes";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
-import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
+import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/limits";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
 import { renderTaskPriorityRule } from "@/lib/tasks/priority";
 import { TASK_STEPS_LIMIT } from "@/lib/tasks/steps";
@@ -92,6 +93,7 @@ export const MCP_TOOL_NAMES = [
   "request_attention",
   "suggest_replies",
   "publish_prototype_review",
+  "resend_prototype_review_telegram",
   "read_prototype_review",
   "dismiss_attention",
   "bridge_report",
@@ -156,6 +158,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      under a question the operator has since answered. */
   "suggest_replies",
   "publish_prototype_review",
+  "resend_prototype_review_telegram",
   /* Clears a needs-you flag the operator is shown, durably and attributed. A
      replayed clientRequestId must answer with the first result rather than
      clear again something that asked anew since. */
@@ -256,6 +259,7 @@ const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolN
      one it did, whose copies no longer need the source files. A changed
      payload under the same key is refused by the digest check above. */
   "publish_prototype_review",
+  "resend_prototype_review_telegram",
   /* Deliberately NOT here: `suggest_replies`. Its write is idempotent over the
      record, but the record is retired by something outside the call — the
      operator's own answer — so re-running an interrupted write would put the
@@ -398,7 +402,6 @@ export interface McpBoundedNumericArg {
  */
 export const MCP_BOUNDED_NUMERIC_ARGS: Partial<Record<McpToolName, readonly McpBoundedNumericArg[]>> = {
   spawn_agent: [
-    { path: ["roleParams", "maxWorkers"], min: 1, max: 20, fallback: 3, role: "orchestrator" },
     { path: ["roleParams", "parallelN"], min: 1, max: 8, fallback: 1, role: "reviewer" },
   ],
   list_conversations: [
@@ -3385,7 +3388,8 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Authority is the same as request_attention's, and for the same reason \u2014 this writes into the surface they are answering in: the operator's own session or a designated orchestrator seat. A worker or unidentified caller is refused (SUGGEST_REPLIES_NOT_PERMITTED) with nothing recorded.",
     "The drafts always land under your OWN message: conversationId defaults to your conversation, and naming any other one is refused. To offer drafts elsewhere, ask that conversation's own session to offer them.",
   ].join(" "),
-  publish_prototype_review: "questions (3–7 on a task, 1–7 without one): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. Variants require a lane visual-critic pass or a passed fix after its last fail; use prototype → critic → proto-fix (2 rounds) → publish, whose publish stage calls this tool. A refusal names the missing evidence; retry after it is resolved with a new clientRequestId. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. A seat may omit taskId: the form (questions required) then lives in its conversation and the «Рішення» column. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state; nothing is uploaded. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
+  publish_prototype_review: "questions (3–7 on a task, 1–7 without one): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. Variants require a lane visual-critic pass or a passed fix after its last fail; use prototype → critic → proto-fix (2 rounds) → publish, whose publish stage calls this tool. A refusal names the missing evidence; retry after it is resolved with a new clientRequestId. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. A seat may omit taskId: the form (questions required) then lives in its conversation and the «Рішення» column. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state. The paired owner also receives a rich Telegram carousel with up to 50 image previews; a definite Telegram limit refusal uses a smaller preview and a link to the full review. Failed or unconfirmed posts carry telegramPost state and a reason on the review and in the seat wake. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
+  resend_prototype_review_telegram: "Resend a saved round to the paired owner as a rich Telegram carousel by reviewId. Only the caller’s project is readable, as with read_prototype_review. The same clientRequestId sends once; a new key intentionally sends another copy. The answer includes durable telegramPost state and a reason code on failure or uncertainty. This does not choose a variant or send the operator’s answer to the seat.",
   read_prototype_review: "Rounds carry questions; decision.answers holds option indexes per question id, and skipped:true means the operator took the recommendations. Read a task's prototype reviews, newest waiting round, chosen variant numbers, exact operator comment, time and delivery state. Only the newest round can wait; an undecided round a later decision retired stays in the history with supersededBy naming that decided round. Pipeline callers may omit taskId; a seat that omits it reads its own taskless questions; other callers supply it. Only your own project is readable. Media URLs are installation-local and absent where copies are unavailable. This tool makes no choice and sends no message.",
   dismiss_attention: [
     "Omit target to read exactly this project's Waiting-for-you panel, with each row's clear target and server evidence as hints. project defaults to your seat or maintenance run; the operator names one. Compact by default: 40 rows, 24 KB, nextCursor for more; kinds filters and full evidence are available. Use a fresh clientRequestId for each observation.",
@@ -3426,8 +3430,9 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "`project` defaults to your own on a list, and is required to add or remove.",
   ].join(" "),
   role_presets: [
+    "workerLimit reads the machine default and each project's own worker limit, with current running counts; detail:true adds overrides and the newest 20 changes. Set workerLimit {value: 1..64 or null, project?: project, reason: required text up to 300 characters} to change the machine default or one project's limit; running seats read it at their next wake. Do not combine workerLimit with overrides; expectedRevision applies only to overrides.",
     "Read — and change — which engine, model and effort each role runs on (builder, reviewer, verifier, architect, orchestrator, cleaner, prod-auditor, deployer, maintainer, and the builder and reviewer variants such as `trivial`, `frontend` or `apply-fixes`), the mapping the Settings agent mapping edits and `PUT /api/roles` writes.",
-    "Called without `overrides` it is a read: per role its `config` and its `variants`, plus the registry `revision`, its `health` and any `resets` a retirement made. `detail: true` adds each role's `shipped` values and whether its prompt text is overridden, and `choices`, every valid model per engine with the efforts each accepts.",
+    "Called without `overrides` or `workerLimit` it is a read: per role its `config` and its `variants`, plus the registry `revision`, its `health` and any `resets` a retirement made. `detail: true` adds each role's `shipped` values and whether its prompt text is overridden, and `choices`, every valid model per engine with the efforts each accepts.",
     "`overrides` writes, in the shape of the PUT: `{ [roleId]: { config?, variants? } }`, where a full `{ engine, model, effort }` sets a row and `null` resets it to the shipped default; an absent key is left alone, and `promptScaffold: null` restores the shipped prompt text (a scaffold cannot be set from here). Example: `{ builder: { config: { engine: \"claude\", model: \"claude-sonnet-5-5\", effort: \"high\" } }, reviewer: { config: null } }`.",
     "Only the designated orchestrator seat and the operator's own session write; any other caller reads, and its write is refused with `role_presets_write_refused` before anything else is checked.",
     "The whole write is refused, and nothing is stored, when a row names an engine, model or effort outside the launch catalogue (`role_presets_invalid`, with the offending `violations` and `choices`) or when `expectedRevision` is not the current revision (`role_presets_stale_revision`, carrying the current registry to resend against). `expectedRevision` is optional.",
@@ -3669,6 +3674,7 @@ const taskStepsInputSchema = z.array(z.object({
 
 export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   publish_prototype_review: prototypePublishSchema,
+  resend_prototype_review_telegram: z.object({ clientRequestId: clientRequestIdSchema, reviewId: z.string().regex(/^pr_[a-f0-9]{32}$/) }).strict(),
   read_prototype_review: z.object({ clientRequestId: clientRequestIdSchema.optional(), taskId: z.string().min(1).optional() }).strict(),
   spawn_agent: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -4383,6 +4389,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   role_presets: z.object({
     clientRequestId: clientRequestIdSchema,
+    workerLimit: z.object({ value: z.number().int().min(1).max(64).nullable(), project: z.string().trim().min(1).optional(), reason: z.string().trim().min(1).max(300) }).optional(),
     overrides: z.record(z.string(), z.object({
       config: z.object({ engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable().optional()
         .describe("A full { engine, model, effort } sets the role's row; null resets it to the shipped default."),

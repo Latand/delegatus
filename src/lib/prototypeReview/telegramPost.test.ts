@@ -11,10 +11,12 @@ import { FakeBotTransport, fakeBotToken, ok, refused, unreachable } from "@/lib/
 import { createBotApiTransport } from "@/lib/telegram/bot/transport";
 import { publishPOST } from "./http";
 import { NextRequest } from "next/server";
-import { saveTasks } from "@/lib/tasks/store";
+import { saveTasks, loadTasks } from "@/lib/tasks/store";
 import { roundDirectory, storedMediaPath, prototypeRoot } from "./store";
 import { telegramRound, telegramTask } from "./telegram.fixture";
 import { prototypeSlides, renderPrototypeTelegram, postPrototypeReviewToTelegram } from "./telegramPost";
+import { telegramPostSignals } from "./telegramPostSignals";
+import { readPrototypeReviews } from "./read";
 
 const roots: string[] = [];
 const restores: Array<() => void> = [];
@@ -216,4 +218,93 @@ test("rich sends follow chat migrations within the same journal claim", async ()
   await service.sendRichMessage({ chat: "reports", clientRequestId: "migration", message: renderPrototypeTelegram(telegramRound(), []) });
   expect(transport.callsOf("sendRichMessage")[1]!.params.chat_id).toBe(-43);
   expect(store.sendRow("prototype-review", "migration")?.chatId).toBe("-43");
+});
+
+test("a failed automatic post is durable and readable, including a missing destination", async () => {
+  const { transport } = await connected();
+  updateRelayStore(s => ({ ...s, relays: [destinationRelay()] }));
+  transport.handlers.getChat = () => ok({ id: 41, type: "private" });
+  const round = telegramRound("failed-post"); saveTasks([telegramTask([round])]);
+  transport.script("sendRichMessage", refused(403, "Forbidden"));
+  await postPrototypeReviewToTelegram(round);
+  const stored = loadTasks()[0]!.prototypeReviews![0]!;
+  expect(stored).toMatchObject({ telegramPost: { state: "failed", reason: "forbidden" } });
+  expect(readPrototypeReviews(loadTasks()[0]!).rounds[0]).toMatchObject({ telegramPost: { state: "failed", reason: "forbidden" } });
+  expect(telegramPostSignals("project-a", loadTasks(), [])).toMatchObject([{ actionable: true, label: expect.stringContaining("forbidden") }]);
+  expect(telegramPostSignals("project-b", loadTasks(), [])).toEqual([]);
+  updateRelayStore(s => ({ ...s, relays: [] }));
+  const absent = telegramRound("absent-destination"); saveTasks([telegramTask([absent])]);
+  await postPrototypeReviewToTelegram(absent);
+  expect(loadTasks()[0]!.prototypeReviews![0]!).toMatchObject({ telegramPost: { state: "failed", reason: "no_relay" } });
+});
+
+test("a 238-frame nine-variant round survives a definite Telegram size refusal as a rich summary with a link", async () => {
+  const { transport } = await connected();
+  updateRelayStore(s => ({ ...s, relays: [destinationRelay()] }));
+  transport.handlers.getChat = () => ok({ id: 41, type: "private" });
+  const round = telegramRound("large-round");
+  const directory = roundDirectory(round.id); await fs.mkdir(directory, { recursive: true }); roots.push(directory);
+  const bytes = await sharp({ create: { width: 40, height: 40, channels: 3, background: "white" } }).png().toBuffer();
+  const image = { id: createHash("sha256").update(bytes).digest("hex"), mime: "image/png" as const, bytes: bytes.length };
+  await fs.writeFile(storedMediaPath(await fs.realpath(prototypeRoot()), round.id, image), bytes);
+  round.variants = Array.from({ length: 9 }, (_, i) => ({ number: i + 1, name: `Choice ${i + 1}`, description: "A detailed layout. ".repeat(20),
+    frames: Array.from({ length: i < 4 ? 27 : 26 }, (_, j) => ({ image, caption: `Frame ${j + 1}` })), videos: [] }));
+  saveTasks([telegramTask([round])]);
+  transport.script("sendRichMessage", refused(400, "Bad Request: rich message text is too long"), ok({ message_id: 20, date: 4 }));
+  await postPrototypeReviewToTelegram(round);
+  expect(transport.callsOf("sendRichMessage")).toHaveLength(2);
+  const initial = transport.callsOf("sendRichMessage")[0]!.params.rich_message as { markdown: string; media: unknown[] };
+  expect(initial.media).toHaveLength(50);
+  expect(initial.markdown).toContain("Кадри: 50/238");
+  const summary = transport.callsOf("sendRichMessage")[1]!.params.rich_message as { markdown: string; media: unknown[] };
+  expect(summary.markdown.length).toBeLessThan(10000);
+  expect(summary.markdown).toContain("http://localhost:");
+  expect(summary.markdown).toContain("238");
+  expect(summary.media).toHaveLength(9);
+  expect(summary.markdown).toContain("Скопіювати рекомендовані");
+  for (let n = 1; n <= 9; n++) expect(summary.markdown).toContain(`Варіант ${n}`);
+  expect(loadTasks()[0]!.prototypeReviews![0]!).toMatchObject({ telegramPost: { state: "sent" } });
+});
+
+test("a pending post after a lost completion replays its bot receipt; uncertain sends stay visible without another send", async () => {
+  const { transport } = await connected();
+  const { mutatePrototypeRound } = await import("./store");
+  const { sweepPrototypeDeliveries } = await import("./deliveryWorker");
+  updateRelayStore(s => ({ ...s, relays: [destinationRelay()] }));
+  transport.handlers.getChat = () => ok({ id: 41, type: "private" });
+  const round = telegramRound("lost-completion"); saveTasks([telegramTask([round])]);
+  transport.script("sendRichMessage", ok({ message_id: 21, date: 5 }));
+  await postPrototypeReviewToTelegram(round);
+  mutatePrototypeRound(round.taskId, round.id, held => { held.telegramPost!.state = "pending"; });
+  await sweepPrototypeDeliveries();
+  expect(loadTasks()[0]!.prototypeReviews![0]!.telegramPost?.state).toBe("sent");
+  expect(transport.callsOf("sendRichMessage")).toHaveLength(1);
+  const uncertain = telegramRound("uncertain-post"); saveTasks([telegramTask([uncertain])]);
+  transport.script("sendRichMessage", unreachable("timed_out"));
+  await postPrototypeReviewToTelegram(uncertain); await postPrototypeReviewToTelegram(uncertain);
+  expect(transport.callsOf("sendRichMessage")).toHaveLength(2);
+  expect(loadTasks()[0]!.prototypeReviews![0]!.telegramPost).toMatchObject({ state: "uncertain", reason: "send_uncertain" });
+});
+
+test("media and size refusals in either order reach a text summary without dangling photo references", async () => {
+  const { service, transport, store } = await connected();
+  const { renderPrototypeTelegramSummary } = await import("./telegramPost");
+  const round = telegramRound();
+  const slides = [{ id: "v1f1", variantNumber: 1, caption: "Preview", blob: new Blob(["frame"]) }];
+  const mediaError = refused(400, "Bad Request: invalid photo dimensions");
+  const sizeError = refused(400, "Bad Request: rich message text is too long");
+  for (const [index, refusals] of [[mediaError, sizeError], [sizeError, mediaError]].entries()) {
+    transport.script("sendRichMessage", ...refusals, ok({ message_id: 30 + index, date: 6 }));
+    const key = `combined-refusals-${index}`;
+    await service.sendRichMessage({ chat: "reports", topicId: 7, clientRequestId: key,
+      message: renderPrototypeTelegram(round, slides), fallbackMarkdown: renderPrototypeTelegram(round, []).markdown,
+      limitFallback: renderPrototypeTelegramSummary(round, slides) });
+    const final = transport.callsOf("sendRichMessage").at(-1)!.params;
+    expect(final.message_thread_id).toBe(7);
+    expect(final.rich_message).not.toHaveProperty("media");
+    expect((final.rich_message as { markdown: string }).markdown).not.toContain("tg://photo");
+    expect((final.rich_message as { markdown: string }).markdown).toContain("Повне рев’ю у Delegatus");
+    expect(store.sendRow("prototype-review", key)?.state).toBe("sent");
+  }
+  expect(transport.callsOf("sendRichMessage")).toHaveLength(6);
 });

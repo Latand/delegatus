@@ -1,0 +1,902 @@
+[
+  {
+    "theme": "light",
+    "width": 1440,
+    "surface": "task-review",
+    "failed": {
+      "state": "failed",
+      "text": "Telegram: не надіслано · боту заборонено надсилати повідомлення",
+      "rowHeight": 32,
+      "lineHeight": 16.5,
+      "button": {
+        "x": 473.703125,
+        "y": 699,
+        "width": 196.609375,
+        "height": 32
+      },
+      "bordered": true,
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "gap": 0
+    },
+    "sent": {
+      "state": "sent",
+      "text": "Надіслано в Telegram",
+      "rowHeight": 16.5,
+      "lineHeight": 16.5,
+      "button": {
+        "x": 239.359375,
+        "y": 714.5,
+        "width": 147.421875,
+        "height": 16.5
+      },
+      "bordered": false,
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "gap": 0
+    },
+    "calls": 1,
+    "draftPreserved": true
+  },
+  {
+    "theme": "light",
+    "width": 1440,
+    "surface": "task-review",
+    "tgstate": "sent",
+    "state": "sent",
+    "text": "Надіслано в Telegram",
+    "rowHeight": 16.5,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 239.359375,
+      "y": 714.5,
+      "width": 147.421875,
+      "height": 16.5
+    },
+    "bordered": false,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0
+  },
+  {
+    "theme": "light",
+    "width": 1440,
+    "surface": "task-review",
+    "tgstate": "uncertain",
+    "state": "uncertain",
+    "text": "Telegram: отримання не підтверджено · Telegram не підтвердив отримання; повтор може створити копію",
+    "rowHeight": 32,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 661.046875,
+      "y": 699,
+      "width": 196.609375,
+      "height": 32
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0
+  },
+  {
+    "theme": "light",
+    "width": 1440,
+    "surface": "task-review",
+    "tgstate": "unknown",
+    "state": "unknown",
+    "text": "Telegram: публікацію ще не записано",
+    "rowHeight": 32,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 318.25,
+      "y": 699,
+      "width": 196.609375,
+      "height": 32
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0
+  },
+  {
+    "theme": "light",
+    "width": 1440,
+    "surface": "seat-form",
+    "tgstate": "failed",
+    "state": "failed",
+    "text": "Telegram: не надіслано · боту заборонено надсилати повідомлення",
+    "rowHeight": 71.875,
+    "lineHeight": 15.95,
+    "button": {
+      "x": 1021.5,
+      "y": 580.765625,
+      "width": 196.609375,
+      "height": 32
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 8,
+    "calls": 1,
+    "draftPreserved": true
+  },
+  {
+    "theme": "light",
+    "width": 1440,
+    "surface": "seat-form",
+    "tgstate": "sent",
+    "state": "sent",
+    "text": "Надіслано в Telegram",
+    "rowHeight": 15.9375,
+    "lineHeight": 15.95,
+    "button": {
+      "x": 1143.859375,
+      "y": 596.890625,
+      "width": 147.421875,
+      "height": 15.9375
+    },
+    "bordered": false,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0,
+    "calls": 0,
+    "draftPreserved": true
+  },
+  {
+    "theme": "dark",
+    "width": 1440,
+    "surface": "task-review",
+    "failed": {
+      "state": "failed",
+      "text": "Telegram: не надіслано · боту заборонено надсилати повідомлення",
+      "rowHeight": 32,
+      "lineHeight": 16.5,
+      "button": {
+        "x": 473.703125,
+        "y": 699,
+        "width": 196.609375,
+        "height": 32
+      },
+      "bordered": true,
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "gap": 0
+    },
+    "sent": {
+      "state": "sent",
+      "text": "Надіслано в Telegram",
+      "rowHeight": 16.5,
+      "lineHeight": 16.5,
+      "button": {
+        "x": 239.359375,
+        "y": 714.5,
+        "width": 147.421875,
+        "height": 16.5
+      },
+      "bordered": false,
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "gap": 0
+    },
+    "calls": 1,
+    "draftPreserved": true
+  },
+  {
+    "theme": "dark",
+    "width": 1440,
+    "surface": "task-review",
+    "tgstate": "sent",
+    "state": "sent",
+    "text": "Надіслано в Telegram",
+    "rowHeight": 16.5,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 239.359375,
+      "y": 714.5,
+      "width": 147.421875,
+      "height": 16.5
+    },
+    "bordered": false,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0
+  },
+  {
+    "theme": "dark",
+    "width": 1440,
+    "surface": "task-review",
+    "tgstate": "uncertain",
+    "state": "uncertain",
+    "text": "Telegram: отримання не підтверджено · Telegram не підтвердив отримання; повтор може створити копію",
+    "rowHeight": 32,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 661.046875,
+      "y": 699,
+      "width": 196.609375,
+      "height": 32
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0
+  },
+  {
+    "theme": "dark",
+    "width": 1440,
+    "surface": "task-review",
+    "tgstate": "unknown",
+    "state": "unknown",
+    "text": "Telegram: публікацію ще не записано",
+    "rowHeight": 32,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 318.25,
+      "y": 699,
+      "width": 196.609375,
+      "height": 32
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0
+  },
+  {
+    "theme": "dark",
+    "width": 1440,
+    "surface": "seat-form",
+    "tgstate": "failed",
+    "state": "failed",
+    "text": "Telegram: не надіслано · боту заборонено надсилати повідомлення",
+    "rowHeight": 71.875,
+    "lineHeight": 15.95,
+    "button": {
+      "x": 1021.5,
+      "y": 580.765625,
+      "width": 196.609375,
+      "height": 32
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 8,
+    "calls": 1,
+    "draftPreserved": true
+  },
+  {
+    "theme": "dark",
+    "width": 1440,
+    "surface": "seat-form",
+    "tgstate": "sent",
+    "state": "sent",
+    "text": "Надіслано в Telegram",
+    "rowHeight": 15.9375,
+    "lineHeight": 15.95,
+    "button": {
+      "x": 1143.859375,
+      "y": 596.890625,
+      "width": 147.421875,
+      "height": 15.9375
+    },
+    "bordered": false,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0,
+    "calls": 0,
+    "draftPreserved": true
+  },
+  {
+    "theme": "light",
+    "width": 1000,
+    "surface": "task-review",
+    "failed": {
+      "state": "failed",
+      "text": "Telegram: не надіслано · боту заборонено надсилати повідомлення",
+      "rowHeight": 32,
+      "lineHeight": 16.5,
+      "button": {
+        "x": 397.703125,
+        "y": 511,
+        "width": 196.609375,
+        "height": 32
+      },
+      "bordered": true,
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "gap": 0
+    },
+    "sent": {
+      "state": "sent",
+      "text": "Надіслано в Telegram",
+      "rowHeight": 16.5,
+      "lineHeight": 16.5,
+      "button": {
+        "x": 163.359375,
+        "y": 526.5,
+        "width": 147.421875,
+        "height": 16.5
+      },
+      "bordered": false,
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "gap": 0
+    },
+    "calls": 1,
+    "draftPreserved": true
+  },
+  {
+    "theme": "light",
+    "width": 1000,
+    "surface": "task-review",
+    "tgstate": "sent",
+    "state": "sent",
+    "text": "Надіслано в Telegram",
+    "rowHeight": 16.5,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 163.359375,
+      "y": 526.5,
+      "width": 147.421875,
+      "height": 16.5
+    },
+    "bordered": false,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0
+  },
+  {
+    "theme": "light",
+    "width": 1000,
+    "surface": "task-review",
+    "tgstate": "uncertain",
+    "state": "uncertain",
+    "text": "Telegram: отримання не підтверджено · Telegram не підтвердив отримання; повтор може створити копію",
+    "rowHeight": 32,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 585.046875,
+      "y": 511,
+      "width": 196.609375,
+      "height": 32
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0
+  },
+  {
+    "theme": "light",
+    "width": 1000,
+    "surface": "task-review",
+    "tgstate": "unknown",
+    "state": "unknown",
+    "text": "Telegram: публікацію ще не записано",
+    "rowHeight": 32,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 242.25,
+      "y": 511,
+      "width": 196.609375,
+      "height": 32
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0
+  },
+  {
+    "theme": "light",
+    "width": 1000,
+    "surface": "seat-form",
+    "tgstate": "failed",
+    "state": "failed",
+    "text": "Telegram: не надіслано · боту заборонено надсилати повідомлення",
+    "rowHeight": 56.5,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 246,
+      "y": 539.5,
+      "width": 196.609375,
+      "height": 32
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 8,
+    "calls": 1,
+    "draftPreserved": true
+  },
+  {
+    "theme": "light",
+    "width": 1000,
+    "surface": "seat-form",
+    "tgstate": "sent",
+    "state": "sent",
+    "text": "Надіслано в Telegram",
+    "rowHeight": 16.5,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 368.359375,
+      "y": 555,
+      "width": 147.421875,
+      "height": 16.5
+    },
+    "bordered": false,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0,
+    "calls": 0,
+    "draftPreserved": true
+  },
+  {
+    "theme": "dark",
+    "width": 1000,
+    "surface": "task-review",
+    "failed": {
+      "state": "failed",
+      "text": "Telegram: не надіслано · боту заборонено надсилати повідомлення",
+      "rowHeight": 32,
+      "lineHeight": 16.5,
+      "button": {
+        "x": 397.703125,
+        "y": 511,
+        "width": 196.609375,
+        "height": 32
+      },
+      "bordered": true,
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "gap": 0
+    },
+    "sent": {
+      "state": "sent",
+      "text": "Надіслано в Telegram",
+      "rowHeight": 16.5,
+      "lineHeight": 16.5,
+      "button": {
+        "x": 163.359375,
+        "y": 526.5,
+        "width": 147.421875,
+        "height": 16.5
+      },
+      "bordered": false,
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "gap": 0
+    },
+    "calls": 1,
+    "draftPreserved": true
+  },
+  {
+    "theme": "dark",
+    "width": 1000,
+    "surface": "task-review",
+    "tgstate": "sent",
+    "state": "sent",
+    "text": "Надіслано в Telegram",
+    "rowHeight": 16.5,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 163.359375,
+      "y": 526.5,
+      "width": 147.421875,
+      "height": 16.5
+    },
+    "bordered": false,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0
+  },
+  {
+    "theme": "dark",
+    "width": 1000,
+    "surface": "task-review",
+    "tgstate": "uncertain",
+    "state": "uncertain",
+    "text": "Telegram: отримання не підтверджено · Telegram не підтвердив отримання; повтор може створити копію",
+    "rowHeight": 32,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 585.046875,
+      "y": 511,
+      "width": 196.609375,
+      "height": 32
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0
+  },
+  {
+    "theme": "dark",
+    "width": 1000,
+    "surface": "task-review",
+    "tgstate": "unknown",
+    "state": "unknown",
+    "text": "Telegram: публікацію ще не записано",
+    "rowHeight": 32,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 242.25,
+      "y": 511,
+      "width": 196.609375,
+      "height": 32
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0
+  },
+  {
+    "theme": "dark",
+    "width": 1000,
+    "surface": "seat-form",
+    "tgstate": "failed",
+    "state": "failed",
+    "text": "Telegram: не надіслано · боту заборонено надсилати повідомлення",
+    "rowHeight": 56.5,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 246,
+      "y": 539.5,
+      "width": 196.609375,
+      "height": 32
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 8,
+    "calls": 1,
+    "draftPreserved": true
+  },
+  {
+    "theme": "dark",
+    "width": 1000,
+    "surface": "seat-form",
+    "tgstate": "sent",
+    "state": "sent",
+    "text": "Надіслано в Telegram",
+    "rowHeight": 16.5,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 368.359375,
+      "y": 555,
+      "width": 147.421875,
+      "height": 16.5
+    },
+    "bordered": false,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0,
+    "calls": 0,
+    "draftPreserved": true
+  },
+  {
+    "theme": "light",
+    "width": 390,
+    "surface": "task-review",
+    "failed": {
+      "state": "failed",
+      "text": "Telegram: не надіслано · боту заборонено надсилати повідомлення",
+      "rowHeight": 68.5,
+      "lineHeight": 16.5,
+      "button": {
+        "x": 16,
+        "y": 628,
+        "width": 196.609375,
+        "height": 44
+      },
+      "bordered": true,
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "gap": 8
+    },
+    "sent": {
+      "state": "sent",
+      "text": "Надіслано в Telegram",
+      "rowHeight": 16.5,
+      "lineHeight": 16.5,
+      "button": {
+        "x": 138.359375,
+        "y": 645.5,
+        "width": 147.421875,
+        "height": 36.5
+      },
+      "bordered": false,
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "gap": 0
+    },
+    "calls": 1,
+    "draftPreserved": true
+  },
+  {
+    "theme": "light",
+    "width": 390,
+    "surface": "task-review",
+    "tgstate": "sent",
+    "state": "sent",
+    "text": "Надіслано в Telegram",
+    "rowHeight": 16.5,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 138.359375,
+      "y": 645.5,
+      "width": 147.421875,
+      "height": 36.5
+    },
+    "bordered": false,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0
+  },
+  {
+    "theme": "light",
+    "width": 390,
+    "surface": "task-review",
+    "tgstate": "uncertain",
+    "state": "uncertain",
+    "text": "Telegram: отримання не підтверджено · Telegram не підтвердив отримання; повтор може створити копію",
+    "rowHeight": 85,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 16,
+      "y": 628,
+      "width": 196.609375,
+      "height": 44
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 8
+  },
+  {
+    "theme": "light",
+    "width": 390,
+    "surface": "task-review",
+    "tgstate": "unknown",
+    "state": "unknown",
+    "text": "Telegram: публікацію ще не записано",
+    "rowHeight": 68.5,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 16,
+      "y": 628,
+      "width": 196.609375,
+      "height": 44
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 8
+  },
+  {
+    "theme": "light",
+    "width": 390,
+    "surface": "seat-form",
+    "tgstate": "failed",
+    "state": "failed",
+    "text": "Telegram: не надіслано · боту заборонено надсилати повідомлення",
+    "rowHeight": 85,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 25,
+      "y": 657.28125,
+      "width": 196.609375,
+      "height": 44
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 8,
+    "calls": 1,
+    "draftPreserved": true
+  },
+  {
+    "theme": "light",
+    "width": 390,
+    "surface": "seat-form",
+    "tgstate": "sent",
+    "state": "sent",
+    "text": "Надіслано в Telegram",
+    "rowHeight": 16.5,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 147.359375,
+      "y": 754.28125,
+      "width": 147.421875,
+      "height": 36.5
+    },
+    "bordered": false,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0,
+    "calls": 0,
+    "draftPreserved": true
+  },
+  {
+    "theme": "dark",
+    "width": 390,
+    "surface": "task-review",
+    "failed": {
+      "state": "failed",
+      "text": "Telegram: не надіслано · боту заборонено надсилати повідомлення",
+      "rowHeight": 68.5,
+      "lineHeight": 16.5,
+      "button": {
+        "x": 16,
+        "y": 628,
+        "width": 196.609375,
+        "height": 44
+      },
+      "bordered": true,
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "gap": 8
+    },
+    "sent": {
+      "state": "sent",
+      "text": "Надіслано в Telegram",
+      "rowHeight": 16.5,
+      "lineHeight": 16.5,
+      "button": {
+        "x": 138.359375,
+        "y": 645.5,
+        "width": 147.421875,
+        "height": 36.5
+      },
+      "bordered": false,
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "gap": 0
+    },
+    "calls": 1,
+    "draftPreserved": true
+  },
+  {
+    "theme": "dark",
+    "width": 390,
+    "surface": "task-review",
+    "tgstate": "sent",
+    "state": "sent",
+    "text": "Надіслано в Telegram",
+    "rowHeight": 16.5,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 138.359375,
+      "y": 645.5,
+      "width": 147.421875,
+      "height": 36.5
+    },
+    "bordered": false,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0
+  },
+  {
+    "theme": "dark",
+    "width": 390,
+    "surface": "task-review",
+    "tgstate": "uncertain",
+    "state": "uncertain",
+    "text": "Telegram: отримання не підтверджено · Telegram не підтвердив отримання; повтор може створити копію",
+    "rowHeight": 85,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 16,
+      "y": 628,
+      "width": 196.609375,
+      "height": 44
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 8
+  },
+  {
+    "theme": "dark",
+    "width": 390,
+    "surface": "task-review",
+    "tgstate": "unknown",
+    "state": "unknown",
+    "text": "Telegram: публікацію ще не записано",
+    "rowHeight": 68.5,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 16,
+      "y": 628,
+      "width": 196.609375,
+      "height": 44
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 8
+  },
+  {
+    "theme": "dark",
+    "width": 390,
+    "surface": "seat-form",
+    "tgstate": "failed",
+    "state": "failed",
+    "text": "Telegram: не надіслано · боту заборонено надсилати повідомлення",
+    "rowHeight": 85,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 25,
+      "y": 657.28125,
+      "width": 196.609375,
+      "height": 44
+    },
+    "bordered": true,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 8,
+    "calls": 1,
+    "draftPreserved": true
+  },
+  {
+    "theme": "dark",
+    "width": 390,
+    "surface": "seat-form",
+    "tgstate": "sent",
+    "state": "sent",
+    "text": "Надіслано в Telegram",
+    "rowHeight": 16.5,
+    "lineHeight": 16.5,
+    "button": {
+      "x": 147.359375,
+      "y": 754.28125,
+      "width": 147.421875,
+      "height": 36.5
+    },
+    "bordered": false,
+    "visible": true,
+    "clipped": false,
+    "overlap": false,
+    "gap": 0,
+    "calls": 0,
+    "draftPreserved": true
+  }
+]

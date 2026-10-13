@@ -1,6 +1,7 @@
 "use client";
 
 import { SpeakButton } from "../feed/SpeakButton";
+import { WorkerLimitChip } from "./WorkerLimitChip";
 
 import { CornerDownRight, LoaderCircle, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
@@ -144,6 +145,7 @@ export function IncumbentHeader({
           </Badge>
         ) : null}
         <ContextMeter context={context} />
+        <WorkerLimitChip project={project} workers={incumbent?.workers} />
         {orchestratorMandateStale(promptVersion) ? (
           <span
             data-orchestrator-mandate-version={String(promptVersion)}

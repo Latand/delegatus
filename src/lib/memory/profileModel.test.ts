@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { directProfileCaller, MEMORY_PROFILE_MODEL, prepareProfileCaller, type ProfileFetch } from "./profileModel";
+import { directJsonCaller, directProfileCaller, MEMORY_PROFILE_MODEL, prepareJsonCaller, prepareProfileCaller, type ProfileFetch } from "./profileModel";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { profileInputs } from "./profile";
 import { sampleAnswer, sampleMemory } from "./profile.fixture";
@@ -85,4 +85,31 @@ describe("direct profile request", () => {
     const timedOut = directProfileCaller("sample", "haiku", (async () => { throw new DOMException("private response", "TimeoutError"); }) as ProfileFetch);
     await expect(timedOut(input, "uk")).rejects.toThrow("timeout");
   });
+});
+
+test("the shared direct caller returns provider usage and a bounded deadline without exposing auth", async () => {
+  const caller = directJsonCaller("sample",MEMORY_PROFILE_MODEL,async (_,init) => {
+    const payload = JSON.parse(init.body as string);
+    expect(payload.max_tokens).toBe(2048); expect(init.signal).toBeDefined();
+    expect(payload.messages[0].content).toBe("Summarize invented speech.");
+    expect(payload.output_config.format.schema).toEqual({ type:"object" });
+    return Response.json({ stop_reason:"end_turn",content:[{ type:"text",text:'{"asked":[]}' }],usage:{ input_tokens:2475,output_tokens:566 } });
+  });
+  const result = await caller({ prompt:"Summarize invented speech.",schema:{type:"object"},maxTokens:2048,deadlineMs:20000 });
+  expect(result).toMatchObject({ answer:{asked:[]},inputTokens:2475,outputTokens:566,model:MEMORY_PROFILE_MODEL });
+  expect(result.durationMs).toBeGreaterThanOrEqual(0); expect(JSON.stringify(result)).not.toContain("sample");
+});
+
+test("call summaries exclude legacy homes while profile admission keeps its existing default", async () => {
+  const legacy: AccountContext = { engine:"claude",accountId:"legacy-one",kind:"legacy",home:"legacy-home",transcriptRoot:"sample",env:{NODE_ENV:"test"} };
+  const managed: AccountContext = { ...legacy,accountId:"managed-one",kind:"managed",home:"managed-home" };
+  for (const managedOnly of [false,true]) {
+    const read: string[] = [];
+    await prepareJsonCaller("garden",{ model:MEMORY_PROFILE_MODEL,
+      manager:{resolveHeadlessSpawn:(_engine,_requested,_excluded,_project,_model,unavailable=[]) => {
+        const account = [legacy,managed].find(row => !unavailable.includes(row.accountId)); return account ? {kind:"available",account} : {kind:"unavailable"};
+      }},credentials:home => { read.push(home); return {state:"present",source:"file",document:{claudeAiOauth:{accessToken:"sample",expiresAt:Date.now()+60000}}}; }
+    },managedOnly);
+    expect(read).toEqual([managedOnly ? "managed-home" : "legacy-home"]);
+  }
 });

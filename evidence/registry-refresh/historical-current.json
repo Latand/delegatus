@@ -1,0 +1,5534 @@
+{
+  "schemaVersion": 1,
+  "method": "Full historical SQLite store and archive modules in the reviewed common application and gate; compatibility exports only, historical class unchanged.",
+  "commonRevision": "c5db12d42e5c39e0a935b1addd45b4003f565903",
+  "historicalRevision": "6ced7a3a5577de0ad325f3d0648911300cc13826",
+  "runtime": "Bun 1.4.0 (34cbb9a40)",
+  "warmupRounds": 1,
+  "measuredRoundsPerKindAndMode": 5,
+  "gateLoad": {
+    "scale": 1,
+    "scopes": 8,
+    "workers": 4,
+    "writers": 2,
+    "browserViews": 8
+  },
+  "measurementOrder": [
+    "historical gate",
+    "current gate",
+    "historical SQL refresh",
+    "current SQL refresh"
+  ],
+  "timingBoundary": "Refresh starts after the identical SQL transaction commits and ends when readOnlySnapshot returns; deferred row access follows timing. Timer windows include writes, refreshes and warmup.",
+  "harnessRetention": "Persist each new maximum from the existing boot timer and retain its result on Viewer error; copy existing *-report.json after measured phases and shutdown, immediately before gate cleanup. Identical in both exports; workload, windows, deadlines and bounds unchanged.",
+  "incompleteDiagnostic": {
+    "historicalMutate": "Stopped at 446 seconds after reaching external round zero; exit 143, no complete timing result. Current mutate diagnostic completed, kept outside the historical pair."
+  },
+  "sqlProbePreparationFailure": "Two probe attempts incorrectly required Bun run().changes to equal one, although it counts trigger updates. Both variants stopped before timing a refresh. The final probe checks SQLite changes() and each returned field.",
+  "preliminaryFailure": "Historical build under node_modules failed in webpack loaders before any measurement. Both exports moved into .artifacts; no source/workload change.",
+  "regression": {
+    "historical": {
+      "passed": 0,
+      "failed": 4,
+      "assertions": 40,
+      "failures": [
+        "two breadth assertions: 73 decisions exceeds 9",
+        "two restoration assertions: previously absent parent restored, Telegram still denied"
+      ]
+    },
+    "current": {
+      "passed": 4,
+      "failed": 0,
+      "assertions": 100
+    }
+  },
+  "commonFiles": {
+    "src/lib/agent/registryPerformanceDataset.ts": "29155edf0bcd252df58305cbbe615b622886c65a48e5d7c6604c68d294b78baa",
+    "src/runtime-host/candidatePerformanceRun.ts": "62fcd433a2076c6badf0dd01e4ff91f80f401ebb4de139fc51b0a820d760f2f4",
+    "src/lib/agent/registry.ts": "2f9fdd0b7b59307b3c961ace1b28cc2ca3595abc70162396857a552c3492109e",
+    "src/lib/agent/mcpAllowlist.ts": "c57c5cc46c0162b7bf7eb170e313cb0b8159cb5c5bb111cd6f3e8d08b8968f67",
+    "bun.lock": "22588d87096818a35d0d5367ecf485780bdbb57640dd8c049a1c4e8c90d3136b"
+  },
+  "diagnosticSha256": "3442f8f8d905744a5ca331738c4da10e0638826d9798aa249725d54098007e49",
+  "historical": {
+    "revision": "6ced7a3a5577de0ad325f3d0648911300cc13826",
+    "sourceSha256": "cb915bb7e75345b5ba33165b07ea88e32b2835f4008d847073f7a06f1c077560",
+    "archiveSha256": "75d7e65e7e6f5a5e4a18e17971ccff2329459c3e09c824da487b23cf2d7270c8",
+    "buildExit": 0,
+    "refreshExit": 0,
+    "gateExit": 1,
+    "refresh": {
+      "measuredAt": "2026-10-13T05:55:10.905Z",
+      "warmupRounds": 1,
+      "measuredRounds": 5,
+      "writer": "identical SQL transaction; revision bump and production journal triggers",
+      "datasetSha256": "64ef533af23fed7caba5f72d0d3c03a1faf31444fea8fc17e5e50f46c171bc11",
+      "datasetLayoutSha256": "e2a535e586e65547eeee8500a8a4efb75539356460741fd9ca94e4186e85531e",
+      "rows": 30036,
+      "coldRows": 27836,
+      "runtime": "1.4.0",
+      "results": {
+        "external": {
+          "kinds": {
+            "conversations": {
+              "writeMs": {
+                "count": 5,
+                "p50": 1.175,
+                "p95": 1.364,
+                "max": 1.364
+              },
+              "refreshMs": {
+                "count": 5,
+                "p50": 1298.737,
+                "p95": 1364.694,
+                "max": 1364.694
+              },
+              "grantDecisions": {
+                "count": 5,
+                "p50": 88,
+                "p95": 88,
+                "max": 88
+              }
+            },
+            "receipts": {
+              "writeMs": {
+                "count": 5,
+                "p50": 1.265,
+                "p95": 13.085,
+                "max": 13.085
+              },
+              "refreshMs": {
+                "count": 5,
+                "p50": 1331.019,
+                "p95": 1427.097,
+                "max": 1427.097
+              },
+              "grantDecisions": {
+                "count": 5,
+                "p50": 88,
+                "p95": 88,
+                "max": 88
+              }
+            },
+            "entries": {
+              "writeMs": {
+                "count": 5,
+                "p50": 1.005,
+                "p95": 1.404,
+                "max": 1.404
+              },
+              "refreshMs": {
+                "count": 5,
+                "p50": 119.187,
+                "p95": 137.631,
+                "max": 137.631
+              },
+              "grantDecisions": {
+                "count": 5,
+                "p50": 1,
+                "p95": 1,
+                "max": 1
+              }
+            }
+          },
+          "timerLatenessMs": {
+            "count": 36,
+            "p50": 2.506,
+            "p95": 1370.603,
+            "max": 1423.355
+          }
+        },
+        "local": {
+          "kinds": {
+            "conversations": {
+              "writeMs": {
+                "count": 5,
+                "p50": 1.93,
+                "p95": 2.16,
+                "max": 2.16
+              },
+              "refreshMs": {
+                "count": 5,
+                "p50": 1513.018,
+                "p95": 1728.676,
+                "max": 1728.676
+              },
+              "grantDecisions": {
+                "count": 5,
+                "p50": 88,
+                "p95": 88,
+                "max": 88
+              }
+            },
+            "receipts": {
+              "writeMs": {
+                "count": 5,
+                "p50": 1.875,
+                "p95": 4.468,
+                "max": 4.468
+              },
+              "refreshMs": {
+                "count": 5,
+                "p50": 1484.609,
+                "p95": 1554.433,
+                "max": 1554.433
+              },
+              "grantDecisions": {
+                "count": 5,
+                "p50": 88,
+                "p95": 88,
+                "max": 88
+              }
+            },
+            "entries": {
+              "writeMs": {
+                "count": 5,
+                "p50": 1.35,
+                "p95": 2.607,
+                "max": 2.607
+              },
+              "refreshMs": {
+                "count": 5,
+                "p50": 130.984,
+                "p95": 166.727,
+                "max": 166.727
+              },
+              "grantDecisions": {
+                "count": 5,
+                "p50": 1,
+                "p95": 1,
+                "max": 1
+              }
+            }
+          },
+          "timerLatenessMs": {
+            "count": 35,
+            "p50": 130.29,
+            "p95": 1658.482,
+            "max": 1736.789
+          }
+        }
+      }
+    },
+    "gate": {
+      "checkedAt": "2026-10-13T05:48:31.965Z",
+      "runtime": "bun 1.4.0",
+      "bounds": {
+        "firstBoot": {
+          "registryOpenMs": 2000,
+          "firstSnapshotMs": 2000,
+          "firstUsableMs": 10000,
+          "eventLoopMaxMs": 1000
+        },
+        "activation": {
+          "durationMs": 15000,
+          "eventLoopMaxMs": 1500
+        },
+        "grantWrite": {
+          "p95Ms": 350,
+          "maxMs": 500
+        },
+        "eventLoop": {
+          "p95Ms": 50,
+          "maxMs": 500
+        },
+        "projectionWorker": {
+          "coldMs": 8000,
+          "warmP95Ms": 1000,
+          "warmMaxMs": 2000
+        },
+        "scopeRequests": {
+          "p95Ms": 5000,
+          "maxMs": 10000,
+          "maxQueueDepth": 8
+        },
+        "handover": {
+          "successorReadyMs": 15000,
+          "adoptionMs": 15000,
+          "workerProgressGapMs": 20000
+        },
+        "runtimeRpc": {
+          "p95Ms": 250,
+          "maxMs": 2000
+        },
+        "browser": {
+          "readyMs": 10000,
+          "filesP95Ms": 5000,
+          "filesMaxMs": 10000,
+          "apiMaxMs": 10000,
+          "bootLagMaxMs": 1000,
+          "lagP95Ms": 50,
+          "lagMaxMs": 500,
+          "inputMs": 500,
+          "serverBootLoopMaxMs": 1000,
+          "serverLoopP95Ms": 50,
+          "serverLoopMaxMs": 500
+        }
+      },
+      "measurements": null,
+      "breaches": [],
+      "ok": false,
+      "detail": "the candidate performance gate could not run: release A never became ready: Error: files response worker was retired mid-build (timed out): release a failed: Error: files response worker was retired mid-build (timed out)",
+      "log": [
+        "dataset 30036 rows, 27836 cold, 320 transcripts, seeded in 8885ms",
+        "runtime host 2193597 answering"
+      ]
+    },
+    "containment": {
+      "cgroup": "$GATE_SCOPE",
+      "cpu": "60000 20000",
+      "memory": "8589934592"
+    },
+    "gateProcessReports": {
+      "release-a-report.json": {
+        "completed": false,
+        "name": "a",
+        "bootLoopMaxMs": 83462.27291300001,
+        "registryOpenMs": 52.974627999999996,
+        "snapshotMs": 83445.76276900001,
+        "error": "Error: files response worker was retired mid-build (timed out)",
+        "busy": 0,
+        "runtimeRpc": {
+          "requests": 0,
+          "timeouts": 0,
+          "failures": 0,
+          "maxMs": 0,
+          "latencies": []
+        },
+        "log": [
+          "release a failed: Error: files response worker was retired mid-build (timed out)"
+        ]
+      }
+    },
+    "secondGate": {
+      "checkedAt": "2026-10-13T05:42:07.526Z",
+      "runtime": "bun 1.4.0",
+      "bounds": {
+        "firstBoot": {
+          "registryOpenMs": 2000,
+          "firstSnapshotMs": 2000,
+          "firstUsableMs": 10000,
+          "eventLoopMaxMs": 1000
+        },
+        "activation": {
+          "durationMs": 15000,
+          "eventLoopMaxMs": 1500
+        },
+        "grantWrite": {
+          "p95Ms": 350,
+          "maxMs": 500
+        },
+        "eventLoop": {
+          "p95Ms": 50,
+          "maxMs": 500
+        },
+        "projectionWorker": {
+          "coldMs": 8000,
+          "warmP95Ms": 1000,
+          "warmMaxMs": 2000
+        },
+        "scopeRequests": {
+          "p95Ms": 5000,
+          "maxMs": 10000,
+          "maxQueueDepth": 8
+        },
+        "handover": {
+          "successorReadyMs": 15000,
+          "adoptionMs": 15000,
+          "workerProgressGapMs": 20000
+        },
+        "runtimeRpc": {
+          "p95Ms": 250,
+          "maxMs": 2000
+        },
+        "browser": {
+          "readyMs": 10000,
+          "filesP95Ms": 5000,
+          "filesMaxMs": 10000,
+          "apiMaxMs": 10000,
+          "bootLagMaxMs": 1000,
+          "lagP95Ms": 50,
+          "lagMaxMs": 500,
+          "inputMs": 500,
+          "serverBootLoopMaxMs": 1000,
+          "serverLoopP95Ms": 50,
+          "serverLoopMaxMs": 500
+        }
+      },
+      "measurements": null,
+      "breaches": [],
+      "ok": false,
+      "detail": "the candidate performance gate could not run: release A never became ready: viewer:a produced no report",
+      "log": [
+        "dataset 30036 rows, 27836 cold, 320 transcripts, seeded in 7673ms",
+        "runtime host 2076755 answering"
+      ]
+    },
+    "secondGateProcessReports": {},
+    "earlierGate": {
+      "checkedAt": "2026-10-13T05:35:49.388Z",
+      "runtime": "bun 1.4.0",
+      "bounds": {
+        "firstBoot": {
+          "registryOpenMs": 2000,
+          "firstSnapshotMs": 2000,
+          "firstUsableMs": 10000,
+          "eventLoopMaxMs": 1000
+        },
+        "activation": {
+          "durationMs": 15000,
+          "eventLoopMaxMs": 1500
+        },
+        "grantWrite": {
+          "p95Ms": 350,
+          "maxMs": 500
+        },
+        "eventLoop": {
+          "p95Ms": 50,
+          "maxMs": 500
+        },
+        "projectionWorker": {
+          "coldMs": 8000,
+          "warmP95Ms": 1000,
+          "warmMaxMs": 2000
+        },
+        "scopeRequests": {
+          "p95Ms": 5000,
+          "maxMs": 10000,
+          "maxQueueDepth": 8
+        },
+        "handover": {
+          "successorReadyMs": 15000,
+          "adoptionMs": 15000,
+          "workerProgressGapMs": 20000
+        },
+        "runtimeRpc": {
+          "p95Ms": 250,
+          "maxMs": 2000
+        },
+        "browser": {
+          "readyMs": 10000,
+          "filesP95Ms": 5000,
+          "filesMaxMs": 10000,
+          "apiMaxMs": 10000,
+          "bootLagMaxMs": 1000,
+          "lagP95Ms": 50,
+          "lagMaxMs": 500,
+          "inputMs": 500,
+          "serverBootLoopMaxMs": 1000,
+          "serverLoopP95Ms": 50,
+          "serverLoopMaxMs": 500
+        }
+      },
+      "measurements": null,
+      "breaches": [],
+      "ok": false,
+      "detail": "the candidate performance gate could not run: release A never became ready: Error: files response worker was retired mid-build (timed out): release a failed: Error: files response worker was retired mid-build (timed out)",
+      "log": [
+        "dataset 30036 rows, 27836 cold, 320 transcripts, seeded in 9130ms",
+        "runtime host 2014740 answering"
+      ]
+    },
+    "earlierGateProcessReports": {
+      "release-a-report.json": {
+        "completed": false,
+        "name": "a",
+        "registryOpenMs": 64.642528,
+        "snapshotMs": 78799.634089,
+        "error": "Error: files response worker was retired mid-build (timed out)",
+        "busy": 0,
+        "runtimeRpc": {
+          "requests": 0,
+          "timeouts": 0,
+          "failures": 0,
+          "maxMs": 0,
+          "latencies": []
+        },
+        "log": [
+          "release a failed: Error: files response worker was retired mid-build (timed out)"
+        ]
+      }
+    },
+    "historicalSourcePrefixSha256": "d76334c5d1a27f4dff0aa1467ebb16dd320bb2817248973f1de857a73afe7b08",
+    "compatibilityExportsSha256": "8243cf7b46a4df0448be0a52fe0bb7191ac4b002ee0c0f36b6e5109dd2d01b01"
+  },
+  "current": {
+    "revision": "c5db12d42e5c39e0a935b1addd45b4003f565903",
+    "sourceSha256": "aa0faeef630036de7c2a29b2c86e82095189f767b4d2f175f1f02b6326d2d324",
+    "archiveSha256": "ad7ef5ad699a1f7b6fa293feb794b5d9daa81d670b6edd33641dfa142eaa89f6",
+    "buildExit": 0,
+    "refreshExit": 0,
+    "gateExit": 1,
+    "refresh": {
+      "measuredAt": "2026-10-13T05:55:13.196Z",
+      "warmupRounds": 1,
+      "measuredRounds": 5,
+      "writer": "identical SQL transaction; revision bump and production journal triggers",
+      "datasetSha256": "64ef533af23fed7caba5f72d0d3c03a1faf31444fea8fc17e5e50f46c171bc11",
+      "datasetLayoutSha256": "e2a535e586e65547eeee8500a8a4efb75539356460741fd9ca94e4186e85531e",
+      "rows": 30036,
+      "coldRows": 27836,
+      "runtime": "1.4.0",
+      "results": {
+        "external": {
+          "kinds": {
+            "conversations": {
+              "writeMs": {
+                "count": 5,
+                "p50": 1.034,
+                "p95": 1.096,
+                "max": 1.096
+              },
+              "refreshMs": {
+                "count": 5,
+                "p50": 3.945,
+                "p95": 5.57,
+                "max": 5.57
+              },
+              "grantDecisions": {
+                "count": 5,
+                "p50": 3,
+                "p95": 12,
+                "max": 12
+              }
+            },
+            "receipts": {
+              "writeMs": {
+                "count": 5,
+                "p50": 1.178,
+                "p95": 1.845,
+                "max": 1.845
+              },
+              "refreshMs": {
+                "count": 5,
+                "p50": 5.014,
+                "p95": 6.479,
+                "max": 6.479
+              },
+              "grantDecisions": {
+                "count": 5,
+                "p50": 2,
+                "p95": 2,
+                "max": 2
+              }
+            },
+            "entries": {
+              "writeMs": {
+                "count": 5,
+                "p50": 1.153,
+                "p95": 1.381,
+                "max": 1.381
+              },
+              "refreshMs": {
+                "count": 5,
+                "p50": 3.985,
+                "p95": 5.71,
+                "max": 5.71
+              },
+              "grantDecisions": {
+                "count": 5,
+                "p50": 1,
+                "p95": 1,
+                "max": 1
+              }
+            }
+          },
+          "timerLatenessMs": {
+            "count": 36,
+            "p50": 1.059,
+            "p95": 10.283,
+            "max": 10.605
+          }
+        },
+        "local": {
+          "kinds": {
+            "conversations": {
+              "writeMs": {
+                "count": 5,
+                "p50": 1.445,
+                "p95": 2.02,
+                "max": 2.02
+              },
+              "refreshMs": {
+                "count": 5,
+                "p50": 5.73,
+                "p95": 5.87,
+                "max": 5.87
+              },
+              "grantDecisions": {
+                "count": 5,
+                "p50": 3,
+                "p95": 12,
+                "max": 12
+              }
+            },
+            "receipts": {
+              "writeMs": {
+                "count": 5,
+                "p50": 1.346,
+                "p95": 1.709,
+                "max": 1.709
+              },
+              "refreshMs": {
+                "count": 5,
+                "p50": 4.25,
+                "p95": 5.617,
+                "max": 5.617
+              },
+              "grantDecisions": {
+                "count": 5,
+                "p50": 2,
+                "p95": 2,
+                "max": 2
+              }
+            },
+            "entries": {
+              "writeMs": {
+                "count": 5,
+                "p50": 1.092,
+                "p95": 1.667,
+                "max": 1.667
+              },
+              "refreshMs": {
+                "count": 5,
+                "p50": 4.268,
+                "p95": 4.584,
+                "max": 4.584
+              },
+              "grantDecisions": {
+                "count": 5,
+                "p50": 1,
+                "p95": 1,
+                "max": 1
+              }
+            }
+          },
+          "timerLatenessMs": {
+            "count": 36,
+            "p50": 0.1,
+            "p95": 10.31,
+            "max": 12.018
+          }
+        }
+      }
+    },
+    "gate": {
+      "checkedAt": "2026-10-13T05:52:27.090Z",
+      "runtime": "bun 1.4.0",
+      "bounds": {
+        "firstBoot": {
+          "registryOpenMs": 2000,
+          "firstSnapshotMs": 2000,
+          "firstUsableMs": 10000,
+          "eventLoopMaxMs": 1000
+        },
+        "activation": {
+          "durationMs": 15000,
+          "eventLoopMaxMs": 1500
+        },
+        "grantWrite": {
+          "p95Ms": 350,
+          "maxMs": 500
+        },
+        "eventLoop": {
+          "p95Ms": 50,
+          "maxMs": 500
+        },
+        "projectionWorker": {
+          "coldMs": 8000,
+          "warmP95Ms": 1000,
+          "warmMaxMs": 2000
+        },
+        "scopeRequests": {
+          "p95Ms": 5000,
+          "maxMs": 10000,
+          "maxQueueDepth": 8
+        },
+        "handover": {
+          "successorReadyMs": 15000,
+          "adoptionMs": 15000,
+          "workerProgressGapMs": 20000
+        },
+        "runtimeRpc": {
+          "p95Ms": 250,
+          "maxMs": 2000
+        },
+        "browser": {
+          "readyMs": 10000,
+          "filesP95Ms": 5000,
+          "filesMaxMs": 10000,
+          "apiMaxMs": 10000,
+          "bootLagMaxMs": 1000,
+          "lagP95Ms": 50,
+          "lagMaxMs": 500,
+          "inputMs": 500,
+          "serverBootLoopMaxMs": 1000,
+          "serverLoopP95Ms": 50,
+          "serverLoopMaxMs": 500
+        }
+      },
+      "measurements": {
+        "dataset": {
+          "scale": 1,
+          "rows": 30036,
+          "coldRows": 27836,
+          "payloadBytes": 96604975,
+          "transcripts": 320,
+          "seedMs": 4804
+        },
+        "firstBoot": {
+          "registryOpenMs": 85,
+          "firstSnapshotMs": 339,
+          "coldProjectionMs": 3222,
+          "firstUsableMs": 3811,
+          "eventLoopMaxMs": 391,
+          "coldBuild": {
+            "sequence": 1,
+            "buildMs": 1627
+          }
+        },
+        "activation": {
+          "incumbentMs": 2830,
+          "successorMs": 3172,
+          "eventLoopMaxMs": 360
+        },
+        "grantWrites": {
+          "count": 273,
+          "p50Ms": 2.9,
+          "p95Ms": 7.8,
+          "maxMs": 266.6,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "externalWrites": {
+          "count": 456,
+          "p50Ms": 2.8,
+          "p95Ms": 7.4,
+          "maxMs": 270.6,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedOperationReads": {
+          "count": 117,
+          "p50Ms": 0.8,
+          "p95Ms": 2,
+          "maxMs": 6.8
+        },
+        "eventLoop": {
+          "p95Ms": 6.8,
+          "maxMs": 294.9
+        },
+        "projection": {
+          "warmBuilds": {
+            "count": 143,
+            "p50Ms": 196.2,
+            "p95Ms": 387.3,
+            "maxMs": 2184
+          },
+          "queueWait": {
+            "count": 145,
+            "p50Ms": 768.7,
+            "p95Ms": 1834.6,
+            "maxMs": 3106.4
+          }
+        },
+        "scopeRequests": {
+          "count": 176,
+          "p50Ms": 142.7,
+          "p95Ms": 1423.6,
+          "maxMs": 2507.9,
+          "scopes": 8,
+          "failures": 0,
+          "maxQueueDepth": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "worker": {
+          "spawns": 1,
+          "timeoutRetirements": 0,
+          "pidStable": true
+        },
+        "stability": {
+          "rounds": 20,
+          "responses": 160,
+          "emptyResponses": 0,
+          "missingRows": 0,
+          "extraRows": 0,
+          "reattributedRows": 0,
+          "missingPins": 0
+        },
+        "handover": {
+          "successor": {
+            "completed": true,
+            "exitCode": 0,
+            "signal": null,
+            "readyMs": 5378,
+            "registryOpenMs": 62,
+            "snapshotMs": 528,
+            "firstProjectionMs": 2910,
+            "archived": 250,
+            "grantMismatches": 0,
+            "adoptionMs": 2082,
+            "adopted": 4
+          },
+          "switched": true,
+          "demotionExitCode": 0,
+          "servingRelease": "successor",
+          "serving": {
+            "requests": 96,
+            "failures": 0
+          }
+        },
+        "workers": {
+          "count": 4,
+          "rehosted": 4,
+          "answering": 4,
+          "progressGapMaxMs": 2122,
+          "lostProgress": 0,
+          "repeatedProgress": 0,
+          "failedPings": 0
+        },
+        "sqliteBusy": 0,
+        "runtimeTimeouts": 0,
+        "runtimeRpc": {
+          "requests": 2283,
+          "p95Ms": 10.4,
+          "maxMs": 213,
+          "timeouts": 0,
+          "failures": 0,
+          "hostAlive": true
+        },
+        "deliveryEvidence": {
+          "pending": 16,
+          "uncertain": 8,
+          "preserved": true
+        },
+        "browser": {
+          "views": 8,
+          "writes": {
+            "count": 947,
+            "p95Ms": 14,
+            "maxMs": 102,
+            "failures": 0
+          },
+          "readyMaxMs": 9139,
+          "filesP95Ms": 2378,
+          "filesMaxMs": 2441,
+          "filesErrors": 0,
+          "viewsWithoutAnswerDuringWrites": 0,
+          "apiMaxMs": 3436,
+          "apiMaxRoute": "/api/accounts",
+          "apiErrors": 0,
+          "apiFirstError": null,
+          "apiUnfinished": 0,
+          "bootLagMaxMs": 978,
+          "lagP95Ms": 8,
+          "lagMaxMs": 192,
+          "inputMaxMs": 221,
+          "inputsMin": 2,
+          "selectionsLost": 0,
+          "staleNotices": 0,
+          "server": {
+            "samples": 2292,
+            "bootMaxMs": 1580.7,
+            "p95Ms": 7.9,
+            "maxMs": 171.5
+          }
+        }
+      },
+      "breaches": [
+        "warm projection build max 2184ms exceeds 2000ms",
+        "server event-loop delay while the browser views opened 1580.7ms exceeds 1000ms"
+      ],
+      "ok": false,
+      "detail": "warm projection build max 2184ms exceeds 2000ms",
+      "log": [
+        "dataset 30036 rows, 27836 cold, 320 transcripts, seeded in 4804ms",
+        "runtime host 2214789 answering",
+        "release A ready in 7396ms and hosting 4 live workers",
+        "baseline rows per scope: 330,330,330,330,330,330,330,330",
+        "warm operation measured; starting release B",
+        "release B ready in 5378ms; serving target switched",
+        "release B re-hosted 4 worker(s) 2082ms after the switch",
+        "release A: release a appointed",
+        "release A: release a started worker 3751 as 2215895",
+        "release A: release a started worker 3752 as 2215907",
+        "release A: release a started worker 3753 as 2215919",
+        "release A: release a started worker 3754 as 2215931",
+        "release A: release a re-hosted 4 worker(s) 2780ms after its appointment",
+        "release A: release a demoted",
+        "release B: release b appointed",
+        "release B: release b waiting: 3751:2215895/- 3752:2215907/- 3753:2215919/- 3754:2215931/-",
+        "release B: release b started worker 3751 as 2220925",
+        "release B: release b started worker 3752 as 2220939",
+        "release B: release b started worker 3753 as 2220960",
+        "release B: release b started worker 3754 as 2220981",
+        "release B: release b re-hosted 4 worker(s) 2040ms after its appointment",
+        "event loop while serving: release A {\"p95Ms\":6.765323999999964,\"maxMs\":294.87015299999985,\"stalls\":[{\"at\":1791870771585,\"ms\":105},{\"at\":1791870780010,\"ms\":295},{\"at\":1791870780195,\"ms\":144}]}, release B {\"p95Ms\":4.792813000000024,\"maxMs\":47.3542039999993,\"stalls\":[]}",
+        "release A steps of 100ms or more: grant-bearing write 107ms at 1791870779654; grant-bearing write 267ms at 1791870779981; grant-bearing write 149ms at 1791870780190",
+        "warm builds: release A {\"count\":85,\"p50Ms\":193.4,\"p95Ms\":403,\"maxMs\":508.7}, release B {\"count\":58,\"p50Ms\":209.1,\"p95Ms\":387.3,\"maxMs\":2184}",
+        "runtime host calls: {\"requests\":2283,\"p95Ms\":10.4,\"maxMs\":213,\"timeouts\":0,\"failures\":0,\"hostAlive\":true}",
+        "activations: release A {\"completed\":true,\"ms\":2830,\"eventLoopMaxMs\":220.50434700000005}, release B {\"completed\":true,\"ms\":3172,\"eventLoopMaxMs\":359.6121310000008}",
+        "browser: the server's structured-host startup is ready",
+        "browser view 0: slowest [{\"route\":\"/api/accounts\",\"files\":false,\"status\":200,\"ms\":3340,\"queuedMs\":2493,\"firstByteMs\":3299,\"at\":8201},{\"route\":\"/api/tmux/targets\",\"files\":false,\"status\":200,\"ms\":3015,\"queuedMs\":1505,\"firstByteMs\":2999,\"at\":8873}]",
+        "browser view 1: slowest [{\"route\":\"/api/accounts\",\"files\":false,\"status\":200,\"ms\":3424,\"queuedMs\":2599,\"firstByteMs\":3422,\"at\":8098},{\"route\":\"/api/tmux/targets\",\"files\":false,\"status\":200,\"ms\":3283,\"queuedMs\":1781,\"firstByteMs\":3245,\"at\":8617}]",
+        "browser view 2: slowest [{\"route\":\"/api/accounts\",\"files\":false,\"status\":200,\"ms\":2958,\"queuedMs\":2208,\"firstByteMs\":2922,\"at\":8316},{\"route\":\"/api/tmux/targets\",\"files\":false,\"status\":200,\"ms\":2823,\"queuedMs\":1277,\"firstByteMs\":2787,\"at\":9018}]",
+        "browser view 3: slowest [{\"route\":\"/api/accounts\",\"files\":false,\"status\":200,\"ms\":3349,\"queuedMs\":2496,\"firstByteMs\":3312,\"at\":8200},{\"route\":\"/api/tmux/targets\",\"files\":false,\"status\":200,\"ms\":3142,\"queuedMs\":1627,\"firstByteMs\":3103,\"at\":8758}]",
+        "browser view 4: slowest [{\"route\":\"/api/accounts\",\"files\":false,\"status\":200,\"ms\":2879,\"queuedMs\":2113,\"firstByteMs\":2860,\"at\":8379},{\"route\":\"/api/tmux/targets\",\"files\":false,\"status\":200,\"ms\":2653,\"queuedMs\":1152,\"firstByteMs\":2652,\"at\":9127}]",
+        "browser view 5: slowest [{\"route\":\"/api/accounts\",\"files\":false,\"status\":200,\"ms\":3100,\"queuedMs\":2343,\"firstByteMs\":3099,\"at\":8263},{\"route\":\"/api/tmux/targets\",\"files\":false,\"status\":200,\"ms\":2873,\"queuedMs\":1348,\"firstByteMs\":2856,\"at\":8920}]",
+        "browser view 6: slowest [{\"route\":\"/api/accounts\",\"files\":false,\"status\":200,\"ms\":3436,\"queuedMs\":2615,\"firstByteMs\":3427,\"at\":8007},{\"route\":\"/api/tmux/targets\",\"files\":false,\"status\":200,\"ms\":3230,\"queuedMs\":1685,\"firstByteMs\":3195,\"at\":8579}]",
+        "browser view 7: slowest [{\"route\":\"/api/accounts\",\"files\":false,\"status\":200,\"ms\":2982,\"queuedMs\":2220,\"firstByteMs\":2981,\"at\":8281},{\"route\":\"/api/tmux/targets\",\"files\":false,\"status\":200,\"ms\":2811,\"queuedMs\":1282,\"firstByteMs\":2792,\"at\":8980}]",
+        "browser: the server's event loop {\"samples\":2292,\"bootMaxMs\":1580.7,\"p95Ms\":7.9,\"maxMs\":171.5}; delays of 100ms or more: 411ms at 1791870806586, 150ms at 1791870810185, 652ms at 1791870810893, 289ms at 1791870811192, 221ms at 1791870811423, 212ms at 1791870811645, 136ms at 1791870811791, 509ms at 1791870812412, 303ms at 1791870812724, 378ms at 1791870813112, 563ms at 1791870813685, 630ms at 1791870814325, 1581ms at 1791870815915, 735ms at 1791870816660, 253ms at 1791870816923, 766ms at 1791870817699, 290ms at 1791870817999, 172ms at 1791870836387, 100ms at 1791870836555"
+      ]
+    },
+    "containment": {
+      "cgroup": "$GATE_SCOPE",
+      "cpu": "60000 20000",
+      "memory": "8589934592"
+    },
+    "gateProcessReports": {
+      "release-a-report.json": {
+        "completed": true,
+        "name": "a",
+        "bootLoopMaxMs": 391.150745,
+        "registryOpenMs": 85.455296,
+        "snapshotMs": 339.179328,
+        "firstProjectionMs": 3221.543634,
+        "firstUsableMs": 3810.780297,
+        "readyMs": 7395.891801000001,
+        "exitPath": "demoted",
+        "samples": [
+          {
+            "sequence": 1,
+            "waitMs": 0.08836099999962244,
+            "buildMs": 1626.9876240000003
+          },
+          {
+            "sequence": 2,
+            "waitMs": 11.218257999999878,
+            "buildMs": 436.79812499999935
+          },
+          {
+            "sequence": 3,
+            "waitMs": 446.3686809999999,
+            "buildMs": 201.8160910000006
+          },
+          {
+            "sequence": 4,
+            "waitMs": 646.8157939999992,
+            "buildMs": 261.20507700000053
+          },
+          {
+            "sequence": 5,
+            "waitMs": 906.0935679999993,
+            "buildMs": 280.6371760000002
+          },
+          {
+            "sequence": 6,
+            "waitMs": 1185.436608,
+            "buildMs": 188.5323239999998
+          },
+          {
+            "sequence": 7,
+            "waitMs": 1372.6282819999997,
+            "buildMs": 275.94358400000056
+          },
+          {
+            "sequence": 8,
+            "waitMs": 1647.0556560000005,
+            "buildMs": 189.35433999999987
+          },
+          {
+            "sequence": 9,
+            "waitMs": 1834.6049950000006,
+            "buildMs": 198.43121799999972
+          },
+          {
+            "sequence": 10,
+            "waitMs": 7.177658999999039,
+            "buildMs": 225.25674299999991
+          },
+          {
+            "sequence": 11,
+            "waitMs": 231.27397799999926,
+            "buildMs": 194.72312200000124
+          },
+          {
+            "sequence": 12,
+            "waitMs": 425.00376700000015,
+            "buildMs": 178.4268839999986
+          },
+          {
+            "sequence": 13,
+            "waitMs": 602.4777579999991,
+            "buildMs": 155.53373399999873
+          },
+          {
+            "sequence": 14,
+            "waitMs": 757.018376,
+            "buildMs": 165.57312600000114
+          },
+          {
+            "sequence": 15,
+            "waitMs": 921.6581800000004,
+            "buildMs": 163.3548899999987
+          },
+          {
+            "sequence": 16,
+            "waitMs": 1084.0987270000005,
+            "buildMs": 175.33474200000092
+          },
+          {
+            "sequence": 17,
+            "waitMs": 1258.4528310000005,
+            "buildMs": 198.8909190000013
+          },
+          {
+            "sequence": 18,
+            "waitMs": 6.563954999999623,
+            "buildMs": 184.25993200000084
+          },
+          {
+            "sequence": 19,
+            "waitMs": 189.7606999999989,
+            "buildMs": 195.2507800000003
+          },
+          {
+            "sequence": 20,
+            "waitMs": 384.09528800000044,
+            "buildMs": 192.3565690000014
+          },
+          {
+            "sequence": 21,
+            "waitMs": 575.5253249999987,
+            "buildMs": 194.0238790000003
+          },
+          {
+            "sequence": 22,
+            "waitMs": 768.6781319999991,
+            "buildMs": 177.98545899999954
+          },
+          {
+            "sequence": 23,
+            "waitMs": 945.7985509999999,
+            "buildMs": 163.62011899999925
+          },
+          {
+            "sequence": 24,
+            "waitMs": 1108.6414109999987,
+            "buildMs": 163.11595500000112
+          },
+          {
+            "sequence": 25,
+            "waitMs": 1270.8612670000002,
+            "buildMs": 153.50386799999978
+          },
+          {
+            "sequence": 26,
+            "waitMs": 6.390138000000661,
+            "buildMs": 173.11708400000134
+          },
+          {
+            "sequence": 27,
+            "waitMs": 178.58022800000072,
+            "buildMs": 186.31219000000056
+          },
+          {
+            "sequence": 28,
+            "waitMs": 364.03743100000065,
+            "buildMs": 183.81741299999885
+          },
+          {
+            "sequence": 29,
+            "waitMs": 547.0301469999995,
+            "buildMs": 185.98292100000072
+          },
+          {
+            "sequence": 30,
+            "waitMs": 732.0994119999996,
+            "buildMs": 200.9314519999989
+          },
+          {
+            "sequence": 31,
+            "waitMs": 932.0844739999993,
+            "buildMs": 186.15702899999997
+          },
+          {
+            "sequence": 32,
+            "waitMs": 1117.3552329999984,
+            "buildMs": 153.7021449999993
+          },
+          {
+            "sequence": 33,
+            "waitMs": 1270.2038439999997,
+            "buildMs": 150.325605
+          },
+          {
+            "sequence": 34,
+            "waitMs": 5.614815999999337,
+            "buildMs": 157.30797600000005
+          },
+          {
+            "sequence": 35,
+            "waitMs": 162.06146799999988,
+            "buildMs": 160.6990259999984
+          },
+          {
+            "sequence": 36,
+            "waitMs": 321.97785400000066,
+            "buildMs": 164.60096899999917
+          },
+          {
+            "sequence": 37,
+            "waitMs": 485.81002799999806,
+            "buildMs": 173.41496100000222
+          },
+          {
+            "sequence": 38,
+            "waitMs": 658.4882890000008,
+            "buildMs": 175.38538799999878
+          },
+          {
+            "sequence": 39,
+            "waitMs": 833.1227499999986,
+            "buildMs": 166.34871399999975
+          },
+          {
+            "sequence": 40,
+            "waitMs": 998.6765020000003,
+            "buildMs": 194.5107330000028
+          },
+          {
+            "sequence": 41,
+            "waitMs": 1192.4319300000006,
+            "buildMs": 177.38503599999967
+          },
+          {
+            "sequence": 42,
+            "waitMs": 7.458983000000444,
+            "buildMs": 169.41936799999894
+          },
+          {
+            "sequence": 43,
+            "waitMs": 174.98124000000098,
+            "buildMs": 155.78017399999953
+          },
+          {
+            "sequence": 44,
+            "waitMs": 329.6017000000029,
+            "buildMs": 143.5032280000014
+          },
+          {
+            "sequence": 45,
+            "waitMs": 472.12476799999786,
+            "buildMs": 146.29184299999906
+          },
+          {
+            "sequence": 46,
+            "waitMs": 617.5458010000002,
+            "buildMs": 185.91750200000024
+          },
+          {
+            "sequence": 47,
+            "waitMs": 802.6551610000024,
+            "buildMs": 157.70866100000057
+          },
+          {
+            "sequence": 48,
+            "waitMs": 959.5893510000024,
+            "buildMs": 314.23125900000014
+          },
+          {
+            "sequence": 49,
+            "waitMs": 1272.997800000001,
+            "buildMs": 252.29113599999982
+          },
+          {
+            "sequence": 50,
+            "waitMs": 37.21685400000206,
+            "buildMs": 198.21094100000118
+          },
+          {
+            "sequence": 51,
+            "waitMs": 234.35052299999734,
+            "buildMs": 193.4059010000019
+          },
+          {
+            "sequence": 52,
+            "waitMs": 426.69999400000233,
+            "buildMs": 232.70799800000168
+          },
+          {
+            "sequence": 53,
+            "waitMs": 658.008468,
+            "buildMs": 174.901335999999
+          },
+          {
+            "sequence": 54,
+            "waitMs": 831.7292510000007,
+            "buildMs": 178.0001790000024
+          },
+          {
+            "sequence": 55,
+            "waitMs": 1008.6637719999999,
+            "buildMs": 179.3492640000004
+          },
+          {
+            "sequence": 56,
+            "waitMs": 1187.006949999999,
+            "buildMs": 170.7162750000025
+          },
+          {
+            "sequence": 57,
+            "waitMs": 6.075961999998981,
+            "buildMs": 183.29766200000086
+          },
+          {
+            "sequence": 58,
+            "waitMs": 188.37772200000109,
+            "buildMs": 174.5592199999992
+          },
+          {
+            "sequence": 59,
+            "waitMs": 362.0854619999991,
+            "buildMs": 185.1261599999998
+          },
+          {
+            "sequence": 60,
+            "waitMs": 546.4312959999988,
+            "buildMs": 242.2967069999977
+          },
+          {
+            "sequence": 61,
+            "waitMs": 787.906931999998,
+            "buildMs": 271.61670700000104
+          },
+          {
+            "sequence": 62,
+            "waitMs": 1058.7480670000004,
+            "buildMs": 221.5871760000009
+          },
+          {
+            "sequence": 63,
+            "waitMs": 1279.5612,
+            "buildMs": 240.04964599999948
+          },
+          {
+            "sequence": 64,
+            "waitMs": 1518.7489879999994,
+            "buildMs": 340.0925320000024
+          },
+          {
+            "sequence": 65,
+            "waitMs": 350.6981960000012,
+            "buildMs": 254.04806700000336
+          },
+          {
+            "sequence": 66,
+            "waitMs": 603.5697110000001,
+            "buildMs": 208.3456670000014
+          },
+          {
+            "sequence": 67,
+            "waitMs": 810.7874129999982,
+            "buildMs": 420.47434799999974
+          },
+          {
+            "sequence": 68,
+            "waitMs": 1230.4206730000005,
+            "buildMs": 297.95822899999985
+          },
+          {
+            "sequence": 69,
+            "waitMs": 1527.5518530000008,
+            "buildMs": 356.47463499999867
+          },
+          {
+            "sequence": 70,
+            "waitMs": 1881.3593660000006,
+            "buildMs": 365.00504100000035
+          },
+          {
+            "sequence": 71,
+            "waitMs": 735.5420199999971,
+            "buildMs": 355.44919299999674
+          },
+          {
+            "sequence": 72,
+            "waitMs": 1090.069872,
+            "buildMs": 307.9686019999972
+          },
+          {
+            "sequence": 73,
+            "waitMs": 1397.224594000003,
+            "buildMs": 403.0407669999986
+          },
+          {
+            "sequence": 74,
+            "waitMs": 1790.8841660000035,
+            "buildMs": 338.54471099999864
+          },
+          {
+            "sequence": 75,
+            "waitMs": 2128.3658030000006,
+            "buildMs": 192.24948499999664
+          },
+          {
+            "sequence": 76,
+            "waitMs": 834.3090779999984,
+            "buildMs": 215.19275600000037
+          },
+          {
+            "sequence": 77,
+            "waitMs": 1047.6931350000013,
+            "buildMs": 177.38798400000087
+          },
+          {
+            "sequence": 78,
+            "waitMs": 1215.7535400000015,
+            "buildMs": 198.56753000000026
+          },
+          {
+            "sequence": 79,
+            "waitMs": 1412.7893089999998,
+            "buildMs": 276.6203060000007
+          },
+          {
+            "sequence": 80,
+            "waitMs": 1687.4719450000011,
+            "buildMs": 455.85936700000093
+          },
+          {
+            "sequence": 81,
+            "waitMs": 656.1178319999999,
+            "buildMs": 265.13846699999704
+          },
+          {
+            "sequence": 82,
+            "waitMs": 918.1936340000029,
+            "buildMs": 245.14618300000075
+          },
+          {
+            "sequence": 83,
+            "waitMs": 1161.4875829999983,
+            "buildMs": 196.1974590000027
+          },
+          {
+            "sequence": 84,
+            "waitMs": 1354.093213,
+            "buildMs": 508.6569950000012
+          },
+          {
+            "sequence": 85,
+            "waitMs": 1855.2275550000013,
+            "buildMs": 301.011391
+          },
+          {
+            "sequence": 86,
+            "waitMs": 2154.0069589999985,
+            "buildMs": 248.20726300000024
+          }
+        ],
+        "servedLoop": {
+          "p95Ms": 6.765323999999964,
+          "maxMs": 294.87015299999985,
+          "stalls": [
+            {
+              "at": 1791870771585,
+              "ms": 105
+            },
+            {
+              "at": 1791870780010,
+              "ms": 295
+            },
+            {
+              "at": 1791870780195,
+              "ms": 144
+            }
+          ]
+        },
+        "activation": {
+          "completed": true,
+          "ms": 2830,
+          "eventLoopMaxMs": 220.50434700000005
+        },
+        "writes": {
+          "latencies": [
+            10.244991000001392,
+            2.7210629999990488,
+            2.744720000000598,
+            2.283057999999073,
+            1.6270759999988513,
+            2.181495000000723,
+            2.697175999999672,
+            1.8151749999997264,
+            1.5541460000004008,
+            2.445832999999766,
+            1.7708419999999023,
+            2.5715040000013687,
+            2.1082490000007965,
+            2.12786000000051,
+            2.6840469999988272,
+            2.5526470000004338,
+            3.286020000001372,
+            3.191917000000103,
+            2.6592319999999745,
+            2.5500759999995353,
+            1.8292860000001383,
+            2.588082000000213,
+            3.186913999999888,
+            2.8716499999991356,
+            3.002215000000433,
+            3.209670999998707,
+            3.190128000000186,
+            2.763966000000437,
+            2.8589449999999488,
+            2.9560470000014902,
+            2.702519000000393,
+            2.206582000000708,
+            1.862275999999838,
+            2.2956190000004426,
+            1.8771770000003016,
+            1.7076100000012957,
+            2.775223000000551,
+            1.882701000000452,
+            2.0735899999999674,
+            1.6195740000002843,
+            1.9765279999992345,
+            2.2813330000008136,
+            2.4455999999991036,
+            2.773908000001029,
+            2.373379999999088,
+            2.421929000000091,
+            2.8968129999993835,
+            2.7745259999992413,
+            2.3096069999992324,
+            2.4173480000008567,
+            3.1170619999993505,
+            2.3699950000009267,
+            2.945619000000079,
+            2.850891000000047,
+            2.8548609999998007,
+            2.7110170000014477,
+            2.696541999999681,
+            2.145339000000604,
+            3.013769000001048,
+            3.250879999999597,
+            2.5671169999986887,
+            2.5020430000004126,
+            2.7607129999996687,
+            1.5096229999999196,
+            2.090399000000616,
+            2.039617000000362,
+            2.612927000000127,
+            3.1104399999985617,
+            2.1756659999991825,
+            3.955960999999661,
+            4.60218199999872,
+            4.613843000000998,
+            1.8470890000007785,
+            4.5170840000009775,
+            4.000677999998516,
+            2.8037989999993442,
+            2.8275480000011157,
+            2.9599989999987883,
+            1.996356999999989,
+            3.390104000000065,
+            2.232855999998719,
+            2.296573999999964,
+            2.585954000000129,
+            3.2013029999998253,
+            2.8207299999994575,
+            3.4582480000008218,
+            2.5111659999984113,
+            2.6909510000004957,
+            2.892366000000038,
+            3.0429889999995794,
+            2.6127380000016274,
+            2.5100860000002285,
+            1.9997520000015356,
+            2.5192409999999654,
+            1.8665079999991576,
+            2.7095640000006824,
+            3.2424879999998666,
+            2.7038249999986874,
+            2.8225039999997534,
+            2.3523519999980635,
+            2.7634429999998247,
+            2.3819640000001527,
+            3.0839169999999285,
+            3.4776740000015707,
+            2.893491000002541,
+            3.660120000000461,
+            3.0682059999999183,
+            2.7258079999992333,
+            2.06021999999939,
+            1.9366069999996398,
+            2.9579459999986284,
+            3.38220800000272,
+            3.012108000002627,
+            3.0650239999995392,
+            3.3316410000006726,
+            3.0136400000010326,
+            3.1671319999986736,
+            3.135041999998066,
+            2.8716290000011213,
+            3.2494240000014543,
+            2.806086000000505,
+            4.215982999998232,
+            3.3028249999988475,
+            1.4030899999997928,
+            1.852684000001318,
+            1.54263500000161,
+            2.131503000000521,
+            2.264009000002261,
+            2.1336430000010296,
+            1.2866140000005544,
+            6.719592999997985,
+            2.3307830000012473,
+            3.0715109999982815,
+            2.7645709999997052,
+            3.6863269999994372,
+            2.302741999999853,
+            2.906369000000268,
+            3.279342000001634,
+            3.652764999998908,
+            3.0863810000009835,
+            2.916010000000824,
+            3.486645999997563,
+            3.2514719999999215,
+            2.412468999998964,
+            2.8090359999987413,
+            2.7592250000016065,
+            2.7815620000001218,
+            3.6666970000005676,
+            3.4861089999976684,
+            3.297736000000441,
+            2.792899000000034,
+            3.255238999998255,
+            2.122246000002633,
+            2.790314000001672,
+            2.6709869999976945,
+            2.6230060000016238,
+            2.774782000000414,
+            3.187502000000677,
+            1.7197749999977532,
+            1.9196419999971113,
+            2.6882650000006834,
+            2.734472000000096,
+            2.9527389999966545,
+            2.9672820000014326,
+            2.325999000000593,
+            2.7555670000001555,
+            3.7786059999998542,
+            2.867931000000681,
+            2.447176000001491,
+            2.7751600000010512,
+            3.9321820000004664,
+            4.572824999999284,
+            3.2392609999988053,
+            6.343306000002485,
+            4.3551600000027975,
+            2.9874540000018897,
+            2.5783039999987523,
+            2.8803550000011455,
+            3.8241219999981695,
+            4.277028000000428,
+            2.7484519999998156,
+            2.524322999997821,
+            2.3361489999988407,
+            3.6309849999997823,
+            3.3189569999995,
+            2.841042000000016,
+            3.745178000001033,
+            2.2318210000012186,
+            4.306957999997394,
+            4.406105000001844,
+            3.6717610000014247,
+            3.099772000001394,
+            7.5968900000007125,
+            3.4766210000016144,
+            4.499793999999383,
+            3.1124700000000303,
+            3.5430860000014945,
+            2.9408719999992172,
+            3.3221099999973376,
+            3.6935580000026675,
+            3.563727000000654,
+            3.6660679999986314,
+            2.558957000001101,
+            16.527146000000357,
+            6.801967999999761,
+            2.5024259999991045,
+            2.6995760000027076,
+            1.8536159999966912,
+            2.3705169999993814,
+            3.701595999998972,
+            3.90197999999873,
+            8.430685999999696,
+            3.5270629999977245,
+            5.678608999998687,
+            3.515493000002607,
+            3.611488000002282,
+            2.5612309999996796,
+            11.106266999999207,
+            15.107141999997111,
+            4.87347900000168,
+            13.029859999998735,
+            5.842435000002297,
+            6.696060000002035,
+            7.807127999996737,
+            5.3566589999973075,
+            3.3025699999998324,
+            10.401230999999825,
+            5.551610999998957,
+            3.717526000000362,
+            3.35709499999939,
+            7.404754999999568,
+            3.1862360000013723,
+            3.821828000000096,
+            3.200157000002946,
+            6.983822000001965,
+            3.6522769999974116,
+            2.79339699999764,
+            2.7076489999999467,
+            7.814139000001887,
+            3.162859000000026,
+            6.624664999999368,
+            11.18900399999984,
+            4.1778640000011364,
+            2.9952330000014626,
+            2.6478409999981523,
+            8.214775000000373,
+            4.883202000000892,
+            3.4870259999988775,
+            2.4115510000010545,
+            2.0120029999998224,
+            2.988315999999031,
+            4.371018999998341,
+            3.8207990000009886,
+            3.5029039999972156,
+            2.858409999997093,
+            2.344296999999642,
+            4.011206999999558,
+            3.2700839999997697,
+            3.555197000001499,
+            106.99020000000019,
+            266.5605880000003,
+            148.59672599999976,
+            6.398850999998103,
+            9.201008000000002,
+            3.8754529999969236,
+            4.811652000000322,
+            2.523064000000886,
+            2.0229460000009567,
+            3.0012880000031146,
+            2.4438520000003336,
+            2.3998819999978878,
+            4.5941600000005565,
+            2.430469000002631
+          ],
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedLatencies": [
+          1.9677190000002156,
+          0.6997529999989638,
+          0.7074489999995421,
+          0.4732910000002448,
+          0.47498799999993935,
+          0.8383529999991879,
+          1.765148999998928,
+          0.7632190000003902,
+          1.0171950000003562,
+          0.850905999999668,
+          0.8032030000013037,
+          0.6869110000006913,
+          0.7644270000000688,
+          0.6238789999988512,
+          0.5943360000001121,
+          0.6207529999992403,
+          0.55143500000122,
+          0.7468119999994087,
+          0.7475059999997029,
+          0.9317589999991469,
+          0.40654600000016217,
+          0.5702569999994012,
+          0.8804319999999279,
+          0.9328370000002906,
+          0.9785459999984596,
+          0.6519500000013068,
+          0.5250100000012026,
+          0.4882870000001276,
+          0.7352350000001024,
+          0.7620010000009643,
+          0.619713000000047,
+          0.706994999998642,
+          0.9676629999994475,
+          0.9339509999990696,
+          0.8040229999987787,
+          0.482201000000714,
+          0.8392279999989114,
+          0.7271009999985836,
+          0.7372840000007272,
+          0.6381859999983135,
+          0.6781110000010813,
+          0.5787100000015926,
+          0.7445050000023912,
+          1.0140269999974407,
+          0.7057219999987865,
+          0.49770899999930407,
+          0.8694109999996726,
+          0.9879629999995814,
+          0.9853179999990971,
+          0.7984360000009474,
+          0.3973360000018147,
+          0.5977229999989504,
+          0.5639070000033826,
+          0.630486000001838,
+          0.5353299999987939,
+          0.9297550000010233,
+          0.917249999998603,
+          0.9089860000021872,
+          0.7017309999973804,
+          0.5575910000006843,
+          0.6619410000021162,
+          0.8961899999994785,
+          1.2631289999990258,
+          1.069178000001557,
+          0.8688079999992624,
+          0.867632000001322,
+          4.679896999998164,
+          0.6279739999990852,
+          0.6799749999991036,
+          0.5087500000008731,
+          0.7454350000007253,
+          0.7576589999989665,
+          0.8893589999970573,
+          1.2498489999998128,
+          1.3104569999995874,
+          0.899412000002485,
+          0.9782390000000305,
+          1.0696250000000873,
+          1.2168969999984256,
+          6.786083999999391,
+          0.876828000000387,
+          0.9879089999994903,
+          1.159672000001592,
+          0.9465409999975236,
+          1.294239999999263,
+          0.850096999998641,
+          0.7702670000035141,
+          0.6899149999990186,
+          0.8770030000014231,
+          5.398408000000927,
+          0.774303999998665,
+          0.951336000001902,
+          0.9579799999992247,
+          0.7356030000009923,
+          1.172919999997248,
+          0.8785229999994044,
+          0.8784580000028654,
+          0.8224069999996573,
+          0.8369180000008782,
+          1.3926920000012615,
+          0.4509180000022752,
+          0.9361509999980626,
+          6.1538759999966715,
+          0.5335209999975632,
+          0.8317950000018755,
+          0.6675209999993967,
+          0.7771610000017972,
+          0.5948160000007192,
+          0.8539850000015576,
+          0.5321439999970607,
+          4.881132999998954,
+          1.0745290000013483,
+          0.6563180000011926,
+          0.8040599999985716,
+          0.7634809999981371,
+          1.3221929999999702,
+          1.2350059999989753
+        ],
+        "busy": 0,
+        "timeoutRetirements": 0,
+        "projectionWorker": {
+          "spawns": 1,
+          "pidStable": true
+        },
+        "queue": {
+          "maxWaiting": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "appointedAt": 1791870757250,
+        "adoptedAt": 1791870760030,
+        "adopted": {
+          "codex:fixture-id-1": 2215895,
+          "codex:fixture-id-2": 2215907,
+          "codex:fixture-id-3": 2215919,
+          "codex:fixture-id-4": 2215931
+        },
+        "runtimeRpc": {
+          "requests": 1207,
+          "timeouts": 0,
+          "failures": 0,
+          "maxMs": 110,
+          "latencies": [
+            16.320173000000068,
+            0.5442499999990105,
+            0.6734429999996792,
+            0.26466400000026624,
+            0.8498519999993732,
+            0.25538199999937206,
+            0.8912280000004102,
+            0.2566740000002028,
+            0.6975229999989097,
+            0.27821100000073784,
+            0.592066999999588,
+            0.13853200000085053,
+            0.8234709999996994,
+            0.3043789999992441,
+            0.8860489999988204,
+            0.2632869999997638,
+            0.614861000000019,
+            0.15010499999880267,
+            0.6577400000005582,
+            0.19611000000077183,
+            0.7756620000000112,
+            0.2689799999989191,
+            1.0018399999989924,
+            0.2611699999997654,
+            0.6336830000000191,
+            0.24831900000026508,
+            1.9058250000016415,
+            0.3303799999994226,
+            0.9333329999972193,
+            0.45083399999930407,
+            0.8147639999988314,
+            0.32734200000049896,
+            0.7376390000026731,
+            0.3012689999995928,
+            0.5819109999974899,
+            0.17799700000250596,
+            0.7559619999992719,
+            0.23564099999930477,
+            0.9987989999972342,
+            0.40364400000180467,
+            0.7384590000001481,
+            0.2342449999996461,
+            0.8281260000003385,
+            0.23760300000139978,
+            1.180170999999973,
+            0.38329499999963446,
+            0.9002490000020771,
+            0.24748900000122376,
+            1.0247909999998228,
+            0.3125959999997576,
+            0.7614689999973052,
+            0.216549999997369,
+            5.733509000001504,
+            7.368355999999039,
+            1.077926000001753,
+            0.3278729999983625,
+            0.8885200000004261,
+            0.3057599999992817,
+            1.0792680000013206,
+            0.4085000000013679,
+            9.629468000002817,
+            0.21727000000100816,
+            1.5582670000003418,
+            0.3178069999994477,
+            0.7459660000022268,
+            0.26072299999941606,
+            2.056174999997893,
+            0.41711299999951734,
+            4.825813999999809,
+            0.40903199999956996,
+            0.9184350000032282,
+            0.1787640000002284,
+            12.509142999999312,
+            43.28683500000261
+          ]
+        },
+        "slowSteps": [
+          {
+            "step": "grant-bearing write",
+            "at": 1791870779654,
+            "ms": 107
+          },
+          {
+            "step": "grant-bearing write",
+            "at": 1791870779981,
+            "ms": 267
+          },
+          {
+            "step": "grant-bearing write",
+            "at": 1791870780190,
+            "ms": 149
+          }
+        ],
+        "demotionExitCode": 0,
+        "log": [
+          "release a appointed",
+          "release a started worker 3751 as 2215895",
+          "release a started worker 3752 as 2215907",
+          "release a started worker 3753 as 2215919",
+          "release a started worker 3754 as 2215931",
+          "release a re-hosted 4 worker(s) 2780ms after its appointment",
+          "release a demoted"
+        ]
+      },
+      "release-b-report.json": {
+        "completed": true,
+        "name": "b",
+        "bootLoopMaxMs": 682.133531,
+        "registryOpenMs": 62.05005700000001,
+        "snapshotMs": 527.5457879999999,
+        "archived": 250,
+        "grantMismatches": 0,
+        "firstProjectionMs": 2909.9320740000003,
+        "firstUsableMs": 3817.035055,
+        "readyMs": 5378.077169,
+        "exitPath": "stopped",
+        "samples": [
+          {
+            "sequence": 1,
+            "waitMs": 0.09583599999996295,
+            "buildMs": 2878.477207
+          },
+          {
+            "sequence": 2,
+            "waitMs": 16.986958999999842,
+            "buildMs": 502.0473899999997
+          },
+          {
+            "sequence": 3,
+            "waitMs": 514.1461989999998,
+            "buildMs": 337.5098159999998
+          },
+          {
+            "sequence": 4,
+            "waitMs": 849.1360180000001,
+            "buildMs": 387.3399789999994
+          },
+          {
+            "sequence": 5,
+            "waitMs": 1234.264021,
+            "buildMs": 250.39228600000024
+          },
+          {
+            "sequence": 6,
+            "waitMs": 1482.6022279999997,
+            "buildMs": 306.2477479999998
+          },
+          {
+            "sequence": 7,
+            "waitMs": 1786.85387,
+            "buildMs": 213.98704499999985
+          },
+          {
+            "sequence": 8,
+            "waitMs": 1998.8957930000006,
+            "buildMs": 231.19310999999925
+          },
+          {
+            "sequence": 9,
+            "waitMs": 2228.9862630000007,
+            "buildMs": 212.60928000000058
+          },
+          {
+            "sequence": 10,
+            "waitMs": 9.50235900000007,
+            "buildMs": 272.623415
+          },
+          {
+            "sequence": 11,
+            "waitMs": 280.80381300000045,
+            "buildMs": 217.99762700000065
+          },
+          {
+            "sequence": 12,
+            "waitMs": 497.69120100000146,
+            "buildMs": 214.77611399999842
+          },
+          {
+            "sequence": 13,
+            "waitMs": 710.9375689999997,
+            "buildMs": 165.3081689999999
+          },
+          {
+            "sequence": 14,
+            "waitMs": 875.0557320000007,
+            "buildMs": 198.17234599999938
+          },
+          {
+            "sequence": 15,
+            "waitMs": 1072.0339240000012,
+            "buildMs": 222.72857999999906
+          },
+          {
+            "sequence": 16,
+            "waitMs": 1293.200678000001,
+            "buildMs": 175.96812900000077
+          },
+          {
+            "sequence": 17,
+            "waitMs": 1467.852633999999,
+            "buildMs": 308.52208299999984
+          },
+          {
+            "sequence": 18,
+            "waitMs": 319.89695200000097,
+            "buildMs": 209.73357299999952
+          },
+          {
+            "sequence": 19,
+            "waitMs": 527.2579970000006,
+            "buildMs": 235.6174149999988
+          },
+          {
+            "sequence": 20,
+            "waitMs": 760.7447730000004,
+            "buildMs": 201.58070000000043
+          },
+          {
+            "sequence": 21,
+            "waitMs": 961.0098550000002,
+            "buildMs": 213.00332100000014
+          },
+          {
+            "sequence": 22,
+            "waitMs": 1173.1136229999993,
+            "buildMs": 197.79635400000006
+          },
+          {
+            "sequence": 23,
+            "waitMs": 1370.1309230000006,
+            "buildMs": 222.3732459999992
+          },
+          {
+            "sequence": 24,
+            "waitMs": 98.7303150000007,
+            "buildMs": 240.0919359999989
+          },
+          {
+            "sequence": 25,
+            "waitMs": 336.2957179999994,
+            "buildMs": 245.07486600000084
+          },
+          {
+            "sequence": 26,
+            "waitMs": 579.7860520000013,
+            "buildMs": 169.70778299999984
+          },
+          {
+            "sequence": 27,
+            "waitMs": 748.5445080000009,
+            "buildMs": 188.8677719999996
+          },
+          {
+            "sequence": 28,
+            "waitMs": 936.5374820000015,
+            "buildMs": 143.03717599999982
+          },
+          {
+            "sequence": 29,
+            "waitMs": 1077.2097670000003,
+            "buildMs": 147.82786699999997
+          },
+          {
+            "sequence": 30,
+            "waitMs": 1222.8865050000004,
+            "buildMs": 158.7630420000005
+          },
+          {
+            "sequence": 31,
+            "waitMs": 6.4661399999986315,
+            "buildMs": 156.66392799999994
+          },
+          {
+            "sequence": 32,
+            "waitMs": 162.30051000000094,
+            "buildMs": 173.82175000000097
+          },
+          {
+            "sequence": 33,
+            "waitMs": 335.28335100000004,
+            "buildMs": 178.26382899999953
+          },
+          {
+            "sequence": 34,
+            "waitMs": 512.7931050000007,
+            "buildMs": 217.3264620000009
+          },
+          {
+            "sequence": 35,
+            "waitMs": 729.3767979999993,
+            "buildMs": 185.24410800000078
+          },
+          {
+            "sequence": 36,
+            "waitMs": 913.3580409999995,
+            "buildMs": 225.19393599999967
+          },
+          {
+            "sequence": 37,
+            "waitMs": 1137.7160380000005,
+            "buildMs": 213.58323999999993
+          },
+          {
+            "sequence": 38,
+            "waitMs": 1350.3107049999999,
+            "buildMs": 156.16033199999947
+          },
+          {
+            "sequence": 39,
+            "waitMs": 6.7852660000007745,
+            "buildMs": 153.59455100000014
+          },
+          {
+            "sequence": 40,
+            "waitMs": 159.49857100000008,
+            "buildMs": 145.49092100000053
+          },
+          {
+            "sequence": 41,
+            "waitMs": 304.13896399999976,
+            "buildMs": 149.9850889999998
+          },
+          {
+            "sequence": 42,
+            "waitMs": 453.2934670000013,
+            "buildMs": 189.37128400000074
+          },
+          {
+            "sequence": 43,
+            "waitMs": 641.8501859999997,
+            "buildMs": 159.51510699999926
+          },
+          {
+            "sequence": 44,
+            "waitMs": 800.6064299999998,
+            "buildMs": 252.12289600000076
+          },
+          {
+            "sequence": 45,
+            "waitMs": 1052.006703000001,
+            "buildMs": 229.09193699999923
+          },
+          {
+            "sequence": 46,
+            "waitMs": 6.4246170000005804,
+            "buildMs": 236.25105299999996
+          },
+          {
+            "sequence": 47,
+            "waitMs": 241.61461299999974,
+            "buildMs": 190.2994460000009
+          },
+          {
+            "sequence": 48,
+            "waitMs": 431.0194870000014,
+            "buildMs": 209.0717199999999
+          },
+          {
+            "sequence": 49,
+            "waitMs": 639.3195009999981,
+            "buildMs": 246.10227699999814
+          },
+          {
+            "sequence": 50,
+            "waitMs": 884.4994939999997,
+            "buildMs": 182.37462500000038
+          },
+          {
+            "sequence": 51,
+            "waitMs": 1066.003859999999,
+            "buildMs": 165.79902800000127
+          },
+          {
+            "sequence": 52,
+            "waitMs": 1230.962110999999,
+            "buildMs": 167.03937900000165
+          },
+          {
+            "sequence": 53,
+            "waitMs": 1397.1713759999984,
+            "buildMs": 213.36737899999935
+          },
+          {
+            "sequence": 54,
+            "waitMs": 83.55800299999828,
+            "buildMs": 190.3357790000009
+          },
+          {
+            "sequence": 55,
+            "waitMs": 272.73988199999803,
+            "buildMs": 166.15636399999858
+          },
+          {
+            "sequence": 56,
+            "waitMs": 437.8094720000008,
+            "buildMs": 290.3650209999978
+          },
+          {
+            "sequence": 57,
+            "waitMs": 727.0828469999979,
+            "buildMs": 170.30475400000068
+          },
+          {
+            "sequence": 59,
+            "waitMs": 923.4044050000011,
+            "buildMs": 2183.9860679999983
+          },
+          {
+            "sequence": 60,
+            "waitMs": 3106.377999999997,
+            "buildMs": 205.18864299999768
+          }
+        ],
+        "servedLoop": {
+          "p95Ms": 4.792813000000024,
+          "maxMs": 47.3542039999993,
+          "stalls": []
+        },
+        "activation": {
+          "completed": true,
+          "ms": 3172,
+          "eventLoopMaxMs": 359.6121310000008
+        },
+        "writes": {
+          "latencies": [],
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedLatencies": [],
+        "busy": 0,
+        "timeoutRetirements": 0,
+        "projectionWorker": {
+          "spawns": 1,
+          "pidStable": true
+        },
+        "queue": {
+          "maxWaiting": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "appointedAt": 1791870780838,
+        "adoptedAt": 1791870782878,
+        "adopted": {
+          "codex:fixture-id-1": 2220925,
+          "codex:fixture-id-2": 2220939,
+          "codex:fixture-id-3": 2220960,
+          "codex:fixture-id-4": 2220981
+        },
+        "runtimeRpc": {
+          "requests": 1076,
+          "timeouts": 0,
+          "failures": 0,
+          "maxMs": 213,
+          "latencies": [
+            1.8411690000002636,
+            0.8260110000001077,
+            0.785131999999976,
+            0.43413500000042404,
+            6.4460079999998925,
+            7.856318000000101,
+            3.782543999999689,
+            10.401753999999528,
+            18.43779799999993,
+            2.9323169999997845,
+            76.10780599999998,
+            36.260582999999315,
+            2.437802999998894,
+            9.567745000000286,
+            10.107226000000082,
+            0.3476649999993242,
+            0.57181700000001,
+            0.14570000000094296,
+            1.2995649999993475,
+            0.24890899999991234,
+            0.9389499999997497,
+            0.2724610000004759,
+            0.8363840000001801,
+            0.42888999999922817,
+            0.7499000000007072,
+            0.21728499999881024,
+            0.6722360000003391,
+            0.19044800000119722,
+            0.6455389999991894,
+            0.1601040000005014,
+            0.9335090000004129,
+            0.25730300000032,
+            0.8829600000008213,
+            0.24647299999924144,
+            0.4753079999991314,
+            0.11613100000067789,
+            1.28531699999985,
+            0.511225000000195,
+            0.9701999999997497,
+            0.28691000000071654,
+            0.7753819999998086,
+            0.2236300000004121,
+            1.2359289999985776,
+            0.26095899999927497,
+            0.647702999998728,
+            0.22635299999819836,
+            3.9209940000000643,
+            0.2971399999987625,
+            0.8174600000020291,
+            0.18708500000138883
+          ]
+        },
+        "slowSteps": [],
+        "log": [
+          "release b appointed",
+          "release b waiting: 3751:2215895/- 3752:2215907/- 3753:2215919/- 3754:2215931/-",
+          "release b started worker 3751 as 2220925",
+          "release b started worker 3752 as 2220939",
+          "release b started worker 3753 as 2220960",
+          "release b started worker 3754 as 2220981",
+          "release b re-hosted 4 worker(s) 2040ms after its appointment"
+        ]
+      }
+    },
+    "secondGate": {
+      "checkedAt": "2026-10-13T05:46:16.201Z",
+      "runtime": "bun 1.4.0",
+      "bounds": {
+        "firstBoot": {
+          "registryOpenMs": 2000,
+          "firstSnapshotMs": 2000,
+          "firstUsableMs": 10000,
+          "eventLoopMaxMs": 1000
+        },
+        "activation": {
+          "durationMs": 15000,
+          "eventLoopMaxMs": 1500
+        },
+        "grantWrite": {
+          "p95Ms": 350,
+          "maxMs": 500
+        },
+        "eventLoop": {
+          "p95Ms": 50,
+          "maxMs": 500
+        },
+        "projectionWorker": {
+          "coldMs": 8000,
+          "warmP95Ms": 1000,
+          "warmMaxMs": 2000
+        },
+        "scopeRequests": {
+          "p95Ms": 5000,
+          "maxMs": 10000,
+          "maxQueueDepth": 8
+        },
+        "handover": {
+          "successorReadyMs": 15000,
+          "adoptionMs": 15000,
+          "workerProgressGapMs": 20000
+        },
+        "runtimeRpc": {
+          "p95Ms": 250,
+          "maxMs": 2000
+        },
+        "browser": {
+          "readyMs": 10000,
+          "filesP95Ms": 5000,
+          "filesMaxMs": 10000,
+          "apiMaxMs": 10000,
+          "bootLagMaxMs": 1000,
+          "lagP95Ms": 50,
+          "lagMaxMs": 500,
+          "inputMs": 500,
+          "serverBootLoopMaxMs": 1000,
+          "serverLoopP95Ms": 50,
+          "serverLoopMaxMs": 500
+        }
+      },
+      "measurements": {
+        "dataset": {
+          "scale": 1,
+          "rows": 30036,
+          "coldRows": 27836,
+          "payloadBytes": 96604975,
+          "transcripts": 320,
+          "seedMs": 8057
+        },
+        "firstBoot": {
+          "registryOpenMs": 154,
+          "firstSnapshotMs": 551,
+          "coldProjectionMs": 5326,
+          "firstUsableMs": 6282,
+          "eventLoopMaxMs": 657,
+          "coldBuild": {
+            "sequence": 1,
+            "buildMs": 2694.8
+          }
+        },
+        "activation": {
+          "incumbentMs": 3869,
+          "successorMs": 2988,
+          "eventLoopMaxMs": 552
+        },
+        "grantWrites": {
+          "count": 291,
+          "p50Ms": 2.9,
+          "p95Ms": 10.8,
+          "maxMs": 106.3,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "externalWrites": {
+          "count": 486,
+          "p50Ms": 2.7,
+          "p95Ms": 7,
+          "maxMs": 102.1,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedOperationReads": {
+          "count": 127,
+          "p50Ms": 0.9,
+          "p95Ms": 1.4,
+          "maxMs": 9.1
+        },
+        "eventLoop": {
+          "p95Ms": 7.8,
+          "maxMs": 349.7
+        },
+        "projection": {
+          "warmBuilds": {
+            "count": 125,
+            "p50Ms": 252.3,
+            "p95Ms": 429.4,
+            "maxMs": 1686.5
+          },
+          "queueWait": {
+            "count": 127,
+            "p50Ms": 1085.9,
+            "p95Ms": 2146.7,
+            "maxMs": 2758
+          }
+        },
+        "scopeRequests": {
+          "count": 184,
+          "p50Ms": 142.8,
+          "p95Ms": 1393.7,
+          "maxMs": 2638.3,
+          "scopes": 8,
+          "failures": 0,
+          "maxQueueDepth": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "worker": {
+          "spawns": 1,
+          "timeoutRetirements": 0,
+          "pidStable": true
+        },
+        "stability": {
+          "rounds": 21,
+          "responses": 168,
+          "emptyResponses": 0,
+          "missingRows": 0,
+          "extraRows": 0,
+          "reattributedRows": 0,
+          "missingPins": 0
+        },
+        "handover": {
+          "successor": {
+            "completed": true,
+            "exitCode": 0,
+            "signal": null,
+            "readyMs": 5719,
+            "registryOpenMs": 74,
+            "snapshotMs": 464,
+            "firstProjectionMs": 3268,
+            "archived": 250,
+            "grantMismatches": 0,
+            "adoptionMs": 1912,
+            "adopted": 4
+          },
+          "switched": true,
+          "demotionExitCode": 0,
+          "servingRelease": "successor",
+          "serving": {
+            "requests": 96,
+            "failures": 0
+          }
+        },
+        "workers": {
+          "count": 4,
+          "rehosted": 4,
+          "answering": 4,
+          "progressGapMaxMs": 2259,
+          "lostProgress": 0,
+          "repeatedProgress": 0,
+          "failedPings": 0
+        },
+        "sqliteBusy": 0,
+        "runtimeTimeouts": 0,
+        "runtimeRpc": {
+          "requests": 2282,
+          "p95Ms": 7.1,
+          "maxMs": 366,
+          "timeouts": 0,
+          "failures": 0,
+          "hostAlive": true
+        },
+        "deliveryEvidence": {
+          "pending": 16,
+          "uncertain": 8,
+          "preserved": true
+        },
+        "browser": {
+          "views": 8,
+          "writes": {
+            "count": 949,
+            "p95Ms": 11,
+            "maxMs": 119,
+            "failures": 0
+          },
+          "readyMaxMs": 8058,
+          "filesP95Ms": 2515,
+          "filesMaxMs": 3248,
+          "filesErrors": 0,
+          "viewsWithoutAnswerDuringWrites": 0,
+          "apiMaxMs": 3248,
+          "apiMaxRoute": "/api/files",
+          "apiErrors": 0,
+          "apiFirstError": null,
+          "apiUnfinished": 0,
+          "bootLagMaxMs": 634,
+          "lagP95Ms": 6,
+          "lagMaxMs": 193,
+          "inputMaxMs": 178,
+          "inputsMin": 2,
+          "selectionsLost": 0,
+          "staleNotices": 0,
+          "server": {
+            "samples": 2196,
+            "bootMaxMs": 991,
+            "p95Ms": 10.8,
+            "maxMs": 118.6
+          }
+        }
+      },
+      "breaches": [],
+      "ok": true,
+      "log": [
+        "dataset 30036 rows, 27836 cold, 320 transcripts, seeded in 8057ms",
+        "runtime host 2159310 answering",
+        "release A ready in 11093ms and hosting 4 live workers",
+        "baseline rows per scope: 330,330,330,330,330,330,330,330",
+        "warm operation measured; starting release B",
+        "release B ready in 5719ms; serving target switched",
+        "release B re-hosted 4 worker(s) 1912ms after the switch",
+        "release A: release a appointed",
+        "release A: release a started worker 3751 as 2162902",
+        "release A: release a started worker 3752 as 2162948",
+        "release A: release a started worker 3753 as 2162995",
+        "release A: release a started worker 3754 as 2163039",
+        "release A: release a re-hosted 4 worker(s) 3766ms after its appointment",
+        "release A: release a demoted",
+        "release B: release b appointed",
+        "release B: release b waiting: 3751:-/- 3752:-/- 3753:-/- 3754:-/-",
+        "release B: release b started worker 3751 as 2171040",
+        "release B: release b started worker 3752 as 2171078",
+        "release B: release b started worker 3753 as 2171107",
+        "release B: release b started worker 3754 as 2171134",
+        "release B: release b re-hosted 4 worker(s) 1867ms after its appointment",
+        "event loop while serving: release A {\"p95Ms\":7.7854110000007495,\"maxMs\":349.6840149999989,\"stalls\":[{\"at\":1791870406839,\"ms\":127},{\"at\":1791870416389,\"ms\":350},{\"at\":1791870418207,\"ms\":116}]}, release B {\"p95Ms\":6.418959000000541,\"maxMs\":49.612591999999495,\"stalls\":[]}",
+        "release A steps of 100ms or more: grant-bearing write 106ms at 1791870418192",
+        "warm builds: release A {\"count\":75,\"p50Ms\":255.2,\"p95Ms\":489.4,\"maxMs\":652.2}, release B {\"count\":50,\"p50Ms\":247.1,\"p95Ms\":429.4,\"maxMs\":1686.5}",
+        "runtime host calls: {\"requests\":2282,\"p95Ms\":7.1,\"maxMs\":366,\"timeouts\":0,\"failures\":0,\"hostAlive\":true}",
+        "activations: release A {\"completed\":true,\"ms\":3869,\"eventLoopMaxMs\":288.53176800000074}, release B {\"completed\":true,\"ms\":2988,\"eventLoopMaxMs\":552.2159160000001}",
+        "browser: the server's structured-host startup is ready",
+        "browser view 0: slowest [{\"route\":\"/api/files\",\"files\":true,\"status\":200,\"ms\":3241,\"queuedMs\":0,\"firstByteMs\":3201,\"at\":6280},{\"route\":\"/api/accounts\",\"files\":false,\"status\":200,\"ms\":2941,\"queuedMs\":2483,\"firstByteMs\":2939,\"at\":7343}]",
+        "browser view 1: slowest [{\"route\":\"/api/accounts\",\"files\":false,\"status\":200,\"ms\":2980,\"queuedMs\":2565,\"firstByteMs\":2978,\"at\":7320},{\"route\":\"/api/tmux/targets\",\"files\":false,\"status\":200,\"ms\":2734,\"queuedMs\":1475,\"firstByteMs\":2733,\"at\":7640}]",
+        "browser view 2: slowest [{\"route\":\"/api/files\",\"files\":true,\"status\":200,\"ms\":3248,\"queuedMs\":19,\"firstByteMs\":3246,\"at\":6198},{\"route\":\"/api/accounts\",\"files\":false,\"status\":200,\"ms\":2658,\"queuedMs\":2155,\"firstByteMs\":2657,\"at\":7265}]",
+        "browser view 3: slowest [{\"route\":\"/api/files\",\"files\":true,\"status\":200,\"ms\":3169,\"queuedMs\":0,\"firstByteMs\":3148,\"at\":6198},{\"route\":\"/api/accounts\",\"files\":false,\"status\":200,\"ms\":2736,\"queuedMs\":2136,\"firstByteMs\":2719,\"at\":7281}]",
+        "browser view 4: slowest [{\"route\":\"/api/files\",\"files\":true,\"status\":200,\"ms\":3247,\"queuedMs\":1,\"firstByteMs\":3228,\"at\":6215},{\"route\":\"/api/tmux/targets\",\"files\":false,\"status\":200,\"ms\":2769,\"queuedMs\":800,\"firstByteMs\":2752,\"at\":7598}]",
+        "browser view 5: slowest [{\"route\":\"/api/files\",\"files\":true,\"status\":200,\"ms\":3230,\"queuedMs\":1,\"firstByteMs\":3210,\"at\":6129},{\"route\":\"/api/accounts\",\"files\":false,\"status\":200,\"ms\":2691,\"queuedMs\":2126,\"firstByteMs\":2690,\"at\":7214}]",
+        "browser view 6: slowest [{\"route\":\"/api/files\",\"files\":true,\"status\":200,\"ms\":3241,\"queuedMs\":1,\"firstByteMs\":3222,\"at\":6006},{\"route\":\"/api/accounts\",\"files\":false,\"status\":200,\"ms\":2618,\"queuedMs\":2001,\"firstByteMs\":2616,\"at\":7227}]",
+        "browser view 7: slowest [{\"route\":\"/api/files\",\"files\":true,\"status\":200,\"ms\":3228,\"queuedMs\":0,\"firstByteMs\":3226,\"at\":5992},{\"route\":\"/api/tmux/targets\",\"files\":false,\"status\":200,\"ms\":2079,\"queuedMs\":702,\"firstByteMs\":2078,\"at\":8056}]",
+        "browser: the server's event loop {\"samples\":2196,\"bootMaxMs\":991,\"p95Ms\":10.8,\"maxMs\":118.6}; delays of 100ms or more: 191ms at 1791870446490, 113ms at 1791870446812, 143ms at 1791870450093, 611ms at 1791870450772, 278ms at 1791870451060, 227ms at 1791870451297, 184ms at 1791870451491, 148ms at 1791870451649, 454ms at 1791870452113, 666ms at 1791870452789, 470ms at 1791870453269, 991ms at 1791870454270, 972ms at 1791870455252, 232ms at 1791870455494, 623ms at 1791870456127, 293ms at 1791870456430, 272ms at 1791870456711, 119ms at 1791870484392"
+      ]
+    },
+    "secondGateProcessReports": {
+      "release-a-report.json": {
+        "completed": true,
+        "name": "a",
+        "registryOpenMs": 153.93096699999998,
+        "snapshotMs": 551.400942,
+        "firstProjectionMs": 5326.300107,
+        "firstUsableMs": 6281.734418999999,
+        "bootLoopMaxMs": 657.090151,
+        "readyMs": 11092.957543999999,
+        "exitPath": "demoted",
+        "samples": [
+          {
+            "sequence": 1,
+            "waitMs": 0.12249900000006164,
+            "buildMs": 2694.845809
+          },
+          {
+            "sequence": 2,
+            "waitMs": 19.246499999999287,
+            "buildMs": 652.1617989999995
+          },
+          {
+            "sequence": 3,
+            "waitMs": 669.0769849999997,
+            "buildMs": 307.3776919999982
+          },
+          {
+            "sequence": 4,
+            "waitMs": 973.8066500000004,
+            "buildMs": 190.671832
+          },
+          {
+            "sequence": 5,
+            "waitMs": 1161.6396490000006,
+            "buildMs": 226.0196190000006
+          },
+          {
+            "sequence": 6,
+            "waitMs": 1385.00446,
+            "buildMs": 192.55319899999995
+          },
+          {
+            "sequence": 7,
+            "waitMs": 1574.9680599999992,
+            "buildMs": 186.18193900000006
+          },
+          {
+            "sequence": 8,
+            "waitMs": 1758.331585,
+            "buildMs": 176.64565799999946
+          },
+          {
+            "sequence": 9,
+            "waitMs": 1932.0696609999995,
+            "buildMs": 254.58591200000046
+          },
+          {
+            "sequence": 10,
+            "waitMs": 16.612303000001702,
+            "buildMs": 251.1286510000009
+          },
+          {
+            "sequence": 11,
+            "waitMs": 265.30844699999943,
+            "buildMs": 269.43441600000006
+          },
+          {
+            "sequence": 12,
+            "waitMs": 532.1877349999995,
+            "buildMs": 318.91207100000065
+          },
+          {
+            "sequence": 13,
+            "waitMs": 848.7682030000014,
+            "buildMs": 257.54686200000106
+          },
+          {
+            "sequence": 14,
+            "waitMs": 1104.1020860000008,
+            "buildMs": 228.1275229999992
+          },
+          {
+            "sequence": 15,
+            "waitMs": 1329.9883850000024,
+            "buildMs": 259.7177660000016
+          },
+          {
+            "sequence": 16,
+            "waitMs": 1587.438975000001,
+            "buildMs": 324.98190199999954
+          },
+          {
+            "sequence": 17,
+            "waitMs": 1910.2004529999977,
+            "buildMs": 354.7748380000012
+          },
+          {
+            "sequence": 18,
+            "waitMs": 785.3803919999991,
+            "buildMs": 347.27863100000104
+          },
+          {
+            "sequence": 19,
+            "waitMs": 1131.1237250000013,
+            "buildMs": 225.4060129999998
+          },
+          {
+            "sequence": 20,
+            "waitMs": 1355.3172399999967,
+            "buildMs": 282.56365500000175
+          },
+          {
+            "sequence": 21,
+            "waitMs": 1636.4235799999988,
+            "buildMs": 244.70180799999798
+          },
+          {
+            "sequence": 22,
+            "waitMs": 1879.847698999998,
+            "buildMs": 260.2106939999976
+          },
+          {
+            "sequence": 23,
+            "waitMs": 639.0186199999989,
+            "buildMs": 245.10064000000057
+          },
+          {
+            "sequence": 24,
+            "waitMs": 881.8266519999997,
+            "buildMs": 316.9455280000002
+          },
+          {
+            "sequence": 25,
+            "waitMs": 1190.3663899999992,
+            "buildMs": 339.03953399999955
+          },
+          {
+            "sequence": 26,
+            "waitMs": 1526.9002110000001,
+            "buildMs": 352.83330900000146
+          },
+          {
+            "sequence": 27,
+            "waitMs": 1877.5875089999972,
+            "buildMs": 281.6993279999988
+          },
+          {
+            "sequence": 28,
+            "waitMs": 676.1829179999986,
+            "buildMs": 240.08490299999903
+          },
+          {
+            "sequence": 29,
+            "waitMs": 914.1054179999992,
+            "buildMs": 273.3285739999992
+          },
+          {
+            "sequence": 30,
+            "waitMs": 1185.3641730000018,
+            "buildMs": 277.15142299999934
+          },
+          {
+            "sequence": 31,
+            "waitMs": 1460.4414419999994,
+            "buildMs": 248.4530339999983
+          },
+          {
+            "sequence": 32,
+            "waitMs": 1706.750415999999,
+            "buildMs": 300.99806700000045
+          },
+          {
+            "sequence": 33,
+            "waitMs": 499.0061740000019,
+            "buildMs": 247.49929100000008
+          },
+          {
+            "sequence": 34,
+            "waitMs": 743.9680919999992,
+            "buildMs": 321.6556039999996
+          },
+          {
+            "sequence": 35,
+            "waitMs": 1062.9587089999986,
+            "buildMs": 227.5239729999994
+          },
+          {
+            "sequence": 36,
+            "waitMs": 1283.4002760000003,
+            "buildMs": 199.02262399999745
+          },
+          {
+            "sequence": 37,
+            "waitMs": 1480.0014190000002,
+            "buildMs": 236.63372999999774
+          },
+          {
+            "sequence": 38,
+            "waitMs": 1714.3137339999994,
+            "buildMs": 166.59108299999934
+          },
+          {
+            "sequence": 39,
+            "waitMs": 420.09419199999684,
+            "buildMs": 196.55713800000012
+          },
+          {
+            "sequence": 40,
+            "waitMs": 614.7358870000025,
+            "buildMs": 327.88768999999957
+          },
+          {
+            "sequence": 41,
+            "waitMs": 941.0493050000005,
+            "buildMs": 214.4896520000002
+          },
+          {
+            "sequence": 42,
+            "waitMs": 1153.4091740000003,
+            "buildMs": 170.2772530000002
+          },
+          {
+            "sequence": 43,
+            "waitMs": 1321.6548679999978,
+            "buildMs": 203.70830899999783
+          },
+          {
+            "sequence": 44,
+            "waitMs": 42.60534499999994,
+            "buildMs": 217.38160699999935
+          },
+          {
+            "sequence": 45,
+            "waitMs": 258.9024989999998,
+            "buildMs": 201.63601200000267
+          },
+          {
+            "sequence": 46,
+            "waitMs": 459.5281009999999,
+            "buildMs": 416.5991619999986
+          },
+          {
+            "sequence": 47,
+            "waitMs": 875.2485080000006,
+            "buildMs": 169.5751769999988
+          },
+          {
+            "sequence": 48,
+            "waitMs": 1043.1436979999999,
+            "buildMs": 278.70191799999884
+          },
+          {
+            "sequence": 49,
+            "waitMs": 1320.8531220000004,
+            "buildMs": 196.99179200000071
+          },
+          {
+            "sequence": 50,
+            "waitMs": 1516.9206459999987,
+            "buildMs": 166.94558700000198
+          },
+          {
+            "sequence": 51,
+            "waitMs": 187.401590999998,
+            "buildMs": 180.62443899999926
+          },
+          {
+            "sequence": 52,
+            "waitMs": 367.0536639999991,
+            "buildMs": 168.85073000000193
+          },
+          {
+            "sequence": 53,
+            "waitMs": 535.0284040000006,
+            "buildMs": 176.07288900000276
+          },
+          {
+            "sequence": 54,
+            "waitMs": 710.203583999999,
+            "buildMs": 255.71717799999897
+          },
+          {
+            "sequence": 55,
+            "waitMs": 965.0024340000018,
+            "buildMs": 212.72650900000008
+          },
+          {
+            "sequence": 56,
+            "waitMs": 1176.9887449999987,
+            "buildMs": 289.0648650000003
+          },
+          {
+            "sequence": 57,
+            "waitMs": 15.998672000001534,
+            "buildMs": 206.85641699999906
+          },
+          {
+            "sequence": 58,
+            "waitMs": 221.11518499999875,
+            "buildMs": 252.12251900000047
+          },
+          {
+            "sequence": 59,
+            "waitMs": 470.79648299999826,
+            "buildMs": 197.24745500000063
+          },
+          {
+            "sequence": 60,
+            "waitMs": 665.8021439999975,
+            "buildMs": 332.273167000003
+          },
+          {
+            "sequence": 61,
+            "waitMs": 995.6112380000013,
+            "buildMs": 320.00780699999814
+          },
+          {
+            "sequence": 62,
+            "waitMs": 1313.2899600000019,
+            "buildMs": 621.1394570000011
+          },
+          {
+            "sequence": 63,
+            "waitMs": 1932.1997150000025,
+            "buildMs": 409.3264820000004
+          },
+          {
+            "sequence": 64,
+            "waitMs": 2339.329239999999,
+            "buildMs": 301.68352499999673
+          },
+          {
+            "sequence": 65,
+            "waitMs": 1130.5441199999987,
+            "buildMs": 321.85730500000136
+          },
+          {
+            "sequence": 66,
+            "waitMs": 1441.253783,
+            "buildMs": 548.2967470000003
+          },
+          {
+            "sequence": 67,
+            "waitMs": 1987.1126089999998,
+            "buildMs": 362.5791619999982
+          },
+          {
+            "sequence": 68,
+            "waitMs": 2347.533307999998,
+            "buildMs": 412.4978250000022
+          },
+          {
+            "sequence": 69,
+            "waitMs": 2757.9510349999982,
+            "buildMs": 227.17704899999808
+          },
+          {
+            "sequence": 70,
+            "waitMs": 1506.2926880000014,
+            "buildMs": 245.41055700000288
+          },
+          {
+            "sequence": 71,
+            "waitMs": 1736.4707890000027,
+            "buildMs": 289.59032600000137
+          },
+          {
+            "sequence": 72,
+            "waitMs": 2025.0340689999975,
+            "buildMs": 255.161884000001
+          },
+          {
+            "sequence": 73,
+            "waitMs": 2279.05415,
+            "buildMs": 271.1710000000021
+          },
+          {
+            "sequence": 74,
+            "waitMs": 1093.361232000003,
+            "buildMs": 252.3240750000041
+          },
+          {
+            "sequence": 75,
+            "waitMs": 1344.615397999998,
+            "buildMs": 489.41480500000034
+          },
+          {
+            "sequence": 76,
+            "waitMs": 1832.9644290000033,
+            "buildMs": 375.08139699999447
+          }
+        ],
+        "servedLoop": {
+          "p95Ms": 7.7854110000007495,
+          "maxMs": 349.6840149999989,
+          "stalls": [
+            {
+              "at": 1791870406839,
+              "ms": 127
+            },
+            {
+              "at": 1791870416389,
+              "ms": 350
+            },
+            {
+              "at": 1791870418207,
+              "ms": 116
+            }
+          ]
+        },
+        "activation": {
+          "completed": true,
+          "ms": 3869,
+          "eventLoopMaxMs": 288.53176800000074
+        },
+        "writes": {
+          "latencies": [
+            4.841961000000083,
+            2.8065050000004703,
+            2.79903000000013,
+            2.6869299999998475,
+            3.268335999999181,
+            2.7165549999990617,
+            3.429463999998916,
+            2.7330650000003516,
+            2.009571999999025,
+            2.9177469999995083,
+            2.6836550000007264,
+            2.5468760000003385,
+            2.922309999999925,
+            2.0418860000008863,
+            2.8551009999991948,
+            2.3822669999990467,
+            2.4189339999993535,
+            2.2878489999984595,
+            3.56231200000002,
+            2.712199999999939,
+            2.06392600000072,
+            1.9306699999997363,
+            3.033875999999509,
+            2.4288759999999456,
+            3.30080099999941,
+            3.6882060000007186,
+            3.190875000000233,
+            2.234465999999884,
+            2.6549770000001445,
+            3.9393140000011044,
+            3.888494000000719,
+            3.5756280000005063,
+            5.505905999998504,
+            8.337067000000388,
+            2.8435609999996814,
+            3.1623620000009396,
+            4.10535499999969,
+            3.0227239999985613,
+            3.9049489999997604,
+            2.1465960000023188,
+            3.629152999998041,
+            3.206597000000329,
+            2.3252920000013546,
+            3.0745029999998224,
+            2.7634739999994054,
+            3.4706049999986135,
+            3.305501999999251,
+            3.4925400000029185,
+            3.2545179999979155,
+            5.120526999999129,
+            2.6939820000006875,
+            2.7653790000003937,
+            2.521087000000989,
+            3.2932609999988927,
+            3.470919999999751,
+            2.4107479999984207,
+            2.774611000000732,
+            2.3357600000017555,
+            2.8629480000017793,
+            3.686811999999918,
+            3.3361170000025595,
+            2.78126500000144,
+            3.2013850000003004,
+            2.735206000001199,
+            2.4455830000006245,
+            2.3451010000026145,
+            2.724715999996988,
+            3.015838999999687,
+            2.96751900000163,
+            2.917703999999503,
+            2.4127189999999246,
+            3.2476370000003953,
+            3.5150480000011157,
+            2.633003999999346,
+            4.949065000000701,
+            2.5397649999977148,
+            3.639012999999977,
+            3.074745999998413,
+            2.3687340000033146,
+            3.252983000002132,
+            5.735728999999992,
+            2.681365000000369,
+            2.945812999998452,
+            2.97143899999719,
+            2.535595999997895,
+            2.6034880000006524,
+            2.921341000001121,
+            2.4832160000005388,
+            3.0795230000003357,
+            3.362370999999257,
+            2.3986670000012964,
+            3.9713819999997213,
+            1.9365919999981998,
+            2.282932999998593,
+            2.9396689999994123,
+            2.8413609999988694,
+            4.512274999997317,
+            2.243101000000024,
+            2.955812000000151,
+            4.525462000001426,
+            2.4129309999989346,
+            3.3165179999996326,
+            3.0117150000005495,
+            3.2511129999984405,
+            2.6532159999987925,
+            2.337500000001455,
+            3.1350859999984095,
+            3.177625000000262,
+            3.6071369999990566,
+            3.272092999999586,
+            2.434274999999616,
+            3.125995000002149,
+            3.17438200000106,
+            2.8308799999977055,
+            3.575474999997823,
+            3.5106659999983094,
+            2.6901770000004035,
+            3.4016450000017358,
+            2.7709649999997055,
+            3.0477439999995113,
+            4.299042999999074,
+            3.5081370000007155,
+            3.2574820000008913,
+            3.0895049999999173,
+            2.9145129999997152,
+            3.101243000000977,
+            3.624644999999873,
+            2.196373999999196,
+            1.64635300000009,
+            2.3263980000010633,
+            2.771668999997928,
+            2.7665650000017195,
+            3.4744680000003427,
+            3.036320999999589,
+            2.941077999999834,
+            2.3413849999997183,
+            2.84464300000036,
+            2.5799740000002203,
+            2.6419170000008307,
+            1.5471440000001166,
+            2.4017619999976887,
+            2.87586999999985,
+            2.617737999997189,
+            1.8303180000002612,
+            2.639271000000008,
+            2.8336770000023535,
+            3.0268920000016806,
+            1.9877919999998994,
+            2.718262999998842,
+            2.955956999998307,
+            3.2321029999984603,
+            1.9262670000025537,
+            2.1470230000013544,
+            1.7908009999991918,
+            2.363467999999557,
+            2.057759999999689,
+            2.9888649999993504,
+            2.3253850000000966,
+            2.878025999998499,
+            1.9764929999982996,
+            1.866571999998996,
+            2.5199659999998403,
+            2.1941530000003695,
+            1.8939529999988736,
+            1.8051589999995485,
+            4.541071999999986,
+            2.869921000001341,
+            3.553423000001203,
+            2.676030999999057,
+            3.0645970000005036,
+            3.588576000001922,
+            3.486995000002935,
+            3.6200930000013614,
+            4.5243569999984175,
+            5.762269999999262,
+            4.647323999997752,
+            1.5812440000008792,
+            2.461414000001241,
+            3.0214860000014596,
+            2.7397559999990335,
+            2.8550240000004123,
+            3.2786859999978333,
+            2.619166000000405,
+            1.6272309999985737,
+            1.7329329999993206,
+            1.9696160000021337,
+            1.8959730000024138,
+            2.6899309999971592,
+            2.585732999999891,
+            2.494011999999202,
+            2.6433969999998226,
+            2.6889289999999164,
+            2.8314959999988787,
+            2.17098999999871,
+            1.8420509999996284,
+            2.7105140000021493,
+            2.005386000000726,
+            2.259647999999288,
+            2.5806940000002214,
+            2.6106350000009115,
+            2.439622000001691,
+            3.5465170000024955,
+            3.081594999999652,
+            3.1099549999999,
+            7.552276999998867,
+            4.984935000000405,
+            3.4921920000015234,
+            3.039028999999573,
+            1.6359389999997802,
+            1.5168159999993804,
+            2.4819620000016585,
+            2.1553729999977804,
+            2.65161199999784,
+            1.8734530000001541,
+            2.9231809999982943,
+            2.916468999999779,
+            3.52539600000091,
+            3.5896739999989222,
+            2.5109580000025744,
+            2.2280229999996664,
+            11.777930999996897,
+            3.0105880000010075,
+            2.831125000000611,
+            2.8674380000011297,
+            5.124030999999377,
+            2.9358309999988705,
+            12.848407000001316,
+            3.149514000000636,
+            2.706783000001451,
+            2.800187000000733,
+            11.763706999998249,
+            3.0224429999980202,
+            2.701258000000962,
+            1.9789460000029067,
+            13.055411999997887,
+            15.242182999998477,
+            3.1269549999997253,
+            3.3934189999999944,
+            4.4286470000006375,
+            2.7428230000004987,
+            11.660439999999653,
+            4.43647300000157,
+            3.165870000000723,
+            4.586334999999963,
+            11.676640000001498,
+            2.8992049999978917,
+            2.4471769999981916,
+            2.957687000001897,
+            7.175512999998318,
+            2.772430999997596,
+            3.1603759999998147,
+            2.3311739999990095,
+            3.437830999999278,
+            9.470563999999285,
+            1.6417689999980212,
+            2.3509589999994205,
+            8.82068199999776,
+            3.1187580000005255,
+            17.883198999999877,
+            10.821803999999247,
+            9.443317999997817,
+            11.087919999998121,
+            3.2769760000010137,
+            3.244962000000669,
+            11.325027999999293,
+            2.8811920000007376,
+            6.748098000000027,
+            2.4900259999994887,
+            2.86481300000014,
+            3.30698399999892,
+            2.6139140000013867,
+            3.568481000002066,
+            2.206138000001374,
+            3.8333200000015495,
+            2.7141499999997905,
+            2.2112300000007963,
+            2.543998000001011,
+            3.0189119999995455,
+            3.223684000000503,
+            2.3819540000004054,
+            2.6390400000018417,
+            2.419298999997409,
+            106.2621599999984,
+            78.37806199999613,
+            72.93891499999881,
+            65.47973900000216,
+            2.7244279999940773,
+            3.0121670000007725,
+            2.572477000001527,
+            3.1584559999973862,
+            9.161503999996057
+          ],
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedLatencies": [
+          1.4062250000006316,
+          0.7542850000008912,
+          0.7041580000004615,
+          0.7671329999993759,
+          0.8087169999998878,
+          0.6972970000006171,
+          0.6800839999996242,
+          0.917674000000261,
+          0.6602020000009361,
+          0.6234469999999419,
+          0.905428000000029,
+          0.708797000001141,
+          0.9059570000008534,
+          1.0027920000011363,
+          1.3526099999999133,
+          0.7081030000008468,
+          1.1912339999980759,
+          1.183618999999453,
+          1.0863730000019132,
+          0.7093980000026932,
+          0.8568219999979192,
+          0.7995240000018384,
+          0.817802000001393,
+          0.9828320000015083,
+          0.726024999999936,
+          1.1556569999993371,
+          1.6552159999992,
+          0.8024079999995593,
+          0.9249220000019704,
+          1.1569080000008398,
+          0.8568300000006275,
+          1.0177270000021963,
+          0.8112959999998566,
+          0.808751000000484,
+          1.210746000000654,
+          0.6806890000007115,
+          1.0662779999984195,
+          0.7242369999985385,
+          0.7064970000028552,
+          0.9253180000014254,
+          0.958717000001343,
+          0.8990610000000743,
+          0.8355329999976675,
+          1.0257929999970656,
+          0.6602679999996326,
+          0.8817000000017288,
+          0.9794489999985672,
+          5.176808000000165,
+          1.0263650000015332,
+          0.7404409999980999,
+          0.8933250000009139,
+          1.0327270000016142,
+          1.1889809999993304,
+          0.9219950000006065,
+          1.1033370000004652,
+          0.8507360000003246,
+          1.0455109999966226,
+          0.965860000000248,
+          0.8091749999985041,
+          0.5977740000016638,
+          0.6840909999991709,
+          0.6839569999974628,
+          0.6745669999982056,
+          0.9622899999994843,
+          0.42935399999987567,
+          0.8437389999999141,
+          1.3455289999983506,
+          0.4229830000003858,
+          0.8271630000017467,
+          0.4516689999982191,
+          0.9155759999994189,
+          0.8603530000000319,
+          1.1766109999989567,
+          2.0370750000001863,
+          1.153096000001824,
+          0.7249379999993835,
+          0.989596999999776,
+          0.5668970000006084,
+          0.792131000001973,
+          0.6579229999988456,
+          0.5679549999986193,
+          0.7091919999984384,
+          0.506956999997783,
+          0.8379400000012538,
+          0.7133260000009614,
+          0.5173329999997804,
+          1.4106070000016189,
+          0.8483720000003814,
+          1.074373999999807,
+          0.7709240000003774,
+          0.7163579999978538,
+          0.9942410000003292,
+          0.8200709999982791,
+          0.5857660000001488,
+          0.8230480000020179,
+          0.7027799999996205,
+          0.8833750000012515,
+          0.8049499999979162,
+          0.9359660000009171,
+          0.8186109999987821,
+          1.25521099999969,
+          1.121234000002005,
+          0.6789390000012645,
+          9.0621080000019,
+          0.6942200000012235,
+          0.7384369999999763,
+          0.9129080000020622,
+          0.7722040000007837,
+          0.8235950000016601,
+          1.0212679999967804,
+          8.46706599999743,
+          1.1185329999971145,
+          1.8440520000003744,
+          0.7664790000017092,
+          0.7885219999989204,
+          0.5561540000016976,
+          0.9500559999978577,
+          0.5382930000014312,
+          1.136620999997831,
+          0.6033380000008037,
+          0.9057270000012068,
+          1.0093419999975595,
+          0.8939710000049672,
+          1.151229000002786,
+          0.8600450000012643,
+          0.9123640000034356,
+          0.591390000001411
+        ],
+        "busy": 0,
+        "timeoutRetirements": 0,
+        "projectionWorker": {
+          "spawns": 1,
+          "pidStable": true
+        },
+        "queue": {
+          "maxWaiting": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "appointedAt": 1791870392711,
+        "adoptedAt": 1791870396477,
+        "adopted": {
+          "codex:fixture-id-1": 2162902,
+          "codex:fixture-id-2": 2162948,
+          "codex:fixture-id-3": 2162995,
+          "codex:fixture-id-4": 2163039
+        },
+        "runtimeRpc": {
+          "requests": 1213,
+          "timeouts": 0,
+          "failures": 0,
+          "maxMs": 366,
+          "latencies": [
+            9.002533000000767,
+            0.6157540000003792,
+            0.9822430000003806,
+            0.6069739999984449,
+            0.8523150000000896,
+            0.3726569999998901,
+            0.8319320000009611,
+            0.3328509999992093,
+            1.0436919999992824,
+            0.4271150000004127,
+            1.0751250000030268,
+            0.38185100000191596,
+            1.0389089999989665,
+            1.2769610000032117,
+            0.8786819999986619,
+            0.3497949999982666,
+            0.8847849999983737,
+            0.3314379999974335,
+            0.8414460000021791,
+            0.2798140000013518,
+            4.00663600000189,
+            0.577462999997806,
+            0.8606650000001537,
+            0.2856869999995979,
+            0.9789810000002035,
+            0.3621400000010908,
+            0.8106899999984307,
+            0.30683099999805563,
+            0.8267579999992449,
+            0.36207999999896856,
+            0.9107699999985925,
+            0.32044300000052317,
+            0.8635790000007546,
+            0.25642899999729707,
+            0.8319200000005367,
+            0.2860770000006596,
+            0.7253679999994347,
+            0.22870999999940977,
+            0.8962309999988065,
+            0.3278269999973418,
+            0.8294299999979557,
+            0.2804260000011709,
+            0.7226819999996223,
+            0.29091600000174367,
+            1.4362580000015441,
+            0.5312999999987369,
+            0.6789220000027854,
+            0.23412699999971665,
+            0.7517269999989367,
+            3.266222000002017,
+            1.2688650000018242,
+            3.1639429999995627,
+            0.8299169999991136,
+            0.2789749999974447,
+            0.9647430000004533,
+            0.4071970000004512,
+            0.9281300000002375,
+            0.37479499999972177,
+            0.7347410000002128,
+            0.220857000000251,
+            0.9140850000003411,
+            1.2221970000027795,
+            1.2449980000019423,
+            0.6366290000005392,
+            0.8259360000010929,
+            0.3030059999982768,
+            0.812261999999464,
+            2.7999630000012985,
+            0.9548510000022361,
+            7.063194999998814,
+            1.2077070000013919,
+            0.3814750000019558,
+            0.6098979999987932,
+            0.311346999998932,
+            1.2616029999990133,
+            0.2114529999998922,
+            1.960624999999709,
+            0.38632700000016484,
+            4.105115999998816,
+            16.314006000000518
+          ]
+        },
+        "slowSteps": [
+          {
+            "step": "grant-bearing write",
+            "at": 1791870418192,
+            "ms": 106
+          }
+        ],
+        "demotionExitCode": 0,
+        "log": [
+          "release a appointed",
+          "release a started worker 3751 as 2162902",
+          "release a started worker 3752 as 2162948",
+          "release a started worker 3753 as 2162995",
+          "release a started worker 3754 as 2163039",
+          "release a re-hosted 4 worker(s) 3766ms after its appointment",
+          "release a demoted"
+        ]
+      },
+      "release-b-report.json": {
+        "completed": true,
+        "name": "b",
+        "registryOpenMs": 73.79239899999999,
+        "snapshotMs": 464.16557600000004,
+        "archived": 250,
+        "grantMismatches": 0,
+        "firstProjectionMs": 3267.8969660000002,
+        "firstUsableMs": 4239.082993,
+        "bootLoopMaxMs": 666.549103,
+        "readyMs": 5718.719365,
+        "exitPath": "stopped",
+        "samples": [
+          {
+            "sequence": 1,
+            "waitMs": 0.10068500000011227,
+            "buildMs": 3223.8925230000004
+          },
+          {
+            "sequence": 2,
+            "waitMs": 7.471199999999953,
+            "buildMs": 531.2003059999997
+          },
+          {
+            "sequence": 3,
+            "waitMs": 537.3202289999999,
+            "buildMs": 346.05128700000023
+          },
+          {
+            "sequence": 4,
+            "waitMs": 882.2942459999995,
+            "buildMs": 153.46328499999981
+          },
+          {
+            "sequence": 5,
+            "waitMs": 1034.8082319999994,
+            "buildMs": 311.9488789999996
+          },
+          {
+            "sequence": 6,
+            "waitMs": 1345.7771949999997,
+            "buildMs": 269.30978400000004
+          },
+          {
+            "sequence": 7,
+            "waitMs": 1614.191283,
+            "buildMs": 315.9713040000006
+          },
+          {
+            "sequence": 8,
+            "waitMs": 1929.1829470000002,
+            "buildMs": 218.53473699999995
+          },
+          {
+            "sequence": 9,
+            "waitMs": 2146.727159,
+            "buildMs": 424.3292079999992
+          },
+          {
+            "sequence": 10,
+            "waitMs": 6.717282999999952,
+            "buildMs": 333.8379530000002
+          },
+          {
+            "sequence": 11,
+            "waitMs": 339.4503560000012,
+            "buildMs": 233.75427200000013
+          },
+          {
+            "sequence": 12,
+            "waitMs": 572.2641889999995,
+            "buildMs": 229.200205000001
+          },
+          {
+            "sequence": 13,
+            "waitMs": 800.5021989999987,
+            "buildMs": 217.2591829999983
+          },
+          {
+            "sequence": 14,
+            "waitMs": 1016.8925139999992,
+            "buildMs": 250.43182199999865
+          },
+          {
+            "sequence": 15,
+            "waitMs": 1266.451862,
+            "buildMs": 307.5327640000014
+          },
+          {
+            "sequence": 16,
+            "waitMs": 1573.1079610000015,
+            "buildMs": 257.2026479999986
+          },
+          {
+            "sequence": 17,
+            "waitMs": 1829.4774280000001,
+            "buildMs": 255.9878520000002
+          },
+          {
+            "sequence": 18,
+            "waitMs": 612.214054,
+            "buildMs": 280.5452610000011
+          },
+          {
+            "sequence": 19,
+            "waitMs": 890.7124440000007,
+            "buildMs": 282.93711900000017
+          },
+          {
+            "sequence": 20,
+            "waitMs": 1171.6242160000002,
+            "buildMs": 429.4101359999986
+          },
+          {
+            "sequence": 21,
+            "waitMs": 1599.7159360000005,
+            "buildMs": 414.2709020000002
+          },
+          {
+            "sequence": 22,
+            "waitMs": 2012.5935530000006,
+            "buildMs": 220.07784100000026
+          },
+          {
+            "sequence": 23,
+            "waitMs": 739.2072850000004,
+            "buildMs": 233.6218489999992
+          },
+          {
+            "sequence": 24,
+            "waitMs": 964.044629,
+            "buildMs": 278.364286
+          },
+          {
+            "sequence": 25,
+            "waitMs": 1230.6746029999995,
+            "buildMs": 259.19065899999987
+          },
+          {
+            "sequence": 26,
+            "waitMs": 1481.2500999999993,
+            "buildMs": 300.4531619999998
+          },
+          {
+            "sequence": 27,
+            "waitMs": 1779.1032720000003,
+            "buildMs": 369.7680959999998
+          },
+          {
+            "sequence": 28,
+            "waitMs": 687.0728749999998,
+            "buildMs": 282.00212099999953
+          },
+          {
+            "sequence": 29,
+            "waitMs": 968.0148130000016,
+            "buildMs": 250.84931499999948
+          },
+          {
+            "sequence": 30,
+            "waitMs": 1217.6501399999997,
+            "buildMs": 199.66689499999848
+          },
+          {
+            "sequence": 31,
+            "waitMs": 1416.1747030000006,
+            "buildMs": 205.2791070000003
+          },
+          {
+            "sequence": 32,
+            "waitMs": 1620.3500839999997,
+            "buildMs": 189.73817299999973
+          },
+          {
+            "sequence": 33,
+            "waitMs": 310.7750269999997,
+            "buildMs": 176.77730300000076
+          },
+          {
+            "sequence": 34,
+            "waitMs": 485.6377370000009,
+            "buildMs": 184.49883299999965
+          },
+          {
+            "sequence": 35,
+            "waitMs": 668.9406949999993,
+            "buildMs": 201.36361599999873
+          },
+          {
+            "sequence": 36,
+            "waitMs": 867.3901900000001,
+            "buildMs": 219.59031099999993
+          },
+          {
+            "sequence": 37,
+            "waitMs": 1085.9453510000003,
+            "buildMs": 283.8995369999993
+          },
+          {
+            "sequence": 38,
+            "waitMs": 1368.8644569999997,
+            "buildMs": 215.28000799999973
+          },
+          {
+            "sequence": 39,
+            "waitMs": 85.07899200000065,
+            "buildMs": 247.07863799999905
+          },
+          {
+            "sequence": 40,
+            "waitMs": 329.9039079999984,
+            "buildMs": 287.10362499999974
+          },
+          {
+            "sequence": 41,
+            "waitMs": 614.6721870000001,
+            "buildMs": 222.43431000000055
+          },
+          {
+            "sequence": 42,
+            "waitMs": 834.9948430000004,
+            "buildMs": 216.05934400000115
+          },
+          {
+            "sequence": 43,
+            "waitMs": 1048.9974070000007,
+            "buildMs": 255.38544199999887
+          },
+          {
+            "sequence": 44,
+            "waitMs": 1302.2371860000003,
+            "buildMs": 178.40691399999923
+          },
+          {
+            "sequence": 45,
+            "waitMs": 1478.5568999999996,
+            "buildMs": 179.59400599999935
+          },
+          {
+            "sequence": 46,
+            "waitMs": 135.5763020000013,
+            "buildMs": 173.78505700000096
+          },
+          {
+            "sequence": 47,
+            "waitMs": 308.24029599999994,
+            "buildMs": 230.89830699999948
+          },
+          {
+            "sequence": 48,
+            "waitMs": 538.2336739999992,
+            "buildMs": 189.89525499999945
+          },
+          {
+            "sequence": 50,
+            "waitMs": 771.4114499999996,
+            "buildMs": 1686.481907999998
+          },
+          {
+            "sequence": 51,
+            "waitMs": 2457.064699999999,
+            "buildMs": 183.60112200000003
+          },
+          {
+            "sequence": 52,
+            "waitMs": 2638.9696839999997,
+            "buildMs": 151.99145299999873
+          }
+        ],
+        "servedLoop": {
+          "p95Ms": 6.418959000000541,
+          "maxMs": 49.612591999999495,
+          "stalls": []
+        },
+        "activation": {
+          "completed": true,
+          "ms": 2988,
+          "eventLoopMaxMs": 552.2159160000001
+        },
+        "writes": {
+          "latencies": [],
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedLatencies": [],
+        "busy": 0,
+        "timeoutRetirements": 0,
+        "projectionWorker": {
+          "spawns": 1,
+          "pidStable": true
+        },
+        "queue": {
+          "maxWaiting": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "appointedAt": 1791870418891,
+        "adoptedAt": 1791870420758,
+        "adopted": {
+          "codex:fixture-id-1": 2171040,
+          "codex:fixture-id-2": 2171078,
+          "codex:fixture-id-3": 2171107,
+          "codex:fixture-id-4": 2171134
+        },
+        "runtimeRpc": {
+          "requests": 1069,
+          "timeouts": 0,
+          "failures": 0,
+          "maxMs": 265,
+          "latencies": [
+            1.7384259999998903,
+            0.8878649999996924,
+            1.4339959999997518,
+            14.073491999999533,
+            0.6547279999995226,
+            0.31253600000036386,
+            0.9168300000001182,
+            11.94130800000039,
+            67.06461500000114,
+            24.39215200000035,
+            1.432983000000604,
+            0.37143499999911,
+            0.8159580000010465,
+            0.2802429999992455,
+            1.1514719999995577,
+            0.5036479999998846,
+            0.9698889999999665,
+            0.6268179999988206,
+            0.9001229999994393,
+            0.45704900000055204,
+            0.9043860000001587,
+            2.881251999999222,
+            1.2383840000002238,
+            0.47880499999882886,
+            0.6272969999990892,
+            0.19572499999958382,
+            0.7373750000006112,
+            0.22188199999982317,
+            0.7239429999990534,
+            0.3016889999998966,
+            0.8568359999990207,
+            0.3162030000003142,
+            0.7372340000001714,
+            0.381891999999425,
+            0.6658720000014,
+            0.4802850000014587,
+            0.7084319999994477,
+            0.28369999999995343,
+            0.9648209999995743,
+            0.15108800000052724,
+            0.6673219999993307,
+            0.23546899999928428,
+            1.0426520000000892,
+            0.36560000000099535,
+            1.1405769999983022,
+            0.7656580000002577,
+            0.8911900000020978,
+            0.33810799999992014
+          ]
+        },
+        "slowSteps": [],
+        "log": [
+          "release b appointed",
+          "release b waiting: 3751:-/- 3752:-/- 3753:-/- 3754:-/-",
+          "release b started worker 3751 as 2171040",
+          "release b started worker 3752 as 2171078",
+          "release b started worker 3753 as 2171107",
+          "release b started worker 3754 as 2171134",
+          "release b re-hosted 4 worker(s) 1867ms after its appointment"
+        ]
+      }
+    },
+    "earlierGate": {
+      "checkedAt": "2026-10-13T05:39:48.767Z",
+      "runtime": "bun 1.4.0",
+      "bounds": {
+        "firstBoot": {
+          "registryOpenMs": 2000,
+          "firstSnapshotMs": 2000,
+          "firstUsableMs": 10000,
+          "eventLoopMaxMs": 1000
+        },
+        "activation": {
+          "durationMs": 15000,
+          "eventLoopMaxMs": 1500
+        },
+        "grantWrite": {
+          "p95Ms": 350,
+          "maxMs": 500
+        },
+        "eventLoop": {
+          "p95Ms": 50,
+          "maxMs": 500
+        },
+        "projectionWorker": {
+          "coldMs": 8000,
+          "warmP95Ms": 1000,
+          "warmMaxMs": 2000
+        },
+        "scopeRequests": {
+          "p95Ms": 5000,
+          "maxMs": 10000,
+          "maxQueueDepth": 8
+        },
+        "handover": {
+          "successorReadyMs": 15000,
+          "adoptionMs": 15000,
+          "workerProgressGapMs": 20000
+        },
+        "runtimeRpc": {
+          "p95Ms": 250,
+          "maxMs": 2000
+        },
+        "browser": {
+          "readyMs": 10000,
+          "filesP95Ms": 5000,
+          "filesMaxMs": 10000,
+          "apiMaxMs": 10000,
+          "bootLagMaxMs": 1000,
+          "lagP95Ms": 50,
+          "lagMaxMs": 500,
+          "inputMs": 500,
+          "serverBootLoopMaxMs": 1000,
+          "serverLoopP95Ms": 50,
+          "serverLoopMaxMs": 500
+        }
+      },
+      "measurements": {
+        "dataset": {
+          "scale": 1,
+          "rows": 30036,
+          "coldRows": 27836,
+          "payloadBytes": 96604975,
+          "transcripts": 320,
+          "seedMs": 5243
+        },
+        "firstBoot": {
+          "registryOpenMs": 104,
+          "firstSnapshotMs": 543,
+          "coldProjectionMs": 4403,
+          "firstUsableMs": 5356,
+          "eventLoopMaxMs": 609,
+          "coldBuild": {
+            "sequence": 1,
+            "buildMs": 2293.4
+          }
+        },
+        "activation": {
+          "incumbentMs": 3409,
+          "successorMs": 3186,
+          "eventLoopMaxMs": 466
+        },
+        "grantWrites": {
+          "count": 289,
+          "p50Ms": 3.2,
+          "p95Ms": 11.1,
+          "maxMs": 138.4,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "externalWrites": {
+          "count": 478,
+          "p50Ms": 3,
+          "p95Ms": 8.7,
+          "maxMs": 127.5,
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedOperationReads": {
+          "count": 128,
+          "p50Ms": 0.9,
+          "p95Ms": 1.4,
+          "maxMs": 11.1
+        },
+        "eventLoop": {
+          "p95Ms": 8.6,
+          "maxMs": 193.2
+        },
+        "projection": {
+          "warmBuilds": {
+            "count": 127,
+            "p50Ms": 231,
+            "p95Ms": 462.5,
+            "maxMs": 1877.1
+          },
+          "queueWait": {
+            "count": 129,
+            "p50Ms": 1025,
+            "p95Ms": 2373.1,
+            "maxMs": 3056.9
+          }
+        },
+        "scopeRequests": {
+          "count": 184,
+          "p50Ms": 142.4,
+          "p95Ms": 1141.1,
+          "maxMs": 2474,
+          "scopes": 8,
+          "failures": 0,
+          "maxQueueDepth": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "worker": {
+          "spawns": 1,
+          "timeoutRetirements": 0,
+          "pidStable": true
+        },
+        "stability": {
+          "rounds": 21,
+          "responses": 168,
+          "emptyResponses": 0,
+          "missingRows": 0,
+          "extraRows": 0,
+          "reattributedRows": 0,
+          "missingPins": 0
+        },
+        "handover": {
+          "successor": {
+            "completed": true,
+            "exitCode": 0,
+            "signal": null,
+            "readyMs": 6375,
+            "registryOpenMs": 96,
+            "snapshotMs": 715,
+            "firstProjectionMs": 3554,
+            "archived": 250,
+            "grantMismatches": 0,
+            "adoptionMs": 2091,
+            "adopted": 4
+          },
+          "switched": true,
+          "demotionExitCode": 0,
+          "servingRelease": "successor",
+          "serving": {
+            "requests": 104,
+            "failures": 0
+          }
+        },
+        "workers": {
+          "count": 4,
+          "rehosted": 4,
+          "answering": 4,
+          "progressGapMaxMs": 3016,
+          "lostProgress": 0,
+          "repeatedProgress": 0,
+          "failedPings": 0
+        },
+        "sqliteBusy": 0,
+        "runtimeTimeouts": 0,
+        "runtimeRpc": {
+          "requests": 2285,
+          "p95Ms": 8.7,
+          "maxMs": 301,
+          "timeouts": 0,
+          "failures": 0,
+          "hostAlive": true
+        },
+        "deliveryEvidence": {
+          "pending": 16,
+          "uncertain": 8,
+          "preserved": true
+        },
+        "browser": {
+          "views": 8,
+          "writes": {
+            "count": 961,
+            "p95Ms": 7,
+            "maxMs": 88,
+            "failures": 0
+          },
+          "readyMaxMs": 8833,
+          "filesP95Ms": 2036,
+          "filesMaxMs": 2777,
+          "filesErrors": 0,
+          "viewsWithoutAnswerDuringWrites": 0,
+          "apiMaxMs": 3076,
+          "apiMaxRoute": "/api/runtime/snapshot",
+          "apiErrors": 0,
+          "apiFirstError": null,
+          "apiUnfinished": 0,
+          "bootLagMaxMs": 705,
+          "lagP95Ms": 5,
+          "lagMaxMs": 200,
+          "inputMaxMs": 133,
+          "inputsMin": 2,
+          "selectionsLost": 0,
+          "staleNotices": 0,
+          "server": {
+            "samples": 2213,
+            "bootMaxMs": 1175.4,
+            "p95Ms": 10.7,
+            "maxMs": 164.5
+          }
+        }
+      },
+      "breaches": [
+        "server event-loop delay while the browser views opened 1175.4ms exceeds 1000ms"
+      ],
+      "ok": false,
+      "detail": "server event-loop delay while the browser views opened 1175.4ms exceeds 1000ms",
+      "log": [
+        "dataset 30036 rows, 27836 cold, 320 transcripts, seeded in 5243ms",
+        "runtime host 2054069 answering",
+        "release A ready in 9655ms and hosting 4 live workers",
+        "baseline rows per scope: 330,330,330,330,330,330,330,330",
+        "warm operation measured; starting release B",
+        "release B ready in 6375ms; serving target switched",
+        "release B re-hosted 4 worker(s) 2091ms after the switch",
+        "release A: release a appointed",
+        "release A: release a started worker 3751 as 2055193",
+        "release A: release a started worker 3752 as 2055210",
+        "release A: release a started worker 3753 as 2055232",
+        "release A: release a started worker 3754 as 2055252",
+        "release A: release a re-hosted 4 worker(s) 3358ms after its appointment",
+        "release A: release a demoted",
+        "release B: release b appointed",
+        "release B: release b waiting: 3751:-/- 3752:-/- 3753:-/- 3754:-/-",
+        "release B: release b started worker 3751 as 2058925",
+        "release B: release b started worker 3752 as 2058945",
+        "release B: release b started worker 3753 as 2058974",
+        "release B: release b started worker 3754 as 2058987",
+        "release B: release b re-hosted 4 worker(s) 2030ms after its appointment",
+        "event loop while serving: release A {\"p95Ms\":8.572487999997975,\"maxMs\":193.20676900000035,\"stalls\":[{\"at\":1791870015372,\"ms\":120},{\"at\":1791870023580,\"ms\":193},{\"at\":1791870024908,\"ms\":153},{\"at\":1791870025358,\"ms\":121}]}, release B {\"p95Ms\":3.125670999997965,\"maxMs\":65.4384370000007,\"stalls\":[]}",
+        "release A steps of 100ms or more: grant-bearing write 138ms at 1791870024893; grant-bearing write 127ms at 1791870025358; runtime-host call 213ms at 1791870026947",
+        "warm builds: release A {\"count\":69,\"p50Ms\":258,\"p95Ms\":500.3,\"maxMs\":598.9}, release B {\"count\":58,\"p50Ms\":191,\"p95Ms\":376.6,\"maxMs\":1877.1}",
+        "runtime host calls: {\"requests\":2285,\"p95Ms\":8.7,\"maxMs\":301,\"timeouts\":0,\"failures\":0,\"hostAlive\":true}",
+        "activations: release A {\"completed\":true,\"ms\":3409,\"eventLoopMaxMs\":194.67776400000002}, release B {\"completed\":true,\"ms\":3186,\"eventLoopMaxMs\":465.8732919999993}",
+        "browser: the server's structured-host startup is ready",
+        "browser view 0: slowest [{\"route\":\"/api/runtime/snapshot\",\"files\":false,\"status\":200,\"ms\":3038,\"queuedMs\":22,\"firstByteMs\":3022,\"at\":4814},{\"route\":\"/api/resources\",\"files\":false,\"status\":200,\"ms\":2972,\"queuedMs\":680,\"firstByteMs\":2970,\"at\":6294}]",
+        "browser view 1: slowest [{\"route\":\"/api/runtime/snapshot\",\"files\":false,\"status\":200,\"ms\":3003,\"queuedMs\":1,\"firstByteMs\":3001,\"at\":4823},{\"route\":\"/api/resources\",\"files\":false,\"status\":200,\"ms\":2972,\"queuedMs\":260,\"firstByteMs\":2970,\"at\":6282}]",
+        "browser view 2: slowest [{\"route\":\"/api/runtime/snapshot\",\"files\":false,\"status\":200,\"ms\":3019,\"queuedMs\":1,\"firstByteMs\":3001,\"at\":4821},{\"route\":\"/api/resources\",\"files\":false,\"status\":200,\"ms\":2974,\"queuedMs\":681,\"firstByteMs\":2971,\"at\":6280}]",
+        "browser view 3: slowest [{\"route\":\"/api/runtime/snapshot\",\"files\":false,\"status\":200,\"ms\":3076,\"queuedMs\":3,\"firstByteMs\":3043,\"at\":4790},{\"route\":\"/api/resources\",\"files\":false,\"status\":200,\"ms\":3012,\"queuedMs\":720,\"firstByteMs\":3010,\"at\":6241}]",
+        "browser view 4: slowest [{\"route\":\"/api/runtime/snapshot\",\"files\":false,\"status\":200,\"ms\":3059,\"queuedMs\":3,\"firstByteMs\":3042,\"at\":4736},{\"route\":\"/api/resources\",\"files\":false,\"status\":200,\"ms\":3030,\"queuedMs\":263,\"firstByteMs\":3027,\"at\":6180}]",
+        "browser view 5: slowest [{\"route\":\"/api/resources\",\"files\":false,\"status\":200,\"ms\":2971,\"queuedMs\":577,\"firstByteMs\":2968,\"at\":6240},{\"route\":\"/api/runtime/snapshot\",\"files\":false,\"status\":200,\"ms\":2961,\"queuedMs\":0,\"firstByteMs\":2943,\"at\":4840}]",
+        "browser view 6: slowest [{\"route\":\"/api/runtime/snapshot\",\"files\":false,\"status\":200,\"ms\":2757,\"queuedMs\":1,\"firstByteMs\":2743,\"at\":4899},{\"route\":\"/api/files\",\"files\":true,\"status\":200,\"ms\":2720,\"queuedMs\":302,\"firstByteMs\":2663,\"at\":6479}]",
+        "browser view 7: slowest [{\"route\":\"/api/runtime/snapshot\",\"files\":false,\"status\":200,\"ms\":2961,\"queuedMs\":83,\"firstByteMs\":2943,\"at\":4679},{\"route\":\"/api/resources\",\"files\":false,\"status\":200,\"ms\":2910,\"queuedMs\":437,\"firstByteMs\":2906,\"at\":6141}]",
+        "browser: the server's event loop {\"samples\":2213,\"bootMaxMs\":1175.4,\"p95Ms\":10.7,\"maxMs\":164.5}; delays of 100ms or more: 130ms at 1791870050614, 106ms at 1791870050739, 118ms at 1791870051161, 190ms at 1791870051361, 229ms at 1791870054996, 251ms at 1791870055258, 571ms at 1791870055838, 269ms at 1791870056117, 303ms at 1791870056430, 164ms at 1791870056605, 459ms at 1791870057157, 920ms at 1791870058087, 134ms at 1791870058231, 118ms at 1791870058359, 1175ms at 1791870059545, 761ms at 1791870060316, 172ms at 1791870060498, 438ms at 1791870060945, 118ms at 1791870061074, 102ms at 1791870074657, 164ms at 1791870089715"
+      ]
+    },
+    "earlierGateProcessReports": {
+      "release-a-report.json": {
+        "completed": true,
+        "name": "a",
+        "registryOpenMs": 103.584026,
+        "snapshotMs": 542.733654,
+        "firstProjectionMs": 4402.838320000001,
+        "firstUsableMs": 5355.526192,
+        "bootLoopMaxMs": 609.155418,
+        "readyMs": 9654.929344,
+        "exitPath": "demoted",
+        "samples": [
+          {
+            "sequence": 1,
+            "waitMs": 0.14743300000009185,
+            "buildMs": 2293.418543
+          },
+          {
+            "sequence": 2,
+            "waitMs": 9.978771000000052,
+            "buildMs": 378.78600000000006
+          },
+          {
+            "sequence": 3,
+            "waitMs": 385.97937600000114,
+            "buildMs": 197.51045400000112
+          },
+          {
+            "sequence": 4,
+            "waitMs": 582.3659980000011,
+            "buildMs": 180.36313399999926
+          },
+          {
+            "sequence": 5,
+            "waitMs": 761.4771469999996,
+            "buildMs": 174.62226999999984
+          },
+          {
+            "sequence": 6,
+            "waitMs": 934.6949779999995,
+            "buildMs": 185.4607620000006
+          },
+          {
+            "sequence": 7,
+            "waitMs": 1119.223820000001,
+            "buildMs": 200.16140600000108
+          },
+          {
+            "sequence": 8,
+            "waitMs": 1318.1356719999985,
+            "buildMs": 212.53987600000073
+          },
+          {
+            "sequence": 9,
+            "waitMs": 1529.7190030000002,
+            "buildMs": 213.6369480000012
+          },
+          {
+            "sequence": 10,
+            "waitMs": 17.9740780000011,
+            "buildMs": 444.6218779999999
+          },
+          {
+            "sequence": 11,
+            "waitMs": 460.0192389999993,
+            "buildMs": 256.92121899999984
+          },
+          {
+            "sequence": 12,
+            "waitMs": 713.9646240000002,
+            "buildMs": 264.8051180000002
+          },
+          {
+            "sequence": 13,
+            "waitMs": 975.8733389999998,
+            "buildMs": 385.999679999999
+          },
+          {
+            "sequence": 14,
+            "waitMs": 1359.5107960000005,
+            "buildMs": 349.67617900000005
+          },
+          {
+            "sequence": 15,
+            "waitMs": 1706.8945170000006,
+            "buildMs": 288.6887660000011
+          },
+          {
+            "sequence": 16,
+            "waitMs": 1993.3048559999988,
+            "buildMs": 320.83614300000045
+          },
+          {
+            "sequence": 17,
+            "waitMs": 2311.8739699999987,
+            "buildMs": 462.4535189999988
+          },
+          {
+            "sequence": 18,
+            "waitMs": 1291.6059130000012,
+            "buildMs": 301.51541700000234
+          },
+          {
+            "sequence": 19,
+            "waitMs": 1591.1243140000006,
+            "buildMs": 243.9967859999997
+          },
+          {
+            "sequence": 20,
+            "waitMs": 1832.5691930000012,
+            "buildMs": 289.87032100000215
+          },
+          {
+            "sequence": 21,
+            "waitMs": 2120.1017840000004,
+            "buildMs": 298.0453699999998
+          },
+          {
+            "sequence": 22,
+            "waitMs": 930.0196539999997,
+            "buildMs": 229.58148800000345
+          },
+          {
+            "sequence": 23,
+            "waitMs": 1158.7153429999998,
+            "buildMs": 226.84108399999968
+          },
+          {
+            "sequence": 24,
+            "waitMs": 1384.6905729999999,
+            "buildMs": 238.98433899999873
+          },
+          {
+            "sequence": 25,
+            "waitMs": 1622.7274319999997,
+            "buildMs": 190.35449900000094
+          },
+          {
+            "sequence": 26,
+            "waitMs": 325.78690500000084,
+            "buildMs": 226.48203800000192
+          },
+          {
+            "sequence": 27,
+            "waitMs": 551.2179389999983,
+            "buildMs": 228.27971400000024
+          },
+          {
+            "sequence": 28,
+            "waitMs": 777.6120129999981,
+            "buildMs": 254.3741000000009
+          },
+          {
+            "sequence": 29,
+            "waitMs": 1030.9734529999987,
+            "buildMs": 218.16359300000113
+          },
+          {
+            "sequence": 30,
+            "waitMs": 1248.2512019999995,
+            "buildMs": 217.39586899999995
+          },
+          {
+            "sequence": 31,
+            "waitMs": 1464.7888620000012,
+            "buildMs": 259.6876110000012
+          },
+          {
+            "sequence": 32,
+            "waitMs": 221.80053300000145,
+            "buildMs": 299.11345600000277
+          },
+          {
+            "sequence": 33,
+            "waitMs": 519.6704620000019,
+            "buildMs": 240.91919499999858
+          },
+          {
+            "sequence": 34,
+            "waitMs": 759.7429699999993,
+            "buildMs": 258.00277500000084
+          },
+          {
+            "sequence": 35,
+            "waitMs": 1016.7845540000017,
+            "buildMs": 285.7169470000008
+          },
+          {
+            "sequence": 36,
+            "waitMs": 1301.4904739999984,
+            "buildMs": 370.57560300000114
+          },
+          {
+            "sequence": 37,
+            "waitMs": 1670.1630499999992,
+            "buildMs": 343.5083760000016
+          },
+          {
+            "sequence": 38,
+            "waitMs": 2012.6666100000002,
+            "buildMs": 248.4901690000006
+          },
+          {
+            "sequence": 39,
+            "waitMs": 760.5155290000002,
+            "buildMs": 274.87160700000095
+          },
+          {
+            "sequence": 40,
+            "waitMs": 1031.2626500000006,
+            "buildMs": 210.6208630000001
+          },
+          {
+            "sequence": 41,
+            "waitMs": 1240.1912860000011,
+            "buildMs": 196.27098299999852
+          },
+          {
+            "sequence": 42,
+            "waitMs": 1434.7642540000015,
+            "buildMs": 226.31034200000067
+          },
+          {
+            "sequence": 43,
+            "waitMs": 1658.8716510000013,
+            "buildMs": 347.69964900000195
+          },
+          {
+            "sequence": 44,
+            "waitMs": 528.6415970000016,
+            "buildMs": 247.23725800000102
+          },
+          {
+            "sequence": 45,
+            "waitMs": 773.8080590000027,
+            "buildMs": 253.2823559999997
+          },
+          {
+            "sequence": 46,
+            "waitMs": 1024.986111000002,
+            "buildMs": 243.09492200000022
+          },
+          {
+            "sequence": 47,
+            "waitMs": 1265.2821070000027,
+            "buildMs": 386.71046299999944
+          },
+          {
+            "sequence": 48,
+            "waitMs": 1650.174326999997,
+            "buildMs": 273.3867449999998
+          },
+          {
+            "sequence": 49,
+            "waitMs": 1922.5915290000012,
+            "buildMs": 348.0489200000011
+          },
+          {
+            "sequence": 50,
+            "waitMs": 766.7061480000011,
+            "buildMs": 375.4188379999978
+          },
+          {
+            "sequence": 51,
+            "waitMs": 1139.9897450000026,
+            "buildMs": 598.921322000002
+          },
+          {
+            "sequence": 52,
+            "waitMs": 1736.8025249999992,
+            "buildMs": 400.31913200000054
+          },
+          {
+            "sequence": 53,
+            "waitMs": 2134.8084210000015,
+            "buildMs": 500.3418190000011
+          },
+          {
+            "sequence": 54,
+            "waitMs": 2630.4077709999983,
+            "buildMs": 539.6297200000008
+          },
+          {
+            "sequence": 55,
+            "waitMs": 1643.0088370000012,
+            "buildMs": 420.3676169999999
+          },
+          {
+            "sequence": 56,
+            "waitMs": 2058.2893440000007,
+            "buildMs": 460.36438199999975
+          },
+          {
+            "sequence": 57,
+            "waitMs": 2516.5524210000003,
+            "buildMs": 541.2575829999987
+          },
+          {
+            "sequence": 58,
+            "waitMs": 3056.851770000001,
+            "buildMs": 316.49880100000155
+          },
+          {
+            "sequence": 59,
+            "waitMs": 1890.6171670000003,
+            "buildMs": 252.53340800000296
+          },
+          {
+            "sequence": 60,
+            "waitMs": 2134.991374999998,
+            "buildMs": 241.2090640000024
+          },
+          {
+            "sequence": 61,
+            "waitMs": 2373.1378229999973,
+            "buildMs": 203.92782499999885
+          },
+          {
+            "sequence": 62,
+            "waitMs": 974.5757740000008,
+            "buildMs": 280.53203700000086
+          },
+          {
+            "sequence": 63,
+            "waitMs": 1251.0122899999988,
+            "buildMs": 276.9446019999996
+          },
+          {
+            "sequence": 64,
+            "waitMs": 1527.0593410000001,
+            "buildMs": 238.34735299999738
+          },
+          {
+            "sequence": 65,
+            "waitMs": 1764.5050190000002,
+            "buildMs": 203.61718200000178
+          },
+          {
+            "sequence": 66,
+            "waitMs": 549.8058380000002,
+            "buildMs": 200.69852100000207
+          },
+          {
+            "sequence": 67,
+            "waitMs": 749.5159810000005,
+            "buildMs": 271.3599749999994
+          },
+          {
+            "sequence": 68,
+            "waitMs": 1019.9378740000029,
+            "buildMs": 206.63047799999913
+          },
+          {
+            "sequence": 69,
+            "waitMs": 1225.6658659999994,
+            "buildMs": 211.61220400000093
+          },
+          {
+            "sequence": 70,
+            "waitMs": 1430.6820880000014,
+            "buildMs": 417.64210000000094
+          }
+        ],
+        "servedLoop": {
+          "p95Ms": 8.572487999997975,
+          "maxMs": 193.20676900000035,
+          "stalls": [
+            {
+              "at": 1791870015372,
+              "ms": 120
+            },
+            {
+              "at": 1791870023580,
+              "ms": 193
+            },
+            {
+              "at": 1791870024908,
+              "ms": 153
+            },
+            {
+              "at": 1791870025358,
+              "ms": 121
+            }
+          ]
+        },
+        "activation": {
+          "completed": true,
+          "ms": 3409,
+          "eventLoopMaxMs": 194.67776400000002
+        },
+        "writes": {
+          "latencies": [
+            10.143301000000065,
+            1.7976009999983944,
+            2.184946999999738,
+            2.5769209999998566,
+            2.6945899999991525,
+            6.754172999999355,
+            3.2171309999994264,
+            3.5273980000001757,
+            2.3694180000002234,
+            1.9035059999987425,
+            5.48225900000034,
+            8.923886999999013,
+            3.117706000000908,
+            2.6834749999998166,
+            4.871251999999004,
+            3.1455519999999524,
+            3.282693000001018,
+            2.8759699999991426,
+            1.99416999999994,
+            4.98086499999954,
+            3.7770419999997102,
+            4.1550979999992705,
+            2.4468740000011167,
+            7.60422600000129,
+            5.713019000000713,
+            14.613004000000728,
+            11.137155000000348,
+            7.382864999999583,
+            7.718317999999272,
+            3.398558000000776,
+            2.4882999999990716,
+            2.850188000000344,
+            2.7648079999999027,
+            2.647917000000234,
+            3.704074999999648,
+            4.180812000000515,
+            3.5592820000001666,
+            3.147877999999764,
+            3.1576900000000023,
+            2.47163399999954,
+            4.8145150000000285,
+            3.081739999999627,
+            3.551087000001644,
+            5.145023000000947,
+            2.312985000000481,
+            6.145284999998694,
+            3.895340999999462,
+            3.3532220000015514,
+            8.742095999999947,
+            2.7799269999995886,
+            5.257485000000088,
+            4.8064290000002075,
+            3.1361390000001848,
+            3.171566000000894,
+            5.898214000000735,
+            7.658003999998982,
+            2.2270820000012463,
+            2.8511880000005476,
+            4.0994099999988975,
+            4.522998000000371,
+            3.6608459999988554,
+            4.456201999999394,
+            7.790944000000309,
+            4.52907199999936,
+            3.1487900000010995,
+            2.9330489999993006,
+            5.527621000001091,
+            5.088474000000133,
+            3.247871000003215,
+            2.039734000001772,
+            3.0305420000004233,
+            3.5564380000032543,
+            2.8754470000021684,
+            3.2933970000012778,
+            3.449240000001737,
+            2.4088489999994636,
+            5.316962999997486,
+            3.3982820000019274,
+            2.1193270000003395,
+            2.6494459999994433,
+            2.5648110000001907,
+            4.220728000000236,
+            3.9393529999979364,
+            3.171682000000146,
+            1.90295100000003,
+            2.3650930000003427,
+            2.330473999998503,
+            2.115873000002466,
+            2.4936710000001767,
+            2.5938940000014554,
+            3.271720999997342,
+            1.8508349999974598,
+            2.5638920000019425,
+            1.9275980000020354,
+            3.3422219999993104,
+            2.4117700000024342,
+            2.3868970000003173,
+            2.745474999999715,
+            2.818420999999944,
+            2.381547999997565,
+            2.3912229999987176,
+            7.749182999999903,
+            3.1787549999971816,
+            2.8833620000004885,
+            2.0800320000016654,
+            2.818230000000767,
+            3.2656740000020363,
+            3.041073000000324,
+            2.1830020000015793,
+            2.497559999999794,
+            3.2606140000025334,
+            1.8804239999990386,
+            5.252475000001141,
+            7.264691000000312,
+            3.1481999999996333,
+            2.210306999997556,
+            2.1920810000010533,
+            4.345267000000604,
+            3.572260000000824,
+            3.2286199999980454,
+            4.10049699999945,
+            3.586477000000741,
+            2.824878000003082,
+            2.230751999999484,
+            2.0570540000007895,
+            2.7790139999997336,
+            2.1238069999999425,
+            1.827818000001571,
+            2.8140149999999267,
+            3.2233800000030897,
+            2.394324000000779,
+            2.2466329999988375,
+            3.126027999998769,
+            7.08113400000002,
+            3.2011509999974805,
+            5.003784000000451,
+            3.8727989999970305,
+            2.8420729999998002,
+            5.683945000000676,
+            3.2169409999987693,
+            2.6056920000009995,
+            3.480865999998059,
+            2.9388599999983853,
+            3.116993999999977,
+            5.884829000002355,
+            3.123262999997678,
+            2.312126000000717,
+            5.507625000002008,
+            3.798758999997517,
+            2.593819000001531,
+            2.923646999999619,
+            2.2349280000016734,
+            4.292375999997603,
+            2.1328150000008463,
+            2.4678579999999783,
+            2.5755349999999453,
+            2.3906149999966146,
+            2.2633520000017597,
+            4.19863500000065,
+            2.6514750000023923,
+            4.028158999997686,
+            3.665949999998702,
+            2.9107760000006238,
+            2.197104999999283,
+            2.9653790000011213,
+            2.8143979999986186,
+            4.003146999999444,
+            4.023579000000609,
+            3.135145999996894,
+            3.0998919999983627,
+            2.511266000001342,
+            2.7990960000024643,
+            3.136058000000048,
+            3.054584999998042,
+            3.355249999996886,
+            5.42462699999669,
+            2.6838190000016766,
+            3.013574000000517,
+            4.21684500000265,
+            4.096729000000778,
+            3.852877000001172,
+            4.326130000001285,
+            2.759406000001036,
+            2.999035000000731,
+            3.963449999999284,
+            4.0709810000007565,
+            3.4769729999970878,
+            4.248153000000457,
+            3.38350999999966,
+            2.9922550000010233,
+            3.1715670000012324,
+            2.8707759999997506,
+            2.937044000002061,
+            2.7801169999984268,
+            3.9979520000015327,
+            2.5604220000022906,
+            4.257142999998905,
+            11.375684999999066,
+            3.0869240000029095,
+            3.4800490000016,
+            2.718394999999873,
+            3.5754720000004454,
+            4.177589999999327,
+            11.118149999998423,
+            3.5774600000004284,
+            18.6597929999989,
+            10.185370999999577,
+            2.6708680000010645,
+            17.090316999998322,
+            3.5497419999992417,
+            3.7066669999985606,
+            8.277681000003213,
+            2.321162000000186,
+            3.134106999998039,
+            3.4541620000018156,
+            10.681392000002234,
+            3.3780019999976503,
+            2.9681190000010247,
+            15.381692999999359,
+            2.701383999999962,
+            2.567285000000993,
+            3.107408999996551,
+            12.42324600000211,
+            3.053418999999849,
+            3.5295729999998002,
+            2.9732920000024023,
+            4.70530399999916,
+            2.9941130000006524,
+            3.0057989999986603,
+            3.8695279999992636,
+            31.026628999999957,
+            3.5029839999988326,
+            4.292341000000306,
+            13.461490000001504,
+            18.93477200000052,
+            4.19612099999722,
+            3.295697999998083,
+            13.184668999998394,
+            3.657681999997294,
+            2.2153890000008687,
+            4.35208799999964,
+            7.35276199999862,
+            5.876116999999795,
+            3.4115879999990284,
+            9.849190999997518,
+            3.81485099999918,
+            3.583742999999231,
+            3.744942000001174,
+            3.771199999999226,
+            6.463485999996919,
+            3.2357669999983045,
+            3.333679999999731,
+            3.448907000001782,
+            4.611222999999882,
+            4.169870999998238,
+            3.212648000000627,
+            3.5845249999983935,
+            4.0370550000006915,
+            3.243235999998433,
+            3.2763969999978144,
+            2.657406999998784,
+            2.1955850000013015,
+            3.3177340000002005,
+            5.194612999999663,
+            3.071531000001414,
+            2.9558209999995597,
+            138.40952299999844,
+            86.48540100000173,
+            70.6499049999984,
+            127.1391229999972,
+            2.715881999996782,
+            2.8184560000008787,
+            1.7009800000014366,
+            2.824481999999989,
+            2.6346269999994547,
+            2.5344680000016524,
+            3.058442000001378,
+            3.6061869999975897,
+            3.3051890000024287,
+            2.6820260000022245,
+            2.6726640000015323,
+            3.0374469999987923,
+            3.1866420000005746,
+            3.4452349999992293,
+            2.302901999999449,
+            2.8476300000002084,
+            2.2887119999977585,
+            5.874101000001247,
+            2.429200000002311
+          ],
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedLatencies": [
+          1.3259219999999914,
+          1.3946089999990363,
+          0.8481439999995928,
+          0.9754389999998239,
+          0.7827379999998811,
+          0.804892000000109,
+          0.9507950000006531,
+          0.731127999999444,
+          0.8328830000009475,
+          0.7419659999995929,
+          0.8744950000000244,
+          1.2182329999996,
+          1.0043939999995928,
+          0.6044529999999213,
+          0.7501679999986663,
+          0.9640789999994013,
+          0.9941139999991719,
+          1.1450860000004468,
+          1.22754999999961,
+          1.042859999999564,
+          0.9071339999991324,
+          1.4164760000003298,
+          1.2565420000009908,
+          0.668798999999126,
+          1.0172359999996843,
+          0.9343189999999595,
+          1.2930280000000494,
+          1.1909289999985049,
+          1.437259999998787,
+          0.571871000000101,
+          1.1303919999991194,
+          0.6374770000002172,
+          7.022644999997283,
+          10.963150999999925,
+          1.3292040000014822,
+          1.1027800000010757,
+          0.9214140000003681,
+          0.7677870000006806,
+          0.9510449999979755,
+          0.9150779999981751,
+          0.7516059999979916,
+          0.9082359999993059,
+          0.8638129999999364,
+          0.9872020000002522,
+          0.8634550000024319,
+          0.791482000000542,
+          0.8095140000004903,
+          1.0438849999991362,
+          0.61529999999766,
+          0.5932829999983369,
+          1.1270179999992251,
+          0.6641359999994165,
+          0.8873430000021472,
+          0.6061719999997877,
+          1.5582739999990736,
+          0.7949910000024829,
+          0.7343299999993178,
+          4.110243000002811,
+          0.9342510000024049,
+          0.5798590000013064,
+          1.2024099999980535,
+          0.9083060000011756,
+          0.7814150000012887,
+          0.7721999999994296,
+          0.6016210000016144,
+          1.1055840000008175,
+          0.7097140000005311,
+          0.7151830000002519,
+          0.8367980000002717,
+          0.48656600000322214,
+          0.8052300000017567,
+          0.7441140000009909,
+          1.3107339999987744,
+          0.7490619999989576,
+          0.9101300000002084,
+          0.7546139999976731,
+          0.8990839999969467,
+          0.9866789999978209,
+          1.2496009999995294,
+          1.0585490000012214,
+          1.1773930000017572,
+          1.149625999998534,
+          0.9394719999982044,
+          0.9914310000021942,
+          1.044237999998586,
+          0.8276980000009644,
+          1.0085250000011001,
+          1.1254230000013195,
+          0.8759269999973185,
+          0.9961939999993774,
+          0.9985730000007607,
+          1.641961999997875,
+          1.0436620000000403,
+          0.799245999998675,
+          1.052586000001611,
+          0.9204879999997502,
+          11.064698999998654,
+          0.6665009999996983,
+          0.9703410000001895,
+          1.1891819999982545,
+          0.9179430000003777,
+          1.2342979999993986,
+          1.0949800000016694,
+          0.7112699999997858,
+          1.0630009999986214,
+          1.2586210000008577,
+          1.0599139999976614,
+          1.2488250000023982,
+          1.0030040000019653,
+          1.3190470000008645,
+          0.7649060000003374,
+          0.8020160000014585,
+          1.2849269999969692,
+          0.9704290000008768,
+          0.7761159999972733,
+          0.9890369999993709,
+          1.3366779999996652,
+          0.8593199999995704,
+          0.9756229999984498,
+          0.7329019999997399,
+          0.7351229999985662,
+          0.5524379999988014,
+          0.809081999999762,
+          1.070759000001999,
+          0.9803209999990941,
+          0.7834560000010242,
+          0.590330000002723,
+          0.5037780000020575
+        ],
+        "busy": 0,
+        "timeoutRetirements": 0,
+        "projectionWorker": {
+          "spawns": 1,
+          "pidStable": true
+        },
+        "queue": {
+          "maxWaiting": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "appointedAt": 1791870001150,
+        "adoptedAt": 1791870004508,
+        "adopted": {
+          "codex:fixture-id-1": 2055193,
+          "codex:fixture-id-2": 2055210,
+          "codex:fixture-id-3": 2055232,
+          "codex:fixture-id-4": 2055252
+        },
+        "runtimeRpc": {
+          "requests": 1213,
+          "timeouts": 0,
+          "failures": 0,
+          "maxMs": 218,
+          "latencies": [
+            14.840314000000944,
+            0.8812980000002426,
+            0.955167000000074,
+            0.39740700000038487,
+            0.8292630000014469,
+            0.2481000000007043,
+            2.264601999999286,
+            0.42099899999993795,
+            0.715251999999964,
+            0.262908000000607,
+            0.9323269999986223,
+            0.35056799999983923,
+            0.7609110000012151,
+            0.27273199999945064,
+            0.9488789999995788,
+            0.25007799999912095,
+            1.891378000000259,
+            0.6449800000009418,
+            0.8865870000008726,
+            0.26753399999870453,
+            2.1969370000006165,
+            1.0583699999988312,
+            1.194772999999259,
+            0.461725999997725,
+            1.0099740000005113,
+            0.30419899999833433,
+            0.7838589999992109,
+            0.26356400000076974,
+            0.9903049999993527,
+            0.4947470000006433,
+            0.7641560000010941,
+            0.4118010000020149,
+            0.8933340000003227,
+            0.29001200000129757,
+            4.032245000002149,
+            0.4592010000014852,
+            2.1000759999988077,
+            0.5843350000031933,
+            0.806390999998257,
+            0.2821719999992638,
+            0.9092940000009548,
+            0.31485199999951874,
+            1.146656000000803,
+            0.4615319999975327,
+            0.9205299999994168,
+            0.3960450000013225,
+            0.8278500000014901,
+            0.2552660000001197,
+            1.1370009999991453,
+            0.32333199999993667,
+            1.1603360000008252,
+            0.5104409999985364,
+            0.8652929999989283,
+            0.2988289999993867,
+            1.0070159999995667,
+            0.3523220000024594,
+            1.0801429999992251,
+            0.31949600000007194,
+            1.1227660000004107,
+            0.29582299999674433,
+            6.55876999999964,
+            8.69283500000165,
+            1.092623000000458,
+            0.41909300000043004,
+            1.1294269999998505,
+            0.4235000000007858,
+            33.679002999997465,
+            7.377483000000211,
+            1.3541929999992135,
+            0.30814200000168057,
+            1.9700389999998151,
+            0.4841519999972661,
+            5.548037000000477,
+            0.33857200000056764,
+            1.4875840000022436,
+            0.4133849999998347,
+            0.8210579999977199,
+            0.2683530000031169,
+            212.62430400000085,
+            10.791519999998854
+          ]
+        },
+        "slowSteps": [
+          {
+            "step": "grant-bearing write",
+            "at": 1791870024893,
+            "ms": 138
+          },
+          {
+            "step": "grant-bearing write",
+            "at": 1791870025358,
+            "ms": 127
+          },
+          {
+            "step": "runtime-host call",
+            "at": 1791870026947,
+            "ms": 213
+          }
+        ],
+        "demotionExitCode": 0,
+        "log": [
+          "release a appointed",
+          "release a started worker 3751 as 2055193",
+          "release a started worker 3752 as 2055210",
+          "release a started worker 3753 as 2055232",
+          "release a started worker 3754 as 2055252",
+          "release a re-hosted 4 worker(s) 3358ms after its appointment",
+          "release a demoted"
+        ]
+      },
+      "release-b-report.json": {
+        "completed": true,
+        "name": "b",
+        "registryOpenMs": 95.914255,
+        "snapshotMs": 715.096157,
+        "archived": 250,
+        "grantMismatches": 0,
+        "firstProjectionMs": 3554.0214210000004,
+        "firstUsableMs": 4725.257234,
+        "bootLoopMaxMs": 913.0025949999999,
+        "readyMs": 6374.978512,
+        "exitPath": "stopped",
+        "samples": [
+          {
+            "sequence": 1,
+            "waitMs": 0.09542099999998754,
+            "buildMs": 3523.8779560000003
+          },
+          {
+            "sequence": 2,
+            "waitMs": 19.890260000000126,
+            "buildMs": 495.4314720000002
+          },
+          {
+            "sequence": 3,
+            "waitMs": 511.6357859999998,
+            "buildMs": 343.32050900000013
+          },
+          {
+            "sequence": 4,
+            "waitMs": 852.1376840000003,
+            "buildMs": 211.16554299999916
+          },
+          {
+            "sequence": 5,
+            "waitMs": 1060.8739850000002,
+            "buildMs": 376.57463199999984
+          },
+          {
+            "sequence": 6,
+            "waitMs": 1434.8671450000002,
+            "buildMs": 346.98090200000115
+          },
+          {
+            "sequence": 7,
+            "waitMs": 1779.1095100000002,
+            "buildMs": 230.9663189999992
+          },
+          {
+            "sequence": 8,
+            "waitMs": 2007.1495950000008,
+            "buildMs": 182.89371799999935
+          },
+          {
+            "sequence": 9,
+            "waitMs": 2187.6271639999995,
+            "buildMs": 206.62411900000006
+          },
+          {
+            "sequence": 10,
+            "waitMs": 6.288710999999239,
+            "buildMs": 239.755079999999
+          },
+          {
+            "sequence": 11,
+            "waitMs": 245.01862299999993,
+            "buildMs": 236.17866099999992
+          },
+          {
+            "sequence": 12,
+            "waitMs": 480.2292149999994,
+            "buildMs": 264.98817299999973
+          },
+          {
+            "sequence": 13,
+            "waitMs": 744.3400089999996,
+            "buildMs": 336.9560099999999
+          },
+          {
+            "sequence": 14,
+            "waitMs": 1080.5162410000012,
+            "buildMs": 195.0017029999999
+          },
+          {
+            "sequence": 15,
+            "waitMs": 1274.6446639999995,
+            "buildMs": 220.69275599999855
+          },
+          {
+            "sequence": 16,
+            "waitMs": 1494.5336609999995,
+            "buildMs": 175.90680299999985
+          },
+          {
+            "sequence": 17,
+            "waitMs": 1672.2881970000017,
+            "buildMs": 207.5696540000008
+          },
+          {
+            "sequence": 18,
+            "waitMs": 401.45471200000065,
+            "buildMs": 187.56088399999862
+          },
+          {
+            "sequence": 19,
+            "waitMs": 588.0576390000006,
+            "buildMs": 190.9681010000004
+          },
+          {
+            "sequence": 20,
+            "waitMs": 777.7706180000005,
+            "buildMs": 256.7816329999987
+          },
+          {
+            "sequence": 21,
+            "waitMs": 1033.6038540000009,
+            "buildMs": 185.47935799999868
+          },
+          {
+            "sequence": 22,
+            "waitMs": 1218.2190549999996,
+            "buildMs": 295.68852999999945
+          },
+          {
+            "sequence": 23,
+            "waitMs": 18.140842000000703,
+            "buildMs": 303.5620409999992
+          },
+          {
+            "sequence": 24,
+            "waitMs": 319.4175410000007,
+            "buildMs": 206.37209599999915
+          },
+          {
+            "sequence": 25,
+            "waitMs": 523.5267490000006,
+            "buildMs": 202.3420100000003
+          },
+          {
+            "sequence": 26,
+            "waitMs": 723.6680079999987,
+            "buildMs": 166.34696599999916
+          },
+          {
+            "sequence": 27,
+            "waitMs": 885.8450539999994,
+            "buildMs": 145.16216800000075
+          },
+          {
+            "sequence": 28,
+            "waitMs": 1028.9909640000005,
+            "buildMs": 148.20620099999906
+          },
+          {
+            "sequence": 29,
+            "waitMs": 1175.1867270000002,
+            "buildMs": 150.95955099999992
+          },
+          {
+            "sequence": 30,
+            "waitMs": 7.734657999999399,
+            "buildMs": 155.85607999999957
+          },
+          {
+            "sequence": 31,
+            "waitMs": 161.90224599999965,
+            "buildMs": 191.46418300000005
+          },
+          {
+            "sequence": 32,
+            "waitMs": 351.85798499999873,
+            "buildMs": 198.54391099999884
+          },
+          {
+            "sequence": 33,
+            "waitMs": 549.5128189999996,
+            "buildMs": 171.35520899999938
+          },
+          {
+            "sequence": 34,
+            "waitMs": 720.057777,
+            "buildMs": 187.46108699999968
+          },
+          {
+            "sequence": 35,
+            "waitMs": 906.6993839999996,
+            "buildMs": 235.29021499999908
+          },
+          {
+            "sequence": 36,
+            "waitMs": 1141.1114269999998,
+            "buildMs": 203.42401599999903
+          },
+          {
+            "sequence": 37,
+            "waitMs": 1343.6706990000002,
+            "buildMs": 186.51555800000096
+          },
+          {
+            "sequence": 38,
+            "waitMs": 26.68240700000024,
+            "buildMs": 152.9001049999988
+          },
+          {
+            "sequence": 39,
+            "waitMs": 177.4977859999999,
+            "buildMs": 166.28930299999956
+          },
+          {
+            "sequence": 40,
+            "waitMs": 341.7709750000013,
+            "buildMs": 164.6866799999989
+          },
+          {
+            "sequence": 41,
+            "waitMs": 504.6981659999983,
+            "buildMs": 162.24681599999894
+          },
+          {
+            "sequence": 42,
+            "waitMs": 665.0522149999997,
+            "buildMs": 162.10084799999822
+          },
+          {
+            "sequence": 43,
+            "waitMs": 825.3411429999996,
+            "buildMs": 149.33539999999994
+          },
+          {
+            "sequence": 44,
+            "waitMs": 972.9581449999987,
+            "buildMs": 162.49087599999984
+          },
+          {
+            "sequence": 45,
+            "waitMs": 6.329890999997588,
+            "buildMs": 169.83253200000036
+          },
+          {
+            "sequence": 46,
+            "waitMs": 175.22738200000094,
+            "buildMs": 187.57602499999848
+          },
+          {
+            "sequence": 47,
+            "waitMs": 361.94953800000076,
+            "buildMs": 232.053820000001
+          },
+          {
+            "sequence": 48,
+            "waitMs": 593.0788240000002,
+            "buildMs": 213.26808000000165
+          },
+          {
+            "sequence": 49,
+            "waitMs": 805.4131010000019,
+            "buildMs": 179.3277820000003
+          },
+          {
+            "sequence": 50,
+            "waitMs": 983.8047619999998,
+            "buildMs": 161.14009799999985
+          },
+          {
+            "sequence": 51,
+            "waitMs": 1144.1841239999994,
+            "buildMs": 174.5385129999995
+          },
+          {
+            "sequence": 52,
+            "waitMs": 1317.9321950000012,
+            "buildMs": 165.46350000000166
+          },
+          {
+            "sequence": 53,
+            "waitMs": 6.22701799999777,
+            "buildMs": 282.72792599999957
+          },
+          {
+            "sequence": 54,
+            "waitMs": 287.9339919999984,
+            "buildMs": 148.0871449999977
+          },
+          {
+            "sequence": 56,
+            "waitMs": 454.66598200000226,
+            "buildMs": 1877.0777540000017
+          },
+          {
+            "sequence": 57,
+            "waitMs": 2330.900329,
+            "buildMs": 295.0967039999996
+          },
+          {
+            "sequence": 58,
+            "waitMs": 2625.197142000001,
+            "buildMs": 196.9324489999999
+          },
+          {
+            "sequence": 59,
+            "waitMs": 2821.347035999999,
+            "buildMs": 139.99469000000317
+          },
+          {
+            "sequence": 60,
+            "waitMs": 2960.386814999998,
+            "buildMs": 160.68242199999804
+          }
+        ],
+        "servedLoop": {
+          "p95Ms": 3.125670999997965,
+          "maxMs": 65.4384370000007,
+          "stalls": []
+        },
+        "activation": {
+          "completed": true,
+          "ms": 3186,
+          "eventLoopMaxMs": 465.8732919999993
+        },
+        "writes": {
+          "latencies": [],
+          "mismatches": 0,
+          "failures": 0
+        },
+        "keyedLatencies": [],
+        "busy": 0,
+        "timeoutRetirements": 0,
+        "projectionWorker": {
+          "spawns": 1,
+          "pidStable": true
+        },
+        "queue": {
+          "maxWaiting": 8,
+          "refused": 0,
+          "expired": 0
+        },
+        "appointedAt": 1791870026547,
+        "adoptedAt": 1791870028577,
+        "adopted": {
+          "codex:fixture-id-1": 2058925,
+          "codex:fixture-id-2": 2058945,
+          "codex:fixture-id-3": 2058974,
+          "codex:fixture-id-4": 2058987
+        },
+        "runtimeRpc": {
+          "requests": 1072,
+          "timeouts": 0,
+          "failures": 0,
+          "maxMs": 301,
+          "latencies": [
+            11.110270000000128,
+            2.7682510000004186,
+            0.970101999999315,
+            0.5170029999999315,
+            0.8911259999995309,
+            0.3223619999998846,
+            3.423152999999729,
+            2.587354000000232,
+            2.962353000000803,
+            0.9896079999998619,
+            0.7350530000003346,
+            0.26743200000055367,
+            1.1668049999989307,
+            0.5072300000010728,
+            37.22244200000023,
+            0.7808039999999892,
+            0.732639999998355,
+            0.20444700000007288,
+            5.634251999999833,
+            0.43388899999990826,
+            0.8011769999993703,
+            0.29855099999986123,
+            0.8176439999988361,
+            0.23686300000008487,
+            0.7561390000009851,
+            0.26995800000076997,
+            0.9324710000000778,
+            0.15727999999944586,
+            0.7009610000004614,
+            0.21171999999933178,
+            0.6999439999999595,
+            0.24708099999952537,
+            0.9251329999988229,
+            0.3242759999993723,
+            0.9384780000000319,
+            0.386250999999902,
+            0.8759850000005827,
+            0.3115429999998014,
+            0.6167770000010933,
+            0.13734199999998964,
+            0.8426790000012261,
+            0.28759200000058627,
+            0.7184689999994589,
+            0.26890300000013667,
+            0.86422500000117,
+            0.25422899999830406,
+            0.9203880000022764,
+            0.34687299999859533,
+            0.9675639999986743,
+            0.3663010000018403
+          ]
+        },
+        "slowSteps": [],
+        "log": [
+          "release b appointed",
+          "release b waiting: 3751:-/- 3752:-/- 3753:-/- 3754:-/-",
+          "release b started worker 3751 as 2058925",
+          "release b started worker 3752 as 2058945",
+          "release b started worker 3753 as 2058974",
+          "release b started worker 3754 as 2058987",
+          "release b re-hosted 4 worker(s) 2030ms after its appointment"
+        ]
+      }
+    }
+  },
+  "redaction": "Machine paths and UUID identifiers replaced consistently; numeric measurements and counts unchanged."
+}

@@ -22,7 +22,7 @@ export const delegationCreated = (id: string, offsetMs: number) =>
  * research note. A test decides their ordering, including transport loss. */
 export class FakeLiveProvider implements LiveProvider {
   readonly commands: LiveCommand[] = [];
-  readonly sessions: Array<{ id: string; locale: Locale; sdp: string }> = [];
+  readonly sessions: Array<{ id: string; locale: Locale; sdp: string; memory?: string }> = [];
   private readonly receivers = new Map<string, { event(value: unknown): void; lost(): void; tool?: LiveToolHandler }>();
   private readonly disconnected = new Set<string>();
   autoClose = true;
@@ -44,13 +44,13 @@ export class FakeLiveProvider implements LiveProvider {
     this.hangups.push(id);
     if (this.hangupFailures > 0) { this.hangupFailures -= 1; throw new Error("PROVIDER_ERROR"); }
   }
-  async create(_key: string, locale: Locale, sdp: string) {
+  async create(_key: string, locale: Locale, sdp: string, _projectName?: string, _project?: string, memory?: string) {
     const failure = this.createFailures.shift();
     if (failure === "refused") throw new Error("PROVIDER_REFUSED");
     const fallback = `live_fake_${this.sessions.length + 1}`;
     const answer = this.answer(fallback);
     const id = answer.id ?? fallback;
-    this.sessions.push({ id, locale, sdp });
+    this.sessions.push({ id, locale, sdp, ...(memory ? { memory } : {}) });
     if (failure === "lost") throw new Error("PROVIDER_ERROR");
     if (failure === "hang") return new Promise<never>(() => undefined);
     return { id, sdp: answer.sdp };

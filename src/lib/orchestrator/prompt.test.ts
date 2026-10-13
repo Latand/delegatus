@@ -80,8 +80,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 52, and a v51 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(52);
+test("the default mandate is at version 53, and a v52 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(53);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -119,7 +119,8 @@ test("the default mandate is at version 52, and a v51 seat reads as stale", () =
      asks; v49 keeps forms without a task and asks 3–7 on a task. v50
      shortens equivalent draft wording to keep the delivery reserve. v51
      retains the reviewed branch's refreshing fence alongside those rules. v52
-     combines them with automatic release control and incident holds. */
+     combines them with automatic release control and incident holds. v53
+     adds the machine-wide worker limit while retaining those rules. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -142,7 +143,8 @@ test("the default mandate is at version 52, and a v51 seat reads as stale", () =
   expect(orchestratorMandateStale(49)).toBe(true);
   expect(orchestratorMandateStale(50)).toBe(true);
   expect(orchestratorMandateStale(51)).toBe(true);
-  expect(orchestratorMandateStale(52)).toBe(false);
+  expect(orchestratorMandateStale(52)).toBe(true);
+  expect(orchestratorMandateStale(53)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("gives the shape, the outcome rule and what");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
@@ -209,6 +211,10 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   // v52 combines its release rule with main's refreshing fence.
   51: "16ededfd81b40430ab1f9d48abe8155b77411e725b5c478a28ae3d7d2a24d54b",
   52: "faa19a0588778962bad646ccf910e8fd68c7894fa09d5b62ce89c80819f3774a",
+  // The worker-limit branch independently used v49 with fingerprint
+  // a50133384753b7ad25d86b7792dcfa19ec54feb944776cbc4ebc93a62a7f2f22.
+  // v53 combines its worker-limit rule with main's mandate.
+  53: "28e34e893a3677250f71ccad3a56a58f0c5188a34e9eb6f9812910b465e1f5d6",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -894,7 +900,7 @@ test("the delivered default names no stack and teaches one verdict vocabulary (v
   /* The worker cap holds in every mode, in the scaffold's words. */
   /* A seat designated onto an existing conversation gets no scaffold, so the
      mandate names the default cap itself (review of #2301). */
-  expect(delivered).toContain("Keep no more workers running at once than your role parameters allow (3 when they name none), in every mode: each running lane and each live spawned agent counts as one.");
+  expect(delivered).toContain("Keep no more workers running at once than the worker limit each wake and get_orchestrator state, in every mode: each running lane and each live spawned agent counts as one.");
 });
 
 /* The operator, 2026-09-27: a friend who teases a little, speaks their way,
