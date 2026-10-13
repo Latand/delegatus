@@ -57,6 +57,7 @@ import {
 
 import type { AgentEngine, ResumeSpec } from "./cli";
 import {
+  IDENTITY_WAVE_MIGRATION,
   applyIdentityWaveMigration,
   stampOrchestratorLineage,
   type IdentityWaveMigrationInput,
@@ -6428,10 +6429,16 @@ export class AgentRegistry {
   }
 
   runIdentityWaveMigration(input: IdentityWaveMigrationInput, validatePreparedState?: () => void): IdentityWaveMigrationResult {
-    if (input.dryRun) {
-      return applyIdentityWaveMigration(clone(this.readOnlySnapshot()), { ...input, dryRun: true });
+    const snapshot = this.readOnlySnapshot();
+    // The durable marker ends this one-time migration. Read it before cloning
+    // retained history or taking a write lease: neither can change its answer.
+    if (snapshot.identityMigrations[IDENTITY_WAVE_MIGRATION]) {
+      return { dryRun: input.dryRun === true, alreadyCompleted: true, retitled: 0, rekeyed: 0, quarantinedRekeys: 0, edgesStamped: 0 };
     }
-    const observed = clone(this.readOnlySnapshot());
+    if (input.dryRun) {
+      return applyIdentityWaveMigration(clone(snapshot), { ...input, dryRun: true });
+    }
+    const observed = clone(snapshot);
     const prepared = clone(observed);
     let rekeys: Parameters<NonNullable<IdentityWaveMigrationInput["commitExternalPathRekeys"]>>[0] = [];
     const result = applyIdentityWaveMigration(prepared, { ...input, commitExternalPathRekeys: value => { rekeys = value; } });
