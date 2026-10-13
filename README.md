@@ -659,7 +659,13 @@ requester who is allowed to, perform one action at a time. **Full agent for
 the owner**, off by default on each target, runs the relay owner's requests
 as ordinary Delegatus agents with full access to this computer. The card
 shows each relay's state and, for each target, the engine, model and effort
-it answers with; answers are kept for 30 days. The protocol is in
+it answers with; answers are kept for 30 days. Polling refreshes the service’s
+features every five minutes and after an unknown-feature refusal. A claim is
+acknowledged before account selection or agent launch. The service journal
+records heartbeat attempts and results with request prefixes and fixed step
+names, withholding credentials and free-form progress text. A cancelled owner
+launch that has failed and has no remaining execution custody settles after
+a one-minute grace from the claim; uncertain or live work keeps its custody. The protocol is in
 [docs/design/relay.md](docs/design/relay.md).
 
 <a id="connect-an-orchestrator-through-mcp"></a>

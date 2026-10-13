@@ -35,7 +35,7 @@ const { PHONE_VOICE_STORAGE_KEY, readPhoneVoice, resetPhoneVoiceForTests, showPh
 
 const FAKE_KEY = ["fixture", "voice", "value", "42"].join("-");
 const settingsOf = (over: Partial<CompanionSettings> = {}): CompanionSettings => ({
-  enabled: false, backend: "api", monthlyCapUsd: 20, keySource: "missing", keyEnvironment: "OPENAI_API_KEY",
+  enabled: false, callMemory: true, backend: "api", monthlyCapUsd: 20, keySource: "missing", keyEnvironment: "OPENAI_API_KEY",
   month: "2026-10", usageUsd: 0, reservedUsd: 0, incomplete: false, uncertainSession: false, ...over,
 });
 
@@ -45,6 +45,7 @@ function routes(initial: CompanionSettings) {
   harness.setRoute((url, init) => {
     const path = new URL(url, "http://127.0.0.1:8898").pathname;
     const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : null;
+    if (path === "/api/voice-companion/memory") return jsonResponse({ calls: [] });
     if (path === "/api/voice-companion/settings") {
       if (body?.releaseUncertainSession === true) document.uncertainSession = false;
       else if (body) Object.assign(document, body);
@@ -151,6 +152,7 @@ test("on Codex, Talk with no key and a spent dollar cap asks the session route, 
   const settings = settingsOf({ enabled: true, backend: "codex", keySource: "missing", usageUsd: 25 });
   harness.setRoute((url) => {
     const path = new URL(url, "http://127.0.0.1:8898").pathname;
+    if (path === "/api/voice-companion/memory") return jsonResponse({ calls: [] });
     if (path === "/api/voice-companion/settings") return jsonResponse(settings);
     if (path === "/api/orchestrator/seat") return jsonResponse({ seat: null, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: false, previous: [], currentTask: null, all: null });
     if (path === "/api/voice-companion/session") return jsonResponse({ code: "CODEX_LIMIT_REACHED", resetsAt }, 409);
@@ -247,7 +249,8 @@ test("the settings rows: the switch reveals the choice of voice with the API cho
     const choice = section.querySelector<HTMLElement>("[role='radiogroup'][data-voice-companion-backend]")!;
     expect([...choice.querySelectorAll<HTMLInputElement>("input[type='radio']")].map((radio) => [radio.value, radio.checked])).toEqual([["api", true], ["codex", false]]);
     expect([choice.querySelector("[data-voice-backend='api'] label")!.textContent, choice.querySelector("[data-voice-backend='codex'] label")!.textContent]).toEqual(["Through the API (with a key)", "Codex V3 (subscription)"]);
-    expect(section.querySelectorAll("input, button, select")).toHaveLength(6);
+    expect(section.querySelectorAll("input, button, select")).toHaveLength(8);
+    expect(section.querySelector("[data-call-memory]")).not.toBeNull();
     expect(section.textContent).not.toMatch(/demo|демо/iu);
     expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ enabled: true }, { monthlyCapUsd: 35.5 }]);
 
@@ -271,7 +274,7 @@ test("the settings rows: the switch reveals the choice of voice with the API cho
     expect([...planBlock.querySelectorAll<HTMLElement>("[data-plan-figure]")].map((node) => [node.textContent, node.className.includes("font-semibold")])).toEqual([["23%", true], ["77%", true]]);
     expect([planBlock.firstElementChild!.className.includes("text-muted"), planBlock.lastElementChild!.className.includes("text-muted"), planBlock.children[1]!.className.includes("text-muted")]).toEqual([true, true, false]);
     expect(planBlock.textContent).not.toMatch(/AM|PM/u);
-    expect(section.querySelectorAll("input, button, select")).toHaveLength(3);
+    expect(section.querySelectorAll("input, button, select")).toHaveLength(5);
     expect(codex.textContent).not.toMatch(/\bkey\b|OpenAI|\$/iu);
     expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ enabled: true }, { monthlyCapUsd: 35.5 }, { backend: "codex" }]);
     expect(sessionCalls()).toEqual([]);
@@ -489,6 +492,7 @@ test("project switches and null context preserve the same live call, transcript 
   const emit = (payload: Payload) => events.push({ ...payload, version: 1, sessionId: "same-call", generation: 1, seq: ++seq, eventId: `same-${seq}`, atMs: seq } as CompanionEvent);
   harness.setRoute((url, init) => {
     const path = new URL(url, "http://localhost").pathname;
+    if (path === "/api/voice-companion/memory") return jsonResponse({ calls: [] });
     if (path === "/api/voice-companion/settings") return jsonResponse(settingsOf({ enabled: true, keySource: "file" }));
     if (path === "/api/orchestrator/seat") return jsonResponse({ seat: { project: "atlas", conversationId: "conversation_atlas", seatEpoch: 1, engine: "claude" }, exists: true });
     if (path !== "/api/voice-companion/session") return undefined;
@@ -534,6 +538,7 @@ for (const backend of ["codex", "api"] as const) test(`a ${backend} call that cl
   const emit = (payload: Payload) => events.push({ ...payload, version: 1, sessionId: "limit-call", generation: 1, seq: ++seq, eventId: `limit-${seq}`, atMs: seq } as CompanionEvent);
   harness.setRoute((url, init) => {
     const path = new URL(url, "http://localhost").pathname;
+    if (path === "/api/voice-companion/memory") return jsonResponse({ calls: [] });
     if (path === "/api/voice-companion/settings") return jsonResponse(settingsOf({ enabled: true, backend, keySource: backend === "api" ? "file" : "missing" }));
     if (path === "/api/orchestrator/seat") return jsonResponse({ seat: null, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: false, previous: [], currentTask: null, all: null });
     if (path !== "/api/voice-companion/session") return undefined;
@@ -1114,6 +1119,7 @@ test("phone: a project change, and a view with no project, keep the same head an
   const emit = (payload: Payload) => events.push({ ...payload, version: 1, sessionId: "phone-call", generation: 1, seq: ++seq, eventId: `phone-${seq}`, atMs: seq } as CompanionEvent);
   harness.setRoute((url, init) => {
     const path = new URL(url, "http://localhost").pathname;
+    if (path === "/api/voice-companion/memory") return jsonResponse({ calls: [] });
     if (path === "/api/voice-companion/settings") return jsonResponse(settingsOf({ enabled: true, keySource: "file" }));
     if (path === "/api/orchestrator/seat") return jsonResponse({ seat: { project: "atlas", conversationId: "conversation_atlas", seatEpoch: 1, engine: "claude" }, exists: true });
     if (path !== "/api/voice-companion/session") return undefined;

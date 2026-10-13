@@ -12,14 +12,14 @@ import { procBackend } from "@/lib/proc";
 import { accountManager } from "@/lib/accounts/manager";
 import { runEphemeralAgent, EphemeralProfileError } from "@/lib/agent/ephemeral";
 import type { HeadlessReviewRuntime } from "@/lib/agent/headless";
-import { relayCall, ExternalRelayError } from "./client";
+import { relayCall, ExternalRelayError, isUnknownFeatureRefusal } from "./client";
 import { completeRelayRequest, externalRelayTempRoot } from "./runner";
 import { reserveRun, dropRun, changeRun, readRunLedger, type PairedRelay } from "./store";
 import { readConversations, reserveConversations, releaseConversation, resetConversation, prepareConversationAccount, conversationCodexHome } from "./conversations";
 import { answerRecorder } from "./answers";
 import { answerProfileFor } from "./profile";
 import { answerSchema, type CompactRequest, type ExternalRelayCompletion, type CompactReason } from "./protocol";
-export async function runCompactRequest(relay: PairedRelay, request: CompactRequest, onFreed?: () => void, runtime?: HeadlessReviewRuntime & { timeoutMs?: number }): Promise<ExternalRelayCompletion | null> {
+export async function runCompactRequest(relay: PairedRelay, request: CompactRequest, onFreed?: () => void, runtime?: HeadlessReviewRuntime & { timeoutMs?: number; onUnknownFeature?: () => Promise<unknown> }): Promise<ExternalRelayCompletion | null> {
   const started = Date.now(); const requestId = request.request_id; const lease_id = request.lease_id;
   if (readRunLedger().runs.some((r) => r.requestId === requestId)) return null;
   const target = relay.targets.find((t) => t.id === request.target_id);
@@ -34,7 +34,7 @@ export async function runCompactRequest(relay: PairedRelay, request: CompactRequ
   const finish = async (body: ExternalRelayCompletion) => {
     const checked = checkedCompactCompletion(body); if (!checked) throw new Error("invalid compact completion");
     recorder?.finish({ outcome: `${body.outcome}:${"reason" in body ? body.reason : ""}`, answer: null, delivery: "unconfirmed", compaction });
-    const sent = await completeRelayRequest(relay, requestId, checked, () => heartbeatAt, stallMs);
+    const sent = await completeRelayRequest(relay, requestId, checked, () => heartbeatAt, stallMs, undefined, runtime?.onUnknownFeature);
     recorder?.recordDelivery({ outcome: `${sent.body.outcome}:${"reason" in sent.body ? sent.body.reason : ""}`, delivery: sent.delivery });
     return sent.body;
   };
@@ -44,7 +44,10 @@ export async function runCompactRequest(relay: PairedRelay, request: CompactRequ
   const beat = async () => {
     if (beating || lost) return; beating = true;
     try { await relayCall(relay.api_base, `/requests/${encodeURIComponent(requestId)}/heartbeat`, "POST", { lease_id, seq: ++seq, progress: null }, relay.credential); heartbeatAt = Date.now(); nextBeat = heartbeatAt + request.liveness.heartbeat_interval_s * 1000; }
-    catch (error) { if (error instanceof ExternalRelayError && (error.status === 404 || error.status === 409 && error.code === "lease_lost")) lose(); }
+    catch (error) {
+      if (isUnknownFeatureRefusal(error)) await runtime?.onUnknownFeature?.();
+      if (error instanceof ExternalRelayError && (error.status === 404 || error.status === 409 && error.code === "lease_lost")) lose();
+    }
     finally { beating = false; if (Date.now() - heartbeatAt > stallMs) lose(); }
   };
   if (!target?.engine || !target.model) return decline("not_configured");

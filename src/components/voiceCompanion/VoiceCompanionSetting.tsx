@@ -10,6 +10,7 @@ import { useLocale } from "@/lib/i18n";
 import { companionErrorMessage, limitResetText } from "@/lib/voiceCompanion/errors";
 
 import { callDuration, planName, planTone, planWindows, spendTone, voiceMoney, voiceMonth, windowName, windowTone } from "./CompanionSpend";
+import { CallMemorySetting } from "./CallMemorySetting";
 import { COMPANION_SETTINGS_EVENT } from "./hostSurfaces";
 
 export const OPEN_VOICE_COMPANION_SETTINGS_EVENT = "delegatus:open-voice-companion-settings";
@@ -190,6 +191,7 @@ export function VoiceCompanionSetting() {
           ) : null}
         </div>
       ) : null}
+      {settings ? <CallMemorySetting enabled={settings.callMemory ?? true} busy={busy} onChange={callMemory => void change({ callMemory })} /> : null}
       {error ? <p role="alert" className="mt-3 text-[13px] text-danger" data-voice-companion-setting-error={error}>{companionErrorMessage(error, speech)}</p> : null}
     </div>
   );
