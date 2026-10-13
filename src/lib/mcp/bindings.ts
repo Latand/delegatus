@@ -6101,18 +6101,20 @@ async function archiveConversationAction(
     }
   };
 
-  applyResolved(resolved.flatMap((target, index) => target ? [{ index, target }] : []));
-
+  const registryResolved = resolved.flatMap((target, index) => target ? [{ index, target }] : []);
+  const scanResolved: Array<{ index: number; target: ResolvedConversationArchiveTarget }> = [];
   const unresolvedIndexes = resolved.flatMap((target, index) => target ? [] : [index]);
   if (unresolvedIndexes.length > 0) {
     let files: readonly FileEntry[] | null = null;
     try {
       files = (await dependencies.completedFileScan()).snapshot.files;
-    } catch {
+    } catch (error) {
+      // Resolve the whole batch before any write so a pending scan can safely
+      // release admission and let the caller retry under the same key.
+      if (error instanceof McpUnadmittedRefusal) throw error;
       files = null;
     }
     throwIfCallEnded(context);
-    const scanResolved: Array<{ index: number; target: ResolvedConversationArchiveTarget }> = [];
     for (const index of unresolvedIndexes) {
       const target = files ? resolveArchiveTargetFromFiles(inputs[index]!, files) : null;
       if (target) {
@@ -6128,8 +6130,9 @@ async function archiveConversationAction(
         outcome: files ? "not-found" : "resolution-failed",
       };
     }
-    applyResolved(scanResolved);
   }
+  applyResolved(registryResolved);
+  applyResolved(scanResolved);
 
   const operationId = mcpOperationId("conversation_action", requestId(args));
   const projects = [...resolvedProjects];

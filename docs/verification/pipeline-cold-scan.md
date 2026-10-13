@@ -14,6 +14,12 @@ Read-only `journalctl --user -u delegatus.service` observations:
 
 These are log occurrences, with different windows from the original report. The stack points to `.next/server/chunks/85097.js`. No live process or state was changed.
 
+### Renewed failures without a restart
+
+The operator reported renewed failures around 00:12Z on 2026-10-13, including three orchestrator sends (#2808) and stage notes saying a Delegatus restart interrupted an attempt. Read-only follow-up found no later deployment: the serving release remains `40451576`. The service reports `NRestarts=0`. Its launcher started on 2026-10-11; the current Viewer process started at **2026-10-12 23:37:30Z**, before the reported window, and remained alive at 00:27Z. The journal has no Viewer startup or relaunch marker around 00:12Z. A Viewer generation restart at that time is therefore not supported by the process evidence. The deployed pipeline engine's restart wording can describe an earlier recorded turn cut or a changed host epoch, so the time a stage note appeared does not date a Viewer restart.
+
+The renewed journal errors already appear at 00:10Z. Incomplete-error line counts per UTC minute from 00:12 through 00:24 were **9 / 4 / 4 / 2 / 2 / 8 / 0 / 12 / 10 / 6 / 4 / 7 / 6**. At 00:26:57Z, the persisted snapshot was **complete**, generation **143**, containing **547 files**, written at **00:25:38Z**; it was still the latest complete snapshot at 00:27:42Z. Later incomplete errors continued through **00:29:29Z**, and another complete snapshot was persisted at **00:33:09Z**. At 00:35Z the Viewer PID, its start time and the persisted scan epoch were unchanged. The scanner does complete during this failure window. The throw happens only after a pass returns `complete: false`, so these failures demonstrate incomplete returned generations rather than one indefinitely pending walk. Which transcript invalidates those generations remains unidentified; no live scan was started to investigate it. The fix has no elapsed-time cutoff and also handles later incomplete membership refreshes after a complete generation exists.
+
 ### Throw site and callers
 
 - `src/lib/scanner/scanCache.ts`: `fileScanRefreshPromise` rejects a returned snapshot whose `complete` is false (line 553 on the observed base). The legacy-refresh and pinned-refresh paths enforce the same contract at lines 492 and 638. The rejected generation is never published as a completed snapshot.
@@ -40,7 +46,7 @@ This observation was committed and published in the draft PR before the regressi
 
 `completedFileScan({ wait: false })` starts or joins the shared generation and keeps it alive independently of the caller. It serves an existing completed snapshot once catalog membership is confirmed; a changed membership defers the read until its new generation completes. Without one it returns a typed incomplete-inventory error; failed, incomplete snapshots remain unpersisted. Unexpected scan errors are retained and propagated on the next read. The default waiting contract and the archive/history implementations are unchanged.
 
-The controller defers the scan-dependent flow phase, records that deferral in its journal, and continues pipeline settlement and the independent sweeps. Successful ticks answer 200. The MCP completed-scan adapter returns `scan_incomplete`, `retryable: true`, `retryAfterSeconds: 5`, with “still scanning, retry in 5 s”. Admission and fresh binding preserve that pre-dispatch refusal without claiming a receipt; the same request key can be retried. Targeted reads keep their existing signalled catalog budget and fallback.
+The controller defers the scan-dependent flow phase, records that deferral in its journal, and continues pipeline settlement and the independent sweeps. Successful ticks answer 200. The MCP completed-scan adapter returns `scan_incomplete`, `retryable: true`, `retryAfterSeconds: 5`, with “still scanning, retry in 5 s” and explicit `resend: safe`, `duplicateRisk: false`. Admission and fresh binding preserve that pre-dispatch refusal without claiming a receipt; the same request key can be retried. Targeted reads keep their existing signalled catalog budget and fallback. Board and transcript reads retain the named scan refusal. Archive batches resolve all scan-dependent members before writing any known member, and release their receipt on the same refusal.
 
 Failing-first checks on the unchanged implementation:
 
@@ -61,13 +67,29 @@ The rebuilt Viewer ran under the owned gate runner with a fresh private HOME/XDG
 
 The initial request includes route loading. A complete **320-file** snapshot was persisted **1,044 ms after repair**. The full run took **14,266 ms**, including four deliberately spaced incomplete-phase requests. **Zero tick 500s; zero incomplete-scan phase/watchdog failure lines.** The private journal instead records the scan-dependent phase being skipped. The run stopped only its recorded child PID. No deployment was performed.
 
+## Sustained incomplete-scan verification
+
+After the amended production build, a fresh isolated Viewer held the unfinished synthetic row for **660,001 ms (eleven minutes)**. It used the same 30,036-row / 27,836-archived / 320-transcript fixture, private HOME/XDG/TMPDIR/state, disabled synthetic workers and an ephemeral port. Seed: **4,297 ms**; server readiness: **254 ms**. The build and rehearsal ran under separate owned deadlines so each remained within the runner's fifteen-minute execution bound.
+
+| Phase | Requests | HTTP status | Durations, ms |
+| --- | ---: | --- | --- |
+| Incomplete row held for eleven minutes | 22 | all 200 | first 2,413; subsequent 7–22 |
+| Repaired row, scan still running | 4 | all 200 | 9 / 7 / 7 / 6 |
+| Complete snapshot available | 4 | all 200 | 12 / 18 / 15 / 14 |
+
+**30/30 ticks answered 200**, including incomplete ticks at **602,662 ms** and **632,680 ms**. No complete snapshot was published while the row remained unfinished. After repair the complete **320-file** snapshot appeared in **1,030 ms**. Full run: **666,644 ms**. The private journal had **zero incomplete-scan failure lines and zero HTTP-500 lines** and logged scan-dependent phase deferrals. The rehearsal exited successfully and stopped only its recorded Viewer PID.
+
 ## Checks
 
 All test files ran by explicit path, each with private state, HOME, XDG and temporary roots, through `scripts/gate-slot.sh`:
 
-- Controller cold-scan regressions: 3 pass; MCP cold-scan regressions: 2 pass (send, ordinary admission and changed catalog membership); tick route: 1 pass; controller: 9 pass.
-- MCP server: 89 pass; orchestrator send recovery: 6 pass; files route: 131 pass.
+- Controller cold-scan regressions: 3 pass; MCP cold-scan regressions: 6 pass (send with safe resend, ordinary admission, changed catalog membership, board and transcript reads, archive receipt release and mixed-batch preflight); tick route: 1 pass; controller: 9 pass.
+- MCP bindings: 107 pass; MCP server: 89 pass; orchestrator send recovery: 6 pass; files route: 131 pass.
 - Real scanner cache: 17 pass, 2 failures also present on base `81589bce79f96127a7db188d4f378f24e382f9e2`. The project's baseline comparator reports **0 new failures**. The two pre-existing failures concern persisted Codex tail rereads and multi-megabyte warm starts.
 - Production build and MCP bundle: pass. Full TypeScript and touched-file ESLint pass; the publication gate also verifies them.
 
 Registry archive/index/projection code from #2762 is unchanged. The same large-history fixture completes through the real scanner and production routes; the existing files and receipt checks preserve their behavior. Voice reads, voice memory, and gate/CI implementation were left untouched.
+
+## Related report
+
+Closes #2808. The send regression uses a designated seat addressing another project, the production scan adapter, actual binding and recovery service, and a SQLite receipt store. The confirmed scan read is in project resolution before the claim; the direct send dispatcher does not call `entryForPath`. It proves `scan_incomplete`, retryable `not-executed`, five-second guidance, `resend: safe`, no control write and no consumed claim, then normal validation under the same key after completion. The amended checks failed first for missing safe-resend guidance, generic board/transcript error codes, archive receipt consumption, and a mixed batch accessing its board before resolving unknown members.

@@ -12,6 +12,7 @@ export async function completedScanForMcp(options?: Parameters<typeof completedF
     if (!isFileScanIncompleteError(error)) throw error;
     throw new McpUnadmittedRefusal(`still scanning, retry in ${FILE_SCAN_RETRY_SECONDS} s`, {
       code: "scan_incomplete", status: 503, retryable: true, retryAfterSeconds: FILE_SCAN_RETRY_SECONDS,
+      resend: "safe", duplicateRisk: false,
     });
   }
 }
