@@ -159,7 +159,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
     await Promise.all([client.connect(a), server.connect(b)]);
     fs.writeFileSync(process.env.POSITION_RACE_READY!, "ready");
     while (!fs.existsSync(process.env.POSITION_RACE_GATE!)) await Bun.sleep(5);
-    Date.now = () => 1788220800000;
+    // Keep task timestamps fixed while lease deadlines use the real clock.
     Date.prototype.toISOString = () => "2026-09-01T00:00:00.000Z";
     const result = await client.callTool({ name: "update_task", arguments: args });
     console.log(JSON.stringify(result.structuredContent));
@@ -176,12 +176,13 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
   const deadline = Date.now() + 15000;
   while (!children.every(c => fs.existsSync(c.ready)) && Date.now() < deadline) await Bun.sleep(10);
   fs.writeFileSync(gate, "go");
-  const results = await Promise.all(children.map(async ({ child }) => {
-    const output = await new Response(child.stdout).text();
-    const error = await new Response(child.stderr).text();
-    expect([await child.exited, error]).toEqual([0, ""]);
+  const observations = await Promise.all(children.map(({ child }) => Promise.all([
+    child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+  ])));
+  const results = observations.map(([code, output, error]) => {
+    expect([code, error]).toEqual([0, ""]);
     return JSON.parse(output);
-  }));
+  });
   expect(results.filter(r => r.ok)).toHaveLength(1);
   expect(results.find(r => !r.ok)).toMatchObject({ code: "TASK_REVISION_MISMATCH", retryable: false });
 }, 20000);
