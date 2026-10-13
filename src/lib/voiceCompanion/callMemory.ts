@@ -25,7 +25,8 @@ export function summaryInput(entries: readonly TranscriptEntry[], previous: Call
   const history = rows.findIndex(row => row.kind === "tool" && row.data.name === "relay_owner_history" && ["done", "running"].includes(String(row.data.status)));
   let cut = rows.length;
   if (history >= 0) {
-    const delegation = rows.findIndex(row => row.kind === "delegation" && row.data.delegationId === rows[history].data.delegationId);
+    const delegation = rows.findIndex(row => row.kind === "delegation" && (row.data.delegationId === rows[history].data.delegationId
+      || Number.isSafeInteger(rows[history].data.sourceTurn) && row.data.sourceTurn === rows[history].data.sourceTurn));
     cut = 0;
     if (delegation >= 0 && delegation < history) {
       let last = delegation - 1;
@@ -117,7 +118,7 @@ export class CallMemory {
   clear(starter: SessionStarter, id?: string): void {
     const sessions = Object.values(this.storage.read().sessions).filter(session => sameCallOwner(starter, session.startedBy) && (!id || session.id === id));
     if (id && !sessions.length) throw new Error("SESSION_UNAVAILABLE");
-    for (const session of sessions) this.records.writeSummary(session.id, { ...this.empty(session), state: "cleared" });
+    for (const session of sessions) this.save(session.id, { ...this.empty(session), state: "cleared" });
   }
   checkpoint(id: string): void {
     try { this.checkpointReady(id); } catch { /* An unreadable journal is shown in settings, never hangs up a call. */ }
@@ -127,7 +128,7 @@ export class CallMemory {
     if (!session || session.closed) return;
     const previous = this.records.summary(id);
     const input = summaryInput(this.records.read(id).entries, previous);
-    const last = previous ? session.createdAt + (this.records.read(id).entries.find(row => row.order === previous.through)?.atMs ?? 0) : session.createdAt;
+    const last = previous ? session.createdAt + (this.records.read(id).entries.find(row => row.kind === "summary")?.atMs ?? 0) : session.createdAt;
     if (this.now() - last >= 300_000 && input.turns >= 4) this.trigger(id);
   }
   recover(): void {
@@ -140,7 +141,7 @@ export class CallMemory {
         const summary = this.records.summary(session.id);
         if (summary?.pending && summary.attempts >= 3) {
           const failed = { ...summary }; delete failed.pending;
-          this.records.writeSummary(session.id,failed);
+          this.save(session.id,failed);
         } else if (!summary || summary.pending) this.trigger(session.id);
       }
     } catch { /* A bad journal refuses its memory without holding startup. */ }
@@ -164,6 +165,7 @@ export class CallMemory {
     this.running.set(id,promise);
   }
   async drain(): Promise<void> { while (this.running.size) await Promise.all([...this.running.values()]); }
+  private save(id: string, summary: CallSummary): void { this.records.writeSummary(id,summary,this.now()); }
   private empty(session: StoredSession): CallSummary {
     return { version: 1, state: "failed", through: -1, startedAt: session.createdAt, endedAt: session.endedAt ?? null, projects: [], asked: [], done: [], decided: [], open: [],
       privateOmitted: false, model: MEMORY_PROFILE_MODEL, durationMs: 0, inputTokens: 0, outputTokens: 0, attempts: 0 };
@@ -181,7 +183,7 @@ export class CallMemory {
     const attempts = previous?.code ? previous.attempts + 1 : 1;
     const base = { ...(input.previous ?? this.empty(session)), endedAt: session.endedAt ?? null, privateOmitted: input.privateOmitted, attempts };
     // Persist admission before asking so restart cannot reset the retry ceiling.
-    this.records.writeSummary(id, { ...base, pending: true, code: "failed" });
+    this.save(id, { ...base, pending: true, code: "failed" });
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const result = await Promise.race([this.model(input, session.currentProject ?? session.project), new Promise<never>((_, reject) => {
@@ -191,7 +193,7 @@ export class CallMemory {
       if (this.records.summary(id)?.state === "cleared") return;
       if (!this.storage.settings().callMemory) {
         const stopped = { ...base }; delete stopped.pending;
-        this.records.writeSummary(id,stopped); return;
+        this.save(id,stopped); return;
       }
       const current = summaryInput(this.records.read(id).entries, previous);
       if (current.cut !== input.cut) { this.queued.add(id); return; }
@@ -204,13 +206,13 @@ export class CallMemory {
         ].map(label => clean(label).slice(0,120)))].slice(0,4),
         model: result.model, durationMs: result.durationMs, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
       delete summary.code; delete summary.pending;
-      this.records.writeSummary(id, summary);
+      this.save(id, summary);
     } catch (error) {
       if (this.records.summary(id)?.state === "cleared") return;
       const code = error instanceof MemoryProfileError ? error.code : "failed";
       const failed = { ...base, code: ["account", "timeout", "invalid"].includes(code) ? code as CallSummary["code"] : "failed" };
       delete failed.pending;
-      this.records.writeSummary(id, failed);
+      this.save(id, failed);
     } finally { if (timer) clearTimeout(timer); }
   }
 }

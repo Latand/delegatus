@@ -85,11 +85,11 @@ export class CompanionTranscriptRecords {
     if (!validCallSummary(value)) throw new Error("TRANSCRIPT_UNAVAILABLE");
     return value;
   }
-  writeSummary(id: string, summary: CallSummary): void {
+  writeSummary(id: string, summary: CallSummary, now = Date.now()): void {
     if (!validCallSummary(summary)) throw new Error("TRANSCRIPT_UNAVAILABLE");
     // A pruned journal must stay pruned, even when its request returns late.
     if (!fs.existsSync(this.file(id))) return;
-    this.put(id, { id: "summary", kind: "summary", atMs: Math.max(0, (summary.endedAt ?? summary.startedAt) - summary.startedAt), data: { ...summary } }, true);
+    this.put(id, { id: "summary", kind: "summary", atMs: Math.max(0, now - summary.startedAt), data: { ...summary } }, true);
     if (this.read(id).entries.some(entry => entry.kind === "session_end")) this.finish(id);
   }
   finish(id: string): void {

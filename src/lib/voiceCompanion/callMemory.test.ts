@@ -72,7 +72,7 @@ for (const backend of ["api","codex"] as const) test(`${backend}: private histor
   const call = await start(h); speech(h,call.sessionId);
   h.provider.replay(call.providerId,{ type: "session.input_transcript.delta",event_id: "private-ask",delta: "Read private-sentinel today.",start_ms: 7000,end_ms: 8000 },delegationCreated("private-delegation",9000));
   if (backend === "api") { h.provider.responder = (_request,index) => backendResponse(`answer-${index}`,index === 0 ? [functionCall("history","relay_owner_history",{ action: "messages",chat: "private-sentinel",from: null,to: null,cursor: null,limit: null })] : []); await h.service.drain(call.sessionId); }
-  else { await h.service.drain(call.sessionId); await h.provider.callTool(call.providerId,"relay_owner_history",{ action: "messages",chat: "private-sentinel",from: null,to: null,cursor: null,limit: null },"history","private-delegation"); }
+  else { await h.service.drain(call.sessionId); await h.provider.callTool(call.providerId,"relay_owner_history",{ action: "messages",chat: "private-sentinel",from: null,to: null,cursor: null,limit: null },"history","native-private-turn"); }
   h.admission.record(call.sessionId,{ id: "private-reply",kind: "reply",atMs: 9500,data: { final: true,text: "private title sentinel, private member sentinel: private message sentinel" } });
   await h.service.close(call.sessionId); await h.memory.drain();
   expect(inputs).toHaveLength(1); expect(inputs[0].privateOmitted).toBe(true); expect(inputs[0].text).toContain("Review step");
@@ -183,4 +183,13 @@ test("a call closed with remembering off stays out of restart recovery after re-
   let requests = 0; const h = harness("codex",async () => { requests++; return result(); });
   const call = await start(h); speech(h,call.sessionId); h.storage.updateSettings({callMemory:false}); await h.service.close(call.sessionId); await h.memory.drain();
   h.storage.updateSettings({callMemory:true}); await h.service.recover(); h.memory.retry({operator:true}); await h.memory.drain(); expect(requests).toBe(0); expect(h.admission.records.summary(call.sessionId)).toBeNull();
+});
+
+test("checkpoint cadence uses its saved time even when the covered speech was much earlier", async () => {
+  let requests = 0; const h = harness("codex",async () => { requests++; return result(); });
+  const call = await start(h); speech(h,call.sessionId,4); h.advance(300001); h.memory.checkpoint(call.sessionId); await h.memory.drain();
+  for(let at=0;at<4;at++) h.admission.record(call.sessionId,{id:`later-${at}`,kind:"utterance",atMs:300100+at*1000,data:{text:`Later request ${at}.`,final:true}});
+  h.advance(15000); h.memory.checkpoint(call.sessionId); await h.memory.drain(); expect(requests).toBe(1);
+  h.advance(300001); h.memory.checkpoint(call.sessionId); await h.memory.drain(); expect(requests).toBe(2);
+  await h.service.close(call.sessionId); await h.memory.drain();
 });

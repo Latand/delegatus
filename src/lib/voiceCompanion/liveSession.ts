@@ -548,7 +548,7 @@ export class CompanionLiveSessions {
     let argumentsText: string;
     try { argumentsText = privateHistoryBlocked || PRIVATE_RESULT_TOOLS.has(name) ? "[private owner history arguments omitted]" : JSON.stringify(cleanStrings(JSON.parse(item.arguments as string),
       text=>withoutLocalPaths(withoutCredentials(text,active.secrets)),true), null, 2); } catch { argumentsText = String(item.arguments); }
-    const toolData = { name: privateHistoryBlocked ? "private_history_blocked" : name, callId: recordedCallId, delegationId, arguments: argumentsText.slice(0, 4_000) };
+    const toolData = { name: privateHistoryBlocked ? "private_history_blocked" : name, callId: recordedCallId, delegationId, sourceTurn, arguments: argumentsText.slice(0, 4_000) };
     this.admission.record(active.id, { id: `tool-${recordedCallId}`, kind: "tool", atMs, data: { ...toolData, status: "running" } }, false);
     this.admission.emit(active.id, { type: "tool.called", callId: recordedCallId, name: toolData.name.slice(0, 80), summary: toolData.name.replaceAll("_", " ") });
     if (privateHistoryBlocked) {

@@ -512,7 +512,10 @@ outside recovery. A summary admission persists `pending: true` and its attempt
 before the provider request. Recovery can therefore repair a restart between
 call closure and admission, or during the request, without resetting its retry
 ceiling. A clear tombstone wins over an in-flight result. A checkpoint never
-advances past growing speech whose final text will retain the same order.
+advances past growing speech whose final text will retain the same order. The
+five-minute cadence uses the summary entry’s saved timestamp. Private reads
+from a Codex backing turn correlate through the recorded source turn when
+its native turn id differs from the voice handoff id.
 
 The real Messages endpoint rejects `maxItems` in a structured-output schema.
 The wire schema carries the object and list types, as the existing memory
