@@ -234,6 +234,8 @@ test("a private-history cut immediately hides an older checkpoint from recall an
   expect(h.memory.block({ operator:true })).toContain("PRIVATE_TRIGGER_SENTINEL");
   h.admission.record(call.sessionId,{ id:"private-delegation",kind:"delegation",atMs:301001,data:{ delegationId:"private-turn",sourceTurn:"private-question" } });
   h.admission.record(call.sessionId,{ id:"private-read",kind:"tool",atMs:301002,data:{ name:"relay_owner_history",status:"done",delegationId:"private-turn",sourceTurn:"private-question" } });
+  expect(h.memory.block({ operator:true })).not.toContain("PRIVATE_TRIGGER_SENTINEL");
+  expect(JSON.stringify(h.memory.list({ operator:true }))).not.toContain("PRIVATE_TRIGGER_SENTINEL");
   await h.service.close(call.sessionId); await new Promise(resolve => setTimeout(resolve,0));
   expect(h.memory.block({ operator:true })).not.toContain("PRIVATE_TRIGGER_SENTINEL");
   expect(JSON.stringify(h.memory.list({ operator:true }))).not.toContain("PRIVATE_TRIGGER_SENTINEL");
