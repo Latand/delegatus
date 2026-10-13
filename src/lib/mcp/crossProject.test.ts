@@ -123,7 +123,7 @@ test("a project with no active seat is refused as unknown before cross-project a
   expect(persistProjectAliases([{ source: "seatless-old", target: "project-without-a-seat", displayName: "Seatless" }])).toBe(true);
   const refused = await call(SEAT, "create_task", { project: "project-without-a-seat", text: "Nobody manages this board" });
   expect(refused).toMatchObject({ ok: false, code: "unknown_project", retryable: false });
-  expect(refused.error).toBe('no such project "project-without-a-seat"; no close matches; pass a known project key, display name or repository name');
+  expect(refused.error).toBe('no such project "project-without-a-seat"; close matches: Seatless (project-without-a-seat)');
   expect(cardsNamed("Nobody manages this board")).toEqual([]);
   expect(cardsNamed("Asked for on an unmanaged board")).toEqual([]);
 });
