@@ -8,6 +8,356 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+## [1.12.0] — 2026-10-13
+
+### Added
+- **Finished work waits in Done until you accept it.** **Needs you** has a
+  **Done** section on the desktop panel and in the phone sheet. It lists
+  what finished in the last seven days: pull requests that landed, the
+  members of a merge batch included, lanes that finished without a pull
+  request, tasks closed with no lane, Delegatus deploys, incidents and
+  publications the orchestrator reported, and account limits that ran out
+  with the time they came back. Visible changes come first, each with its
+  frame as a thumbnail that opens the image viewer; technical fixes and
+  work without a pull request fold into groups that one button accepts.
+  **Accept** takes an item off the count and **Undo** brings it back, and
+  an accepted item never returns when its event repeats. The header
+  counter, the panel title, the tab title and the phone badge count
+  decisions plus unaccepted Done items ([#2744]).
+- **Every decision the orchestrator needs is a form in one column.** The
+  column beside the orchestrator's chat has two tabs, **Decisions** and
+  **Reports**, and opens on Decisions while anything waits. One form is
+  open with the recommended answers preselected, so one click and the
+  answer button settle it; the others are folded rows, and a prototype
+  round shows its numbered first frames. An answered form leaves the column
+  at once. The orchestrator can now ask without a task, with one to seven
+  questions. On a narrow window one line under the header, "N waiting for a
+  decision", opens the column, and on a phone it opens a sheet with both
+  tabs. An orchestrator can no longer stop its turn on an engine's own
+  question prompt: Delegatus refuses that prompt for the seat on Claude and
+  on Codex, and its standing instructions require a form with a
+  recommendation for each question. Agents other than the seat keep their
+  question tools ([#2758], [#2788]).
+- **Reject every prototype variant and say what to redo.** A prototype
+  review has **None fits** in the row of choices. It asks you to write or
+  dictate the corrections, and **Reject and redo** sends the orchestrator
+  an explicit rejection that asks for a new round. All the frames of a
+  round now show as captioned square tiles in a grid that scrolls down,
+  five, three or two columns by window width, and a tile opens the enlarged
+  viewer. An agent can publish variants only after the lane's visual critic
+  passed, or after a fix that followed the critic's findings ([#2798]).
+- **Prototype reviews can reach you in Telegram.** With a Celestia clone
+  paired, a published prototype round goes to the paired owner's private
+  chat as one message: a carousel per variant, the descriptions, the
+  questions with their recommendations, and buttons that copy an answer. A
+  copied answer or a reply that names a waiting review records the same
+  decision the web review records, and no agent starts for it. Nothing is
+  sent when the pairing is missing or paused or its first target is not
+  configured, and the relay card says why. The Telegram side works once the
+  service accepts publications ([#2751]).
+- **Voice Delegatus can run on your Codex subscription.** The voice
+  settings choose how a call talks: **Through the API (with a key)**, the
+  default for existing and new installs, or **Codex V3 (subscription)**.
+  The key field, the monthly cap and the month's dollars show only under
+  the API; under Codex nothing asks for a key and a call starts with none.
+  A Codex call runs on a managed Codex account with room and shows its
+  length and the plan's usage window in place of dollars. When the account
+  reaches its limit mid-call, the voice says so once and the call ends, and
+  a start refused at the limit names the reset time. On Codex the voice
+  reads the board, sends work to the orchestrator, speaks its reports in
+  order, switches project and hangs up when you ask
+  ([#2692], [#2706], [#2746], [#2767]).
+- **Voice Delegatus on the phone.** With voice switched on, the phone shows
+  a small voice head above the composer with one two-line bubble, and a
+  call continues while you move between projects, orchestrators and agents.
+  **Hide** removes the head and ends a live call, so the microphone is
+  never on without a sign of it on screen. **Show voice** in the ⋯ menu,
+  above Settings, brings the head back. Showing the head starts no call;
+  only **Talk** does ([#2797]).
+- **The voice finds prototype reviews and compares their pictures.** Voice
+  Delegatus lists the reviews that wait in the selected project, searches
+  round titles, variants and questions, reads one round, and compares up to
+  three stored pictures by variant, view, width and language. When a read
+  comes back empty or a frame is missing, it says so. Decisions still go
+  through the review form ([#2796]).
+- **Each role has its own Delegatus.** Answers in the feed, cards from
+  another agent and conversation headers show Delegatus in the costume of
+  the agent's role: builder, reviewer, orchestrator and the rest. An agent
+  with no role wears black sunglasses and a tuxedo. The engine keeps its
+  glyph and name beside the time, so role and engine read as two separate
+  things ([#2754]).
+- **Account chips show the weekly limit left.** Where you pick an account
+  for a launch (the new-agent draft, the orchestrator's draft, the rotate
+  sheet and onboarding), the choice is a row of chips. A chip shows the
+  account's name, the percent of its weekly limit left and a small bar; the
+  percent turns to the warning colour at 30% or less. The engine's active
+  account has a green dot and a signed-out account is a dashed chip that
+  cannot be picked. On a phone the row scrolls sideways and a long press
+  shows the reset time. The runtime pill's account menu shows the same
+  percent and bar on each row ([#2686]).
+- **Remove any signed-in account, Main included.** **Remove** now works on
+  the engine's own default account. Removing Main only forgets it: nothing
+  under its home is touched, it leaves every list, picker and automatic
+  selection, and its conversations stay readable. **Show Main again**, in
+  the removal summary and in account setup, brings it back. Copilot
+  accounts get the same control. When live work blocks a removal, the
+  refusal lists up to five of those conversations as links and lets you
+  cancel a pending sign-in in place. A removed account is never picked
+  again: its project bindings are dropped and routing moves to an account
+  that is still listed ([#2725]).
+- **Claude Haiku 5.5 in the model list.** The `haiku` alias now runs Haiku
+  5.5, shown as "Haiku 5.5", with its one-million-token context window.
+  Haiku 4.5 stays selectable as `claude-haiku-4-5` ([#2750]).
+- **A memory profile for each project.** **Learned rules** opens on a
+  readable profile: an overall summary, then what this role, this project
+  and this machine have learned. **Summarize** writes it with Claude Haiku
+  5.5 on your Claude account and shows each part as it arrives; a part
+  whose rules did not change is reused. A topic opens the rules behind it,
+  and a failed refresh keeps the earlier text ([#2766]).
+- **Learned rules can be rewritten, and their history can be undone.** A
+  stage now gives one answer about rules: none, a rewrite of a rule it was
+  given, or one new general rule. A rewrite keeps the rule's id and level,
+  and the earlier text stays as a version you can return to. Agents read
+  their rules in their engine instructions at every start, a resume and an
+  account move included. A curator runs from the orchestrator's wakes,
+  after ten new or rewritten rules or after six hours: it keeps, ranks,
+  merges, widens and archives rules, and the **Learned rules** window shows
+  each role's rules, rules awaiting the curator, earlier texts with
+  **Return**, why a rule was archived, the curator's last and next run, and
+  an **Undo** for a whole pass that keeps later writes. A fix round is
+  asked for the check its role needed before the first review, quoting the
+  findings it repaired. A concrete defect in the project goes to the
+  orchestrator as a problem report and creates no task by itself.
+  Orchestrators and the board maintainer now read shared rules too, and an
+  orchestrator can leave or rewrite one outside a pipeline
+  ([#2726], [#2768], [#2779], [#2787]).
+- **One call answers "what is the fleet doing".** The new `agent_fleet`
+  tool returns live and running agents counted by engine, model, effort and
+  account, where they work (pipelines, the seat, elsewhere), stalled agents
+  and waits on a provider limit, and each account's usage. Filters by
+  pipeline, conversation, engine, model, effort, account and state return
+  bounded rows. A seat sees its own project, a worker its own, and your own
+  session sees all projects ([#2793]).
+- **A long message goes as a text file.** A message over the size the
+  engines accept used to be refused with HTTP 413. Delegatus now sends it
+  as a complete UTF-8 `message.txt` attachment with a short instruction to
+  read it in full, together with the files and images you attached. The
+  sent bubble shows the file chip on desktop and phone, and **Retry**
+  converts a message that was refused earlier. The orchestrator's
+  `send_message` gets the same conversion ([#2802]).
+- **A reviewed pull request that conflicts with its base refreshes
+  itself.** With **Merge when the review passes** on, Delegatus used to
+  stop at a conflict. It now starts successor work on the same task and
+  branch: an agent merges the base and keeps both sides, a reviewer checks
+  only that resolution for one round, and findings are fixed. The merge
+  then waits for green checks as before. A conflict in meaning parks with
+  the file and the hunk named, and another automatic refresh needs the base
+  to move again ([#2777]).
+- **Automatic releases, off by default.** In the seat tick
+  panel a **Releases** block can prepare a release once 30 visible
+  changes have gathered and twelve hours have passed since the last one,
+  from a revision production has served for six hours. It stays off until
+  you switch it on, and it also needs orchestrator wakes and automatic
+  merging to be on. A release task then prepares the changelog and the
+  version, retakes the README pictures, goes through visual and code
+  review, and asks you before it publishes. **Ask before publishing** stays
+  on until you switch it off, and the block shows the count of visible
+  changes, the next eligible time and what a release is waiting for
+  ([#2792]).
+- **Relay: three abilities that wait for a switch or for the service.**
+  **Create a clone** in a paired relay's card makes a new Celestia clone
+  from a name, a username derived from it and a photo you upload, generate
+  or skip; it appears only when the service's descriptor lists the feature.
+  Relay runs report closed progress steps (accepted, thinking, reading the
+  board, other tool work, the final answer) when the service advertises
+  them, and expose no host text, paths or tool names. `relay_owner_history`
+  lets an agent on this install and Voice Delegatus list the owner's
+  eligible Celestia groups and read a page of a day or a date range; it
+  ships behind the owner tools switch, which is off by default, author ids
+  are discarded and the content is never logged or cached
+  ([#2757], [#2770], [#2801]).
+- **`spawn_agent` takes an account.** The tool's schema now offers an
+  `account` field, and the launch honours it: the project's account binding
+  is checked before the account is resolved and again when the launch is
+  reserved, and a pinned launch never falls back to another account
+  ([#2724]).
+- **A stage parked on a limit or a login resumes when capacity returns.**
+  A stage that stopped because every allowed account was out of quota or
+  signed out is checked on every controller pass. A newly bound account, a
+  successful sign-in or fresh room on an account resumes it in the same
+  worktree, with its pins and controls kept ([#2737]).
+
+### Changed
+- **The board header is one row.** At every width the desktop header is one
+  48 px row: the project name, accounts, a dot with the number of working
+  agents, find joined with one filter, one **+** with a two-row menu for a
+  task or an agent, the Orchestrator panel button, recent agents under an
+  icon, ⋯ and **Needs you**. The Board and Conversations switch is gone:
+  the Board is the one desktop view, and the recent agents list opens from
+  its icon. Reason chips and the funnel became one filter beside the
+  search, and **Hidden** moved into ⋯. When the row runs out of room it
+  gives way in a fixed order (accounts into ⋯, labels to icons, narrower
+  gaps, the search last) and nothing wraps ([#2782]).
+- **The old Tasks panel is removed.** The desktop **Tasks** panel and its
+  header button are gone, and nothing replaces them. Tasks the board does
+  not draw are rows in the **Hidden** tray with **Show on board**, a task
+  is created from **+** on the board, tasks of every project are on the
+  Overview's board, and crowned favourites are pinned atop the needs-you
+  panel ([#2799]).
+- **Task cards are calm: closed by default, a timeline when opened.** A
+  closed card shows a status dot and one state line that says who has the
+  card and what stopped, with no buttons except **Answer** where you are
+  really asked something. An opened card keeps everything it showed before
+  and adds a timeline of the task's events, oldest first: lanes, attempts,
+  review rounds, decision answers, pauses, merges. It shows the latest
+  eight under "Earlier · N". Skip, Retry, retry the merge, leave the pull
+  request open and the review answers moved from the card's face into its
+  ⋯, on the phone's lane sheet and the pipeline screen too, each marked as
+  a manual override on a lane the orchestrator handles. The orchestrator
+  resolves stops by default: on its wake it clears a merge that can no
+  longer happen, refreshes a conflicting branch and retries once checks are
+  green. Amber marks only what you answer ([#2800]).
+- **Board columns order by the newest work.** Inside a column, cards with
+  work in flight come first, newest start first, then the newest agent
+  work, then the last edit. In the Inbox, cards worked in the last three
+  days stand above the priority queue. A hidden task with no explicit board
+  choice is drawn again while one of its lanes is active or moved within
+  three days. A card's age reads its last agent work ([#2794]).
+- **The transcript keeps at least 60% of its column.** In the
+  orchestrator's chat, the agent window, stage panels and on the phone, the
+  composer takes only what that floor leaves: a long draft grows to the cap
+  and then scrolls inside the field. Failed sends rest as one chip in the
+  composer's row and their list opens above the field. The count of new
+  messages floats over the feed's corner and takes no row. **Stop** is its
+  own button beside **Send** while the agent works, so a message typed
+  meanwhile queues behind the turn; Interrupt, Compact, Re-check and the
+  terminal command are under **More actions**. "Attach in your terminal"
+  is renamed **Copy terminal command**. The eye chip is removed together
+  with automatic attachment: a turn no longer carries the card you happen
+  to have open, and a task is attached only through the card's own button
+  ([#2756]).
+- **Needs you keeps only what you alone can decide.** A question from an
+  agent the orchestrator started, a memory kill, a permission request, a
+  parked lane, a spent review budget and a stopped merge go to the
+  project's orchestrator first, which is woken with the question in the
+  asker's words. With no orchestrator, or with its wakes off, they come to
+  you. Delegatus clears waits its records prove settled, names the rule
+  that cleared each, and **Undo** restores one and keeps that rule from
+  clearing it again. Every remaining row says in one sentence what to
+  choose and shows an orchestrator's question in full. A seat that cannot
+  decide escalates through a decision form, and that form is then your only
+  row for it ([#2769]).
+- **A prototype decision saves at once.** Saving a decision no longer waits
+  for the orchestrator. The review collapses into the saved decision as
+  soon as it is written, and a quiet line says it is saved, being delivered
+  or delivered. Delivery runs in the background, repeats after a restart or
+  a deploy, goes to whoever holds the project's seat at that moment and
+  never sends a decision twice ([#2747]).
+- **Voice Delegatus asks the orchestrator less and more briefly.** The
+  voice answers from what it can read, and "what can you do" from its own
+  tool list. It sends the orchestrator one ask of at most 400 characters in
+  your words and language, taken from your latest turn. It does not send a
+  question again while that question's report is pending, unless you ask it
+  to, and it relays reports whole and in order ([#2752]).
+- **The sidebar shows each account's weekly limit.** A Claude account's
+  line used to show its tightest window, so 36% of five hours hid 77% of
+  the week. Every account line, in the compact view, under **All windows**
+  and on the phone's accounts screen, now shows the weekly percent, or "no
+  weekly data". The five-hour and tier figures stay in the tooltip and in
+  their labelled rows ([#2763]).
+- **Updating asks in Delegatus's own dialog.** Update, retry and install no
+  longer open the browser's confirm box. The dialog names the target
+  version, says Delegatus will restart and the page will reconnect, and
+  lists the work running now by project, with each card's title and the
+  role in words. On a phone it is a bottom sheet with its buttons pinned
+  ([#2755]).
+- **Agent activity is a dot that tells the truth.** A busy agent could be
+  reported as stalled for hours when a stale catalogue answered first, and
+  the board called a long check stalled after three minutes. Activity now
+  reads the agent's newest transcript, its background tasks and the
+  processes its turn started, and tells work, a running check and ten
+  minutes of real idleness apart; a row it cannot verify shows no silence
+  figure and no verdict. On the board it is an 8 px green, amber or red dot
+  with a short popover on hover, focus or tap. The orchestrator is woken at
+  once when one of its agents is verified idle ([#2783]).
+- **Automatic merging waits only for required checks.** A reviewed pull
+  request used to wait for queued optional jobs and for check names
+  remembered from earlier heads. It now waits for the base branch's
+  required checks; a finished failure from any reported check still stops
+  the merge. A task marked to finish with its pipeline stays open until its
+  pull request is recorded as merged, and a lane that published changes
+  with no pull request gets a merge stop with **Try the merge again**
+  ([#2723], [#2719]).
+- **Work waits for the CPU in a queue with a bound.** Stages and heavy
+  checks that wait for CPU pressure to fall now stand in one first-come
+  queue that survives restarts. The head starts when pressure permits or
+  after ten minutes, so a busy machine can no longer hold work without end.
+  A waiting card reads "Waiting for the CPU queue · 2nd · up to 7 min". The
+  wait now begins at 30% pressure and ends below 20% for ten seconds; it
+  was 20% and 10% ([#2773], [#2789]).
+- **A launch is refused when less than 2 GiB of RAM is available.** Before
+  any agent starts, Delegatus checks the memory that can be reclaimed,
+  whatever the lane count, swap use and memory-limit mode. A refusal names
+  the measured RAM and the floor. An unreadable reading permits the launch
+  ([#2709]).
+- **A launch has a named task before its agent starts.** A launch creates
+  its task with a usable title and a one-line brief up front: your title
+  when you gave one, a short name derived from the prompt otherwise. A
+  launch that fails before its first turn keeps that named card, and a
+  retry reuses it ([#2700]).
+- **Codex CLI versions are pinned.** Hosted Codex sessions and account
+  operations support Codex CLI 0.154.0, 0.159.0 and 0.162.1. Any other
+  version is refused before its app-server starts, with an error that names
+  the supported versions. Every request Delegatus writes to Codex is
+  checked against that version's schema first ([#2735]).
+- **Agents Delegatus starts cannot stop processes by name or port.** A
+  managed Claude or Codex agent that runs `pkill`, `killall`, `fuser -k` or
+  an `lsof` or `pgrep` lookup piped into `kill` gets a refusal before the
+  command runs,
+  with the rule: stop a process by the PID you recorded, and probe on port
+  0. It applies to terminal, headless and hosted launches and to resumes
+  ([#2729]).
+- **Transcript search runs outside the web server.** A search for a common
+  word used to hold every other request until it finished. Searches from
+  the page and from `search_transcripts` now run in one worker process with
+  a 30-second deadline and a queue of 64, and the board keeps answering
+  meanwhile. On Windows the worker's first start is given 15 seconds
+  ([#2731], [#2772]).
+- **Less memory and faster reads on an install with a long history.** An
+  agent's MCP server passes its large reads (`conversation_messages`,
+  `resources`, `operator_snapshot`, `board_snapshot`) to Delegatus and no
+  longer loads the whole registry itself; in the measured case its heap
+  growth fell from 156 MiB to 6.5 MiB. Finished conversations and launch
+  receipts move to an archive inside the registry and stay resumable.
+  Reads by key use an index, a write on a registry of about 30,000 rows
+  fell from about 840 ms to a few milliseconds, and a restart no longer
+  rereads the tail of every settled Claude transcript
+  ([#2716], [#2714], [#2762], [#2720]).
+- **An update waits for agents that are really working.** The wait before
+  an automatic update now judges each recorded agent process from its own
+  records: a finished or idle one releases at once, a busy one holds, and
+  one whose state is unknown holds for at most five minutes with a visible
+  reason. A standalone agent in the middle of a turn is no longer cut by an
+  update ([#2555], [#2634]).
+- **Approve a bug report inside a longer message.** The approving reply for
+  an `issue_report` preview may now sit among other text, in English or
+  Ukrainian, and one message can approve several previews by their digests.
+  A refusal of the same report in that message wins. A yes with no digest
+  is still refused, and the refusal explains what to write ([#2785]).
+- **Reviewers must show that a failing test is new.** Review stages and
+  review flows compare a failing test against the base commit: a failure
+  the base shares goes in the notes, a failure only the head has blocks,
+  and a missing comparison has to be resolved before the verdict ([#2736]).
+- **The automatic task inbox scanner is removed.** The opt-in scanner that
+  turned recent requests into board cards is gone together with
+  `LLV_ENABLE_AUTO_TASK_INBOX`. Tasks you or an agent create and curator
+  proposals you apply work as before, and existing cards are untouched
+  ([#2721]).
+- **The CPU placement installer prints stop and start.** After
+  `node bin/install-cpu-placement.mjs`, apply the files with the reload,
+  stop and start it prints. A plain restart could leave the service in its
+  old control group, where the new CPU weight did nothing ([#2748]).
+
 ### Fixed
 - **A second tab no longer freezes the board on the local address.** Opened
   over plain HTTP (`http://127.0.0.1:8898`), every tab held three connections
@@ -18,7 +368,170 @@ guarantees for the 1.x series.
   carries its live streams over one connection instead of three, which leaves
   room for requests with up to five tabs open; a sixth still takes the last
   connection. Addresses served over HTTPS were never affected and are
-  unchanged. `LLV_STREAM_MUX=0` restores a connection per stream.
+  unchanged. `LLV_STREAM_MUX=0` restores a connection per stream ([#2684]).
+- **A message sent to a Claude agent during its turn arrives once and shows
+  in the feed.** A queued follow-up waits in Delegatus's own queue until the
+  turn ends and is then delivered once, in order, with its images; a send
+  you mark as an interrupt still interrupts. Messages that reached Claude
+  while a turn was running, voice relays and orchestrator messages
+  included, were read and answered by the agent while the feed never showed
+  them. Each now has its row at its place in the conversation
+  ([#2694], [#2743], [#2749]).
+- **A delivered message no longer keeps its warning.** When the answer to a
+  send was lost, the message could keep its delivery warning without end. The
+  composer now looks the send up by its own key while the conversation is
+  visible and settles the bubble with no second send. A send in progress
+  also survives a cleanup that ran beside it, and a resend with the same
+  key no longer resets its progress ([#2804], [#2699]).
+- **Pipelines keep moving while the conversation scan is incomplete.**
+  After a start, a scan that had not completed made every pipeline pass
+  fail with an HTTP 500 and made orchestrator tools answer with a failure
+  marked as final. A pass now does its pipeline work and puts off only the
+  part that needs the scan, and a tool answers "still scanning, retry in
+  5 s", which is safe to repeat ([#2805]).
+- **Claude sign-in is no longer ended by other processes.** The code field
+  vanished while you were still typing the code, because every agent's MCP
+  server and every scan worker treated the open sign-in as a leftover and
+  stopped it. Only the web server itself now recovers sign-ins. After a
+  successful Claude or Codex sign-in the account's status and limits are
+  read again before the panel reports success, so the sidebar stops showing
+  the failure from before the sign-in. A draft launched before the account
+  list loaded keeps the account you picked ([#2687], [#2776], [#2682]).
+- **Stages survive a restart at more points.** A stage launched while
+  Delegatus restarted could park with "staged launch was released before
+  publication completed"; it is now retried once when the records prove
+  nothing started. A launch cut by a runtime restart is probed and retried
+  when no agent can still be running. Completed work is no longer repeated
+  after a release or a restart, and a recovery clock no longer carries over
+  from an earlier cut and parks a stage early. An orchestrator left with no
+  host after a deploy gets the wake it was owed, and a deploy's wake no
+  longer waits 40 minutes behind a turn that had already ended. A Codex
+  stage interrupted by a runtime switch continues on its new profile
+  ([#2688], [#2764], [#2713], [#2732], [#2697], [#2685], [#2734]).
+- **A passed stage is no longer parked by its own commit or push.** When a
+  pre-push check refuses a stage that already passed, its agent gets one
+  repair turn with the refusal text, and the stage is committed and
+  published again; a second refusal parks with both causes kept, a crash in
+  between included. A commit that outlasts a minute is retried with backoff
+  and hooks get fifteen minutes. A read-only stage commits its outputs when
+  its worktree has no `node_modules`. A commit restored during
+  reconciliation is checked for a personal identity, credentials and home
+  paths before any ref moves, and a controller that died during a hook no
+  longer leaves an index lock that parks the next stage
+  ([#2727], [#2708], [#2765], [#2780], [#2722]).
+- **The Telegram connector ends with Delegatus.** Its runner outlived every
+  restart, a later start adopted it even from an older release, and it kept
+  the service in its old control group. The runner now exits when its
+  Delegatus exits, a crash included, and a runner left by another release
+  is stopped and replaced. Large Telegram reads run one at a time, and a daily
+  report that failed after a restart keeps its original window in place of
+  a wider one on every retry ([#2689], [#2715]).
+- **Board maintenance leaves merged tasks in Done.** The maintainer could
+  move a merged task back to Assigned while its deployment was pending. It
+  now keeps Done and records the deployment's progress in the task's note
+  ([#2753]).
+- **Account removal is stricter about what it deletes.** A file replaced
+  between the check and the deletion is kept and named. Homes retired
+  earlier are moved to the archive and reported. A launch queued for one
+  account blocks only that account's removal. The account policy read
+  returns a project's restriction when the project is named by its display
+  name, and refuses an unknown or ambiguous name
+  ([#2698], [#2712], [#2717]).
+- **A working orchestrator no longer shows an old failure.** The banner
+  "The last designation failed / database is locked" could stay for hours
+  after the seat recovered. It now clears once a live host is observed or a
+  later designation succeeds, a busy database is retried three times before
+  it counts as a failure, and the phone's banner carries the failure's date
+  and time ([#2786]).
+- **Phone menus cannot scroll sideways.** One line that would not shrink
+  could make an open ⋯ sheet slide sideways. Every phone sheet now clips
+  its width, and a long state phrase in the conversation menu wraps
+  ([#2778]).
+- **The voice finds work by its pull request number.** "PR 2800" returned
+  nothing, because the search matched those words against titles. A pull
+  request reference now matches the pipelines and tasks linked to it,
+  finished ones included. The voice refuses a read with an explanation when
+  its project is missing, stale or ambiguous ([#2807]).
+- **The relay owner's requests run.** With **Full agent for the owner** on,
+  a verified owner's request was refused at the hand-off to the
+  orchestrator and stayed queued. It is now admitted, and its board task
+  starts assigned so the orchestrator wakes for it. A reply to a published
+  report reaches the orchestrator that filed it, with the report and the
+  owner's answer quoted ([#2759]).
+- **Your own message keeps its bubble when a lookup fails.** A message you
+  sent to a Claude agent could keep the styling of a system message after
+  one failed read of who sent it. The read is now retried on its usual
+  schedule ([#2696]).
+- **Agent tools keep working while a conversation moves accounts.** The
+  move withdrew the old agent's access to the Delegatus tools before the
+  hand-over committed. Two Codex agents sharing a connection could also
+  cancel or overwrite each other's calls; each client now has its own
+  session ([#2704]).
+- **The CLI and the updater finish cleanly.** A CLI that failed during
+  startup could exit while its runtime host or web server was still alive;
+  it now waits for them to stop and keeps its exit status. An update step
+  whose process had finished just as its deadline arrived is read as its
+  real result, and a step whose process vanished ends within a bound
+  ([#2733], [#2711]).
+- **The runtime host no longer dies opening its journal.** A start that met
+  another reader at the wrong moment failed with "database is locked" and
+  the host exited. The busy wait is now set before the first statement that
+  reads the file ([#2803]).
+- **Temporary directories in use are not swept.** A directory whose owner
+  was still running could be removed once it passed the age limit. A live
+  owner now protects its directory until it exits ([#2718]).
+- **Landing page.** The hero demo's task cards land opaque, so the deck in
+  the Inbox no longer shows one card's text through another, and on a touch
+  phone the page scrolls natively over the demo frames
+  ([#2691], [#2775]).
+
+### Maintainer notes
+- The candidate performance gate in `verify-candidate` runs a release
+  against a synthetic registry of about 30,000 rows with two releases
+  handing live workers over, concurrent writers and eight Chromium views,
+  and refuses a candidate that breaches a bound. Run it locally with
+  `bun scripts/verify-viewer-runtime.ts --performance` ([#2762]).
+- Heavy commands share the CPU queue through `scripts/gate-slot.sh`, and
+  time spent waiting in it is excluded from Git command, hook, test
+  comparison and owned-runner budgets ([#2773]).
+- `scripts/deploy-checkout.py` stops the service, waits up to 30 seconds
+  for the old control group to be released, lists survivors with their
+  proof and then starts; it also admits a verified launcher ancestor of the
+  service's main process and refuses a web server child from an older
+  release ([#2748], [#2740]).
+- `scripts/release-verify.ts` reads a release's paths, README provenance,
+  immutable tag, npm package, Docker tags and macOS check, and
+  `docs/RELEASING.md` describes the release procedure ([#2792]).
+- `scripts/generate-codex-protocol.ts` regenerates the pinned Codex
+  app-server schemas for a new CLI version ([#2735]).
+- `scripts/delivery-phase-report.ts` prints the p50 and p95 time a send
+  spent in each delivery phase for a time window; delivery progress now
+  keeps up to 128 phase entries and the arrival timestamps ([#2730]).
+- `scripts/review-export.ts` exports an exact commit into stage scratch for
+  a reviewer and borrows the lane's installed dependencies when the
+  manifests, lockfile and patches match; review-history exports remove
+  credentials by one key classifier ([#2718]).
+- The privacy gate reads a split GitHub token only with its prefix boundary
+  and a complete body, so template badges stop matching; it scans a 3.5 MB
+  range in 268 seconds where it timed out at 900, and a repeated local scan
+  uses about a tenth of the CPU. A repair pull request can pass when the
+  default branch's own privacy self-tests are red, and fixture cleanup has
+  its own 30-second test
+  ([#2701], [#2774], [#2795], [#2702], [#2745]).
+- The merger lets a reviewed replacement of a test supersede unchanged
+  copies of the same base version, so an unrelated member's old test no
+  longer vetoes it ([#2705]).
+- Keyed message admission reads through the conversation index, the MCP
+  probe receives its configured deadline and cleans up its child, and the
+  capture drivers bind port 0 and own the server they start
+  ([#2707], [#2710]).
+- The relay's owner-tool capture returns the public route objects and is
+  validated against the pinned response schemas, with a five-second pending
+  retry; `ajv` and `ajv-formats` are explicit development dependencies, and
+  the dated exception for the local `braces` mitigation is renewed
+  ([#2771], [#2781]).
+- New documents: the model outcome analysis for pipelines since 6 October
+  and the audit of mechanisms that remain duplicated ([#2690], [#2693]).
 
 ## [1.11.0] — 2026-10-10
 
@@ -2718,7 +3231,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v1.11.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v1.12.0...HEAD
+[1.12.0]: https://github.com/Latand/delegatus/compare/v1.11.0...v1.12.0
 [1.11.0]: https://github.com/Latand/delegatus/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/Latand/delegatus/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/Latand/delegatus/compare/v1.8.0...v1.9.0
@@ -3123,3 +3637,117 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2680]: https://github.com/Latand/delegatus/pull/2680
 [#2681]: https://github.com/Latand/delegatus/pull/2681
 [#2683]: https://github.com/Latand/delegatus/pull/2683
+[#2555]: https://github.com/Latand/delegatus/pull/2555
+[#2634]: https://github.com/Latand/delegatus/pull/2634
+[#2682]: https://github.com/Latand/delegatus/pull/2682
+[#2684]: https://github.com/Latand/delegatus/pull/2684
+[#2685]: https://github.com/Latand/delegatus/pull/2685
+[#2686]: https://github.com/Latand/delegatus/pull/2686
+[#2687]: https://github.com/Latand/delegatus/pull/2687
+[#2688]: https://github.com/Latand/delegatus/pull/2688
+[#2689]: https://github.com/Latand/delegatus/pull/2689
+[#2690]: https://github.com/Latand/delegatus/pull/2690
+[#2691]: https://github.com/Latand/delegatus/pull/2691
+[#2692]: https://github.com/Latand/delegatus/pull/2692
+[#2693]: https://github.com/Latand/delegatus/pull/2693
+[#2694]: https://github.com/Latand/delegatus/pull/2694
+[#2696]: https://github.com/Latand/delegatus/pull/2696
+[#2697]: https://github.com/Latand/delegatus/pull/2697
+[#2698]: https://github.com/Latand/delegatus/pull/2698
+[#2699]: https://github.com/Latand/delegatus/pull/2699
+[#2700]: https://github.com/Latand/delegatus/pull/2700
+[#2701]: https://github.com/Latand/delegatus/pull/2701
+[#2702]: https://github.com/Latand/delegatus/pull/2702
+[#2704]: https://github.com/Latand/delegatus/pull/2704
+[#2705]: https://github.com/Latand/delegatus/pull/2705
+[#2706]: https://github.com/Latand/delegatus/pull/2706
+[#2707]: https://github.com/Latand/delegatus/pull/2707
+[#2708]: https://github.com/Latand/delegatus/pull/2708
+[#2709]: https://github.com/Latand/delegatus/pull/2709
+[#2710]: https://github.com/Latand/delegatus/pull/2710
+[#2711]: https://github.com/Latand/delegatus/pull/2711
+[#2712]: https://github.com/Latand/delegatus/pull/2712
+[#2713]: https://github.com/Latand/delegatus/pull/2713
+[#2714]: https://github.com/Latand/delegatus/pull/2714
+[#2715]: https://github.com/Latand/delegatus/pull/2715
+[#2716]: https://github.com/Latand/delegatus/pull/2716
+[#2717]: https://github.com/Latand/delegatus/pull/2717
+[#2718]: https://github.com/Latand/delegatus/pull/2718
+[#2719]: https://github.com/Latand/delegatus/pull/2719
+[#2720]: https://github.com/Latand/delegatus/pull/2720
+[#2721]: https://github.com/Latand/delegatus/pull/2721
+[#2722]: https://github.com/Latand/delegatus/pull/2722
+[#2723]: https://github.com/Latand/delegatus/pull/2723
+[#2724]: https://github.com/Latand/delegatus/pull/2724
+[#2725]: https://github.com/Latand/delegatus/pull/2725
+[#2726]: https://github.com/Latand/delegatus/pull/2726
+[#2727]: https://github.com/Latand/delegatus/pull/2727
+[#2729]: https://github.com/Latand/delegatus/pull/2729
+[#2730]: https://github.com/Latand/delegatus/pull/2730
+[#2731]: https://github.com/Latand/delegatus/pull/2731
+[#2732]: https://github.com/Latand/delegatus/pull/2732
+[#2733]: https://github.com/Latand/delegatus/pull/2733
+[#2734]: https://github.com/Latand/delegatus/pull/2734
+[#2735]: https://github.com/Latand/delegatus/pull/2735
+[#2736]: https://github.com/Latand/delegatus/pull/2736
+[#2737]: https://github.com/Latand/delegatus/pull/2737
+[#2740]: https://github.com/Latand/delegatus/pull/2740
+[#2743]: https://github.com/Latand/delegatus/pull/2743
+[#2744]: https://github.com/Latand/delegatus/pull/2744
+[#2745]: https://github.com/Latand/delegatus/pull/2745
+[#2746]: https://github.com/Latand/delegatus/pull/2746
+[#2747]: https://github.com/Latand/delegatus/pull/2747
+[#2748]: https://github.com/Latand/delegatus/pull/2748
+[#2749]: https://github.com/Latand/delegatus/pull/2749
+[#2750]: https://github.com/Latand/delegatus/pull/2750
+[#2751]: https://github.com/Latand/delegatus/pull/2751
+[#2752]: https://github.com/Latand/delegatus/pull/2752
+[#2753]: https://github.com/Latand/delegatus/pull/2753
+[#2754]: https://github.com/Latand/delegatus/pull/2754
+[#2755]: https://github.com/Latand/delegatus/pull/2755
+[#2756]: https://github.com/Latand/delegatus/pull/2756
+[#2757]: https://github.com/Latand/delegatus/pull/2757
+[#2758]: https://github.com/Latand/delegatus/pull/2758
+[#2759]: https://github.com/Latand/delegatus/pull/2759
+[#2762]: https://github.com/Latand/delegatus/pull/2762
+[#2763]: https://github.com/Latand/delegatus/pull/2763
+[#2764]: https://github.com/Latand/delegatus/pull/2764
+[#2765]: https://github.com/Latand/delegatus/pull/2765
+[#2766]: https://github.com/Latand/delegatus/pull/2766
+[#2767]: https://github.com/Latand/delegatus/pull/2767
+[#2768]: https://github.com/Latand/delegatus/pull/2768
+[#2769]: https://github.com/Latand/delegatus/pull/2769
+[#2770]: https://github.com/Latand/delegatus/pull/2770
+[#2771]: https://github.com/Latand/delegatus/pull/2771
+[#2772]: https://github.com/Latand/delegatus/pull/2772
+[#2773]: https://github.com/Latand/delegatus/pull/2773
+[#2774]: https://github.com/Latand/delegatus/pull/2774
+[#2775]: https://github.com/Latand/delegatus/pull/2775
+[#2776]: https://github.com/Latand/delegatus/pull/2776
+[#2777]: https://github.com/Latand/delegatus/pull/2777
+[#2778]: https://github.com/Latand/delegatus/pull/2778
+[#2779]: https://github.com/Latand/delegatus/pull/2779
+[#2780]: https://github.com/Latand/delegatus/pull/2780
+[#2781]: https://github.com/Latand/delegatus/pull/2781
+[#2782]: https://github.com/Latand/delegatus/pull/2782
+[#2783]: https://github.com/Latand/delegatus/pull/2783
+[#2785]: https://github.com/Latand/delegatus/pull/2785
+[#2786]: https://github.com/Latand/delegatus/pull/2786
+[#2787]: https://github.com/Latand/delegatus/pull/2787
+[#2788]: https://github.com/Latand/delegatus/pull/2788
+[#2789]: https://github.com/Latand/delegatus/pull/2789
+[#2792]: https://github.com/Latand/delegatus/pull/2792
+[#2793]: https://github.com/Latand/delegatus/pull/2793
+[#2794]: https://github.com/Latand/delegatus/pull/2794
+[#2795]: https://github.com/Latand/delegatus/pull/2795
+[#2796]: https://github.com/Latand/delegatus/pull/2796
+[#2797]: https://github.com/Latand/delegatus/pull/2797
+[#2798]: https://github.com/Latand/delegatus/pull/2798
+[#2799]: https://github.com/Latand/delegatus/pull/2799
+[#2800]: https://github.com/Latand/delegatus/pull/2800
+[#2801]: https://github.com/Latand/delegatus/pull/2801
+[#2802]: https://github.com/Latand/delegatus/pull/2802
+[#2803]: https://github.com/Latand/delegatus/pull/2803
+[#2804]: https://github.com/Latand/delegatus/pull/2804
+[#2805]: https://github.com/Latand/delegatus/pull/2805
+[#2807]: https://github.com/Latand/delegatus/pull/2807
