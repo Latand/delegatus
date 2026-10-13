@@ -159,7 +159,9 @@ The savings are measured numbers from section 2. The after-times in section 5 ar
 
 ### C2. One admission per push; independent checks run side by side
 
-`pre-push` runs privacy first (uncapped, 9–38 s, so a privacy refusal still arrives at once). Then it takes one `gate-slot` admission for its whole heavy phase and runs the steps inside it. Nested `gate-slot` calls already take the `--reuse-slot` path (`scripts/gate-slot.sh:84`) and get their own scope and quota without queueing again.
+`pre-push` starts mandatory privacy inspection and the isolated checks concurrently. Privacy keeps its uncapped execution and existing refusal text and exit behaviour. The checks take one `gate-slot` admission for their whole heavy phase. Nested `gate-slot` calls reuse that slot and get their own scope and quota without queueing again.
+
+The operator approved this revised order on 2026-10-13 after cold L privacy inspection measured 120–188 seconds. Both halves must return a passing verdict before the hook permits publication. A failure or timeout in either half refuses the push and cancels the other half, waiting for owned process cleanup before returning. A surviving helper is itself a refusal. Git sends the candidate only after both verdicts pass. Neither half publishes it or can authorize a push alone, so their execution order does not change protection. A push with no checks beyond privacy still runs privacy alone; pre-commit keeps its existing order.
 
 Inside the admission, steps run in lanes at the same time. A lane runs its steps in order, and a failure in one lane stops the others through the existing group cancel in `runSteps`:
 
@@ -171,7 +173,7 @@ Inside the admission, steps run in lanes at the same time. A lane runs its steps
 The outer owned-runner limit for the admitted phase is taken from `LLV_GATE_PUSH_DEADLINE` when the controller sets it. A manual push gets 15 minutes.
 
 - Saves the queue waits, about 254 s on L and about 836 s on S, down to one wait per push. It also overlaps types (100–165 s) with tests.
-- Keeps every check. The slot count still bounds how many pushes run heavy work at once. Each step keeps its 300 % scope and 8 GB cap.
+- Keeps every check and both mandatory verdicts. The slot count still bounds how many pushes run heavy work at once. Each step keeps its 300 % scope and 8 GB cap.
 
 ### C3. Runtime chain and native Codex move to PR CI as a required check (decided, section 6)
 
@@ -278,7 +280,7 @@ Hosted CI has never run touched unit tests. A deliberately failing new test is c
 
 | Protection | After this design |
 | --- | --- |
-| Privacy: files, commit messages, identities, merge boundary | Pre-commit and pre-push privacy unchanged and still first. The hosted trusted scan is unchanged on every PR. The candidate self-tests run whenever privacy code changes (C7). |
+| Privacy: files, commit messages, identities, merge boundary | Pre-commit privacy remains first. Pre-push privacy runs concurrently with isolated checks, retaining its mandatory verdict, refusal text and exit behaviour. The hosted trusted scan is unchanged on every PR. The candidate self-tests run whenever privacy code changes (C7). |
 | New-failure detection | Every touched test file runs on the branch side. Every branch failure is sampled on the main side and confirmed exactly as today (C1). A red branch with no base sample blocks. The batch merger's tests gate is unchanged. |
 | Bun pin: Viewer runtime and runtime host | Runs locally for every `Dockerfile` (pin), `src/runtime-host/**` and `bin/**` change, on CI for every PR as the merge-required `runtime-gate`, and in the candidate image at release (`verify-candidate`). |
 | Native Codex contracts | On CI for every PR inside `runtime-gate`; locally with the runtime chain. |
@@ -320,6 +322,8 @@ Tests (all by explicit path under `scripts/gate-slot.sh` with private HOME, XDG,
 - `scripts/local-gate.test.ts` and `scripts/local-gate.cpuQueue.test.ts`:
   - one queue ticket per push, with nested capped steps reusing the slot;
   - lanes run at once, and a failing lane stops the others and names itself;
+  - privacy and admitted checks overlap; each refusal and timeout blocks when its peer passes;
+  - privacy refusal while admitted checks run stops their detached helpers and preserves the privacy refusal text and exit code;
   - deadline handling and `NO_VERDICT` still hold per lane;
   - pre-commit lint is uncapped at 40 files and capped at 41;
   - the runtime chain and native Codex are planned for a push touching `Dockerfile`, `src/runtime-host/x.ts` or `bin/cli.mjs`, and absent for one touching only `src/lib/pipelines/engine.ts`.

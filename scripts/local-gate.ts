@@ -494,6 +494,8 @@ async function prepared(prepare: RunOptions["prepare"], step: Step, until: numbe
 const isOutcome = (value: Prepared | Outcome): value is Outcome => "stopped" in value;
 interface RunOptions {
   root: string; deadline: PushDeadline | null; logDir: string; say?: (line: string) => void; ref?: string;
+  /** The other half of publication refused; stop owned work before returning. */
+  cancel?: AbortSignal;
   /** Anything it waits on ends by `until`, or at once on `cancel`, through the
       installers above. */
   prepare: (step: Step, until: number, cancel?: AbortSignal, waitEnv?: NodeJS.ProcessEnv) => Prepared | Promise<Prepared>;
@@ -521,6 +523,7 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
       return true;
     };
     for (let index = 0; index < steps.length;) {
+      if (options.cancel?.aborted) return deferred;
       const step = steps[index]!;
       let end = index + 1;
       if (step.group) while (end < steps.length && steps[end]!.group === step.group) end++;
@@ -528,8 +531,12 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
       index = end;
       say(`${mode}: ${step.group ?? step.name}`);
       if (!step.group) {
-        const ready = await prepared(prepare, step, until, undefined, budget.env);
-        const outcome = isOutcome(ready) ? ready : await execute(ready.command, root, withBudget(ready.env), until);
+        const ready = await prepared(prepare, step, until, options.cancel, budget.env);
+        const outcome = isOutcome(ready) ? ready : await execute(ready.command, root, withBudget(ready.env), until, undefined, options.cancel);
+        if (outcome.cancelled) {
+          if (outcome.leaked) throw new ContainmentFailed(`"${step.name}"`, outcome.leaked, true);
+          return deferred;
+        }
         if (!settle(step, outcome)) throw new Error(`${isOutcome(ready) ? step.name : ready.command[0]} failed (${outcome.code})`);
         continue;
       }
@@ -540,6 +547,9 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
       // and the group is reported once every member has settled: nothing a
       // member started may outlive the hook unreported.
       const cancel = new AbortController(), errors = new Map<number, unknown>();
+      const onCancel = () => cancel.abort();
+      options.cancel?.addEventListener("abort", onCancel, { once: true });
+      if (options.cancel?.aborted) cancel.abort();
       const lanes = new Map<string, Promise<Outcome | null>>();
       const pending = members.map(({ member, log }, at) => {
         const predecessor = member.lane ? lanes.get(member.lane) : undefined;
@@ -560,6 +570,10 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
         return run;
       });
       const outcomes = await Promise.all(pending);
+      options.cancel?.removeEventListener("abort", onCancel);
+      if (!errors.size) for (const [at, outcome] of outcomes.entries()) {
+        if (outcome?.leaked) throw new ContainmentFailed(`"${members[at]!.member.name}"`, outcome.leaked, outcome.cancelled);
+      }
       if (errors.size) {
         const [first, error] = [...errors][0]!, culprit = members[first]!.member.name;
         const reason = error instanceof Error ? error.message : String(error);
@@ -593,6 +607,27 @@ export function endingOf(mode: Mode, error: unknown): { line: string; code: numb
 /** Exits at once: a stopped step's survivor must not hold the push open. */
 class AdmittedGateFailed extends Error {
   constructor(readonly code: number) { super(`admitted checks exited ${code}`); }
+}
+
+/** Both verdicts are mandatory. Refusal cancels the peer and waits for its
+ * owned cleanup; a cleanup failure takes precedence over the initial refusal.
+ * Preserve the original error so privacy keeps its refusal text and exit code.
+ */
+export async function runPushPair(privacy: (cancel: AbortSignal) => Promise<unknown>, checks: (cancel: AbortSignal) => Promise<unknown>): Promise<void> {
+  const cancel = new AbortController();
+  let first: unknown;
+  let failed = false;
+  const run = async (half: typeof privacy) => {
+    try { await half(cancel.signal); }
+    catch (error) {
+      if (!failed) { failed = true; first = error; }
+      cancel.abort();
+      throw error;
+    }
+  };
+  const results = await Promise.allSettled([run(privacy), run(checks)]);
+  for (const result of results) if (result.status === "rejected" && result.reason instanceof ContainmentFailed) throw result.reason;
+  if (failed) throw first;
 }
 
 export function endHook(mode: Mode, error: unknown): never {
@@ -673,12 +708,16 @@ async function main(mode: Mode, admitted = false): Promise<void> {
     const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();
     const options = { root, deadline, logDir: sandbox, prepare, ...(branch ? { ref: branch } : {}) };
     if (mode === "pre-push" && !admitted) {
-      await runSteps(mode, steps.filter(step => step.name === "privacy"), options);
-      if (steps.some(step => step.name !== "privacy")) {
+      const privacy = (cancel?: AbortSignal) => runSteps(mode, steps.filter(step => step.name === "privacy"), { ...options, cancel });
+      const checks = async (cancel: AbortSignal) => {
         const outcome = await execute(["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "pre-push", "--admitted"], root,
-          { ...process.env, ...(deadline ? { LLV_GATE_PUSH_DEADLINE: String(deadline.at + (deadline.cpuWaitMs ?? 0)) } : {}), LLV_OWNED_RUN_TIMEOUT_MS: String(deadline ? Math.max(1, deadline.at + (deadline.cpuWaitMs ?? 0) - Date.now()) : 15 * 60 * 1000) }, Infinity);
+          { ...process.env, ...(deadline ? { LLV_GATE_PUSH_DEADLINE: String(deadline.at + (deadline.cpuWaitMs ?? 0)) } : {}), LLV_OWNED_RUN_TIMEOUT_MS: String(deadline ? Math.max(1, deadline.at + (deadline.cpuWaitMs ?? 0) - Date.now()) : 15 * 60 * 1000) }, Infinity, undefined, cancel);
+        if (outcome.leaked) throw new ContainmentFailed("admitted checks", outcome.leaked, outcome.cancelled);
+        if (outcome.cancelled) return;
         if (outcome.code !== 0) throw new AdmittedGateFailed(outcome.code ?? 1);
-      }
+      };
+      if (steps.some(step => step.name !== "privacy")) await runPushPair(privacy, checks);
+      else await privacy();
     } else {
       await runSteps(mode, admitted ? steps.filter(step => step.name !== "privacy") : steps, options);
     }

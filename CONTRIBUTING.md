@@ -280,9 +280,11 @@ recovery supplies a separate opportunity to identify intermittency.
 Baseline results are not cached. Every failure receives a fresh base sample
 and fresh filtered confirmation runs.
 
-Privacy runs first without admission. The heavy pre-push phase takes one shared
-slot: types then lint run alongside touched tests then Linux checks, the runtime
-chain and native Codex. Each lane stops the others on failure, retains its own
+Mandatory privacy inspection runs without admission alongside the isolated
+pre-push checks. Both verdicts must pass; either refusal or timeout stops the
+other half and waits for owned process cleanup. Privacy keeps its refusal text
+and exit behaviour. The heavy phase takes one shared slot: types then lint run
+alongside touched tests then Linux checks, the runtime chain and native Codex. Each lane stops the others on failure, retains its own
 verdict and uses the shared execution deadline. Nested capped steps reuse the
 admitted slot while retaining their own process scope and quota. Pre-commit
 lint runs directly for up to 40 staged files and takes admission for larger

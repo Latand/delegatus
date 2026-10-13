@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { codexFixture, discover, endingOf, fetchMain, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, pushDeadline, requiresMediaTools, runSteps, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
+import { codexFixture, discover, endingOf, fetchMain, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, pushDeadline, requiresMediaTools, runPushPair, runSteps, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
 import { nativeBatches } from "./verify-native-codex-runtime";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { stopFixtureIdentity } from "../src/lib/testing/fixtureProcess";
@@ -728,3 +728,74 @@ test.skipIf(process.platform !== "linux")("a real push takes one queue ticket an
   expect(calls.some(call => call.args.includes("scripts/eslint-changes.ts"))).toBeTrue();
   expect(calls.some(call => call.args.includes("scripts/local-gate-tests.ts"))).toBeTrue();
 }, 20_000);
+
+for (const failed of ["privacy", "checks"] as const) test(`publication refuses ${failed} after its peer passes`, async () => {
+  const f = hookFixture();
+  writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
+  const record = path.join(f.dir, "record.ts");
+  const source = readFileSync(record, "utf8");
+  writeFileSync(record, source + `
+const privacy = process.argv.includes("scripts/privacy-publication-gate.ts");
+const selected = ${JSON.stringify(failed)} === "privacy" ? privacy : process.argv.includes("tsc");
+if (selected) {
+  const until = Date.now() + 10000;
+  while (!require("node:fs").existsSync(process.env.PEER_PASSED!)) {
+    if (Date.now() > until) throw new Error("peer did not pass");
+    await Bun.sleep(10);
+  }
+  process.exit(19);
+}
+if (${JSON.stringify(failed)} === "privacy" ? process.argv.includes("scripts/local-gate-tests.ts") : privacy)
+  require("node:fs").writeFileSync(process.env.PEER_PASSED!, "passed");
+`);
+  const passed = path.join(f.dir, "peer-passed");
+  const child = Bun.spawn({ cmd: ["bash", ".githooks/pre-push"], cwd: f.dir, env: { ...f.env, PEER_PASSED: passed }, stdout: "pipe", stderr: "pipe" });
+  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(code).toBe(1);
+  expect(existsSync(passed)).toBeTrue();
+  expect(stdout + stderr).toContain(failed === "privacy" ? "pre-push: bun failed (19); gate failed" : 'pre-push: "types" failed: 19; gate failed');
+}, 20000);
+
+test("privacy refusal stops running admitted checks and their detached helper", async () => {
+  const f = hookFixture();
+  writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
+  const record = path.join(f.dir, "record.ts");
+  writeFileSync(record, readFileSync(record, "utf8") + `
+const fs = require("node:fs");
+if (process.argv.includes("tsc")) {
+  const helper = require("node:child_process").spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
+  helper.unref();
+  fs.writeFileSync(process.env.CHECK_PID!, String(process.pid));
+  fs.writeFileSync(process.env.HELPER_PID!, String(helper.pid));
+  await Bun.sleep(60000);
+}
+if (process.argv.includes("scripts/privacy-publication-gate.ts")) {
+  while (!fs.existsSync(process.env.HELPER_PID!)) await Bun.sleep(10);
+  await Bun.sleep(100);
+  process.exit(19);
+}
+`);
+  const check = path.join(f.dir, "check.pid"), helper = path.join(f.dir, "helper.pid");
+  const child = Bun.spawn({ cmd: ["bash", ".githooks/pre-push"], cwd: f.dir, env: { ...f.env, CHECK_PID: check, HELPER_PID: helper }, stdout: "pipe", stderr: "pipe" });
+  const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  const identities = await recordFixtureIdentities([check, helper]);
+  expect(await child.exited).toBe(1);
+  expect((await output).join("")).toContain("pre-push: bun failed (19); gate failed");
+  for (const identity of identities) expect(processIdentityStatus(identity)).toBe("dead");
+}, 20000);
+
+for (const slow of ["privacy", "checks"] as const) test(`a ${slow} deadline preserves its missing-verdict refusal after its peer passes`, async () => {
+  const runner = stepRunner(soon(500), () => ({ slow: "sleep 60", pass: "exit 0" }));
+  const missing = slow === "privacy" ? { name: "privacy", command: [] } : { name: "types", command: [] };
+  let passed = false;
+  const passing = async () => { passed = true; };
+  const timed = (cancel: AbortSignal) => runSteps("pre-push", [missing], {
+    root, deadline: soon(500), logDir: runner.dir, say: () => {}, cancel,
+    prepare: () => ({ command: ["bash", "-c", "sleep 60"], env: process.env }),
+  });
+  const error = await runPushPair(slow === "privacy" ? timed : passing, slow === "checks" ? timed : passing).then(() => null, (error: unknown) => error);
+  expect(passed).toBeTrue();
+  expect(error).toBeInstanceOf(NoVerdict);
+  expect(endingOf("pre-push", error)).toMatchObject({ code: 75 });
+  expect(endingOf("pre-push", error).line).toContain(`"${missing.name}" was still running`);
+}, 15000);

@@ -102,7 +102,9 @@ output retains pre-existing failures, describe ancestry, test names and
 between-tests errors. An incomplete baseline for a red branch blocks unless
 both sides are broken the same way, which lists as pre-existing.
 Samples report elapsed time. Budgets are five minutes per file and fifteen
-minutes per baseline/head test run. Privacy runs first; pre-push takes one admission for independent types/lint,
+minutes per baseline/head test run. Privacy and isolated checks run concurrently
+and both must pass; a refusal or timeout stops the peer and waits for owned process cleanup. Privacy retains its
+refusal text and exit behaviour. Pre-push takes one admission for independent types/lint,
 test, runtime and native lanes. Pre-commit lint on up to 40 files needs no
 admission. Privacy, types and ESLint retain their own checks.
 A push with no changed file against the merge base runs privacy with
