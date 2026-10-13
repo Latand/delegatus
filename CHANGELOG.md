@@ -45,7 +45,11 @@ guarantees for the 1.x series.
   round now show as captioned square tiles in a grid that scrolls down,
   five, three or two columns by window width, and a tile opens the enlarged
   viewer. An agent can publish variants only after the lane's visual critic
-  passed, or after a fix that followed the critic's findings ([#2798]).
+  passed, or after a fix that followed the critic's findings. A linked
+  install must also run 1.12.0 to receive a rejected round: an older one
+  refuses the task update that carries the rejection and keeps syncing
+  rounds where a variant was chosen. Update the linked install before you
+  reject a round on a shared project ([#2798]).
 - **Prototype reviews can reach you in Telegram.** With a Celestia clone
   paired, a published prototype round goes to the paired owner's private
   chat as one message: a carousel per variant, the descriptions, the
@@ -516,9 +520,8 @@ guarantees for the 1.x series.
   and a complete body, so template badges stop matching; it scans a 3.5 MB
   range in 268 seconds where it timed out at 900, and a repeated local scan
   uses about a tenth of the CPU. A repair pull request can pass when the
-  default branch's own privacy self-tests are red, and fixture cleanup has
-  its own 30-second test
-  ([#2701], [#2774], [#2795], [#2702], [#2745]).
+  default branch's own privacy self-tests are red
+  ([#2701], [#2774], [#2795], [#2702]).
 - The merger lets a reviewed replacement of a test supersede unchanged
   copies of the same base version, so an unrelated member's old test no
   longer vetoes it ([#2705]).
@@ -526,11 +529,8 @@ guarantees for the 1.x series.
   probe receives its configured deadline and cleans up its child, and the
   capture drivers bind port 0 and own the server they start
   ([#2707], [#2710]).
-- The relay's owner-tool capture returns the public route objects and is
-  validated against the pinned response schemas, with a five-second pending
-  retry; `ajv` and `ajv-formats` are explicit development dependencies, and
-  the dated exception for the local `braces` mitigation is renewed
-  ([#2771], [#2781]).
+- `ajv` and `ajv-formats` are explicit development dependencies, and the
+  dated exception for the local `braces` mitigation is renewed ([#2771]).
 - New documents: the model outcome analysis for pipelines since 6 October
   and the audit of mechanisms that remain duplicated ([#2690], [#2693]).
 
@@ -3695,7 +3695,6 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2740]: https://github.com/Latand/delegatus/pull/2740
 [#2743]: https://github.com/Latand/delegatus/pull/2743
 [#2744]: https://github.com/Latand/delegatus/pull/2744
-[#2745]: https://github.com/Latand/delegatus/pull/2745
 [#2746]: https://github.com/Latand/delegatus/pull/2746
 [#2747]: https://github.com/Latand/delegatus/pull/2747
 [#2748]: https://github.com/Latand/delegatus/pull/2748
@@ -3729,7 +3728,6 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2778]: https://github.com/Latand/delegatus/pull/2778
 [#2779]: https://github.com/Latand/delegatus/pull/2779
 [#2780]: https://github.com/Latand/delegatus/pull/2780
-[#2781]: https://github.com/Latand/delegatus/pull/2781
 [#2782]: https://github.com/Latand/delegatus/pull/2782
 [#2783]: https://github.com/Latand/delegatus/pull/2783
 [#2785]: https://github.com/Latand/delegatus/pull/2785
