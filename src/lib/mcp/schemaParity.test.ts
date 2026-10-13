@@ -912,7 +912,7 @@ test("spawn_agent and both send tools publish recoveryOnly and the recovery cont
       expect(schema.properties.recoveryOnly).toMatchObject({ type: "boolean", description: expect.stringContaining("never claim an absent key") });
       expect(recoveryOnlyDescription).toContain("nothing is disclosed");
       if (toolName === "spawn_agent") {
-        expect(String(schema.properties.project.description)).toContain("resolved server-side from cwd");
+        expect(String(schema.properties.project.description)).toContain("Must agree with cwd");
       }
       expect(schema.required ?? []).not.toContain("recoveryOnly");
       expect(tool.description).toContain(RECOVERY_CONTRACT_DESCRIPTION);

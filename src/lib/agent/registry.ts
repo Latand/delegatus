@@ -5510,6 +5510,16 @@ export class AgentRegistry {
 
   /** A detached delivery view for one conversation, including historical aliases. */
   conversationDeliverySnapshot(target: { conversationId?: string | null; path?: string }): RegistryFile {
+    return this.scopedConversationSnapshot(target, false);
+  }
+
+  /** Activity attribution needs one conversation's custody, role and launch
+      receipts. It must not hydrate unrelated retained history. */
+  activityConversationSnapshot(artifactPath: string): RegistryFile {
+    return this.scopedConversationSnapshot({ path: artifactPath }, true);
+  }
+
+  private scopedConversationSnapshot(target: { conversationId?: string | null; path?: string }, activity: boolean): RegistryFile {
     return this.readKeyed(file => {
       const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
       const id = target.conversationId ? resolveConversationAlias(file, target.conversationId as ViewerConversationId)
@@ -5525,6 +5535,16 @@ export class AgentRegistry {
         if (generation) {
           const key = `${conversation.engine}:${generation.id}`;
           if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+        }
+      }
+      if (activity) {
+        if (file.memberships[id]) result.memberships[id] = clone(file.memberships[id]!);
+        if (file.lineageEdges[id]) result.lineageEdges[id] = clone(file.lineageEdges[id]!);
+        for (const key of registryKeysMatching(file, "receipts", "conversationId", conversationIdentities(file, id))) {
+          const receipt = file.receipts[key]!;
+          result.receipts[key] = clone(receipt);
+          const parent = receipt.parentConversationId;
+          if (parent && file.conversations[parent]) result.conversations[parent] = clone(file.conversations[parent]!);
         }
       }
       for (const collection of ["heldDeliveries", "deliveryOperationOwners", "deliveryEvidenceCompactions"] as const) {

@@ -15,7 +15,7 @@ import { activeOrchestratorSeats, type OrchestratorSeat } from "@/lib/orchestrat
 import { captureProcessIdentity, processIdentityMayOwn, processIdentityStatus, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
 import { readStableTailRecords, type StableTailRead } from "@/lib/scanner/activity";
-import { loadPipelinesForStartup, pipelineRegistryHealth, withPipelineStartupAdmission } from "@/lib/pipelines/store";
+import { loadPipelinesForStartupAsync, pipelineRegistryHealthAsync, withPipelineStartupAdmission } from "@/lib/pipelines/store";
 
 import {
   adoptClaudeRegistryHosts,
@@ -1621,15 +1621,15 @@ interface PipelineStartupEvidence {
 /** Pipeline attempts and frozen close hosts determine whether startup may create another writer.
     A failed read retains pipeline members without launch or demotion; a
     captured survivor blocks even pending work until its identity is dead. */
-function pipelineStartupEvidence(registry: AgentRegistry, available = true): PipelineStartupEvidence {
+async function pipelineStartupEvidence(registry: AgentRegistry, available = true): Promise<PipelineStartupEvidence> {
   const settled = new Set<string>();
   const deferred = new Set<string>();
   let pipelines;
   let preservedIds: Set<string>;
   try {
     if (!available) throw new Error("pipeline admission authority is unavailable");
-    pipelines = loadPipelinesForStartup();
-    preservedIds = new Set(pipelineRegistryHealth().map((issue) => issue.id));
+    pipelines = await loadPipelinesForStartupAsync();
+    preservedIds = new Set((await pipelineRegistryHealthAsync()).map((issue) => issue.id));
   } catch (error) {
     console.error("[structured hosts] pipeline registry unreadable; deferring pipeline adoption", {
       error: error instanceof Error ? error.message : String(error),
@@ -2066,7 +2066,7 @@ async function adoptStructuredHostsPass(
     const claimHost = (entry: AgentRegistryEntry, owner: ProcessIdentity) =>
       admitState(async (available) => {
         assertActive();
-        const evidence = available ? readEvidence() : pipelineStartupEvidence(registry, false);
+        const evidence = await (available ? readEvidence() : pipelineStartupEvidence(registry, false));
         const conversation = registry.conversationForPath(entry.artifactPath);
         const id = conversation && registry.canonicalConversationId(conversation.id);
         // Selection deliberately admits owed work on already-settled stages.
@@ -2284,7 +2284,7 @@ async function adoptStructuredHostsPass(
     await demoteSkippedStructuredRegistryHosts(registry, shouldRetainCandidateOrAdopt, (entry, mutation) =>
       admitState(async (available) => {
         assertActive();
-        const evidence = available ? readEvidence() : pipelineStartupEvidence(registry, false);
+        const evidence = await (available ? readEvidence() : pipelineStartupEvidence(registry, false));
         const conversation = registry.conversationForPath(entry.artifactPath);
         if (conversation && evidence.deferred.has(registry.canonicalConversationId(conversation.id))) {
           deferredHostKeys.add(sessionKeyId(entry.key));
@@ -2577,7 +2577,7 @@ async function reprobeDeferredStructuredStartup(
 ): Promise<void> {
   let unchanged = true;
   try {
-    const evidence = (dependencies.pipelineEvidence ?? pipelineStartupEvidence)(registry);
+    const evidence = dependencies.pipelineEvidence ? dependencies.pipelineEvidence(registry) : await pipelineStartupEvidence(registry);
     unchanged = [...state.conversationIds].every((id) => evidence.deferred.has(id))
       && fencedPendingSpawnReceipts(registry, evidence.deferred).length >= state.fencedReceipts;
   } catch (error) {

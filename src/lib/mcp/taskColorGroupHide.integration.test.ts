@@ -24,6 +24,12 @@ for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR",
 process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 process.env.LLV_RUNTIME_HOST_SOCKET = path.join(sandbox, "runtime.sock");
 process.env.LLV_RUNTIME_HOST_CONTROL_SOCKET = path.join(sandbox, "absent.sock");
+const { persistProjectAliases } = await import("@/lib/projects/aliases");
+expect(persistProjectAliases([
+  { source: "color-project-fixture-old", target: "color-project", displayName: "color-project" },
+  { source: "seat-project-fixture-old", target: "seat-project", displayName: "seat-project" },
+  { source: "unknown-seat-project-fixture-old", target: "unknown-seat-project", displayName: "unknown-seat-project" },
+])).toBe(true);
 const { viewerMcpBindings } = await import("./bindings");
 const { createMcpToolService, createViewerMcpServer, SqliteMcpReceiptStore } = await import("./server");
 const { TASKS_FILE, loadTasks, saveTasks } = await import("@/lib/tasks/store");
@@ -69,6 +75,7 @@ function seatFor(project: string, conversationId: string) {
 }
 
 test("update_task publishes the colour names and the hide, and both land in the task file", async () => {
+  seatFor("color-project", "conversation_color_fixture");
   const p = await protocol();
   try {
     const { tools } = await p.client.listTools();
@@ -106,12 +113,12 @@ test("the dashboard's PATCH hides as the operator, and both surfaces refuse the 
   const p = await protocol();
   try {
     const project = "seat-project";
+    seatFor(project, "conversation_seat_fixture");
     const plain = await p.call("create_task", { project, text: "Plain group" });
     const seatTask = await p.call("create_task", { project, text: "Orchestrator group" });
     saveTasks(loadTasks().map((row) => row.id === seatTask.task.id
       ? { ...row, assignments: [{ path: "/fixture/seat.jsonl", conversationId: "conversation_seat_fixture", panePid: null, state: "linked", error: null, at: "2026-09-14T09:00:00.000Z" }] }
       : row));
-    seatFor(project, "conversation_seat_fixture");
 
     const plainRow = loadTasks().find((row) => row.id === plain.task.id) as TaskWithRevision;
     const response = await patchHttp(plain.task.id, { hide: true, expectedProject: plainRow.project, expectedRevision: plainRow.revision });
@@ -142,6 +149,7 @@ test("a seat record the store cannot establish refuses every hide with 503 on bo
   const seats = statePath("orchestrator-seats.json");
   try {
     const project = "unknown-seat-project";
+    seatFor(project, "conversation_unknown_seat_fixture");
     const created = await p.call("create_task", { project, text: "Group under an unreadable seat record" });
     const row = () => loadTasks().find((candidate) => candidate.id === created.task.id) as TaskWithRevision;
     const fence = () => ({ expectedProject: row().project, expectedRevision: row().revision });

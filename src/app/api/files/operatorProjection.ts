@@ -1,10 +1,11 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 
 import { agentRegistry } from "@/lib/agent/registry";
 import { SEAT_DECISIONS_COLLECTION } from "@/lib/prototypeReview/seatRounds";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
-import { pipelineRegistryHealth } from "@/lib/pipelines/store";
+import { pipelineRegistryHealthAsync } from "@/lib/pipelines/store";
 import { bridgeReportLogSignature } from "@/lib/bridge/store";
 import { stateDir, statePath } from "@/lib/configDir";
 import { isDiskFullError, noteStateCommit, noteStateDiskFull, stateWriteHealth, STATE_DISK_FULL_FLOOR_BYTES, type StateWriteHealth } from "@/lib/state/diskFull";
@@ -499,7 +500,7 @@ async function projectionFor(
             headers: [...headers.entries()],
             ...(fromFile ? { snapshotFile: persistedSnapshot } : { snapshot }),
             ...(summary ? { deltaScope: createHash("sha1").update(scopeKey).digest("hex") } : {}),
-          });
+          }, undefined, summary ? previous : undefined);
           // Result-file transport recovers independently of state-data writes.
           // The body may itself report a state write failure from the worker.
           projectionCacheStore.__llvFilesWorkerWriteFailedSince = undefined;
@@ -529,7 +530,8 @@ async function projectionFor(
       representation = await inlineProjection();
     }
     representation = withCurrentWriteHealth(representation);
-    if (summary && previous && previous.etag !== representation.etag) representation.delta = {
+    if (summary && previous && previous.etag !== representation.etag
+      && representation.delta?.base !== previous.etag) representation.delta = {
       base: previous.etag,
       body: diffFilesBodies(previous.body, representation.body, previous.etag, representation.etag),
     };
@@ -610,13 +612,17 @@ export function HEAD(request: Request): Response {
 }
 
 export async function GET(request: Request): Promise<Response> {
+  return withViewerOperation("files.get", () => getFiles(request));
+}
+
+async function getFiles(request: Request): Promise<Response> {
   const requiredRevision = generationHeader(request, "x-llv-files-revision");
   const requiredGeneration = generationHeader(request, "x-llv-files-generation");
   const url = new URL(request.url);
   // This live health poll must work while writes and durable events are refused.
   // Return before presence, scans, migrations and projection-worker transport.
   if (url.searchParams.get("view") === "storage-health") {
-    return Response.json({ ...currentWriteHealth(), registryIssues: pipelineRegistryHealth() }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json({ ...currentWriteHealth(), registryIssues: await withViewerOperation("files.health", pipelineRegistryHealthAsync) }, { headers: { "Cache-Control": "no-store" } });
   }
   const selectedProject = url.searchParams.get("project")?.trim() || undefined;
   markBoardViewed(selectedProject);

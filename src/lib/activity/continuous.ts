@@ -1,4 +1,5 @@
 import { agentRegistry, type RegistryFile } from "@/lib/agent/registry";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { statePath } from "@/lib/configDir";
 
 import { conversationResolver } from "./conversationResolver";
@@ -28,9 +29,9 @@ function state(): ContinuousState {
   return host.__llvActivityRecord ??= { lastPulls: {} };
 }
 
-function registrySnapshot(): RegistryFile | null {
+function registrySnapshot(artifactPath: string): RegistryFile | null {
   try {
-    return agentRegistry().readOnlySnapshot();
+    return agentRegistry().activityConversationSnapshot(artifactPath);
   } catch {
     /* Unreadable: only the marker and the typed flag decide, and delivered
        sessions wait as unregistered. */
@@ -46,12 +47,12 @@ export async function recordActivityFromIndexFeed(
   const startedAt = Date.now();
   const store = ActivityStore.open();
   try {
-    const result = await ingestTranscripts(sources, {
+    const result = await withViewerOperation("activity.ingest", () => ingestTranscripts(sources, {
       complete,
       listedAt,
       store,
-      resolver: () => conversationResolver(registrySnapshot()),
-    });
+      resolver: () => conversationResolver(facts => registrySnapshot(facts.path)),
+    }));
     state().lastIngest = { ...result, durationMs: Date.now() - startedAt, at: startedAt };
     if (result.failures.length) {
       console.error(`[activity] ${result.failures.length} transcript(s) could not be read; a later pass retries them`);

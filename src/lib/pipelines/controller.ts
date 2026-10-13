@@ -1,3 +1,4 @@
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -308,7 +309,7 @@ export class FlowPipelineController {
 
     const startedAt = this.ports.now();
     this.publish({ cycle, pass, trigger, phase, state: "running", startedAt });
-    const promise = Promise.resolve().then(work);
+    const promise = Promise.resolve().then(() => withViewerOperation(`controller.${phase}`, work));
     const lease: ActivePhase<T> = { startedAt, promise };
     this.activePhases.set(phase, lease);
     void promise.then(

@@ -1,3 +1,4 @@
+import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -881,6 +882,7 @@ export async function installSpawnCapabilityResolverAtStartup(): Promise<void> {
 }
 
 export async function registerViewerRuntime(): Promise<void> {
+  viewerLoopMonitor.start();
   discardUnsupportedApiCredentials();
 
   await installSpawnCapabilityResolverAtStartup();

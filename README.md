@@ -788,7 +788,14 @@ The tools, by area:
   seat's `create_task`, `create_pipeline` or `spawn_agent` on another project
   is refused with a pointer to `send_message_to_orchestrator`, which
   designates that project's orchestrator first when it has none, unless you
-  asked for it and the seat quotes your request in `crossProjectRequest`;
+  asked for it and the seat quotes your request in `crossProjectRequest`.
+  Project inputs accept known keys, display names and repository names in any
+  letter case, with surrounding whitespace. Lookup uses known project
+  identities without waiting for catalog scan completion. Ambiguous names
+  refuse immediately with candidate keys; unknown names say “no such project”
+  and list close matches. Named `create_task` inputs store the canonical key;
+  optional `project` on `create_pipeline` and `spawn_agent` must agree with
+  `repoDir` and `cwd`, respectively;
 - **accounts:** `account_limits`, `account_project_binding`,
   `conversation_migration`;
 - **roles:** `role_presets` reads which engine, model and effort each role
@@ -855,6 +862,13 @@ The command starts two processes: the web app, and the runtime host that
 launches and supervises agents. Ctrl-C stops both. Delegatus listens on
 `127.0.0.1` unless you pass `--hostname`, and opens the page in your browser
 when it can. Set `DELEGATUS_DEBUG=1` to print startup diagnostics.
+
+The web process logs `[viewer loop-gap]` when a ten-millisecond timer is more
+than 500 ms late. The entry names bounded request and controller operations,
+including operations that completed before the delayed tick. A
+`[state lease-hold]` entry names a pipelines lease held for more than one
+second, measured from durable acquisition through release. These entries carry
+operation names and durations without request bodies or account identifiers.
 
 Delegatus used to be called Agent Log Viewer. The old `agent-log-viewer`
 command still works and prints a one-line notice.

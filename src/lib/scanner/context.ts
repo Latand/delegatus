@@ -7,6 +7,13 @@ import { claudeCapacity, claudeCapacityHints, usableContextCapacity, type Contex
 
 const ctxCache = globalCache<[number, number, CtxUsage | null, string | null]>("ctx-v3");
 
+/** Warm-start a validated complete file using the reader's current cache
+    contract, including the model that determines Claude's capacity. */
+export function primeContextUsage(entry: FileEntry): void {
+  if (entry.ctx != null && (typeof entry.ctx !== "object" || typeof entry.ctx.usedTokens !== "number" || typeof entry.ctx.observedAt !== "string")) return;
+  ctxCache.set(entry.path, [entry.size, entry.mtime * 1000, entry.ctx ?? null, entry.launchModel ?? null]);
+}
+
 function unknownUsage(usedTokens: number, observedAt: string): CtxUsage {
   return { usedTokens, windowTokens: null, pct: null, source: "unknown", confidence: "unknown", observedAt };
 }

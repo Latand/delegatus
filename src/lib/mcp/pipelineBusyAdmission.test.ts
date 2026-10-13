@@ -25,6 +25,8 @@ process.env.LLV_CODEX_HOME = path.join(sandbox, "codex");
 fs.mkdirSync(path.join(process.env.LLV_CODEX_HOME, "sessions"), { recursive: true });
 
 const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+const busyProject = (await import("@/lib/scanner/describe")).projectForCwd(process.cwd())!;
 const { agentRegistry } = await import("@/lib/agent/registry");
 const pipelineStore = await import("@/lib/pipelines/store");
 const { loadPipelines, withPipelineMutation } = pipelineStore;
@@ -32,6 +34,7 @@ const { getPipelines, tickPipelines } = await import("@/lib/pipelines/engine");
 const { publishHotStateAuthority } = await import("@/lib/state/hotStateAuthority");
 const { isoNow } = await import("@/lib/tasks/helpers");
 const { mutateTasks } = await import("@/lib/tasks/store");
+const { projectForCwd } = await import("@/lib/scanner/describe");
 const { FileTransactionBusyError } = await import("@/lib/state/fileTransaction");
 const { productionDomainDependencies, viewerMcpBindings, viewerMcpRecoverableTools } = await import("./bindings");
 const { SqliteMcpReceiptStore, createMcpToolService } = await import("./server");
@@ -74,6 +77,8 @@ function seedCaller(): { conversationId: ViewerConversationId; path: string } {
 }
 
 const caller = seedCaller();
+beginOrchestratorSeatIntent({ project: busyProject, mandate: "own the board", clientRequestId: "pipeline-busy-seat", mode: "existing", conversationId: "conversation_pipeline_busy_seat" });
+completeOrchestratorSeatIntent({ project: busyProject, clientRequestId: "pipeline-busy-seat", conversationId: "conversation_pipeline_busy_seat", path: null });
 const receiptsPath = path.join(sandbox, "mcp-receipts.sqlite");
 const receipts = new SqliteMcpReceiptStore(receiptsPath);
 const recovery = viewerMcpRecoverableTools({ ...productionDomainDependencies,
@@ -322,7 +327,7 @@ test("a link-task refused on the task lock keeps its id too", async () => {
   const board = await linkService.callTool("create_task", {
     clientRequestId: `link-task-${crypto.randomUUID()}`,
     text: task,
-    project: path.basename(process.cwd()),
+    project: projectForCwd(process.cwd())!,
   });
   expect(board.ok).toBe(true);
   const taskId = board.ok ? board.taskId : null;

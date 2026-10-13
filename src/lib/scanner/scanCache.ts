@@ -7,6 +7,7 @@ import { fsyncPath, readJsonCache } from "@/lib/state/durableJson";
 import type { listFilesWithProjectCatalog } from "@/lib/scanner";
 import { primeTranscriptTurnEvidence } from "@/lib/scanner/activity";
 import { globalCache } from "@/lib/scanner/caches";
+import { primeContextUsage } from "@/lib/scanner/context";
 import { primePersistedLineageFacts } from "@/lib/scanner/links";
 import { QUESTION_CACHE_NAME } from "@/lib/scanner/questions";
 import { FileScanIncompleteError, isFileScanIncompleteError } from "@/lib/scanner/incompleteScan";
@@ -267,7 +268,7 @@ function primePersistedFileDerivations(snapshot: FileScanSnapshot): void {
     }
     if (Object.hasOwn(entry, "plan")) globalCache<[number, number, FileEntry["plan"]]>("plan-v2").set(entry.path, [entry.size, mtimeMs, entry.plan]);
     if (Object.hasOwn(entry, "goal")) globalCache<[number, number, FileEntry["goal"]]>("goal-v2").set(entry.path, [entry.size, mtimeMs, entry.goal]);
-    if (Object.hasOwn(entry, "ctx")) globalCache<[number, number, FileEntry["ctx"]]>("ctx-v2").set(entry.path, [entry.size, mtimeMs, entry.ctx]);
+    if (Object.hasOwn(entry, "ctx")) primeContextUsage(entry);
     if (Object.hasOwn(entry, "lastTurn")) {
       globalCache<[number, number, FileEntry["lastTurn"]]>("last-turn-v5").set(entry.path, [entry.size, mtimeMs, entry.lastTurn]);
     }
