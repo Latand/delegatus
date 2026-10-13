@@ -67,6 +67,97 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("Overview incremental catalog", () => {
+  browserTest("measures changed files payloads with the rendered catalog unchanged", async () => {
+    const out = path.resolve(".artifacts/overview-performance");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    let baselineOutput: string | undefined;
+    let baselineGeometry: Array<{ id: string | null; x: number; y: number; width: number; height: number }> | undefined;
+    try {
+      for (const variant of process.env.OVERVIEW_BASELINE_BUNDLE ? ["main", "incremental"] : ["candidate"]) {
+        const { context, page, pageErrors } = await openFixture(browser, "about:blank", VIEWPORT, "dark", "en", "reduce");
+        try {
+          // Fix the display clock alone: Playwright's clock also replaces the
+          // Performance API whose real long tasks this case measures.
+          await page.addInitScript(() => { Date.now = () => 1_791_856_800_000; });
+          const metrics = await context.newCDPSession(page);
+          await metrics.send("Performance.enable");
+          const taskTime = async () => (await metrics.send("Performance.getMetrics")).metrics.find(metric => metric.name === "TaskDuration")!.value * 1000;
+          if (variant === "main" && process.env.OVERVIEW_BASELINE_BUNDLE) {
+            await page.route("**/app.js", route => route.fulfill({ path: process.env.OVERVIEW_BASELINE_BUNDLE!, contentType: "text/javascript" }));
+          }
+          await page.addInitScript(() => {
+            const timings: { start: number; duration: number }[] = [];
+            new PerformanceObserver(list => {
+              for (const entry of list.getEntries()) timings.push({ start: entry.startTime, duration: entry.duration });
+            }).observe({ type: "longtask", buffered: true });
+            Object.assign(window, { overviewLongTasks: timings });
+          });
+          await page.goto(`${server.base}?scenario=overview-performance&cards=closed`);
+          await page.locator(card("catalog-0")).waitFor({ timeout: 30_000 });
+          await page.waitForTimeout(1500);
+          type TraceEvent = { name: string; ph: string; ts: number; dur?: number; pid: number; tid: number; args?: { name?: string } };
+          const trace: TraceEvent[] = [];
+          metrics.on("Tracing.dataCollected", event => trace.push(...event.value as unknown as TraceEvent[]));
+          await metrics.send("Tracing.start", { categories: "toplevel,blink.user_timing", transferMode: "ReportEvents" });
+          const samples = [];
+          for (let sample = 0; sample < 8; sample++) {
+            const before = await taskTime();
+            const start = await page.evaluate(() => {
+              (window as unknown as { overviewPoll(): void }).overviewPoll();
+              return performance.getEntriesByName("overview-poll").at(-1)!.startTime;
+            });
+            await page.waitForTimeout(1000);
+            const timing = await page.evaluate(start => {
+              const tasks = (window as unknown as { overviewLongTasks: { start: number; duration: number }[] }).overviewLongTasks.filter(task => task.start >= start);
+              return { longTasks: tasks.map(task => task.duration), totalBlockingMs: tasks.reduce((sum, task) => sum + task.duration - 50, 0) };
+            }, start);
+            samples.push({ ...timing, taskDurationMs: Math.round(((await taskTime()) - before) * 10) / 10 });
+          }
+          const traceDone = new Promise<void>(resolve => metrics.once("Tracing.tracingComplete", () => resolve()));
+          await metrics.send("Tracing.end");
+          await traceDone;
+          const marks = trace.filter(event => event.name === "overview-poll");
+          const longestTasks = marks.map((mark, i) => {
+            const end = marks[i + 1]?.ts ?? mark.ts + 1_000_000;
+            return Math.max(0, ...trace.filter(event => event.pid === mark.pid && event.tid === mark.tid
+              && event.ph === "X" && /(?:^|::)RunTask$/.test(event.name) && event.ts + (event.dur ?? 0) > mark.ts && event.ts < end).map(event => (event.dur ?? 0) / 1000));
+          });
+          fs.writeFileSync(path.join(out, `${variant}-trace.json`), JSON.stringify(trace));
+          const output = await page.locator("[data-kanban-board]").innerText();
+          const geometry = await page.locator("[data-kanban-board]").evaluate(board => [...board.querySelectorAll(".card[data-id]")].map(element => {
+            const rect = element.getBoundingClientRect();
+            return { id: element.getAttribute("data-id"), x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+          }));
+          readings.push({ variant, browser: browser.version(), viewport: VIEWPORT, catalog: { projects: 194, conversations: 1071, tasks: 1331, pipelines: 1071 }, samples: samples.map((sample, i) => ({ ...sample, longestTaskMs: longestTasks[i] })), renderedText: output, geometry });
+          fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+          if (baselineOutput !== undefined) expect(output).toBe(baselineOutput);
+          if (baselineGeometry !== undefined) expect(geometry).toEqual(baselineGeometry);
+          baselineOutput = output;
+          baselineGeometry = geometry;
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${variant}.png`) });
+          if (process.env.OVERVIEW_CPU_PROFILE && variant !== "main") {
+            await metrics.send("Profiler.enable");
+            await metrics.send("Profiler.start");
+            await page.evaluate(() => (window as unknown as { overviewPoll(): void }).overviewPoll());
+            await page.waitForTimeout(1000);
+            const { profile } = await metrics.send("Profiler.stop");
+            fs.writeFileSync(path.join(out, "poll.cpuprofile"), JSON.stringify(profile));
+          }
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+      const evidence = path.resolve("evidence/overview-performance");
+      fs.mkdirSync(evidence, { recursive: true });
+      fs.writeFileSync(path.join(evidence, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("CPU admission queue", () => {
   browserTest("the waiting card shows queue position and remaining minutes in en and uk", async () => {
     const out = path.resolve(".artifacts/cpu-queue");

@@ -78,6 +78,7 @@ import { refreshTeamView } from "@/components/team/teamClient";
  */
 
 const SCENARIO = new URLSearchParams(location.search).get("scenario");
+const OVERVIEW_PERFORMANCE = SCENARIO === "overview-performance";
 /* A task another machine runs (docs/design/synced-task-card.md): four tasks owned by the linked stage
    install, one of them with no lane (an older peer), beside the board's own local ones. The page
    answers nothing about them; the driver serves `/api/links/agents` with this install's id, the host
@@ -2992,6 +2993,32 @@ Object.assign(window, {
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
+/* A production-shaped, invented catalog for the landing board's poll cost.
+   Keep inactive history: the Overview still projects it before filtering. */
+if (OVERVIEW_PERFORMANCE) {
+  files.length = 0; tasks.length = 0; pipelines.length = 0; flows.length = 0;
+  for (let i = 0; i < 1071; i++) {
+    const project = `catalog-${i % 194}`;
+    files.push(conversation(`catalog-${i}`, `Catalog worker ${i}`, {
+      project, ...(i < 12 ? working() : {}),
+    }));
+  }
+  for (let i = 0; i < 1331; i++) {
+    const project = `catalog-${i % 194}`;
+    const member = files[i];
+    tasks.push(task(`catalog-${i}`, i < 12 ? "assigned" : "done", `Catalog task ${i}`, "", 60 + i, member ? [member] : [], { project }));
+    if (member) pipelines.push(pipeline(`catalog-${i}`, `Catalog task ${i}`, `catalog-${i}`, i < 12 ? "running" : "completed",
+      [stage("build", "builder", "review"), stage("review", "reviewer", null)],
+      [{ stageId: "build", attempts: [attempt(1, i < 12 ? "running" : "passed", member)] }],
+      { stageId: "build", state: i < 12 ? "running" : "completed", input: null, activatedBy: null }, { project }));
+  }
+  Object.assign(window, { overviewPoll: () => {
+    files[0] = { ...files[0], size: files[0].size + 1 };
+    performance.mark("overview-poll");
+    fireTasksChanged();
+  } });
+}
+
 /* The task album (`&album=1`): the search task's pictures across its stages
    and a conversation, as `GET /api/tasks/:id/album` answers them, and the
    export task's, all seen. The pictures are drawn on a canvas in the shapes an
@@ -4346,7 +4373,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 
 /* #1820's scenarios ARE the Overview, which is the view with no project
    selected; every other scenario opens on `atlas`'s own board. */
-const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY || new URLSearchParams(location.search).get("railview") === "overview";
+const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY || OVERVIEW_PERFORMANCE || new URLSearchParams(location.search).get("railview") === "overview";
 if (OVERVIEW_VIEW) localStorage.removeItem("llvProject");
 else localStorage.setItem("llvProject", PROJECT);
 /* The harness may seed a language before this module runs (`openFixture`), so
