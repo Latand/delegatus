@@ -1,4 +1,4 @@
-import { AccountMutationBusyError, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { AccountMutationBusyError } from "@/lib/accounts/accountMutation";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { resolveContinuityAccount } from "@/lib/accounts/manager";
@@ -440,12 +440,8 @@ async function recoverCandidate(
     };
     let begun: SpawnBeginResult;
     try {
-      begun = await withAccountMutationLockAsync(async () => {
-        // Admission may have closed while recovery waited for this lease.
-        assertRecoveryAdmission(request, registry);
-        await assertAccountAuthorized();
-        request.admissionGuard?.();
-        return await registry.beginSpawnRequestAsync({
+      await assertAccountAuthorized();
+      begun = await registry.beginSpawnRequestAsync({
           engine: current.engine,
           cwd: current.spec.cwd,
           transport: "structured",
@@ -456,8 +452,12 @@ async function recoverCandidate(
           origin: { kind: "successor" },
           expectedArtifactPath: current.path,
           launchProfile: current.spec.launchProfile,
+        }, () => {
+          // Recheck authority after both authorization and writer admission.
+          assertRecoveryAdmission(request, registry);
+          request.authorityGuard?.();
+          request.admissionGuard?.();
         });
-      }, { holder: "resume admission", caller: "resume" });
     } catch (error) {
       /* #1716: the lock throws its typed busy refusal from the acquire, before
          the reservation's transaction is admitted, so this recovery reserved

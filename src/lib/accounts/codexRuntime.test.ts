@@ -175,6 +175,19 @@ test("managed login keeps one per-home child until completion and returns only c
   expect(children[0]!.kills).toBe(1);
 });
 
+test("login observation closes its child after releasing the account lease", async () => {
+  const home = path.join(RUNTIME_SANDBOX, "close-outside-lease");
+  const child = new FakeChild();
+  const held: boolean[] = [];
+  child.kill = () => { held.push(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "account-selection.lock"))); return true; };
+  const runtime = fixtureRuntime({ startClient: async () => CodexAppServerClient.start({ readProtocolVersion: () => "0.162.1", home, spawn: () => child as never }) });
+  const work = account("close-outside-lease", home);
+  await runtime.startLogin(work);
+  child.authenticated = true;
+  expect((await runtime.loginSnapshot(work)).state).toBe("authenticated");
+  expect(held).toEqual([false]);
+});
+
 test("lock contention defers Codex completion persistence and still closes the client", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-contention-"));
   const previousState = process.env.LLV_STATE_DIR;

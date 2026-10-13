@@ -16,6 +16,9 @@ import { reconcileDeadStructuredRegistryHost } from "./registry";
 import { recoverDeadStructuredConversation, StructuredResumeUnpublishedError } from "./structuredRecovery";
 import { structuredResumeSessionId } from "./structuredSpawn";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { statePath } from "@/lib/configDir";
+import { trackAccountLeases } from "@/lib/accounts/accountMutation.contention.fixture";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-recovery-"));
 /* Publish-readiness now reads the limits cache out of the viewer state dir, so
@@ -23,6 +26,48 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-recovery-"
    write the state directory the running viewer owns. */
 process.env.LLV_STATE_DIR = path.join(sandbox, "state");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+
+test("recovery authorization waits outside admission and a racing revocation reserves nothing", async () => {
+  const sessionId = crypto.randomUUID();
+  const cwd = path.join(sandbox, sessionId);
+  const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
+  fs.mkdirSync(cwd, { recursive: true }); fs.writeFileSync(artifactPath, "");
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = registry.ensureConversation("codex", artifactPath, "default");
+  registry.upsert({ key: { engine: "codex", sessionId }, artifactPath, cwd, accountId: "default",
+    launchProfile: emptyLaunchProfile({ cwd }), status: "dead", host: null, structuredHost: null,
+    claimEpoch: 1, claimOwner: null, pendingAction: null });
+  let enter!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { enter = resolve; });
+  const slow = new Promise<void>(resolve => { release = resolve; });
+  let revoked = false, spawns = 0;
+  let leaseHeldDuringProbe = false;
+  const leases = trackAccountLeases();
+  const recovery = recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id,
+    authorityGuard: () => { if (revoked) throw new Error("authority changed"); },
+  }, { registry, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+    resolveAccount: () => ({ engine: "codex", accountId: "default", kind: "legacy", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+    ownership: { operationId: "authorization-race", revision: 1, owns: async () => true, releaseHost: async () => true,
+      authorizeAccount: async () => {
+        leaseHeldDuringProbe = fs.existsSync(statePath("account-selection.lock"));
+        enter();
+        await slow;
+      } },
+    spawn: async () => { spawns++; throw new Error("unexpected spawn"); },
+  }).then(() => null, error => error as Error);
+  try {
+    await ready;
+    await withAccountMutationLockAsync(() => { revoked = true; }, { waitMs: 100 });
+    release();
+    expect((await recovery)?.message).toBe("authority changed");
+    expect(leaseHeldDuringProbe).toBe(false);
+    expect(spawns).toBe(0);
+    expect(Object.keys(registry.readOnlySnapshot().receipts)).toHaveLength(0);
+  } finally {
+    revoked = true; release(); await recovery; leases.stop(); registry.close();
+    console.info(JSON.stringify({ measurement: "recovery authorization", maxHoldMs: Math.max(0, ...leases.holds) }));
+  }
+});
 
 test.each(["settled", "unsettled", "retained host", "authority refusal"] as const)("an immediate resume error with %s evidence retains its recovery meaning", async evidence => {
   const sessionId = crypto.randomUUID();

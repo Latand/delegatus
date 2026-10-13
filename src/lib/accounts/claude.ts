@@ -5,9 +5,9 @@ import os from "node:os";
 import path from "node:path";
 
 import { stateDir, statePath } from "@/lib/configDir";
-import { CLAUDE_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
+import { CLAUDE_ACCOUNTS_SOURCE, CLAUDE_LOGIN_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import { claudeCredentialFileState, readClaudeCredentials, type ClaudeCredentialRead } from "./claudeCredentials";
-import { withAccountMutationLock } from "./accountMutation";
+import { AccountMutationBusyError, withAccountMutationLock } from "./accountMutation";
 import { providerSecretsAtHome, retainProviderRedactionSecrets } from "./providerSecretRedaction";
 import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, cleanupAccountProviderSidecars, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retireAccountInPlace, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
 import type { AccountPathRewrite, AccountRetirementReport } from "@/lib/agent/registry";
@@ -20,7 +20,6 @@ const CAPABILITY_FILES = ["settings.json"] as const;
 const PRIVATE_NAMES = new Set([".credentials.json", ".provider-token", ".provider-headers", ".provider-runtime", ".provider-auth-health", ".claude.json", "projects", "history.jsonl", "session-env", "shell-snapshots", "file-history", "todos", "cache", "debug", "backups", "paste-cache", "plugins", "mcp.json", "settings.local.json"]);
 const MAX_CAPABILITY_FILES = 2_000;
 const MAX_CAPABILITY_BYTES = 16 * 1024 * 1024;
-const REGISTRY_LOCK_WAIT_MS = 5_000;
 const REGISTRY_LOCK_STALE_MS = 30_000;
 
 export type ClaudeAccount = {
@@ -268,35 +267,39 @@ function readLegacyRegistryFile(): Loaded {
   catch { return { registry: defaults(), corrupt: true }; }
 }
 function mutable(): Registry { const loaded = readRegistry(); if (loaded.corrupt) throw new CorruptClaudeAccountsError(); return loaded.registry; }
-function sleep(ms: number): void { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 function registryLockPath(): string { return `${claudeRegistryPath()}.lock`; }
-/* The file lock is only ever taken inside the account mutation lock, so a lock
-   left by a process that died (a crash mid-removal, #1857) is released at once
-   instead of stalling every account mutation for the staleness window. */
+/* The existing engine guard serializes home preparation and archive recovery.
+   Acquire it before the account lease; a busy owner never holds up admission. */
 function registryLockOwnerGone(lock: string): boolean {
   try {
     const pid = Number.parseInt(fs.readFileSync(lock, "utf8"), 10);
-    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return false;
+    if (!Number.isSafeInteger(pid) || pid <= 0) return Date.now() - fs.statSync(lock).mtimeMs > REGISTRY_LOCK_STALE_MS;
+    if (pid === process.pid) return false;
     process.kill(pid, 0);
     return false;
   } catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
 }
-function withRegistryLock<T>(operation: () => T): T {
-  return withAccountMutationLock(() => {
-    const lock = registryLockPath(); const started = Date.now(); fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
-    for (;;) {
+function withRegistryLock<T>(operation: () => T, mutation = true): T {
+  const lock = registryLockPath();
+  fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+  for (;;) {
+    let fd: number;
+    try { fd = fs.openSync(lock, "wx", 0o600); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       try {
-        const fd = fs.openSync(lock, "wx", 0o600);
-        try { fs.writeFileSync(fd, `${process.pid}\n`, "utf8"); return operation(); }
-        finally { fs.closeSync(fd); fs.rmSync(lock, { force: true }); }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        try { if (registryLockOwnerGone(lock) || Date.now() - fs.statSync(lock).mtimeMs > REGISTRY_LOCK_STALE_MS) { fs.rmSync(lock, { force: true }); continue; } } catch { continue; }
-        if (Date.now() - started >= REGISTRY_LOCK_WAIT_MS) throw new Error("Claude account registry is busy; retry shortly");
-        sleep(10);
-      }
+        if (registryLockOwnerGone(lock)) {
+          fs.rmSync(lock, { force: true });
+          continue;
+        }
+      } catch { continue; }
+      throw new AccountMutationBusyError();
     }
-  });
+    try {
+      fs.writeFileSync(fd, `${process.pid}\n`, "utf8");
+      return mutation ? withAccountMutationLock(operation) : operation();
+    } finally { fs.closeSync(fd); fs.rmSync(lock, { force: true }); }
+  }
 }
 /** One transaction: the account rows, the retired records and the removal
     journal step commit together, and the collection revision — the account
@@ -524,7 +527,13 @@ export function createManagedClaudeAccount(label: string, provider?: { config: C
         writeProviderRuntime(home, { config: config!, token: provider.token, headers: provider.headers ?? {} });
         retainProviderRedactionSecrets([provider.token, ...Object.values(provider.headers ?? {})]);
       }
-      const stored: StoredAccount = { id, label: clean, kind: "managed", createdAt: Date.now(), ...(config ? { provider: config } : {}) }; write({ ...registry, accounts: [...registry.accounts, stored] }); return account(stored);
+      const stored: StoredAccount = { id, label: clean, kind: "managed", createdAt: Date.now(), ...(config ? { provider: config } : {}) };
+      withAccountMutationLock(() => {
+        const current = mutable();
+        if (current.accounts.some(item => item.id === id) || current.retired.some(item => item.id === id)) throw new UnsafeClaudeHomeError();
+        write({ ...current, accounts: [...current.accounts, stored] });
+      });
+      return account(stored);
     } catch (error) {
       if (made) {
         try {
@@ -536,7 +545,7 @@ export function createManagedClaudeAccount(label: string, provider?: { config: C
       }
       throw error;
     }
-  });
+  }, false);
 }
 
 export function updateProviderClaudeAccount(id: string, config: ClaudeProviderConfig, token?: string, label?: string, headers?: Record<string, string>): ClaudeAccount {
@@ -642,7 +651,10 @@ function claudeArchiveRewrites(home: string, archive: string): Array<{ from: str
 }
 
 function writeJournal(id: string, phase: AccountRemovalJournalPhase | null, rewrites?: readonly AccountPathRewrite[]): void {
-  const current = mutable(); write({ ...current, removals: withAccountRemovalJournal(current.removals, id, phase, rewrites) });
+  withAccountMutationLock(() => {
+    const current = mutable();
+    write({ ...current, removals: withAccountRemovalJournal(current.removals, id, phase, rewrites) });
+  });
 }
 
 /** The registry once `id` is removed: it leaves, a retired record points at
@@ -674,7 +686,7 @@ function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } 
         listed: registry.accounts.some((item) => item.id === entry.id),
         retiredInPlace: registry.retired.some((item) => item.id === entry.id && !item.archived),
         fallbackAccountId: fallbackAccountId(registry, entry.id),
-        commitRetired: () => { write(withAccountRetired(mutable(), entry.id)); },
+        commitRetired: () => { withAccountMutationLock(() => write(withAccountRetired(mutable(), entry.id))); },
         clearJournal: () => writeJournal(entry.id, null),
       });
     } catch { /* stays journaled; one stuck record never blocks another account */ }
@@ -687,7 +699,7 @@ function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } 
 /** Settles removals a crash interrupted (issue #1857): an unfinished move is
     undone, a committed one is finished. */
 export function recoverInterruptedClaudeAccountRemovals(): { recovered: string[]; unresolved: string[] } {
-  return withRegistryLock(() => recoverRemovalsLocked());
+  return withRegistryLock(() => recoverRemovalsLocked(), false);
 }
 
 let startupRecoveryDone = false;
@@ -715,7 +727,7 @@ export function removeManagedClaudeAccount(id: string): AccountArchiveRemovalRep
     recoverRemovalsLocked();
     const registry = mutable(); const existing = registry.accounts.find((item) => item.id === id); if (!existing) throw new UnknownClaudeAccountError(id);
     if (existing.provider) retainProviderRedactionSecrets(providerSecretsAtHome(managedHome(id)));
-    const before: Registry = { ...registry, removals: withAccountRemovalJournal(registry.removals, id, null) };
+    let before: Registry = { ...registry, removals: withAccountRemovalJournal(registry.removals, id, null) };
     const report = removeManagedAccountIntoArchive({
       engine: "claude",
       accountId: id,
@@ -724,14 +736,24 @@ export function removeManagedClaudeAccount(id: string): AccountArchiveRemovalRep
       homeIsSafe: () => managedClaudeHomeIsSafe(id, true),
       unsafeHome: () => new UnsafeClaudeHomeError(),
       rewrites: claudeArchiveRewrites,
+      validate: () => {
+        const current = mutable();
+        const account = current.accounts.find(item => item.id === id);
+        if (!account || account.createdAt !== existing.createdAt) throw new UnknownClaudeAccountError(id);
+        const login = readAccountSource(CLAUDE_LOGIN_SOURCE);
+        if (login.kind === "gap") throw new Error("Claude sign-in state is unavailable");
+        if (login.kind === "collection" && Array.isArray(login.body) && login.body.some(item => item?.accountId === id && ["starting", "awaiting_browser", "awaiting_code", "verifying", "canceling"].includes(item.phase)))
+          throw new Error("Claude sign-in is still running");
+        before = { ...current, removals: withAccountRemovalJournal(current.removals, id, null) };
+      },
       registry: {
         journal: (phase, rewrites) => writeJournal(id, phase, rewrites),
-        commitRetired: () => write(withAccountRetired(before, id)),
+        commitRetired: () => write(withAccountRetired(mutable(), id)),
         restore: () => write(before),
       },
     });
     return { ...report, cleanupPending: cleanupClaudeSidecars(id) || report.cleanupPending };
-  });
+  }, false);
 }
 
 /**
@@ -767,15 +789,20 @@ export function restoreLegacyClaudeAccount(): void {
 /** The caller holds the registry lock; the existing removal journal fences
  * the move and registry rewrites of a home retired before shared archives. */
 function archiveRetiredClaudeHome(id: string): AccountArchiveRemovalReport {
-  const before = mutable();
+  let before = mutable();
   return removeManagedAccountIntoArchive({
     engine: "claude", accountId: id, home: managedHome(id),
     homeIsSafe: () => managedClaudeHomeIsSafe(id, true),
     unsafeHome: () => new UnsafeClaudeHomeError(),
     rewrites: claudeArchiveRewrites,
+    validate: () => {
+      const current = mutable();
+      if (current.accounts.some(account => account.id === id) || !current.retired.some(account => account.id === id && !account.archived)) throw new UnknownClaudeAccountError(id);
+      before = current;
+    },
     registry: {
       journal: (phase, rewrites) => writeJournal(id, phase, rewrites),
-      commitRetired: () => write(withAccountRetired(before, id)),
+      commitRetired: () => write(withAccountRetired(mutable(), id)),
       restore: () => write(before),
     },
   });
@@ -863,7 +890,7 @@ export function cleanupOrphanedClaudeHomes(): AccountOrphanCleanupReport {
       ...(archived.length > 0 ? { archived: archived.sort((left, right) => left.id.localeCompare(right.id)) } : {}),
       ...(Object.keys(historyReports).length > 0 ? { history: historyReports } : {}),
     };
-  });
+  }, false);
 }
 
 const SHADOWED_ENV = ["CLAUDE_SECURESTORAGE_CONFIG_DIR","ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "VERTEXAI_PROJECT", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"];

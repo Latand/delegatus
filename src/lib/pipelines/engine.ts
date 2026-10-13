@@ -13,7 +13,6 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { activeDrain, type DrainLease } from "@/lib/selfUpdate/drain";
-import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { withConversationActuation } from "@/lib/deliveryActuation";
 import { tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { listCodexAccounts } from "@/lib/accounts/codex";
@@ -719,12 +718,7 @@ async function spawnPipelineAgent(
   const creatorConversationId = input.creatorConversationId?.startsWith("conversation_")
     ? registry.canonicalConversationId(input.creatorConversationId as ViewerConversationId)
     : null;
-  const begun = await withAccountMutationLockAsync(() => {
-    // Recovery can reach this adapter with a reserving checkpoint but no
-    // receipt. Recheck fresh admission after the downstream account wait;
-    // an existing receipt keeps its original custody through the drain.
-    if (activeDrain() && !registry.spawnReceiptForClientAttempt(input.clientAttemptId)) throw new PipelineAdmissionHeld();
-    return registry.beginSpawnRequestAsync({
+  const begun = await registry.beginSpawnRequestAsync({
       engine: input.role.engine,
       cwd: input.cwd,
       transport: "structured",
@@ -750,8 +744,10 @@ async function spawnPipelineAgent(
       requestDigest: digest,
       supersedes,
       supersedesReason: "stage-retry",
+    }, () => {
+      // A writer retry must recheck the drain before creating its receipt.
+      if (activeDrain() && !registry.spawnReceiptForClientAttempt(input.clientAttemptId)) throw new PipelineAdmissionHeld();
     });
-  }, { holder: "pipeline spawn admission", caller: "spawn" });
   if (begun.kind === "conflict") throw new Error("pipeline spawn attempt conflicts with its original request");
   try {
     await onReserved({

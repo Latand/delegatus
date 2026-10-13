@@ -105,6 +105,32 @@ test("POST starts Claude login in a clean environment with the shared operation 
   }));
 });
 
+test("Claude login spawn and code input run outside the lease while a second creation is refused", async () => {
+  const held: boolean[] = [];
+  const supervisor = new ClaudeLoginSupervisor({
+    spawn: () => { held.push(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "account-selection.lock"))); return child as never; },
+    kill: () => undefined, pidStartToken: () => "start-4312", isExpectedClaude: () => true,
+    waitForExit: async () => true, observeSignedIn: async () => {},
+    now: () => 1_000,
+    status: async () => ({ loggedIn: false, method: null, email: null, plan: null }),
+    setTimeout: (callback, ms) => { if (ms <= 2_000) callback(); return {} as NodeJS.Timeout; }, clearTimeout: () => undefined,
+  });
+  setClaudeLoginSupervisorForTests(supervisor);
+  const request = () => new NextRequest("http://127.0.0.1/api/accounts/claude", { method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ label: "Concurrent login" }) });
+  const responses = await Promise.all([POST(request()), POST(request())]);
+  expect(responses.filter(response => response.status === 202)).toHaveLength(1);
+  expect(responses.find(response => response.status !== 202)!.status).toBe(409);
+  expect(listClaudeAccounts().filter(account => account.kind === "managed")).toHaveLength(1);
+  const accepted = await responses.find(response => response.status === 202)!.json();
+  const login = supervisor.forAccount(accepted.account.id)!;
+  child.stdout.emit("data", "https://claude.ai/oauth/authorize?code=true\n");
+  child.stdin.write = () => { held.push(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "account-selection.lock"))); return true; };
+  const submitted = await submitInput(new NextRequest("http://127.0.0.1/api/accounts/claude/login/input", { method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ code: "fixture-code" }) }), { params: Promise.resolve({ operationId: login.operationId }) });
+  expect(submitted.status).toBe(200);
+  expect(held).toEqual([false, false]);
+  await supervisor.cancel(login.operationId);
+});
+
 test("provider create and edit read a model catalogue and never return the token", async () => {
   const secret = ["local", "route", "fixture", "token"].join("-");
   const headerSecret = ["opaque", "header", "fixture", "8427"].join("-");

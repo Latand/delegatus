@@ -2425,7 +2425,7 @@ export class SqliteAgentRegistryStore {
     }
   }
 
-  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { operationName?: string } = {}): SqliteRegistryMutation<T> {
+  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { operationName?: string; noWait?: boolean } = {}): SqliteRegistryMutation<T> {
     let operationName = options.operationName ?? operation.name;
     /* {@link withWriter} already opened the write transaction for this call. */
     const writerHeld = this.writerHeld;
@@ -2434,7 +2434,7 @@ export class SqliteAgentRegistryStore {
       const pessimistic = attempt > 1 || writerHeld;
       const waitStartedAt = performance.now();
       if (writerHeld) { /* the lock is held and the transaction is open */ }
-      else if (pessimistic) this.beginMutationWrite();
+      else if (pessimistic) this.beginMutationWrite(options.noWait);
       else this.db.exec("BEGIN");
       let current: LazyRegistrySnapshot;
       let changes: RegistryChanges;
@@ -2450,7 +2450,7 @@ export class SqliteAgentRegistryStore {
         throw error;
       }
       const optimisticWaitStartedAt = performance.now();
-      if (!pessimistic) this.beginMutationWrite();
+      if (!pessimistic) this.beginMutationWrite(options.noWait);
       let revision: number;
       let stamps = { before: "", after: "" };
       const changed = changes.rows.size > 0 || changes.meta.size > 0 || changes.order.size > 0;
@@ -2615,7 +2615,13 @@ export class SqliteAgentRegistryStore {
     }
   }
 
-  private beginMutationWrite(): void {
+  private beginMutationWrite(noWait = false): void {
+    if (noWait) {
+      this.db.exec("PRAGMA busy_timeout = 0");
+      try { this.db.exec("BEGIN IMMEDIATE"); }
+      finally { this.db.exec("PRAGMA busy_timeout = 5000"); }
+      return;
+    }
     const deadline = this.writerClock() + 5_000;
     // SQLite's default busy handler grows its sleep to 100 ms. Short registry
     // commits can repeatedly pass a sleeping lane. Retry acquisition in short

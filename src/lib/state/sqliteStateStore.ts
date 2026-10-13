@@ -1,3 +1,4 @@
+import { AccountCommitBusyError, accountMutationHeld } from "@/lib/accounts/accountMutationContext";
 import crypto from "node:crypto";
 import { recordBlockingWait } from "@/lib/blockingWaits";
 import fs from "node:fs";
@@ -314,6 +315,7 @@ function connectRawDatabase(filename: string): Database {
         return db;
       } catch (error) {
         if (!isBusyError(error)) throw classifyStateError(error, "state transaction");
+        if (accountMutationHeld()) throw new AccountCommitBusyError("state writer is busy during account commit");
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
       }
     }
@@ -427,6 +429,7 @@ function openRawDatabase(filename: string): Database {
       } catch (error) {
         rollbackQuietly(db);
         if (!isBusyError(error)) throw classifyStateError(error, "state transaction");
+        if (accountMutationHeld()) throw new AccountCommitBusyError("state writer is busy during account commit");
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
       }
     }
@@ -469,6 +472,7 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
     } catch (error) {
       rollbackQuietly(db);
       if (!isBusyError(error)) throw classifyStateError(error, "state transaction");
+      if (accountMutationHeld()) throw new AccountCommitBusyError("state writer is busy during account commit");
       Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
     }
   }
@@ -560,6 +564,7 @@ export function initializeStateCollections(
       } catch (error) {
         rollbackQuietly(db);
         if (!isBusyError(error)) throw classifyStateError(error, "state transaction");
+        if (accountMutationHeld()) throw new AccountCommitBusyError("state writer is busy during account commit");
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
       }
     }
@@ -1941,6 +1946,7 @@ export class SqliteStateCollection<T> {
         attempts = attempt;
         if (this.tryAcquireLease(db, ownerToken)) return ownerToken;
         if ((attempt + 1) % 200 === 0) this.assertDiskHasSpace();
+        if (accountMutationHeld()) throw new AccountCommitBusyError("state writer is busy during account commit");
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
       }
       this.assertDiskHasSpace();

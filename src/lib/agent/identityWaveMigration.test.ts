@@ -26,6 +26,52 @@ import {
 
 const NOW = "2026-08-05T12:00:00.000Z";
 
+test("startup identity evidence rejects a seat changed while transcript titles are read", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "identity-seat-race-"));
+  const filename = path.join(directory, "agent-registry.json");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  try {
+    const conversation = registry.ensureConversation("codex", path.join(directory, "transcript.jsonl"), null);
+    const initial = registry.snapshot();
+    initial.conversations[conversation.id]!.generations.at(-1)!.launchProfile.title = "Codex session";
+    fs.writeFileSync(filename, JSON.stringify(initial));
+    let epoch = 1;
+    expect(() => runIdentityWaveMigrationAtStartup({
+      registry, now: () => NOW, log: () => {}, sharedPath: () => null,
+      seats: () => [{ project: "fixture", seatEpoch: epoch, conversationId: conversation.id,
+        predecessorConversationId: null, designatedAt: NOW, activatedAt: NOW }],
+      transcriptTitle: () => { epoch += 1; return "Prepared title"; },
+    })).toThrow("seat evidence changed");
+    expect(registry.snapshot().identityMigrations[IDENTITY_WAVE_MIGRATION]).toBeUndefined();
+  } finally { registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("identity wave reads transcript evidence outside the lease and preserves a racing title mutation", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "identity-evidence-race-"));
+  const filename = path.join(directory, "agent-registry.json");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
+  try {
+    const conversation = registry.ensureConversation("codex", path.join(directory, "transcript.jsonl"), null);
+    const initial = registry.snapshot();
+    initial.conversations[conversation.id]!.generations.at(-1)!.launchProfile.title = "Codex session";
+    fs.writeFileSync(filename, JSON.stringify(initial));
+    const held: boolean[] = [];
+    expect(() => registry.runIdentityWaveMigration({
+      now: NOW, orchestratorSeats: [], sharedPathForLegacy: () => null,
+      transcriptTitle: () => {
+        held.push(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "account-selection.lock")));
+        const raced = registry.snapshot();
+        raced.conversations[conversation.id]!.generations.at(-1)!.launchProfile.title = "Concurrent title";
+        fs.writeFileSync(filename, JSON.stringify(raced));
+        return "Prepared title";
+      },
+    })).toThrow();
+    expect(held).toEqual([false]);
+    expect(registry.conversation(conversation.id)?.generations.at(-1)?.launchProfile.title).toBe("Concurrent title");
+    expect(registry.snapshot().identityMigrations[IDENTITY_WAVE_MIGRATION]).toBeUndefined();
+  } finally { registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 /** Every durable byte under a state root: directories, symlink targets and
     file contents. Two equal trees mean nothing on disk changed. */
 function durableStateTree(root: string): string[] {

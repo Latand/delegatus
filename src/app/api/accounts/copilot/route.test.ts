@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,6 +6,8 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 
 import { NextRequest } from "next/server";
+import * as cli from "@/lib/agent/cli";
+import { statePath } from "@/lib/configDir";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-copilot-route-"));
 const previous = {
@@ -67,6 +69,24 @@ function post(body: Record<string, unknown>, origin = "http://127.0.0.1") {
     body: JSON.stringify(body),
   });
 }
+
+test("removal probes the CLI after its commit and includes a racing account creation", async () => {
+  const leases: boolean[] = [];
+  let peer: string | undefined;
+  const probe = spyOn(cli, "copilotBinaryGap").mockImplementation(() => {
+    leases.push(fs.existsSync(statePath("account-selection.lock")));
+    peer ??= createManagedCopilotAccount("Racing account").id;
+    return "fixture CLI unavailable";
+  });
+  try {
+    const response = await remove(post({ id: accountId }));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.removed.id).toBe(accountId);
+    expect(body.accounts.some((account: { id: string }) => account.id === peer)).toBe(true);
+    expect(leases).toEqual([false]);
+  } finally { probe.mockRestore(); }
+});
 
 test("GET reports config auth and the active login operation; POST starts device-code login", async () => {
   const before = await GET();

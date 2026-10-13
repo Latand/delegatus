@@ -20,6 +20,7 @@ import {
 } from "@/lib/processIdentity";
 import { durableSemanticTitle, firstMeaningfulPromptLine, SPAWN_TITLE_REQUIRED_ERROR } from "@/lib/title";
 import { withAccountMutationLock, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { accountMutationHeld } from "@/lib/accounts/accountMutationContext";
 import { readRetiredAccountIds, retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { accountProjectBindings, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
@@ -5280,6 +5281,13 @@ export class AgentRegistry {
     for (let attempt = 0; ; attempt += 1) {
       const claim = this.tryAcquireLock(lock, owner);
       if (claim) return claim;
+      if (accountMutationHeld()) {
+        // Reclaiming a dead owner's file returns no claim. Try the now-free
+        // slot once more before refusing; neither probe waits.
+        const recovered = this.tryAcquireLock(lock, owner);
+        if (recovered) return recovered;
+        throw new RegistryWriterBusyError("account commit");
+      }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, this.lockBackoff(attempt, REGISTRY_LOCK_BACKOFF_MAX_MS));
     }
   }
@@ -5322,7 +5330,7 @@ export class AgentRegistry {
     };
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
       const operationName = new Error().stack?.split("\n")[3]?.match(/at (\w+)/)?.[1] ?? "anonymous";
-      const mutation = this.sqliteStore!.mutate(mutator, false, { operationName });
+      const mutation = this.sqliteStore!.mutate(mutator, false, { operationName, noWait: accountMutationHeld() });
       if (this.sqliteMode === "read") {
         this.mirrorDirty = this.lastMirroredRevision === null || mutation.revision > this.lastMirroredRevision;
         if (this.mirrorDirty) this.scheduleRollbackMirrorForCadence();
@@ -5406,6 +5414,7 @@ export class AgentRegistry {
     operation: () => T,
     correlate?: (value: T) => { label: string; operationId?: string | null } | null,
   ): Promise<{ acquired: true; value: T } | { acquired: false }> {
+    if (accountMutationHeld()) return this.deliveryWriteNow(correlation, operation);
     if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") {
       return { acquired: true, value: withWaitCorrelation(correlation, operation) };
     }
@@ -5775,11 +5784,28 @@ export class AgentRegistry {
       terminal rejection receipt when the initiating origin is a denied role
       or the child would exceed the nesting-depth ceiling. */
   /** Bounded, non-blocking admission for request and controller paths. */
-  async beginSpawnRequestAsync(input: SpawnRequest): Promise<SpawnBeginResult> {
-    return await withAccountMutationLockAsync(() => this.beginSpawnRequest(input), {
-      holder: input.purpose === "resume-successor" ? "resume admission" : "spawn admission",
-      caller: input.purpose === "resume-successor" ? "resume" : "spawn",
-    });
+  async beginSpawnRequestAsync(input: SpawnRequest, guard?: () => void): Promise<SpawnBeginResult> {
+    const caller = input.purpose === "resume-successor" ? "resume" : "spawn";
+    const written = await this.accountMutationWrite(`${caller} admission`, () => this.beginSpawnRequest(input), guard);
+    if (!written.acquired) throw new RegistryWriterBusyError(`${caller} admission`);
+    return written.value;
+  }
+
+  /** Acquire each writer without waiting while the other is held. A failed
+   * probe runs no mutation; its bounded retry waits outside both leases. */
+  async accountMutationWrite<T>(label: string, write: () => T, guard?: () => void): Promise<{ acquired: true; value: T } | { acquired: false }> {
+    const inherited = accountMutationHeld();
+    const deadline = performance.now() + (this.writerDeadlineMs ?? 2_000);
+    for (;;) {
+      const result = await withAccountMutationLockAsync(() => {
+        guard?.();
+        return this.deliveryWriteNow({ label }, write);
+      }, {
+        holder: label, caller: label, waitMs: Math.max(0, deadline - performance.now()),
+      });
+      if (result.acquired || inherited || performance.now() >= deadline) return result;
+      await new Promise<void>(resolve => setTimeout(resolve, 5));
+    }
   }
 
   beginSpawnRequest(input: SpawnRequest): SpawnBeginResult {
@@ -6309,11 +6335,21 @@ export class AgentRegistry {
     return this.mutate((file) => clone(recordMembership(file, conversationId, membership, now())));
   }
 
-  runIdentityWaveMigration(input: IdentityWaveMigrationInput): IdentityWaveMigrationResult {
+  runIdentityWaveMigration(input: IdentityWaveMigrationInput, validatePreparedState?: () => void): IdentityWaveMigrationResult {
     if (input.dryRun) {
       return applyIdentityWaveMigration(clone(this.readOnlySnapshot()), { ...input, dryRun: true });
     }
-    return withAccountMutationLock(() => this.mutate((file) => applyIdentityWaveMigration(file, input)));
+    const observed = clone(this.readOnlySnapshot());
+    const prepared = clone(observed);
+    let rekeys: Parameters<NonNullable<IdentityWaveMigrationInput["commitExternalPathRekeys"]>>[0] = [];
+    const result = applyIdentityWaveMigration(prepared, { ...input, commitExternalPathRekeys: value => { rekeys = value; } });
+    return withAccountMutationLock(() => this.mutate((file) => {
+      validatePreparedState?.();
+      if (!isDeepStrictEqual(file, observed)) throw new Error("identity migration state changed while reading evidence; retry at startup");
+      if (rekeys.length) input.commitExternalPathRekeys?.(rekeys);
+      Object.assign(file, prepared);
+      return result;
+    }));
   }
 
   stampOrchestratorSeatIdentity(seat: IdentityWaveSeat): boolean {
@@ -8582,6 +8618,13 @@ export class AgentRegistry {
   }
 
   setEngineRouting(engine: AgentEngine, accountId: string): number {
+    // Preserve the synchronous JSON compatibility setter's wait, before it
+    // takes the account lease. A nested call must refuse a contended writer;
+    // its caller owns the surrounding account transaction and any retry.
+    if (!accountMutationHeld() && this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") {
+      const claim = this.acquireLock(`${this.filename}.write-lock`, captureProcessIdentity(process.pid));
+      this.releaseLock(claim);
+    }
     return withAccountMutationLock(() => this.mutate((file) => {
       const route = file.engineRouting[engine];
       route.activeAccountId = accountId;

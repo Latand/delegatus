@@ -11,7 +11,7 @@ import { operatorLocale } from "@/lib/operator/settings";
 import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 import { UnknownAccountError } from "@/lib/accounts/codex";
 import { claudeProviderForHome, claudeSettingsPath, isManagedClaudeHome, UnknownClaudeAccountError } from "@/lib/accounts/claude";
-import { accountProbeIdentity, accountProbeSnapshot, AccountAdmissionChangedError, isAccountAdmissionRetryable, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { accountProbeIdentity, accountProbeSnapshot, AccountAdmissionChangedError, AccountMutationBusyError, isAccountAdmissionRetryable, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { accountManager, ProjectAccountRefusedError, resolveHealthySpawnAccount, type HealthySpawnAccountResolution } from "@/lib/accounts/manager";
 import { emptyLaunchProfile, validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
@@ -1036,12 +1036,20 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       () => dependencies.resolveSpawnAccount(engine, account.accountId),
       { holder: "spawn catalog snapshot", caller: "spawn" },
     );
-    const begun = await withAccountMutationLockAsync(() => {
+    let heldForUpdate = false;
+    const admissionWrite = await registry.accountMutationWrite("spawn admission", () => heldForUpdate ? null
+      : registry.beginSpawnRequest(canonicalSpawnRequest(
+        receiptAccountId,
+        spec.launchProfile,
+        digest,
+        existingAttempt?.accountPin ?? (requestedAccount !== undefined),
+      )), () => {
+      heldForUpdate = false;
       dependencies.authorizeAutonomousLaunch?.();
       assertRequestedAccountBinding();
       const autonomous = authenticatedCaller?.kind === "agent" || req.headers.get(VIEWER_AUTONOMOUS_SPAWN_HEADER) === "1";
       if ((dependencies.autonomousAdmissionHeld?.() || (autonomous && activeDrain()))
-        && !(clientAttemptId && registry.spawnReceiptForClientAttempt(clientAttemptId))) return null;
+        && !(clientAttemptId && registry.spawnReceiptForClientAttempt(clientAttemptId))) { heldForUpdate = true; return; }
       if (!existingAttempt && clientAttemptId) {
         /* The validation endpoint may have fenced this exact downstream key
            while an older request was between validation and reservation. Both
@@ -1065,13 +1073,9 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         }
         dependencies.assertAccountAdmission?.(account.accountId);
       }
-      return registry.beginSpawnRequest(canonicalSpawnRequest(
-        receiptAccountId,
-        spec.launchProfile,
-        digest,
-        existingAttempt?.accountPin ?? (requestedAccount !== undefined),
-      ));
-    }, { holder: "spawn admission", caller: "spawn" });
+    });
+    if (!admissionWrite.acquired) throw new AccountMutationBusyError();
+    const begun = admissionWrite.value;
     if (!begun) {
       /* The same wait the MCP refusal names (#2515). */
       const wait = updateHoldWait();

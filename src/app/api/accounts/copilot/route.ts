@@ -113,7 +113,7 @@ export async function DELETE(req: NextRequest) {
   if (typeof body?.id !== "string") return NextResponse.json({ error: "account id is invalid", code: "invalid_request" }, { status: 400 });
   const id = body.id;
   try {
-    return await withAccountMutationLockAsync(() => {
+    const result = await withAccountMutationLockAsync(() => {
       const account = listCopilotAccounts().find((candidate) => candidate.id === id);
       if (!account) return NextResponse.json({ error: "Copilot account is unavailable", code: "unknown_account" }, { status: 404 });
       const login = copilotLoginSupervisor.forAccount(account.id);
@@ -127,20 +127,20 @@ export async function DELETE(req: NextRequest) {
       if (blockers.length > 0) return refusal(blockers);
       try {
         const removal = removeCopilotAccount(account.id);
-        return NextResponse.json({
-          ...copilotAccountsBody(),
+        return {
           removed: { id: account.id },
           ...(removal.hidden ? { hidden: { home: removal.home } } : {}),
           cleanupPending: removal.cleanupPending,
           pinsCleared: removal.pinsCleared,
           deliveriesDropped: removal.deliveriesDropped,
-        });
+        };
       } catch (error) {
         if (error instanceof AccountRemovalBlockedError) return refusal(error.blockers);
         if (error instanceof UnknownCopilotAccountError) return NextResponse.json({ error: "Copilot account is unavailable", code: "unknown_account" }, { status: 404 });
         return NextResponse.json({ error: "Copilot account could not be removed", code: "removal_failed" }, { status: 500 });
       }
     }, { caller: "Copilot account remove", holder: "Copilot catalog remove" });
+    return result instanceof NextResponse ? result : NextResponse.json({ ...copilotAccountsBody(), ...result });
   } catch (error) {
     if (error instanceof AccountMutationBusyError) return NextResponse.json({ error: ACCOUNT_STORE_BUSY_MESSAGE, code: "account_store_busy" }, { status: 503 });
     return NextResponse.json({ error: "Copilot account could not be removed", code: "removal_failed" }, { status: 500 });

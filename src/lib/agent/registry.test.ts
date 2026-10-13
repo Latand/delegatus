@@ -10,6 +10,7 @@ import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { structuredContent } from "@/lib/runtime/structuredContent";
+import { statePath } from "@/lib/configDir";
 
 const KEY = { engine: "codex" as const, sessionId: "019f4906-3f67-\x37b72-9fbc-9ec3b5ad1326" };
 
@@ -1753,8 +1754,10 @@ describe("agent registry", () => {
 
   test("waits through transient write-lock contention", () => {
     let livenessChecks = 0;
+    const held: boolean[] = [];
     const store = registry(() => {
       livenessChecks += 1;
+      held.push(fs.existsSync(statePath("account-selection.lock")));
       return livenessChecks <= 100;
     });
     const lock = `${store.filename}.write-lock`;
@@ -1764,6 +1767,7 @@ describe("agent registry", () => {
     expect(() => store.setEngineRouting("codex", "work")).not.toThrow();
     expect(livenessChecks).toBeGreaterThan(100);
     expect(store.engineRouting("codex").activeAccountId).toBe("work");
+    expect(held).not.toContain(true);
   });
 
   test("waits for an interprocess write owner beyond the former deadline", async () => {

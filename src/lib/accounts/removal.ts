@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { withAccountMutationLock } from "./accountMutation";
+
 import { stateDir } from "@/lib/configDir";
 import { accountLiveSessionKind, accountLiveWork, liveAccountConversationIds, type AccountLiveWorkItem, type AccountLivenessOptions, type ManagedAccountEngine } from "@/lib/agent/accountLiveness";
 import type { AgentEngine } from "@/lib/agent/cli";
@@ -636,6 +638,8 @@ export interface AccountRemovalRegistryPort {
 }
 
 export interface ManagedAccountArchiveRemoval {
+  /** Revalidate the prepared account and login ownership at the commit boundary. */
+  validate?(): void;
   engine: ManagedAccountEngine;
   accountId: string;
   home: string;
@@ -796,7 +800,8 @@ function finishArchive(engine: ManagedAccountEngine, archive: string): { complet
 /**
  * Removes a managed account by moving its home into the shared archive
  * (issue #1857, section 6 of docs/investigations/1857-account-removal.md).
- * The caller holds the account mutation lock and its engine registry lock.
+ * The caller holds its engine registry lock. Only the revalidated retirement
+ * and its journal writes take the account mutation lock; scans run afterward.
  */
 export function removeManagedAccountIntoArchive(spec: ManagedAccountArchiveRemoval): AccountArchiveRemovalReport {
   const { engine, accountId } = spec;
@@ -822,72 +827,79 @@ export function removeManagedAccountIntoArchive(spec: ManagedAccountArchiveRemov
   const key = `${engine}:${accountId}`;
   inFlight.add(key);
   try {
-    /* 2. Journal the intent. */
-    spec.registry.journal("archiving");
-    reach("journaled");
+    const retirement = withAccountMutationLock(() => {
+      spec.validate?.();
+      const currentBlockers = accountRemovalBlockers(engine, accountId);
+      if (currentBlockers.length > 0) throw new AccountRemovalBlockedError(currentBlockers);
+      /* 2. Journal the intent. */
+      spec.registry.journal("archiving");
+      reach("journaled");
 
-    /* 3. One rename moves the home, credentials included. */
-    const putHomeBack = (): void => { if (homeStat) fs.renameSync(archive, home); };
-    if (homeStat) {
+      /* 3. One rename moves the home, credentials included. */
+      const putHomeBack = (): void => { if (homeStat) fs.renameSync(archive, home); };
+      if (homeStat) {
+        try {
+          fs.mkdirSync(path.dirname(archive), { recursive: true, mode: 0o700 });
+          fs.renameSync(home, archive);
+        } catch (error) {
+          spec.registry.journal(null);
+          if ((error as NodeJS.ErrnoException).code === "EXDEV") throw new AccountArchiveUnavailableError(archive, "archive is on another filesystem than the account home");
+          throw error;
+        }
+        reach("renamed");
+      }
+
+      /* 4. One agent-registry mutation; it re-checks liveness inside. From
+         here a crash is finished, never undone, so the journal first records
+         the path moves recovery needs to redo it. */
       try {
-        fs.mkdirSync(path.dirname(archive), { recursive: true, mode: 0o700 });
-        fs.renameSync(home, archive);
+        spec.registry.journal("retiring", rewrites);
       } catch (error) {
-        spec.registry.journal(null);
-        if ((error as NodeJS.ErrnoException).code === "EXDEV") throw new AccountArchiveUnavailableError(archive, "archive is on another filesystem than the account home");
+        putHomeBack();
+        try { spec.registry.journal(null); } catch { /* `archiving` with the home in place: recovery clears it */ }
         throw error;
       }
-      reach("renamed");
-    }
-
-    /* 4. One agent-registry mutation; it re-checks liveness inside. From
-       here a crash is finished, never undone, so the journal first records
-       the path moves recovery needs to redo it. */
-    try {
-      spec.registry.journal("retiring", rewrites);
-    } catch (error) {
-      putHomeBack();
-      try { spec.registry.journal(null); } catch { /* `archiving` with the home in place: recovery clears it */ }
-      throw error;
-    }
-    const registry = agentRegistry();
-    const beforeRetirement = registry.readOnlySnapshot();
-    let retirement: AccountRetirementReport;
-    try {
-      /* A non-waiting write: this step runs inside the accounts registry's
-         file lock (docs/design/delivery-progress-and-drain.md, C5). A registry
-         lock held elsewhere takes the failure branch below with nothing
-         retired, and the operator is asked to try again. */
-      retirement = registry.retireAccountNow(engine, accountId, spec.fallbackAccountId === undefined ? "default" : spec.fallbackAccountId, {}, { rewrite: rewrites });
-    } catch (error) {
-      putHomeBack();
-      spec.registry.journal(null);
-      if (error instanceof RegistryWriterBusyError) throw new Error("the agent registry is busy; nothing was removed, try the removal again");
-      if (error instanceof Error && error.message === "account has live sessions") throw new AccountRemovalBlockedError(["live_sessions"]);
-      if (error instanceof Error && error.message === "account has current conversations") throw new AccountRemovalBlockedError(["current_conversations"]);
-      throw error;
-    }
-    reach("registry-retired");
-
-    /* 5. Commit the accounts registry. */
-    const retired = registry.readOnlySnapshot();
-    try {
-      spec.registry.commitRetired();
-    } catch (error) {
-      const restored = registry.deliveryWriteNow({ label: "account.retirement-rollback", operationId: `account-removal:${engine}:${accountId}` },
-        () => registry.restoreSnapshot(retired, beforeRetirement));
-      if (!restored.acquired) {
-        /* The retirement and its path intent remain durable. Keep the archive
-           in place so a later retiring recovery can finish the removal. */
-        throw new Error("the accounts commit failed and the agent registry is busy; the journaled retirement awaits recovery", { cause: error });
+      const registry = agentRegistry();
+      const beforeRetirement = registry.readOnlySnapshot();
+      let retirement: AccountRetirementReport;
+      try {
+        /* A non-waiting write: this step runs inside the accounts registry's
+           file lock (docs/design/delivery-progress-and-drain.md, C5). A registry
+           lock held elsewhere takes the failure branch below with nothing
+           retired, and the operator is asked to try again. */
+        retirement = registry.retireAccountNow(engine, accountId, spec.fallbackAccountId === undefined ? "default" : spec.fallbackAccountId, {}, { rewrite: rewrites });
+      } catch (error) {
+        putHomeBack();
+        spec.registry.journal(null);
+        if (error instanceof RegistryWriterBusyError) throw new Error("the agent registry is busy; nothing was removed, try the removal again");
+        if (error instanceof Error && error.message === "account has live sessions") throw new AccountRemovalBlockedError(["live_sessions"]);
+        if (error instanceof Error && error.message === "account has current conversations") throw new AccountRemovalBlockedError(["current_conversations"]);
+        throw error;
       }
-      putHomeBack();
-      /* If this write fails too, the journal still says `archiving` with the
-         home in place, which recovery clears. */
-      try { spec.registry.restore(); } catch { /* recovered at startup */ }
-      throw error;
-    }
-    reach("accounts-committed");
+      reach("registry-retired");
+
+      /* 5. Commit the accounts registry. */
+      const retired = registry.readOnlySnapshot();
+      try {
+        spec.registry.commitRetired();
+      } catch (error) {
+        const restored = registry.deliveryWriteNow({ label: "account.retirement-rollback", operationId: `account-removal:${engine}:${accountId}` },
+          () => registry.restoreSnapshot(retired, beforeRetirement));
+        if (!restored.acquired) {
+          /* The retirement and its path intent remain durable. Keep the archive
+             in place so a later retiring recovery can finish the removal. */
+          throw new Error("the accounts commit failed and the agent registry is busy; the journaled retirement awaits recovery", { cause: error });
+        }
+        putHomeBack();
+        /* If this write fails too, the journal still says `archiving` with the
+           home in place, which recovery clears. */
+        try { spec.registry.restore(); } catch { /* recovered at startup */ }
+        throw error;
+      }
+      reach("accounts-committed");
+
+      return retirement;
+    });
 
     /* 6. Credentials and links leave by exact name. */
     const finished = homeStat ? finishArchive(engine, archive) : { complete: true, files: 0, bytes: 0 };
@@ -938,37 +950,40 @@ export function recoverManagedAccountRemoval(input: {
     input.clearJournal();
     return "retired";
   };
-  if (input.entry.phase === "scrubbing") return scrub();
-  const homeExists = lstatOrNull(home) !== null;
-  const archiveExists = lstatOrNull(archive) !== null;
-  if (homeExists && archiveExists) return null;
-  if (input.entry.phase === "retiring") {
-    /* A home in place means the failed step already undid the retirement. */
-    if (homeExists) { input.clearJournal(); return "restored"; }
-    if (!input.listed && !input.retiredInPlace) return scrub();
-    try {
-      /* Busy, like any refusal here, is retried by the next listing. */
-      agentRegistry().retireAccountNow(input.engine, input.accountId, input.fallbackAccountId === undefined ? "default" : input.fallbackAccountId, {}, { rewrite: input.entry.rewrites ?? [] });
-    } catch {
-      return null;
+  const outcome = withAccountMutationLock(() => {
+    if (input.entry.phase === "scrubbing") return "scrub" as const;
+    const homeExists = lstatOrNull(home) !== null;
+    const archiveExists = lstatOrNull(archive) !== null;
+    if (homeExists && archiveExists) return null;
+    if (input.entry.phase === "retiring") {
+      /* A home in place means the failed step already undid the retirement. */
+      if (homeExists) { input.clearJournal(); return "restored"; }
+      if (!input.listed && !input.retiredInPlace) return "scrub" as const;
+      try {
+        /* Busy, like any refusal here, is retried by the next listing. */
+        agentRegistry().retireAccountNow(input.engine, input.accountId, input.fallbackAccountId === undefined ? "default" : input.fallbackAccountId, {}, { rewrite: input.entry.rewrites ?? [] });
+      } catch {
+        return null;
+      }
+      reach("registry-retired");
+      input.commitRetired();
+      reach("accounts-committed");
+      return "scrub" as const;
     }
-    reach("registry-retired");
-    input.commitRetired();
-    reach("accounts-committed");
-    return scrub();
-  }
-  if (!homeExists && archiveExists && !input.listed && !input.retiredInPlace) return null;
-  if (homeExists || archiveExists) {
-    const restored = agentRegistry().deliveryWriteNow({ label: "account.archive-recovery", operationId: `account-removal:${input.engine}:${input.accountId}` }, () => {
-      if (!homeExists && archiveExists) fs.renameSync(archive, home);
-      /* A crash after the rename leaves the same archiving intent with the
-         home present. That later pass must still undo the registry paths. */
-      agentRegistry().rewriteAccountPaths(input.engine, [{ from: archive, to: home }]);
-    });
-    if (!restored.acquired) return null;
-  }
-  input.clearJournal();
-  return "restored";
+    if (!homeExists && archiveExists && !input.listed && !input.retiredInPlace) return null;
+    if (homeExists || archiveExists) {
+      const restored = agentRegistry().deliveryWriteNow({ label: "account.archive-recovery", operationId: `account-removal:${input.engine}:${input.accountId}` }, () => {
+        if (!homeExists && archiveExists) fs.renameSync(archive, home);
+        /* A crash after the rename leaves the same archiving intent with the
+           home present. That later pass must still undo the registry paths. */
+        agentRegistry().rewriteAccountPaths(input.engine, [{ from: archive, to: home }]);
+      });
+      if (!restored.acquired) return null;
+    }
+    input.clearJournal();
+    return "restored";
+  });
+  return outcome === "scrub" ? scrub() : outcome;
 }
 
 export function normalizeAccountRemovalJournal(value: unknown, validId: (id: string) => boolean): AccountRemovalJournalEntry[] | null {

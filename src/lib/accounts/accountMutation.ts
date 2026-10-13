@@ -9,6 +9,7 @@ import { procBackend } from "@/lib/proc";
 import { readClaudeCredentials } from "./claudeCredentials";
 
 import { accountsCollectionRevision } from "./accountsStore";
+import { AccountCommitBusyError } from "./accountMutationContext";
 import { ACCOUNT_STORE_BUSY_MESSAGE } from "./contentionMessage";
 export { ACCOUNT_STORE_BUSY_MESSAGE } from "./contentionMessage";
 
@@ -362,6 +363,9 @@ export function withAccountMutationLock<T>(operation: () => T, options: AccountM
   catch (error) { logRefusal(error, options, started); throw error; }
   try {
     return transactionContext.run(transaction.context, operation);
+  } catch (error) {
+    if (error instanceof AccountCommitBusyError) throw new AccountMutationBusyError();
+    throw error;
   } finally {
     transaction.release();
   }
@@ -376,6 +380,11 @@ export async function withAccountMutationLockAsync<T>(operation: () => T | Promi
   catch (error) { logRefusal(error, options, started); throw error; }
   try {
     return await transactionContext.run(transaction.context, operation);
+  } catch (error) {
+    // A callback can commit more than one store. Retrying it here could repeat
+    // an earlier write; only an explicit, revalidated commit may retry.
+    if (error instanceof AccountCommitBusyError) throw new AccountMutationBusyError();
+    throw error;
   } finally {
     transaction.release();
   }
@@ -385,6 +394,17 @@ export async function withAccountMutationLockAsync<T>(operation: () => T | Promi
     collection revision, which every account write advances with itself. */
 export function accountMutationRevisionForTests(): number {
   return accountsCollectionRevision();
+}
+
+/** Wait before preparation without lending the lease to child or filesystem
+ * work. The operation's own commit must revalidate its prepared state. */
+export async function afterAccountMutationAdmission<T>(operation: () => T | Promise<T>, options: AccountMutationOptions = {}): Promise<T> {
+  try { withAccountMutationLock(() => undefined, options); }
+  catch (error) {
+    if (!(error instanceof AccountMutationBusyError)) throw error;
+    await withAccountMutationLockAsync(() => undefined, options);
+  }
+  return operation();
 }
 
 /** File identity catches reauthentication that does not change the catalog.

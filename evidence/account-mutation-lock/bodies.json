@@ -1,0 +1,4905 @@
+{
+  "issue": 1935,
+  "observedMain": "7140fa6739dfd3fb4712878325a8ae19b2e1b8b4",
+  "date": "2026-10-13",
+  "originalBodies": 101,
+  "method": "Isolated same-machine original-main and changed-code installs with independent frozen dependencies. AST wrappers time each callback and record shared AsyncLocalStorage lease ownership at entry. Durations exclude acquisition, queue waits and release overhead; inclusive nested spans must not be summed. All paths use explicit test files through the shared gate and owned runner. Original unlocked facades map to observed downstream commit bodies; their pooled samples include other callers. Failed-first cases intentionally inject competing changes, child admission and 400 ms writer holds. Numbers describe these fixtures, not production percentiles.",
+  "bodyOrder": "Each body is identified by repository-relative file, enclosing function, and lexical ordinal in the original main inventory. Original line numbers identify the observation baseline. Renamed and removed bodies explicitly map to changed-code commits.",
+  "optionalSeams": "The retained withImageAdmissionLock dependency hooks have no production caller and were not supplied by the after fixtures. Their production accountMutationWrite commits are measured instead.",
+  "bodies": [
+    {
+      "id": 1,
+      "body": "src/lib/agent/identityWaveStartup.ts:runIdentityWaveMigrationAtStartup:1",
+      "baseLine": 196,
+      "observation": "Reads title evidence and transcript files; nested registry migration. Preparation moved out; registry snapshot is compared before commit.",
+      "before": {
+        "samples": 10,
+        "heldSamples": 10,
+        "heldMedianMs": 2.419,
+        "heldMaxMs": 11.481,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/identityWaveMigration.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/registry.ts:runIdentityWaveMigration:1"
+      ],
+      "after": {
+        "samples": 29,
+        "heldSamples": 29,
+        "heldMedianMs": 1.584,
+        "heldMaxMs": 10.4,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/identityWaveMigration.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 0,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 0,
+        "tests": []
+      }
+    },
+    {
+      "id": 2,
+      "body": "src/lib/agent/spawnAdmission.ts:recordSpawnAdmissionRejection:1",
+      "baseLine": 224,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 9,
+        "heldSamples": 9,
+        "heldMedianMs": 21.623,
+        "heldMaxMs": 50.105,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/spawnHealth.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/spawnAdmission.ts:recordSpawnAdmissionRejection:1"
+      ],
+      "after": {
+        "samples": 9,
+        "heldSamples": 9,
+        "heldMedianMs": 14.317,
+        "heldMaxMs": 45.68,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/spawnHealth.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 9,
+        "heldSamples": 9,
+        "heldMedianMs": 14.317,
+        "heldMaxMs": 45.68,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/spawnHealth.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "body": "src/lib/agent/transcriptHost.ts:decide:1",
+      "baseLine": 490,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 12,
+        "heldSamples": 12,
+        "heldMedianMs": 0.002,
+        "heldMaxMs": 0.1,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/agent/transcriptHost.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/transcriptHost.ts:decide:1"
+      ],
+      "after": {
+        "samples": 12,
+        "heldSamples": 12,
+        "heldMedianMs": 0.001,
+        "heldMaxMs": 0.026,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/agent/transcriptHost.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 12,
+        "heldSamples": 12,
+        "heldMedianMs": 0.001,
+        "heldMaxMs": 0.026,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/agent/transcriptHost.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "body": "src/app/api/account-project-bindings/route.ts:POST:1",
+      "baseLine": 189,
+      "observation": "Confirming view discovers credentials and reads carrier transcripts. Commit bindings first; prepare display from the exact returned binding rows outside the lease.",
+      "before": {
+        "samples": 8,
+        "heldSamples": 8,
+        "heldMedianMs": 3.568,
+        "heldMaxMs": 12.478,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/account-project-bindings/route.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/app/api/account-project-bindings/route.ts:POST:1"
+      ],
+      "after": {
+        "samples": 8,
+        "heldSamples": 8,
+        "heldMedianMs": 2.262,
+        "heldMaxMs": 3.178,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/account-project-bindings/route.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 8,
+        "heldSamples": 8,
+        "heldMedianMs": 2.262,
+        "heldMaxMs": 3.178,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/account-project-bindings/route.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "body": "src/lib/agent/registry.ts:beginSpawnRequestAsync:1",
+      "baseLine": 5779,
+      "observation": "Synchronous registry-writer wait. Probe both leases without waiting; sleep outside; recheck guards on every attempt.",
+      "before": {
+        "samples": 56,
+        "heldSamples": 56,
+        "heldMedianMs": 8.823,
+        "heldMaxMs": 417.023,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts",
+          "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "src/lib/runtime/structuredRecovery.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/registry.ts:accountMutationWrite:1"
+      ],
+      "after": {
+        "samples": 275,
+        "heldSamples": 275,
+        "heldMedianMs": 1.452,
+        "heldMaxMs": 66.073,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts",
+          "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "src/lib/runtime/structuredRecovery.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 55,
+        "heldSamples": 55,
+        "heldMedianMs": 8.311,
+        "heldMaxMs": 37.263,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts",
+          "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "src/lib/runtime/structuredRecovery.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "body": "src/lib/agent/registry.ts:beginSpawnRequest:1",
+      "baseLine": 5786,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 345,
+        "heldSamples": 345,
+        "heldMedianMs": 1.819,
+        "heldMaxMs": 406.948,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/app/api/accounts/copilot/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/accountMutation.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/accounts/removal.test.ts",
+          "src/lib/agent/identityWaveMigration.test.ts",
+          "src/lib/agent/registry.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts",
+          "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "src/lib/runtime/structuredRecovery.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/registry.ts:beginSpawnRequest:1"
+      ],
+      "after": {
+        "samples": 379,
+        "heldSamples": 379,
+        "heldMedianMs": 1.608,
+        "heldMaxMs": 18.585,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/app/api/accounts/copilot/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/accountMutation.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/accounts/removal.test.ts",
+          "src/lib/agent/identityWaveMigration.test.ts",
+          "src/lib/agent/registry.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts",
+          "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "src/lib/runtime/structuredRecovery.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 379,
+        "heldSamples": 379,
+        "heldMedianMs": 1.608,
+        "heldMaxMs": 18.585,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/app/api/accounts/copilot/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/accountMutation.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/accounts/removal.test.ts",
+          "src/lib/agent/identityWaveMigration.test.ts",
+          "src/lib/agent/registry.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts",
+          "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "src/lib/runtime/structuredRecovery.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "body": "src/lib/agent/registry.ts:runIdentityWaveMigration:1",
+      "baseLine": 6316,
+      "observation": "Reads title evidence while mutating the registry. Evidence is prepared on a clone and the original registry snapshot is compared before commit.",
+      "before": {
+        "samples": 30,
+        "heldSamples": 30,
+        "heldMedianMs": 2.5,
+        "heldMaxMs": 17.858,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/identityWaveMigration.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/registry.ts:runIdentityWaveMigration:1"
+      ],
+      "after": {
+        "samples": 29,
+        "heldSamples": 29,
+        "heldMedianMs": 1.584,
+        "heldMaxMs": 10.4,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/identityWaveMigration.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 29,
+        "heldSamples": 29,
+        "heldMedianMs": 1.584,
+        "heldMaxMs": 10.4,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/identityWaveMigration.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "body": "src/lib/agent/registry.ts:setEngineRouting:1",
+      "baseLine": 8585,
+      "observation": "JSON registry writer could wait for seconds. Preserve the legacy synchronous wait before the account lease; nested commits refuse a busy writer.",
+      "before": {
+        "samples": 88,
+        "heldSamples": 88,
+        "heldMedianMs": 1.051,
+        "heldMaxMs": 8525.213,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts",
+          "src/lib/agent/registry.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/pipelines/engine.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/registry.ts:setEngineRouting:1"
+      ],
+      "after": {
+        "samples": 85,
+        "heldSamples": 85,
+        "heldMedianMs": 0.843,
+        "heldMaxMs": 16.578,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts",
+          "src/lib/agent/registry.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/pipelines/engine.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 85,
+        "heldSamples": 85,
+        "heldMedianMs": 0.843,
+        "heldMaxMs": 16.578,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts",
+          "src/lib/agent/registry.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/pipelines/engine.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "body": "src/lib/agent/registry.ts:retireAccount:1",
+      "baseLine": 8620,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 5,
+        "heldSamples": 5,
+        "heldMedianMs": 1.181,
+        "heldMaxMs": 3.078,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/registry.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/registry.ts:retireAccount:1"
+      ],
+      "after": {
+        "samples": 5,
+        "heldSamples": 5,
+        "heldMedianMs": 1.596,
+        "heldMaxMs": 1.872,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/registry.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 5,
+        "heldSamples": 5,
+        "heldMedianMs": 1.596,
+        "heldMaxMs": 1.872,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/registry.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "body": "src/lib/agent/registry.ts:retireAccountNow:1",
+      "baseLine": 8638,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 107,
+        "heldSamples": 107,
+        "heldMedianMs": 1.617,
+        "heldMaxMs": 12.033,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/app/api/accounts/copilot/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/registry.ts:retireAccountNow:1"
+      ],
+      "after": {
+        "samples": 95,
+        "heldSamples": 95,
+        "heldMedianMs": 1.534,
+        "heldMaxMs": 10.455,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/app/api/accounts/copilot/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 95,
+        "heldSamples": 95,
+        "heldMedianMs": 1.534,
+        "heldMaxMs": 10.455,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/app/api/accounts/copilot/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "body": "src/lib/agent/registry.ts:rewriteAccountPaths:1",
+      "baseLine": 8722,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 14,
+        "heldSamples": 14,
+        "heldMedianMs": 2.789,
+        "heldMaxMs": 6.541,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/registry.ts:rewriteAccountPaths:1"
+      ],
+      "after": {
+        "samples": 14,
+        "heldSamples": 14,
+        "heldMedianMs": 1.988,
+        "heldMaxMs": 5.261,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 14,
+        "heldSamples": 14,
+        "heldMedianMs": 1.988,
+        "heldMaxMs": 5.261,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "body": "src/lib/agent/registry.ts:commitMigrationIntent:1",
+      "baseLine": 8758,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 11,
+        "heldSamples": 11,
+        "heldMedianMs": 2.508,
+        "heldMaxMs": 109.038,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/registry.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/registry.ts:commitMigrationIntent:1"
+      ],
+      "after": {
+        "samples": 12,
+        "heldSamples": 12,
+        "heldMedianMs": 1.859,
+        "heldMaxMs": 5.894,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/registry.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 12,
+        "heldSamples": 12,
+        "heldMedianMs": 1.859,
+        "heldMaxMs": 5.894,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/registry.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 13,
+      "body": "src/lib/agent/registry.ts:restoreSnapshot:1",
+      "baseLine": 9965,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 11,
+        "heldSamples": 11,
+        "heldMedianMs": 3.083,
+        "heldMaxMs": 10.09,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts",
+          "src/lib/agent/registry.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/registry.ts:restoreSnapshot:1"
+      ],
+      "after": {
+        "samples": 10,
+        "heldSamples": 10,
+        "heldMedianMs": 3.306,
+        "heldMaxMs": 5.021,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts",
+          "src/lib/agent/registry.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 10,
+        "heldSamples": 10,
+        "heldMedianMs": 3.306,
+        "heldMaxMs": 5.021,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts",
+          "src/lib/agent/registry.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 14,
+      "body": "src/lib/agent/spawnCommand.ts:fenceSpawnAdmissionRejection:1",
+      "baseLine": 214,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 6,
+        "heldSamples": 6,
+        "heldMedianMs": 27.237,
+        "heldMaxMs": 50.288,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/spawnCommand.ts:fenceSpawnAdmissionRejection:1"
+      ],
+      "after": {
+        "samples": 6,
+        "heldSamples": 6,
+        "heldMedianMs": 19.587,
+        "heldMaxMs": 45.928,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 6,
+        "heldSamples": 6,
+        "heldMedianMs": 19.587,
+        "heldMaxMs": 45.928,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 15,
+      "body": "src/lib/agent/spawnCommand.ts:executeParsedSpawnRequest:1",
+      "baseLine": 1039,
+      "observation": "Registry-writer wait. Probe both leases without waiting; recheck account, binding, authority, drain and attempt fences.",
+      "before": {
+        "samples": 28,
+        "heldSamples": 28,
+        "heldMedianMs": 7.138,
+        "heldMaxMs": 17.054,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/spawnCommand.ts:executeParsedSpawnRequest:1"
+      ],
+      "after": {
+        "samples": 26,
+        "heldSamples": 26,
+        "heldMedianMs": 8.357,
+        "heldMaxMs": 65.767,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 26,
+        "heldSamples": 26,
+        "heldMedianMs": 8.357,
+        "heldMaxMs": 65.767,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 16,
+      "body": "src/app/api/accounts/copilot/route.ts:POST:1",
+      "baseLine": 85,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 2,
+        "heldSamples": 2,
+        "heldMedianMs": 0.273,
+        "heldMaxMs": 0.438,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/app/api/accounts/copilot/route.ts:POST:1"
+      ],
+      "after": {
+        "samples": 2,
+        "heldSamples": 2,
+        "heldMedianMs": 0.322,
+        "heldMaxMs": 0.48,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 2,
+        "heldSamples": 2,
+        "heldMedianMs": 0.322,
+        "heldMaxMs": 0.48,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 17,
+      "body": "src/app/api/accounts/copilot/route.ts:POST:2",
+      "baseLine": 90,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 3,
+        "heldSamples": 3,
+        "heldMedianMs": 0.248,
+        "heldMaxMs": 0.397,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/app/api/accounts/copilot/route.ts:POST:2"
+      ],
+      "after": {
+        "samples": 3,
+        "heldSamples": 3,
+        "heldMedianMs": 0.503,
+        "heldMaxMs": 0.683,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 3,
+        "heldSamples": 3,
+        "heldMedianMs": 0.503,
+        "heldMaxMs": 0.683,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 18,
+      "body": "src/app/api/accounts/copilot/route.ts:POST:3",
+      "baseLine": 94,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 3,
+        "heldSamples": 3,
+        "heldMedianMs": 0.309,
+        "heldMaxMs": 0.42,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/app/api/accounts/copilot/route.ts:POST:3"
+      ],
+      "after": {
+        "samples": 3,
+        "heldSamples": 3,
+        "heldMedianMs": 0.591,
+        "heldMaxMs": 0.898,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 3,
+        "heldSamples": 3,
+        "heldMedianMs": 0.591,
+        "heldMaxMs": 0.898,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 19,
+      "body": "src/app/api/accounts/copilot/route.ts:DELETE:1",
+      "baseLine": 116,
+      "observation": "Response probes the Copilot executable. Commit removal first; prepare response after release.",
+      "before": {
+        "samples": 6,
+        "heldSamples": 6,
+        "heldMedianMs": 12.364,
+        "heldMaxMs": 26.388,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/app/api/accounts/copilot/route.ts:DELETE:1"
+      ],
+      "after": {
+        "samples": 6,
+        "heldSamples": 6,
+        "heldMedianMs": 10.056,
+        "heldMaxMs": 27.936,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 6,
+        "heldSamples": 6,
+        "heldMedianMs": 10.056,
+        "heldMaxMs": 27.936,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 20,
+      "body": "src/app/api/accounts/claude/login/[operationId]/input/route.ts:POST:1",
+      "baseLine": 15,
+      "observation": "Writes to the login child stdin and awaits verification. Remove route lease; supervisor durably records the input transition before child I/O.",
+      "before": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 3.061,
+        "heldMaxMs": 4.94,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/claudeLogin.ts:persist:1"
+      ],
+      "after": {
+        "samples": 226,
+        "heldSamples": 226,
+        "heldMedianMs": 1.456,
+        "heldMaxMs": 6.892,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/claudeLogin.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 0,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 0,
+        "tests": []
+      }
+    },
+    {
+      "id": 21,
+      "body": "src/app/api/accounts/claude/route.ts:PATCH:1",
+      "baseLine": 49,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 14,
+        "heldSamples": 14,
+        "heldMedianMs": 3.557,
+        "heldMaxMs": 8.589,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/app/api/accounts/claude/route.ts:PATCH:1"
+      ],
+      "after": {
+        "samples": 7,
+        "heldSamples": 7,
+        "heldMedianMs": 5.52,
+        "heldMaxMs": 7.547,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 7,
+        "heldSamples": 7,
+        "heldMedianMs": 5.52,
+        "heldMaxMs": 7.547,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 22,
+      "body": "src/app/api/accounts/claude/route.ts:POST:1",
+      "baseLine": 86,
+      "observation": "Provider home/capability preparation and credential discovery; route now admits preparation without lending the lease.",
+      "before": {
+        "samples": 8,
+        "heldSamples": 8,
+        "heldMedianMs": 4.275,
+        "heldMaxMs": 10.335,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/claude.ts:createManagedClaudeAccount:2"
+      ],
+      "after": {
+        "samples": 296,
+        "heldSamples": 296,
+        "heldMedianMs": 1.787,
+        "heldMaxMs": 6.158,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeLogin.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/spawnHealth.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 4,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 4,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 23,
+      "body": "src/app/api/accounts/claude/route.ts:POST:2",
+      "baseLine": 102,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 2,
+        "heldSamples": 2,
+        "heldMedianMs": 2.088,
+        "heldMaxMs": 2.437,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/app/api/accounts/claude/route.ts:POST:2"
+      ],
+      "after": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 3.806,
+        "heldMaxMs": 3.806,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 3.806,
+        "heldMaxMs": 3.806,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 24,
+      "body": "src/app/api/accounts/claude/route.ts:POST:3",
+      "baseLine": 113,
+      "observation": "Login create/retry spawns a child, verifies its process identity and sets a timeout. Supervisor reserves the operation atomically; child work follows release.",
+      "before": {
+        "samples": 24,
+        "heldSamples": 24,
+        "heldMedianMs": 8.821,
+        "heldMaxMs": 27.075,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/claudeLogin.ts:reserve:1",
+        "src/lib/accounts/claudeLogin.ts:persist:1"
+      ],
+      "after": {
+        "samples": 278,
+        "heldSamples": 278,
+        "heldMedianMs": 1.493,
+        "heldMaxMs": 10.877,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/claudeLogin.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 12,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 12,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 25,
+      "body": "src/app/api/accounts/claude/route.ts:DELETE:1",
+      "baseLine": 181,
+      "observation": "Recursive orphan/archive cleanup; route now delegates to revalidated inner commits.",
+      "before": {
+        "samples": 12,
+        "heldSamples": 12,
+        "heldMedianMs": 1.664,
+        "heldMaxMs": 44.896,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/removal.ts:removeManagedAccountIntoArchive:1",
+        "src/lib/accounts/removal.ts:recoverManagedAccountRemoval:1",
+        "src/lib/accounts/claude.ts:writeJournal:1",
+        "src/lib/accounts/claude.ts:recoverRemovalsLocked:1"
+      ],
+      "after": {
+        "samples": 230,
+        "heldSamples": 230,
+        "heldMedianMs": 2.766,
+        "heldMaxMs": 28.88,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 6,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 6,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 26,
+      "body": "src/app/api/accounts/claude/route.ts:DELETE:2",
+      "baseLine": 192,
+      "observation": "Catalog credential discovery and recursive archive cleanup; route now delegates to revalidated inner commits.",
+      "before": {
+        "samples": 31,
+        "heldSamples": 31,
+        "heldMedianMs": 7.551,
+        "heldMaxMs": 55.156,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/removal.ts:removeManagedAccountIntoArchive:1",
+        "src/lib/accounts/removal.ts:recoverManagedAccountRemoval:1",
+        "src/lib/accounts/claude.ts:writeJournal:1",
+        "src/lib/accounts/claude.ts:recoverRemovalsLocked:1"
+      ],
+      "after": {
+        "samples": 230,
+        "heldSamples": 230,
+        "heldMedianMs": 2.766,
+        "heldMaxMs": 28.88,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 16,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 16,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 27,
+      "body": "src/lib/orchestrator/seatCommand.ts:activate:1",
+      "baseLine": 529,
+      "observation": "Async runtime replacement evidence and credential discovery. Prepare first; compare pending/active seats and incumbent delivery evidence in commit.",
+      "before": {
+        "samples": 156,
+        "heldSamples": 156,
+        "heldMedianMs": 0.821,
+        "heldMaxMs": 102.204,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/seatCommand.ts:activate:1"
+      ],
+      "after": {
+        "samples": 156,
+        "heldSamples": 156,
+        "heldMedianMs": 0.631,
+        "heldMaxMs": 6.31,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 156,
+        "heldSamples": 156,
+        "heldMedianMs": 0.631,
+        "heldMaxMs": 6.31,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 28,
+      "body": "src/lib/orchestrator/seatCommand.ts:reconcileCompletedSeatReplay:1",
+      "baseLine": 605,
+      "observation": "Runtime identity discovery can read transcript metadata. Discover first; compare active epoch and conversation before stamping identity.",
+      "before": {
+        "samples": 202,
+        "heldSamples": 202,
+        "heldMedianMs": 0.103,
+        "heldMaxMs": 1.645,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/seatCommand.ts:reconcileAuthorityProjections:1"
+      ],
+      "after": {
+        "samples": 166,
+        "heldSamples": 166,
+        "heldMedianMs": 0.289,
+        "heldMaxMs": 4.36,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 0,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 0,
+        "tests": []
+      }
+    },
+    {
+      "id": 29,
+      "body": "src/lib/orchestrator/seatCommand.ts:seatStoreReleased:1",
+      "baseLine": 872,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 11,
+        "heldSamples": 11,
+        "heldMedianMs": 0.003,
+        "heldMaxMs": 0.05,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/seatCommand.ts:seatStoreReleased:1"
+      ],
+      "after": {
+        "samples": 12,
+        "heldSamples": 12,
+        "heldMedianMs": 0.004,
+        "heldMaxMs": 0.046,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 12,
+        "heldSamples": 12,
+        "heldMedianMs": 0.004,
+        "heldMaxMs": 0.046,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 30,
+      "body": "src/app/api/accounts/codex/route.ts:POST:1",
+      "baseLine": 24,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 3.177,
+        "heldMaxMs": 3.177,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/app/api/accounts/codex/route.ts:POST:1"
+      ],
+      "after": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 1.856,
+        "heldMaxMs": 1.856,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 1.856,
+        "heldMaxMs": 1.856,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 31,
+      "body": "src/app/api/accounts/codex/route.ts:POST:2",
+      "baseLine": 49,
+      "observation": "Home/link preparation and nested recovery; route now delegates to a revalidated creation commit.",
+      "before": {
+        "samples": 7,
+        "heldSamples": 7,
+        "heldMedianMs": 4.675,
+        "heldMaxMs": 8.528,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/codex.ts:createManagedCodexAccount:2"
+      ],
+      "after": {
+        "samples": 162,
+        "heldSamples": 162,
+        "heldMedianMs": 1.857,
+        "heldMaxMs": 25.4,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/accountMutation.observation.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/codex.loginReservation.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 7,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 7,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 32,
+      "body": "src/app/api/accounts/codex/route.ts:DELETE:1",
+      "baseLine": 86,
+      "observation": "Recursive orphan/archive cleanup; route now delegates to revalidated inner commits.",
+      "before": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 11.387,
+        "heldMaxMs": 51.135,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/removal.ts:removeManagedAccountIntoArchive:1",
+        "src/lib/accounts/removal.ts:recoverManagedAccountRemoval:1",
+        "src/lib/accounts/codex.ts:writeJournal:1",
+        "src/lib/accounts/codex.ts:recoverRemovalsLocked:1"
+      ],
+      "after": {
+        "samples": 200,
+        "heldSamples": 200,
+        "heldMedianMs": 3.163,
+        "heldMaxMs": 28.88,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 4,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 4,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 33,
+      "body": "src/app/api/accounts/codex/route.ts:DELETE:2",
+      "baseLine": 97,
+      "observation": "Catalog discovery and recursive archive cleanup; route now delegates to revalidated inner commits.",
+      "before": {
+        "samples": 18,
+        "heldSamples": 18,
+        "heldMedianMs": 8.506,
+        "heldMaxMs": 45.703,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/removal.ts:removeManagedAccountIntoArchive:1",
+        "src/lib/accounts/removal.ts:recoverManagedAccountRemoval:1",
+        "src/lib/accounts/codex.ts:writeJournal:1",
+        "src/lib/accounts/codex.ts:recoverRemovalsLocked:1"
+      ],
+      "after": {
+        "samples": 200,
+        "heldSamples": 200,
+        "heldMedianMs": 3.163,
+        "heldMaxMs": 28.88,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 18,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 18,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 34,
+      "body": "src/lib/orchestrator/seats.ts:beginOrchestratorSeatIntent:1",
+      "baseLine": 791,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 317,
+        "heldSamples": 317,
+        "heldMedianMs": 0.298,
+        "heldMaxMs": 2.865,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/identityWaveMigration.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/orchestrator/seats.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/seats.ts:beginOrchestratorSeatIntent:1"
+      ],
+      "after": {
+        "samples": 318,
+        "heldSamples": 318,
+        "heldMedianMs": 0.287,
+        "heldMaxMs": 2.701,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/identityWaveMigration.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/orchestrator/seats.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 318,
+        "heldSamples": 318,
+        "heldMedianMs": 0.287,
+        "heldMaxMs": 2.701,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/identityWaveMigration.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/orchestrator/seats.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 35,
+      "body": "src/lib/orchestrator/seats.ts:recordOrchestratorSeatAuthCredentialBaseline:1",
+      "baseLine": 853,
+      "observation": "Credential discovery may launch Keychain. Capture first; compare pending request and epoch in commit.",
+      "before": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 1.461,
+        "heldMaxMs": 1.461,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/seats.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/seats.ts:recordOrchestratorSeatAuthCredentialBaseline:1"
+      ],
+      "after": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 0.52,
+        "heldMaxMs": 0.52,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/seats.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 0.52,
+        "heldMaxMs": 0.52,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/seats.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 36,
+      "body": "src/lib/orchestrator/seats.ts:completeOrchestratorSeatIntent:1",
+      "baseLine": 888,
+      "observation": "Credential discovery may launch Keychain. Capture first; compare pending request and epoch in commit.",
+      "before": {
+        "samples": 212,
+        "heldSamples": 212,
+        "heldMedianMs": 0.379,
+        "heldMaxMs": 8.642,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/identityWaveMigration.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/orchestrator/seats.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/seats.ts:completeOrchestratorSeatIntent:1"
+      ],
+      "after": {
+        "samples": 210,
+        "heldSamples": 210,
+        "heldMedianMs": 0.284,
+        "heldMaxMs": 4.435,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/identityWaveMigration.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/orchestrator/seats.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 210,
+        "heldSamples": 210,
+        "heldMedianMs": 0.284,
+        "heldMaxMs": 4.435,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/identityWaveMigration.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/orchestrator/seats.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 37,
+      "body": "src/lib/orchestrator/seats.ts:repairOrchestratorSeatRuntimeIdentity:1",
+      "baseLine": 959,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 169,
+        "heldSamples": 169,
+        "heldMedianMs": 0.151,
+        "heldMaxMs": 3.802,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/seats.ts:repairOrchestratorSeatRuntimeIdentity:1"
+      ],
+      "after": {
+        "samples": 166,
+        "heldSamples": 166,
+        "heldMedianMs": 0.113,
+        "heldMaxMs": 3.255,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 166,
+        "heldSamples": 166,
+        "heldMedianMs": 0.113,
+        "heldMaxMs": 3.255,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 38,
+      "body": "src/lib/orchestrator/seats.ts:failOrchestratorSeatIntent:1",
+      "baseLine": 997,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 88,
+        "heldSamples": 88,
+        "heldMedianMs": 0.751,
+        "heldMaxMs": 5.005,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/orchestrator/seats.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/seats.ts:failOrchestratorSeatIntent:1"
+      ],
+      "after": {
+        "samples": 90,
+        "heldSamples": 90,
+        "heldMedianMs": 0.685,
+        "heldMaxMs": 4.728,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/orchestrator/seats.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 90,
+        "heldSamples": 90,
+        "heldMedianMs": 0.685,
+        "heldMaxMs": 4.728,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/orchestrator/seats.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 39,
+      "body": "src/lib/orchestrator/seats.ts:abandonStillbornOrchestratorSeat:1",
+      "baseLine": 1063,
+      "observation": "Predecessor resolution can read transcripts. Resolve first; compare active seat, rollback and revocations before rollback.",
+      "before": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 0.98,
+        "heldMaxMs": 1.868,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/orchestrator/seats.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/seats.ts:abandonStillbornOrchestratorSeat:1"
+      ],
+      "after": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 0.453,
+        "heldMaxMs": 1.097,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/orchestrator/seats.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 0.453,
+        "heldMaxMs": 1.097,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/orchestrator/seats.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 40,
+      "body": "src/lib/orchestrator/seats.ts:confirmOrchestratorSeatMaterialization:1",
+      "baseLine": 1146,
+      "observation": "Credential discovery may launch Keychain. Capture first; compare full active seat before publication.",
+      "before": {
+        "samples": 7,
+        "heldSamples": 7,
+        "heldMedianMs": 0.477,
+        "heldMaxMs": 0.796,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/orchestrator/seats.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/seats.ts:confirmOrchestratorSeatMaterialization:1"
+      ],
+      "after": {
+        "samples": 7,
+        "heldSamples": 7,
+        "heldMedianMs": 0.387,
+        "heldMaxMs": 1.12,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/orchestrator/seats.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 7,
+        "heldSamples": 7,
+        "heldMedianMs": 0.387,
+        "heldMaxMs": 1.12,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/seatCommand.test.ts",
+          "src/lib/orchestrator/seats.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 41,
+      "body": "src/lib/orchestrator/seats.ts:rekeyOrchestratorSeatPaths:1",
+      "baseLine": 1212,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 5,
+        "heldSamples": 5,
+        "heldMedianMs": 0.285,
+        "heldMaxMs": 1.205,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/identityWaveMigration.test.ts",
+          "src/lib/orchestrator/seats.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/seats.ts:rekeyOrchestratorSeatPaths:1"
+      ],
+      "after": {
+        "samples": 5,
+        "heldSamples": 5,
+        "heldMedianMs": 0.272,
+        "heldMaxMs": 0.757,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/identityWaveMigration.test.ts",
+          "src/lib/orchestrator/seats.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 5,
+        "heldSamples": 5,
+        "heldMedianMs": 0.272,
+        "heldMaxMs": 0.757,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/agent/identityWaveMigration.test.ts",
+          "src/lib/orchestrator/seats.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 42,
+      "body": "src/lib/orchestrator/deputyCommand.ts:askOnce:1",
+      "baseLine": 199,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 18,
+        "heldSamples": 18,
+        "heldMedianMs": 0.204,
+        "heldMaxMs": 0.7,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/deputyCommand.ts:askOnce:1"
+      ],
+      "after": {
+        "samples": 20,
+        "heldSamples": 20,
+        "heldMedianMs": 0.11,
+        "heldMaxMs": 0.913,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 20,
+        "heldSamples": 20,
+        "heldMedianMs": 0.11,
+        "heldMaxMs": 0.913,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 43,
+      "body": "src/lib/orchestrator/deputyCommand.ts:askOnce:2",
+      "baseLine": 233,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 0.712,
+        "heldMaxMs": 0.712,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/deputyCommand.ts:askOnce:2"
+      ],
+      "after": {
+        "samples": 2,
+        "heldSamples": 2,
+        "heldMedianMs": 0.463,
+        "heldMaxMs": 0.733,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 2,
+        "heldSamples": 2,
+        "heldMedianMs": 0.463,
+        "heldMaxMs": 0.733,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 44,
+      "body": "src/lib/orchestrator/deputyCommand.ts:askOnce:3",
+      "baseLine": 247,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 0.457,
+        "heldMaxMs": 0.457,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/deputyCommand.ts:askOnce:3"
+      ],
+      "after": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 0.18,
+        "heldMaxMs": 0.18,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 0.18,
+        "heldMaxMs": 0.18,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 45,
+      "body": "src/lib/orchestrator/deputyCommand.ts:askOnce:4",
+      "baseLine": 251,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 0.293,
+        "heldMaxMs": 0.293,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/deputyCommand.ts:askOnce:4"
+      ],
+      "after": {
+        "samples": 2,
+        "heldSamples": 2,
+        "heldMedianMs": 0.293,
+        "heldMaxMs": 0.45,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 2,
+        "heldSamples": 2,
+        "heldMedianMs": 0.293,
+        "heldMaxMs": 0.45,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 46,
+      "body": "src/lib/orchestrator/deputyCommand.ts:askOnce:5",
+      "baseLine": 273,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 11,
+        "heldSamples": 11,
+        "heldMedianMs": 0.288,
+        "heldMaxMs": 0.53,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/deputyCommand.ts:askOnce:5"
+      ],
+      "after": {
+        "samples": 11,
+        "heldSamples": 11,
+        "heldMedianMs": 0.162,
+        "heldMaxMs": 0.29,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 11,
+        "heldSamples": 11,
+        "heldMedianMs": 0.162,
+        "heldMaxMs": 0.29,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 47,
+      "body": "src/lib/orchestrator/deputyCommand.ts:askOnce:6",
+      "baseLine": 298,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 0.299,
+        "heldMaxMs": 0.299,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/deputyCommand.ts:askOnce:6"
+      ],
+      "after": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 0.149,
+        "heldMaxMs": 0.149,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 0.149,
+        "heldMaxMs": 0.149,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 48,
+      "body": "src/lib/orchestrator/deputyCommand.ts:askOnce:7",
+      "baseLine": 302,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 8,
+        "heldSamples": 8,
+        "heldMedianMs": 0.285,
+        "heldMaxMs": 0.398,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/deputyCommand.ts:askOnce:7"
+      ],
+      "after": {
+        "samples": 8,
+        "heldSamples": 8,
+        "heldMedianMs": 0.186,
+        "heldMaxMs": 0.263,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 8,
+        "heldSamples": 8,
+        "heldMedianMs": 0.186,
+        "heldMaxMs": 0.263,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputyCommand.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 49,
+      "body": "src/lib/orchestrator/deputies.ts:mutateDeputies:1",
+      "baseLine": 275,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 96,
+        "heldSamples": 96,
+        "heldMedianMs": 0.257,
+        "heldMaxMs": 1.496,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/deputyCommand.test.ts",
+          "src/lib/orchestrator/deputySweep.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/deputies.ts:mutateDeputies:1"
+      ],
+      "after": {
+        "samples": 100,
+        "heldSamples": 100,
+        "heldMedianMs": 0.144,
+        "heldMaxMs": 1.234,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/deputyCommand.test.ts",
+          "src/lib/orchestrator/deputySweep.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 100,
+        "heldSamples": 100,
+        "heldMedianMs": 0.144,
+        "heldMaxMs": 1.234,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/orchestrator/deputyCommand.test.ts",
+          "src/lib/orchestrator/deputySweep.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 50,
+      "body": "src/lib/orchestrator/deputySweep.ts:finishDeputy:1",
+      "baseLine": 158,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 8,
+        "heldSamples": 8,
+        "heldMedianMs": 0.388,
+        "heldMaxMs": 0.664,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputySweep.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/deputySweep.ts:finishDeputy:1"
+      ],
+      "after": {
+        "samples": 8,
+        "heldSamples": 8,
+        "heldMedianMs": 0.198,
+        "heldMaxMs": 0.417,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputySweep.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 8,
+        "heldSamples": 8,
+        "heldMedianMs": 0.198,
+        "heldMaxMs": 0.417,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputySweep.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 51,
+      "body": "src/lib/orchestrator/deputySweep.ts:finishDeputy:2",
+      "baseLine": 177,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 7,
+        "heldSamples": 7,
+        "heldMedianMs": 0.373,
+        "heldMaxMs": 0.523,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputySweep.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/orchestrator/deputySweep.ts:finishDeputy:2"
+      ],
+      "after": {
+        "samples": 7,
+        "heldSamples": 7,
+        "heldMedianMs": 0.183,
+        "heldMaxMs": 0.233,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputySweep.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 7,
+        "heldSamples": 7,
+        "heldMedianMs": 0.183,
+        "heldMaxMs": 0.233,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/deputySweep.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 52,
+      "body": "src/lib/accounts/codex.ts:withRegistryLock:1",
+      "baseLine": 300,
+      "observation": "Engine guard acquisition could sleep for five seconds under the shared lock. Guard acquired first, without waiting; only catalog commits use the shared lease.",
+      "before": {
+        "samples": 233,
+        "heldSamples": 233,
+        "heldMedianMs": 9.82,
+        "heldMaxMs": 197.839,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/accountMutation.observation.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/codex.loginReservation.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/codex.ts:withRegistryLock:1"
+      ],
+      "after": {
+        "samples": 9,
+        "heldSamples": 9,
+        "heldMedianMs": 4.411,
+        "heldMaxMs": 17.804,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.observation.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 9,
+        "heldSamples": 9,
+        "heldMedianMs": 4.411,
+        "heldMaxMs": 17.804,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.observation.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 53,
+      "body": "src/lib/accounts/codex.ts:withManagedCodexLogin:1",
+      "baseLine": 454,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 22,
+        "heldSamples": 22,
+        "heldMedianMs": 2.968,
+        "heldMaxMs": 7.436,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/codex.loginReservation.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/codex.ts:withManagedCodexLogin:1"
+      ],
+      "after": {
+        "samples": 22,
+        "heldSamples": 22,
+        "heldMedianMs": 1.939,
+        "heldMaxMs": 4.527,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/codex.loginReservation.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 22,
+        "heldSamples": 22,
+        "heldMedianMs": 1.939,
+        "heldMaxMs": 4.527,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/codex.loginReservation.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 54,
+      "body": "src/lib/accounts/codex.ts:withManagedCodexLogin:2",
+      "baseLine": 469,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 23,
+        "heldSamples": 23,
+        "heldMedianMs": 2.964,
+        "heldMaxMs": 7.21,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/codex.loginReservation.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/codex.ts:withManagedCodexLogin:2"
+      ],
+      "after": {
+        "samples": 23,
+        "heldSamples": 23,
+        "heldMedianMs": 2.137,
+        "heldMaxMs": 7.548,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/codex.loginReservation.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 23,
+        "heldSamples": 23,
+        "heldMedianMs": 2.137,
+        "heldMaxMs": 7.548,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/codex.loginReservation.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 55,
+      "body": "src/lib/accounts/codex.ts:setActiveCodexAccount:1",
+      "baseLine": 510,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 28,
+        "heldSamples": 28,
+        "heldMedianMs": 3.876,
+        "heldMaxMs": 405.509,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/codex.ts:setActiveCodexAccount:1"
+      ],
+      "after": {
+        "samples": 26,
+        "heldSamples": 26,
+        "heldMedianMs": 2.715,
+        "heldMaxMs": 4.815,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 26,
+        "heldSamples": 26,
+        "heldMedianMs": 2.715,
+        "heldMaxMs": 4.815,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 56,
+      "body": "src/lib/accounts/codex.ts:createManagedCodexAccount:1",
+      "baseLine": 563,
+      "observation": "Home/link preparation and interrupted-removal recovery. Prepare under engine guard; commit against current catalog.",
+      "before": {
+        "samples": 175,
+        "heldSamples": 175,
+        "heldMedianMs": 8.503,
+        "heldMaxMs": 166.55,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/accountMutation.observation.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/codex.loginReservation.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/codex.ts:createManagedCodexAccount:2"
+      ],
+      "after": {
+        "samples": 162,
+        "heldSamples": 162,
+        "heldMedianMs": 1.857,
+        "heldMaxMs": 25.4,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/accountMutation.observation.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/codex.loginReservation.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 164,
+        "heldSamples": 1,
+        "heldMedianMs": 7.249,
+        "heldMaxMs": 7.249,
+        "outsideSamples": 163,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/accountMutation.observation.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/codex.loginReservation.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 57,
+      "body": "src/lib/accounts/codex.ts:recoverInterruptedCodexAccountRemovals:1",
+      "baseLine": 644,
+      "observation": "Recursive archive scrubbing. Engine guard keeps recovery exclusive; shared lease covers journal/retirement commits.",
+      "before": {
+        "samples": 15,
+        "heldSamples": 15,
+        "heldMedianMs": 7.794,
+        "heldMaxMs": 158.847,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/codex.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/removal.ts:removeManagedAccountIntoArchive:1",
+        "src/lib/accounts/removal.ts:recoverManagedAccountRemoval:1",
+        "src/lib/accounts/codex.ts:writeJournal:1",
+        "src/lib/accounts/codex.ts:recoverRemovalsLocked:1"
+      ],
+      "after": {
+        "samples": 200,
+        "heldSamples": 200,
+        "heldMedianMs": 3.163,
+        "heldMaxMs": 28.88,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 14,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 14,
+        "tests": [
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/codex.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 58,
+      "body": "src/lib/accounts/codex.ts:removeManagedCodexAccount:1",
+      "baseLine": 680,
+      "observation": "Removal recovery and archive scrubbing. Revalidate account identity, login and liveness before retirement; scrub after commit.",
+      "before": {
+        "samples": 20,
+        "heldSamples": 20,
+        "heldMedianMs": 22.232,
+        "heldMaxMs": 191.072,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/removal.ts:removeManagedAccountIntoArchive:1",
+        "src/lib/accounts/removal.ts:recoverManagedAccountRemoval:1",
+        "src/lib/accounts/codex.ts:writeJournal:1",
+        "src/lib/accounts/codex.ts:recoverRemovalsLocked:1"
+      ],
+      "after": {
+        "samples": 200,
+        "heldSamples": 200,
+        "heldMedianMs": 3.163,
+        "heldMaxMs": 28.88,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 19,
+        "heldSamples": 1,
+        "heldMedianMs": 34.406,
+        "heldMaxMs": 34.406,
+        "outsideSamples": 18,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 59,
+      "body": "src/lib/accounts/codex.ts:hideLegacyCodexAccount:1",
+      "baseLine": 711,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 6,
+        "heldSamples": 6,
+        "heldMedianMs": 5.71,
+        "heldMaxMs": 26.604,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/codex.ts:hideLegacyCodexAccount:1"
+      ],
+      "after": {
+        "samples": 6,
+        "heldSamples": 6,
+        "heldMedianMs": 5.102,
+        "heldMaxMs": 17.794,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 6,
+        "heldSamples": 6,
+        "heldMedianMs": 5.102,
+        "heldMaxMs": 17.794,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 60,
+      "body": "src/lib/accounts/codex.ts:restoreLegacyCodexAccount:1",
+      "baseLine": 726,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 2,
+        "heldSamples": 2,
+        "heldMedianMs": 2.964,
+        "heldMaxMs": 3.052,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/codex.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/codex.ts:restoreLegacyCodexAccount:1"
+      ],
+      "after": {
+        "samples": 2,
+        "heldSamples": 2,
+        "heldMedianMs": 1.886,
+        "heldMaxMs": 2.053,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/codex.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 2,
+        "heldSamples": 2,
+        "heldMedianMs": 1.886,
+        "heldMaxMs": 2.053,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/codex.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 61,
+      "body": "src/lib/accounts/codex.ts:cleanupOrphanedCodexHomes:1",
+      "baseLine": 754,
+      "observation": "Recursive account/history inventory and scrubbing. Scan outside; revalidate retirement against current catalog.",
+      "before": {
+        "samples": 14,
+        "heldSamples": 14,
+        "heldMedianMs": 16.078,
+        "heldMaxMs": 197.703,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/codex.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/removal.ts:removeManagedAccountIntoArchive:1",
+        "src/lib/accounts/removal.ts:recoverManagedAccountRemoval:1",
+        "src/lib/accounts/codex.ts:writeJournal:1",
+        "src/lib/accounts/codex.ts:recoverRemovalsLocked:1"
+      ],
+      "after": {
+        "samples": 200,
+        "heldSamples": 200,
+        "heldMedianMs": 3.163,
+        "heldMaxMs": 28.88,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 13,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 13,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/codex.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 62,
+      "body": "src/lib/accounts/codex.ts:setCodexAccountLoginPane:1",
+      "baseLine": 808,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 3.769,
+        "heldMaxMs": 3.769,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.observation.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/codex.ts:setCodexAccountLoginPane:1"
+      ],
+      "after": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 5.217,
+        "heldMaxMs": 5.217,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.observation.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 5.217,
+        "heldMaxMs": 5.217,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.observation.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 63,
+      "body": "src/lib/accounts/projectBindings.ts:inRecordTransaction:1",
+      "baseLine": 293,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 36,
+        "heldSamples": 36,
+        "heldMedianMs": 3.206,
+        "heldMaxMs": 16.744,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/account-project-bindings/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/projectBindings.test.ts",
+          "src/lib/accounts/spawnHealth.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/projectBindings.ts:inRecordTransaction:1"
+      ],
+      "after": {
+        "samples": 36,
+        "heldSamples": 36,
+        "heldMedianMs": 2.331,
+        "heldMaxMs": 11.741,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/account-project-bindings/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/projectBindings.test.ts",
+          "src/lib/accounts/spawnHealth.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 36,
+        "heldSamples": 36,
+        "heldMedianMs": 2.331,
+        "heldMaxMs": 11.741,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/account-project-bindings/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/projectBindings.test.ts",
+          "src/lib/accounts/spawnHealth.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 64,
+      "body": "src/lib/accounts/projectBindings.ts:forgetAccountProjectBindings:1",
+      "baseLine": 410,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 19,
+        "heldSamples": 19,
+        "heldMedianMs": 0.456,
+        "heldMaxMs": 3.9,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/projectBindings.ts:forgetAccountProjectBindings:1"
+      ],
+      "after": {
+        "samples": 14,
+        "heldSamples": 14,
+        "heldMedianMs": 0.435,
+        "heldMaxMs": 2.166,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 14,
+        "heldSamples": 14,
+        "heldMedianMs": 0.435,
+        "heldMaxMs": 2.166,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 65,
+      "body": "src/lib/accounts/codexRuntime.ts:loginSnapshot:1",
+      "baseLine": 310,
+      "observation": "The RPC was already outside. Closing a completed app-server child remained in the commit; close after release.",
+      "before": {
+        "samples": 19,
+        "heldSamples": 19,
+        "heldMedianMs": 0.361,
+        "heldMaxMs": 3.736,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/codexRuntime.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/codexRuntime.ts:loginSnapshot:1"
+      ],
+      "after": {
+        "samples": 19,
+        "heldSamples": 19,
+        "heldMedianMs": 0.311,
+        "heldMaxMs": 3.76,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/codexRuntime.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 19,
+        "heldSamples": 19,
+        "heldMedianMs": 0.311,
+        "heldMaxMs": 3.76,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/codexRuntime.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 66,
+      "body": "src/lib/accounts/codexRuntime.ts:probeQuota:1",
+      "baseLine": 403,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 0.074,
+        "heldMaxMs": 0.143,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/codexRuntime.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/codexRuntime.ts:probeQuota:1"
+      ],
+      "after": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 0.041,
+        "heldMaxMs": 0.152,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/codexRuntime.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 0.041,
+        "heldMaxMs": 0.152,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/codexRuntime.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 67,
+      "body": "src/lib/accounts/codexRuntime.ts:recheck:1",
+      "baseLine": 436,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 8,
+        "heldSamples": 8,
+        "heldMedianMs": 0.065,
+        "heldMaxMs": 0.077,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/codexRuntime.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/codexRuntime.ts:recheck:1"
+      ],
+      "after": {
+        "samples": 8,
+        "heldSamples": 8,
+        "heldMedianMs": 0.055,
+        "heldMaxMs": 0.077,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/codexRuntime.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 8,
+        "heldSamples": 8,
+        "heldMedianMs": 0.055,
+        "heldMaxMs": 0.077,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/codexRuntime.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 68,
+      "body": "src/lib/accounts/codexRuntime.ts:record:1",
+      "baseLine": 478,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 60,
+        "heldSamples": 60,
+        "heldMedianMs": 2.994,
+        "heldMaxMs": 5.402,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/codexRuntime.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/codexRuntime.ts:record:1"
+      ],
+      "after": {
+        "samples": 60,
+        "heldSamples": 60,
+        "heldMedianMs": 2.36,
+        "heldMaxMs": 6.038,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/codexRuntime.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 60,
+        "heldSamples": 60,
+        "heldMedianMs": 2.36,
+        "heldMaxMs": 6.038,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/codexRuntime.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 69,
+      "body": "src/lib/accounts/codexRuntime.ts:drain:1",
+      "baseLine": 517,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 5,
+        "heldSamples": 5,
+        "heldMedianMs": 2.148,
+        "heldMaxMs": 3.362,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/codexRuntime.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/codexRuntime.ts:drain:1"
+      ],
+      "after": {
+        "samples": 5,
+        "heldSamples": 5,
+        "heldMedianMs": 2.515,
+        "heldMaxMs": 3.837,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/codexRuntime.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 5,
+        "heldSamples": 5,
+        "heldMedianMs": 2.515,
+        "heldMaxMs": 3.837,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/codexRuntime.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 70,
+      "body": "src/lib/accounts/copilot.ts:setActiveCopilotAccount:1",
+      "baseLine": 200,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 6,
+        "heldSamples": 6,
+        "heldMedianMs": 0.28,
+        "heldMaxMs": 0.428,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/copilot.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/copilot.ts:setActiveCopilotAccount:1"
+      ],
+      "after": {
+        "samples": 6,
+        "heldSamples": 6,
+        "heldMedianMs": 0.285,
+        "heldMaxMs": 0.48,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/copilot.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 6,
+        "heldSamples": 6,
+        "heldMedianMs": 0.285,
+        "heldMaxMs": 0.48,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/copilot.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 71,
+      "body": "src/lib/accounts/copilot.ts:createManagedCopilotAccount:1",
+      "baseLine": 211,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 27,
+        "heldSamples": 27,
+        "heldMedianMs": 0.287,
+        "heldMaxMs": 1.244,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/copilot.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/copilot.ts:createManagedCopilotAccount:1"
+      ],
+      "after": {
+        "samples": 27,
+        "heldSamples": 27,
+        "heldMedianMs": 0.398,
+        "heldMaxMs": 0.993,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/copilot.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 27,
+        "heldSamples": 27,
+        "heldMedianMs": 0.398,
+        "heldMaxMs": 0.993,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/copilot.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 72,
+      "body": "src/lib/accounts/copilot.ts:removeCopilotAccount:1",
+      "baseLine": 264,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 1.434,
+        "heldMaxMs": 2.07,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/copilot.ts:removeCopilotAccount:1"
+      ],
+      "after": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 1.534,
+        "heldMaxMs": 4.305,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 1.534,
+        "heldMaxMs": 4.305,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 73,
+      "body": "src/lib/accounts/copilot.ts:restoreLegacyCopilotAccount:1",
+      "baseLine": 303,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 2,
+        "heldSamples": 2,
+        "heldMedianMs": 0.192,
+        "heldMaxMs": 0.297,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/copilot.ts:restoreLegacyCopilotAccount:1"
+      ],
+      "after": {
+        "samples": 2,
+        "heldSamples": 2,
+        "heldMedianMs": 0.221,
+        "heldMaxMs": 0.318,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 2,
+        "heldSamples": 2,
+        "heldMedianMs": 0.221,
+        "heldMaxMs": 0.318,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/copilot/route.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 74,
+      "body": "src/lib/flows/engine.ts:tickFlow:1",
+      "baseLine": 1371,
+      "observation": "Reviewer account/credential discovery.",
+      "before": {
+        "samples": 33,
+        "heldSamples": 33,
+        "heldMedianMs": 1.539,
+        "heldMaxMs": 5.929,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/flows/engine.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/accountMutation.ts:accountProbeSnapshot:2"
+      ],
+      "after": {
+        "samples": 246,
+        "heldSamples": 246,
+        "heldMedianMs": 0.036,
+        "heldMaxMs": 5.245,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.observation.test.ts",
+          "src/lib/accounts/accountMutation.test.ts",
+          "src/lib/accounts/codexRuntime.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/accounts/spawnHealth.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts",
+          "src/lib/flows/engine.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 17,
+        "heldSamples": 17,
+        "heldMedianMs": 13.87,
+        "heldMaxMs": 34.508,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/flows/engine.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 75,
+      "body": "src/lib/flows/engine.ts:tickFlow:2",
+      "baseLine": 1381,
+      "observation": "Reviewer publication environment can probe a login shell; registry writer could wait. Prepare publication outside and revalidate the account and flow before reservation.",
+      "before": {
+        "samples": 16,
+        "heldSamples": 16,
+        "heldMedianMs": 13.455,
+        "heldMaxMs": 73.558,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/flows/engine.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/flows/engine.ts:tickFlow:1"
+      ],
+      "after": {
+        "samples": 17,
+        "heldSamples": 17,
+        "heldMedianMs": 13.87,
+        "heldMaxMs": 34.508,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/flows/engine.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 0,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 0,
+        "tests": []
+      }
+    },
+    {
+      "id": 76,
+      "body": "src/lib/accounts/spawnHealth.ts:fencedLiveValidityProbe:1",
+      "baseLine": 223,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 79,
+        "heldSamples": 79,
+        "heldMedianMs": 0.058,
+        "heldMaxMs": 0.18,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/spawnHealth.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/spawnHealth.ts:fencedLiveValidityProbe:1"
+      ],
+      "after": {
+        "samples": 79,
+        "heldSamples": 79,
+        "heldMedianMs": 0.029,
+        "heldMaxMs": 0.095,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/spawnHealth.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 79,
+        "heldSamples": 79,
+        "heldMedianMs": 0.029,
+        "heldMaxMs": 0.095,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/spawnHealth.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 77,
+      "body": "src/lib/accounts/accountMutation.ts:accountProbeSnapshot:1",
+      "baseLine": 429,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 0.018,
+        "heldMaxMs": 0.018,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.observation.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/accountMutation.ts:accountProbeSnapshot:1"
+      ],
+      "after": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 0.019,
+        "heldMaxMs": 0.019,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.observation.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 0.019,
+        "heldMaxMs": 0.019,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.observation.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 78,
+      "body": "src/lib/accounts/accountMutation.ts:accountProbeSnapshot:2",
+      "baseLine": 433,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 212,
+        "heldSamples": 212,
+        "heldMedianMs": 0.058,
+        "heldMaxMs": 0.232,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.observation.test.ts",
+          "src/lib/accounts/accountMutation.test.ts",
+          "src/lib/accounts/codexRuntime.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/accounts/spawnHealth.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/accountMutation.ts:accountProbeSnapshot:2"
+      ],
+      "after": {
+        "samples": 246,
+        "heldSamples": 246,
+        "heldMedianMs": 0.036,
+        "heldMaxMs": 5.245,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.observation.test.ts",
+          "src/lib/accounts/accountMutation.test.ts",
+          "src/lib/accounts/codexRuntime.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/accounts/spawnHealth.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts",
+          "src/lib/flows/engine.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 246,
+        "heldSamples": 246,
+        "heldMedianMs": 0.036,
+        "heldMaxMs": 5.245,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.observation.test.ts",
+          "src/lib/accounts/accountMutation.test.ts",
+          "src/lib/accounts/codexRuntime.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/accounts/spawnHealth.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts",
+          "src/lib/flows/engine.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 79,
+      "body": "src/lib/accounts/claudeLogin.ts:persist:1",
+      "baseLine": 358,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 262,
+        "heldSamples": 262,
+        "heldMedianMs": 1.641,
+        "heldMaxMs": 10.225,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/claudeLogin.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/claudeLogin.ts:persist:1"
+      ],
+      "after": {
+        "samples": 226,
+        "heldSamples": 226,
+        "heldMedianMs": 1.456,
+        "heldMaxMs": 6.892,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/claudeLogin.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 226,
+        "heldSamples": 226,
+        "heldMedianMs": 1.456,
+        "heldMaxMs": 6.892,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/claudeLogin.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 80,
+      "body": "src/lib/accounts/claudeLogin.ts:drain:1",
+      "baseLine": 371,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 0.044,
+        "heldMaxMs": 0.044,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/claudeLogin.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/claudeLogin.ts:drain:1"
+      ],
+      "after": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 0.051,
+        "heldMaxMs": 0.051,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/claudeLogin.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 1,
+        "heldSamples": 1,
+        "heldMedianMs": 0.051,
+        "heldMaxMs": 0.051,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/claudeLogin.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 81,
+      "body": "src/lib/accounts/migration/quotaController.ts:tick:1",
+      "baseLine": 287,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 19,
+        "heldSamples": 19,
+        "heldMedianMs": 0.159,
+        "heldMaxMs": 1.129,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/migration/quotaController.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/migration/quotaController.ts:tick:1"
+      ],
+      "after": {
+        "samples": 19,
+        "heldSamples": 19,
+        "heldMedianMs": 0.117,
+        "heldMaxMs": 1.317,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/migration/quotaController.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 19,
+        "heldSamples": 19,
+        "heldMedianMs": 0.117,
+        "heldMaxMs": 1.317,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/migration/quotaController.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 82,
+      "body": "src/lib/accounts/migration/quotaController.ts:tick:2",
+      "baseLine": 319,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 19,
+        "heldSamples": 19,
+        "heldMedianMs": 0.81,
+        "heldMaxMs": 3.737,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/migration/quotaController.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/migration/quotaController.ts:tick:2"
+      ],
+      "after": {
+        "samples": 19,
+        "heldSamples": 19,
+        "heldMedianMs": 0.621,
+        "heldMaxMs": 2.76,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/migration/quotaController.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 19,
+        "heldSamples": 19,
+        "heldMedianMs": 0.621,
+        "heldMaxMs": 2.76,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/migration/quotaController.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 83,
+      "body": "src/lib/accounts/manager.ts:selectAccount:1",
+      "baseLine": 566,
+      "observation": "Catalog/credential discovery may launch Keychain. Snapshot outside; compare catalog revision and credential-file identity; bounded re-read on a competing selection.",
+      "before": {
+        "samples": 12,
+        "heldSamples": 12,
+        "heldMedianMs": 170.917,
+        "heldMaxMs": 536.964,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/manager.ts:selectAccount:1"
+      ],
+      "after": {
+        "samples": 10,
+        "heldSamples": 10,
+        "heldMedianMs": 32.214,
+        "heldMaxMs": 538.17,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/manager.interprocess.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 10,
+        "heldSamples": 10,
+        "heldMedianMs": 32.214,
+        "heldMaxMs": 538.17,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/manager.interprocess.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 84,
+      "body": "src/lib/accounts/manager.ts:add:1",
+      "baseLine": 580,
+      "observation": "Nested creation and credential-backed summary. Remove outer lease; creation owns its revalidated commit.",
+      "before": {
+        "samples": 2,
+        "heldSamples": 2,
+        "heldMedianMs": 160.291,
+        "heldMaxMs": 167.416,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.bodies.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/claude.ts:createManagedClaudeAccount:2",
+        "src/lib/accounts/codex.ts:createManagedCodexAccount:2"
+      ],
+      "after": {
+        "samples": 458,
+        "heldSamples": 458,
+        "heldMedianMs": 1.814,
+        "heldMaxMs": 25.4,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/accountMutation.observation.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeLogin.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/codex.loginReservation.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/spawnHealth.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 0,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 0,
+        "tests": []
+      }
+    },
+    {
+      "id": 85,
+      "body": "src/lib/accounts/migration/controller.ts:syncCompatibilityRouting:1",
+      "baseLine": 75,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 5,
+        "heldSamples": 5,
+        "heldMedianMs": 3.821,
+        "heldMaxMs": 5.348,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/migration/controller.ts:syncCompatibilityRouting:1"
+      ],
+      "after": {
+        "samples": 5,
+        "heldSamples": 5,
+        "heldMedianMs": 2.818,
+        "heldMaxMs": 3.482,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 5,
+        "heldSamples": 5,
+        "heldMedianMs": 2.818,
+        "heldMaxMs": 3.482,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 86,
+      "body": "src/lib/accounts/claude.ts:withRegistryLock:1",
+      "baseLine": 285,
+      "observation": "Engine guard acquisition could sleep for five seconds under the shared lock. Guard acquired first, without waiting; only catalog commits use the shared lease.",
+      "before": {
+        "samples": 457,
+        "heldSamples": 457,
+        "heldMedianMs": 4.165,
+        "heldMaxMs": 196.732,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeLogin.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/spawnHealth.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/claude.ts:withRegistryLock:1"
+      ],
+      "after": {
+        "samples": 28,
+        "heldSamples": 28,
+        "heldMedianMs": 3.351,
+        "heldMaxMs": 15.934,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 28,
+        "heldSamples": 28,
+        "heldMedianMs": 3.351,
+        "heldMaxMs": 15.934,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 87,
+      "body": "src/lib/accounts/claude.ts:setActiveClaudeAccount:1",
+      "baseLine": 360,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 22,
+        "heldSamples": 22,
+        "heldMedianMs": 3.392,
+        "heldMaxMs": 10.055,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/claude.ts:setActiveClaudeAccount:1"
+      ],
+      "after": {
+        "samples": 16,
+        "heldSamples": 16,
+        "heldMedianMs": 2.786,
+        "heldMaxMs": 6.908,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 16,
+        "heldSamples": 16,
+        "heldMedianMs": 2.786,
+        "heldMaxMs": 6.908,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 88,
+      "body": "src/lib/accounts/claude.ts:createManagedClaudeAccount:1",
+      "baseLine": 511,
+      "observation": "Keychain credential discovery and recursive capability copy. Prepare home under engine guard; commit against current catalog.",
+      "before": {
+        "samples": 340,
+        "heldSamples": 340,
+        "heldMedianMs": 3.792,
+        "heldMaxMs": 189.274,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeLogin.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/spawnHealth.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/claude.ts:createManagedClaudeAccount:2"
+      ],
+      "after": {
+        "samples": 296,
+        "heldSamples": 296,
+        "heldMedianMs": 1.787,
+        "heldMaxMs": 6.158,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeLogin.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/spawnHealth.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 299,
+        "heldSamples": 2,
+        "heldMedianMs": 7.458,
+        "heldMaxMs": 7.517,
+        "outsideSamples": 297,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeLogin.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/spawnHealth.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 89,
+      "body": "src/lib/accounts/claude.ts:updateProviderClaudeAccount:1",
+      "baseLine": 547,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 27,
+        "heldSamples": 27,
+        "heldMedianMs": 3.653,
+        "heldMaxMs": 8.069,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/claude.ts:updateProviderClaudeAccount:1"
+      ],
+      "after": {
+        "samples": 20,
+        "heldSamples": 20,
+        "heldMedianMs": 3.326,
+        "heldMaxMs": 7.027,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 20,
+        "heldSamples": 20,
+        "heldMedianMs": 3.326,
+        "heldMaxMs": 7.027,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 90,
+      "body": "src/lib/accounts/claude.ts:recoverInterruptedClaudeAccountRemovals:1",
+      "baseLine": 690,
+      "observation": "Recursive archive scrubbing. Engine guard keeps recovery exclusive; shared lease covers journal/retirement commits.",
+      "before": {
+        "samples": 15,
+        "heldSamples": 15,
+        "heldMedianMs": 7.057,
+        "heldMaxMs": 159.035,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/removal.ts:removeManagedAccountIntoArchive:1",
+        "src/lib/accounts/removal.ts:recoverManagedAccountRemoval:1",
+        "src/lib/accounts/claude.ts:writeJournal:1",
+        "src/lib/accounts/claude.ts:recoverRemovalsLocked:1"
+      ],
+      "after": {
+        "samples": 230,
+        "heldSamples": 230,
+        "heldMedianMs": 2.766,
+        "heldMaxMs": 28.88,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 14,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 14,
+        "tests": [
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 91,
+      "body": "src/lib/accounts/claude.ts:removeManagedClaudeAccount:1",
+      "baseLine": 714,
+      "observation": "Removal recovery, archive scrubbing and sidecar cleanup. Revalidate account identity, login and liveness before retirement; scrub after commit.",
+      "before": {
+        "samples": 40,
+        "heldSamples": 40,
+        "heldMedianMs": 17.964,
+        "heldMaxMs": 196.649,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/removal.ts:removeManagedAccountIntoArchive:1",
+        "src/lib/accounts/removal.ts:recoverManagedAccountRemoval:1",
+        "src/lib/accounts/claude.ts:writeJournal:1",
+        "src/lib/accounts/claude.ts:recoverRemovalsLocked:1"
+      ],
+      "after": {
+        "samples": 230,
+        "heldSamples": 230,
+        "heldMedianMs": 2.766,
+        "heldMaxMs": 28.88,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 32,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 32,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 92,
+      "body": "src/lib/accounts/claude.ts:hideLegacyClaudeAccount:1",
+      "baseLine": 745,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 6,
+        "heldSamples": 6,
+        "heldMedianMs": 4.304,
+        "heldMaxMs": 18.139,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/claude.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/claude.ts:hideLegacyClaudeAccount:1"
+      ],
+      "after": {
+        "samples": 5,
+        "heldSamples": 5,
+        "heldMedianMs": 5.025,
+        "heldMaxMs": 15.917,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/claude.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 5,
+        "heldSamples": 5,
+        "heldMedianMs": 5.025,
+        "heldMaxMs": 15.917,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/claude.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 93,
+      "body": "src/lib/accounts/claude.ts:restoreLegacyClaudeAccount:1",
+      "baseLine": 760,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 2.248,
+        "heldMaxMs": 2.947,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/claude.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/claude.ts:restoreLegacyClaudeAccount:1"
+      ],
+      "after": {
+        "samples": 3,
+        "heldSamples": 3,
+        "heldMedianMs": 2.374,
+        "heldMaxMs": 3.511,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/claude.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 3,
+        "heldSamples": 3,
+        "heldMedianMs": 2.374,
+        "heldMaxMs": 3.511,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/claude.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 94,
+      "body": "src/lib/accounts/claude.ts:cleanupOrphanedClaudeHomes:1",
+      "baseLine": 788,
+      "observation": "Recursive account/history inventory, scrubbing and sidecar cleanup. Scan outside; revalidate retirement against current catalog.",
+      "before": {
+        "samples": 25,
+        "heldSamples": 25,
+        "heldMedianMs": 3.417,
+        "heldMaxMs": 189.158,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/accounts/removal.ts:removeManagedAccountIntoArchive:1",
+        "src/lib/accounts/removal.ts:recoverManagedAccountRemoval:1",
+        "src/lib/accounts/claude.ts:writeJournal:1",
+        "src/lib/accounts/claude.ts:recoverRemovalsLocked:1"
+      ],
+      "after": {
+        "samples": 230,
+        "heldSamples": 230,
+        "heldMedianMs": 2.766,
+        "heldMaxMs": 28.88,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 18,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 18,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 95,
+      "body": "src/lib/runtime/structuredRecovery.ts:recoverCandidate:1",
+      "baseLine": 443,
+      "observation": "Async account authorization and registry-writer acquisition. Authorize first; recheck authority, recovery admission and request guards on every writer attempt.",
+      "before": {
+        "samples": 30,
+        "heldSamples": 30,
+        "heldMedianMs": 8.285,
+        "heldMaxMs": 100.457,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "src/lib/runtime/structuredRecovery.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/registry.ts:accountMutationWrite:1"
+      ],
+      "after": {
+        "samples": 275,
+        "heldSamples": 275,
+        "heldMedianMs": 1.452,
+        "heldMaxMs": 66.073,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts",
+          "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "src/lib/runtime/structuredRecovery.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 0,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 0,
+        "tests": []
+      }
+    },
+    {
+      "id": 96,
+      "body": "src/lib/runtime/structuredMessageDelivery.ts:holdDuringRuntimeSynchronization:1",
+      "baseLine": 656,
+      "observation": "Image publication, image-store writer wait and garbage-collection scans. Publish first; reserve after repeating durable payload/admission checks.",
+      "before": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 1.565,
+        "heldMaxMs": 1.946,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/runtime/structuredMessageDelivery.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/registry.ts:accountMutationWrite:1"
+      ],
+      "after": {
+        "samples": 275,
+        "heldSamples": 275,
+        "heldMedianMs": 1.452,
+        "heldMaxMs": 66.073,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts",
+          "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "src/lib/runtime/structuredRecovery.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 0,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 0,
+        "tests": []
+      }
+    },
+    {
+      "id": 97,
+      "body": "src/lib/runtime/structuredMessageDelivery.ts:admitDurably:1",
+      "baseLine": 1518,
+      "observation": "Image publication/collection plus registry-writer wait. Publish first; reserve after repeating durable payload/admission checks.",
+      "before": {
+        "samples": 75,
+        "heldSamples": 75,
+        "heldMedianMs": 1.515,
+        "heldMaxMs": 7.437,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/flows/engine.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/registry.ts:accountMutationWrite:1"
+      ],
+      "after": {
+        "samples": 275,
+        "heldSamples": 275,
+        "heldMedianMs": 1.452,
+        "heldMaxMs": 66.073,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts",
+          "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "src/lib/runtime/structuredRecovery.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 0,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 0,
+        "tests": []
+      }
+    },
+    {
+      "id": 98,
+      "body": "src/lib/runtime/structuredMessageDelivery.ts:admitDurably:2",
+      "baseLine": 1519,
+      "observation": "Image publication/collection plus registry-writer wait. Publish first; reserve after repeating durable payload/admission checks.",
+      "before": {
+        "samples": 17,
+        "heldSamples": 17,
+        "heldMedianMs": 1.837,
+        "heldMaxMs": 199.451,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/runtime/structuredMessageDelivery.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/registry.ts:accountMutationWrite:1"
+      ],
+      "after": {
+        "samples": 275,
+        "heldSamples": 275,
+        "heldMedianMs": 1.452,
+        "heldMaxMs": 66.073,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts",
+          "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "src/lib/runtime/structuredRecovery.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 0,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 0,
+        "tests": []
+      }
+    },
+    {
+      "id": 99,
+      "body": "src/lib/runtime/structuredMessageDelivery.ts:admitDurably:3",
+      "baseLine": 1520,
+      "observation": "Image publication/collection plus registry-writer wait. Publish first; reserve after repeating durable payload/admission checks.",
+      "before": {
+        "samples": 17,
+        "heldSamples": 17,
+        "heldMedianMs": 1.868,
+        "heldMaxMs": 199.496,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/runtime/structuredMessageDelivery.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/registry.ts:accountMutationWrite:1"
+      ],
+      "after": {
+        "samples": 275,
+        "heldSamples": 275,
+        "heldMedianMs": 1.452,
+        "heldMaxMs": 66.073,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts",
+          "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "src/lib/runtime/structuredRecovery.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 0,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 0,
+        "tests": []
+      }
+    },
+    {
+      "id": 100,
+      "body": "src/lib/telegram/bot/reportReplies.ts:module:1",
+      "baseLine": 67,
+      "observation": "No child process, RPC, timer wait or recursive filesystem scan in this body on the pinned main. Fixed-file reads and durable state writes remain; contended state/registry writes now refuse without sleeping under the lease.",
+      "before": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 3.04,
+        "heldMaxMs": 66.185,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/telegram/bot/reportReplies.ts:module:1"
+      ],
+      "after": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 2.494,
+        "heldMaxMs": 4.434,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 2.494,
+        "heldMaxMs": 4.434,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      }
+    },
+    {
+      "id": 101,
+      "body": "src/lib/pipelines/engine.ts:spawnPipelineAgent:1",
+      "baseLine": 722,
+      "observation": "Nested asynchronous spawn admission could retain the shared lease while waiting for the registry. Remove outer lease; recheck drain at each retry.",
+      "before": {
+        "samples": 15,
+        "heldSamples": 15,
+        "heldMedianMs": 9.04,
+        "heldMaxMs": 25.858,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/pipelines/engine.test.ts"
+        ]
+      },
+      "afterBodies": [
+        "src/lib/agent/registry.ts:accountMutationWrite:1"
+      ],
+      "after": {
+        "samples": 275,
+        "heldSamples": 275,
+        "heldMedianMs": 1.452,
+        "heldMaxMs": 66.073,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts",
+          "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "src/lib/runtime/structuredRecovery.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      },
+      "originalBodyAfter": {
+        "samples": 0,
+        "heldSamples": 0,
+        "heldMedianMs": null,
+        "heldMaxMs": null,
+        "outsideSamples": 0,
+        "tests": []
+      }
+    }
+  ],
+  "newBodies": [
+    {
+      "body": "src/lib/agent/registry.ts:accountMutationWrite:1",
+      "stats": {
+        "samples": 275,
+        "heldSamples": 275,
+        "heldMedianMs": 1.452,
+        "heldMaxMs": 66.073,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/migration/quotaController.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts",
+          "src/lib/agent/transcriptHost.test.ts",
+          "src/lib/flows/engine.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "src/lib/runtime/structuredRecovery.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      }
+    },
+    {
+      "body": "src/lib/orchestrator/seatCommand.ts:reconcileAuthorityProjections:1",
+      "stats": {
+        "samples": 166,
+        "heldSamples": 166,
+        "heldMedianMs": 0.289,
+        "heldMaxMs": 4.36,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/orchestrator/seatCommand.test.ts"
+        ]
+      }
+    },
+    {
+      "body": "src/lib/runtime/structuredMessageDelivery.ts:place:1",
+      "stats": {
+        "samples": 25,
+        "heldSamples": 25,
+        "heldMedianMs": 1.248,
+        "heldMaxMs": 5.82,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/flows/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts"
+        ]
+      }
+    },
+    {
+      "body": "src/lib/runtime/structuredMessageDelivery.ts:admit:1",
+      "stats": {
+        "samples": 94,
+        "heldSamples": 94,
+        "heldMedianMs": 1.462,
+        "heldMaxMs": 7.503,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/flows/engine.test.ts",
+          "src/lib/pipelines/engine.test.ts",
+          "src/lib/runtime/structuredMessageDelivery.test.ts",
+          "src/lib/telegram/bot/reportReplies.test.ts"
+        ]
+      }
+    },
+    {
+      "body": "src/lib/accounts/accountMutation.ts:afterAccountMutationAdmission:1",
+      "stats": {
+        "samples": 53,
+        "heldSamples": 53,
+        "heldMedianMs": 0.003,
+        "heldMaxMs": 0.027,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts"
+        ]
+      }
+    },
+    {
+      "body": "src/lib/accounts/accountMutation.ts:afterAccountMutationAdmission:2",
+      "stats": {
+        "samples": 14,
+        "heldSamples": 14,
+        "heldMedianMs": 0.007,
+        "heldMaxMs": 0.049,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts"
+        ]
+      }
+    },
+    {
+      "body": "src/lib/accounts/removal.ts:removeManagedAccountIntoArchive:1",
+      "stats": {
+        "samples": 60,
+        "heldSamples": 60,
+        "heldMedianMs": 9.592,
+        "heldMaxMs": 28.88,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      }
+    },
+    {
+      "body": "src/lib/accounts/removal.ts:recoverManagedAccountRemoval:1",
+      "stats": {
+        "samples": 40,
+        "heldSamples": 40,
+        "heldMedianMs": 2.146,
+        "heldMaxMs": 12.337,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/removal.writerWait.test.ts"
+        ]
+      }
+    },
+    {
+      "body": "src/lib/accounts/claude.ts:createManagedClaudeAccount:2",
+      "stats": {
+        "samples": 296,
+        "heldSamples": 296,
+        "heldMedianMs": 1.787,
+        "heldMaxMs": 6.158,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeLogin.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/accounts/migration/controller.routing.test.ts",
+          "src/lib/accounts/spawnHealth.test.ts"
+        ]
+      }
+    },
+    {
+      "body": "src/lib/accounts/claude.ts:writeJournal:1",
+      "stats": {
+        "samples": 126,
+        "heldSamples": 126,
+        "heldMedianMs": 2.215,
+        "heldMaxMs": 5.869,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/claude.test.ts",
+          "src/lib/accounts/claudeProvider.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts"
+        ]
+      }
+    },
+    {
+      "body": "src/lib/accounts/claude.ts:recoverRemovalsLocked:1",
+      "stats": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 2.22,
+        "heldMaxMs": 5.678,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/claude.test.ts"
+        ]
+      }
+    },
+    {
+      "body": "src/lib/accounts/codex.ts:createManagedCodexAccount:2",
+      "stats": {
+        "samples": 162,
+        "heldSamples": 162,
+        "heldMedianMs": 1.857,
+        "heldMaxMs": 25.4,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/accountMutation.callers.test.ts",
+          "src/lib/accounts/accountMutation.observation.test.ts",
+          "src/lib/accounts/accountMutation.writer.test.ts",
+          "src/lib/accounts/codex.loginReservation.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts",
+          "src/lib/agent/spawnCommand.contention.test.ts"
+        ]
+      }
+    },
+    {
+      "body": "src/lib/accounts/codex.ts:writeJournal:1",
+      "stats": {
+        "samples": 96,
+        "heldSamples": 96,
+        "heldMedianMs": 2.333,
+        "heldMaxMs": 18.637,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/codex/route.test.ts",
+          "src/lib/accounts/accountMutation.bodies.test.ts",
+          "src/lib/accounts/codex.test.ts",
+          "src/lib/accounts/manager.interprocess.test.ts",
+          "src/lib/accounts/managerProjectBinding.test.ts"
+        ]
+      }
+    },
+    {
+      "body": "src/lib/accounts/codex.ts:recoverRemovalsLocked:1",
+      "stats": {
+        "samples": 4,
+        "heldSamples": 4,
+        "heldMedianMs": 1.988,
+        "heldMaxMs": 3.313,
+        "outsideSamples": 0,
+        "tests": [
+          "src/lib/accounts/codex.test.ts"
+        ]
+      }
+    },
+    {
+      "body": "src/lib/accounts/claudeLogin.ts:reserve:1",
+      "stats": {
+        "samples": 52,
+        "heldSamples": 52,
+        "heldMedianMs": 1.611,
+        "heldMaxMs": 10.877,
+        "outsideSamples": 0,
+        "tests": [
+          "src/app/api/accounts/claude/route.test.ts",
+          "src/lib/accounts/claudeLogin.test.ts"
+        ]
+      }
+    }
+  ]
+}

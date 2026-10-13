@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { AccountAdmissionChangedError, AccountMutationBusyError } from "@/lib/accounts/accountMutation";
+import { AccountAdmissionChangedError, AccountMutationBusyError, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { foreignAccountHolder } from "@/lib/accounts/accountMutation.fixture";
 import { defaultModelFor } from "@/lib/agent/models";
 import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
@@ -43,7 +43,7 @@ import {
   SEAT_STORE_BUSY_REASON,
   type SeatCommandDependencies,
 } from "./seatCommand";
-import { activeOrchestratorSeats, orchestratorRevocations, orchestratorSeatFor, type OrchestratorSeat } from "./seats";
+import { activeOrchestratorSeats, beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, failOrchestratorSeatIntent, orchestratorRevocations, orchestratorSeatFor, type OrchestratorSeat } from "./seats";
 
 let sandbox = "";
 let previousStateDir: string | undefined;
@@ -63,6 +63,27 @@ afterEach(() => {
 const AT = "2026-07-29T00:00:00.000Z";
 const NEW_ID = "conversation_33333333-3333-4333-8333-333333333333";
 const OLD_ID = "conversation_44444444-4444-4444-8444-444444444444";
+
+test("seat activation waits for runtime evidence outside the lease and preserves a racing designation", async () => {
+  const { deps, recorded } = dependencies();
+  let enter!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { enter = resolve; });
+  const slow = new Promise<void>(resolve => { release = resolve; });
+  let calls = 0;
+  const work = executeOrchestratorSeatRequest({ project: "proj-a", cwd: "/workspace", mandate: "Run the board", clientRequestId: "activation-race" }, deps, null, {
+    replacementHold: async () => { if (++calls === 2) { enter(); await slow; } return null; },
+  });
+  try {
+    await ready;
+    await withAccountMutationLockAsync(() => {
+      failOrchestratorSeatIntent("proj-a", "activation-race", "superseded", AT);
+      beginOrchestratorSeatIntent({ project: "proj-a", mandate: "Replacement", clientRequestId: "race-winner", mode: "spawn", now: AT });
+    }, { waitMs: 100 });
+    release(); await work;
+    expect(orchestratorSeatFor("proj-a").pending?.intent.clientRequestId).toBe("race-winner");
+    expect(recorded.identityStamps).toEqual([]);
+  } finally { release(); await work; }
+});
 
 test("seat command publishes pre-admission evidence for validation and target refusals", async () => {
   for (const input of [
@@ -440,6 +461,21 @@ test("a legacy active seat replay recovers incumbent runtime metadata", async ()
 
   expect(replay).toMatchObject({ status: 200, body: { replayed: true, conversationId: NEW_ID } });
   expect(orchestratorSeatFor("proj-a").active).toMatchObject({ engine: "codex", model: "gpt-5.6-sol" });
+});
+
+test("legacy runtime discovery releases the lease and cannot stamp a superseded seat", async () => {
+  seedLegacyActiveSeat("legacy_runtime_race");
+  let held: boolean | undefined;
+  const { deps, recorded } = dependencies({ runtimeIdentity: () => {
+    held = fs.existsSync(path.join(sandbox, "account-selection.lock"));
+    beginOrchestratorSeatIntent({ project: "proj-a", mandate: "Replacement", clientRequestId: "runtime_race_winner", mode: "existing", now: AT });
+    completeOrchestratorSeatIntent({ project: "proj-a", clientRequestId: "runtime_race_winner", conversationId: OLD_ID, path: "/fixture/replacement.jsonl", engine: "codex", model: "gpt-5.6-sol", now: AT });
+    return { engine: "claude", model: "opus" };
+  } });
+  await executeOrchestratorSeatRequest({ project: "proj-a", mandate: "own the board", clientRequestId: "legacy_runtime_race", cwd: "/fixture" }, deps);
+  expect(held).toBe(false);
+  expect(recorded.identityStamps).toEqual([]);
+  expect(orchestratorSeatFor("proj-a").active?.conversationId).toBe(OLD_ID);
 });
 
 test("an admitted asynchronous spawn activates the seat from its durable conversation id", async () => {

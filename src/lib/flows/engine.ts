@@ -1,6 +1,7 @@
 import { classifyProviderCondition } from "@/lib/pipelines/providerConditions";
 import { durableStageTurnEvidence } from "@/lib/pipelines/durableEvidence";
-import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { accountProbeIdentity, accountProbeSnapshot, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { accountsCollectionRevision } from "@/lib/accounts/accountsStore";
 import { activeDrain, flowAwaitingAdmission } from "@/lib/selfUpdate/drain";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import crypto from "node:crypto";
@@ -210,6 +211,16 @@ export function reserveReviewerSpawn(
   registry: AgentRegistry = agentRegistry(),
 ): Exclude<SpawnBeginResult, { kind: "conflict" }> {
   agentPublicationIdentityEnv(process.env);
+  return commitReviewerSpawn(flow, round, role, accountId, registry);
+}
+
+function commitReviewerSpawn(
+  flow: Flow,
+  round: Round,
+  role: RoleConfig,
+  accountId: string | null,
+  registry: AgentRegistry = agentRegistry(),
+): Exclude<SpawnBeginResult, { kind: "conflict" }> {
   const implementer = flow.implementerConversationId?.startsWith("conversation_")
     ? registry.conversation(flow.implementerConversationId as `conversation_${string}`)
     : null;
@@ -1368,22 +1379,22 @@ export async function tickFlow(
       // if controls or update admission change before the final account fence.
       const launchFlow = cloneFlows([flow])[0]!;
       const launchRound = launchFlow.rounds.find(item => item.n === round.n)!;
-      const prepared = await withAccountMutationLockAsync(
-        () => {
-          if (!flowRevisionCurrent(flow) || flowAwaitingAdmission(flow) && activeDrain()) return null;
-          return prepareReviewerLaunch(launchFlow, launchRound);
-        },
-        { holder: "reviewer spawn admission", caller: "reviewer spawn admission" },
-      );
-      if (!prepared) return false;
+      if (!flowRevisionCurrent(flow) || flowAwaitingAdmission(flow) && activeDrain()) return false;
+      const accountSnapshot = await accountProbeSnapshot(() => prepareReviewerLaunch(launchFlow, launchRound).account,
+        { holder: "reviewer account preparation", caller: "reviewer spawn admission" });
+      const prepared: PreparedReviewerLaunch = { role: launchRound.reviewerRole!, account: accountSnapshot.account };
+      // Publication preparation can start a login shell. The final account
+      // revision check below fences any routing change made while it runs.
+      agentPublicationIdentityEnv(process.env);
       const observed = await withFlowGitFence(flow, (signal) => captureReviewHead(launchFlow, launchRound, signal));
       if (!observed.current) return false;
       const reservation = await withAccountMutationLockAsync(
         () => {
           if (!flowRevisionCurrent(flow) || flowAwaitingAdmission(flow) && activeDrain()) return null;
+          if (accountsCollectionRevision() !== accountSnapshot.revision || accountProbeIdentity(prepared.account) !== accountSnapshot.identity) return null;
           Object.assign(round, launchRound);
           round.spawnStartedAt = isoNow();
-          return reserveReviewerSpawn(flow, round, prepared.role, prepared.account.accountId);
+          return commitReviewerSpawn(flow, round, prepared.role, prepared.account.accountId);
         },
         { holder: "reviewer spawn admission", caller: "reviewer spawn admission" },
       );

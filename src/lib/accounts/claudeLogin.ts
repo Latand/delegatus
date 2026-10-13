@@ -418,17 +418,19 @@ export class ClaudeLoginSupervisor {
   }
 
   reserve(): LoginOperationSummary {
-    this.refreshDurableOperations();
-    if ([...this.operations.values()].some((item) => !terminal(item.phase))) throw new Error("a Claude login operation is already running");
-    const now = this.ports.now();
-    const item: LoginOperation = {
-      operationId: crypto.randomUUID(), accountId: null, phase: "starting", loginUrl: null, acceptsCode: false,
-      deadlineAt: new Date(now + LOGIN_TIMEOUT_MS).toISOString(), result: null, pid: null, startToken: null,
-      generation: ++this.generation, submitted: false, startedAt: new Date(now).toISOString(),
-    };
-    this.operations.set(item.operationId, item);
-    try { this.persist(); } catch (error) { this.operations.delete(item.operationId); throw error; }
-    return this.summary(item);
+    return withAccountMutationLock(() => {
+      this.refreshDurableOperations();
+      if ([...this.operations.values()].some((item) => !terminal(item.phase))) throw new Error("a Claude login operation is already running");
+      const now = this.ports.now();
+      const item: LoginOperation = {
+        operationId: crypto.randomUUID(), accountId: null, phase: "starting", loginUrl: null, acceptsCode: false,
+        deadlineAt: new Date(now + LOGIN_TIMEOUT_MS).toISOString(), result: null, pid: null, startToken: null,
+        generation: ++this.generation, submitted: false, startedAt: new Date(now).toISOString(),
+      };
+      this.operations.set(item.operationId, item);
+      try { this.persist(); } catch (error) { this.operations.delete(item.operationId); throw error; }
+      return this.summary(item);
+    });
   }
 
   abandon(operationId: string): void {

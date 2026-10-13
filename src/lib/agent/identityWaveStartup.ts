@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
 import { legacyClaudeHome, sharedClaudeProjectsRoot } from "@/lib/accounts/claude";
 import { statePath } from "@/lib/configDir";
 import { startupDiagnostic } from "@/lib/startupDiagnostics";
@@ -185,15 +184,20 @@ export function runIdentityWaveMigrationAtStartup(
     log: overrides.log ?? ((message, detail) => startupDiagnostic("info", message, detail)),
     env,
   };
-  const migrate = () => dependencies.registry.runIdentityWaveMigration({
+  const seats = dependencies.seats();
+  const seatEvidence = JSON.stringify(seats);
+  const result = dependencies.registry.runIdentityWaveMigration({
     dryRun,
     now: dependencies.now(),
     transcriptTitle: dependencies.transcriptTitle,
     sharedPathForLegacy: dependencies.sharedPath,
-    orchestratorSeats: dependencies.seats(),
+    orchestratorSeats: seats,
     commitExternalPathRekeys: dependencies.commitExternalPathRekeys,
+  }, () => {
+    if (JSON.stringify(dependencies.seats()) !== seatEvidence) {
+      throw new Error("identity migration seat evidence changed while reading transcripts; retry at startup");
+    }
   });
-  const result = dryRun ? migrate() : withAccountMutationLock(migrate);
   dependencies.log("[identity-wave] registry migration", {
     dryRun: result.dryRun,
     alreadyCompleted: result.alreadyCompleted,

@@ -5627,6 +5627,11 @@ test("a due busy wait survives a restarted controller race with one fresh host c
     // This child models admission and a fake spawn, just like the parent harness.
     ports.engineReadiness = () => "connected";
     ports.structuredDeliveryPublication = () => "ready";
+    // bun -e is not recognized as a test by the machine scheduler. Keep this
+    // account-contention fixture out of the shared CPU admission queue.
+    ports.cpuPressureHold = () => null;
+    ports.cpuAdmissionReconcile = () => {};
+    ports.cpuAdmissionSuspend = () => {};
     ports.conversationAgentActive = async () => true;
     ports.spawnAgent = async (input, onReserved) => {
       fs.appendFileSync(${JSON.stringify(claimsPath)}, JSON.stringify({ pid: process.pid, clientAttemptId: input.clientAttemptId }) + "\\n");

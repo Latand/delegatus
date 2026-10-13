@@ -8,14 +8,13 @@ import { stateDir, statePath } from "@/lib/configDir";
 
 import { CODEX_ACCOUNTS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import { isShellCommand } from "@/lib/status";
-import { accountProbeIdentity, withAccountMutationLockAsync, withAccountMutationLock } from "./accountMutation";
+import { accountProbeIdentity, withAccountMutationLockAsync, AccountMutationBusyError, withAccountMutationLock } from "./accountMutation";
 import { AccountHistoryInventoryBlockedError, accountHistoryInventory, accountRemovalBlockers, accountRemovalInFlight, normalizeAccountRemovalJournal, recoverManagedAccountRemoval, removeHistoryFreeAccountHome, removeManagedAccountIntoArchive, retireAccountInPlace, retiredAccountArchive, withAccountRemovalJournal, type AccountArchiveRemovalReport, type AccountHistoryInventoryReport, type AccountOrphanCleanupReport, type AccountRemovalJournalEntry, type AccountRemovalJournalPhase } from "./removal";
 import type { AccountPathRewrite, AccountRetirementReport } from "@/lib/agent/registry";
 
 const ACCOUNT_ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const DEFAULT_ID = "default";
 const REGISTRY_VERSION = 1;
-const REGISTRY_LOCK_WAIT_MS = 5_000;
 const REGISTRY_LOCK_STALE_MS = 30_000;
 export const LOGIN_STARTUP_GRACE_MS = 15_000;
 /* Shared, read-mostly capability state. Account tokens, sessions, plugin data,
@@ -274,21 +273,17 @@ function mutableRegistry(): Registry {
   return loaded.registry;
 }
 
-function sleep(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
 function registryLockPath(): string {
   return `${registryPath()}.lock`;
 }
 
-/* The file lock is only ever taken inside the account mutation lock, so a lock
-   left by a process that died (a crash mid-removal, #1857) is released at once
-   instead of stalling every account mutation for the staleness window. */
+/* The existing engine guard serializes home preparation and archive recovery.
+   Acquire it before the account lease; a busy owner never holds up admission. */
 function registryLockOwnerGone(lock: string): boolean {
   try {
     const pid = Number.parseInt(fs.readFileSync(lock, "utf8"), 10);
-    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return false;
+    if (!Number.isSafeInteger(pid) || pid <= 0) return Date.now() - fs.statSync(lock).mtimeMs > REGISTRY_LOCK_STALE_MS;
+    if (pid === process.pid) return false;
     process.kill(pid, 0);
     return false;
   } catch (error) {
@@ -296,38 +291,27 @@ function registryLockOwnerGone(lock: string): boolean {
   }
 }
 
-function withRegistryLock<T>(operation: () => T): T {
-  return withAccountMutationLock(() => {
-    const lock = registryLockPath();
-    const started = Date.now();
-    fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
-    for (;;) {
-      let fd: number;
+function withRegistryLock<T>(operation: () => T, mutation = true): T {
+  const lock = registryLockPath();
+  fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
+  for (;;) {
+    let fd: number;
+    try { fd = fs.openSync(lock, "wx", 0o600); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       try {
-        fd = fs.openSync(lock, "wx", 0o600);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        try {
-          if (registryLockOwnerGone(lock) || Date.now() - fs.statSync(lock).mtimeMs > REGISTRY_LOCK_STALE_MS) {
-            fs.rmSync(lock, { force: true });
-            continue;
-          }
-        } catch {
+        if (registryLockOwnerGone(lock)) {
+          fs.rmSync(lock, { force: true });
           continue;
         }
-        if (Date.now() - started >= REGISTRY_LOCK_WAIT_MS) throw new Error("Codex account registry is busy; retry shortly");
-        sleep(10);
-        continue;
-      }
-      try {
-        fs.writeFileSync(fd, `${process.pid}\n`, "utf8");
-        return operation();
-      } finally {
-        fs.closeSync(fd);
-        fs.rmSync(lock, { force: true });
-      }
+      } catch { continue; }
+      throw new AccountMutationBusyError();
     }
-  });
+    try {
+      fs.writeFileSync(fd, `${process.pid}\n`, "utf8");
+      return mutation ? withAccountMutationLock(operation) : operation();
+    } finally { fs.closeSync(fd); fs.rmSync(lock, { force: true }); }
+  }
 }
 
 /** True when the registry is degraded and any persistence would throw
@@ -574,7 +558,11 @@ export function createManagedCodexAccount(label: string): CodexAccount {
       fs.mkdirSync(path.join(home, "plugins"), { mode: 0o700 });
       fs.symlinkSync(path.join(legacyHome(), "plugins", "cache"), path.join(home, "plugins", "cache"));
       const stored: StoredAccount = { id, label: cleanLabel, kind: "managed", createdAt: Date.now(), loginPane: null };
-      writeRegistry({ ...registry, accounts: [...registry.accounts, stored] });
+      withAccountMutationLock(() => {
+        const current = mutableRegistry();
+        if (current.accounts.some(item => item.id === id) || current.retired.some(item => item.id === id)) throw new UnsafeCodexHomeError();
+        writeRegistry({ ...current, accounts: [...current.accounts, stored] });
+      });
       return asAccount(stored);
     } catch (error) {
       if (createdHome) {
@@ -587,12 +575,14 @@ export function createManagedCodexAccount(label: string): CodexAccount {
       }
       throw error;
     }
-  });
+  }, false);
 }
 
 function writeJournal(id: string, phase: AccountRemovalJournalPhase | null, rewrites?: readonly AccountPathRewrite[]): void {
-  const current = mutableRegistry();
-  writeRegistry({ ...current, removals: withAccountRemovalJournal(current.removals, id, phase, rewrites) });
+  withAccountMutationLock(() => {
+    const current = mutableRegistry();
+    writeRegistry({ ...current, removals: withAccountRemovalJournal(current.removals, id, phase, rewrites) });
+  });
 }
 
 /** The registry once `id` is removed: it leaves, a retired record points at
@@ -626,7 +616,7 @@ function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } 
         retiredInPlace: registry.retired.some((account) => account.id === entry.id && !account.archived),
         fallbackAccountId: fallbackAccountId(registry, entry.id),
         commitRetired: () => {
-          writeRegistry(withAccountRetired(mutableRegistry(), entry.id));
+          withAccountMutationLock(() => writeRegistry(withAccountRetired(mutableRegistry(), entry.id)));
         },
         clearJournal: () => writeJournal(entry.id, null),
       });
@@ -641,7 +631,7 @@ function recoverRemovalsLocked(): { recovered: string[]; unresolved: string[] } 
 /** Settles removals a crash interrupted (issue #1857): an unfinished move is
     undone, a committed one is finished. */
 export function recoverInterruptedCodexAccountRemovals(): { recovered: string[]; unresolved: string[] } {
-  return withRegistryLock(() => recoverRemovalsLocked());
+  return withRegistryLock(() => recoverRemovalsLocked(), false);
 }
 
 let startupRecoveryDone = false;
@@ -683,7 +673,7 @@ export function removeManagedCodexAccount(id: string): AccountArchiveRemovalRepo
     const registry = mutableRegistry();
     const existing = registry.accounts.find((account) => account.id === id);
     if (!existing) throw new UnknownAccountError(id);
-    const before: Registry = { ...registry, removals: withAccountRemovalJournal(registry.removals, id, null) };
+    let before: Registry = { ...registry, removals: withAccountRemovalJournal(registry.removals, id, null) };
     return removeManagedAccountIntoArchive({
       engine: "codex",
       accountId: id,
@@ -692,13 +682,20 @@ export function removeManagedCodexAccount(id: string): AccountArchiveRemovalRepo
       homeIsSafe: () => managedHomeIsSafe(id, true),
       unsafeHome: () => new UnsafeCodexHomeError(),
       rewrites: codexArchiveRewrites,
+      validate: () => {
+        const current = mutableRegistry();
+        const account = current.accounts.find(item => item.id === id);
+        if (!account || account.createdAt !== existing.createdAt) throw new UnknownAccountError(id);
+        if (account.loginReservation) throw new CodexLoginBusyError();
+        before = { ...current, removals: withAccountRemovalJournal(current.removals, id, null) };
+      },
       registry: {
         journal: (phase, rewrites) => writeJournal(id, phase, rewrites),
-        commitRetired: () => writeRegistry(withAccountRetired(before, id)),
+        commitRetired: () => writeRegistry(withAccountRetired(mutableRegistry(), id)),
         restore: () => writeRegistry(before),
       },
     });
-  });
+  }, false);
 }
 
 /**
@@ -733,15 +730,20 @@ export function restoreLegacyCodexAccount(): void {
 /** The caller holds the registry lock; older retired homes use the same
  * journaled move and path rewrites as newly removed accounts. */
 function archiveRetiredCodexHome(id: string): AccountArchiveRemovalReport {
-  const before = mutableRegistry();
+  let before = mutableRegistry();
   return removeManagedAccountIntoArchive({
     engine: "codex", accountId: id, home: managedHome(id),
     homeIsSafe: () => managedHomeIsSafe(id, true),
     unsafeHome: () => new UnsafeCodexHomeError(),
     rewrites: codexArchiveRewrites,
+    validate: () => {
+      const current = mutableRegistry();
+      if (current.accounts.some(account => account.id === id) || !current.retired.some(account => account.id === id && !account.archived)) throw new UnknownAccountError(id);
+      before = current;
+    },
     registry: {
       journal: (phase, rewrites) => writeJournal(id, phase, rewrites),
-      commitRetired: () => writeRegistry(withAccountRetired(before, id)),
+      commitRetired: () => writeRegistry(withAccountRetired(mutableRegistry(), id)),
       restore: () => writeRegistry(before),
     },
   });
@@ -801,7 +803,7 @@ export function cleanupOrphanedCodexHomes(): AccountOrphanCleanupReport {
       ...(archived.length > 0 ? { archived: archived.sort((left, right) => left.id.localeCompare(right.id)) } : {}),
       ...(Object.keys(historyReports).length > 0 ? { history: historyReports } : {}),
     };
-  });
+  }, false);
 }
 
 export function setCodexAccountLoginPane(id: string, loginPane: LoginPane | null): void {

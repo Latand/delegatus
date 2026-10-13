@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import * as authCredentials from "@/lib/accounts/seatAuthCredentials";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +24,8 @@ import {
   readOrchestratorSeatFile,
   seatTaskOf,
   rekeyOrchestratorSeatPaths,
+  recordOrchestratorSeatAuthCredentialBaseline,
+  confirmOrchestratorSeatMaterialization,
   revokedOrchestratorSeatConversationsOrUnknown,
 } from "./seats";
 
@@ -42,6 +45,50 @@ afterEach(() => {
 });
 
 const AT = "2026-07-29T00:00:00.000Z";
+
+test.each(["baseline", "complete", "materialize"] as const)("seat %s reads credentials outside the lease and rejects a racing intent", action => {
+  const project = "credential-race";
+  beginOrchestratorSeatIntent({ project, mandate: "m", clientRequestId: "first", mode: "spawn", engine: "claude", now: AT });
+  if (action === "materialize") completeOrchestratorSeatIntent({ project, clientRequestId: "first", conversationId: "conversation_first", path: null, now: AT });
+  const held: boolean[] = [];
+  const race = () => {
+    held.push(fs.existsSync(path.join(sandbox, "account-selection.lock")));
+    if (action !== "materialize") failOrchestratorSeatIntent(project, "first", "superseded", AT);
+    beginOrchestratorSeatIntent({ project, mandate: "m", clientRequestId: "winner", mode: "spawn", now: AT });
+    return undefined;
+  };
+  const capture = spyOn(authCredentials, "captureSeatAuthCredentialBaseline").mockImplementation(race);
+  const stamp = spyOn(authCredentials, "seatAuthCredentialStamp").mockImplementation(() => { race(); return null; });
+  try {
+    if (action === "baseline") expect(() => recordOrchestratorSeatAuthCredentialBaseline(project, "first", 1, "claude", "default")).toThrow();
+    else if (action === "complete") expect(completeOrchestratorSeatIntent({ project, clientRequestId: "first", conversationId: "conversation_first", path: "/fixture/first.jsonl", now: AT }).kind).toBe("missing");
+    else {
+      confirmOrchestratorSeatMaterialization({ project, clientRequestId: "first", conversationId: "conversation_first", path: "/fixture/first.jsonl" });
+    }
+    expect(orchestratorSeatFor(project).pending?.intent.clientRequestId).toBe("winner");
+    expect(held).toEqual([false]);
+  } finally { capture.mockRestore(); stamp.mockRestore(); }
+});
+
+test("stillborn rollback resolves its predecessor outside the lease and refuses a racing replacement", () => {
+  beginOrchestratorSeatIntent({ project: "rollback-race", mandate: "m", clientRequestId: "first", mode: "existing", now: AT });
+  completeOrchestratorSeatIntent({ project: "rollback-race", clientRequestId: "first", conversationId: "conversation_first", path: "/fixture/first.jsonl", now: AT });
+  beginOrchestratorSeatIntent({ project: "rollback-race", mandate: "m", clientRequestId: "failed", mode: "spawn", now: AT });
+  completeOrchestratorSeatIntent({ project: "rollback-race", clientRequestId: "failed", conversationId: "conversation_failed", path: null, now: AT });
+  const held: boolean[] = [];
+  const result = abandonStillbornOrchestratorSeat({
+    project: "rollback-race", clientRequestId: "failed", error: "launch failed", now: AT,
+    resolvable: () => {
+      held.push(fs.existsSync(path.join(sandbox, "account-selection.lock")));
+      beginOrchestratorSeatIntent({ project: "rollback-race", mandate: "m", clientRequestId: "winner", mode: "existing", now: AT });
+      completeOrchestratorSeatIntent({ project: "rollback-race", clientRequestId: "winner", conversationId: "conversation_winner", path: "/fixture/winner.jsonl", now: AT });
+      return true;
+    },
+  });
+  expect(held).toEqual([false]);
+  expect(result).toBeNull();
+  expect(orchestratorSeatFor("rollback-race").active?.conversationId).toBe("conversation_winner");
+});
 
 test("begin persists a pending intent that grants nothing and is replayable by key", () => {
   const begun = beginOrchestratorSeatIntent({ project: "proj-a", mandate: "run the board", clientRequestId: "req_0000001", mode: "spawn", now: AT });

@@ -71,8 +71,7 @@ function carriers(): CarrierConversation[] {
   );
 }
 
-function projectView(project: string) {
-  const bindings = accountProjectBindings();
+function projectView(project: string, bindings = accountProjectBindings()) {
   const carrying = carriers();
   const displayNames = projectAliasSnapshot().displayNames;
   /* Deliberate choices of an account outside this project's pool. Read once for
@@ -181,30 +180,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "INVALID_PROJECT", message: "project is required" }, { status: 400, headers });
   }
   const canonical = canonicalProject(project);
-  /* Taken here, around the mutation AND the confirming view, so an operator's
-     click queues behind another account mutation instead of being turned away
-     by it — the store re-enters this transaction rather than acquiring twice.
-     It also makes the view below a read of the record this write produced. */
+  // Catalog and transcript discovery can start a subprocess or read history.
+  // The confirming view uses this mutation's returned bindings throughout.
   try {
-    return await withAccountMutationLockAsync(async () => {
-      const result = action === "add"
-        ? bindAccountToProject(record?.engine, record?.accountId, canonical)
-        : unbindAccountFromProject(record?.engine, record?.accountId, canonical);
-      if (!result.ok) {
-        return NextResponse.json(
-          { error: result.code, message: result.message, bindings: result.bindings },
-          { status: FAILURE_STATUS[result.code] ?? 400, headers },
-        );
-      }
-      return NextResponse.json({
-        ok: true,
-        changed: result.changed,
-        bindings: result.bindings,
-        /* The confirming read of the project the caller just changed, so the answer
-           carries the state the fence will actually enforce. */
-        project: projectView(canonical),
-      }, { headers });
-    });
+    const result = await withAccountMutationLockAsync(() => action === "add"
+      ? bindAccountToProject(record?.engine, record?.accountId, canonical)
+      : unbindAccountFromProject(record?.engine, record?.accountId, canonical));
+    if (!result.ok) {
+      return NextResponse.json(
+        { error: result.code, message: result.message, bindings: result.bindings },
+        { status: FAILURE_STATUS[result.code] ?? 400, headers },
+      );
+    }
+    return NextResponse.json({
+      ok: true,
+      changed: result.changed,
+      bindings: result.bindings,
+      // Keep the committed binding result while preparing its display outside the lease.
+      project: projectView(canonical, result.bindings),
+    }, { headers });
   } catch (error) {
     if (error instanceof AccountProjectBindingsUnreadableError) return unreadableResponse(error);
     throw error;

@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
+import { statePath } from "@/lib/configDir";
 
 import { AgentRegistry } from "@/lib/agent/registry";
 import { RuntimeJournal } from "@/runtime-host/journal";
@@ -136,6 +137,34 @@ function snapshot(ownedConversationId = conversationId, engine: "codex" | "claud
     deployments: [],
   };
 }
+
+test("image storage scans outside the account lease and rechecks a racing reservation", async () => {
+  const { registry, conversation } = registryWithConversation("default", "claude");
+  const images = new RuntimeImageStore(path.join(sandbox, "race-runtime-images"), { procSelfFdPaths: false });
+  const scans: boolean[] = [];
+  let raced = false;
+  const read = fs.readdirSync;
+  const scan = spyOn(fs, "readdirSync").mockImplementation(((...args: Parameters<typeof fs.readdirSync>) => {
+    if (String(args[0]).includes("runtime-images")) {
+      scans.push(fs.existsSync(statePath("account-selection.lock")));
+      if (!raced) {
+        raced = true;
+        registry.holdDelivery(conversation.id, "Racing payload", "image-scan-race");
+      }
+    }
+    return read(...args);
+  }) as typeof fs.readdirSync);
+  try {
+    const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+      clientMessageId: "image-scan-race", text: "", images: [{ base64: PNG_BASE64, mime: "image/png" }],
+    }, { enabled: () => true, registry: () => registry, kick: () => {}, storeImages: uploads => images.putMany(uploads),
+      client: () => ({ readSession: sessionReader(async () => snapshot(conversation.id, "claude", true)) }) as RuntimeHostClient });
+    expect(result).toMatchObject({ ok: false, status: 409 });
+    expect(scans.length).toBeGreaterThan(0);
+    expect(scans).not.toContain(true);
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries).filter(row => row.clientMessageId === "image-scan-race")).toHaveLength(1);
+  } finally { scan.mockRestore(); registry.close(); }
+});
 
 test("Claude image-only admission stores refs and journals their content digest", async () => {
   const { registry, conversation } = registryWithConversation("default", "claude");
@@ -3196,15 +3225,15 @@ test("an injection a switch overtook between preflight and its reservation is re
       recordStructuredOwner(registry, conversation);
       const progress = new DeliveryProgressStore(null);
       let commands = 0;
-      const originalHold = registry.holdDeliveryOffLoop.bind(registry);
-      registry.holdDeliveryOffLoop = (async (...args: Parameters<AgentRegistry["holdDeliveryOffLoop"]>) => {
+      const originalHold = registry.accountMutationWrite.bind(registry);
+      registry.accountMutationWrite = (async (...args: Parameters<AgentRegistry["accountMutationWrite"]>) => {
         /* The switch lands between the preflight and the reservation. */
         registry.commitMigrationIntent({ engine: "codex", targetId: "b", origin: "manual", requestId: "inject-race",
           expectedRevision: registry.engineRouting("codex").revision });
         const held = await originalHold(...args);
         if (lockHeldMs > 0) await holder.hold(lockHeldMs);
         return held;
-      }) as AgentRegistry["holdDeliveryOffLoop"];
+      }) as AgentRegistry["accountMutationWrite"];
       let duringEnding: ReturnType<DeliveryProgressStore["get"]> | undefined;
       const originalWrite = registry.deliveryWrite.bind(registry);
       registry.deliveryWrite = ((correlation: { label: string; operationId?: string | null }, write: () => unknown, correlate?: never) => {

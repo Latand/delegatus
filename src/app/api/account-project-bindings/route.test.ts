@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
+import * as credentials from "@/lib/accounts/claudeCredentials";
 import { NextRequest } from "next/server";
 
 /* Everything the route touches — the binding record, the registry it reads
@@ -19,7 +20,7 @@ process.env.HOME = path.join(SANDBOX, "home");
 const { GET, POST } = await import("./route");
 const { BINDINGS_SOURCE, resetAccountCollectionsForTests } = await import("@/lib/accounts/accountsStore");
 const { clearAccountFixture, persistedAccountSource, seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
-const { accountProjectBindings } = await import("@/lib/accounts/projectBindings");
+const { accountProjectBindings, unbindAccountFromProject } = await import("@/lib/accounts/projectBindings");
 
 const ATLAS = "project-atlas";
 
@@ -68,6 +69,25 @@ test("an unconfigured project reads as allowing every account", async () => {
   expect(view.engines.claude?.restricted).toBe(false);
   expect(view.engines.claude?.allowed.map((account) => account.accountId)).toContain(MAIN);
   expect(view.engines.codex?.restricted).toBe(false);
+});
+
+test("binding readback discovers credentials without the lease and keeps the committed result during a racing unbind", async () => {
+  const read = credentials.readClaudeCredentials;
+  const held: boolean[] = [];
+  let raced = false;
+  const probe = spyOn(credentials, "readClaudeCredentials").mockImplementation((...args) => {
+    held.push(fs.existsSync(path.join(STATE, "account-selection.lock")));
+    if (!raced) { raced = true; unbindAccountFromProject("claude", MAIN, ATLAS); }
+    return read(...args);
+  });
+  try {
+    const result = await mutate({ action: "add", engine: "claude", accountId: MAIN, project: ATLAS });
+    expect(result.payload).toMatchObject({ bindings: [{ accountId: MAIN }],
+      project: { engines: { claude: { restricted: true, allowed: [{ accountId: MAIN }] } } } });
+    expect(accountProjectBindings()).toEqual([]);
+    expect(held.length).toBeGreaterThan(0);
+    expect(held).not.toContain(true);
+  } finally { probe.mockRestore(); }
 });
 
 test("an added binding is visible from both directions, and survives a fresh read", async () => {

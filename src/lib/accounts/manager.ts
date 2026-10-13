@@ -1,4 +1,5 @@
 import { codexModelServiceTiers, tierOffers, CodexServiceTierUnavailableError } from "./codexServiceTiers";
+import { accountsCollectionRevision } from "./accountsStore";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { accountForSpawn, activeCodexAccountId, codexAccountListed, codexAccountsMutationLocked, codexHomeOwningSessionPath, CorruptCodexAccountsError, createManagedCodexAccount, listCodexAccounts, setActiveCodexAccount, UnknownAccountError, type CodexAccount } from "./codex";
 import { activeClaudeAccountId, claudeAccountForSpawn, claudeAccountListed, claudeAccountsMutationLocked, claudeHomeOwningTranscript, claudeAccountEnvironment, CorruptClaudeAccountsError, createManagedClaudeAccount, listClaudeAccounts, readClaudeProviderRuntime, setActiveClaudeAccount, UnknownClaudeAccountError } from "./claude";
@@ -8,7 +9,7 @@ import { activeCopilotAccountId, copilotAccountContext, copilotAccountForSpawn, 
 import { copilotLoginSupervisor } from "./copilotLogin";
 import type { AccountContext, AccountEngineName, AccountManager, AccountSummary, CopilotAccountSummary, ProjectSpawnRequest, ProjectSpawnResolution } from "./contracts";
 import { unavailableLimits } from "./contracts";
-import { isAccountAdmissionRetryable, withAccountMutationLockAsync } from "./accountMutation";
+import { accountProbeSnapshot, accountProbeIdentity, AccountAdmissionChangedError, isAccountAdmissionRetryable, withAccountMutationLockAsync } from "./accountMutation";
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
 import { AccountProjectBindingsUnreadableError, accountProjectBindings, allowedAccountIdsForProject, projectAccountRefusalDetail, type AccountProjectBinding } from "./projectBindings";
 import { selectProjectAccount } from "./projectSelection";
@@ -511,16 +512,10 @@ export class AccountLoginPendingError extends Error {
 type RoutingStore = Pick<AgentRegistry, "engineRouting" | "setEngineRouting">;
 
 /** Keeps the compatibility catalog and launch-routing registry aligned. */
-function selectAccountLocked(engine: "claude" | "codex", id: string, routing: RoutingStore): AccountSummary {
+function selectAccountLocked(engine: "claude" | "codex", id: string, routing: RoutingStore, account: ReturnType<typeof listClaudeAccounts>[number] | CodexAccount): void {
   if (engine === "claude" ? claudeAccountsMutationLocked() : codexAccountsMutationLocked()) {
     if (engine === "claude") throw new CorruptClaudeAccountsError();
     throw new CorruptCodexAccountsError();
-  }
-  const accounts = engine === "claude" ? listClaudeAccounts() : listCodexAccounts();
-  const account = accounts.find((candidate) => candidate.id === id);
-  if (!account) {
-    if (engine === "claude") throw new UnknownClaudeAccountError(id);
-    throw new UnknownAccountError(id);
   }
   const loginPending = engine === "claude"
     ? (() => {
@@ -555,7 +550,6 @@ function selectAccountLocked(engine: "claude" | "codex", id: string, routing: Ro
     if (rollbackErrors.length > 0) throw new AggregateError([error, ...rollbackErrors], "account selection rollback failed");
     throw error;
   }
-  return summary(engine, id);
 }
 
 export async function selectAccount(engine: AccountEngineName, id: string, routing: RoutingStore = agentRegistry()): Promise<AccountSummary> {
@@ -563,7 +557,20 @@ export async function selectAccount(engine: AccountEngineName, id: string, routi
     setActiveCopilotAccount(id);
     return copilotSummary(id);
   }
-  return await withAccountMutationLockAsync(async () => selectAccountLocked(engine, id, routing));
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const snapshot = await accountProbeSnapshot(() => {
+      const account = (engine === "claude" ? listClaudeAccounts() : listCodexAccounts()).find(item => item.id === id);
+      if (!account) throw engine === "claude" ? new UnknownClaudeAccountError(id) : new UnknownAccountError(id);
+      return account;
+    }, { caller: "account select", holder: "account selection preparation" });
+    const committed = await withAccountMutationLockAsync(() => {
+      if (accountsCollectionRevision() !== snapshot.revision || accountProbeIdentity(snapshot.account) !== snapshot.identity) return false;
+      selectAccountLocked(engine, id, routing, snapshot.account);
+      return true;
+    }, { caller: "account select", holder: "account selection commit" });
+    if (committed) return summary(engine, id);
+  }
+  throw new AccountAdmissionChangedError();
 }
 
 /** Narrow boundary used by all launch paths. Filesystem account details remain behind it. */
@@ -577,10 +584,8 @@ export const accountManager: AccountManager = {
   },
   async add(engine, label) {
     if (engine === "copilot") return copilotSummary(createManagedCopilotAccount(label).id);
-    return await withAccountMutationLockAsync(async () => {
-      const item = engine === "claude" ? createManagedClaudeAccount(label) : createManagedCodexAccount(label);
-      return summary(engine, item.id);
-    });
+    const item = engine === "claude" ? createManagedClaudeAccount(label) : createManagedCodexAccount(label);
+    return summary(engine, item.id);
   },
   async select(engine, id) { return selectAccount(engine, id); },
   async status(engine, id) { return summary(engine, id); },

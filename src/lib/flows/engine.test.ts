@@ -299,7 +299,7 @@ test("a review round parks when clean HEAD advances past its synchronized target
   }
 });
 
-test.each((["launch", "marker"] as const).flatMap((boundary) => (["pause", "close", "cycle"] as const).map((action) => [boundary, action] as const)))("async flow %s head capture respects %s", async (boundary, action) => {
+test.each((["launch", "marker"] as const).flatMap((boundary) => (["pause", "close", "cycle", "account-change", "publication-change"] as const).filter(action => boundary === "launch" || action !== "account-change" && action !== "publication-change").map((action) => [boundary, action] as const)))("async flow %s head capture respects %s", async (boundary, action) => {
   const { accountManager } = await import("@/lib/accounts/manager");
   const git = await import("./git");
   const exec = await import("./exec");
@@ -309,7 +309,22 @@ test.each((["launch", "marker"] as const).flatMap((boundary) => (["pause", "clos
   const implementer = writeCodexEntry(`head-control-${boundary}-${action}.jsonl`, { id: crypto.randomUUID(), cwd: root }, Date.now() / 1_000);
   const account = { engine: "codex" as const, accountId: "account-a", kind: "managed" as const,
     home: root, transcriptRoot: root, env: { NODE_ENV: "test" as const } };
-  const choose = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "available", account });
+  const catalogLeases: boolean[] = [];
+  const publicationLeases: boolean[] = [];
+  const publication = await import("@/lib/git/agentPublicationIdentity");
+  const preparePublication = publication.agentPublicationIdentityEnv;
+  const publicationProbe = spyOn(publication, "agentPublicationIdentityEnv").mockImplementation(source => {
+    publicationLeases.push(fs.existsSync(path.join(root, "account-selection.lock")));
+    if (action === "publication-change") {
+      seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex", accountId: "replacement", project: "repo", createdAt: new Date().toISOString() }] });
+      return {};
+    }
+    return preparePublication(source);
+  });
+  const choose = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => {
+    catalogLeases.push(fs.existsSync(path.join(root, "account-selection.lock")));
+    return { kind: "available", account };
+  });
   const launch = spyOn(exec, "startHeadlessReview").mockResolvedValue({ pid: null, identity: null, sessionId: "head-control-session", reviewerPath: null });
   const status = spyOn(exec, "headlessReviewStatus").mockReturnValue(null);
   const turn = spyOn(decisions, "flowTurn").mockResolvedValue({ state: "terminal", successful: true,
@@ -332,19 +347,24 @@ test.each((["launch", "marker"] as const).flatMap((boundary) => (["pause", "clos
     tick = tickFlows([implementer]);
     await entered;
     if (action === "close") expect((await closeFlow(flow.id)).flow?.state).toBe("closed");
-    else {
+    else if (action === "account-change") {
+      seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex", accountId: "replacement", project: "repo", createdAt: new Date().toISOString() }] });
+    } else if (action !== "publication-change") {
       expect(patchFlow(flow.id, { action: "pause" }).flow?.state).toBe("paused");
       if (action === "cycle") expect(patchFlow(flow.id, { action: "resume" }).error).toBeUndefined();
     }
     release(); await tick;
+    expect(catalogLeases).not.toContain(true);
+    expect(publicationLeases).not.toContain(true);
+    if (action === "publication-change") expect(publicationLeases.length).toBeGreaterThan(0);
     expect(launch).not.toHaveBeenCalled();
     expect(Object.keys(agentRegistry().snapshot().receipts)).toEqual(receiptsBefore);
-    expect(loadFlows()[0]!.state).toBe(action === "cycle" ? flow.state : action === "close" ? "closed" : "paused");
-    expect(loadFlows()[0]!.rounds).toHaveLength(boundary === "marker" ? 0 : 1);
+    expect(loadFlows()[0]!.state).toBe(action === "cycle" || action === "account-change" || action === "publication-change" ? flow.state : action === "close" ? "closed" : "paused");
+    expect(loadFlows()[0]!.rounds).toHaveLength(boundary === "marker" && action !== "account-change" ? 0 : 1);
     expect(loadFlows()[0]!.rounds[0]?.reviewHeadSha ?? null).toBeNull();
   } finally {
-    release(); await tick;
-    head.mockRestore(); turn.mockRestore(); status.mockRestore(); launch.mockRestore(); choose.mockRestore();
+    release(); await tick; clearAccountFixture(BINDINGS_SOURCE);
+    head.mockRestore(); turn.mockRestore(); status.mockRestore(); launch.mockRestore(); choose.mockRestore(); publicationProbe.mockRestore();
   }
 });
 

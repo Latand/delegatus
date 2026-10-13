@@ -307,13 +307,15 @@ export class ManagedCodexRuntime {
     if (snapshot.account.kind !== "managed" && !activeBefore && !storedBefore) return { state: snapshot.account.authPresent ? "authenticated" : "idle", attemptState: null, deviceAuth: null };
     const status = await this.readAccount(activeBefore?.client ?? null, snapshot.account.home)
       .then((value) => ({ value, failed: false as const }), () => ({ value: null, failed: true as const }));
-    return await withAccountMutationLockAsync(() => {
+    const result = await withAccountMutationLockAsync(() => {
       const active = this.active.get(home);
       const stored = readStoredAttempts(this.stateFile).get(home);
       if (accountsCollectionRevision() !== snapshot.revision || accountProbeIdentity(snapshot.account) !== snapshot.identity
         || active !== activeBefore || JSON.stringify(stored) !== JSON.stringify(storedBefore)) return this.peekLogin(snapshot.account);
       return this.commitLoginSnapshot(home, active, stored, status);
     }, { holder: "Codex login commit" });
+    if (activeBefore && this.active.get(home) !== activeBefore) activeBefore.client?.close();
+    return result;
   }
 
   private commitLoginSnapshot(home: string, active: ActiveAttempt | undefined, stored: PersistedAttempt | undefined,
@@ -322,7 +324,7 @@ export class ManagedCodexRuntime {
     try {
       if (read.failed || !read.value) throw new Error("account read failed");
       if (isSupportedChatGptAccount(read.value)) {
-        if (active) this.settle(active, "completed", null, true);
+        if (active) this.settle(active, "completed", null, false);
         else if (stored) this.recordTransition(home, stored, "completed", null);
         return { state: "authenticated", attemptState: "completed", deviceAuth: null };
       }
@@ -335,7 +337,7 @@ export class ManagedCodexRuntime {
       }
       return stored ? { state: stored.state, attemptState: stored.state, deviceAuth: null } : { state: "idle", attemptState: null, deviceAuth: null };
     } catch {
-      if (active) this.settle(active, "stale", "account-read-failed", true);
+      if (active) this.settle(active, "stale", "account-read-failed", false);
       else if (stored) this.recordTransition(home, stored, "stale", "account-read-failed");
       return { state: "stale", attemptState: "stale", deviceAuth: null };
     }

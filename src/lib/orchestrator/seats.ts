@@ -850,13 +850,13 @@ export function beginOrchestratorSeatIntent(input: {
 /** Freeze the actual account's contents before a new seat launch is admitted. */
 export function recordOrchestratorSeatAuthCredentialBaseline(projectInput: string, clientRequestId: string, seatEpoch: number, engine: string, accountId: string): void {
   if (engine !== "claude" && engine !== "codex") return;
+  const scope = `seat-auth-baseline:${canonicalOrchestratorProject(projectInput)}:${seatEpoch}`;
+  const stamp = seatAuthCredentialStamp(engine, accountId, scope);
   withAccountMutationLock(() => {
     const file = readOrchestratorSeatFile();
     const project = canonicalOrchestratorProject(projectInput);
     const pending = file.pending[project];
     if (!pending || pending.intent.clientRequestId !== clientRequestId || pending.seatEpoch !== seatEpoch) throw new Error("seat intent changed before credential admission");
-    const scope = `seat-auth-baseline:${project}:${seatEpoch}`;
-    const stamp = seatAuthCredentialStamp(engine, accountId, scope);
     if (!stamp) return;
     pending.authCredentialBaseline = { engine, accountId, stamp, scope };
     writeSeatFile(file);
@@ -884,7 +884,13 @@ export function completeOrchestratorSeatIntent(input: {
   engine?: string | null;
   model?: string | null;
   now?: string;
+  preparedAuthCredentialBaseline?: SeatAuthCredentialBaseline | null;
 }): CompleteSeatIntentResult {
+  const observed = orchestratorSeatFor(input.project).pending;
+  const baseline = observed && !observed.authCredentialBaseline
+    ? input.preparedAuthCredentialBaseline !== undefined ? input.preparedAuthCredentialBaseline ?? undefined
+      : captureSeatAuthCredentialBaseline(observed.engine ?? input.engine, input.path, `seat-auth-baseline:${canonicalOrchestratorProject(input.project)}:${observed.seatEpoch}`)
+    : undefined;
   return withAccountMutationLock(() => {
     const file = readOrchestratorSeatFile();
     const project = canonicalOrchestratorProject(input.project);
@@ -893,7 +899,7 @@ export function completeOrchestratorSeatIntent(input: {
       return { kind: "replay", seat: active };
     }
     const pending = file.pending[project];
-    if (!pending || pending.intent.clientRequestId !== input.clientRequestId) return { kind: "missing" };
+    if (!pending || pending.seatEpoch !== observed?.seatEpoch || pending.intent.clientRequestId !== input.clientRequestId) return { kind: "missing" };
     const now = input.now ?? new Date().toISOString();
     let revoked: OrchestratorRevocation | null = null;
     if (active && active.conversationId && active.conversationId !== input.conversationId) {
@@ -939,7 +945,7 @@ export function completeOrchestratorSeatIntent(input: {
       state: "active",
       intent: { ...pending.intent, launchId: input.launchId ?? pending.intent.launchId, error: null },
       activatedAt: now,
-      authCredentialBaseline: pending.authCredentialBaseline ?? captureSeatAuthCredentialBaseline(pending.engine ?? input.engine, input.path, `seat-auth-baseline:${project}:${pending.seatEpoch}`),
+      authCredentialBaseline: pending.authCredentialBaseline ?? baseline,
     };
     delete file.pending[project];
     file.seats[project] = seat;
@@ -1060,27 +1066,31 @@ export function abandonStillbornOrchestratorSeat(input: {
       transcript belong to the caller. */
   restorableSeat?: (input: { conversationId: string; stillborn: OrchestratorSeat }) => OrchestratorSeat | null;
 }): StillbornSeatRollback | null {
+  const observed = readOrchestratorSeatFile();
+  const file = observed;
+  const project = canonicalOrchestratorProject(input.project);
+  const active = file.seats[project];
+  if (!active || active.intent.clientRequestId !== input.clientRequestId) return null;
+  if (active.state !== "active" || active.intent.mode !== "spawn" || active.path !== null) return null;
+  if (!active.conversationId) return null;
+
+  const recorded = file.rollbacks[project] ?? null;
+  /* Newest-first, so a project rotated more than once follows the revocation
+     that actually seated the stillborn conversation. */
+  const lineagePredecessor = recorded
+    ? null
+    : [...file.revocations].reverse().find((revocation) =>
+      revocation.project === project && revocation.successorConversationId === active.conversationId)?.conversationId ?? null;
+  const candidate = recorded
+    ?? (lineagePredecessor ? input.restorableSeat?.({ conversationId: lineagePredecessor, stillborn: active }) ?? null : null);
+  const unresolvable = Boolean(
+    candidate?.conversationId && input.resolvable && !input.resolvable(candidate.conversationId),
+  );
+  const predecessor = unresolvable ? null : candidate;
   return withAccountMutationLock(() => {
     const file = readOrchestratorSeatFile();
-    const project = canonicalOrchestratorProject(input.project);
-    const active = file.seats[project];
-    if (!active || active.intent.clientRequestId !== input.clientRequestId) return null;
-    if (active.state !== "active" || active.intent.mode !== "spawn" || active.path !== null) return null;
-    if (!active.conversationId) return null;
+    if (JSON.stringify([file.seats[project], file.rollbacks[project], file.revocations]) !== JSON.stringify([observed.seats[project], observed.rollbacks[project], observed.revocations])) return null;
     const now = input.now ?? new Date().toISOString();
-    const recorded = file.rollbacks[project] ?? null;
-    /* Newest-first, so a project rotated more than once follows the revocation
-       that actually seated the stillborn conversation. */
-    const lineagePredecessor = recorded
-      ? null
-      : [...file.revocations].reverse().find((revocation) =>
-        revocation.project === project && revocation.successorConversationId === active.conversationId)?.conversationId ?? null;
-    const candidate = recorded
-      ?? (lineagePredecessor ? input.restorableSeat?.({ conversationId: lineagePredecessor, stillborn: active }) ?? null : null);
-    const unresolvable = Boolean(
-      candidate?.conversationId && input.resolvable && !input.resolvable(candidate.conversationId),
-    );
-    const predecessor = unresolvable ? null : candidate;
     let restored: OrchestratorSeat | null = null;
     if (predecessor?.conversationId) {
       restored = {
@@ -1102,7 +1112,7 @@ export function abandonStillbornOrchestratorSeat(input: {
     }
     file.revocations.push({
       project,
-      conversationId: active.conversationId,
+      conversationId: active.conversationId!,
       seatEpoch: active.seatEpoch,
       revokedAt: now,
       successorConversationId: restored?.conversationId ?? null,
@@ -1143,15 +1153,18 @@ export function confirmOrchestratorSeatMaterialization(input: {
   conversationId: string;
   path: string;
 }): OrchestratorSeat | null {
+  const observed = orchestratorSeatFor(input.project).active;
+  const baseline = observed && !observed.authCredentialBaseline
+    ? captureSeatAuthCredentialBaseline(observed.engine, input.path, `seat-auth-baseline:${canonicalOrchestratorProject(input.project)}:${observed.seatEpoch}`) : undefined;
   return withAccountMutationLock(() => {
     const file = readOrchestratorSeatFile();
     const project = canonicalOrchestratorProject(input.project);
     const active = file.seats[project];
-    if (!active || active.intent.clientRequestId !== input.clientRequestId) return null;
+    if (!active || JSON.stringify(active) !== JSON.stringify(observed) || active.intent.clientRequestId !== input.clientRequestId) return null;
     if (active.conversationId !== input.conversationId) return null;
     if (active.path === input.path && !file.rollbacks[project]) return active;
     const confirmed: OrchestratorSeat = { ...active, path: input.path,
-      authCredentialBaseline: active.authCredentialBaseline ?? captureSeatAuthCredentialBaseline(active.engine, input.path, `seat-auth-baseline:${project}:${active.seatEpoch}`) };
+      authCredentialBaseline: active.authCredentialBaseline ?? baseline };
     file.seats[project] = confirmed;
     delete file.rollbacks[project];
     writeSeatFile(file);

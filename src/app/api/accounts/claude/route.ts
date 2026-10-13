@@ -5,7 +5,7 @@ import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "@/lib/accounts/
 import { forgetAccountProjectBindings } from "@/lib/accounts/projectBindings";
 import { AccountArchiveUnavailableError, AccountHistoryInventoryBlockedError, AccountRemovalBlockedError, accountRemovalBlockers, accountRemovalLiveWork, legacyRemovalResponse, removalErrno, removalResponse } from "@/lib/accounts/removal";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
-import { AccountMutationBusyError, ACCOUNT_STORE_BUSY_MESSAGE, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
+import { AccountMutationBusyError, ACCOUNT_STORE_BUSY_MESSAGE, afterAccountMutationAdmission, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 
 export const runtime = "nodejs";
@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
       if (!input.token) return failure(400, "invalid_provider", "Provider token is required");
       validateClaudeProviderModelRoute(input.config);
       const models = await listClaudeProviderModels(input.config, input.token, input.headers);
-      const account = await withAccountMutationLockAsync(() => createManagedClaudeAccount(body.label as string, { config: input.config, token: input.token!, headers: input.headers }), { caller: "Claude provider create", holder: "Claude catalog create" });
+      const account = await afterAccountMutationAdmission(() => createManagedClaudeAccount(body.label as string, { config: input.config, token: input.token!, headers: input.headers }), { caller: "Claude provider create", holder: "Claude catalog create" });
       return NextResponse.json({ account: { id: account.id, label: account.label, kind: account.kind, authPresent: account.authPresent, provider: account.provider }, models }, { status: 201 });
     } catch (error) {
       if (error instanceof AccountMutationBusyError) return failure(503, "account_store_busy", ACCOUNT_STORE_BUSY_MESSAGE);
@@ -110,7 +110,7 @@ export async function POST(req: NextRequest) {
     }
   }
   try {
-    return await withAccountMutationLockAsync(async () => {
+    return await afterAccountMutationAdmission(async () => {
       if (body.action === "retry") {
         if (typeof body.id !== "string") return failure(400, "invalid_account", "Account id must be a string");
         try {
@@ -178,7 +178,7 @@ export async function DELETE(req: NextRequest) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return failure(400, "invalid_json", "Invalid JSON object");
   if (body.cleanupOrphans === true) {
     if (body.id !== undefined) return failure(400, "invalid_request", "Cleanup accepts no account id");
-    try { return NextResponse.json(await withAccountMutationLockAsync(() => cleanupOrphanedClaudeHomes(), { caller: "Claude orphan cleanup", holder: "Claude catalog cleanup" })); }
+    try { return NextResponse.json(await afterAccountMutationAdmission(() => cleanupOrphanedClaudeHomes(), { caller: "Claude orphan cleanup", holder: "Claude catalog cleanup" })); }
     catch (error) {
       if (error instanceof AccountMutationBusyError) return failure(503, "account_store_busy", ACCOUNT_STORE_BUSY_MESSAGE);
       if (error instanceof CorruptClaudeAccountsError) return failure(409, "accounts_locked", "Claude accounts require registry repair");
@@ -189,7 +189,7 @@ export async function DELETE(req: NextRequest) {
     return failure(400, "invalid_request", "Account id and force flag are invalid");
   }
   try {
-    return await withAccountMutationLockAsync(async () => {
+    return await afterAccountMutationAdmission(async () => {
       if (claudeAccountsMutationLocked()) return failure(409, "accounts_locked", "Claude accounts require registry repair");
       const account = listClaudeAccounts().find((candidate) => candidate.id === body.id);
       if (!account) return failure(404, "unknown_account", "Claude account is unavailable");
