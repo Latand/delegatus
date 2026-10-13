@@ -6,7 +6,7 @@ import { statePath } from "@/lib/configDir";
 import { claudeProjectRoots } from "@/lib/accounts/claude";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import type { ExternalRelayRequester } from "./protocol";
-import { withFileLock, writeRelayFile, type PairedRelay, type RelayTargetSettings, type RunRecord } from "./store";
+import { withFileLock, withFileLockAsync, readRunLedger, writeRelayFile, type PairedRelay, type RelayTargetSettings, type RunRecord } from "./store";
 export type ConversationContext = "member" | "owner";
 export type RelayConversation = {
   id: string; relayId: string; targetId: string; chatKey: string; context: ConversationContext;
@@ -53,7 +53,13 @@ function fresh(record: RelayConversation) {
   Object.assign(record, { sessionId: null, seen: [], staticDigest: null, turnsSinceCompaction: 0, lastPromptTokens: null, state: "idle", runningRequestId: null });
 }
 export function reserveConversations(relay: PairedRelay, target: RelayTargetSettings, chatKey: string, requestId: string, contexts: ConversationContext[], preserveBroken = false): RelayConversation[] | null {
-  return change((rows) => {
+  return change(reservation(relay, target, chatKey, requestId, contexts, preserveBroken));
+}
+export async function reserveConversationsAsync(relay: PairedRelay, target: RelayTargetSettings, chatKey: string, requestId: string, contexts: ConversationContext[], until: number): Promise<RelayConversation[] | null> {
+  return changeAsync(reservation(relay, target, chatKey, requestId, contexts, false), until);
+}
+function reservation(relay: PairedRelay, target: RelayTargetSettings, chatKey: string, requestId: string, contexts: ConversationContext[], preserveBroken: boolean) {
+  return (rows: RelayConversation[]) => {
     const matches = (r: RelayConversation) => r.relayId === relay.id && r.targetId === target.id && r.chatKey === chatKey;
     if (rows.some((r) => matches(r) && r.state === "running")) return null;
     const result = contexts.map((context) => {
@@ -71,10 +77,16 @@ export function reserveConversations(relay: PairedRelay, target: RelayTargetSett
       return { ...record };
     });
     return result;
-  });
+  };
 }
 export function releaseConversation(id: string, patch: Partial<RelayConversation> = {}) {
   change((rows) => { const record = rows.find((r) => r.id === id); if (record) Object.assign(record, { state: "idle", runningRequestId: null }, patch); });
+}
+export async function releaseConversationAsync(id: string, patch: Partial<RelayConversation>, until: number): Promise<void> {
+  await changeAsync(rows => { const record = rows.find(r => r.id === id); if (record) Object.assign(record, { state: "idle", runningRequestId: null }, patch); }, until);
+}
+function changeAsync<T>(action: (rows: RelayConversation[]) => T, until: number): Promise<T> {
+  return withFileLockAsync(file(), () => { const rows = readConversations(); const result = action(rows); writeRelayFile(file(), { v: 1, conversations: rows }); return result; }, until);
 }
 export function resetConversation(record: RelayConversation) { fresh(record); releaseConversation(record.id, record); }
 export function prepareConversationAccount(record: RelayConversation, account: AccountContext) {
@@ -104,7 +116,14 @@ function transcriptBytes(record: RelayConversation): number {
 }
 export function sweepConversations(relays: PairedRelay[], runs: RunRecord[], now = Date.now(), removeRelayId?: string, onlyRelayId?: string) {
   if (!fs.existsSync(file())) return;
-  change((rows) => {
+  change(sweepAction(relays, runs, now, removeRelayId, onlyRelayId));
+}
+export async function sweepConversationsAsync(relays: PairedRelay[], now: number, until: number, onlyRelayId?: string): Promise<void> {
+  if (!fs.existsSync(file())) return;
+  await changeAsync(rows => sweepAction(relays, readRunLedger().runs, now, undefined, onlyRelayId)(rows), until);
+}
+function sweepAction(relays: PairedRelay[], runs: RunRecord[], now: number, removeRelayId?: string, onlyRelayId?: string) {
+  return (rows: RelayConversation[]) => {
     for (let i = rows.length - 1; i >= 0; i--) {
       const record = rows[i]!; if (onlyRelayId && record.relayId !== onlyRelayId) continue; const relay = relays.find((r) => r.id === record.relayId); const target = relay?.targets.find((t) => t.id === record.targetId);
       if (record.state === "running" && !runs.some((r) => r.requestId === record.runningRequestId)) { record.state = "idle"; record.runningRequestId = null; }
@@ -113,5 +132,5 @@ export function sweepConversations(relays: PairedRelay[], runs: RunRecord[], now
         deleteConversationFiles(record); rows.splice(i, 1);
       }
     }
-  });
+  };
 }

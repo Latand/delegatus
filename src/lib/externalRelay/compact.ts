@@ -34,7 +34,7 @@ export async function runCompactRequest(relay: PairedRelay, request: CompactRequ
   const finish = async (body: ExternalRelayCompletion) => {
     const checked = checkedCompactCompletion(body); if (!checked) throw new Error("invalid compact completion");
     recorder?.finish({ outcome: `${body.outcome}:${"reason" in body ? body.reason : ""}`, answer: null, delivery: "unconfirmed", compaction });
-    const sent = await completeRelayRequest(relay, requestId, checked, () => heartbeatAt, stallMs, undefined, runtime?.onUnknownFeature);
+    const sent = await completeRelayRequest(relay, requestId, checked, () => heartbeatAt + stallMs, undefined, runtime?.onUnknownFeature);
     recorder?.recordDelivery({ outcome: `${sent.body.outcome}:${"reason" in sent.body ? sent.body.reason : ""}`, delivery: sent.delivery });
     return sent.body;
   };

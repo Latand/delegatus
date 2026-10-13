@@ -8,6 +8,7 @@ test("the descriptor gates steps independently of the legacy note preference", (
 });
 
 test("only explicit viewer reads map to reading_board; other tools map to working", () => {
+  expect(relayStepFor({ queued: true, writingAnswer: true, currentTool: "Bash" })).toBe("queued");
   expect(relayStepFor({})).toBe("thinking");
   expect(relayStepFor({ currentTool: null })).toBe("thinking");
   for (const tool of ["mcp__viewer__list_tasks", "mcp__viewer__get_pipeline", "viewer.board_snapshot", "mcp__viewer__read_prototype_review"])
@@ -117,4 +118,18 @@ test("member stdout recognizes native search and final output while proposals st
     ] } }]))).toBe("thinking");
     expect(relayStepFor(stepObservationFromRecords([{ type: "result", structured_output: { action } }]))).toBe("thinking");
   }
+});
+
+test("queued progress appears after three seconds even on a two-second heartbeat grid", () => {
+  const steps = createRelaySteps(["progress_steps"])!;
+  expect(steps.beat(1, 0, false)?.label).toBe("accepted");
+  steps.observe({ queued: true });
+  expect(steps.beat(2, 2000, false)).toBeNull();
+  expect(steps.changeDue(2999)).toBe(false);
+  expect(steps.changeDue(3000)).toBe(true);
+  expect(steps.beat(3, 3000, true)?.label).toBe("queued");
+  expect(steps.changeDue(6000)).toBe(false);
+  steps.observe({});
+  expect(steps.changeDue(5999)).toBe(false);
+  expect(steps.beat(4, 6000, true)?.label).toBe("thinking");
 });

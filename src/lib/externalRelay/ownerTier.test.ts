@@ -1,3 +1,4 @@
+import { relayRequestDeadline, type RelayRequestDeadline } from "./deadline";
 import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -212,8 +213,8 @@ test("encoded owner output applies provider, opaque credential, armor and path r
     }
 });
 
-function start(ports: OwnerRunPorts, hardCapMs = 1000, onConversation = (_id: string) => {}) {
-  return runOwnerAgent({ request: request(), owner: instruction(), target, accountId: "answer", hardCapMs, ports, onConversation });
+function start(ports: OwnerRunPorts, hardCapMs = 1000, onConversation = (_id: string) => {}, deadline?: RelayRequestDeadline) {
+  return runOwnerAgent({ request: request(), owner: instruction(), target, accountId: "answer", hardCapMs, ports, onConversation, deadline });
 }
 const launch = async () => ({ status: 202, body: { conversationId: "conversation_owner" } });
 
@@ -243,12 +244,54 @@ test("hard cap interrupts even while observation is unresponsive", async () => {
   expect(await run.done).toMatchObject({ status: "timeout" }); expect(stops).toEqual(["interrupt"]);
 });
 
-test("queued admission is killed and a refused launch never falls back", async () => {
-  const stops: string[] = [];
+test("queued first message is observed through the same receipt and can answer without cancellation", async () => {
+  const stops: string[] = [], progress: unknown[] = []; let observations = 0;
   const ports: OwnerRunPorts = { launch: async () => ({ status: 202, body: { conversationId: "conversation_queued", initialMessage: "queued" } }),
-    observe: async () => { throw Error("must not observe queued launch"); }, stop: async (_id, action) => { stops.push(action); } };
-  expect(await start(ports).done).toMatchObject({ status: "failed" }); expect(stops).toEqual(["kill"]);
+    observe: async () => ++observations < 3 ? { state: "running", firstMessagePending: true } : { state: "ended", firstMessagePending: false, finalText: "Done" },
+    stop: async (_id, action) => { stops.push(action); }, pollMs: 10 };
+  const run = runOwnerAgent({ request: request(), owner: instruction(), target, accountId: "answer", hardCapMs: 1000, ports,
+    onConversation: () => {}, onProgress: value => progress.push(value), deadline: relayRequestDeadline({}, Date.now()) });
+  expect(await run.done).toMatchObject({ status: "done", answer: { text: "Done" } });
+  expect(observations).toBe(3); expect(stops).toEqual([]); expect(progress).toContainEqual({ queued: true });
   expect(await start({ ...ports, launch: async () => ({ status: 503, body: {} }) }).done).toMatchObject({ status: "failed" });
+});
+
+for (const phase of ["launch", "queued", "observation"] as const) test(`unconfirmed owner ${phase} is killed at the shared admission bound`, async () => {
+  const stops: string[] = []; let release!: () => void;
+  const gate = new Promise<void>(r => { release = r; });
+  const ports: OwnerRunPorts = { launch: async () => { if (phase === "launch") await gate;
+    return { status: 202, body: { conversationId: "conversation_pending", initialMessage: "queued" } }; },
+    observe: async () => { if (phase === "observation") await gate; return { state: "running", firstMessagePending: true }; },
+    stop: async (_id, action) => { stops.push(action); }, pollMs: 5 };
+  const deadline = relayRequestDeadline({ claimed_at: "2026-10-13T12:00:00Z", deadline_at: new Date(Date.now() + 10100).toISOString() });
+  const started = performance.now(); const run = start(ports, 1000, () => {}, deadline);
+  try {
+    expect(await run.done).toMatchObject({ status: "failed" });
+    expect(performance.now() - started).toBeGreaterThanOrEqual(80);
+    expect(performance.now() - started).toBeLessThan(500);
+    release(); await Bun.sleep(20); expect(stops).toEqual(["kill"]);
+  } finally { release(); await run.done; }
+});
+
+test("confirmed owner work retains its hard cap after the admission deadline", async () => {
+  const stops: string[] = [];
+  const deadline = relayRequestDeadline({ claimed_at: "2026-10-13T12:00:00Z", deadline_at: new Date(Date.now() + 10050).toISOString() });
+  const run = start({ launch, observe: async () => ({ state: "running", firstMessagePending: false }),
+    stop: async (_id, action) => { stops.push(action); }, pollMs: 5 }, 150, () => {}, deadline);
+  expect(await run.done).toMatchObject({ status: "timeout" }); expect(stops).toEqual(["interrupt"]);
+});
+
+test("a delivered owner prompt survives slow conversation attribution", async () => {
+  const stops: string[] = [];
+  const deadline = relayRequestDeadline({ deadline_at: new Date(Date.now() + 10_150).toISOString() });
+  const run = start({
+    launch: async () => ({ status: 202, body: { conversationId: "conversation_delivered", initialMessage: "delivered" } }),
+    observe: async () => ({ state: "ended", finalText: "Done" }),
+    stop: async (_id, action) => { stops.push(action); },
+    pollMs: 5,
+  }, 1000, async () => { await Bun.sleep(300); }, deadline);
+  expect(await run.done).toMatchObject({ status: "done", answer: { text: "Done" } });
+  expect(stops).toEqual([]);
 });
 
 
@@ -334,7 +377,7 @@ test("failed owner receipt releases custody only after owed first-prompt cleanup
     expect(await settleOwnerFirstPrompt(clientAttemptId, conversationId, registry)).toEqual({ confirmed: false, pending: true });
     expect(registry.readOnlySnapshot().heldDeliveries[delivery.id]!.text).toBe("Owner instruction");
     // A pending prompt can recover even after its original host has gone.
-    expect(await observeOwnerTurn({ clientAttemptId, claimedAt: new Date().toISOString() }, sources)).toMatchObject({ state: "running" });
+    expect(await observeOwnerTurn({ clientAttemptId, claimedAt: new Date().toISOString() }, sources)).toMatchObject({ state: "running", firstMessagePending: true });
     refused = false;
     expect(await settleOwnerFirstPrompt(clientAttemptId, conversationId, registry)).toEqual({ confirmed: true, pending: true });
     expect(registry.readOnlySnapshot().heldDeliveries[delivery.id]).toMatchObject({ state: "failed", text: "" });

@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +6,11 @@ import {
   dropRun,
   mergeRelayTargets,
   reserveRun,
+  reserveRunAsync,
+  claimRelayRequestAsync,
+  settleRelayRequestClaimAsync,
+  withFileLock,
+  withFileLockAsync,
   readRunLedger,
   readRelayStore,
   updateRelayStore,
@@ -76,6 +81,38 @@ test("two Viewer processes cannot reserve the same target slot", async () => {
     (item) => item.relayId === "shared",
   ))
     dropRun(run.requestId);
+});
+
+test("separate processes share a request claim that survives execution-row cleanup", async () => {
+  const childFile = path.join(root, "claim-child.ts");
+  const modulePath = path.join(process.cwd(), "src/lib/externalRelay/store.ts");
+  const procPath = path.join(process.cwd(), "src/lib/proc/index.ts");
+  fs.writeFileSync(childFile, `import { claimRelayRequestAsync } from ${JSON.stringify(modulePath)};
+import { procBackend } from ${JSON.stringify(procPath)};
+const result = await claimRelayRequestAsync("cross-process-request", process.env.RELAY_LEASE!, Date.now() + 5000);
+console.log(JSON.stringify({ result, pid: process.pid, identity: procBackend.processIdentity(process.pid) }));
+await Bun.sleep(1000);
+`);
+  const launch = (lease: string) => Bun.spawn([process.execPath, childFile], {
+    env: { ...process.env, LLV_STATE_DIR: root, RELAY_LEASE: lease }, stdout: "pipe", stderr: "pipe",
+  });
+  const first = launch("same-lease"), second = launch("same-lease");
+  const read = async (child: ReturnType<typeof launch>) => {
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(code, stderr).toBe(0);
+    return JSON.parse(stdout.trim()) as { result: { kind: string; completion?: unknown }; pid: number; identity: string };
+  };
+  const initial = await Promise.all([read(first), read(second)]);
+  expect(initial.map(item => item.result.kind).sort()).toEqual(["claimed", "duplicate"]);
+  const owner = initial.find(item => item.result.kind === "claimed")!;
+  const completion = { lease_id: "same-lease", outcome: "declined" as const, reason: "busy", detail: null, retry_after_s: null };
+  await settleRelayRequestClaimAsync("cross-process-request", "same-lease", owner.pid, owner.identity, "terminal", completion, Date.now() + 5000);
+  const requestRow = { requestId: "cross-process-request", leaseId: "same-lease", relayId: "shared", targetId: "target",
+    childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: "test", runDir: root, startedAt: new Date().toISOString() };
+  expect(reserveRun(requestRow)).toBe("added");
+  dropRun(requestRow.requestId);
+  const retry = await read(launch("same-lease"));
+  expect(retry.result).toEqual({ kind: "terminal", completion });
 });
 test("concurrent relay settings updates retain both changes", async () => {
   const childFile = path.join(root, "update-child.ts");
@@ -157,4 +194,48 @@ test("a target refresh keeps settings of listed targets, adds new ones unconfigu
     },
   ]);
   expect(mergeRelayTargets(stored, [])).toEqual([]);
+});
+
+test("store contention yields to short timers while waiting for the same live lock", async () => {
+  const lock = path.join(root, "external-relay/runs.json.lock");
+  const ready = path.join(root, "contention-ready");
+  const childFile = path.join(root, "contention-child.ts");
+  fs.writeFileSync(childFile, `import fs from "node:fs";
+import { procBackend } from ${JSON.stringify(path.join(process.cwd(), "src/lib/proc/index.ts"))};
+fs.mkdirSync(${JSON.stringify(path.dirname(lock))}, { recursive: true });
+fs.writeFileSync(${JSON.stringify(lock)}, JSON.stringify({ pid: process.pid, identity: procBackend.processIdentity(process.pid) }), { flag: "wx" });
+fs.writeFileSync(${JSON.stringify(ready)}, "ready");
+await Bun.sleep(1500);
+fs.rmSync(${JSON.stringify(lock)});
+`);
+  const child = Bun.spawn([process.execPath, childFile], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  let previous = performance.now(), largest = 0;
+  const probe = setInterval(() => { const now = performance.now(); largest = Math.max(largest, now - previous - 10); previous = now; }, 10);
+  try {
+    for (let i = 0; i < 200 && !fs.existsSync(ready); i++) await Bun.sleep(5);
+    expect(fs.existsSync(ready)).toBe(true);
+    const row = { requestId: "contended", leaseId: "lease", relayId: "contention", targetId: "target", childPid: null,
+      childIdentity: null, ownerPid: process.pid, ownerIdentity: "fixture", runDir: root, startedAt: new Date().toISOString() };
+    const started = performance.now();
+    expect(await reserveRunAsync(row, 1, Date.now() + 5000)).toBe("added");
+    expect(performance.now() - started).toBeGreaterThan(1400);
+    await Bun.sleep(30);
+    expect(largest).toBeLessThan(100);
+    expect(await child.exited).toBe(0);
+  } finally { clearInterval(probe); if (child.exitCode === null) child.kill(); await child.exited; dropRun("contended"); }
+}, 10000);
+
+test("a contended store lock that frees at the cutoff cannot commit expired waiting work", async () => {
+  let now = 1000, writes = 0;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const file = path.join(root, "deadline-lock.json");
+  let pending!: Promise<string>;
+  try {
+    withFileLock(file, () => {
+      pending = withFileLockAsync(file, () => { writes++; return "committed"; }, 1010);
+      now = 1010;
+    });
+    await expect(pending).rejects.toThrow("relay store is busy");
+    expect(writes).toBe(0);
+  } finally { await pending.catch(() => {}); clock.mockRestore(); }
 });

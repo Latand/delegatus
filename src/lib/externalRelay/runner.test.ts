@@ -8,7 +8,7 @@ import { ownerRequest, pendingRetryAfterSeconds, x1Request, x1Results, x1Errors,
 import { relayClaimCapabilities } from "./poller";
 import { setRelaySwitch } from "./switches";
 import { assertOwnerCaptureResponse } from "./ownerCapture.fixture";
-import { afterAll, expect, spyOn, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,11 +19,11 @@ import type { AccountContext } from "@/lib/accounts/contracts";
 import { createManagedClaudeAccount } from "@/lib/accounts/claude";
 import { advertisedSlots, completeRelayRequest, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest, runningCount } from "./runner";
 import { relayActivity } from "./activity";
-import { dropRun, externalRelayFile, readRunLedger, updateRelayStore, type PairedRelay } from "./store";
+import { dropRun, externalRelayFile, readRunLedger, reserveRun, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
 import { countMemberAnswers, listAnswerRecords, readAnswerRecord, settleInterruptedAnswer } from "./answers";
-import { startTestRelay } from "./testRelay";
+import { startTestRelay, deadlineNegotiatedCapture } from "./testRelay";
 import { saveTasks, loadTasks } from "@/lib/tasks/store";
 import { telegramRound, telegramTask } from "@/lib/prototypeReview/telegram.fixture";
 import { prototypeCopyLine } from "@/lib/prototypeReview/telegramAnswer";
@@ -31,6 +31,11 @@ import { prototypeDecisionText } from "@/lib/prototypeReview/decision";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runner-test-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+beforeEach(() => {
+  const requests = externalRelayFile("requests");
+  fs.rmSync(requests, { force: true });
+  fs.rmSync(`${requests}.lock`, { force: true });
+});
 const original = accountManager.resolveHeadlessSpawn;
 const home = path.join(root, "account");
 fs.mkdirSync(home, { recursive: true });
@@ -111,7 +116,7 @@ test.each([true, false])("prototype owner control records the web decision witho
   const previous = accountManager.resolveHeadlessSpawn;
   accountManager.resolveHeadlessSpawn = (() => { selections++; return { kind: "exhausted", resetsAt: null }; }) as typeof previous;
   const text = `${prototypeCopyLine(round, 2)}\nKeep these controls.`;
-  const request = { ...contextRequest, request_id: "prototype-owner", answer: { ...contextRequest.answer, max_chars: 4000 }, input: {
+  const request = { ...contextRequest, request_id: `prototype-owner-${ownerTier ? "enabled" : "disabled"}`, answer: { ...contextRequest.answer, max_chars: 4000 }, input: {
     ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
     conversation: contextRequest.input.conversation.map(m => ({ ...m, text })) } };
   try {
@@ -120,7 +125,8 @@ test.each([true, false])("prototype owner control records the web decision witho
     const [result, duplicate] = await Promise.all([runClaimedRequest(paired, request, undefined, ports), runClaimedRequest(paired, request, undefined, ports)]);
     expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", reply_to: "m1" } });
     if (result?.outcome === "answered") expect(result.answer.text).toContain("✅ Записав рішення");
-    expect(duplicate).toBeNull(); expect(selections).toBe(0); expect(launches).toBe(0); expect(completions).toHaveLength(1);
+    if (duplicate !== null) expect(duplicate).toMatchObject({ outcome: "answered" });
+    expect(selections).toBe(0); expect(launches).toBe(0); expect(completions).toHaveLength(1);
     const task = loadTasks()[0]!, decision = task.prototypeReviews![0]!.decision!;
     expect(decision).toMatchObject({ chosen: [2], comment: "Keep these controls.", answers: round.questions!.map(q => ({ questionId: q.id, options: [0] })) });
     expect(decision.delivery.clientMessageId).toBe(`prototype-decision:${round.id}`);
@@ -265,7 +271,105 @@ test("heartbeat 1 acknowledges the claim before account selection and a held own
   }
 });
 
-test("an early decline stops heartbeats so failed completions reach the retry deadline", async () => {
+test("a slow first acknowledgement cannot start work after the request cutoff", async () => {
+  let launches = 0;
+  const completions: unknown[] = [];
+  const server = await startTestRelay(async (req, body) => {
+    if (req.url?.endsWith("/heartbeat")) { await Bun.sleep(350); return { body: { status: "ok" } }; }
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  const pending = runClaimedRequest(paired, {
+    ...contextRequest, request_id: "slow-first-ack-cutoff",
+    deadline_at: new Date(Date.now() + 150).toISOString(),
+    input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } },
+  }, undefined, { ownerPorts: {
+    launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_too_late" } }; },
+    observe: async () => ({ state: "ended", finalText: "Too late" }), stop: async () => {}, pollMs: 1,
+  } });
+  try {
+    expect(await pending).toMatchObject({ outcome: "declined", reason: "busy" });
+    expect(launches).toBe(0);
+    expect(completions).toHaveLength(1);
+  } finally { await server.close(); }
+});
+
+test("a completion ready after the absolute deadline receives no renewed retry window", async () => {
+  let completions = 0, settled = false;
+  const server = await startTestRelay(async req => {
+    if (req.url?.endsWith("/heartbeat")) { await Bun.sleep(350); return { body: { status: "ok" } }; }
+    if (req.url?.endsWith("/complete")) { completions++; return { status: 503, body: { error: { code: "unavailable" } } }; }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  const previous = accountManager.resolveHeadlessSpawn;
+  accountManager.resolveHeadlessSpawn = (() => ({ kind: "exhausted", resetsAt: null })) as typeof previous;
+  const pending = runClaimedRequest(paired, {
+    ...sampleRequest, request_id: "completion-after-deadline",
+    deadline_at: new Date(Date.now() + 150).toISOString(),
+  }).finally(() => { settled = true; });
+  try {
+    await Promise.race([pending, Bun.sleep(1300)]);
+    expect(settled).toBe(true);
+    expect(completions).toBe(1);
+  } finally { accountManager.resolveHeadlessSpawn = previous; await server.close(); }
+}, 5000);
+
+test("an accepted busy decline remains terminal after its execution slot row is gone", async () => {
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body as typeof completions[number]);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  const blocker = { requestId: "terminal-claim-blocker", leaseId: "blocker-lease", relayId: paired.id, targetId: "target_1",
+    childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid),
+    runDir: root, startedAt: new Date().toISOString() };
+  expect(reserveRun(blocker, 1)).toBe("added");
+  const request = { ...sampleRequest, request_id: "terminal-busy-request", deadline_at: new Date(Date.now() + 10_100).toISOString() };
+  try {
+    expect(await runClaimedRequest(paired, request)).toMatchObject({ outcome: "declined", reason: "busy" });
+    expect(readRunLedger().runs.map(run => run.requestId)).toEqual([blocker.requestId]);
+    dropRun(blocker.requestId);
+    expect(await runClaimedRequest(paired, request)).toMatchObject({ outcome: "declined", reason: "busy" });
+    expect(completions).toEqual([{ lease_id: request.lease_id, outcome: "declined", reason: "busy", detail: null, retry_after_s: null }]);
+  } finally { dropRun(blocker.requestId); await server.close(); }
+});
+
+test("failed feature refresh during an early completion releases duplicate suppression", async () => {
+  let refuse = true;
+  const server = await startTestRelay(() => refuse ? { status: 400, body: { error: { code: "unknown_feature" } } } : { body: { status: "ok" } });
+  const paired = relay(`${server.origin}/v1`);
+  const request = { ...sampleRequest, request_id: "early-refresh-failure", target_id: "unconfigured" };
+  try {
+    await expect(runClaimedRequest(paired, request, undefined, { onUnknownFeature: async () => { throw new Error("refresh failed"); } })).rejects.toThrow("refresh failed");
+    refuse = false;
+    expect(await runClaimedRequest(paired, request)).toMatchObject({ outcome: "declined", reason: "not_configured" });
+  } finally { refuse = false; await server.close(); }
+});
+
+test("invalid compact completion retries end at the captured request deadline", async () => {
+  setRelaySwitch("chat_conversations", true);
+  setRelaySwitch("compact", true);
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  let attempts = 0, accept = false, settled = false;
+  const server = await startTestRelay(() => {
+    attempts++; now += 121000;
+    return accept ? { body: { status: "ok" } } : { status: 503, body: { error: { code: "unavailable" } } };
+  });
+  const pending = runClaimedRequest(relay(`${server.origin}/v1`), { kind: "compact", request_id: "invalid-compact-deadline", lease_id: sampleRequest.lease_id })
+    .then(value => { settled = true; return value; });
+  try {
+    await Promise.race([pending, Bun.sleep(300)]);
+    expect(settled).toBe(true);
+    expect(attempts).toBe(1);
+    expect(await pending).toMatchObject({ outcome: "declined", reason: "invalid_request" });
+  } finally { accept = true; await pending; clock.mockRestore(); setRelaySwitch("compact", false); setRelaySwitch("chat_conversations", false); await server.close(); }
+}, 10000);
+
+test("an early decline keeps heartbeats during delivery without renewing its deadline", async () => {
   let now = Date.now();
   const clock = spyOn(Date, "now").mockImplementation(() => now);
   let heartbeatCount = 0, completionCount = 0, acceptCompletion = false, settled = false;
@@ -292,19 +396,19 @@ test("an early decline stops heartbeats so failed completions reach the retry de
   const previousSelection = accountManager.resolveHeadlessSpawn;
   accountManager.resolveHeadlessSpawn = (() => ({ kind: "exhausted", resetsAt: null })) as typeof previousSelection;
   const request = { ...sampleRequest, request_id: "early_decline_completion_retry",
-    liveness: { ...sampleRequest.liveness, heartbeat_interval_s: 10, stall_window_s: 120 } };
+    liveness: { ...sampleRequest.liveness, heartbeat_interval_s: 2, stall_window_s: 120 } };
   const pending = runClaimedRequest(paired, request).then(outcome => { settled = true; return outcome; });
   try {
     const firstResult = await Promise.race([
       pending.then(outcome => ({ kind: "settled" as const, outcome })),
-      Bun.sleep(2500).then(() => ({ kind: "timeout" as const })),
+      Bun.sleep(7000).then(() => ({ kind: "timeout" as const })),
     ]);
     expect(firstResult.kind).toBe("settled");
     if (firstResult.kind === "settled") {
       expect(firstResult.outcome).toMatchObject({ outcome: "declined", reason: "no_capacity" });
     }
     expect(completionCount).toBeGreaterThan(0);
-    expect(heartbeatCount).toBe(1);
+    expect(heartbeatCount).toBeGreaterThan(1);
     expect(readAnswerRecord(paired.id, "target_1", request.request_id)?.delivery).toBe("unconfirmed");
     expect(readRunLedger().runs.some(run => run.requestId === request.request_id)).toBe(false);
     expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 1 }]);
@@ -316,7 +420,7 @@ test("an early decline stops heartbeats so failed completions reach the retry de
     clock.mockRestore();
     await server.close();
   }
-});
+}, 12000);
 
 test("heartbeat journal records attempts, step ids and failures without credential or note content", async () => {
   const logs: unknown[][] = [];
@@ -336,6 +440,27 @@ test("heartbeat journal records attempts, step ids and failures without credenti
       if (secret) expect(JSON.stringify(journal)).not.toContain(secret);
   } finally { logger.mockRestore(); await server.close(); }
 });
+
+test("heartbeat sends stay on their grid despite acknowledgement latency", async () => {
+  const sends: number[] = [];
+  const server = await startTestRelay(async req => {
+    if (req.url?.endsWith("/heartbeat")) { sends.push(Date.now()); await Bun.sleep(400); }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  try {
+    const result = await runClaimedRequest(paired, { ...contextRequest, request_id: "cadence",
+      liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_cadence" } }),
+        observe: async () => sends.length >= 6 ? { state: "ended", finalText: "Done" } : { state: "running" }, stop: async () => {}, pollMs: 20 },
+    });
+    expect(result?.outcome).toBe("answered");
+    expect(sends.length).toBeGreaterThanOrEqual(6);
+    for (let i = 1; i < sends.length; i++) expect(sends[i]! - sends[i - 1]!).toBeLessThanOrEqual(2050);
+  } finally { await server.close(); }
+}, 25000);
 
 test("heartbeats continue through silence, newest progress is sent, completion frees slot", async () => {
   const beats: { seq: number; progress: { label: string } | null }[] = [];
@@ -384,7 +509,41 @@ test("heartbeats continue through silence, newest progress is sent, completion f
     await server.close();
   }
 });
-test("a full target is declined and a nonzero CLI exit cannot use a written answer", async () => {
+
+test("a queued step crossing a grid point sends the overdue regular heartbeat immediately", async () => {
+  const sends: { at: number; seq: number; label?: string }[] = [];
+  let queuedAckAt = 0;
+  const server = await startTestRelay(async (req, body) => {
+    if (req.url?.endsWith("/heartbeat")) {
+      const beat = body as { seq: number; progress?: { label?: string } };
+      sends.push({ at: Date.now(), seq: beat.seq, label: beat.progress?.label });
+      if (beat.progress?.label === "queued") { await Bun.sleep(1500); queuedAckAt = Date.now(); }
+      return { body: { status: "ok" } };
+    }
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true; paired.features = ["progress_steps"];
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  try {
+    const result = await runClaimedRequest(paired, {
+      ...contextRequest, request_id: "queued-step-grid-boundary",
+      liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } },
+    }, undefined, { ownerPorts: {
+      launch: async () => ({ status: 202, body: { conversationId: "conversation_grid", initialMessage: "queued" } }),
+      observe: async () => {
+        const queued = sends.find(beat => beat.label === "queued");
+        return queued && sends.some(beat => beat.seq > queued.seq) ? { state: "ended", finalText: "Done" } : { state: "running", firstMessagePending: true };
+      }, stop: async () => {}, pollMs: 5,
+    } });
+    expect(result?.outcome).toBe("answered");
+    const queued = sends.find(beat => beat.label === "queued")!;
+    const following = sends.find(beat => beat.seq > queued.seq)!;
+    expect(following.at - queuedAckAt).toBeLessThan(250);
+    expect(following.at - queued.at).toBeLessThan(1900);
+  } finally { await server.close(); }
+}, 10000);
+test("a full target waits for its slot and a nonzero CLI exit cannot use a written answer", async () => {
   const completions: unknown[] = [];
   const server = await startTestRelay((req, body) =>
     req.url?.endsWith("/complete")
@@ -410,7 +569,7 @@ test("a full target is declined and a nonzero CLI exit cannot use a written answ
       undefined,
       { command: script },
     );
-    expect(busy).toMatchObject({ outcome: "declined", reason: "busy" });
+    expect(busy).toMatchObject({ outcome: "failed", reason: "agent_error" });
     expect(await first).toMatchObject({
       outcome: "failed",
       reason: "agent_error",
@@ -646,6 +805,155 @@ test("completion retry reuses the identical body after a lost response", async (
     await server.close();
   }
 });
+test("accepted completion stays terminal if local settlement contends", async () => {
+  const completions: unknown[] = [];
+  const requestId = "rq_settlement_contention";
+  const requestLock = `${externalRelayFile("requests")}.lock`;
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) {
+      completions.push(body);
+      fs.writeFileSync(requestLock, JSON.stringify({ pid: process.pid, identity: procBackend.processIdentity(process.pid) }), { flag: "wx" });
+      setTimeout(() => fs.rmSync(requestLock, { force: true }), 6200);
+    }
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  try {
+    const result = await runClaimedRequest(paired, { ...sampleRequest, request_id: requestId,
+      deadline_at: new Date(Date.now() + 30000).toISOString() }, undefined,
+      { command: stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`) });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Done" } });
+    expect(completions).toHaveLength(1);
+    dropRun(requestId);
+    expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: requestId,
+      deadline_at: new Date(Date.now() + 30000).toISOString() })).toMatchObject({ outcome: "answered", answer: { text: "Done" } });
+    expect(completions).toHaveLength(1);
+  } finally {
+    fs.rmSync(requestLock, { force: true });
+    await server.close();
+  }
+}, 15000);
+
+test("claim identity contention waits within the request budget", async () => {
+  const heartbeats: unknown[] = [];
+  const completions: unknown[] = [];
+  const requestLock = `${externalRelayFile("requests")}.lock`;
+  fs.mkdirSync(path.dirname(requestLock), { recursive: true });
+  fs.writeFileSync(requestLock, JSON.stringify({ pid: process.pid, identity: procBackend.processIdentity(process.pid) }), { flag: "wx" });
+  const release = setTimeout(() => fs.rmSync(requestLock, { force: true }), 6200);
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/heartbeat")) heartbeats.push(body);
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  try {
+    const started = Date.now();
+    const result = await runClaimedRequest(relay(`${server.origin}/v1`), { ...sampleRequest,
+      request_id: "rq_claim_contention", deadline_at: new Date(started + 30000).toISOString() }, undefined,
+      { command: stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`) });
+    expect(result?.outcome).toBe("answered");
+    expect(Date.now() - started).toBeGreaterThanOrEqual(6000);
+    expect(heartbeats.length).toBeGreaterThan(0);
+    expect(completions).toHaveLength(1);
+  } finally {
+    clearTimeout(release);
+    fs.rmSync(requestLock, { force: true });
+    await server.close();
+  }
+}, 15000);
+
+test("an immediately available last-ten-seconds request may answer", async () => {
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  try {
+    const deadlineAt = Date.now() + 5000;
+    const result = await runClaimedRequest(relay(`${server.origin}/v1`), { ...sampleRequest,
+      request_id: "rq_last_ten_seconds", deadline_at: new Date(deadlineAt).toISOString() }, undefined,
+      { command: stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`) });
+    expect(result?.outcome).toBe("answered");
+    expect(Date.now()).toBeLessThan(deadlineAt);
+    expect(completions).toHaveLength(1);
+  } finally { await server.close(); }
+}, 10000);
+
+test("an immediately admitted owner can answer in the final ten seconds", async () => {
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  try {
+    const deadlineAt = Date.now() + 5000;
+    const result = await runClaimedRequest(paired, { ...contextRequest, request_id: "rq_owner_final_ten_seconds",
+      deadline_at: new Date(deadlineAt).toISOString(), answer: { ...contextRequest.answer, max_chars: 1000, progress: "none" },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { ownerPorts: {
+        launch: async () => ({ status: 202, body: { conversationId: "conversation_deadline", initialMessage: "delivered" } }),
+        observe: async () => ({ state: "ended", finalText: "Done" }),
+        stop: async () => {}, pollMs: 5,
+      } });
+    expect(result?.outcome).toBe("answered");
+    expect(Date.now()).toBeLessThan(deadlineAt);
+    expect(completions).toHaveLength(1);
+  } finally { await server.close(); }
+}, 10000);
+
+test("a confirmed owner run keeps its configured hard cap and may answer after the request deadline", async () => {
+  const completions: unknown[] = [];
+  const stops: string[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  try {
+    const result = await runClaimedRequest(paired, { ...contextRequest, request_id: "rq_confirmed_past_deadline",
+      deadline_at: new Date(Date.now() + 700).toISOString(),
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      ownerPorts: {
+        launch: async () => ({ status: 202, body: { conversationId: "conversation_past_deadline", initialMessage: "delivered" } }),
+        observe: async () => { await Bun.sleep(1100); return { state: "ended", finalText: "Done" }; },
+        stop: async (_id, action) => { stops.push(action); }, pollMs: 5,
+      },
+    });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Done" } });
+    expect(stops).toEqual([]);
+    expect(completions).toHaveLength(1);
+  } finally { await server.close(); }
+}, 10000);
+
+test("claim contention through expiry never sends a completion without exclusive request custody", async () => {
+  const completions: unknown[] = [];
+  const requestLock = `${externalRelayFile("requests")}.lock`;
+  fs.mkdirSync(path.dirname(requestLock), { recursive: true });
+  fs.writeFileSync(requestLock, JSON.stringify({ pid: process.pid, identity: procBackend.processIdentity(process.pid) }), { flag: "wx" });
+  const release = setTimeout(() => fs.rmSync(requestLock, { force: true }), 5000);
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  try {
+    const request = { ...sampleRequest, request_id: "rq_claim_contention_expired",
+      deadline_at: new Date(Date.now() + 3000).toISOString() };
+    const results = await Promise.all([
+      runClaimedRequest(relay(`${server.origin}/v1`), request),
+      runClaimedRequest(relay(`${server.origin}/v1`), request),
+    ]);
+    expect(results).toEqual([null, null]);
+    expect(completions).toHaveLength(0);
+  } finally {
+    clearTimeout(release);
+    fs.rmSync(requestLock, { force: true });
+    await server.close();
+  }
+}, 10000);
 test("unknown request kind is declined as unsupported", async () => {
   const completions: unknown[] = [];
   const server = await startTestRelay((_req, body) => {
@@ -918,14 +1226,15 @@ test("relay advertises zero capacity and starts no answer child during drain, th
   const request = { ...sampleRequest, request_id: "rq_drain" };
   try {
     writeDrain(drainFile(), { id: "relay-hold", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
-    expect(await runClaimedRequest(paired, request, undefined, { command })).toMatchObject({ outcome: "declined", reason: "busy" });
+    const pending = runClaimedRequest(paired, request, undefined, { command });
+    await Bun.sleep(100);
     expect(fs.existsSync(marker)).toBe(false); expect(readRunLedger().runs).toEqual([]);
     expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 0 }]);
     releaseDrain(drainFile(), "relay-hold");
     expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 1 }]);
-    expect(await runClaimedRequest(paired, { ...request, lease_id: "ls_released_Zq3vN8bY1xKp4Lm" }, undefined, { command })).toMatchObject({ outcome: "answered" });
+    expect(await pending).toMatchObject({ outcome: "answered" });
     expect(fs.readFileSync(marker, "utf8")).toBe("launched");
-    expect(completed).toHaveLength(2);
+    expect(completed).toHaveLength(1);
   } finally { releaseDrain(drainFile(), "relay-hold"); await server.close(); }
 });
 
@@ -1127,7 +1436,7 @@ test("pre-launch capacity and drain declines leave the member's allowance availa
       writeDrain(drainFile(), { id: "admission-hold", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
       return { kind: "available", account };
     }) as typeof previous;
-    expect(await runClaimedRequest(paired, request("rq_before_drain"), undefined, { command })).toMatchObject({ outcome: "declined", reason: "busy" });
+    expect(await runClaimedRequest(paired, { ...request("rq_before_drain"), deadline_at: new Date(Date.now() + 10500).toISOString() }, undefined, { command })).toMatchObject({ outcome: "declined", reason: "busy" });
     releaseDrain(drainFile(), "admission-hold");
     accountManager.resolveHeadlessSpawn = previous;
     for (const id of ["rq_before_capacity", "rq_before_drain"])
@@ -1224,10 +1533,10 @@ test("service-built roles answer and the real runner and poller emit cross-check
     ensureExternalRelayPollers();
     const deadline = Date.now() + 5000;
     while (!claimBody && Date.now() < deadline) await Bun.sleep(10);
-    expect(claimBody).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions"], slots: [{ target_id: "t_target", free: 1 }] });
+    expect(claimBody).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline"], slots: [{ target_id: "t_target", free: 1 }] });
     const expected = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../../../evidence/external-relay/install_completions.json"), "utf8"));
     expect(handoff).toEqual(expected.handoff);
-    expect(claimBody).toEqual(expected.claim_body);
+    expect(claimBody).toEqual(JSON.parse(deadlineNegotiatedCapture(JSON.stringify(expected))).claim_body);
     // The absolute retry duration depends on the clock between launches.
     // Check its range above and compare the stable wire fields here.
     expect({ ...limited, retry_after_s: expected.member_limit.retry_after_s }).toEqual(expected.member_limit);
@@ -1325,6 +1634,9 @@ async function runLoopCase(options: {
     accountManager.resolveHeadlessSpawn = (() => ({ kind: "available", account: liveAccount })) as typeof previousSelection;
   }
   try {
+    const requestClaims = externalRelayFile("requests");
+    fs.rmSync(requestClaims, { force: true });
+    fs.rmSync(`${requestClaims}.lock`, { force: true });
     const completion = await runClaimedRequest(paired, request, undefined, { ...(options.live ? {} : { command: loopStub(options.plan ?? oneCallPlan, seen) }),
       sleep: async () => {}, ...options.runtime });
     const rounds = fs.existsSync(seen) ? fs.readFileSync(seen, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
@@ -1549,7 +1861,7 @@ test(`X2 is generated by the real poller and runner with X1 pending and pages ($
     ensureExternalRelayPollers();
     const deadline = Date.now() + 5000;
     while (!claimBody && Date.now() < deadline) await Bun.sleep(10);
-    expect(claimBody).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions"], slots: [{ target_id: request.target_id, free: 1 }] });
+    expect(claimBody).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline"], slots: [{ target_id: request.target_id, free: 1 }] });
     const completion = await runClaimedRequest(paired, request, undefined, { sleep: async () => {}, command: loopStub(
       `if(round===1)return {action:'call',text:'',reply_to:null,calls:[call('get_media',{message_id:'m_b40b71a0a9d43622ee0e2e6a'}),call()]};
        if(round===2)return {action:'call',text:'',reply_to:null,calls:[call('get_media',{},results.find(r=>r.next_cursor).next_cursor)]};return reply;`,
@@ -1570,11 +1882,11 @@ test(`X2 is generated by the real poller and runner with X1 pending and pages ($
       ...(JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../../../evidence/external-relay/install_tool_loop.json"), "utf8")).actions ? { actions: JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../../../evidence/external-relay/install_tool_loop.json"), "utf8")).actions } : {}) }, null, 2) + "\n";
     const readWire = JSON.parse(output);
     delete readWire.actions;
-    readWire.claim_body.features = readWire.claim_body.features.filter((feature: string) => feature !== "relay_tool_actions");
+    readWire.claim_body.features = readWire.claim_body.features.filter((feature: string) => feature !== "relay_tool_actions" && feature !== "request_deadline");
     expect({ ...hashes, wire: hash(JSON.stringify(readWire, null, 2) + "\n") })
       .toEqual(JSON.parse(fs.readFileSync(hashFile, "utf8")));
     if (process.env.LLV_RELAY_WIRE_OUTPUT_TOOL_LOOP) fs.writeFileSync(process.env.LLV_RELAY_WIRE_OUTPUT_TOOL_LOOP, output);
-    expect(output).toBe(fs.readFileSync(path.join(import.meta.dir, "../../../evidence/external-relay/install_tool_loop.json"), "utf8"));
+    expect(output).toBe(deadlineNegotiatedCapture(fs.readFileSync(path.join(import.meta.dir, "../../../evidence/external-relay/install_tool_loop.json"), "utf8")));
     expect(calls[0]!.attempts[0]!.request).toEqual(calls[0]!.attempts[1]!.request);
     expect(calls[2]!.attempts[0]!.request).toEqual({ lease_id: request.lease_id, call_id: calls[2]!.attempts[0]!.request.call_id, cursor: x1Results.cursor_page!.cursor! });
   } finally { http.request = originalHttpRequest; stopExternalRelayPollers(); await server.close(); }
@@ -1718,7 +2030,7 @@ const actionPlan = (tool: string, final = "reply") =>
 const projectionsOf = (run: Awaited<ReturnType<typeof runLoopCase>>, round = 1) =>
   JSON.parse(run.rounds[round].prompt.match(/<tool_results>\n([^]*?)\n<\/tool_results>/)[1]);
 
-test("N1 owner switch OFF preserves pre-amendment v3 runner and claim bytes", async () => {
+test("N1 owner switch OFF preserves v3 runner bytes with additive deadline negotiation", async () => {
   const hashes: Record<string, unknown> = {};
   setRelaySwitch("relay:owner_tools:enabled", false);
   for (const role of ["member", "admin", "owner", "anonymous_admin", "admin_owner_member", "actions_admin"]) {
@@ -1730,7 +2042,13 @@ test("N1 owner switch OFF preserves pre-amendment v3 runner and claim bytes", as
   hashes.claim = JSON.stringify(relayClaimCapabilities({ features: ["relay_owner_tools"] }));
   const output = JSON.stringify(hashes, null, 2) + "\n";
   if (process.env.LLV_RELAY_CAPTURE_OWNER_N1) fs.writeFileSync(process.env.LLV_RELAY_CAPTURE_OWNER_N1, output);
-  else expect(output).toBe(fs.readFileSync(path.join(x1Dir, "owner-tools-off-runner-hashes.json"), "utf8"));
+  else {
+    const expected = JSON.parse(fs.readFileSync(path.join(x1Dir, "owner-tools-off-runner-hashes.json"), "utf8"));
+    const claim = JSON.parse(expected.claim);
+    claim.features.push("request_deadline");
+    expected.claim = JSON.stringify(claim);
+    expect(output).toBe(JSON.stringify(expected, null, 2) + "\n");
+  }
 });
 
 const ownerFeatures = ["requester_context", "relay_tool_calls", "relay_tool_actions", "relay_owner_tools"];
@@ -1932,7 +2250,7 @@ test("X4 six owner runs extend the existing X2 capture format", async () => {
       slots: [{ target_id: ownerRequest().target_id, free: 1 }] }, calls: reads!.calls, completion: reads!.completion, actions }, null, 2) + "\n";
     const file = path.join(import.meta.dir, "../../../evidence/external-relay/install_tool_loop_owner.json");
     if (process.env.LLV_RELAY_WIRE_OUTPUT_OWNER) fs.writeFileSync(process.env.LLV_RELAY_WIRE_OUTPUT_OWNER, output);
-    else expect(output).toBe(fs.readFileSync(file, "utf8"));
+    else expect(output).toBe(deadlineNegotiatedCapture(fs.readFileSync(file, "utf8")));
   } finally { setRelaySwitch("relay:owner_tools:enabled", false); }
 });
 const actionResponse = (sample: string, body: WireCall) => ({ body: {
@@ -2714,7 +3032,7 @@ for (const retry of [false, true]) test(`owner completion rechecks cutoff after 
     const paired = relay(`${server.origin.replace("127.0.0.1", "relay-fixture.test")}/v1`);
     const done = completeRelayRequest(paired, "owner_dns_fixture", {
       lease_id: "lease_fixture", outcome: "answered", duration_ms: 0, answer: { action: "reply", text: "Late owner reply", reply_to: null },
-    }, Date.now, 45000, () => allowed);
+    }, () => Date.now() + 45000, () => allowed);
     await resolving; allowed = false; release();
     expect(await done).toMatchObject({ body: { outcome: "failed", reason: "cancelled" }, delivery: "accepted" });
     expect(completions.at(-1)).toMatchObject({ outcome: "failed", reason: "cancelled" });

@@ -3,7 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { procBackend } from "@/lib/proc";
-import type { ExternalRelayOwner, ExternalRelayTarget } from "./protocol";
+import type { ExternalRelayCompletion, ExternalRelayOwner, ExternalRelayTarget } from "./protocol";
 import type { OwnerBridgeContext } from "./ownerBridgeContext";
 
 export type RelayTargetSettings = {
@@ -108,7 +108,10 @@ export type RunRecord = {
   startedAt: string;
 };
 export type RunLedger = { v: 1; runs: RunRecord[] };
-export const externalRelayFile = (name: "relays" | "runs") =>
+type RelayRequestClaim = { requestId: string; leaseId: string; ownerPid: number; ownerIdentity: string; claimedAt: number; terminalAt?: number; completion?: ExternalRelayCompletion };
+type RelayRequestLedger = { v: 1; claims: RelayRequestClaim[] };
+const RELAY_REQUEST_CLAIM_RETENTION_MS = 24 * 60 * 60_000;
+export const externalRelayFile = (name: "relays" | "runs" | "requests") =>
   statePath(`external-relay/${name}.json`);
 function read<T>(file: string, fallback: () => T): T {
   try {
@@ -241,6 +244,65 @@ export function withFileLock<T>(file: string, action: () => T): T {
     fs.rmSync(lock, { force: true });
   }
 }
+export class RelayStoreBusy extends Error {
+  constructor() { super("relay store is busy"); this.name = "RelayStoreBusy"; }
+}
+export async function withFileLockAsync<T>(file: string, action: () => T, until: number): Promise<T> {
+  const lock = `${file}.lock`;
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  let fd: number | null = null;
+  const deadline = until;
+  let firstAttempt = true;
+  while (fd === null) {
+    if (!firstAttempt && Date.now() >= deadline) throw new RelayStoreBusy();
+    firstAttempt = false;
+    try {
+      fd = fs.openSync(lock, "wx", 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const stat = fs.statSync(lock, { throwIfNoEntry: false });
+      if (stat && Date.now() - stat.mtimeMs > 1_000) {
+        try {
+          const owner = JSON.parse(fs.readFileSync(lock, "utf8")) as {
+            pid?: number;
+            identity?: string;
+          };
+          if (
+            !owner.pid ||
+            !owner.identity ||
+            procBackend.processIdentity(owner.pid) !== owner.identity
+          )
+            fs.rmSync(lock, { force: true });
+        } catch {
+          fs.rmSync(lock, { force: true });
+        }
+      }
+      if (Date.now() >= deadline) throw new RelayStoreBusy();
+      await new Promise<void>(resolve => setTimeout(resolve, Math.min(10, Math.max(0, deadline - Date.now()))));
+    }
+  }
+  try {
+    fs.writeSync(
+      fd,
+      JSON.stringify({
+        pid: process.pid,
+        identity: procBackend.processIdentity(process.pid),
+      }),
+    );
+    return action();
+  } finally {
+    fs.closeSync(fd);
+    fs.rmSync(lock, { force: true });
+  }
+}
+export async function updateRunLedgerAsync(change: (ledger: RunLedger) => RunLedger, until: number): Promise<RunLedger> {
+  const file = externalRelayFile("runs");
+  return withFileLockAsync(file, () => {
+    const next = change(readRunLedger());
+    writeRelayFile(file, next);
+    return next;
+  }, until);
+}
 export function reserveRun(
   record: RunRecord,
   maxConcurrent?: number,
@@ -280,6 +342,107 @@ export function dropRun(requestId: string): void {
     ...ledger,
     runs: ledger.runs.filter((run) => run.requestId !== requestId),
   }));
+}
+export async function reserveRunAsync(
+  record: RunRecord,
+  maxConcurrent: number | undefined,
+  until: number,
+): Promise<"added" | "duplicate" | "full"> {
+  let outcome: "added" | "duplicate" | "full" = "full";
+  await updateRunLedgerAsync((ledger) => {
+    if (ledger.runs.some((run) => run.requestId === record.requestId)) {
+      outcome = "duplicate";
+      return ledger;
+    }
+    if (
+      maxConcurrent !== undefined &&
+      ledger.runs.filter(
+        (run) =>
+          run.relayId === record.relayId && run.targetId === record.targetId,
+      ).length >= maxConcurrent
+    )
+      return ledger;
+    outcome = "added";
+    return { ...ledger, runs: [...ledger.runs, record] };
+  }, until);
+  return outcome;
+}
+export async function changeRunAsync(
+  requestId: string,
+  change: (record: RunRecord) => RunRecord,
+  until: number,
+): Promise<void> {
+  await updateRunLedgerAsync((ledger) => ({
+    ...ledger,
+    runs: ledger.runs.map((run) =>
+      run.requestId === requestId ? change(run) : run,
+    ),
+  }), until);
+}
+export async function dropRunAsync(requestId: string, until: number): Promise<void> {
+  await updateRunLedgerAsync((ledger) => ({
+    ...ledger,
+    runs: ledger.runs.filter((run) => run.requestId !== requestId),
+  }), until);
+}
+function readRelayRequestLedger(): RelayRequestLedger {
+  const ledger = read(externalRelayFile("requests"), () => ({ v: 1 as const, claims: [] }));
+  if (ledger.v !== 1 || !Array.isArray(ledger.claims)) throw new Error("invalid relay request claim ledger");
+  return ledger;
+}
+/** Atomically claim request identity independently of the execution-slot ledger. */
+export async function claimRelayRequestAsync(requestId: string, leaseId: string, until: number): Promise<
+  { kind: "claimed" } | { kind: "duplicate" } | { kind: "terminal"; completion: ExternalRelayCompletion | null }
+> {
+  const file = externalRelayFile("requests");
+  const ownerPid = process.pid;
+  const ownerIdentity = procBackend.processIdentity(ownerPid);
+  if (!ownerIdentity) throw new Error("relay request owner identity unavailable");
+  let result: { kind: "claimed" } | { kind: "duplicate" } | { kind: "terminal"; completion: ExternalRelayCompletion | null } = { kind: "duplicate" };
+  await withFileLockAsync(file, () => {
+    const now = Date.now();
+    const ledger = readRelayRequestLedger();
+    const claims = ledger.claims.filter(claim => claim.terminalAt === undefined || now - claim.terminalAt < RELAY_REQUEST_CLAIM_RETENTION_MS);
+    const existing = claims.find(claim => claim.requestId === requestId && claim.leaseId === leaseId);
+    if (existing) {
+      if (existing.terminalAt !== undefined) {
+        result = { kind: "terminal", completion: existing.completion ?? null };
+        writeRelayFile(file, { v: 1, claims });
+        return;
+      }
+      if (procBackend.processIdentity(existing.ownerPid) === existing.ownerIdentity) {
+        writeRelayFile(file, { v: 1, claims });
+        return;
+      }
+      const recovered = claims.filter(claim => claim.requestId !== requestId || claim.leaseId !== leaseId);
+      writeRelayFile(file, { v: 1, claims: [...recovered, { requestId, leaseId, ownerPid, ownerIdentity, claimedAt: now }] });
+      result = { kind: "claimed" };
+      return;
+    }
+    writeRelayFile(file, { v: 1, claims: [...claims, { requestId, leaseId, ownerPid, ownerIdentity, claimedAt: now }] });
+    result = { kind: "claimed" };
+  }, until);
+  return result;
+}
+/** Keep a terminal tombstone after delivery, or release a claim whose delivery was definitely refused. */
+export async function settleRelayRequestClaimAsync(
+  requestId: string,
+  leaseId: string,
+  ownerPid: number,
+  ownerIdentity: string,
+  disposition: "terminal" | "release",
+  completion: ExternalRelayCompletion | null,
+  until: number,
+): Promise<void> {
+  const file = externalRelayFile("requests");
+  await withFileLockAsync(file, () => {
+    const ledger = readRelayRequestLedger();
+    const claims = ledger.claims.flatMap(claim => {
+      if (claim.requestId !== requestId || claim.leaseId !== leaseId || claim.ownerPid !== ownerPid || claim.ownerIdentity !== ownerIdentity || claim.terminalAt !== undefined) return [claim];
+      return disposition === "terminal" ? [{ ...claim, terminalAt: Date.now(), ...(completion ? { completion } : {}) }] : [];
+    });
+    writeRelayFile(file, { v: 1, claims });
+  }, until);
 }
 /** A target this install has not configured: no engine, so it is not
  * answered until the operator picks one (§B.9). */

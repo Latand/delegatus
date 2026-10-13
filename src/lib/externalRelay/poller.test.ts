@@ -95,7 +95,7 @@ test("polling learns progress_steps within five minutes with owner tools OFF and
     expect(descriptorReads).toBe(2);
     expect(observed.map(row => row.features)).toEqual([["requester_context"], ["requester_context"], features]);
     for (const row of observed) expect(row.claim).toEqual({ wait_s: 25, kinds: ["answer"],
-      features: ["requester_context", "relay_tool_calls", "relay_tool_actions"], slots: [{ target_id: "target_1", free: 1 }] });
+      features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline"], slots: [{ target_id: "target_1", free: 1 }] });
     expect(completed).toBe(true);
     expect(heartbeat).toMatchObject({ seq: 1, progress: { kind: "step", label: "accepted" } });
   } finally {
@@ -319,7 +319,7 @@ test("the real claim loop adds F4 after descriptor refresh only while the local 
         const deadline = Date.now() + 2000;
         while (!claim && Date.now() < deadline) await Bun.sleep(5);
         expect(order).toEqual(["targets", "descriptor", "claim"]);
-        expect(claim).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions",
+        expect(claim).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline",
           ...(enabled ? ["relay_owner_tools"] : [])], slots: [] });
       } finally { stopExternalRelayPollers(); await server.close(); }
     }
@@ -778,7 +778,7 @@ test("the claim loop refreshes targets first, merges them, and advertises slots 
     // "gone" is no longer offered and "added" waits for its settings.
     expect(slots[0]).toEqual([{ target_id: "kept", free: 2 }]);
     // The claim lists what this install implements (§A.2 rule 11).
-    expect(features[0]).toEqual(["requester_context", "relay_tool_calls", "relay_tool_actions"]);
+    expect(features[0]).toEqual(["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline"]);
     expect(relayPollerStatus("loop_refresh").state).toBe("polling");
   } finally {
     stopExternalRelayPollers();
@@ -891,7 +891,7 @@ test("a 5xx, an invalid body or a network error keeps the stored targets and say
 });
 
 
-test("a claim already waiting when drain begins is declined without reserving an answer", async () => {
+test("a claim already waiting when drain begins is held until its busy bound without reserving an answer", async () => {
   const { drainFile, writeDrain, releaseDrain } = await import("@/lib/selfUpdate/drain");
   let entered!: () => void, release!: () => void, completed!: () => void;
   const waiting = new Promise<void>(resolve => { entered = resolve; });
@@ -905,14 +905,15 @@ test("a claim already waiting when drain begins is declined without reserving an
       slots.push((body as { slots: unknown }).slots);
       if (claimed) return { status: 204 };
       claimed = true; entered(); await gate;
-      return { body: { request: { ...sampleRequest, request_id: "rq_waiting_drain" } } };
+      return { body: { request: { ...sampleRequest, request_id: "rq_waiting_drain", deadline_at: new Date(Date.now() + 14000).toISOString() } } };
     }
     if (req.url?.endsWith("/complete")) { completions.push(body); completed(); return { body: { status: "accepted", duplicate: false } }; }
+    if (req.url?.endsWith("/heartbeat")) return { body: { status: "ok" } };
     return { status: 404 };
   });
   const originalRelays = readRelayStore().relays;
   const resolve = accountManager.resolveHeadlessSpawn;
-  accountManager.resolveHeadlessSpawn = () => ({ kind: "unavailable" });
+  accountManager.resolveHeadlessSpawn = () => ({ kind: "available", account: { engine: "codex", accountId: "fixture", kind: "managed", home: root, transcriptRoot: root, env: { ...process.env } } });
   try {
     updateRelayStore(store => ({ ...store, relays: [pairedRelay("drain_claim", server.origin, [configured("target_1")])] }));
     ensureExternalRelayPollers();

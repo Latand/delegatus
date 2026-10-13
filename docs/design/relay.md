@@ -842,11 +842,11 @@ unknown fields, rule A.2.6), so only the CLI answer schema in §A.8 is closed.
       "type": "object",
       "required": ["poll_freshness_s", "claim_window_s", "ack_window_s", "heartbeat_interval_s", "stall_window_s"],
       "properties": {
-        "poll_freshness_s": { "type": "integer", "minimum": 30, "maximum": 300 },
-        "claim_window_s": { "type": "integer", "minimum": 1, "maximum": 60 },
-        "ack_window_s": { "type": "integer", "minimum": 2, "maximum": 120 },
+        "poll_freshness_s": { "type": "integer", "minimum": 1 },
+        "claim_window_s": { "type": "integer", "minimum": 1 },
+        "ack_window_s": { "type": "integer", "minimum": 1 },
         "heartbeat_interval_s": { "type": "integer", "minimum": 2, "maximum": 60 },
-        "stall_window_s": { "type": "integer", "minimum": 10, "maximum": 600 }
+        "stall_window_s": { "type": "integer", "minimum": 1, "maximum": 600 }
       }
     },
 
@@ -3370,3 +3370,32 @@ See [relay-slice3.md](relay-slice3.md) for the boundaries and lifecycle.
 `evidence/external-relay/install_compact_loop.json` records the real poller
 and runner replay against the service's X3 claims. Activation awaits the
 final-head cross-check and the operators' go.
+
+### 2026-10-13 request deadline amendment
+
+The paired service may apply a fixed 120 s total deadline and show an error
+instead of invoking its hosted assistant. An agent's explicit hand-off still
+returns the request to that assistant. This supersedes the earlier L1 rule
+for a service that enforces a total deadline.
+
+The install announces `request_deadline` in claim negotiation. Answer claims
+may carry optional `request.deadline_at`, original `created_at` + 120 s,
+RFC 3339 UTC ending in `Z`. The install reads it from the raw request and
+uses that absolute timestamp. Older peers omit it; compact claims omit it.
+Absent or malformed fields use one fixed receipt + 120 s budget. Past values
+use that same fallback delivery budget and complete `declined` / `busy`
+immediately without holding. The field stays outside request validation.
+The service sends `request.liveness.stall_window_s` as
+`max(10, ceil(remaining seconds at response preparation))`; local stall
+handling uses the supplied duration. Busy holds end ten seconds before the
+fixed deadline. Completion retries end at it, including invalid compact
+claims. Valid compact requests retain their own lifecycle.
+See [relay-request-deadline.md](relay-request-deadline.md) for the wait rules.
+
+Answer admission acknowledges before reserving execution capacity. Drain, full
+target and busy chat races enter a hold with the `queued` step. A hold owns no
+execution slot or chat reservation; capacity waiters take slots in deadline
+order and advertised free slots exclude them. On expiry it sends `declined`
+with reason `busy`, retaining detail `chat busy` for a chat hold. Demotion
+wakes holds and attempts that completion once before its bounded exit.
+Heartbeats follow a fixed grid through admission and completion delivery.

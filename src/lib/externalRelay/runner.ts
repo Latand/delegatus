@@ -1,3 +1,5 @@
+import { capacityWaiters, olderCapacityWaiter, enterRelayHold, leaveRelayHold, releasingRelayHolds, type RelayHoldCause } from "./hold";
+import { relayRequestDeadline } from "./deadline";
 import { ownerRelayAuthorized } from "./ownerAuthority";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
@@ -6,7 +8,7 @@ import { runOwnerAgent, ownerClarificationAnswer, type OwnerRunPorts } from "./o
 import { readRelaySwitches } from "./switches";
 import { compactRequestSchema } from "./protocol";
 import { runCompactRequest } from "./compact";
-import { conversationContext, reserveConversations, releaseConversation, prepareConversationAccount, conversationCodexHome, sweepConversations, type RelayConversation } from "./conversations";
+import { conversationContext, reserveConversationsAsync, releaseConversationAsync, prepareConversationAccount, conversationCodexHome, sweepConversationsAsync, readConversations, type RelayConversation } from "./conversations";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import fs from "node:fs";
 import os from "node:os";
@@ -47,18 +49,23 @@ import {
   RELAY_MEMBER_LIMIT_WINDOW_MS,
 } from "./profile";
 import {
-  changeRun,
-  dropRun,
-  reserveRun,
+  changeRunAsync,
+  claimRelayRequestAsync,
+  dropRunAsync,
+  reserveRunAsync,
+  RelayStoreBusy,
   readRunLedger,
+  settleRelayRequestClaimAsync,
   type PairedRelay,
   type RelayTargetSettings,
 } from "./store";
 
 const globalRelay = globalThis as typeof globalThis & {
   __llvExternalRelayActive?: Map<string, number>;
+  __llvExternalRelayInflight?: Set<string>;
 };
 const active = (globalRelay.__llvExternalRelayActive ??= new Map<string, number>());
+const inflight = globalRelay.__llvExternalRelayInflight ??= new Set<string>();
 export function externalRelayTempRoot(): string {
   const temporary = path.resolve(os.tmpdir());
   const home = path.resolve(os.homedir());
@@ -88,7 +95,7 @@ export function advertisedSlots(
             held.filter(
               (run) => run.relayId === relay.id && run.targetId === target.id,
             ).length,
-          ),
+          ) - capacityWaiters(relay.id, target.id),
       ),
     }));
 }
@@ -128,13 +135,15 @@ export async function completeRelayRequest(
   relay: PairedRelay,
   requestId: string,
   body: ExternalRelayCompletion,
-  lastHeartbeat: () => number,
-  stallMs: number,
+  until: () => number,
   allowOwnerReply?: () => boolean,
   onUnknownFeature?: () => Promise<unknown>,
 ): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery }> {
   let wait = 1000;
+  let attempted = false;
   while (true) {
+    if (attempted && Date.now() >= until()) return { body, delivery: "unconfirmed" };
+    attempted = true;
     if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
     try {
       await relayCall(
@@ -165,9 +174,9 @@ export async function completeRelayRequest(
         if ([400, 401, 404, 409, 413, 426].includes(error.status))
           return { body, delivery: "refused" };
       }
-      if (Date.now() - lastHeartbeat() > stallMs)
+      if (Date.now() >= until())
         return { body, delivery: "unconfirmed" };
-      await new Promise((resolve) => setTimeout(resolve, wait));
+      await new Promise((resolve) => setTimeout(resolve, Math.min(wait, Math.max(0, until() - Date.now()))));
       wait = Math.min(wait * 2, 5000);
     }
   }
@@ -178,12 +187,16 @@ export async function runClaimedRequest(
   onFreed?: () => void,
   runtime?: HeadlessReviewRuntime & ToolLoopRuntime & { timeoutMs?: number; ownerPorts?: OwnerRunPorts; onUnknownFeature?: () => Promise<unknown> },
 ): Promise<ExternalRelayCompletion | null> {
+  const deadline = relayRequestDeadline(raw);
+  const claimId = raw && typeof raw === "object" ? (raw as Record<string, unknown>).request_id : null;
+  if (deadline.fallback && typeof claimId === "string")
+    console.info("External relay deadline", { request: claimId.slice(0, 8), fallback: deadline.fallback });
   if (readRelaySwitches().compact && raw && typeof raw === "object" && (raw as Record<string, unknown>).kind === "compact") {
     const compact = compactRequestSchema.safeParse(raw);
     if (compact.success) return runCompactRequest(relay, compact.data, onFreed, runtime);
     const invalid = raw as Record<string, unknown>;
     if (typeof invalid.request_id !== "string" || typeof invalid.lease_id !== "string") return null;
-    return (await completeRelayRequest(relay, invalid.request_id, declined(invalid.lease_id, "invalid_request"), Date.now, 45000,
+    return (await completeRelayRequest(relay, invalid.request_id, declined(invalid.lease_id, "invalid_request"), () => deadline.at,
       undefined, runtime?.onUnknownFeature)).body;
   }
   const parsed = requestSchema.safeParse(raw);
@@ -200,9 +213,33 @@ export async function runClaimedRequest(
     return null;
   const requestId = request?.request_id ?? (rawId as string);
   const leaseId = request?.lease_id ?? (rawLease as string);
-  let heartbeatAt = Date.now();
+  let heartbeatAt = deadline.receivedAt;
   if (request) console.info("External relay claim received", { request: requestId.slice(0, 8), kind: request.kind });
-  if (readRunLedger().runs.some((run) => run.requestId === requestId)) return null;
+  if (inflight.has(requestId) || readRunLedger().runs.some((run) => run.requestId === requestId)) return null;
+  const claimOwnerPid = process.pid;
+  const claimOwnerIdentity = procBackend.processIdentity(claimOwnerPid);
+  if (!claimOwnerIdentity) return null;
+  let requestClaim: Awaited<ReturnType<typeof claimRelayRequestAsync>>;
+  try {
+    requestClaim = await claimRelayRequestAsync(requestId, leaseId, deadline.at);
+  } catch (error) {
+    if (!(error instanceof RelayStoreBusy)) throw error;
+    // A claim-lock timeout gives this process no request custody. Let the
+    // paired service's fixed deadline produce its timeout error; an unclaimed
+    // busy completion could race a different process that later acquires it.
+    return null;
+  }
+  if (requestClaim.kind === "duplicate") return null;
+  if (requestClaim.kind === "terminal")
+    return requestClaim.completion ? { ...requestClaim.completion, lease_id: leaseId } : null;
+  let terminalCompletion: ExternalRelayCompletion | null = null;
+  let claimSettled = false;
+  let claimTerminal = false;
+  const settleClaim = async (disposition: "terminal" | "release", until = deadline.at) => {
+    await settleRelayRequestClaimAsync(requestId, leaseId, claimOwnerPid, claimOwnerIdentity, disposition,
+      disposition === "terminal" ? terminalCompletion : null, until);
+    claimSettled = true;
+  };
   const rawRequest = raw as Record<string, unknown>;
   const targetId = request?.target_id ?? rawRequest.target_id;
   const recorder = answerRecorder({
@@ -215,39 +252,89 @@ export async function runClaimedRequest(
     requester: request?.input.requester ?? null,
     input: rawRequest.input,
   });
+  inflight.add(requestId);
+  let releaseRequested = false;
+  let deliverySettled!: () => void;
+  const released = new Promise<void>(resolve => { deliverySettled = resolve; });
   let allowOwnerReply: (() => boolean) | undefined;
+  let leaseUnavailable = false;
+  let admissionHeld = false;
+  const admissionCutoff = () => admissionHeld ? deadline.declineAt : deadline.at;
   let rounds = 0;
   let loop: ReturnType<typeof createToolLoop> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let cadenceTimer: ReturnType<typeof setTimeout> | null = null;
+  let heartbeatStopped = false;
   let pendingBeat: Promise<void> | null = null;
+  let finishing: Promise<ExternalRelayCompletion> | null = null;
   const loopRecord = () => loop ? { rounds, toolCalls: loop.records } : {};
-  const finish = async (body: ExternalRelayCompletion, stallMs = 45_000) => {
-    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-    if (pendingBeat) await pendingBeat;
-    // Persist the local decision before any delivery wait: a restart must
-    // leave the generated answer and early declines inspectable.
-    if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
-    recorder?.finish({
-      outcome:
-        body.outcome === "answered"
-          ? "answered"
-          : `${body.outcome}:${body.reason}`,
-      answer:
-        body.outcome === "answered"
-          ? body.answer
-          : body.outcome === "declined" && body.reason === "handoff"
-            ? { action: "handoff", text: "", reply_to: null }
-            : null,
-      delivery: "unconfirmed",
-      ...loopRecord(),
-    });
-    const sent = await completeRelayRequest(relay, requestId, body, () => heartbeatAt, stallMs, allowOwnerReply, runtime?.onUnknownFeature);
-    const completion = sent.body;
-    recorder?.recordDelivery({
-      outcome: completion.outcome === "answered" ? "answered" : `${completion.outcome}:${completion.reason}`,
-      delivery: sent.delivery,
-    });
-    return completion;
+  const finish = (body: ExternalRelayCompletion): Promise<ExternalRelayCompletion> => {
+    if (finishing) return finishing;
+    finishing = (async () => {
+    leaveRelayHold(requestId);
+    try {
+      if (pendingBeat) {
+        if (releaseRequested) void pendingBeat.catch(() => console.error("External relay heartbeat refresh failed during demotion"));
+        else await pendingBeat;
+      }
+      // Persist the local decision before any delivery wait: a restart must
+      // leave the generated answer and early declines inspectable.
+      if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
+      recorder?.finish({
+        outcome:
+          body.outcome === "answered"
+            ? "answered"
+            : `${body.outcome}:${body.reason}`,
+        answer:
+          body.outcome === "answered"
+            ? body.answer
+            : body.outcome === "declined" && body.reason === "handoff"
+              ? { action: "handoff", text: "", reply_to: null }
+              : null,
+        delivery: "unconfirmed",
+        ...loopRecord(),
+      });
+      const deliveryStart = Date.now();
+      const until = releaseRequested ? deliveryStart : deadline.at;
+      const sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature);
+      const completion = sent.body;
+      claimTerminal = sent.delivery !== "refused";
+      terminalCompletion = claimTerminal ? completion : null;
+      try { await settleClaim(claimTerminal ? "terminal" : "release"); }
+      catch (error) {
+        if (!claimTerminal) throw error;
+        console.error("External relay terminal claim settlement pending");
+      }
+      recorder?.recordDelivery({
+        outcome: completion.outcome === "answered" ? "answered" : `${completion.outcome}:${completion.reason}`,
+        delivery: sent.delivery,
+      });
+      return completion;
+    } finally {
+      heartbeatStopped = true;
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+      if (cadenceTimer) { clearTimeout(cadenceTimer); cadenceTimer = null; }
+      if (!claimSettled) {
+        try { await settleClaim(claimTerminal ? "terminal" : "release", deadline.at); }
+        catch { console.error("External relay request claim cleanup failed"); }
+      }
+      if (!claimSettled && claimTerminal) void (async () => {
+        while (!claimSettled) {
+          try { await settleClaim("terminal", Date.now() + 5000); }
+          catch (error) {
+            if (!(error instanceof RelayStoreBusy)) {
+              console.error("External relay terminal claim custody unavailable");
+              return;
+            }
+            await new Promise(resolve => setTimeout(resolve, 250));
+          }
+        }
+      })();
+      inflight.delete(requestId);
+      deliverySettled();
+    }
+    })();
+    return finishing;
   };
   if (!request)
     return finish(
@@ -260,13 +347,13 @@ export async function runClaimedRequest(
           : "invalid_request",
       ),
     );
+  if (deadline.fallback === "past") return finish(declined(leaseId, "busy"));
   const target = relay.targets.find((item) => item.id === request.target_id);
   if (!target || !target.engine || !target.model)
     return finish(declined(leaseId, "not_configured"));
   if (relay.paused || !target.enabled)
     return finish(declined(leaseId, "disabled"));
-  if (activeDrain()) return finish(declined(leaseId, "busy"));
-  let conversation: RelayConversation | null = null;
+  let conversation = null as RelayConversation | null;
   let conversationEvidence: { sessionId?: string | null; promptTokens?: number | null; compacted?: boolean } = {};
   let turn: ReturnType<typeof conversationTurnPrompt> | null = null;
   let conversationBroken = false;
@@ -279,36 +366,16 @@ export async function runClaimedRequest(
   const identityTimers: ReturnType<typeof setTimeout>[] = [];
   let owner: ReturnType<typeof ownerTierFor> = null;
   try {
-    runDir = fs.mkdtempSync(
-      path.join(externalRelayTempRoot(), "llv-external-relay-"),
-    );
-    const ownerIdentity = procBackend.processIdentity(process.pid);
-    if (!ownerIdentity) throw new Error("viewer process identity unavailable");
-    const record = {
-      requestId,
-      leaseId,
-      relayId: relay.id,
-      targetId: target.id,
-      childPid: null,
-      childIdentity: null,
-      ownerPid: process.pid,
-      ownerIdentity,
-      runDir,
-      startedAt: new Date().toISOString(),
-    };
-    const admission = reserveRun(record, target.concurrency);
-    if (admission === "duplicate") { duplicate = true; return null; }
-    if (admission === "full") return await finish(declined(leaseId, "busy"));
-    recorded = true;
-    markActive(relay, target);
     let newestProgress: ExternalRelayProgress | null = null;
     const steps = createRelaySteps(relay.features);
     let stepLog: string | null = null;
     let pendingServiceTools = 0;
-    let leaseUnavailable = false;
     let beatBusy = false;
     let seq = 0;
-    let nextBeatAt = 0;
+    const intervalMs = request.liveness.heartbeat_interval_s * 1000;
+    const beatAnchor = Date.now();
+    let nextRegularDue = beatAnchor + intervalMs;
+    let regularBeatPending = false;
     let acked = false;
     const started = Date.now();
     const stallMs = request.liveness.stall_window_s * 1000;
@@ -319,8 +386,17 @@ export async function runClaimedRequest(
         callAbort.abort();
       }
     };
-    const beat = async (stepChange = false) => {
-      if (beatBusy || leaseUnavailable) return;
+    const armCadence = () => {
+      if (cadenceTimer) clearTimeout(cadenceTimer);
+      cadenceTimer = setTimeout(() => {
+        cadenceTimer = null;
+        pendingBeat = beat(false, true);
+      }, Math.max(0, nextRegularDue - Date.now()));
+      cadenceTimer.unref();
+    };
+    const beat = async (stepChange = false, regular = false) => {
+      if (beatBusy) { if (regular) regularBeatPending = true; return; }
+      if (leaseUnavailable) return;
       beatBusy = true;
       const beatSeq = ++seq;
       const sentAt = Date.now();
@@ -346,7 +422,6 @@ export async function runClaimedRequest(
         if (newestProgress === sentProgress) newestProgress = null;
         acked = true;
         heartbeatAt = Date.now();
-        nextBeatAt = heartbeatAt + request.liveness.heartbeat_interval_s * 1000;
       } catch (error) {
         journal("failed", error instanceof ExternalRelayError ? error.status : 0,
           error instanceof ExternalRelayError && ["lease_lost", "unreachable", "malformed", "too_large", "unauthorized",
@@ -362,9 +437,16 @@ export async function runClaimedRequest(
           callAbort.abort();
         }
       } finally {
-        if (nextBeatAt <= Date.now()) nextBeatAt = Date.now() + 1000;
         beatBusy = false;
         cancelStalledRun();
+        if (!heartbeatStopped && !leaseUnavailable) {
+          const now = Date.now();
+          if (regular) while (nextRegularDue <= now) nextRegularDue += intervalMs;
+          if (regularBeatPending) {
+            regularBeatPending = false;
+            pendingBeat = beat(false, true);
+          } else armCadence();
+        }
       }
     };
     // Acknowledge before filesystem context, account selection or agent launch.
@@ -376,36 +458,25 @@ export async function runClaimedRequest(
       if (!beatBusy) cancelStalledRun();
       if (!beatBusy && !leaseUnavailable) {
         if (steps?.changeDue(Date.now())) pendingBeat = beat(true);
-        else if (Date.now() >= nextBeatAt) pendingBeat = beat();
       }
     }, 1000);
     heartbeatTimer.unref();
     if (leaseUnavailable) return null;
+    if (Date.now() >= deadline.at) return await finish(declined(leaseId, "busy"));
     // The member limit (§B.8): a member past it is declined, and the service's
     // fallback setting decides whether its own agent answers instead.
     const requester = request.input.requester;
     const limit = memberLimitFor(target);
-    if (requester && limit !== null && !exemptFromMemberLimit(requester)) {
+    const memberDecline = (): ExternalRelayCompletion | null => {
+      if (!requester || limit === null || exemptFromMemberLimit(requester)) return null;
       const now = Date.now();
-      const used = countMemberAnswers({
-        relayId: relay.id,
-        targetId: target.id,
-        chatKey: request.chat?.key ?? null,
-        requesterKey: requester.key,
-        sinceMs: now - RELAY_MEMBER_LIMIT_WINDOW_MS,
-      });
-      if (used.count >= limit)
-        return await finish(
-          declined(
-            leaseId,
-            "member_limit",
-            used.oldestMs === null
-              ? null
-              : Math.max(1, Math.ceil((used.oldestMs + RELAY_MEMBER_LIMIT_WINDOW_MS - now) / 1000)),
-            memberLimitDetail(limit),
-          ),
-        );
-    }
+      const used = countMemberAnswers({ relayId: relay.id, targetId: target.id, chatKey: request.chat?.key ?? null,
+        requesterKey: requester.key, sinceMs: now - RELAY_MEMBER_LIMIT_WINDOW_MS });
+      return used.count >= limit ? declined(leaseId, "member_limit", used.oldestMs === null ? null :
+        Math.max(1, Math.ceil((used.oldestMs + RELAY_MEMBER_LIMIT_WINDOW_MS - now) / 1000)), memberLimitDetail(limit)) : null;
+    };
+    const earlyMemberDecline = memberDecline();
+    if (earlyMemberDecline) return await finish(earlyMemberDecline);
     const profile = answerProfileFor(requester);
     const ownerMessage = ownerTierFor({ ownerTier: true }, request);
     const previousAnswer = ownerMessage ? readAnswerRecord(relay.id, target.id, requestId) : null;
@@ -417,40 +488,121 @@ export async function runClaimedRequest(
       try { owner.bridgeReport = resolveOwnerBridgeContext(request, owner, relay.api_base); }
       catch { owner.bridgeReport = null; }
     }
-    if (owner) {
-      allowOwnerReply = () => ownerRelayAuthorized(relay.id, target.id, requestId);
-      changeRun(requestId, current => ({ ...current, ownerTurn: { clientAttemptId: `relay-owner-${requestId}`,
-        request: { text: owner!.text, requestText: owner!.requestText },
-        ...(owner!.bridgeReport ? { bridgeReport: owner!.bridgeReport } : {}),
-        ...(prototype && target.ownerTier !== true ? { prototype: true as const } : {}) } }));
-    }
-    if (activeDrain()) return await finish(declined(leaseId, "busy"));
     if (owner && !prototype && ownerNeedsClarification(owner)) return await finish({ lease_id: leaseId, outcome: "answered", answer: ownerClarificationAnswer(request, owner), duration_ms: 0 });
+    if (owner) allowOwnerReply = () => ownerRelayAuthorized(relay.id, target.id, requestId);
     const context = conversationContext(request.input.requester);
-    if (!owner && readRelaySwitches().chat_conversations && request.chat && context) {
-      sweepConversations([relay], readRunLedger().runs.filter((r) => r.requestId !== requestId), Date.now(), undefined, relay.id);
-      const reserved = reserveConversations(relay, target, request.chat.key, requestId, [context]);
-      if (!reserved) return await finish(declined(leaseId, "busy", null, "chat busy"));
-      conversation = reserved[0]!;
-    }
-    const selection = prototype ? null : accountManager.resolveHeadlessSpawn(
-      target.engine,
-      conversation?.accountId ?? null,
-      [],
-      target.project,
-      target.model,
+    const usesConversation = !owner && readRelaySwitches().chat_conversations && request.chat && context;
+    const selectAccount = () => prototype ? null : accountManager.resolveHeadlessSpawn(target.engine!,
+      conversation?.accountId ?? (usesConversation ? readConversations().find(r => r.relayId === relay.id && r.targetId === target.id && r.chatKey === request.chat!.key && r.context === context)?.accountId : null) ?? null,
+      [], target.project, target.model);
+    let selection = selectAccount();
+    const selectedAccount = () => {
+      if (!selection || selection.kind !== "available") throw new Error("relay account unavailable");
+      return selection.account;
+    };
+    const capacityDecline = () => selection && selection.kind !== "available" ? declined(leaseId, "no_capacity",
+      selection.kind === "exhausted" && selection.resetsAt ? Math.max(0, selection.resetsAt - Math.floor(Date.now() / 1000)) : null) : null;
+    const earlyCapacityDecline = capacityDecline();
+    if (earlyCapacityDecline) return await finish(earlyCapacityDecline);
+    runDir = fs.mkdtempSync(
+      path.join(externalRelayTempRoot(), "llv-external-relay-"),
     );
-    if (selection && selection.kind !== "available")
-      return await finish(
-        declined(
-          leaseId,
-          "no_capacity",
-          selection.kind === "exhausted" && selection.resetsAt
-            ? Math.max(0, selection.resetsAt - Math.floor(Date.now() / 1000))
-            : null,
-        ),
-      );
-    if (conversation && selection?.kind === "available") { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
+    const ownerIdentity = procBackend.processIdentity(process.pid);
+    if (!ownerIdentity) throw new Error("viewer process identity unavailable");
+    const record = {
+      requestId,
+      leaseId,
+      relayId: relay.id,
+      targetId: target.id,
+      childPid: null,
+      childIdentity: null,
+      ownerPid: process.pid,
+      ownerIdentity,
+      runDir,
+      startedAt: new Date().toISOString(),
+      ...(owner ? { ownerTurn: { clientAttemptId: `relay-owner-${requestId}`,
+        request: { text: owner.text, requestText: owner.requestText },
+        ...(owner.bridgeReport ? { bridgeReport: owner.bridgeReport } : {}),
+        ...(prototype && target.ownerTier !== true ? { prototype: true as const } : {}) } } : {}),
+    };
+    let admissionDecline: ExternalRelayCompletion | null = null;
+    let wakeHold: (() => void) | null = null;
+    const releaseAdmission = async () => {
+      if (conversation) { await releaseConversationAsync(conversation.id, {}, Date.now() + 5000); conversation = null; }
+      if (recorded) { await dropRunAsync(requestId, Date.now() + 5000); free(relay, target); recorded = false; }
+    };
+    const admit = async (): Promise<boolean> => {
+      let lastCause: RelayHoldCause | null = null;
+      while (!leaseUnavailable) {
+        if (Date.now() >= admissionCutoff()) {
+          admissionDecline = declined(leaseId, "busy", null, lastCause === "chat" ? "chat busy" : null);
+          return false;
+        }
+        if (usesConversation)
+          await sweepConversationsAsync([relay], Date.now(), admissionCutoff(), relay.id);
+        const liveRuns = usesConversation ? readRunLedger().runs : [];
+        let cause: RelayHoldCause | null = activeDrain() ? "drain" : usesConversation && readConversations().some(r =>
+          r.relayId === relay.id && r.targetId === target.id && r.chatKey === request.chat!.key && r.state === "running" && liveRuns.some(run => run.requestId === r.runningRequestId)) ? "chat" :
+          olderCapacityWaiter(relay.id, target.id, requestId, deadline) ? "capacity" : null;
+        if (releaseRequested || releasingRelayHolds()) { admissionDecline = declined(leaseId, "busy", null, cause === "chat" ? "chat busy" : null); releaseRequested = true; return false; }
+        if (!cause) {
+          try {
+            const admission = await reserveRunAsync(record, target.concurrency, admissionCutoff());
+            if (admission === "duplicate") { duplicate = true; return false; }
+            if (admission === "full") cause = "capacity";
+            else {
+              recorded = true; markActive(relay, target);
+              if (usesConversation) {
+                await sweepConversationsAsync([relay], Date.now(), admissionCutoff(), relay.id);
+                const reserved = await reserveConversationsAsync(relay, target, request.chat!.key, requestId, [context!], admissionCutoff());
+                if (!reserved) { await releaseAdmission(); cause = "chat"; }
+                else conversation = reserved[0]!;
+              }
+              if (Date.now() >= admissionCutoff()) {
+                await releaseAdmission();
+                admissionDecline = declined(leaseId, "busy", null, lastCause === "chat" ? "chat busy" : null);
+                return false;
+              }
+            }
+          } catch (error) {
+            if (!(error instanceof RelayStoreBusy)) throw error;
+            await releaseAdmission(); cause = "capacity"; admissionHeld = true;
+          }
+        }
+        if (leaseUnavailable) return false;
+        if (releaseRequested || releasingRelayHolds()) {
+          releaseRequested = true;
+          admissionDecline = declined(leaseId, "busy", null, cause === "chat" ? "chat busy" : null);
+          return false;
+        }
+        if (!cause) {
+          leaveRelayHold(requestId); steps?.observe({});
+          admissionDecline = memberDecline();
+          if (admissionDecline) return false;
+          selection = selectAccount(); admissionDecline = capacityDecline();
+          if (admissionDecline) return false;
+          if (conversation && selection?.kind === "available") { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
+          return true;
+        }
+        lastCause = cause;
+        admissionHeld = true;
+        enterRelayHold({ requestId, relayId: relay.id, targetId: target.id, cause, deadline,
+          release: () => { releaseRequested = true; wakeHold?.(); return released; } });
+        steps?.observe({ queued: true });
+        if (Date.now() >= admissionCutoff()) { admissionDecline = declined(leaseId, "busy", null, cause === "chat" ? "chat busy" : null); return false; }
+        await new Promise<void>(resolve => {
+          const timer = setTimeout(() => { wakeHold = null; resolve(); }, Math.min(1000, admissionCutoff() - Date.now()));
+          timer.unref();
+          wakeHold = () => { clearTimeout(timer); wakeHold = null; resolve(); };
+        });
+      }
+      return false;
+    };
+    if (!await admit()) return admissionDecline ? await finish(admissionDecline) : null;
+    if (Date.now() >= deadline.at || (admissionHeld && Date.now() >= deadline.declineAt)) {
+      await releaseAdmission();
+      return await finish(declined(leaseId, "busy"));
+    }
     const lose = () => { leaseUnavailable = true; run?.cancel(); callAbort.abort(); };
     if (!owner && callableTools(request).length) loop = createToolLoop(relay, request, {
       signal: callAbort.signal, lose,
@@ -477,10 +629,14 @@ export async function runClaimedRequest(
     let result: Awaited<ReturnType<typeof runEphemeralAgent>["done"]> | null = null;
     let completion: ExternalRelayDecision | null = null;
     for (rounds = 1; rounds <= (loop ? 8 : 1); rounds++) {
+      if (Date.now() >= deadline.at) return await finish(declined(leaseId, "busy"));
       const final = rounds === 8 || !!loop && loop.callsLeft() === 0;
       runFinished = false;
       try {
-        if (rounds === 1 && activeDrain()) return await finish(declined(leaseId, "busy"));
+        if (rounds === 1 && activeDrain()) {
+          await releaseAdmission();
+          if (!await admit()) return admissionDecline ? await finish(admissionDecline) : null;
+        }
         const roundPrompt = loop ? toolRoundPrompt(request, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent }) : answerPrompt(request);
         const frame = roundPrompt.slice(roundPrompt.lastIndexOf("[Answer with one JSON object"));
         if (conversation && rounds === 1) turn = conversationTurnPrompt(request, conversation, frame);
@@ -492,10 +648,10 @@ export async function runClaimedRequest(
         }) : owner ? runOwnerAgent({
           authorize: () => { if (!allowOwnerReply!()) throw new Error("owner relay authorization revoked"); },
           credentials: [relay.credential],
-          request, owner, target, accountId: selection!.account.accountId,
+          request, owner, target, deadline, accountId: selectedAccount().accountId,
           hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
-          onConversation: (conversationId) => {
-            changeRun(requestId, current => ({ ...current, conversationId }));
+          onConversation: async (conversationId) => {
+            await changeRunAsync(requestId, current => ({ ...current, conversationId }), Date.now() + 5000);
             recorder?.bindConversation(conversationId);
           },
           ...(steps ? { onProgress: steps.observe } : {}),
@@ -505,7 +661,7 @@ export async function runClaimedRequest(
           engine: target.engine,
           model: target.model,
           effort: target.effort,
-          account: selection!.account,
+          account: selectedAccount(),
           ["prompt"]: conversation ? persistentPrompt : roundPrompt,
           schema: loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent })) : offersHandoff(request) ? handoffAnswerSchema : answerSchema,
           runDir: loop ? path.join(runDir, `round-${rounds}`) : runDir,
@@ -532,25 +688,27 @@ export async function runClaimedRequest(
       // Record launched children and authenticated owner controls. The profile
       // identifies prototype decisions that used no agent or account capacity.
       if ((launchedRun.pid || owner) && !recorder?.begun) recorder?.begin(target.engine, target.model, owner ? { ...profile, owner: true, ...(prototype ? { prototype: prototype.round.id } : {}) } : profile);
-      changeRun(requestId, (current) => ({
+      await changeRunAsync(requestId, (current) => ({
         ...current,
         childPid: launchedRun.pid,
         childIdentity: launchedRun.identity,
-      }));
+      }), Date.now() + 5000);
       if (launchedRun.pid && !launchedRun.identity)
         for (const delay of [100, 500, 2000]) {
           const timer = setTimeout(() => {
             const identity = procBackend.processIdentity(launchedRun.pid!);
             if (identity && run === launchedRun)
-              changeRun(requestId, (current) => ({
+              void changeRunAsync(requestId, (current) => ({
                 ...current,
                 childIdentity: identity,
-              }));
+              }), Date.now() + 5000).catch(() => console.error("External relay child identity persistence unavailable"));
           }, delay);
           timer.unref();
           identityTimers.push(timer);
         }
       if (leaseUnavailable) launchedRun.cancel();
+      // The request deadline bounds admission and delivery retries. A run
+      // already launched remains protected by its lease and configured cap.
       result = await launchedRun.done;
       if (conversation) {
         if (result.sessionId) conversation.sessionId = result.sessionId;
@@ -572,7 +730,6 @@ export async function runClaimedRequest(
       await loop!.runCalls(decision.calls, rounds);
       if (leaseUnavailable) return null;
     }
-    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
     if (pendingBeat) await pendingBeat;
     cancelStalledRun();
     if (leaseUnavailable) return null;
@@ -599,27 +756,32 @@ export async function runClaimedRequest(
                   ? "cancelled"
                   : "agent_error",
         );
-    return await finish(body, request.liveness.stall_window_s * 1000);
+    return await finish(body);
   } catch {
-    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
     if (callAbort.signal.aborted) return null;
     if (run) {
       if (!runFinished) run.cancel();
       await run.done;
     }
-    return await finish(
-      failed(leaseId, "agent_error"),
-      request.liveness.stall_window_s * 1000,
-    );
+    return await finish(failed(leaseId, "agent_error"));
   } finally {
+    if (!claimSettled) {
+      try { await settleClaim(claimTerminal ? "terminal" : "release", deadline.at); }
+      catch { console.error("External relay request claim cleanup failed"); }
+    }
+    inflight.delete(requestId);
+    leaveRelayHold(requestId);
+    deliverySettled();
+    heartbeatStopped = true;
+    if (cadenceTimer) clearTimeout(cadenceTimer);
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     callAbort.abort();
     if (conversation) {
       const compacted = conversationEvidence.compacted;
-      releaseConversation(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,
+      await releaseConversationAsync(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,
         ...(conversationEvidence.sessionId ? { accountId: conversation.accountId, turns: conversation.turns + 1, turnsSinceCompaction: compacted ? 0 : conversation.turnsSinceCompaction + 1,
           lastTurnAt: new Date().toISOString(), seen: compacted ? [] : turn?.seen ?? [], staticDigest: compacted ? null : turn?.digest ?? null,
-          lastPromptTokens: conversationEvidence.promptTokens ?? null, compactions: conversation.compactions + (compacted ? 1 : 0) } : {}) });
+          lastPromptTokens: conversationEvidence.promptTokens ?? null, compactions: conversation.compactions + (compacted ? 1 : 0) } : {}) }, Date.now() + 5000);
     }
     for (const timer of identityTimers) clearTimeout(timer);
     // The only way out without a completion is a lost lease.
@@ -628,7 +790,7 @@ export async function runClaimedRequest(
     try {
       const held = readRunLedger().runs.find(r => r.requestId === requestId);
       const custodyPending = !!held?.ownerTurn?.cancel && !held.ownerTurn.confirmed;
-      if (recorded && !custodyPending) dropRun(requestId);
+      if (recorded && !custodyPending) await dropRunAsync(requestId, Date.now() + 5000);
     } catch (error) {
       console.error("External relay run ledger cleanup failed", error instanceof Error ? error.name : "unknown");
     }

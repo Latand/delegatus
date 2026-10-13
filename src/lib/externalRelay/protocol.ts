@@ -37,11 +37,11 @@ export const targetsSchema = z
     { message: "duplicate target_id" },
   );
 export const livenessSchema = z.object({
-  poll_freshness_s: z.number().int().min(30).max(300),
-  claim_window_s: z.number().int().min(1).max(60),
-  ack_window_s: z.number().int().min(2).max(120),
+  poll_freshness_s: z.number().int().positive(),
+  claim_window_s: z.number().int().positive(),
+  ack_window_s: z.number().int().positive(),
   heartbeat_interval_s: z.number().int().min(2).max(60),
-  stall_window_s: z.number().int().min(10).max(600),
+  stall_window_s: z.number().int().min(1).max(600),
 });
 export const descriptorSchema = z.object({
   protocol: z.literal("delegatus-relay"),
@@ -302,7 +302,7 @@ export type ExternalRelayProgress = {
   status: "running" | "completed" | "failed" | null;
   at: string;
 } | ExternalRelayStepProgress;
-export type ExternalRelayStepId = "accepted" | "thinking" | "reading_board" | "working" | "writing_answer";
+export type ExternalRelayStepId = "accepted" | "queued" | "thinking" | "reading_board" | "working" | "writing_answer";
 export type ExternalRelayStepProgress = {
   kind: "step";
   label: ExternalRelayStepId;

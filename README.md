@@ -687,6 +687,13 @@ The design is in [docs/design/linked-installs.md](docs/design/linked-installs.md
 
 ## External relay
 
+Answer requests wait through a busy target, chat or deployment hold. Delegatus
+acknowledges the wait and sends the `queued` progress step when the service
+supports steps. It gives up with an explicit busy decline ten seconds before
+the request's fixed deadline, normally 110 s from its start. Member quotas and
+a definite lack of account capacity still return their reasons immediately.
+
+
 A relay service can send this install questions from its own chats.
 **Chat relay**, under **Settings** in the sidebar's ⋯ menu (the board's ⋯
 menu on a phone), or the **Relay service** step of the setup guide, pairs the
