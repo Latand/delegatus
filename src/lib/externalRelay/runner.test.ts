@@ -8,7 +8,7 @@ import { ownerRequest, pendingRetryAfterSeconds, x1Request, x1Results, x1Errors,
 import { relayClaimCapabilities } from "./poller";
 import { setRelaySwitch } from "./switches";
 import { assertOwnerCaptureResponse } from "./ownerCapture.fixture";
-import { afterAll, expect, spyOn, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,7 +19,7 @@ import type { AccountContext } from "@/lib/accounts/contracts";
 import { createManagedClaudeAccount } from "@/lib/accounts/claude";
 import { advertisedSlots, completeRelayRequest, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest, runningCount } from "./runner";
 import { relayActivity } from "./activity";
-import { dropRun, externalRelayFile, readRunLedger, updateRelayStore, type PairedRelay } from "./store";
+import { dropRun, externalRelayFile, readRunLedger, reserveRun, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
 import { countMemberAnswers, listAnswerRecords, readAnswerRecord, settleInterruptedAnswer } from "./answers";
@@ -31,6 +31,11 @@ import { prototypeDecisionText } from "@/lib/prototypeReview/decision";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runner-test-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+beforeEach(() => {
+  const requests = externalRelayFile("requests");
+  fs.rmSync(requests, { force: true });
+  fs.rmSync(`${requests}.lock`, { force: true });
+});
 const original = accountManager.resolveHeadlessSpawn;
 const home = path.join(root, "account");
 fs.mkdirSync(home, { recursive: true });
@@ -111,7 +116,7 @@ test.each([true, false])("prototype owner control records the web decision witho
   const previous = accountManager.resolveHeadlessSpawn;
   accountManager.resolveHeadlessSpawn = (() => { selections++; return { kind: "exhausted", resetsAt: null }; }) as typeof previous;
   const text = `${prototypeCopyLine(round, 2)}\nKeep these controls.`;
-  const request = { ...contextRequest, request_id: "prototype-owner", answer: { ...contextRequest.answer, max_chars: 4000 }, input: {
+  const request = { ...contextRequest, request_id: `prototype-owner-${ownerTier ? "enabled" : "disabled"}`, answer: { ...contextRequest.answer, max_chars: 4000 }, input: {
     ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
     conversation: contextRequest.input.conversation.map(m => ({ ...m, text })) } };
   try {
@@ -120,7 +125,8 @@ test.each([true, false])("prototype owner control records the web decision witho
     const [result, duplicate] = await Promise.all([runClaimedRequest(paired, request, undefined, ports), runClaimedRequest(paired, request, undefined, ports)]);
     expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", reply_to: "m1" } });
     if (result?.outcome === "answered") expect(result.answer.text).toContain("✅ Записав рішення");
-    expect(duplicate).toBeNull(); expect(selections).toBe(0); expect(launches).toBe(0); expect(completions).toHaveLength(1);
+    if (duplicate !== null) expect(duplicate).toMatchObject({ outcome: "answered" });
+    expect(selections).toBe(0); expect(launches).toBe(0); expect(completions).toHaveLength(1);
     const task = loadTasks()[0]!, decision = task.prototypeReviews![0]!.decision!;
     expect(decision).toMatchObject({ chosen: [2], comment: "Keep these controls.", answers: round.questions!.map(q => ({ questionId: q.id, options: [0] })) });
     expect(decision.delivery.clientMessageId).toBe(`prototype-decision:${round.id}`);
@@ -263,6 +269,72 @@ test("heartbeat 1 acknowledges the claim before account selection and a held own
   } finally {
     release(); await pending; selection.mockRestore(); await server.close();
   }
+});
+
+test("a slow first acknowledgement cannot start work after the request cutoff", async () => {
+  let launches = 0;
+  const completions: unknown[] = [];
+  const server = await startTestRelay(async (req, body) => {
+    if (req.url?.endsWith("/heartbeat")) { await Bun.sleep(350); return { body: { status: "ok" } }; }
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  const pending = runClaimedRequest(paired, {
+    ...contextRequest, request_id: "slow-first-ack-cutoff",
+    deadline_at: new Date(Date.now() + 150).toISOString(),
+    input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } },
+  }, undefined, { ownerPorts: {
+    launch: async () => { launches++; return { status: 202, body: { conversationId: "conversation_too_late" } }; },
+    observe: async () => ({ state: "ended", finalText: "Too late" }), stop: async () => {}, pollMs: 1,
+  } });
+  try {
+    expect(await pending).toMatchObject({ outcome: "declined", reason: "busy" });
+    expect(launches).toBe(0);
+    expect(completions).toHaveLength(1);
+  } finally { await server.close(); }
+});
+
+test("a completion ready after the absolute deadline receives no renewed retry window", async () => {
+  let completions = 0, settled = false;
+  const server = await startTestRelay(async req => {
+    if (req.url?.endsWith("/heartbeat")) { await Bun.sleep(350); return { body: { status: "ok" } }; }
+    if (req.url?.endsWith("/complete")) { completions++; return { status: 503, body: { error: { code: "unavailable" } } }; }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  const previous = accountManager.resolveHeadlessSpawn;
+  accountManager.resolveHeadlessSpawn = (() => ({ kind: "exhausted", resetsAt: null })) as typeof previous;
+  const pending = runClaimedRequest(paired, {
+    ...sampleRequest, request_id: "completion-after-deadline",
+    deadline_at: new Date(Date.now() + 150).toISOString(),
+  }).finally(() => { settled = true; });
+  try {
+    await Promise.race([pending, Bun.sleep(1300)]);
+    expect(settled).toBe(true);
+    expect(completions).toBe(1);
+  } finally { accountManager.resolveHeadlessSpawn = previous; await server.close(); }
+}, 5000);
+
+test("an accepted busy decline remains terminal after its execution slot row is gone", async () => {
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body as typeof completions[number]);
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  const blocker = { requestId: "terminal-claim-blocker", leaseId: "blocker-lease", relayId: paired.id, targetId: "target_1",
+    childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid),
+    runDir: root, startedAt: new Date().toISOString() };
+  expect(reserveRun(blocker, 1)).toBe("added");
+  const request = { ...sampleRequest, request_id: "terminal-busy-request", deadline_at: new Date(Date.now() + 10_100).toISOString() };
+  try {
+    expect(await runClaimedRequest(paired, request)).toMatchObject({ outcome: "declined", reason: "busy" });
+    expect(readRunLedger().runs.map(run => run.requestId)).toEqual([blocker.requestId]);
+    dropRun(blocker.requestId);
+    expect(await runClaimedRequest(paired, request)).toMatchObject({ outcome: "declined", reason: "busy" });
+    expect(completions).toEqual([{ lease_id: request.lease_id, outcome: "declined", reason: "busy", detail: null, retry_after_s: null }]);
+  } finally { dropRun(blocker.requestId); await server.close(); }
 });
 
 test("failed feature refresh during an early completion releases duplicate suppression", async () => {
@@ -437,6 +509,40 @@ test("heartbeats continue through silence, newest progress is sent, completion f
     await server.close();
   }
 });
+
+test("a queued step crossing a grid point sends the overdue regular heartbeat immediately", async () => {
+  const sends: { at: number; seq: number; label?: string }[] = [];
+  let queuedAckAt = 0;
+  const server = await startTestRelay(async (req, body) => {
+    if (req.url?.endsWith("/heartbeat")) {
+      const beat = body as { seq: number; progress?: { label?: string } };
+      sends.push({ at: Date.now(), seq: beat.seq, label: beat.progress?.label });
+      if (beat.progress?.label === "queued") { await Bun.sleep(1500); queuedAckAt = Date.now(); }
+      return { body: { status: "ok" } };
+    }
+    return { body: { status: "accepted", duplicate: false } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true; paired.features = ["progress_steps"];
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  try {
+    const result = await runClaimedRequest(paired, {
+      ...contextRequest, request_id: "queued-step-grid-boundary",
+      liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } },
+    }, undefined, { ownerPorts: {
+      launch: async () => ({ status: 202, body: { conversationId: "conversation_grid", initialMessage: "queued" } }),
+      observe: async () => {
+        const queued = sends.find(beat => beat.label === "queued");
+        return queued && sends.some(beat => beat.seq > queued.seq) ? { state: "ended", finalText: "Done" } : { state: "running", firstMessagePending: true };
+      }, stop: async () => {}, pollMs: 5,
+    } });
+    expect(result?.outcome).toBe("answered");
+    const queued = sends.find(beat => beat.label === "queued")!;
+    const following = sends.find(beat => beat.seq > queued.seq)!;
+    expect(following.at - queuedAckAt).toBeLessThan(250);
+    expect(following.at - queued.at).toBeLessThan(1900);
+  } finally { await server.close(); }
+}, 10000);
 test("a full target waits for its slot and a nonzero CLI exit cannot use a written answer", async () => {
   const completions: unknown[] = [];
   const server = await startTestRelay((req, body) =>
@@ -1379,6 +1485,9 @@ async function runLoopCase(options: {
     accountManager.resolveHeadlessSpawn = (() => ({ kind: "available", account: liveAccount })) as typeof previousSelection;
   }
   try {
+    const requestClaims = externalRelayFile("requests");
+    fs.rmSync(requestClaims, { force: true });
+    fs.rmSync(`${requestClaims}.lock`, { force: true });
     const completion = await runClaimedRequest(paired, request, undefined, { ...(options.live ? {} : { command: loopStub(options.plan ?? oneCallPlan, seen) }),
       sleep: async () => {}, ...options.runtime });
     const rounds = fs.existsSync(seen) ? fs.readFileSync(seen, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];

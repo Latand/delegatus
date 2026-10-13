@@ -374,14 +374,17 @@ export function runOwnerAgent(input: {
       }, authorize);
       admitted = true;
       const id = launched.body.conversationId;
-      if (typeof id === "string" && id.startsWith("conversation_")) {
+      const hasConversation = typeof id === "string" && id.startsWith("conversation_");
+      if (launched.status >= 200 && launched.status < 300 && hasConversation) {
+        firstMessagePending = launched.body.initialMessage === "queued" || launched.body.initialMessage === "pending";
+        if (!firstMessagePending) clearTimeout(admissionTimer);
+      }
+      if (hasConversation) {
         turn.conversationId = id;
         if (custody) custody = { ...custody, conversationId: id };
         await input.onConversation(id); // attribution persists even after a pending cutoff
       }
       changeRun(input.request.request_id, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, admissionComplete: true } }));
-      firstMessagePending = launched.body.initialMessage === "queued" || launched.body.initialMessage === "pending";
-      if (!firstMessagePending) clearTimeout(admissionTimer);
       try { authorize(); } catch { cancel("cancelled"); }
       if (stopped) { await applyStop(); return; }
       if (launched.status < 200 || launched.status >= 300 || !turn.conversationId) {

@@ -3,7 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { procBackend } from "@/lib/proc";
-import type { ExternalRelayOwner, ExternalRelayTarget } from "./protocol";
+import type { ExternalRelayCompletion, ExternalRelayOwner, ExternalRelayTarget } from "./protocol";
 import type { OwnerBridgeContext } from "./ownerBridgeContext";
 
 export type RelayTargetSettings = {
@@ -108,7 +108,10 @@ export type RunRecord = {
   startedAt: string;
 };
 export type RunLedger = { v: 1; runs: RunRecord[] };
-export const externalRelayFile = (name: "relays" | "runs") =>
+type RelayRequestClaim = { requestId: string; leaseId: string; ownerPid: number; ownerIdentity: string; claimedAt: number; terminalAt?: number; completion?: ExternalRelayCompletion };
+type RelayRequestLedger = { v: 1; claims: RelayRequestClaim[] };
+const RELAY_REQUEST_CLAIM_RETENTION_MS = 24 * 60 * 60_000;
+export const externalRelayFile = (name: "relays" | "runs" | "requests") =>
   statePath(`external-relay/${name}.json`);
 function read<T>(file: string, fallback: () => T): T {
   try {
@@ -381,6 +384,65 @@ export async function dropRunAsync(requestId: string, until: number): Promise<vo
     ...ledger,
     runs: ledger.runs.filter((run) => run.requestId !== requestId),
   }), until);
+}
+function readRelayRequestLedger(): RelayRequestLedger {
+  const ledger = read(externalRelayFile("requests"), () => ({ v: 1 as const, claims: [] }));
+  if (ledger.v !== 1 || !Array.isArray(ledger.claims)) throw new Error("invalid relay request claim ledger");
+  return ledger;
+}
+/** Atomically claim request identity independently of the execution-slot ledger. */
+export async function claimRelayRequestAsync(requestId: string, leaseId: string, until: number): Promise<
+  { kind: "claimed" } | { kind: "duplicate" } | { kind: "terminal"; completion: ExternalRelayCompletion | null }
+> {
+  const file = externalRelayFile("requests");
+  const ownerPid = process.pid;
+  const ownerIdentity = procBackend.processIdentity(ownerPid);
+  if (!ownerIdentity) throw new Error("relay request owner identity unavailable");
+  let result: { kind: "claimed" } | { kind: "duplicate" } | { kind: "terminal"; completion: ExternalRelayCompletion | null } = { kind: "duplicate" };
+  await withFileLockAsync(file, () => {
+    const now = Date.now();
+    const ledger = readRelayRequestLedger();
+    const claims = ledger.claims.filter(claim => claim.terminalAt === undefined || now - claim.terminalAt < RELAY_REQUEST_CLAIM_RETENTION_MS);
+    const existing = claims.find(claim => claim.requestId === requestId && claim.leaseId === leaseId);
+    if (existing) {
+      if (existing.terminalAt !== undefined) {
+        result = { kind: "terminal", completion: existing.completion ?? null };
+        writeRelayFile(file, { v: 1, claims });
+        return;
+      }
+      if (procBackend.processIdentity(existing.ownerPid) === existing.ownerIdentity) {
+        writeRelayFile(file, { v: 1, claims });
+        return;
+      }
+      const recovered = claims.filter(claim => claim.requestId !== requestId || claim.leaseId !== leaseId);
+      writeRelayFile(file, { v: 1, claims: [...recovered, { requestId, leaseId, ownerPid, ownerIdentity, claimedAt: now }] });
+      result = { kind: "claimed" };
+      return;
+    }
+    writeRelayFile(file, { v: 1, claims: [...claims, { requestId, leaseId, ownerPid, ownerIdentity, claimedAt: now }] });
+    result = { kind: "claimed" };
+  }, until);
+  return result;
+}
+/** Keep a terminal tombstone after delivery, or release a claim whose delivery was definitely refused. */
+export async function settleRelayRequestClaimAsync(
+  requestId: string,
+  leaseId: string,
+  ownerPid: number,
+  ownerIdentity: string,
+  disposition: "terminal" | "release",
+  completion: ExternalRelayCompletion | null,
+  until: number,
+): Promise<void> {
+  const file = externalRelayFile("requests");
+  await withFileLockAsync(file, () => {
+    const ledger = readRelayRequestLedger();
+    const claims = ledger.claims.flatMap(claim => {
+      if (claim.requestId !== requestId || claim.leaseId !== leaseId || claim.ownerPid !== ownerPid || claim.ownerIdentity !== ownerIdentity || claim.terminalAt !== undefined) return [claim];
+      return disposition === "terminal" ? [{ ...claim, terminalAt: Date.now(), ...(completion ? { completion } : {}) }] : [];
+    });
+    writeRelayFile(file, { v: 1, claims });
+  }, until);
 }
 /** A target this install has not configured: no engine, so it is not
  * answered until the operator picks one (§B.9). */

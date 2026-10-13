@@ -271,9 +271,10 @@ whose first message landed, and a tool loop keep running under the lease,
 the per-target hard cap and the per-call bounds the specification keeps. A
 service with the total deadline ends such a lease with 409 at its deadline,
 and the existing lease-loss path (`runner.ts:355-363`) cancels the run within
-one heartbeat interval. A service without it (L1) still gets answers that take
-longer, as today. Stopping running work locally at `at` would also cut runs
-that an older service accepts, and is listed under Deferred.
+one heartbeat interval. A service that accepts a late result may still receive
+the first best-effort completion attempt; failed delivery gets no retry time
+past `at`. Stopping running work locally at `at` would also cut runs that a
+peer still accepts, and is listed under Deferred.
 
 ### 3.4 "No path renews the deadline"
 
@@ -309,14 +310,15 @@ the claim (§1.2).
 1. Create the deadline (§3).
 2. Parse; `invalid_request`, `unsupported_kind`, `not_configured` and
    `disabled` decline as today, without a heartbeat.
-3. **Acknowledge.** Start the heartbeat sequencer (item 7) and send heartbeat 1
-   (`accepted`) before any reservation. Today it comes right after
-   `reserveRun`; L3 already requires it before filesystem context and account
-   selection, so moving it earlier keeps that rule. An in-memory set of
-   in-flight request ids, checked synchronously at entry next to the ledger
-   lookup at `runner.ts:205`, makes a duplicate claim of a held request in this
-   process return `null` without a heartbeat. The ledger still catches a
-   duplicate from another process at reservation (`"duplicate"`).
+3. **Claim and acknowledge.** Atomically claim request/lease identity in
+   shared state, then start the heartbeat sequencer and send heartbeat 1
+   (`accepted`) before any execution reservation. An in-memory set rejects
+   same-process duplicates early. The shared claim stays independent of execution slots:
+   every process sees a held request as claimed, and an accepted or uncertain
+   terminal completion leaves a request tombstone after its run row is
+   removed. A definitely refused completion releases the claim for retry.
+   This prevents another waiter from starting the same request after a quick
+   finish or accepted busy decline.
 4. Member limit (`runner.ts:386-408`), owner resolution and the owner
    clarification answer (`:409-428`), then a **definite capacity check**: the
    same `accountManager.resolveHeadlessSpawn` call as `:436-452`, with the
@@ -541,12 +543,13 @@ window the service would not notice either.
   A beat that crosses an accepted completion gets 409; the existing handler
   only marks the lease gone and cancels what already ended, and the journal
   records it.
-- The runner passes `until = deliveryStart < deadline.at ? deadline.at :
-  deliveryStart + stallMs`. The second branch occurs only when a run finished
-  after the deadline, which needs a service without the total deadline; it
-  keeps the §A.4 rule ("until `stall_window_s` has passed") for that case.
-  Delivery never extends the deadline: past `at`, the service answers 409,
-  which `completeRelayRequest` already treats as terminal.
+- The runner passes the same absolute `deadline.at` for every answer completion
+  retry, including when agent work or attribution finishes after it. The first
+  completion attempt remains best effort; after a failed attempt, an expired
+  deadline ends delivery without another retry window.
+- No peer compatibility path renews the deadline. A service that accepts a
+  completion after its deadline may answer 409; `completeRelayRequest` treats
+  that refusal as terminal.
 - Item 6: the invalid-compact path (`runner.ts:186`) passes `Date.now` as the
   last heartbeat, so the cutoff never ages. It passes `() => deadline.at` now.
 - `compact.ts:37` passes `() => heartbeatAt + stallMs`, which is its current
@@ -602,7 +605,7 @@ against its lane.
 | Member past its limit while busy | `declined` / `busy` when drain or full came first | `declined` / `member_limit` at once, after heartbeat 1; never held |
 | `slots[].free` | `concurrency − max(running, ledger rows)` | the same minus this install's capacity waiters for the target |
 | Owner launch whose first message was not confirmed in 30 s | `failed` / `agent_error` about 30 s after launch | step `queued` while unconfirmed; a normal answer if it lands and the turn ends; else `failed` / `agent_error` at `declineAt` |
-| Completion delivery | heartbeats stop; retries until 45 s (or the stall window) after the last acknowledgement | heartbeats continue until delivery settles; retries stop at the request's deadline |
+| Completion delivery | heartbeats stop; retries until 45 s (or the stall window) after the last acknowledgement | heartbeats continue until delivery settles; retries stop at the request's deadline; a result ready afterward gets one best-effort attempt and no retry allowance |
 | Invalid compact claim | `declined` / `invalid_request`, retried without end on transient errors | the same body; retries stop at the request's deadline |
 | `declineAt` | — | `max(receivedAt, deadline_at − 10 s)` for valid future UTC deadlines; absent or malformed fields use receipt + 110 s; past fields send `declined` / `busy` immediately |
 | New wire values | — | the step id `queued` (shown once the service adds it to `RelayStep` and its `relay-step` text); the install accepts `claim_window_s` of any positive value and `stall_window_s` from 1 to 600, and announces `request_deadline` and reads optional `request.deadline_at` ending in `Z`; the service sends shrinking stall windows floored at 10 s |

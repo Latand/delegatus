@@ -50,10 +50,12 @@ import {
 } from "./profile";
 import {
   changeRunAsync,
+  claimRelayRequestAsync,
   dropRunAsync,
   reserveRunAsync,
   RelayStoreBusy,
   readRunLedger,
+  settleRelayRequestClaimAsync,
   type PairedRelay,
   type RelayTargetSettings,
 } from "./store";
@@ -214,6 +216,21 @@ export async function runClaimedRequest(
   let heartbeatAt = deadline.receivedAt;
   if (request) console.info("External relay claim received", { request: requestId.slice(0, 8), kind: request.kind });
   if (inflight.has(requestId) || readRunLedger().runs.some((run) => run.requestId === requestId)) return null;
+  const claimOwnerPid = process.pid;
+  const claimOwnerIdentity = procBackend.processIdentity(claimOwnerPid);
+  if (!claimOwnerIdentity) return null;
+  const requestClaim = await claimRelayRequestAsync(requestId, leaseId, deadline.at);
+  if (requestClaim.kind === "duplicate") return null;
+  if (requestClaim.kind === "terminal")
+    return requestClaim.completion ? { ...requestClaim.completion, lease_id: leaseId } : null;
+  let terminalCompletion: ExternalRelayCompletion | null = null;
+  let claimSettled = false;
+  let claimTerminal = false;
+  const settleClaim = async (disposition: "terminal" | "release", until = deadline.at) => {
+    await settleRelayRequestClaimAsync(requestId, leaseId, claimOwnerPid, claimOwnerIdentity, disposition,
+      disposition === "terminal" ? terminalCompletion : null, until);
+    claimSettled = true;
+  };
   const rawRequest = raw as Record<string, unknown>;
   const targetId = request?.target_id ?? rawRequest.target_id;
   const recorder = answerRecorder({
@@ -231,6 +248,7 @@ export async function runClaimedRequest(
   let deliverySettled!: () => void;
   const released = new Promise<void>(resolve => { deliverySettled = resolve; });
   let allowOwnerReply: (() => boolean) | undefined;
+  let leaseUnavailable = false;
   let rounds = 0;
   let loop: ReturnType<typeof createToolLoop> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -238,7 +256,7 @@ export async function runClaimedRequest(
   let heartbeatStopped = false;
   let pendingBeat: Promise<void> | null = null;
   const loopRecord = () => loop ? { rounds, toolCalls: loop.records } : {};
-  const finish = async (body: ExternalRelayCompletion, stallMs = 45_000) => {
+  const finish = async (body: ExternalRelayCompletion) => {
     leaveRelayHold(requestId);
     try {
       if (pendingBeat) {
@@ -263,9 +281,12 @@ export async function runClaimedRequest(
         ...loopRecord(),
       });
       const deliveryStart = Date.now();
-      const until = releaseRequested ? deliveryStart : deliveryStart < deadline.at ? deadline.at : deliveryStart + stallMs;
+      const until = releaseRequested ? deliveryStart : deadline.at;
       const sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature);
       const completion = sent.body;
+      claimTerminal = sent.delivery !== "refused";
+      terminalCompletion = claimTerminal ? completion : null;
+      await settleClaim(claimTerminal ? "terminal" : "release");
       recorder?.recordDelivery({
         outcome: completion.outcome === "answered" ? "answered" : `${completion.outcome}:${completion.reason}`,
         delivery: sent.delivery,
@@ -275,6 +296,10 @@ export async function runClaimedRequest(
       heartbeatStopped = true;
       if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
       if (cadenceTimer) { clearTimeout(cadenceTimer); cadenceTimer = null; }
+      if (!claimSettled) {
+        try { await settleClaim(claimTerminal ? "terminal" : "release", deadline.at); }
+        catch { console.error("External relay request claim cleanup failed"); }
+      }
       inflight.delete(requestId);
       deliverySettled();
     }
@@ -313,11 +338,12 @@ export async function runClaimedRequest(
     const steps = createRelaySteps(relay.features);
     let stepLog: string | null = null;
     let pendingServiceTools = 0;
-    let leaseUnavailable = false;
     let beatBusy = false;
     let seq = 0;
     const intervalMs = request.liveness.heartbeat_interval_s * 1000;
     const beatAnchor = Date.now();
+    let nextRegularDue = beatAnchor + intervalMs;
+    let regularBeatPending = false;
     let acked = false;
     const started = Date.now();
     const stallMs = request.liveness.stall_window_s * 1000;
@@ -328,12 +354,20 @@ export async function runClaimedRequest(
         callAbort.abort();
       }
     };
-    const beat = async (stepChange = false) => {
-      if (beatBusy || leaseUnavailable) return;
+    const armCadence = () => {
+      if (cadenceTimer) clearTimeout(cadenceTimer);
+      cadenceTimer = setTimeout(() => {
+        cadenceTimer = null;
+        pendingBeat = beat(false, true);
+      }, Math.max(0, nextRegularDue - Date.now()));
+      cadenceTimer.unref();
+    };
+    const beat = async (stepChange = false, regular = false) => {
+      if (beatBusy) { if (regular) regularBeatPending = true; return; }
+      if (leaseUnavailable) return;
       beatBusy = true;
       const beatSeq = ++seq;
       const sentAt = Date.now();
-      let acknowledged = false;
       let step: string | null = null;
       const journal = (phase: "attempt" | "acknowledged" | "failed", status?: number, code?: string) =>
         console.info("External relay heartbeat", { request: requestId.slice(0, 8), seq: beatSeq, phase, step,
@@ -356,7 +390,6 @@ export async function runClaimedRequest(
         if (newestProgress === sentProgress) newestProgress = null;
         acked = true;
         heartbeatAt = Date.now();
-        acknowledged = true;
       } catch (error) {
         journal("failed", error instanceof ExternalRelayError ? error.status : 0,
           error instanceof ExternalRelayError && ["lease_lost", "unreachable", "malformed", "too_large", "unauthorized",
@@ -375,12 +408,12 @@ export async function runClaimedRequest(
         beatBusy = false;
         cancelStalledRun();
         if (!heartbeatStopped && !leaseUnavailable) {
-          if (cadenceTimer) clearTimeout(cadenceTimer);
           const now = Date.now();
-          const nextGrid = beatAnchor + (Math.floor((now - beatAnchor) / intervalMs) + 1) * intervalMs;
-          const due = acknowledged ? nextGrid : Math.min(nextGrid, now + 1000);
-          cadenceTimer = setTimeout(() => { pendingBeat = beat(); }, Math.max(0, due - now));
-          cadenceTimer.unref();
+          if (regular) while (nextRegularDue <= now) nextRegularDue += intervalMs;
+          if (regularBeatPending) {
+            regularBeatPending = false;
+            pendingBeat = beat(false, true);
+          } else armCadence();
         }
       }
     };
@@ -397,6 +430,7 @@ export async function runClaimedRequest(
     }, 1000);
     heartbeatTimer.unref();
     if (leaseUnavailable) return null;
+    if (Date.now() >= deadline.declineAt) return await finish(declined(leaseId, "busy"));
     // The member limit (§B.8): a member past it is declined, and the service's
     // fallback setting decides whether its own agent answers instead.
     const requester = request.input.requester;
@@ -466,10 +500,9 @@ export async function runClaimedRequest(
       if (recorded) { await dropRunAsync(requestId, Date.now() + 5000); free(relay, target); recorded = false; }
     };
     const admit = async (): Promise<boolean> => {
-      let waited = false;
       let lastCause: RelayHoldCause | null = null;
       while (!leaseUnavailable) {
-        if (waited && Date.now() >= deadline.declineAt) {
+        if (Date.now() >= deadline.declineAt) {
           admissionDecline = declined(leaseId, "busy", null, lastCause === "chat" ? "chat busy" : null);
           return false;
         }
@@ -490,6 +523,11 @@ export async function runClaimedRequest(
                 const reserved = await reserveConversationsAsync(relay, target, request.chat!.key, requestId, [context!], deadline.declineAt);
                 if (!reserved) { await releaseAdmission(); cause = "chat"; }
                 else conversation = reserved[0]!;
+              }
+              if (Date.now() >= deadline.declineAt) {
+                await releaseAdmission();
+                admissionDecline = declined(leaseId, "busy", null, lastCause === "chat" ? "chat busy" : null);
+                return false;
               }
             }
           } catch (error) {
@@ -512,7 +550,7 @@ export async function runClaimedRequest(
           if (conversation && selection?.kind === "available") { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
           return true;
         }
-        waited = true; lastCause = cause;
+        lastCause = cause;
         enterRelayHold({ requestId, relayId: relay.id, targetId: target.id, cause, deadline,
           release: () => { releaseRequested = true; wakeHold?.(); return released; } });
         steps?.observe({ queued: true });
@@ -526,6 +564,10 @@ export async function runClaimedRequest(
       return false;
     };
     if (!await admit()) return admissionDecline ? await finish(admissionDecline) : null;
+    if (Date.now() >= deadline.declineAt) {
+      await releaseAdmission();
+      return await finish(declined(leaseId, "busy"));
+    }
     const lose = () => { leaseUnavailable = true; run?.cancel(); callAbort.abort(); };
     if (!owner && callableTools(request).length) loop = createToolLoop(relay, request, {
       signal: callAbort.signal, lose,
@@ -676,18 +718,19 @@ export async function runClaimedRequest(
                   ? "cancelled"
                   : "agent_error",
         );
-    return await finish(body, request.liveness.stall_window_s * 1000);
+    return await finish(body);
   } catch {
     if (callAbort.signal.aborted) return null;
     if (run) {
       if (!runFinished) run.cancel();
       await run.done;
     }
-    return await finish(
-      failed(leaseId, "agent_error"),
-      request.liveness.stall_window_s * 1000,
-    );
+    return await finish(failed(leaseId, "agent_error"));
   } finally {
+    if (!claimSettled) {
+      try { await settleClaim(claimTerminal ? "terminal" : "release", deadline.at); }
+      catch { console.error("External relay request claim cleanup failed"); }
+    }
     inflight.delete(requestId);
     leaveRelayHold(requestId);
     deliverySettled();

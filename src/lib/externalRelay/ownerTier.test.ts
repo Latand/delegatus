@@ -281,6 +281,19 @@ test("confirmed owner work retains its hard cap after the admission deadline", a
   expect(await run.done).toMatchObject({ status: "timeout" }); expect(stops).toEqual(["interrupt"]);
 });
 
+test("a delivered owner prompt survives slow conversation attribution", async () => {
+  const stops: string[] = [];
+  const deadline = relayRequestDeadline({ deadline_at: new Date(Date.now() + 10_150).toISOString() });
+  const run = start({
+    launch: async () => ({ status: 202, body: { conversationId: "conversation_delivered", initialMessage: "delivered" } }),
+    observe: async () => ({ state: "ended", finalText: "Done" }),
+    stop: async (_id, action) => { stops.push(action); },
+    pollMs: 5,
+  }, 1000, async () => { await Bun.sleep(300); }, deadline);
+  expect(await run.done).toMatchObject({ status: "done", answer: { text: "Done" } });
+  expect(stops).toEqual([]);
+});
+
 
 test("timeout retries a transient interruption failure before settling", async () => {
   let stops = 0;

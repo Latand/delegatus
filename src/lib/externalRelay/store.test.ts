@@ -7,6 +7,8 @@ import {
   mergeRelayTargets,
   reserveRun,
   reserveRunAsync,
+  claimRelayRequestAsync,
+  settleRelayRequestClaimAsync,
   withFileLock,
   withFileLockAsync,
   readRunLedger,
@@ -79,6 +81,38 @@ test("two Viewer processes cannot reserve the same target slot", async () => {
     (item) => item.relayId === "shared",
   ))
     dropRun(run.requestId);
+});
+
+test("separate processes share a request claim that survives execution-row cleanup", async () => {
+  const childFile = path.join(root, "claim-child.ts");
+  const modulePath = path.join(process.cwd(), "src/lib/externalRelay/store.ts");
+  const procPath = path.join(process.cwd(), "src/lib/proc/index.ts");
+  fs.writeFileSync(childFile, `import { claimRelayRequestAsync } from ${JSON.stringify(modulePath)};
+import { procBackend } from ${JSON.stringify(procPath)};
+const result = await claimRelayRequestAsync("cross-process-request", process.env.RELAY_LEASE!, Date.now() + 5000);
+console.log(JSON.stringify({ result, pid: process.pid, identity: procBackend.processIdentity(process.pid) }));
+await Bun.sleep(1000);
+`);
+  const launch = (lease: string) => Bun.spawn([process.execPath, childFile], {
+    env: { ...process.env, LLV_STATE_DIR: root, RELAY_LEASE: lease }, stdout: "pipe", stderr: "pipe",
+  });
+  const first = launch("same-lease"), second = launch("same-lease");
+  const read = async (child: ReturnType<typeof launch>) => {
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(code, stderr).toBe(0);
+    return JSON.parse(stdout.trim()) as { result: { kind: string; completion?: unknown }; pid: number; identity: string };
+  };
+  const initial = await Promise.all([read(first), read(second)]);
+  expect(initial.map(item => item.result.kind).sort()).toEqual(["claimed", "duplicate"]);
+  const owner = initial.find(item => item.result.kind === "claimed")!;
+  const completion = { lease_id: "same-lease", outcome: "declined" as const, reason: "busy", detail: null, retry_after_s: null };
+  await settleRelayRequestClaimAsync("cross-process-request", "same-lease", owner.pid, owner.identity, "terminal", completion, Date.now() + 5000);
+  const requestRow = { requestId: "cross-process-request", leaseId: "same-lease", relayId: "shared", targetId: "target",
+    childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: "test", runDir: root, startedAt: new Date().toISOString() };
+  expect(reserveRun(requestRow)).toBe("added");
+  dropRun(requestRow.requestId);
+  const retry = await read(launch("same-lease"));
+  expect(retry.result).toEqual({ kind: "terminal", completion });
 });
 test("concurrent relay settings updates retain both changes", async () => {
   const childFile = path.join(root, "update-child.ts");
