@@ -1099,11 +1099,11 @@ test("a hand-off during a switch holds neither the switch nor the message", asyn
   }
 });
 
-test("a native entry's settlement waits for the lock off the loop, a hand-off settles its own row, and a refused settle is left for the sweep", async () => {
-  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+test("a native entry's settlement waits for the lock off the loop and a hand-off settles its own row", async () => {
+  const { sqliteRegistryFixture, registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
   const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
   const { settleNativeQueueEntry } = await import("./nativeQueueSettlement");
-  const made = sqliteRegistryFixture("llv-native-settle", { sqliteWriterDeadlineMs: 150 });
+  const made = sqliteRegistryFixture("llv-native-settle", { sqliteWriterDeadlineMs: 5_000 });
   const holder = registryLockHolder(made.sqliteFilename);
   const registry = made.registry;
   try {
@@ -1114,14 +1114,50 @@ test("a native entry's settlement waits for the lock off the loop, a hand-off se
       command: { operationId: "native-settle-handoff", kind: "send", policy: "queue" }, text: "hand-off", contentDigest: null,
       evidenceText: "hand-off", evidenceImageCount: 0 } })!;
     resetBlockingWaitsForTests(() => {});
-    await holder.hold(100);
-    const { value: settled, gapMs } = await longestLoopGap(() => settleNativeQueueEntry(registry, { conversationId: conversation.id, entryId: "native-settle-send", state: "delivered" }));
-    expect(settled).toBe(true);
-    expect(gapMs).toBeLessThan(50);
+    // Only this process's short timer releases the lock. Runner scheduling can
+    // delay the timer; it must still run while settlement is waiting for it.
+    await holder.hold();
+    let settlementFinished = false;
+    let timerWhilePending = false;
+    let timerLatenessMs = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const scheduledAt = performance.now();
+    const release = new Promise<void>((resolve, reject) => {
+      timer = setTimeout(() => {
+        timerLatenessMs = Math.max(0, performance.now() - scheduledAt - 5);
+        timerWhilePending = !settlementFinished;
+        holder.release().then(resolve, reject);
+      }, 5);
+    });
+    try {
+      const settlement = settleNativeQueueEntry(registry, { conversationId: conversation.id, entryId: "native-settle-send", state: "delivered" })
+        .finally(() => { settlementFinished = true; });
+      const [settled, released] = await Promise.allSettled([settlement, release]);
+      expect(timerWhilePending, `lock-release timer lateness: ${timerLatenessMs.toFixed(1)} ms`).toBe(true);
+      expect(released.status).toBe("fulfilled");
+      expect(settled).toEqual({ status: "fulfilled", value: true });
+    } finally {
+      clearTimeout(timer);
+    }
     expect(blockingWaitDiagnostics().longest.find((sample) => sample.label === "delivery.native-settle")).toMatchObject({ operationId: "native-settle-send", synchronous: false });
     expect(registry.snapshot().deliveryOperationOwners["native-settle-send"]).toMatchObject({ terminalState: "delivered" });
     expect(await settleNativeQueueEntry(registry, { conversationId: conversation.id, entryId: handOffRow.command.operationId, state: "delivered" })).toBe(true);
     expect(registry.snapshot().deliveryOperationOwners[handOffRow.command.operationId]).toMatchObject({ terminalState: "delivered", terminalDisposition: "delivered" });
+  } finally {
+    await holder.close();
+    registry.close();
+    made.cleanup();
+  }
+}, 15_000);
+
+test("a refused native entry settlement is left for the sweep", async () => {
+  const { sqliteRegistryFixture, registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
+  const { settleNativeQueueEntry } = await import("./nativeQueueSettlement");
+  const made = sqliteRegistryFixture("llv-native-settle-refused", { sqliteWriterDeadlineMs: 150 });
+  const holder = registryLockHolder(made.sqliteFilename);
+  const registry = made.registry;
+  try {
+    const conversation = registry.ensureConversation("codex", "/native-settle-refused.jsonl", "a");
     const second = registry.recordDirectAdmission({ handOff: { conversationId: conversation.id, clientMessageId: "native-settle-refused",
       command: { operationId: "native-settle-refused", kind: "send", policy: "queue" }, text: "refused", contentDigest: null,
       evidenceText: "refused", evidenceImageCount: 0 } })!;

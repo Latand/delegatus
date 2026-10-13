@@ -12,8 +12,8 @@ import { AgentRegistry, type AgentRegistryStorageOptions } from "./registry";
  */
 
 export interface RegistryLockHolder {
-  /** Takes the lock and keeps it for `ms`; resolves once it is held. */
-  hold(ms: number): Promise<void>;
+  /** Takes the lock until release(), or for `ms`; resolves once it is held. */
+  hold(ms?: number): Promise<void>;
   /** Takes the lock for `holdMs`, gives it up for `gapMs`, again and again,
       so every write made meanwhile has to wait for it. */
   cycle(holdMs: number, gapMs: number): Promise<void>;
@@ -46,9 +46,10 @@ const HOLDER_SCRIPT = `
       buffer = buffer.slice(index + 1);
       if (command === "hold") {
         /* A hold asked for while one is running extends it. */
-        if (held) { process.stdout.write("locked\\n"); if (timer) clearTimeout(timer); }
+        if (held) { process.stdout.write("locked\\n"); }
         else take();
-        timer = setTimeout(() => { give(); process.stdout.write("free\\n"); }, Number(first));
+        if (timer) clearTimeout(timer);
+        timer = first === undefined ? null : setTimeout(() => { give(); process.stdout.write("free\\n"); }, Number(first));
       }
       if (command === "cycle") { cycling = { hold: Number(first), gap: Number(second) }; loop(); }
       if (command === "release") stop();
@@ -77,7 +78,7 @@ export function registryLockHolder(sqliteFilename: string): RegistryLockHolder {
   };
   const send = (command: string) => { child.stdin.write(`${command}\n`); child.stdin.flush(); };
   return {
-    async hold(ms) { send(`hold ${ms}`); await waitFor("locked"); },
+    async hold(ms) { send(ms === undefined ? "hold" : `hold ${ms}`); await waitFor("locked"); },
     async cycle(holdMs, gapMs) { send(`cycle ${holdMs} ${gapMs}`); await waitFor("locked"); },
     async release() { send("release"); await waitFor("free"); lines.length = 0; },
     async close() {
