@@ -36,22 +36,82 @@ function run(argv: string[], env: Record<string, string>): { code: number; stdou
   return { code: child.exitCode, stdout: child.stdout.toString(), stderr: child.stderr.toString() };
 }
 
-test("only the operator's own state directory shares the machine queue", () => {
-  const operator: NodeJS.ProcessEnv = { NODE_ENV: "production", HOME: "/srv/operator", XDG_CONFIG_HOME: "/srv/operator/.config" };
-  const live = "/srv/operator/.config/delegatus/state";
-  expect(isolatedCpuAdmissionDir(live, operator, false)).toBeNull();
-  expect(isolatedCpuAdmissionDir("/srv/operator/.config/agent-log-viewer/state", operator, false)).toBeNull();
-  // A test or a build never shares it, whatever directory it inherited.
-  expect(isolatedCpuAdmissionDir(live, operator, true)).toBe(live);
-  expect(isolatedCpuAdmissionDir(live, { ...operator, NODE_ENV: "test" })).toBe(live);
-  const elsewhere: [string, NodeJS.ProcessEnv][] = [
-    ["/tmp/llv-spawn-sandbox/account/config/agent-log-viewer/state", operator],
-    ["/var/tmp/check-abc/state", operator],
-    ["/srv/work/repo/.artifacts/state", operator],
-    ["/tmp/driver/config/delegatus/state", { ...operator, HOME: "/tmp/driver/home", XDG_CONFIG_HOME: "/tmp/driver/config" }],
-    [`${live}/scratch/llv-stage-a/tmp/run/state`, { ...operator, TMPDIR: `${live}/scratch/llv-stage-a/tmp` }],
-  ];
-  for (const [directory, env] of elsewhere) expect(isolatedCpuAdmissionDir(directory, env, false)).toBe(directory);
+test("only the live installation's state directory shares the machine queue", () => {
+  const live = { home: () => "/srv/operator", staging: false, guarded: false };
+  const state = "/srv/operator/.config/delegatus/state";
+  expect(isolatedCpuAdmissionDir(state, live)).toBeNull();
+  expect(isolatedCpuAdmissionDir("/srv/operator/.config/agent-log-viewer/state", live)).toBeNull();
+  // A test, a build or a staging instance never shares it, whatever directory it resolved.
+  expect(isolatedCpuAdmissionDir(state, { ...live, guarded: true })).toBe(state);
+  expect(isolatedCpuAdmissionDir(state, { ...live, staging: true })).toBe(state);
+  // Neither does anything else under the operator's config root, or anywhere else.
+  for (const directory of [
+    "/srv/operator/.config/delegatus/state-staging",
+    `${state}/fixture`,
+    `${state}/scratch/llv-stage-a/tmp/run/state`,
+    "/srv/operator/.config/delegatus",
+    "/srv/operator/.config/live-log-viewer/state",
+    "/srv/operator/captures/config/delegatus/state",
+    "/tmp/llv-spawn-sandbox/account/config/agent-log-viewer/state",
+    "/srv/work/repo/.artifacts/state",
+  ]) expect(isolatedCpuAdmissionDir(directory, live)).toBe(directory);
+});
+
+test("the live state directory is recognised through the app dir link, and a link elsewhere is not", () => {
+  const root = sandbox(), home = path.join(root, "home"), config = path.join(home, ".config");
+  fs.mkdirSync(path.join(config, "agent-log-viewer", "state"), { recursive: true });
+  fs.symlinkSync("agent-log-viewer", path.join(config, "delegatus"), "dir");
+  fs.mkdirSync(path.join(root, "driver", "delegatus", "state"), { recursive: true });
+  fs.symlinkSync(path.join(config, "agent-log-viewer", "state"), path.join(root, "alias"), "dir");
+  const live = { home: () => home, staging: false, guarded: false };
+  expect(isolatedCpuAdmissionDir(path.join(config, "delegatus", "state"), live)).toBeNull();
+  expect(isolatedCpuAdmissionDir(path.join(root, "alias"), live)).toBeNull();
+  const driver = path.join(root, "driver", "delegatus", "state");
+  expect(isolatedCpuAdmissionDir(driver, live)).toBe(driver);
+});
+
+/* A Viewer as production starts it: no test marker, no private gate directory,
+   an owner token. The sandbox sits outside every temp root, as a staging state
+   or a driver's kept home does, and the child is told that its home is the
+   operating-system user's. Only the path is resolved; no queue is opened. */
+function persistentSandbox(): { home: string; config: string; root: string } {
+  const parent = path.join(import.meta.dir, "..", "..", "..", ".artifacts");
+  fs.mkdirSync(parent, { recursive: true });
+  const root = fs.mkdtempSync(path.join(parent, "cpu-scope-"));
+  directories.push(root);
+  const home = path.join(root, "home"), config = path.join(home, ".config");
+  fs.mkdirSync(config, { recursive: true });
+  return { home, config, root };
+}
+function viewerQueue(home: string, extra: Record<string, string>, owner: string | null = "viewer"): string {
+  const source = `globalThis[Symbol.for("delegatus.cpuAdmission.home")] = ${JSON.stringify(home)}; ${PRINT_INSTANCE}`;
+  const result = run(["-e", source], launchEnv({
+    NODE_ENV: "production", HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), ...(owner ? { LLV_STATE_OWNER: owner } : {}), ...extra,
+  }));
+  expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+  return result.stdout;
+}
+
+test("the live Viewer shares the machine queue gate-slot uses", () => {
+  const { home } = persistentSandbox();
+  expect(viewerQueue(home, {})).toBe(path.join(home, ".cache", "delegatus-cpu", "admission.sqlite"));
+});
+
+test.each(["viewer", null])("a staging instance on its standard state directory keeps its own queue (owner %p)", owner => {
+  const { home, config } = persistentSandbox();
+  expect(viewerQueue(home, { LLV_STAGING: "1" }, owner)).toBe(path.join(config, "delegatus", "state-staging", "cpu-gate", "admission.sqlite"));
+});
+
+test.each(["viewer", null])("a fixture state nested in the live state directory keeps its own queue (owner %p)", owner => {
+  const { home, config } = persistentSandbox(), fixture = path.join(config, "delegatus", "state", "fixture");
+  expect(viewerQueue(home, { LLV_STATE_DIR: fixture }, owner)).toBe(path.join(fixture, "cpu-gate", "admission.sqlite"));
+});
+
+test("a driver's Viewer on a kept home and config root of its own keeps its queue there", () => {
+  const { home, root } = persistentSandbox(), driver = path.join(root, "driver");
+  fs.mkdirSync(path.join(driver, "home"), { recursive: true });
+  const queue = viewerQueue(home, { HOME: path.join(driver, "home"), XDG_CONFIG_HOME: path.join(driver, "config") });
+  expect(queue).toBe(path.join(driver, "config", "delegatus", "state", "cpu-gate", "admission.sqlite"));
 });
 
 const launches: { path: string; argv: string[] | null; owner: string | null }[] = [

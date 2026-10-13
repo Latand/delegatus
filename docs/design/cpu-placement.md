@@ -156,21 +156,29 @@ the operating-system user's `$HOME/.cache/delegatus-cpu`, shared with the
 Viewer container even when a child sandboxes HOME. `LLV_GATE_LOCK_DIR` puts a
 private queue alongside private slot locks for tests.
 
-Only the operator's own installation waits in that machine queue. An instance
-whose state directory is somewhere else (a test's `LLV_STATE_DIR`, a driver's
-sandboxed `XDG_CONFIG_HOME`, a spawned agent's sandbox, any test or build
-process) keeps its queue in `<state>/cpu-gate`, whatever started it
-(`src/lib/runtime/cpuAdmissionScope.ts`). `scripts/gate-slot.sh` stays on the
-machine queue from any environment: its command tickets end with their owner.
-An installation that keeps real state outside the operator's config roots
-gets its own queue too; `LLV_GATE_LOCK_DIR` set to one directory for the Viewer
-and for gate-slot joins them again.
+Only the live installation waits in that machine queue: the instance whose
+state directory is `$HOME/.config/delegatus/state` of the operating-system
+user (or its `agent-log-viewer` spelling, or a link to either). Every other
+instance keeps its queue in `<state>/cpu-gate`, whatever started it and
+whatever owner token it carries (`src/lib/runtime/cpuAdmissionScope.ts`): a
+test's `LLV_STATE_DIR`, a staging instance on `state-staging`, a fixture state
+nested inside the live one, a driver's own `HOME` or `XDG_CONFIG_HOME` wherever
+it sits, a spawned agent's sandbox, any test or build process. A place under
+the operator's config root earns nothing by itself. `scripts/gate-slot.sh`
+stays on the machine queue from any environment: its command tickets end with
+their owner. An installation that keeps its real state anywhere else gets its
+own queue too; `LLV_GATE_LOCK_DIR` set to one directory for the Viewer and for
+gate-slot joins them again.
 
 A stage ticket has no process behind it, so every check records its poll. An
 ownerless ticket nobody has polled for 60 seconds is passed over by every
 checker. Its row stays, so an instance that was only restarting returns to its
 sequence and age with its next check, and the spacing between admissions still
-holds. After 24 hours without a poll, a ticket no fence holds is removed. On
+holds. After 24 hours without a poll, a ticket no fence holds is removed. The
+poll is recorded by a trigger on the insert every check repeats, so a release
+that predates polls and shares the file keeps its stages in place for as long
+as it checks them; tickets already queued when the first current release opens
+the file get one 60-second bound from that moment. On
 2026-10-13 two stage tickets left by a test's child processes held the head of
 the machine queue for 1 h 45 min; nothing reconciled them, because each
 release reconciles only its own namespace.

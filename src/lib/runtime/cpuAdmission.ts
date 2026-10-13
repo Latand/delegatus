@@ -49,7 +49,8 @@ export function cpuSlotForOwner(owner: ProcessIdentity, env = process.env): CpuS
 
 const homeSymbol = Symbol.for("delegatus.cpuAdmission.home");
 const nativeHome = globalThis as typeof globalThis & { [homeSymbol]?: string };
-function machineHome(): string {
+/** The operating-system user's home, whatever HOME a child was handed. */
+export function machineHome(): string {
   if (nativeHome[homeSymbol]) return nativeHome[homeSymbol]!;
   // Bun's userInfo delegates to homedir, which reads HOME/USERPROFILE first.
   // Bun caches homedir at startup, so remove the overrides before launch.
@@ -72,9 +73,9 @@ function machineHome(): string {
   return nativeHome[homeSymbol] = result.stdout;
 }
 
-/** Shared by the operator's Viewer and gate-slot, including children with
- * sandboxed HOME. An instance on an isolated state directory passes that
- * directory and keeps its own queue there (cpuAdmissionScope.ts). */
+/** Shared by the live Viewer and gate-slot, including children with
+ * sandboxed HOME. Every other instance passes its state directory and keeps
+ * its own queue there (cpuAdmissionScope.ts). */
 export function cpuAdmissionFile(isolatedStateDir?: string | null): string {
   if (!process.env.LLV_GATE_LOCK_DIR && isolatedStateDir) return path.join(isolatedStateDir, "cpu-gate", "admission.sqlite");
   if (!process.env.LLV_GATE_LOCK_DIR && /\.test\.[cm]?[jt]sx?$/.test(process.argv[1] ?? "")) {
@@ -104,12 +105,18 @@ export class CpuAdmissionQueue {
     this.db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
     this.db.exec("CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, since INTEGER NOT NULL, owner TEXT); CREATE TABLE IF NOT EXISTS suspended (key TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS admission (id INTEGER PRIMARY KEY, last INTEGER); INSERT OR IGNORE INTO admission VALUES (1, NULL);");
     this.db.exec("CREATE TABLE IF NOT EXISTS stage_admissions (key TEXT PRIMARY KEY);");
-    // Releases that predate polls share this file; they leave the column NULL,
-    // and a NULL poll reads as the ticket's own age.
     if (!this.db.query<{ name: string }, []>("PRAGMA table_info(tickets)").all().some(column => column.name === "polled")) {
-      try { this.db.exec("ALTER TABLE tickets ADD COLUMN polled INTEGER"); }
-      catch (error) { if (!/duplicate column/i.test(String(error))) throw error; }
+      try {
+        this.db.exec("ALTER TABLE tickets ADD COLUMN polled INTEGER");
+        // A ticket queued before polls existed may have a live checker: it
+        // gets one bound from here to show it, whatever its age.
+        this.db.query("UPDATE tickets SET polled = ? WHERE owner IS NULL").run(this.now());
+      } catch (error) { if (!/duplicate column/i.test(String(error))) throw error; }
     }
+    // A release that predates polls shares this file for as long as it serves,
+    // and its check only repeats this insert. The trigger lives in the file, so
+    // that insert records the poll too, with the clock the checker passed.
+    this.db.exec("CREATE TRIGGER IF NOT EXISTS tickets_polled BEFORE INSERT ON tickets BEGIN UPDATE tickets SET polled = NEW.since WHERE key = NEW.key; END");
   }
   close(): void { this.db.close(); }
   cancel(key: string): void {
@@ -152,8 +159,8 @@ export class CpuAdmissionQueue {
         if (processIdentityStatus(identity) === "dead" || procBackend.processExited(identity.pid)) this.cancel(row.key);
       }
       for (const row of this.db.query<{ key: string }, [number]>("SELECT key FROM tickets WHERE owner IS NULL AND COALESCE(polled, since) < ? AND key NOT IN (SELECT key FROM suspended)").all(now - CPU_QUEUE_ABANDONED_MS)) this.cancel(row.key);
+      // The insert is the poll: tickets_polled stamps an existing row with `now`.
       this.db.query("INSERT OR IGNORE INTO tickets (key, since, owner) VALUES (?, ?, ?)").run(key, now, owner ? JSON.stringify(owner) : null);
-      this.db.query("UPDATE tickets SET polled = ? WHERE key = ?").run(now, key);
       this.db.query("DELETE FROM suspended WHERE key = ?").run(key);
       this.db.query("DELETE FROM stage_admissions WHERE key = ?").run(key);
       const ticket = this.db.query<Ticket, [string]>("SELECT * FROM tickets WHERE key = ?").get(key)!;

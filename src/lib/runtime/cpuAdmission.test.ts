@@ -217,14 +217,80 @@ test("a stage released from a long hold is ahead of later work before its own ne
   expect(q.check("stage:one", false)).toBeNull();
 });
 
-test("a queue written before polls were recorded is read by its ticket age", () => {
+/* The checker of a release that predates polls, statement for statement: it
+   shares the file with the current one for as long as that release serves. */
+function olderRelease(file: string, clock: () => number) {
+  const db = new Database(file, { create: true });
+  db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL;");
+  db.exec("CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, since INTEGER NOT NULL, owner TEXT); CREATE TABLE IF NOT EXISTS suspended (key TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS admission (id INTEGER PRIMARY KEY, last INTEGER); INSERT OR IGNORE INTO admission VALUES (1, NULL);");
+  db.exec("CREATE TABLE IF NOT EXISTS stage_admissions (key TEXT PRIMARY KEY);");
+  const check = (key: string, owner?: ReturnType<typeof captureProcessIdentity>) => db.transaction(() => {
+    db.query("INSERT OR IGNORE INTO tickets (key, since, owner) VALUES (?, ?, ?)").run(key, clock(), owner ? JSON.stringify(owner) : null);
+    db.query("DELETE FROM suspended WHERE key = ?").run(key);
+    db.query("DELETE FROM stage_admissions WHERE key = ?").run(key);
+    const ticket = db.query<{ seq: number }, [string]>("SELECT * FROM tickets WHERE key = ?").get(key)!;
+    return db.query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM tickets WHERE seq <= ? AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)").get(ticket.seq)!.n;
+  }).immediate();
+  const row = (key: string) => db.query<{ seq: number; since: number }, [string]>("SELECT seq, since FROM tickets WHERE key = ?").get(key);
+  return { check, row, close: () => db.close() };
+}
+
+test("a stage an older release keeps polling holds its place against a current checker", () => {
+  const f = fixture(CPU_QUEUE_UNPOLLED_MS);
+  let now = 0;
+  const older = olderRelease(f.file, () => now), q = f.open();
+  const at = (value: number) => { now = value; f.at(value); };
+  try {
+    // An orphan at the head, then the older release's stage under pressure.
+    q.check(FOREIGN, false);
+    expect(older.check(LIVE)).toBe(2);
+    const first = older.row(LIVE)!;
+    for (let tick = 5_000; tick <= CPU_QUEUE_UNPOLLED_MS + 5_000; tick += 5_000) { at(tick); older.check(LIVE); }
+    // The orphan is passed over; the polled stage is not, so later work waits behind it.
+    expect(q.check("stage:later", true)).toMatchObject({ since: CPU_QUEUE_UNPOLLED_MS + 5_000, position: 2 });
+    expect(q.check("command:push", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 3 });
+    expect(older.row(LIVE)).toEqual(first);
+    // Its release stops: within the bound of its last poll it is passed over too.
+    at(now + CPU_QUEUE_UNPOLLED_MS + 1);
+    expect(q.check("stage:later", true)).toBeNull();
+    expect(q.check("command:push", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 1 }); // spacing still separates the two starts
+    expect(older.row(LIVE)).toEqual(first);
+    // Back again, the older release finds its stage where it left it.
+    expect(older.check(LIVE)).toBe(2);
+    expect(q.check("command:push", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
+  } finally { older.close(); }
+});
+
+test("a stage an older release polls for more than a day behind a live command keeps its row", () => {
+  const f = fixture(CPU_QUEUE_UNPOLLED_MS);
+  let now = 0;
+  const older = olderRelease(f.file, () => now), q = f.open(), owner = captureProcessIdentity(process.pid);
+  const at = (value: number) => { now = value; f.at(value); };
+  try {
+    expect(older.check("command:long", owner)).toBe(1);
+    expect(older.check(LIVE)).toBe(2);
+    const first = older.row(LIVE)!;
+    for (const tick of [5_000, CPU_QUEUE_UNPOLLED_MS, CPU_QUEUE_ABANDONED_MS - 5_000, CPU_QUEUE_ABANDONED_MS + 5_000]) { at(tick); older.check(LIVE); }
+    at(CPU_QUEUE_ABANDONED_MS + 10_000);
+    expect(q.check("stage:later", true)).toMatchObject({ position: 3 });
+    expect(older.row(LIVE)).toEqual(first);
+    expect(older.check(LIVE)).toBe(2);
+  } finally { older.close(); }
+});
+
+test("a queue written before polls were recorded gives its tickets one bound from the first current open", () => {
   const f = fixture(CPU_QUEUE_UNPOLLED_MS);
   const legacy = new Database(f.file, { create: true });
   legacy.exec("CREATE TABLE tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, since INTEGER NOT NULL, owner TEXT)");
   legacy.query("INSERT INTO tickets (key, since, owner) VALUES (?, 0, NULL)").run(FOREIGN);
   legacy.close();
+  // An hour-old ticket may belong to a release still polling it every five seconds.
+  f.at(3_600_000);
   const q = f.open(), again = f.open(); // two releases opening the same file both migrate it
-  f.at(CPU_QUEUE_UNPOLLED_MS + 1);
+  expect(q.check(LIVE, true)).toMatchObject({ position: 2 });
+  f.at(3_600_000 + CPU_QUEUE_UNPOLLED_MS);
+  expect(q.check(LIVE, true)).toMatchObject({ position: 2 });
+  f.at(3_600_000 + CPU_QUEUE_UNPOLLED_MS + 1);
   expect(q.check(LIVE, true)).toBeNull();
   expect(again.check(FOREIGN, true)).toMatchObject({ since: 0, position: 1 });
 });
