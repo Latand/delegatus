@@ -2,6 +2,8 @@ import fs from "node:fs";
 
 import { agentRegistry, type ConversationLookup } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { SELECTED_TAIL_MAX_LINES, SELECTED_TAIL_MAX_BYTES } from "./limits";
+export { SELECTED_TAIL_MAX_LINES, SELECTED_TAIL_MAX_BYTES } from "./limits";
 
 /**
  * Resolving a selected-card reference (#844 §6/§7).
@@ -29,12 +31,6 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
  * separate lane (#798/#830). This module is what keeps the selected card
  * answerable while that path is still sick.
  */
-
-/** Hard ceilings. `readTail` clamps to these however large the request is: an
-    unbounded tail of a multi-gigabyte transcript is the failure mode, and a
-    caller asking for one has made a mistake, not a policy decision. */
-export const SELECTED_TAIL_MAX_LINES = 200;
-export const SELECTED_TAIL_MAX_BYTES = 256 * 1024;
 
 const CONVERSATION_ID = /^conversation_[A-Za-z0-9_-]{1,180}$/;
 

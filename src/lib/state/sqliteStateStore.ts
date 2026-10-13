@@ -931,10 +931,15 @@ export class SqliteStateCollection<T> {
 
   constructor(readonly filename: string, private readonly options: SqliteStateCollectionOptions<T>) {
     this.readDb = openDatabase(filename);
-    const meta = this.collectionMeta();
-    if (!meta) throw new Error(`SQLite state collection is not initialized: ${options.collection}`);
-    if (meta.schema_version !== options.schemaVersion) {
-      throw new Error(`unsupported ${options.collection} SQLite schema: ${meta.schema_version}`);
+    try {
+      const meta = this.collectionMeta();
+      if (!meta) throw new Error(`SQLite state collection is not initialized: ${options.collection}`);
+      if (meta.schema_version !== options.schemaVersion) {
+        throw new Error(`unsupported ${options.collection} SQLite schema: ${meta.schema_version}`);
+      }
+    } catch (error) {
+      this.readDb.close();
+      throw error;
     }
   }
 

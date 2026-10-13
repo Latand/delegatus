@@ -35,6 +35,8 @@ import {
 import { entryOwners, headlessRoundVerdict, ownerProcessAlive, type RecordedOwner } from "./owners";
 import { classifyAgentActivity, type AgentActivity, type AgentActivityFacts } from "./agentActivity";
 import { activityProcessReader } from "./agentActivityProcesses";
+import { DEFAULT_STALL_AFTER_MS } from "./limits";
+export { DEFAULT_STALL_AFTER_MS } from "./limits";
 import type { LifecycleState, LifecycleTurnState } from "./vocabulary";
 
 /**
@@ -48,10 +50,6 @@ import type { LifecycleState, LifecycleTurnState } from "./vocabulary";
  * a pipeline stuck at `running` over a dead host is exactly the failure this
  * exists to catch.
  */
-
-/** Silence under a LIVE host that turns `running` into `stalled`. A dead host
-    over an open turn needs no threshold: it can never progress. */
-export const DEFAULT_STALL_AFTER_MS = 10 * 60_000;
 
 /** A launch with no host evidence yet is `starting`, not `gone`. Mirrors the
     unproven-launch grace the reaper and blocker evaluation already agree on.

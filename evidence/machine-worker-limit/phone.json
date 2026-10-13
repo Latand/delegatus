@@ -1,0 +1,1673 @@
+{
+  "readings": [
+    {
+      "name": "390-en-light-machine-closed",
+      "rect": [
+        16,
+        463.5,
+        358,
+        44
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": null,
+      "row": null,
+      "dot": null,
+      "text": "Workers 7 / 8",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 224.5,
+        "width": 390,
+        "height": 619.5
+      }
+    },
+    {
+      "name": "390-en-light-machine-popover",
+      "rect": [
+        118,
+        515.5,
+        256,
+        135
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 56,
+      "row": null,
+      "dot": null,
+      "text": "Worker limitfrom the machine default7 running · 19 on machineMachine default: ⋯ → Settings",
+      "overflow": false,
+      "frameRect": {
+        "x": 118,
+        "y": 515.5,
+        "width": 256,
+        "height": 135
+      }
+    },
+    {
+      "name": "390-en-light-machine-settings-row",
+      "rect": [
+        0,
+        568,
+        390,
+        46
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "Workers per project7 here · 19 on machine",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 568,
+        "width": 390,
+        "height": 46
+      }
+    },
+    {
+      "name": "390-en-light-machine-settings",
+      "rect": [
+        0,
+        220.875,
+        390,
+        623.125
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "atlasBack·SettingsSound alertsKeep screen awakeThe screen sleeps on this device's usual timer.Shared memoryState unknownOpenRouter keyState unknownRoles: engine and modelWorkers per project7 here · 19 on machineDictationVoice DelegatusLinked installsChat relayInstall ping",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 220.875,
+        "width": 390,
+        "height": 623.125
+      }
+    },
+    {
+      "name": "390-en-light-machine-overview",
+      "rect": [
+        0,
+        568,
+        390,
+        46
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "Workers per project19 on machine",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 568,
+        "width": 390,
+        "height": 46
+      }
+    },
+    {
+      "name": "390-en-light-own-closed",
+      "rect": [
+        16,
+        463.5,
+        358,
+        44
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": null,
+      "row": null,
+      "dot": [
+        4,
+        4
+      ],
+      "text": "Workers 7 / 10",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 224.5,
+        "width": 390,
+        "height": 619.5
+      }
+    },
+    {
+      "name": "390-en-light-own-popover",
+      "rect": [
+        118,
+        515.5,
+        256,
+        162
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 56,
+      "row": null,
+      "dot": null,
+      "text": "Worker limitown limit7 running · 19 on machineReset to machine default (8)Machine default: ⋯ → Settings",
+      "overflow": false,
+      "frameRect": {
+        "x": 118,
+        "y": 515.5,
+        "width": 256,
+        "height": 162
+      }
+    },
+    {
+      "name": "390-en-light-own-settings-row",
+      "rect": [
+        0,
+        568,
+        390,
+        46
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "Workers per project7 here (own limit 10) · 19 on machine",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 568,
+        "width": 390,
+        "height": 46
+      }
+    },
+    {
+      "name": "390-en-light-own-settings",
+      "rect": [
+        0,
+        220.875,
+        390,
+        623.125
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "atlasBack·SettingsSound alertsKeep screen awakeThe screen sleeps on this device's usual timer.Shared memoryState unknownOpenRouter keyState unknownRoles: engine and modelWorkers per project7 here (own limit 10) · 19 on machineDictationVoice DelegatusLinked installsChat relayInstall ping",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 220.875,
+        "width": 390,
+        "height": 623.125
+      }
+    },
+    {
+      "name": "390-en-light-over-closed",
+      "rect": [
+        16,
+        463.5,
+        358,
+        44
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": null,
+      "row": null,
+      "dot": [
+        4,
+        4
+      ],
+      "text": "Workers 11 / 10",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 224.5,
+        "width": 390,
+        "height": 619.5
+      }
+    },
+    {
+      "name": "390-en-light-over-popover",
+      "rect": [
+        118,
+        515.5,
+        256,
+        162
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 56,
+      "row": null,
+      "dot": null,
+      "text": "Worker limitown limit11 running · 19 on machineReset to machine default (8)Machine default: ⋯ → Settings",
+      "overflow": false,
+      "frameRect": {
+        "x": 118,
+        "y": 515.5,
+        "width": 256,
+        "height": 162
+      }
+    },
+    {
+      "name": "390-en-light-over-settings-row",
+      "rect": [
+        0,
+        568,
+        390,
+        46
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "Workers per project11 here (own limit 10) · 19 on machine",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 568,
+        "width": 390,
+        "height": 46
+      }
+    },
+    {
+      "name": "390-en-light-over-settings",
+      "rect": [
+        0,
+        220.875,
+        390,
+        623.125
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "atlasBack·SettingsSound alertsKeep screen awakeThe screen sleeps on this device's usual timer.Shared memoryState unknownOpenRouter keyState unknownRoles: engine and modelWorkers per project11 here (own limit 10) · 19 on machineDictationVoice DelegatusLinked installsChat relayInstall ping",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 220.875,
+        "width": 390,
+        "height": 623.125
+      }
+    },
+    {
+      "name": "390-en-dark-machine-closed",
+      "rect": [
+        16,
+        463.5,
+        358,
+        44
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": null,
+      "row": null,
+      "dot": null,
+      "text": "Workers 7 / 8",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 224.5,
+        "width": 390,
+        "height": 619.5
+      }
+    },
+    {
+      "name": "390-en-dark-machine-popover",
+      "rect": [
+        118,
+        515.5,
+        256,
+        135
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 56,
+      "row": null,
+      "dot": null,
+      "text": "Worker limitfrom the machine default7 running · 19 on machineMachine default: ⋯ → Settings",
+      "overflow": false,
+      "frameRect": {
+        "x": 118,
+        "y": 515.5,
+        "width": 256,
+        "height": 135
+      }
+    },
+    {
+      "name": "390-en-dark-machine-settings-row",
+      "rect": [
+        0,
+        568,
+        390,
+        46
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "Workers per project7 here · 19 on machine",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 568,
+        "width": 390,
+        "height": 46
+      }
+    },
+    {
+      "name": "390-en-dark-machine-settings",
+      "rect": [
+        0,
+        220.875,
+        390,
+        623.125
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "atlasBack·SettingsSound alertsKeep screen awakeThe screen sleeps on this device's usual timer.Shared memoryState unknownOpenRouter keyState unknownRoles: engine and modelWorkers per project7 here · 19 on machineDictationVoice DelegatusLinked installsChat relayInstall ping",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 220.875,
+        "width": 390,
+        "height": 623.125
+      }
+    },
+    {
+      "name": "390-en-dark-machine-overview",
+      "rect": [
+        0,
+        568,
+        390,
+        46
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "Workers per project19 on machine",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 568,
+        "width": 390,
+        "height": 46
+      }
+    },
+    {
+      "name": "390-en-dark-own-closed",
+      "rect": [
+        16,
+        463.5,
+        358,
+        44
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": null,
+      "row": null,
+      "dot": [
+        4,
+        4
+      ],
+      "text": "Workers 7 / 10",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 224.5,
+        "width": 390,
+        "height": 619.5
+      }
+    },
+    {
+      "name": "390-en-dark-own-popover",
+      "rect": [
+        118,
+        515.5,
+        256,
+        162
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 56,
+      "row": null,
+      "dot": null,
+      "text": "Worker limitown limit7 running · 19 on machineReset to machine default (8)Machine default: ⋯ → Settings",
+      "overflow": false,
+      "frameRect": {
+        "x": 118,
+        "y": 515.5,
+        "width": 256,
+        "height": 162
+      }
+    },
+    {
+      "name": "390-en-dark-own-settings-row",
+      "rect": [
+        0,
+        568,
+        390,
+        46
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "Workers per project7 here (own limit 10) · 19 on machine",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 568,
+        "width": 390,
+        "height": 46
+      }
+    },
+    {
+      "name": "390-en-dark-own-settings",
+      "rect": [
+        0,
+        220.875,
+        390,
+        623.125
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "atlasBack·SettingsSound alertsKeep screen awakeThe screen sleeps on this device's usual timer.Shared memoryState unknownOpenRouter keyState unknownRoles: engine and modelWorkers per project7 here (own limit 10) · 19 on machineDictationVoice DelegatusLinked installsChat relayInstall ping",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 220.875,
+        "width": 390,
+        "height": 623.125
+      }
+    },
+    {
+      "name": "390-en-dark-over-closed",
+      "rect": [
+        16,
+        463.5,
+        358,
+        44
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": null,
+      "row": null,
+      "dot": [
+        4,
+        4
+      ],
+      "text": "Workers 11 / 10",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 224.5,
+        "width": 390,
+        "height": 619.5
+      }
+    },
+    {
+      "name": "390-en-dark-over-popover",
+      "rect": [
+        118,
+        515.5,
+        256,
+        162
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 56,
+      "row": null,
+      "dot": null,
+      "text": "Worker limitown limit11 running · 19 on machineReset to machine default (8)Machine default: ⋯ → Settings",
+      "overflow": false,
+      "frameRect": {
+        "x": 118,
+        "y": 515.5,
+        "width": 256,
+        "height": 162
+      }
+    },
+    {
+      "name": "390-en-dark-over-settings-row",
+      "rect": [
+        0,
+        568,
+        390,
+        46
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "Workers per project11 here (own limit 10) · 19 on machine",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 568,
+        "width": 390,
+        "height": 46
+      }
+    },
+    {
+      "name": "390-en-dark-over-settings",
+      "rect": [
+        0,
+        220.875,
+        390,
+        623.125
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "atlasBack·SettingsSound alertsKeep screen awakeThe screen sleeps on this device's usual timer.Shared memoryState unknownOpenRouter keyState unknownRoles: engine and modelWorkers per project11 here (own limit 10) · 19 on machineDictationVoice DelegatusLinked installsChat relayInstall ping",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 220.875,
+        "width": 390,
+        "height": 623.125
+      }
+    },
+    {
+      "name": "390-uk-light-machine-closed",
+      "rect": [
+        16,
+        463.5,
+        358,
+        44
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": null,
+      "row": null,
+      "dot": null,
+      "text": "Воркери 7 / 8",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 224.5,
+        "width": 390,
+        "height": 619.5
+      }
+    },
+    {
+      "name": "390-uk-light-machine-popover",
+      "rect": [
+        118,
+        515.5,
+        256,
+        135
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 56,
+      "row": null,
+      "dot": null,
+      "text": "Ліміт воркерівз глобальнихПрацюють 7 · на машині 19Глобальний: ⋯ → Налаштування",
+      "overflow": false,
+      "frameRect": {
+        "x": 118,
+        "y": 515.5,
+        "width": 256,
+        "height": 135
+      }
+    },
+    {
+      "name": "390-uk-light-machine-settings-row",
+      "rect": [
+        0,
+        568,
+        390,
+        46
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "Воркерів на проєкт7 тут · 19 на машині",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 568,
+        "width": 390,
+        "height": 46
+      }
+    },
+    {
+      "name": "390-uk-light-machine-settings",
+      "rect": [
+        0,
+        220.875,
+        390,
+        623.125
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "atlasНазад·НалаштуванняЗвукові сповіщенняНе гасити екранЕкран гасне за звичайним таймером цього пристрою.Спільна пам’ятьСтан невідомийКлюч OpenRouterСтан невідомийРолі: рушій і модельВоркерів на проєкт7 тут · 19 на машиніДиктуванняГолосовий DelegatusПов’язані інсталяціїРетранслятор чатівАнонімний пінг",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 220.875,
+        "width": 390,
+        "height": 623.125
+      }
+    },
+    {
+      "name": "390-uk-light-machine-overview",
+      "rect": [
+        0,
+        568,
+        390,
+        46
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "Воркерів на проєкт19 на машині",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 568,
+        "width": 390,
+        "height": 46
+      }
+    },
+    {
+      "name": "390-uk-light-own-closed",
+      "rect": [
+        16,
+        463.5,
+        358,
+        44
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": null,
+      "row": null,
+      "dot": [
+        4,
+        4
+      ],
+      "text": "Воркери 7 / 10",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 224.5,
+        "width": 390,
+        "height": 619.5
+      }
+    },
+    {
+      "name": "390-uk-light-own-popover",
+      "rect": [
+        118,
+        515.5,
+        256,
+        162
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 56,
+      "row": null,
+      "dot": null,
+      "text": "Ліміт воркерівсвій лімітПрацюють 7 · на машині 19Скинути до глобального (8)Глобальний: ⋯ → Налаштування",
+      "overflow": false,
+      "frameRect": {
+        "x": 118,
+        "y": 515.5,
+        "width": 256,
+        "height": 162
+      }
+    },
+    {
+      "name": "390-uk-light-own-settings-row",
+      "rect": [
+        0,
+        568,
+        390,
+        46
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "Воркерів на проєкт7 тут (свій ліміт 10) · 19 на машині",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 568,
+        "width": 390,
+        "height": 46
+      }
+    },
+    {
+      "name": "390-uk-light-own-settings",
+      "rect": [
+        0,
+        220.875,
+        390,
+        623.125
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "atlasНазад·НалаштуванняЗвукові сповіщенняНе гасити екранЕкран гасне за звичайним таймером цього пристрою.Спільна пам’ятьСтан невідомийКлюч OpenRouterСтан невідомийРолі: рушій і модельВоркерів на проєкт7 тут (свій ліміт 10) · 19 на машиніДиктуванняГолосовий DelegatusПов’язані інсталяціїРетранслятор чатівАнонімний пінг",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 220.875,
+        "width": 390,
+        "height": 623.125
+      }
+    },
+    {
+      "name": "390-uk-light-over-closed",
+      "rect": [
+        16,
+        463.5,
+        358,
+        44
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": null,
+      "row": null,
+      "dot": [
+        4,
+        4
+      ],
+      "text": "Воркери 11 / 10",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 224.5,
+        "width": 390,
+        "height": 619.5
+      }
+    },
+    {
+      "name": "390-uk-light-over-popover",
+      "rect": [
+        118,
+        515.5,
+        256,
+        162
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 56,
+      "row": null,
+      "dot": null,
+      "text": "Ліміт воркерівсвій лімітПрацюють 11 · на машині 19Скинути до глобального (8)Глобальний: ⋯ → Налаштування",
+      "overflow": false,
+      "frameRect": {
+        "x": 118,
+        "y": 515.5,
+        "width": 256,
+        "height": 162
+      }
+    },
+    {
+      "name": "390-uk-light-over-settings-row",
+      "rect": [
+        0,
+        568,
+        390,
+        46
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "Воркерів на проєкт11 тут (свій ліміт 10) · 19 на машині",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 568,
+        "width": 390,
+        "height": 46
+      }
+    },
+    {
+      "name": "390-uk-light-over-settings",
+      "rect": [
+        0,
+        220.875,
+        390,
+        623.125
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(28, 28, 34)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(108, 108, 121)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "atlasНазад·НалаштуванняЗвукові сповіщенняНе гасити екранЕкран гасне за звичайним таймером цього пристрою.Спільна пам’ятьСтан невідомийКлюч OpenRouterСтан невідомийРолі: рушій і модельВоркерів на проєкт11 тут (свій ліміт 10) · 19 на машиніДиктуванняГолосовий DelegatusПов’язані інсталяціїРетранслятор чатівАнонімний пінг",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 220.875,
+        "width": 390,
+        "height": 623.125
+      }
+    },
+    {
+      "name": "390-uk-dark-machine-closed",
+      "rect": [
+        16,
+        463.5,
+        358,
+        44
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": null,
+      "row": null,
+      "dot": null,
+      "text": "Воркери 7 / 8",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 224.5,
+        "width": 390,
+        "height": 619.5
+      }
+    },
+    {
+      "name": "390-uk-dark-machine-popover",
+      "rect": [
+        118,
+        515.5,
+        256,
+        135
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 56,
+      "row": null,
+      "dot": null,
+      "text": "Ліміт воркерівз глобальнихПрацюють 7 · на машині 19Глобальний: ⋯ → Налаштування",
+      "overflow": false,
+      "frameRect": {
+        "x": 118,
+        "y": 515.5,
+        "width": 256,
+        "height": 135
+      }
+    },
+    {
+      "name": "390-uk-dark-machine-settings-row",
+      "rect": [
+        0,
+        568,
+        390,
+        46
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "Воркерів на проєкт7 тут · 19 на машині",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 568,
+        "width": 390,
+        "height": 46
+      }
+    },
+    {
+      "name": "390-uk-dark-machine-settings",
+      "rect": [
+        0,
+        220.875,
+        390,
+        623.125
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "atlasНазад·НалаштуванняЗвукові сповіщенняНе гасити екранЕкран гасне за звичайним таймером цього пристрою.Спільна пам’ятьСтан невідомийКлюч OpenRouterСтан невідомийРолі: рушій і модельВоркерів на проєкт7 тут · 19 на машиніДиктуванняГолосовий DelegatusПов’язані інсталяціїРетранслятор чатівАнонімний пінг",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 220.875,
+        "width": 390,
+        "height": 623.125
+      }
+    },
+    {
+      "name": "390-uk-dark-machine-overview",
+      "rect": [
+        0,
+        568,
+        390,
+        46
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "Воркерів на проєкт19 на машині",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 568,
+        "width": 390,
+        "height": 46
+      }
+    },
+    {
+      "name": "390-uk-dark-own-closed",
+      "rect": [
+        16,
+        463.5,
+        358,
+        44
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": null,
+      "row": null,
+      "dot": [
+        4,
+        4
+      ],
+      "text": "Воркери 7 / 10",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 224.5,
+        "width": 390,
+        "height": 619.5
+      }
+    },
+    {
+      "name": "390-uk-dark-own-popover",
+      "rect": [
+        118,
+        515.5,
+        256,
+        162
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 56,
+      "row": null,
+      "dot": null,
+      "text": "Ліміт воркерівсвій лімітПрацюють 7 · на машині 19Скинути до глобального (8)Глобальний: ⋯ → Налаштування",
+      "overflow": false,
+      "frameRect": {
+        "x": 118,
+        "y": 515.5,
+        "width": 256,
+        "height": 162
+      }
+    },
+    {
+      "name": "390-uk-dark-own-settings-row",
+      "rect": [
+        0,
+        568,
+        390,
+        46
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "Воркерів на проєкт7 тут (свій ліміт 10) · 19 на машині",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 568,
+        "width": 390,
+        "height": 46
+      }
+    },
+    {
+      "name": "390-uk-dark-own-settings",
+      "rect": [
+        0,
+        220.875,
+        390,
+        623.125
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "atlasНазад·НалаштуванняЗвукові сповіщенняНе гасити екранЕкран гасне за звичайним таймером цього пристрою.Спільна пам’ятьСтан невідомийКлюч OpenRouterСтан невідомийРолі: рушій і модельВоркерів на проєкт7 тут (свій ліміт 10) · 19 на машиніДиктуванняГолосовий DelegatusПов’язані інсталяціїРетранслятор чатівАнонімний пінг",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 220.875,
+        "width": 390,
+        "height": 623.125
+      }
+    },
+    {
+      "name": "390-uk-dark-over-closed",
+      "rect": [
+        16,
+        463.5,
+        358,
+        44
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": null,
+      "row": null,
+      "dot": [
+        4,
+        4
+      ],
+      "text": "Воркери 11 / 10",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 224.5,
+        "width": 390,
+        "height": 619.5
+      }
+    },
+    {
+      "name": "390-uk-dark-over-popover",
+      "rect": [
+        118,
+        515.5,
+        256,
+        162
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 56,
+      "row": null,
+      "dot": null,
+      "text": "Ліміт воркерівсвій лімітПрацюють 11 · на машині 19Скинути до глобального (8)Глобальний: ⋯ → Налаштування",
+      "overflow": false,
+      "frameRect": {
+        "x": 118,
+        "y": 515.5,
+        "width": 256,
+        "height": 162
+      }
+    },
+    {
+      "name": "390-uk-dark-over-settings-row",
+      "rect": [
+        0,
+        568,
+        390,
+        46
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "Воркерів на проєкт11 тут (свій ліміт 10) · 19 на машині",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 568,
+        "width": 390,
+        "height": 46
+      }
+    },
+    {
+      "name": "390-uk-dark-over-settings",
+      "rect": [
+        0,
+        220.875,
+        390,
+        623.125
+      ],
+      "clipped": [],
+      "clippedControl": false,
+      "overlappingText": [],
+      "inputWidth": 48,
+      "row": {
+        "icon": 18,
+        "titleSize": 13,
+        "titleWeight": 600,
+        "titleColor": "rgb(232, 232, 236)",
+        "titleX": 46,
+        "stateWeight": 500,
+        "stateColor": "rgb(139, 139, 152)",
+        "inputWeight": 400,
+        "inputAlign": "center",
+        "inputX": 326,
+        "inputY": 574,
+        "inputH": 34,
+        "stateRight": 314,
+        "stateTop": 591.25,
+        "stateBottom": 607.75
+      },
+      "dot": null,
+      "text": "atlasНазад·НалаштуванняЗвукові сповіщенняНе гасити екранЕкран гасне за звичайним таймером цього пристрою.Спільна пам’ятьСтан невідомийКлюч OpenRouterСтан невідомийРолі: рушій і модельВоркерів на проєкт11 тут (свій ліміт 10) · 19 на машиніДиктуванняГолосовий DelegatusПов’язані інсталяціїРетранслятор чатівАнонімний пінг",
+      "overflow": false,
+      "frameRect": {
+        "x": 0,
+        "y": 220.875,
+        "width": 390,
+        "height": 623.125
+      }
+    }
+  ],
+  "failures": []
+}

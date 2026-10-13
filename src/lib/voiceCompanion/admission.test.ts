@@ -139,7 +139,7 @@ test("a delayed spoken confirmation remains visible after a newer proposal and a
 test("a declined, an unanswered and an abandoned confirmation each send nothing and say why", async () => {
   fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
   let now = 1_000_000;
-  const admission = new CompanionAdmission(new CompanionStorage(), {
+  const admission = new CompanionAdmission(new CompanionStorage(() => now), {
     recipient: () => ({ project: "unsent", conversationId: "conversation_unsent", seatEpoch: 1, engine: "codex" }),
     send: async () => { throw new Error("must never send"); }, reports: () => [],
   }, () => now);

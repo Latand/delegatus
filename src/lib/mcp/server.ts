@@ -13,10 +13,9 @@ import { FOCUS_TARGET_SHAPES } from "@/lib/attention/targets";
 import { statePath } from "@/lib/configDir";
 import { openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
-import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/liveness";
+import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/limits";
 import { operatorLocale } from "@/lib/operator/settings";
-import { MEMORY_KINDS } from "@/lib/memory/parsers";
-import { PIPELINE_LIST_DEFAULT_LIMIT, PIPELINE_LIST_MAX_LIMIT } from "@/lib/pipelines/listProjection";
+import { MEMORY_KINDS } from "@/lib/memory/kinds";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -28,13 +27,15 @@ import {
   MAX_STAGE_REPORT_FINDINGS,
   MAX_STAGE_REPORT_SUMMARY_CHARS,
   MIN_STARTED_PIPELINE_STAGES,
+  PIPELINE_LIST_DEFAULT_LIMIT,
+  PIPELINE_LIST_MAX_LIMIT,
 } from "@/lib/pipelines/limits";
 import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, STAGE_FINDING_SEVERITIES } from "@/lib/pipelines/types";
 import { procBackend } from "@/lib/proc";
 import { parseMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, PROBLEM_MAX_CHARS, PROBLEM_EVIDENCE_MAX_CHARS } from "@/lib/memory/roleTypes";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
-import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
+import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/limits";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
 import { renderTaskPriorityRule } from "@/lib/tasks/priority";
 import { TASK_STEPS_LIMIT } from "@/lib/tasks/steps";
@@ -401,7 +402,6 @@ export interface McpBoundedNumericArg {
  */
 export const MCP_BOUNDED_NUMERIC_ARGS: Partial<Record<McpToolName, readonly McpBoundedNumericArg[]>> = {
   spawn_agent: [
-    { path: ["roleParams", "maxWorkers"], min: 1, max: 20, fallback: 3, role: "orchestrator" },
     { path: ["roleParams", "parallelN"], min: 1, max: 8, fallback: 1, role: "reviewer" },
   ],
   list_conversations: [
@@ -3430,8 +3430,9 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "`project` defaults to your own on a list, and is required to add or remove.",
   ].join(" "),
   role_presets: [
+    "workerLimit reads the machine default and each project's own worker limit, with current running counts; detail:true adds overrides and the newest 20 changes. Set workerLimit {value: 1..64 or null, project?: project, reason: required text up to 300 characters} to change the machine default or one project's limit; running seats read it at their next wake. Do not combine workerLimit with overrides; expectedRevision applies only to overrides.",
     "Read — and change — which engine, model and effort each role runs on (builder, reviewer, verifier, architect, orchestrator, cleaner, prod-auditor, deployer, maintainer, and the builder and reviewer variants such as `trivial`, `frontend` or `apply-fixes`), the mapping the Settings agent mapping edits and `PUT /api/roles` writes.",
-    "Called without `overrides` it is a read: per role its `config` and its `variants`, plus the registry `revision`, its `health` and any `resets` a retirement made. `detail: true` adds each role's `shipped` values and whether its prompt text is overridden, and `choices`, every valid model per engine with the efforts each accepts.",
+    "Called without `overrides` or `workerLimit` it is a read: per role its `config` and its `variants`, plus the registry `revision`, its `health` and any `resets` a retirement made. `detail: true` adds each role's `shipped` values and whether its prompt text is overridden, and `choices`, every valid model per engine with the efforts each accepts.",
     "`overrides` writes, in the shape of the PUT: `{ [roleId]: { config?, variants? } }`, where a full `{ engine, model, effort }` sets a row and `null` resets it to the shipped default; an absent key is left alone, and `promptScaffold: null` restores the shipped prompt text (a scaffold cannot be set from here). Example: `{ builder: { config: { engine: \"claude\", model: \"claude-sonnet-5-5\", effort: \"high\" } }, reviewer: { config: null } }`.",
     "Only the designated orchestrator seat and the operator's own session write; any other caller reads, and its write is refused with `role_presets_write_refused` before anything else is checked.",
     "The whole write is refused, and nothing is stored, when a row names an engine, model or effort outside the launch catalogue (`role_presets_invalid`, with the offending `violations` and `choices`) or when `expectedRevision` is not the current revision (`role_presets_stale_revision`, carrying the current registry to resend against). `expectedRevision` is optional.",
@@ -4388,6 +4389,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   role_presets: z.object({
     clientRequestId: clientRequestIdSchema,
+    workerLimit: z.object({ value: z.number().int().min(1).max(64).nullable(), project: z.string().trim().min(1).optional(), reason: z.string().trim().min(1).max(300) }).optional(),
     overrides: z.record(z.string(), z.object({
       config: z.object({ engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable().optional()
         .describe("A full { engine, model, effort } sets the role's row; null resets it to the shipped default."),

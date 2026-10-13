@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import type { ApiError } from "@/lib/types";
+import { workerReading } from "@/lib/operator/workerLimitView";
 
 import { readOrchestratorIncumbent, type OrchestratorIncumbentBody } from "./incumbent";
 
@@ -20,5 +21,5 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest): Promise<NextResponse<OrchestratorIncumbentBody | ApiError>> {
   const project = req.nextUrl.searchParams.get("project")?.trim() ?? "";
   if (!project) return NextResponse.json({ error: "project is required" }, { status: 400 });
-  return NextResponse.json(await readOrchestratorIncumbent(project));
+  return NextResponse.json({ ...await readOrchestratorIncumbent(project), workers: workerReading(project) });
 }

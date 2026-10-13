@@ -92,7 +92,7 @@ const REVIEW_DEPENDENCIES = "Prefer the project's review-export helper when it h
 /** The same rules for an orchestrator launched without the mandate (a child
     spawn, a pipeline stage): its scaffold already carries process cleanup,
     and a seat's mandate carries longer versions of the rest. */
-export const ORCHESTRATOR_WITHOUT_MANDATE_RULES = [MISSING_ACCESS, PROJECT_RULES, SEARCH_PRIOR_CONVERSATIONS, HUMAN_IN_THE_LOOP].join(" ");
+export const ORCHESTRATOR_WITHOUT_MANDATE_RULES = [MISSING_ACCESS, PROJECT_RULES, SEARCH_PRIOR_CONVERSATIONS, HUMAN_IN_THE_LOOP, "Keep no more workers running at once than the worker limit each wake and get_orchestrator state, in every mode: each running lane and each live spawned agent counts as one."].join(" ");
 
 // docs/design/model-sizing-tiers.md §1: the small-change tier. Builder and
 // reviewer only, so any other role refuses size as an unknown parameter.
@@ -177,15 +177,14 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "repo", label: "Repository", description: "Repository for backlog-campaign mode.", kind: "text" },
       { key: "issueQuery", label: "Issue query", description: "Issue query for backlog-campaign mode.", kind: "text" },
       { key: "urgent", label: "Urgent list", description: "Comma-separated urgent issue ids.", kind: "text" },
-      { key: "maxWorkers", label: "Maximum workers", description: "Worker cap in every mode: each running lane and each live spawned agent counts as one.", kind: "integer", default: 3, min: 1, max: 20 },
       { key: "mergePolicy", label: "Merge policy", description: "Delivery policy for backlog-campaign mode.", kind: "select", options: ["pr", "merge"] },
       { key: "completionPolicy", label: "Completion policy", description: "Terminal policy for backlog-campaign mode.", kind: "select", options: ["pr-opened", "merged", "released"] },
     ],
     /* The backlog-campaign lines, its paragraph included, render only in that
-       mode (`registry.ts`); the worker cap holds in every mode
-       (agent-prompt-contract.md §3 (c1)). The merge policy yields to the
+       mode (`registry.ts`); the mandate carries the worker rule in every mode.
+       The merge policy yields to the
        project's merge setting, as the mandate's merge bar says. */
-    promptScaffold: `You are the Orchestrator. Mode: {{mode}}. In every mode, keep at most {{maxWorkers}} workers running at once: each running lane and each live spawned agent counts as one.\nRepository: {{repo}}\nIssue query: {{issueQuery}}\nUrgent list: {{urgent}}\nMerge policy: {{mergePolicy}}\nCompletion policy: {{completionPolicy}}\nBacklog campaign: inventory dependencies before assigning work, take each lane's runtime from the role table, give each lane's reviewer maxRounds: 1, and require the project's own release checks. The merge policy applies only where the project's merge setting allows a merge; that setting governs every merge.\n\n${PROCESS_CLEANUP_RULE}`,
+    promptScaffold: `You are the Orchestrator. Mode: {{mode}}.\nRepository: {{repo}}\nIssue query: {{issueQuery}}\nUrgent list: {{urgent}}\nMerge policy: {{mergePolicy}}\nCompletion policy: {{completionPolicy}}\nBacklog campaign: inventory dependencies before assigning work, take each lane's runtime from the role table, give each lane's reviewer maxRounds: 1, and require the project's own release checks. The merge policy applies only where the project's merge setting allows a merge; that setting governs every merge.\n\n${PROCESS_CLEANUP_RULE}`,
     safetyFences: [
       "Delegatus control uses the Delegatus MCP tools with src lineage.",
       "Fresh empty sessions only; forks are disabled.",
