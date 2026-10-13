@@ -31,6 +31,42 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 const TARGET = "a".repeat(40);
 const OLD = "b".repeat(40);
 
+test("a busy checkout survives reconstruction and protects turns until they finish", async () => {
+  const h = scenario(); h.setTurn(true);
+  let service = h.service();
+  try {
+    await service.autoTick(); expect(h.pending()).toBeNull();
+    service.stop(); service = h.service();
+    h.advance(2 * 60_000); await service.autoTick();
+    expect(h.pending()).toBeNull();
+    h.setTurn(false); await service.autoTick();
+    h.advance(60_000); await service.autoTick();
+    expect(h.pending()?.role).toBe("web");
+    expect(readAuto(join(h.dir, "auto.json")).drain?.admitted).toBe(true);
+    h.advance(DRAIN_LEASE_MS);
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+  } finally { service.stop(); }
+});
+
+test.each(["web", "runtime-host"] as const)("a returning cohort turn blocks final %s admission after the safe boundary", async (role) => {
+  const h = scenario(); h.setTurn(true);
+  if (role === "runtime-host") h.record.web.revision = TARGET.slice(0, 7);
+  const service = h.service();
+  try {
+    await service.autoTick(); h.advance(2 * 60_000);
+    h.setTurn(false); await service.autoTick();
+    expect(h.pending()?.role).toBe(role);
+    h.setTurn(true);
+    let restarted = 0;
+    const watcher = watchRestartRequests(h.record.requestFile, async () => { restarted++; }, {
+      intervalMs: 60_000, admitAuto: ({ requestId, autoGateId }) => service.admitAutoRestart(requestId, autoGateId),
+    });
+    try { await watcher.poll(); } finally { watcher.stop(); }
+    expect(restarted).toBe(0);
+    expect(h.pending()).toBeNull();
+  } finally { service.stop(); }
+});
+
 test.each(["before-tick", "mode-wait", "submitted-wait", "ancestor", "taken-web"] as const)("checkout admission fetches real main ancestry at %s", async (seam) => {
   const h = scenario();
   const remote = join(h.dir, "remote");
@@ -241,7 +277,7 @@ test.each(["pending-web", "between-roles"] as const)("switch-off at %s retains e
   service.stop();
 });
 
-test("the six-hour notice retains launches between checkout restart roles", async () => {
+test("the six-hour notice releases an unaccepted checkout hold", async () => {
   const h = scenario();
   h.setTurn(true);
   const service = h.service();
@@ -250,7 +286,7 @@ test("the six-hour notice retains launches between checkout restart roles", asyn
   h.record.web.revision = TARGET.slice(0, 7);
   h.advance(DRAIN_NOTICE_MS);
   await service.autoTick();
-  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+  expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
   expect(readAuto(join(h.dir, "auto.json")).drain?.overranAt).not.toBeNull();
   service.stop();
 });
@@ -265,8 +301,9 @@ test("a ready update immediately holds admission and a three-hour cohort still d
     expect(lease).not.toBeNull();
     h.advance(3 * 60 * 60_000);
     await service.autoTick();
-    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(lease!.id);
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
     expect(h.pending()).toBeNull();
+    h.advance(DRAIN_LEASE_MS);
     h.setTurn(false);
     await service.autoTick();
     h.advance(60_000);
@@ -275,7 +312,7 @@ test("a ready update immediately holds admission and a three-hour cohort still d
   } finally { service.stop(); }
 });
 
-test("a pending green checkout update holds admission before its candidate build", async () => {
+test("a pending green checkout update bounds the hold while its candidate build runs", async () => {
   const h = scenario();
   h.setTurn(true);
   const revision = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1", date: "" });
@@ -301,7 +338,7 @@ test("a pending green checkout update holds admission before its candidate build
     expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.target).toBe(TARGET);
     h.advance(3 * 60 * 60_000);
     await service.autoTick();
-    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.target).toBe(TARGET);
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
   } finally { service.stop(); finishBuild?.(); }
 });
 
@@ -338,7 +375,7 @@ test("checkout advances an unaccepted red target to a green build under the orig
     expect(original.target).toBe(TARGET);
     expect(builds).toHaveLength(0);
     service.stop();
-    h.advance(DRAIN_LEASE_MS + 1);
+    h.advance(1_000);
     service = createService();
     available = newer;
     await service.check();
@@ -352,7 +389,7 @@ test("checkout advances an unaccepted red target to a green build under the orig
   } finally { finishBuild?.(); service.stop(); }
 });
 
-test("six hours names blockers for an operator decision while admission remains held", async () => {
+test("six hours names blockers for an operator decision while admission reopens", async () => {
   const h = scenario();
   h.setTurn(true);
   h.deps.quiet!.runtimeSnapshot = async () => ({ sessions: [{ conversationId: "conversation_long_turn", engine: "codex", host: "hosted", turn: "running" }] }) as never;
@@ -361,7 +398,7 @@ test("six hours names blockers for an operator decision while admission remains 
     await service.autoTick();
     h.advance(6 * 60 * 60_000);
     await service.autoTick();
-    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
     const drain = readAuto(join(h.dir, "auto.json")).drain;
     expect(drain?.overranAt).not.toBeNull();
     expect(drain?.blockers?.turnList?.[0]?.conversationId).toBe("conversation_long_turn");
@@ -380,7 +417,7 @@ test.each(["red", "pending", "unknown"] as const)("a pending checkout update hol
     expect(hold).not.toBeNull();
     h.advance(DRAIN_NOTICE_MS); await service.autoTick();
     expect(readAuto(file).drain?.overranAt).not.toBeNull();
-    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(hold!.id);
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
     expect(h.pending()).toBeNull();
   } finally { service.stop(); }
 });
@@ -401,12 +438,12 @@ test.each(["red", "pending", "unknown"] as const)("six-hour cohort notice surviv
     expect(auto.green[TARGET]?.state).toBe(state);
     expect(auto.drain?.overranAt).not.toBeNull();
     expect(auto.drain?.blockers?.turnList?.[0]?.conversationId).toBe("conversation_original");
-    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
     expect(h.pending()).toBeNull();
   } finally { service.stop(); }
 });
 
-test.each(["keep-waiting", "deploy-now"] as const)("the operator's %s decision preserves custody and fences stale replies", async (choice) => {
+test.each(["keep-waiting", "deploy-now"] as const)("the operator's %s decision respects bounded waiting and fences stale replies", async (choice) => {
   const h = scenario();
   h.setTurn(true);
   const service = h.service();
@@ -418,7 +455,7 @@ test.each(["keep-waiting", "deploy-now"] as const)("the operator's %s decision p
     expect(await service.decideDrain("old-decision", choice)).toMatchObject({ ok: false });
     expect(await service.decideDrain(drain.id, choice)).toEqual({ ok: true });
     expect(await service.decideDrain(drain.id, choice)).toMatchObject({ ok: false });
-    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id).toBe(drain.id);
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())?.id ?? null).toBe(choice === "deploy-now" ? drain.id : null);
     if (choice === "deploy-now") expect(h.pending()?.role).toBe("web");
     else {
       expect(h.pending()).toBeNull();
@@ -1342,7 +1379,7 @@ test("cold recovery renews an expired drain before autonomous controllers start"
   } finally { service.stop(); }
 });
 
-test("timer ticks renew the drain while an earlier observation is still waiting", async () => {
+test("timer ticks expire waiting even while an earlier observation is still waiting", async () => {
   const h = scenario();
   h.setTurn(true);
   const service = h.service();
@@ -1359,7 +1396,7 @@ test("timer ticks renew the drain while an earlier observation is still waiting"
     await observing;
     h.advance(DRAIN_LEASE_MS + 1);
     await service.autoTick();
-    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).not.toBeNull();
+    expect(activeDrain(join(h.dir, "auto-drain.json"), h.deps.now())).toBeNull();
   } finally { resume(); await firstTick; service.stop(); }
 });
 

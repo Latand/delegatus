@@ -35,6 +35,8 @@ import {
 import { entryOwners, headlessRoundVerdict, ownerProcessAlive, type RecordedOwner } from "./owners";
 import { classifyAgentActivity, type AgentActivity, type AgentActivityFacts } from "./agentActivity";
 import { activityProcessReader } from "./agentActivityProcesses";
+import { DEFAULT_STALL_AFTER_MS } from "./limits";
+export { DEFAULT_STALL_AFTER_MS } from "./limits";
 import type { LifecycleState, LifecycleTurnState } from "./vocabulary";
 
 /**
@@ -48,10 +50,6 @@ import type { LifecycleState, LifecycleTurnState } from "./vocabulary";
  * a pipeline stuck at `running` over a dead host is exactly the failure this
  * exists to catch.
  */
-
-/** Silence under a LIVE host that turns `running` into `stalled`. A dead host
-    over an open turn needs no threshold: it can never progress. */
-export const DEFAULT_STALL_AFTER_MS = 10 * 60_000;
 
 /** A launch with no host evidence yet is `starting`, not `gone`. Mirrors the
     unproven-launch grace the reaper and blocker evaluation already agree on.
@@ -640,6 +638,30 @@ export function evaluateLiveness(input: {
   if (input.turnState === "idle") return { lifecycle: "waiting", reason: "host_alive_turn_idle" };
   if (silent) return { lifecycle: "stalled", reason: "host_alive_transcript_silent" };
   return { lifecycle: "running", reason: "host_alive_turn_active" };
+}
+
+/** The activity-aware verdict shared by agent activity and automatic waiting.
+ * Tool and descendant-process evidence belongs to the supplied owner only. */
+export function evaluateActivityLiveness(input: Parameters<typeof evaluateLiveness>[0] & {
+  now: number;
+  activityFacts?: AgentActivityFacts | null;
+  workProcesses?: AgentActivityFacts["workProcesses"];
+  unresolvedActivityOwnership?: boolean;
+}) {
+  const activity = input.turnVerified !== false && input.host.state === "alive" && input.turnState !== "idle"
+    ? classifyAgentActivity({ ...input.activityFacts, lastRecordAt: input.silentForMs === null ? null : input.now - input.silentForMs,
+      workProcesses: input.workProcesses }, input.now, input.stallAfterMs)
+    : undefined;
+  const silent = input.silentForMs !== null && input.silentForMs >= input.stallAfterMs;
+  const verified = input.turnVerified !== false
+    && !(input.host.state === "alive" && input.turnState !== "idle" && input.activityFacts?.backgroundVerified === false
+      && activity?.state !== "checking" && silent)
+    && !((input.activityFacts?.turnBoundaryVerified === false || input.unresolvedActivityOwnership)
+      && activity?.state !== "checking" && silent);
+  const verdict = evaluateLiveness({ ...input, turnVerified: verified,
+    silentForMs: activity?.state === "checking" ? null : input.silentForMs });
+  return { ...verdict, verified,
+    activity: verified && (verdict.lifecycle === "running" || verdict.lifecycle === "stalled") ? activity : undefined };
 }
 
 /** The part of a liveness record that says whether a process still owns it. */
@@ -1317,21 +1339,16 @@ async function livenessSnapshotWithin(
     const pendingPermission = host.state === "alive" && host.kind === "structured"
       ? registryEntry?.structuredHost?.pendingPermissions?.[0] ?? null
       : null;
-    const activity = evidence !== null && lastRecordMs !== null && host.state === "alive" && turnState !== "idle"
-      ? classifyAgentActivity({ ...evidence.activityFacts, lastRecordAt: lastRecordMs, workProcesses: host.pid === null ? [] : processes(host.pid) }, now, stallAfterMs)
-      : undefined;
-    const unresolvedActivityOwnership = evidence?.activityFacts?.turnBoundaryVerified === false
-      || unresolvedCurrentWriters.has(conversationId ?? entry.path);
-    const verified = evidence !== null && lastRecordMs !== null
-      && !(host.state === "alive" && turnState !== "idle" && evidence.activityFacts?.backgroundVerified === false
-        && activity?.state !== "checking" && silentForMs !== null && silentForMs >= stallAfterMs)
-      && !(unresolvedActivityOwnership && activity?.state !== "checking" && silentForMs !== null && silentForMs >= stallAfterMs);
-    const verdict = evaluateLiveness({
+    const verdict = evaluateActivityLiveness({
       host,
       turnState,
-      silentForMs: activity?.state === "checking" ? null : silentForMs,
+      silentForMs,
       stallAfterMs,
-      turnVerified: verified,
+      now,
+      turnVerified: evidence !== null && lastRecordMs !== null,
+      activityFacts: evidence?.activityFacts,
+      workProcesses: evidence !== null && lastRecordMs !== null && host.state === "alive" && turnState !== "idle" && host.pid !== null ? processes(host.pid) : [],
+      unresolvedActivityOwnership: unresolvedCurrentWriters.has(conversationId ?? entry.path),
       launchAgeMs: now - entry.mtimeMs,
       // A recorded PID with an unreadable identity is held until proof of
       // death or replacement; it is not an unbound launch aging through grace.
@@ -1342,14 +1359,12 @@ async function livenessSnapshotWithin(
       pendingPermission,
     });
     return {
-      verified,
-      activity: verified && (verdict.lifecycle === "running" || verdict.lifecycle === "stalled") ? activity : undefined,
       ...verdict,
       entry,
       conversationId,
       turnState,
       lastRecordMs,
-      silentForMs: verified ? silentForMs : null,
+      silentForMs: verdict.verified ? silentForMs : null,
       host,
       pipeline: (conversationId ? pipelines.byConversation.get(conversationId) : undefined)
         ?? pipelines.byPath.get(entry.path)

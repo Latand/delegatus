@@ -71,6 +71,7 @@ async function startIncumbent(): Promise<void> {
     requestTimeoutMs: 5_000,
     shutdownGraceMs: 250,
     spawnProcess: spawnEngine("hold"),
+    readProtocolVersion: () => "0.162.1",
   });
   const key = { engine: "codex" as const, sessionId: host.identity.threadId };
   registry.upsert({
@@ -127,6 +128,7 @@ async function startSuccessor(): Promise<void> {
       requestTimeoutMs: 5_000,
       shutdownGraceMs: 250,
       spawnProcess: spawnEngine("probe"),
+      readProtocolVersion: () => "0.162.1",
     }),
     { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
   );

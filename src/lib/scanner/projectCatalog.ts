@@ -214,6 +214,76 @@ function readState(): ProjectCatalogState {
   }
 }
 
+export type RecordedProjectAttribution = { project: string; projectName?: string };
+let indexedState: { signature: string; state: ProjectCatalogState } | undefined;
+
+/** The persisted index, parsed once per written file. Its records are shared
+    with every later reader: never mutate them. */
+function indexedCatalogState(): ProjectCatalogState {
+  let signature: string;
+  try {
+    const st = fs.statSync(catalogPath());
+    signature = `${st.dev}:${st.ino}:${st.size}:${st.mtimeMs}`;
+  } catch {
+    return { version: 2, resolutionVersion: PROJECT_RESOLUTION_VERSION, files: {} };
+  }
+  if (indexedState?.signature !== signature) indexedState = { signature, state: readState() };
+  return indexedState.state;
+}
+
+/**
+ * The project each transcript holds now, without a scan and without writing
+ * the index. A persisted record answers only under the checks a catalog pass
+ * applies before reusing it (`cachedFile`): the working directories the
+ * records name are observed for linked checkouts first, and a record whose
+ * resolution state has moved since is projected again from its own metadata,
+ * because a folder can become a worktree while its transcript keeps the same
+ * bytes. A transcript the index does not hold, or holds for other bytes, is
+ * described from its head. Null when more than `describeLimit` transcripts
+ * need describing or one of them cannot be described completely: a caller
+ * then has no proof of which projects exist.
+ */
+export async function currentProjectAttributions(
+  entries: readonly RawEntry[],
+  describeLimit: number,
+): Promise<RecordedProjectAttribution[] | null> {
+  const index = indexedCatalogState();
+  const observed = new Set<string>();
+  await forEachCooperatively(entries, (entry) => {
+    const cwd = index.files[entry.path]?.cwd;
+    if (!cwd || observed.has(cwd)) return;
+    observed.add(cwd);
+    observeWorktreeResolution(cwd);
+  });
+  const stateKey = projectResolutionStateKey();
+  /* `cachedFile` stores what it re-derives; a private state takes those
+     writes, so the parsed index stays as the scan wrote it. */
+  const state: ProjectCatalogState = { version: 2, resolutionVersion: index.resolutionVersion, files: {} };
+  const projects = new Map<string, RecordedProjectAttribution>();
+  let described = 0;
+  let verified = true;
+  await forEachCooperatively(entries, (entry) => {
+    if (!verified) return;
+    const record = index.files[entry.path];
+    const recordedBytes = record?.summaryVersion === PROJECT_SUMMARY_VERSION
+      && record.size === entry.st.size
+      && record.mtimeMs === entry.st.mtimeMs;
+    if (!recordedBytes && (described += 1) > describeLimit) {
+      verified = false;
+      return;
+    }
+    if (record) state.files[entry.path] = record;
+    const file = cachedFile(entry, state, stateKey);
+    if (file.summaryVersion !== PROJECT_SUMMARY_VERSION) {
+      verified = false;
+      return;
+    }
+    const project = file.project || "other";
+    projects.set(`${project}\0${file.projectName ?? ""}`, { project, projectName: file.projectName });
+  });
+  return verified ? [...projects.values()] : null;
+}
+
 function persistenceDiagnostic(operation: string, target: string, error: unknown): void {
   const now = Date.now();
   if (now - lastCatalogPersistenceDiagnosticAt < CATALOG_PERSISTENCE_DIAGNOSTIC_MS) return;

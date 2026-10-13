@@ -156,6 +156,47 @@ the operating-system user's `$HOME/.cache/delegatus-cpu`, shared with the
 Viewer container even when a child sandboxes HOME. `LLV_GATE_LOCK_DIR` puts a
 private queue alongside private slot locks for tests.
 
+Only the live installation waits in that machine queue: the instance whose
+state directory is `$HOME/.config/delegatus/state` of the operating-system
+user (or its `agent-log-viewer` spelling, or a link to either). Every other
+instance keeps its queue in `<state>/cpu-gate`, whatever started it and
+whatever owner token it carries (`src/lib/runtime/cpuAdmissionScope.ts`): a
+test's `LLV_STATE_DIR`, a staging instance on `state-staging`, a fixture state
+nested inside the live one, a driver's own `HOME` or `XDG_CONFIG_HOME` wherever
+it sits, a spawned agent's sandbox, any test or build process. A place under
+the operator's config root earns nothing by itself. `scripts/gate-slot.sh`
+stays on the machine queue from any environment: its command tickets end with
+their owner. An installation that keeps its real state anywhere else gets its
+own queue too; `LLV_GATE_LOCK_DIR` set to one directory for the Viewer and for
+gate-slot joins them again.
+
+A stage ticket has no process behind it, so every check records its poll. An
+ownerless ticket nobody has polled for 60 seconds is passed over by every
+checker. Its row stays, so an instance that was only restarting returns to its
+sequence and age with its next check, and the spacing between admissions still
+holds. After 24 hours without a poll, a ticket no fence holds is removed.
+
+A release that predates polls shares the file for as long as it serves, and
+its statements are fixed, so the queue keeps this state where that release
+already looks. A passed-over ticket gets a row in `suspended`, which every
+release skips, and one in `unpolled`, which tells it from a fence's hold and
+lets the 24-hour removal reach it. Triggers in the file record the rest for
+every connection: the insert each check repeats records the poll and ends the
+passing over; a fence's hold replaces the passing over, and its release gives
+the ticket one fresh 60-second bound; a reconcile leaves the passing over in
+place and the ticket's own check ends it; a removed ticket takes its rows along. The
+column, the table, the triggers and the first bound of the tickets already
+queued commit in one writer transaction that reads the schema under its lock,
+so two releases opening the file together never see part of it. On
+2026-10-13 two stage tickets left by a test's child processes held the head of
+the machine queue for 1 h 45 min; nothing reconciled them, because each
+release reconciles only its own namespace.
+
+When the head is past its ten-minute bound and nothing has been admitted for
+a minute since, the wait no longer promises minutes: the state detail reads
+`Waiting for the CPU queue · 7th · stalled for 62 min`, the card says the
+queue is stalled, and gate-slot prints the same line.
+
 A stage waits before its spawn reservation and wakes every five seconds. Its
 state detail and board card name the queue position and remaining whole minutes:
 `Waiting for the CPU queue · 2nd · up to 7 min`, or

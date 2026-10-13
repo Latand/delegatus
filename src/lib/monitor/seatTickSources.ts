@@ -1,5 +1,7 @@
 import { readReleaseProject } from "@/lib/release/store";
 import { readSeatTurnOutcome, type SeatTurnOutcome } from "./seatAuthIncident";
+import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
+import { projectWorkerCounts } from "@/lib/orchestrator/workerCount";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { contextReading, readOrchestratorTranscriptFacts } from "@/lib/orchestrator/health";
 import type { SeatContextUsage } from "./seatAutoRotation";
@@ -72,6 +74,8 @@ import { scanRootEntries } from "@/lib/scanner/roots";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import type { StructuredHostRetirementReport } from "@/lib/runtime/structuredHostRetirement";
 import { loadTasks } from "@/lib/tasks/store";
+import { telegramPostSignals } from "@/lib/prototypeReview/telegramPostSignals";
+import { loadSeatRounds } from "@/lib/prototypeReview/seatRounds";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { evidenceFromPipelines, evidenceFromTasks } from "./evidence";
@@ -486,6 +490,7 @@ export interface SeatTickSources {
   seatEverHeld?: (project: string) => boolean;
   /** Projects that currently hold an active seat. */
   activeSeats: () => string[];
+  workerCounts?: typeof projectWorkerCounts;
   pipelines: () => readonly Pipeline[];
   /** Settled lanes the hot store has already let go of (#1289). Cold storage,
       so it is read only once a check has decided it would pay for a `gh`
@@ -692,6 +697,7 @@ export function defaultSeatTickSources(): SeatTickSources {
     seatFor: (project) => orchestratorSeatForCurrentProject(project),
     seatEverHeld: (project) => orchestratorSeatEverHeld(project),
     activeSeats: () => activeSeatsByCurrentProject().map((seat) => seat.project),
+    workerCounts: projectWorkerCounts,
     pipelines: () => loadPipelinesForList(),
     archivedPipelines: () => loadArchivedPipelines(),
     tasks: () => loadTasks(),
@@ -1386,7 +1392,7 @@ export function readRetirementJournalWindow(filename: string, sinceMs: number): 
 }
 
 function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
-  const found: SeatTickSignalInput[] = [];
+  const found: SeatTickSignalInput[] = telegramPostSignals(project, sources.tasks(), loadSeatRounds(project));
   if (viewerOwnProjectKeys().includes(project)) {
     found.push(...selfUpdateSignals(readAuto(statePath("self-update", "auto.json"))));
   }
@@ -2484,6 +2490,10 @@ export async function gatherSeatTickInput(
     project: canonical,
     now,
     seat,
+    workers: { ...(() => {
+      const limit = effectiveWorkerLimit(canonical);
+      return { limit: limit.value, source: limit.source, machine: limit.machine };
+    })(), running: sources.workerCounts?.().byProject.get(canonical) ?? 0 },
     ...(seat ? {} : { seatEverHeld: sources.seatEverHeld?.(canonical) ?? true }),
     pipelines,
     tasks,

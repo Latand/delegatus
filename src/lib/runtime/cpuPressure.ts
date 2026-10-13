@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
-import { machineCpuAdmissionQueue, cpuCommandOwner, type CpuQueueWait } from "./cpuAdmission";
+import { cpuCommandOwner, type CpuQueueWait } from "./cpuAdmission";
+import { instanceCpuAdmissionQueue } from "./cpuAdmissionScope";
 import { CPU_QUEUE_DETAIL_PREFIX, cpuQueueDetail } from "./cpuQueueText";
 
 import { delegatusSetting } from "./cpuPlacement";
@@ -72,7 +73,7 @@ export class CpuPressureGate {
 
 /** Queue position and whole minutes change only as the wait progresses. */
 export function cpuPressureHoldDetail(hold: CpuPressureHold, subject = "stage start"): string {
-  if (hold.queue) return cpuQueueDetail(hold.queue.position, hold.queue.remainingMs);
+  if (hold.queue) return cpuQueueDetail(hold.queue.position, hold.queue.remainingMs, hold.queue.stalledMs);
   const since = new Date(hold.since).toISOString();
   return hold.deferred
     ? `${subject} deferred by CPU pressure: held since ${since} (avg10 ${hold.avg10}% ≥ ${hold.policy.holdAt}%); it starts once pressure stays below ${hold.policy.releaseBelow}% for ${hold.policy.releaseAfterMs / 1000} s`
@@ -123,10 +124,10 @@ export function machineCpuPressureGate(): CpuStartGate | null {
     check: (key = `command:${process.pid}`) => {
       const held = pressure?.check();
       const durable = key.startsWith("stage:") || key.startsWith("workflow:");
-      const queue = machineCpuAdmissionQueue().check(key, !held, durable ? undefined : cpuCommandOwner());
+      const queue = instanceCpuAdmissionQueue().check(key, !held, durable ? undefined : cpuCommandOwner());
       return queue ? { since: queue.since, avg10: held?.avg10 ?? 0, deferred: false, policy: policy ?? DEFAULT_CPU_PRESSURE_POLICY, queue } : null;
     },
-    cancel: (key) => machineCpuAdmissionQueue().cancel(key),
+    cancel: (key) => instanceCpuAdmissionQueue().cancel(key),
   };
 }
 /** How often a waiting start samples the machine gate. */

@@ -1304,6 +1304,7 @@ export interface SeatTickWorkerAskInput {
 export interface SeatTickCheckInput {
   releaseAlerts?: { kind: "release-settled" | "release-blocked"; id: string; label: string }[];
   project: string;
+  workers?: { limit: number; source: string; machine: number; running: number };
   now: number;
   seat: SeatTickSeatInput | null;
   /** Read only while {@link seat} is null: whether an orchestrator ever held

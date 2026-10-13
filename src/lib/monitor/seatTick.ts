@@ -1745,6 +1745,8 @@ export function seatTickReportLines(
 ): string[] {
   const reports = input.reports;
   if (!reports?.bridgeReports) return [];
+  const asks = state.asksOwed ?? [];
+  const compactLedger = !!input.workers && asks.length > 1;
   const language = reports.operatorLocale ? `, in ${LANGUAGE_NAME[reports.operatorLocale]}` : "";
   const lines: string[] = [];
   const owed: { key: string; label: string }[] = [...(state.reportsOwed ?? [])];
@@ -1759,16 +1761,17 @@ export function seatTickReportLines(
     const named = compact ? `${owed.length} outcome(s)` : labels;
     const more = !compact && owed.length > OWED_NAMED_LIMIT ? `, and ${owed.length - OWED_NAMED_LIMIT} more` : "";
     const dropped = state.reportsOwedDropped ? ` (${state.reportsOwedDropped} older owed outcome(s) no longer listed)` : "";
-    lines.push(`Report owed${language}, before this turn ends: ${named}${more}${dropped}. File one report with key ${owed[0]!.key} and coversOwed: true.`);
+    lines.push(compactLedger
+      ? `Report owed${language}: ${named}${more}${dropped}. File key ${owed[0]!.key}, coversOwed: true, before turn ends.`
+      : `Report owed${language}, before this turn ends: ${named}${more}${dropped}. File one report with key ${owed[0]!.key} and coversOwed: true.`);
     if (!input.pipelines.some(isOpenLane) && owed.some((entry) => entry.key.startsWith("lane:"))) {
-      lines.push("Nothing is running now: the report says so.");
+      lines.push(compactLedger ? `Report ${input.workers!.running} running workers.` : "Nothing is running now: the report says so.");
     }
   }
-  const asks = state.asksOwed ?? [];
   if (asks.length > 1) {
     // Keep all durable keys visible without repeating the same bridge action
     // sixteen times in the reserved tail of a bounded wake.
-    lines.push(`Question reports owed: file bridge_report with class: question, the question in the decision section, and each matching key: ${asks.map(ask => ask.key).join(", ")}.`);
+    lines.push(`${compactLedger ? "Question reports owed: bridge_report class: question; question in decision section; keys: " : "Question reports owed: file bridge_report with class: question, the question in the decision section, and each matching key: "}${asks.map(ask => ask.key).join(", ")}.`);
   } else for (const ask of asks) {
     lines.push(`Question report owed: the question offered at ${clock(ask.at)} has no matching bridge report. File bridge_report with class: question, key ${ask.key} and the question in the decision section.`);
   }

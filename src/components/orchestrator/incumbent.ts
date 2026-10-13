@@ -60,6 +60,7 @@ export interface IncumbentTranscript {
 }
 
 export interface OrchestratorIncumbent {
+  workers?: import("@/lib/operator/workerLimitView").WorkerReading | null;
   project: string;
   /** False means the seat is vacant — the status read agrees with the seat read
       rather than holding the last incumbent on screen. */
@@ -89,6 +90,17 @@ export type IncumbentTelegramAction = "sign_in" | "check" | "restart";
 const str = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
 const num = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
 
+function parseWorkers(value: unknown): OrchestratorIncumbent["workers"] {
+  if (!value || typeof value !== "object") return null;
+  const row = value as Record<string, unknown>;
+  if (!["default", "machine", "project"].includes(String(row.source))) return null;
+  for (const key of ["running", "runningMachine", "limit", "machine"]) {
+    if (typeof row[key] !== "number" || !Number.isInteger(row[key]) || row[key] < 0) return null;
+  }
+  if ((row.limit as number) < 1 || (row.limit as number) > 64 || (row.machine as number) < 1 || (row.machine as number) > 64) return null;
+  return row as unknown as NonNullable<OrchestratorIncumbent["workers"]>;
+}
+
 /** Anything unreadable answers null: the header then says «reading…» instead of
     rendering a half-parsed incumbent. */
 export function parseIncumbent(body: unknown): OrchestratorIncumbent | null {
@@ -99,6 +111,7 @@ export function parseIncumbent(body: unknown): OrchestratorIncumbent | null {
   const engine = raw.engine === "claude" || raw.engine === "codex" ? raw.engine : null;
   return {
     project,
+    workers: parseWorkers(raw.workers),
     designated: raw.designated === true,
     conversationId: str(raw.conversationId),
     predecessorConversationId: str(raw.predecessorConversationId),

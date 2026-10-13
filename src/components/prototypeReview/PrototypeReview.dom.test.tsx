@@ -76,6 +76,33 @@ afterEach(async () => {
   dom.document.body.innerHTML = "";
 });
 
+test.each([false, true])("a Telegram failure has a visible reason and resend keeps the draft (phone: %s)", async phone => {
+  phoneLayout = phone;
+  const read = reviewRead();
+  read.rounds[0]!.telegramPost = { key: "automatic", state: "failed", reason: "forbidden", at: "2026-10-13T00:00:00Z" };
+  const posts: Record<string, unknown>[] = [];
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (String(url) === "/api/prototype-reviews/telegram") {
+      const body = JSON.parse(String(init?.body)); posts.push(body);
+      return Response.json({ reviewId: body.reviewId, telegramPost: { key: body.clientRequestId, state: "sent", at: "2026-10-13T00:01:00Z" } });
+    }
+    return Response.json(read);
+  }) as typeof fetch;
+  const host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host);
+  await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout" onClose={() => {}} />); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(document.querySelector("[data-prototype-telegram-state]")?.textContent).toContain("forbidden");
+  await act(async () => { document.querySelector<HTMLElement>("[data-prototype-variant='1']")?.click(); });
+  const field = document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!;
+  const props = (field as unknown as Record<string, { onChange: (event: { target: { value: string } }) => void }>)[Object.keys(field).find(key => key.startsWith("__reactProps$"))!]!;
+  await act(async () => { props.onChange({ target: { value: "Keep this draft" } }); });
+  await act(async () => { document.querySelector<HTMLElement>("[data-prototype-telegram-resend]")!.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(posts).toHaveLength(1);
+  expect(posts[0]).toMatchObject({ reviewId: read.rounds[0]!.id, clientRequestId: expect.any(String) });
+  expect(document.querySelector("[data-prototype-telegram-state]")?.textContent).toContain("Telegram");
+  expect(field.value).toBe("Keep this draft");
+});
+
 test.each([false, true])("Hide and history Undo share dismissal identity and keep a real choice available (phone: %s)", async (phone) => {
   phoneLayout = phone;
   const calls: unknown[] = [];

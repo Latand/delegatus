@@ -9,8 +9,9 @@ import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { requestSchema, type ExternalRelayRequest } from "./protocol";
 import { contextRequest } from "./request.fixture";
 import { ownerTierFor } from "./profile";
-import { observeOwnerTurn, ownerAnswer, ownerRunPrompt, runOwnerAgent, revokeOwnerRuns, settleOwnerFirstPrompt, type OwnerRunPorts } from "./ownerRun";
+import { observeOwnerTurn, ownerAnswer, ownerRunPrompt, runOwnerAgent, revokeOwnerRuns, settleOwnerFirstPrompt, confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
 import { reserveRun, readRunLedger, externalRelayFile, dropRun } from "./store";
+import { sweepExternalRelayOrphans } from "./poller";
 import { appDirIn } from "../../../bin/appDir.mjs";
 import { retainProviderRedactionSecrets } from "@/lib/accounts/providerSecretRedaction";
 
@@ -339,6 +340,48 @@ test("failed owner receipt releases custody only after owed first-prompt cleanup
     expect(registry.readOnlySnapshot().heldDeliveries[delivery.id]).toMatchObject({ state: "failed", text: "" });
     expect(await observeOwnerTurn({ clientAttemptId, claimedAt: new Date().toISOString() }, sources)).toMatchObject({ state: "failed", failure: { kind: "host-died" } });
   } finally { writer.mockRestore(); registry.close(); fs.rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test("a failed owner launch with retired prompt and no host settles its stop after a bounded grace", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "owner-gone-recovery-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const clientAttemptId = "relay-owner-gone-recovery";
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", clientAttemptId });
+  if (begun.kind !== "created") throw Error("owner receipt fixture unavailable");
+  const conversationId = begun.receipt.conversationId;
+  const key = begun.receipt.key ?? { engine: "codex" as const, sessionId: crypto.randomUUID() };
+  const artifactPath = begun.receipt.artifactPath ?? path.join(cwd, `rollout-2026-01-01T00-00-00-${key.sessionId}.jsonl`);
+  const staged = registry.stageStructuredSpawn(begun.receipt.launchId, { key, artifactPath, cwd,
+    accountId: null, claimEpoch: 0, status: "idle", host: null, structuredHost: null, claimOwner: null, pendingAction: null });
+  expect(staged.kind).toBe("settled");
+  registry.failSpawn(begun.receipt.launchId, "owner relay turn revoked");
+  if (begun.receipt.admissionOwner) registry.releaseStructuredSpawnAdmissionOwner(begun.receipt.launchId, begun.receipt.admissionOwner);
+  const sources = { registry: () => registry, now: () => Date.now(), liveness: async () => [] } as Pick<SeatTickSources, "registry" | "liveness" | "now">;
+  const claimedAt = new Date(Date.now() - 120_000).toISOString();
+  const run = { requestId: "gone-owner", relayId: "relay_fixture", targetId: target.id, leaseId: "lease_fixture",
+    conversationId, ownerTurn: { clientAttemptId, cancel: "interrupt" as const, admissionComplete: true },
+    ownerPid: process.pid, ownerIdentity: "fixture", childPid: null, childIdentity: null, runDir: "", startedAt: claimedAt };
+  reserveRun(run, 1);
+  try {
+    const observed = await observeOwnerTurn({ clientAttemptId, conversationId, claimedAt }, sources);
+    expect(observed).toMatchObject({ state: "failed", failure: { kind: "host-died" } });
+    let stops = 0;
+    const ports: OwnerRunPorts = { launch: async () => { throw Error("must not launch"); },
+      observe: turn => observeOwnerTurn(turn, sources), stop: async () => { stops++; throw Error("host is gone"); }, stopRetryMs: 1 };
+    expect(await confirmOwnerStop(run, ports)).toBe(true);
+    expect(readRunLedger().runs.find(row => row.requestId === run.requestId)?.ownerTurn?.confirmed).toBe(true);
+    await sweepExternalRelayOrphans(ports);
+    expect(readRunLedger().runs.some(row => row.requestId === run.requestId)).toBe(false);
+    await sweepExternalRelayOrphans(ports);
+    expect(stops).toBe(1);
+    // Age alone cannot retire a launch whose generation was resumed or still has custody.
+    expect(await observeOwnerTurn({ clientAttemptId, conversationId, claimedAt: new Date().toISOString() }, sources))
+      .toMatchObject({ failure: { kind: "launch-failed" } });
+    registry.upsert({ key, artifactPath, cwd, accountId: null,
+      claimEpoch: 0, status: "live", host: null, structuredHost: null, claimOwner: "active-launch-owner", pendingAction: "spawn" });
+    expect(await observeOwnerTurn({ clientAttemptId, conversationId, claimedAt }, sources))
+      .toMatchObject({ failure: { kind: "launch-failed" } });
+  } finally { dropRun(run.requestId); registry.close(); fs.rmSync(cwd, { recursive: true, force: true }); }
 });
 
 for (const trigger of ["cancel", "revoke"] as const)

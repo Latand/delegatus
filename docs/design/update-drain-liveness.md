@@ -1,7 +1,10 @@
 # Update drain liveness: one verdict per recorded process — design
 
-R8 defines the current release condition. Earlier revision narratives preserve
-the evidence that led here; their release and timeout rules are superseded by R8.
+R8 defines process custody for manual restart and release readers. Automatic
+update waiting follows the bounded policy in
+[automatic-update-waiting.md](automatic-update-waiting.md), which supersedes R8's
+indefinite automatic hold under #2515 / #2381. Earlier revision narratives
+preserve the evidence that led to the custody rules.
 
 ## Originating requirement
 

@@ -9,7 +9,7 @@ import type { OwnerReading, QuietPorts } from "./quiet";
     do not name is owned by a live process unless `read` says otherwise. */
 export function owners(read: (conversationId: string | undefined) => "alive" | "gone" | "unresolved" = () => "alive"): NonNullable<QuietPorts["owners"]> {
   const owner = (id: string | null | undefined, process: "alive" | "gone"): OwnerReading => ({ id: `owner:${id}`, binding: id ?? null,
-    artifactPath: null, entryKey: null, engine: "codex", cwd: null, role: "host", process, tail: { turn: "busy", lastRecordAt: null } });
+    artifactPath: null, entryKey: null, engine: "codex", cwd: null, role: "host", process, tail: { turn: "busy", lastRecordAt: Date.now() } });
   return async (sessions) => {
     const found = sessions.filter((session) => read(session.conversationId) !== "unresolved")
       .map((session) => owner(session.conversationId, read(session.conversationId) === "gone" ? "gone" : "alive"));

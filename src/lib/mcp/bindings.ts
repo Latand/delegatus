@@ -30,6 +30,8 @@ import path from "node:path";
    binary, so a packaged release with no checkout can still name the repository
    it deploys (#1321). */
 import viewerPackageManifest from "../../../package.json";
+import { effectiveWorkerLimit, projectWorkerLimit, readWorkerLimits, setMachineWorkerLimit, setProjectWorkerLimit, isWorkerLimit } from "@/lib/operator/workerLimit";
+import { projectWorkerCounts } from "@/lib/orchestrator/workerCount";
 
 import { activeClaudeAccountId, claudeAccountsForPrivacy, listClaudeAccounts } from "@/lib/accounts/claude";
 import { activeCodexAccountId, codexAccountsForPrivacy, listCodexAccounts } from "@/lib/accounts/codex";
@@ -169,7 +171,9 @@ import { listFiles } from "@/lib/scanner";
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { describe, projectForCwd, reprojectFileDescription } from "@/lib/scanner/describe";
 import { pathAllowed, scanRootEntries } from "@/lib/scanner/roots";
-import { completedFileScan } from "@/lib/scanner/scanCache";
+import { completedFileScan, lastScannedFiles, lastScannedProjectCatalog, type FileScanSnapshot } from "@/lib/scanner/scanCache";
+import { catalogMemberProjects } from "@/lib/scanner/memberProjects";
+import { completedScanForMcp } from "./completedScan";
 import { readCachedResourceSessions, readResources, readResourcesWithDiagnostic } from "@/lib/resources";
 import { adoptLiveRootSession, conversationRole, liveRootSession, type RootSessionSource } from "@/lib/root/adopt";
 import { appendRoleMappingAudit, changedMappingRows, type RoleMappingAuditRow, roleLaunchChoices, roleMappingViolations, roleRegistryAnswer } from "@/lib/roles/mcpMapping";
@@ -764,6 +768,13 @@ export interface ViewerMcpDomainDependencies {
       harnesses fall back to the production resolver. */
   selectedContext?: SelectedContextTargetDependencies;
   completedFileScan(options?: Parameters<typeof completedFileScan>[0]): ReturnType<typeof completedFileScan>;
+  /** The last completed catalog generation, read without starting or joining
+      a scan; null before any generation completed. Absent in harnesses that
+      inject their own complete scan. */
+  lastCompletedCatalog?(): { projectCatalog: FileScanSnapshot["projectCatalog"]; files: readonly FileScanSnapshot["files"][number][] } | null;
+  /** The project of every transcript under the scanner roots now, read
+      without a scan; null when that cannot be established for all of them. */
+  catalogMemberProjects?(): Promise<readonly { project: string; projectName?: string }[] | null>;
   registrySnapshot(): RegistrySnapshot;
   boardFor(project: string): ReturnType<typeof boardFor>;
   applyBoardCommand(input: unknown, snapshot: RegistrySnapshot): ReturnType<typeof applyBoardCommand>;
@@ -1268,7 +1279,13 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
     ...productionSelectedContextDependencies,
     voiceUtteranceContext: productionVoiceUtteranceContext,
   },
-  completedFileScan,
+  completedFileScan: completedScanForMcp,
+  lastCompletedCatalog: () => {
+    const projectCatalog = lastScannedProjectCatalog();
+    const files = lastScannedFiles();
+    return projectCatalog && files ? { projectCatalog, files } : null;
+  },
+  catalogMemberProjects,
   registrySnapshot: () => agentRegistry().readOnlySnapshot(),
   readSpawnAdmissionFence,
   validateSpawnAdmission: (body, context) => productionViewerControlDependencies().post(
@@ -1427,6 +1444,7 @@ export function defaultMcpSpawnRoleParams(
   if (raw !== undefined && (!raw || typeof raw !== "object" || Array.isArray(raw))) return undefined;
   const source = raw as Record<string, unknown> | undefined;
   const resolved = { ...source };
+  if (role === "orchestrator") delete resolved.maxWorkers;
   const missing: RoleParameter[] = [];
   const prompt = typeof args.prompt === "string" ? args.prompt : "";
   for (const parameter of definition.parameters.filter((candidate) => candidate.required)) {
@@ -1441,7 +1459,7 @@ export function defaultMcpSpawnRoleParams(
       `missing required roleParams for ${role}: ${missing.map((parameter) => `${parameter.key}: ${roleParamShape(parameter)}`).join("; ")}`,
     );
   }
-  return Object.keys(resolved).length ? resolved : source;
+  return Object.keys(resolved).length || raw !== undefined ? resolved : undefined;
 }
 
 /** The exact body handed to `/api/spawn`, shared by the one dispatch and the
@@ -1531,6 +1549,8 @@ function requireMcpDeployerConfirmation(args: McpToolArgs): void {
 }
 
 async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  const retiredWorkerLimit = text(args.role) === "orchestrator" && objectRecord(args.roleParams) && "maxWorkers" in args.roleParams
+    ? effectiveWorkerLimit(projectForCwd(spawnCwd(args)) ?? "") : null;
   if (text(args.role) === "deployer") requireMcpDeployerCaller(args, spawnTargetProject(args, spawnCwd(args)), dependencies);
   requireMcpDeployerConfirmation(args);
   let autonomous = !!dependencies;
@@ -1607,6 +1627,7 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
   }
   return {
     conversationId: result.conversationId,
+    ...(retiredWorkerLimit ? { ignored: { "roleParams.maxWorkers": `the project's worker limit applies (${retiredWorkerLimit.value}, ${retiredWorkerLimit.source}); change it with role_presets workerLimit` } } : {}),
     transcriptPath: result.path,
     operationId: result.launchId,
     launchId: result.launchId,
@@ -4131,6 +4152,28 @@ async function resolveOrchestratorToolProject(named: string, dependencies: Viewe
     if (project) add(project);
   }
   if (keys.has(canonical)) return canonical;
+  /* A designated seat is addressed without a complete generation. Every
+     transcript born on a busy machine reopens the catalog generation, so
+     requiring a complete one here refused seat-to-seat messages for as long
+     as agents kept starting. The last completed generation proves a key it
+     lists. A display name needs proof that no other project carries it, and
+     the last generation knows nothing of a project born since, so the name
+     resolves only when every transcript now under the scanner roots has a
+     known project: then one project with that name and an active seat is the
+     recipient. A shared name, an unknown name, a project with no seat and a
+     membership that cannot be attributed still wait for the complete
+     catalog. */
+  const last = dependencies.lastCompletedCatalog?.() ?? null;
+  for (const entry of last?.projectCatalog ?? []) add(entry.project, entry.displayName);
+  for (const entry of last?.files ?? []) add(entry.project, entry.projectName);
+  if (keys.has(canonical)) return canonical;
+  const members = await dependencies.catalogMemberProjects?.() ?? null;
+  if (members) {
+    for (const member of members) add(member.project, member.projectName);
+    if (keys.has(canonical)) return canonical;
+    const known = [...(names.get(named.trim()) ?? [])];
+    if (known.length === 1 && orchestratorSeatFor(known[0]!).active) return known[0]!;
+  }
   const scan = await dependencies.completedFileScan();
   for (const entry of scan.snapshot.projectCatalog) add(entry.project, entry.displayName);
   for (const entry of scan.snapshot.files) add(entry.project, entry.projectName);
@@ -4215,8 +4258,9 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
       : peerSeatMessages(link.key) ? null : "unknown" };
   });
   const revocations = orchestratorRevocations().filter((revocation) => revocation.project === project);
+  const workerLimit = { ...effectiveWorkerLimit(project), running: projectWorkerCounts().byProject.get(project) ?? 0 };
   const base = full ? {
-    project, linkedSeats,
+    project, linkedSeats, workerLimit,
     mergeOnReview: mergeOnReviewEnabled(project),
     bridgeReports: bridgeReportsEnabled(project),
     ...reportFields(project, dependencies),
@@ -4237,7 +4281,7 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
       successorConversationId: revocation.successorConversationId ?? null,
     })),
   } : {
-    project, linkedSeats,
+    project, linkedSeats, workerLimit,
     /* #2187 §4.1: whether finished lanes here merge on their own. */
     mergeOnReview: mergeOnReviewEnabled(project),
     /* #2146: whether this project's bridge reports are on; off, file none. */
@@ -4621,19 +4665,51 @@ function seatTickFenceAnswer(project: string, wakeIntervalMs: number, now: numbe
  * - **What is recorded.** Every write appends who wrote it and each row's before
  *   and after to `role-presets-audit.jsonl` beside role-presets.json.
  */
-function rolePresetsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
-  if (args.overrides === undefined) {
-    if (args.expectedRevision !== undefined) throw new Error("expectedRevision applies to a write; send it with overrides");
-    const detail = args.detail === true;
-    return redactPayload({ ...roleRegistryAnswer(loadRoleRegistrySnapshotOrDefaults(), { detail }), ...(detail ? { choices: roleLaunchChoices() } : {}) });
-  }
-
+async function rolePresetsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const attribution = attributionOf(dependencies);
-  if ((attribution.kind !== "manager" && attribution.kind !== "gateway") || (attribution.kind === "manager" && !attribution.conversationId)) {
+  const writing = args.overrides !== undefined || args.workerLimit !== undefined;
+  if (writing && ((attribution.kind !== "manager" && attribution.kind !== "gateway") || (attribution.kind === "manager" && !attribution.conversationId))) {
     throw new McpToolRefusal(
       "only the designated orchestrator seat and the operator's own session change the role mapping; this session reads it. Ask the orchestrator, or report the request over the bridge.",
       { code: "role_presets_write_refused", callerKind: attribution.kind },
     );
+  }
+  const workerContext = () => {
+    const supplied = dependencies.callerProject?.();
+    const caller = !supplied && attribution.conversationId ? agentRegistry().conversation(attribution.conversationId as never) : null;
+    const cwd = caller?.generations.at(-1)?.launchProfile.cwd;
+    return { own: supplied ?? caller?.projectOwnership?.project ?? (cwd ? projectForCwd(cwd) : null), counts: projectWorkerCounts() };
+  };
+  if (args.overrides === undefined && args.workerLimit === undefined) {
+    if (args.expectedRevision !== undefined) throw new Error("expectedRevision applies to a write; send it with overrides");
+    const detail = args.detail === true;
+    const { own, counts } = workerContext();
+    const stored = readWorkerLimits();
+    const machine = effectiveWorkerLimit("");
+    const project = own ? canonicalOrchestratorProject(own) : null;
+    return redactPayload({ ...roleRegistryAnswer(loadRoleRegistrySnapshotOrDefaults(), { detail }), ...(detail ? { choices: roleLaunchChoices() } : {}), workerLimit: {
+      machine: { value: machine.machine, source: stored.machine ? "machine" : "default", changedAt: stored.machine?.changedAt ?? null, changedBy: stored.machine?.changedBy ?? null },
+      here: project ? { project, value: projectWorkerLimit(project, stored)?.value ?? null, effective: effectiveWorkerLimit(project).value, source: effectiveWorkerLimit(project).source, running: counts.byProject.get(project) ?? 0 } : null,
+      runningMachine: counts.machine, bounds: [1, 64],
+      ...(detail ? { projects: stored.projects, history: stored.history.slice(-20) } : {}),
+    } });
+  }
+
+  if (args.workerLimit !== undefined) {
+    if (args.overrides !== undefined) throw new McpToolRefusal("workerLimit and overrides change separate stores; send separate calls", { code: "worker_limit_with_overrides" });
+    if (args.expectedRevision !== undefined) throw new Error("expectedRevision applies only to overrides");
+    const input = objectRecord(args.workerLimit) ? args.workerLimit : {};
+    if (input.value !== null && !isWorkerLimit(input.value)) throw new Error("worker limit must be an integer from 1 to 64");
+    const reason = text(input.reason);
+    if (!reason || reason.length > 300) throw new Error("worker limit reason is required (1 to 300 characters)");
+    if (input.project !== undefined && !text(input.project)) throw new Error("project must be non-empty");
+    const { own, counts } = workerContext();
+    const project = input.project === undefined ? null : await resolveOrchestratorToolProject(text(input.project), dependencies);
+    const actor = { kind: attribution.kind as "manager" | "gateway", conversationId: attribution.via?.deputy ?? attribution.conversationId, project: own ? canonicalOrchestratorProject(own) : null, via: "tool" };
+    const result = project === null
+      ? setMachineWorkerLimit(input.value as number | null, actor, reason, text(args.clientRequestId) || null)
+      : setProjectWorkerLimit(project, input.value as number | null, actor, reason, text(args.clientRequestId) || null);
+    return redactPayload({ ...result, scope: project === null ? "machine" : project === canonicalOrchestratorProject(own ?? "") ? "project" : "other-project", running: project ? counts.byProject.get(project) ?? 0 : counts.machine });
   }
 
   const expectedRevision = args.expectedRevision;
@@ -4772,6 +4848,7 @@ function autoUpdatesAnswer(snapshot: Record<string, unknown>): McpToolPayload {
       stageList: Array.isArray(auto.blockers.stageList) ? auto.blockers.stageList.slice(0, 20) : [],
     } : null,
     waitingSince: auto.waitingSince ?? null,
+    deferred: auto.deferred ?? null,
     longWait: auto.longWait === true,
     drain: auto.drain ?? null,
     decision: objectRecord(auto.decision) ? { id: auto.decision.id, at: auto.decision.at, project: auto.decision.project } : null,
@@ -6155,18 +6232,20 @@ async function archiveConversationAction(
     }
   };
 
-  applyResolved(resolved.flatMap((target, index) => target ? [{ index, target }] : []));
-
+  const registryResolved = resolved.flatMap((target, index) => target ? [{ index, target }] : []);
+  const scanResolved: Array<{ index: number; target: ResolvedConversationArchiveTarget }> = [];
   const unresolvedIndexes = resolved.flatMap((target, index) => target ? [] : [index]);
   if (unresolvedIndexes.length > 0) {
     let files: readonly FileEntry[] | null = null;
     try {
       files = (await dependencies.completedFileScan()).snapshot.files;
-    } catch {
+    } catch (error) {
+      // Resolve the whole batch before any write so a pending scan can safely
+      // release admission and let the caller retry under the same key.
+      if (error instanceof McpUnadmittedRefusal) throw error;
       files = null;
     }
     throwIfCallEnded(context);
-    const scanResolved: Array<{ index: number; target: ResolvedConversationArchiveTarget }> = [];
     for (const index of unresolvedIndexes) {
       const target = files ? resolveArchiveTargetFromFiles(inputs[index]!, files) : null;
       if (target) {
@@ -6182,8 +6261,9 @@ async function archiveConversationAction(
         outcome: files ? "not-found" : "resolution-failed",
       };
     }
-    applyResolved(scanResolved);
   }
+  applyResolved(registryResolved);
+  applyResolved(scanResolved);
 
   const operationId = mcpOperationId("conversation_action", requestId(args));
   const projects = [...resolvedProjects];
@@ -7595,11 +7675,11 @@ async function recoverSpawn(
 /** The caller and task a prototype call's receipt belongs to, decided by the
     Viewer with the same fences as the call itself. A caller the Viewer refuses
     is refused here, before any receipt is read. */
-async function prototypeReceiptScope(mode: "publish" | "read",args: McpToolArgs,control: ViewerControlDependencies,context?: McpToolCallContext): Promise<string> {
+async function prototypeReceiptScope(mode: "publish" | "read" | "resend",args: McpToolArgs,control: ViewerControlDependencies,context?: McpToolCallContext): Promise<string> {
   const capability = callerCapability();
   if (!capability) throw new Error("prototype reviews require an identified caller");
   const scope = await viewerControlForCall(control,context).post("/api/prototype-reviews/scope",
-    { mode, ...(args.taskId === undefined ? {} : { taskId: args.taskId }) },{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+    { mode, ...(args.taskId === undefined ? {} : { taskId: args.taskId }), ...(args.reviewId === undefined ? {} : { reviewId: args.reviewId }) },{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
   /* A seat asking without a task is scoped to its own questions (docs/design/operator-decision-forms.md §2.1). */
   if (typeof scope.conversationId !== "string" || (typeof scope.taskId !== "string" && scope.taskId !== null)) throw new Error("the Viewer did not name the caller and task of this prototype call");
   return `${scope.conversationId}\n${scope.taskId ?? "seat"}`;
@@ -7757,6 +7837,11 @@ export function viewerMcpBindings(
       if (!capability) throw new Error("prototype publication requires an identified caller");
       return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews",args,{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
     },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("publish",args,controlDependencies,context) }),
+    resend_prototype_review_telegram: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
+      const capability = callerCapability();
+      if (!capability) throw new Error("prototype resend requires an identified caller");
+      return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews/telegram",args,{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("resend",args,controlDependencies,context) }),
     read_prototype_review: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
       const capability = callerCapability();
       if (!capability) throw new Error("prototype reads require an identified caller");

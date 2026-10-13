@@ -24,7 +24,7 @@ import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
 import { cpuPressureHoldDetail, isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
-import { machineCpuAdmissionQueue } from "@/lib/runtime/cpuAdmission";
+import { instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
 import { stateDir } from "@/lib/configDir";
 import { realExec, provisionWorktree, runFinish, setupStatus, startSetup, type ExecPort, type SetupStatus } from "./provision";
 import { fixerKickoff, prBody, stageKickoff } from "./prompts";
@@ -88,7 +88,7 @@ export function defaultPorts(): WorkflowPorts {
     startSetup,
     cpuPressureHold: (key) => machineCpuPressureGate()?.check(key) ?? null,
     cpuAdmissionReconcile: reconcileCpuAdmission,
-    cpuAdmissionSuspend: (key) => machineCpuAdmissionQueue().suspend(key),
+    cpuAdmissionSuspend: (key) => instanceCpuAdmissionQueue().suspend(key),
     setupStatus,
     spawnAgent: async (role, cwd, prompt, accountId, title) => {
       const account = accountManager.resolveSpawn(role.engine, accountId);
@@ -281,7 +281,7 @@ function reconcileCpuAdmission(): void {
     active.add(key);
     if (!PARKED_STATES.has(wf.state) && !(wf.mode === "auto" && drain)) eligible.add(key);
   }
-  machineCpuAdmissionQueue().reconcile(cpuWorkflowPrefix(), active, eligible);
+  instanceCpuAdmissionQueue().reconcile(cpuWorkflowPrefix(), active, eligible);
 }
 
 async function ensureStageAgent(
