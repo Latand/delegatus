@@ -48,3 +48,11 @@ test("supply-chain CI audits weekly and by dispatch using the shared script", ()
   expect(runs).toContain('bun scripts/supply-chain-check.ts --base "$BASE_SHA" --lockfile-only');
   expect(runs).toContain("bun scripts/supply-chain-check.ts --audit-only");
 });
+
+test("Windows caches Bun downloads by the candidate lockfile before install", () => {
+  const job = read("platform-tests.yml").jobs["windows-platform"]!;
+  const cache = job.steps!.find(step => step.name === "Cache Bun install downloads")!;
+  expect(cache.with?.path).toBe("~/.bun/install/cache");
+  expect(cache.with?.key).toContain("hashFiles('bun.lock')");
+  expect(job.steps!.indexOf(cache)).toBeLessThan(job.steps!.findIndex(step => step.name === "Install dependencies"));
+});

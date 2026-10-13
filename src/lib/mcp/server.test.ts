@@ -1928,6 +1928,7 @@ describe("MCP tool service", () => {
         "request_attention",
         "suggest_replies",
         "publish_prototype_review",
+        "resend_prototype_review_telegram",
         "read_prototype_review",
         "dismiss_attention",
         "bridge_report",

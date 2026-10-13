@@ -1045,29 +1045,32 @@ export function buildSchemeLayout(
   for (const file of manual) (isFavoriteRoot(file) ? favManual : restManual).push(file);
   favGroups.sort((a, b) => recency(b.columns[0]!.file) - recency(a.columns[0]!.file));
   favManual.sort((a, b) => recency(b) - recency(a));
+  const rankedPipelines = new Map(pipelines.map(pipeline => [pipeline.id, pipeline]));
+  const rankedFlows = new Map(actionableFlows.map(flow => [flow.id, flow]));
   const fileWorkRank = (file: FileEntry): number => {
     if (file.pendingQuestion || file.waitingInput) return 5;
     const owner = groupKeyOfPath.get(file.path);
     if (owner?.startsWith("pipe:")) {
-      const pipeline = pipelines.find((candidate) => candidate.id === owner.slice(5));
+      const pipeline = rankedPipelines.get(owner.slice(5));
       if (pipeline?.state === "needs_decision" || pipeline?.state === "needs_review" || pipeline?.state === "paused") return 4;
     }
     if (owner?.startsWith("flow:")) {
-      const flow = actionableFlows.find((candidate) => candidate.id === owner.slice(5));
+      const flow = rankedFlows.get(owner.slice(5));
       if (flow?.state === "needs_decision" || flow?.state === "paused") return 4;
     }
     if (file.activity === "live" || file.activity === "stalled" || file.proc === "running") return 3;
     if (owner?.startsWith("pipe:")) {
-      const pipeline = pipelines.find((candidate) => candidate.id === owner.slice(5));
+      const pipeline = rankedPipelines.get(owner.slice(5));
       if (pipeline && pipeline.state !== "closed") return 1;
     }
     if (owner?.startsWith("flow:")) {
-      const flow = actionableFlows.find((candidate) => candidate.id === owner.slice(5));
+      const flow = rankedFlows.get(owner.slice(5));
       if (flow && flow.state !== "closed") return 1;
     }
     return 0;
   };
-  const groupWorkRank = (group: BranchGroup): number => Math.max(0, ...group.columns.map((column) => fileWorkRank(column.file)));
+  const groupRanks = new Map(restGroups.map(group => [group, Math.max(0, ...group.columns.map(column => fileWorkRank(column.file)))]));
+  const groupWorkRank = (group: BranchGroup): number => groupRanks.get(group)!;
   restGroups.sort((a, b) => groupWorkRank(b) - groupWorkRank(a) || recency(b.columns[0]!.file) - recency(a.columns[0]!.file) || a.key.localeCompare(b.key));
   restManual.sort((a, b) => fileWorkRank(b) - fileWorkRank(a) || recency(b) - recency(a) || a.path.localeCompare(b.path));
   const hasFavorites = favGroups.length + favManual.length > 0;
@@ -1232,25 +1235,30 @@ export function buildSchemeLayout(
         place: (top: number) => placeManual(file, top),
       })),
   ];
-  const restClusters: { keys: Set<string>; items: RestItem[] }[] = [];
+  type RestCluster = { order: number; keys: Set<string>; items: RestItem[] };
+  const restClusters = new Map<number, RestCluster>();
+  const clusterByKey = new Map<string, RestCluster>();
+  let clusterOrder = 0;
   for (const item of restItems) {
-    const matched: typeof restClusters = [];
-    for (const cluster of restClusters) {
-      for (const key of item.keys) {
-        if (cluster.keys.has(key)) { matched.push(cluster); break; }
-      }
-    }
+    // Preserve the former first-cluster claim order when a tree bridges
+    // several containers, without scanning unrelated clusters for each tree.
+    const matched = [...new Set([...item.keys].flatMap(key => {
+      const cluster = clusterByKey.get(key);
+      return cluster ? [cluster] : [];
+    }))].sort((a, b) => a.order - b.order);
     const [target] = matched;
     if (!target) {
-      restClusters.push({ keys: new Set(item.keys), items: [item] });
+      const cluster = { order: clusterOrder++, keys: new Set(item.keys), items: [item] };
+      restClusters.set(cluster.order, cluster);
+      for (const key of item.keys) clusterByKey.set(key, cluster);
       continue;
     }
     target.items.push(item);
-    for (const key of item.keys) target.keys.add(key);
+    for (const key of item.keys) { target.keys.add(key); clusterByKey.set(key, target); }
     for (const extra of matched.slice(1)) {
       target.items.push(...extra.items);
-      for (const key of extra.keys) target.keys.add(key);
-      restClusters.splice(restClusters.indexOf(extra), 1);
+      for (const key of extra.keys) { target.keys.add(key); clusterByKey.set(key, target); }
+      restClusters.delete(extra.order);
     }
   }
   /* Stage member trees take execution order among themselves while every other
@@ -1263,7 +1271,7 @@ export function buildSchemeLayout(
     let next = 0;
     return items.map((item) => (item.stageRank === null ? item : ranked[next++]!));
   };
-  for (const cluster of restClusters) placeRestRun(inExecutionOrder(cluster.items).map((item) => item.place));
+  for (const cluster of restClusters.values()) placeRestRun(inExecutionOrder(cluster.items).map((item) => item.place));
 
   /* Remaining drafts join the same bounded band as fresh top-level cards. */
   for (const id of draftIds) {

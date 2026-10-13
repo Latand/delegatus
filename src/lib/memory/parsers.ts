@@ -1,7 +1,7 @@
 import { projectForCwd } from "@/lib/scanner/describe";
+import type { MemoryKind } from "./kinds";
+export { MEMORY_KINDS, type MemoryKind } from "./kinds";
 
-export const MEMORY_KINDS = ["preference", "project_fact", "reference", "failure", "instruction", "skill"] as const;
-export type MemoryKind = typeof MEMORY_KINDS[number];
 export type MemorySourceKind = "claude_memory" | "claude_index" | "codex_memory" | "codex_summary" | "rollout_summary" | "instruction" | "skill";
 
 export interface MemorySource {

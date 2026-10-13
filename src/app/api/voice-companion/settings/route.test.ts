@@ -44,6 +44,14 @@ test("no settings request can choose a simulator: the demo or the real voice by 
   expect(await (await PUT(request("PUT", { backend: "api" }))).json()).toMatchObject({ backend: "api" });
 });
 
+
+test("call memory is on by default, persists its switch and rejects non-booleans", async () => {
+  expect(await (await GET(request("GET"))).json()).toHaveProperty("callMemory",true);
+  expect(await (await PUT(request("PUT",{ callMemory: false }))).json()).toHaveProperty("callMemory",false);
+  expect(await (await GET(request("GET"))).json()).toHaveProperty("callMemory",false);
+  expect((await PUT(request("PUT",{ callMemory: "off" }))).status).toBe(400);
+});
+
 test("settings in team mode require an active human session", async () => {
   const { claimInstall } = await import("@/lib/team/members");
   const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");

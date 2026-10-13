@@ -18,6 +18,7 @@ afterAll(() => {
 });
 
 const { viewerMcpBindings } = await import("./bindings");
+const { closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { McpToolRefusal } = await import("./server");
 type Attribution = import("./bindings").CallerAttribution;
 type Refusal = import("./server").McpToolRefusal;
@@ -56,6 +57,7 @@ async function refusal(call: Promise<unknown>): Promise<Refusal> {
 }
 
 beforeEach(() => {
+  closeAgentRegistryForTests();
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
 });

@@ -189,10 +189,10 @@ export function seatTickBullet(item: SeatTickItem): string {
  * decides "already shown" from the landed wake's record, per seat epoch, so a
  * successor still sees the note on its first wake.
  */
-function seatTickPromptSection(monitorPrompt: string | null | undefined, unchanged: boolean, previewLimit = SEAT_TICK_PROMPT_PREVIEW_LIMIT): string[] {
+function seatTickPromptSection(monitorPrompt: string | null | undefined, unchanged: boolean, previewLimit = SEAT_TICK_PROMPT_PREVIEW_LIMIT, compact = false): string[] {
   if (!monitorPrompt) return [];
   if (unchanged) {
-    return ["", `Standing monitor note unchanged since your last wake (${monitorPrompt.length} chars; seat_tick_settings with verbose:true reads it).`];
+    return ["", `Standing monitor note unchanged since your last wake (${monitorPrompt.length} chars; seat_tick_settings ${compact ? "verbose:true" : "with verbose:true reads it"}).`];
   }
   return [
     "",
@@ -222,8 +222,17 @@ export function seatTickPromptPreview(monitorPrompt: string, limit = SEAT_TICK_P
   return `${monitorPrompt.slice(0, limit).trimEnd()}… [preview, ${monitorPrompt.length} chars; seat_tick_settings returns the full note]`;
 }
 
+type WakeWorkers = { limit: number; source: string; machine: number; running: number };
+function workerSection(workers: WakeWorkers | undefined): string[] {
+  return workers ? ["", `Worker limit here: ${workers.limit} (${workers.source === "project" ? `this project's own; machine default ${workers.machine}` : "the machine default"}). It replaces any number your mandate or launch text names. Running here now: ${workers.running}.`] : [];
+}
+function snapshotSection(snapshotAt: string | undefined, compact: boolean): string[] {
+  return snapshotAt ? ["", `Snapshot at ${snapshotAt}${compact ? ". Re-read delayed work." : "; age = time since then. Re-read delayed agendas and notes."}`] : [];
+}
+
 export function seatTickWakeMessage(input: {
   project: string;
+  workers?: WakeWorkers;
   /** Oldest evidence time, preserved across transport retention and replay. */
   snapshotAt?: string;
   reasons: readonly SeatTickWakeReason[];
@@ -297,19 +306,22 @@ export function seatTickWakeMessage(input: {
   if (signals.length > 0) {
     lines.push("", "Signals:", ...signals.map((signal) => `- ${signal.label}`));
   }
+  // Compact only large ledgers, keeping ordinary wakes' established framing.
+  const compactLedger = !!input.workers && (input.reportLines?.join("\n").length ?? 0) > 800;
   const reserved = [
-    ...(input.snapshotAt ? ["", `Snapshot at ${input.snapshotAt}; age = time since then. Re-read delayed agendas and notes.`] : []),
-    ...(input.reportLines && input.reportLines.length > 0 ? ["", "Bridge reports:", ...input.reportLines.map((line) => `- ${line}`)] : []),
-    ...(input.operatorInstructions ? ["", "Operator instructions for every wake:", input.operatorInstructions] : []),
-    ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true),
+    ...snapshotSection(input.snapshotAt, !!input.workers),
+    ...(input.reportLines && input.reportLines.length > 0 ? ["", compactLedger ? "Reports:" : "Bridge reports:", ...input.reportLines.map((line) => `- ${line}`)] : []),
+    ...(input.operatorInstructions ? ["", compactLedger ? "Operator instructions:" : "Operator instructions for every wake:", input.operatorInstructions] : []),
+    ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, SEAT_TICK_PROMPT_PREVIEW_LIMIT, !!input.workers),
+    ...workerSection(input.workers),
     ...seatTickContractLines(input.mandateCarriesContract === true),
   ];
   // Large report ledgers keep all their keys. Shorten the note's explicitly
   // marked preview when that tail would exceed the payload bound.
   if (input.reportLines?.length && redactMonitorText(reserved.join("\n")).length > SEAT_TICK_MESSAGE_LIMIT - 700) {
-    const note = seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true);
-    reserved.splice(reserved.length - seatTickContractLines(input.mandateCarriesContract === true).length - note.length, note.length,
-      ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, 100));
+    const note = seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, SEAT_TICK_PROMPT_PREVIEW_LIMIT, !!input.workers);
+    reserved.splice(reserved.length - seatTickContractLines(input.mandateCarriesContract === true).length - (input.workers ? 2 : 0) - note.length, note.length,
+      ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, 100, !!input.workers));
   }
   return boundedSeatTickMessage(lines, reserved);
 }
@@ -349,6 +361,7 @@ export function seatTickWakePayload(input: Parameters<typeof seatTickWakeMessage
  */
 export function seatTickProposalMessage(input: {
   project: string;
+  workers?: WakeWorkers;
   /** Oldest evidence time, preserved across transport retention and replay. */
   snapshotAt?: string;
   issues: readonly ProposalIssue[];
@@ -385,14 +398,15 @@ export function seatTickProposalMessage(input: {
      the next tick reads to recognize the card it already asked for, so losing
      it to a long issue list would mint a second proposal card. */
   return boundedSeatTickMessage(lines, [
-    ...(input.snapshotAt ? ["", `Snapshot at ${input.snapshotAt}; age = time since then. Re-read delayed agendas and notes.`] : []),
+    ...snapshotSection(input.snapshotAt, !!input.workers),
     "",
     `Produce ONE ranked list of at most ${input.items} actions, each with the evidence behind it, and post it as a single board card in inbox for this project.`,
     "Rank by what actually matters now: what is blocking, what is cheap and finishes something, what has been waiting longest.",
     `Put this exact line at the foot of the card so the next tick recognizes it: ${MONITOR_REF_PREFIX} ${seatTickProposalRef(input.slot)}`,
     "Open no GitHub issue and start no pipeline from this — the operator moves a card to assigned when they want it, and the next tick starts it.",
     ...(input.operatorInstructions ? ["", "Operator instructions for every wake:", input.operatorInstructions] : []),
-    ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true),
+    ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, SEAT_TICK_PROMPT_PREVIEW_LIMIT, !!input.workers),
+    ...workerSection(input.workers),
     ...seatTickContractLines(input.mandateCarriesContract === true),
   ]);
 }

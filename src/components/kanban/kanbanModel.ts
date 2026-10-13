@@ -466,7 +466,45 @@ export function cardHasLiveWork(card: KanbanCard): boolean {
   return card.motion.key === "working" || card.motion.key === "needs-you";
 }
 
+interface CachedCard {
+  band: TaskBand;
+  dependencies: readonly unknown[];
+  card: KanbanCard;
+}
+
+function sameValues(a: readonly unknown[], b: readonly unknown[]): boolean {
+  return a.length === b.length && a.every((value, i) => value === b[i]);
+}
+
+function sameFields(a: object, b: object): boolean {
+  const left = a as Record<string, unknown>, right = b as Record<string, unknown>;
+  return Object.keys(left).length === Object.keys(right).length && Object.keys(left).every(key => left[key] === right[key]);
+}
+
+function sameBand(a: TaskBand, b: TaskBand): boolean {
+  return sameFields({ ...a, members: null, mirrors: null, groups: null }, { ...b, members: null, mirrors: null, groups: null })
+    && sameValues(a.groups, b.groups)
+    && a.members.length === b.members.length && a.members.every((member, i) => sameFields(member, b.members[i]))
+    && a.mirrors.length === b.mirrors.length && a.mirrors.every((mirror, i) => sameFields(mirror, b.mirrors[i]));
+}
+
+/** One mounted board's task cards. Only the last answer is retained; removing
+ * a task, or a task leaving the board, removes its cached derivation too. */
+export function createKanbanModel(): (input: KanbanModelInput) => KanbanModel {
+  let previous = new Map<string, CachedCard>();
+  return input => {
+    const next = new Map<string, CachedCard>();
+    const model = deriveKanbanModel(input, { previous, next });
+    previous = next;
+    return model;
+  };
+}
+
 export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
+  return deriveKanbanModel(input);
+}
+
+function deriveKanbanModel(input: KanbanModelInput, cache?: { previous: Map<string, CachedCard>; next: Map<string, CachedCard> }): KanbanModel {
   const { bands, tasks, pipelines, projection, statusOverrides, cardFilter, reasonFilter, now } = input;
   const knownConversations = new Set<string>();
   const workByIdentity = new Map<string, number>();
@@ -535,6 +573,48 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
   const seatTasks: BoardTask[] = [];
   const cards: KanbanCard[] = bands.flatMap((band): KanbanCard[] => {
     const task = band.task;
+    const workflow = task ? workflowByTask.get(task.id) : undefined;
+    const cardPipelines = new Map<string, Pipeline>();
+    if (band.pipeline) cardPipelines.set(band.pipeline.id, band.pipeline);
+    for (const groupKey of band.groups) {
+      const match = /^group::pipeline::(.+)$/.exec(groupKey);
+      const pipeline = match ? pipelineById.get(match[1]!) : undefined;
+      if (pipeline) cardPipelines.set(pipeline.id, pipeline);
+    }
+    for (const execution of workflow?.executions ?? []) {
+      if (execution.basis === "explicit") cardPipelines.set(execution.pipeline.id, pipelineById.get(execution.pipeline.id) ?? execution.pipeline);
+    }
+    const holdTarget = task?.hold?.kind === "task" ? tasksById.get(task.hold.ref ?? "") : undefined;
+    const dependencies: unknown[] = [task, workflow, now, input.seat, task ? statusOverrides?.get(task.id) : undefined, holdTarget];
+    if (cache && task) {
+      // Resolve the external facts the card reads, including work by historical
+      // reviewers outside its visible members and a competing stage owner.
+      for (const member of band.members) {
+        const stage = member.file ? stageByPath.get(member.file.path) : undefined;
+        dependencies.push(stage?.pipeline, stage?.stage, reviewerWorkAt(flowsByDeck.get(member.key)));
+      }
+      dependencies.push(reviewerWorkAt(band.flow));
+      for (const mirror of band.mirrors) dependencies.push(bandTitle.get(mirror.primaryBandId));
+      for (const reference of workflow?.references ?? []) {
+        const identity = referenceIdentity(reference);
+        dependencies.push(reference.path ? knownConversations.has(reference.path) : false,
+          reference.conversationId ? knownConversations.has(reference.conversationId) : false,
+          identity ? workByIdentity.get(identity) : undefined);
+      }
+      for (const pipeline of cardPipelines.values()) {
+        dependencies.push(pipeline, pipelineWorkAt(pipeline));
+        for (const run of pipeline.runs) for (const attempt of run.attempts) {
+          dependencies.push(attempt.flowId ? flowsById.get(attempt.flowId) : undefined,
+            attempt.agentPath ? workingStageConversations.has(attempt.agentPath) : false,
+            attempt.conversationId ? workingStageConversations.has(attempt.conversationId) : false);
+        }
+      }
+      const previous = cache.previous.get(band.id);
+      if (previous && sameBand(previous.band, band) && sameValues(previous.dependencies, dependencies)) {
+        cache.next.set(band.id, previous);
+        return [previous.card];
+      }
+    }
     const nodes = band.members.filter((member) => member.kind === "node" && member.file && !seatFile(member.file));
     /* A launch placeholder whose launch failed is no conversation: it is
        listed as a failed launch, which opens its launch view with Retry. */
@@ -548,18 +628,6 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       primaryCardId: mirror.primaryBandId,
       primaryTitle: bandTitle.get(mirror.primaryBandId) ?? mirror.primaryTitle,
     }));
-
-    const cardPipelines = new Map<string, Pipeline>();
-    if (band.pipeline) cardPipelines.set(band.pipeline.id, band.pipeline);
-    for (const groupKey of band.groups) {
-      const match = /^group::pipeline::(.+)$/.exec(groupKey);
-      const pipeline = match ? pipelineById.get(match[1]!) : undefined;
-      if (pipeline) cardPipelines.set(pipeline.id, pipeline);
-    }
-    const workflow = task ? workflowByTask.get(task.id) : undefined;
-    for (const execution of workflow?.executions ?? []) {
-      if (execution.basis === "explicit") cardPipelines.set(execution.pipeline.id, pipelineById.get(execution.pipeline.id) ?? execution.pipeline);
-    }
 
     /* What a pipeline of this card ran, open or closed: its stage attempts,
        the helpers its agents brought in and its review rounds, and the rounds
@@ -728,7 +796,6 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       now: now * 1000, holdsSeat, seat: input.seat,
       members: members.map((member) => member.file), pipelines,
     })) return [];
-    const holdTarget = task?.hold?.kind === "task" ? tasksById.get(task.hold.ref ?? "") : undefined;
     const stepProjection = deriveTaskSteps(task?.steps, summaries.map(summary => summary.pipeline), now * 1000);
     const color = task?.color && (TASK_COLORS as readonly string[]).includes(task.color) ? task.color : null;
     /* A placeholder no agent will name any more borrows its conversation's
@@ -754,7 +821,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
     const heldSeat = band.members.some((member) => member.kind === "node" && member.file && seatFile(member.file))
       || band.mirrors.some((mirror) => seatFile(mirror.file));
     if (!task && heldSeat && !members.length && !mirrors.length && !summaries.length && !otherSurfaces && !drafts.length && !band.flow) return [];
-    return [{
+    const card: KanbanCard = {
       id: band.id,
       /* One project's board answers `project` for every card alike; the
          cross-project Overview needs each card's own. A recorded task names
@@ -811,7 +878,9 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
       past: pastAttempts(summaries.map((summary) => summary.pipeline), flowsById),
       hide,
       holdsSeat,
-    }];
+    };
+    if (cache && task) cache.next.set(band.id, { band, dependencies, card });
+    return [card];
   });
 
   /* The draft's launch writes a task in Assigned and takes the draft's place there. Beside an agent being

@@ -53,9 +53,21 @@ interface ScopedRead {
     wear it was last read at while the poll below refreshes it, rather than
     dropping back to what the board alone knows for a round-trip. */
 const readings = new Map<string, ScopedRead>();
+const workerChanges = new Map<string, { revision: number; workers: NonNullable<OrchestratorIncumbent["workers"]> }>();
+const WORKER_CHANGED = "llv-worker-limit-changed";
+
+/** A confirmed write supersedes worker fields from reads already in flight.
+    Later status reads still replace it normally, including another device's edit. */
+export function confirmWorkerReading(project: string, workers: NonNullable<OrchestratorIncumbent["workers"]>) {
+  workerChanges.set(project, { revision: (workerChanges.get(project)?.revision ?? 0) + 1, workers });
+  const current = readings.get(project);
+  if (current?.incumbent) readings.set(project, { ...current, incumbent: { ...current.incumbent, workers } });
+  if (typeof window !== "undefined") window.dispatchEvent(new window.CustomEvent(WORKER_CHANGED, { detail: project }));
+}
 
 export function resetOrchestratorIncumbentCacheForTests(): void {
   readings.clear();
+  workerChanges.clear();
 }
 
 const cachedIncumbent = (project: string | null): ScopedRead | null => (project ? readings.get(project) ?? null : null);
@@ -67,12 +79,15 @@ const cachedIncumbent = (project: string | null): ScopedRead | null => (project 
 const restored = (read: ScopedRead | null): ScopedRead | null => (read ? { ...read, stale: true } : null);
 
 export async function fetchOrchestratorIncumbent(project: string, signal?: AbortSignal): Promise<OrchestratorIncumbent | null> {
+  const revision = workerChanges.get(project)?.revision ?? 0;
   const response = await fetch(
     "/api/orchestrator/seat/status?project=" + encodeURIComponent(project),
     signal ? { signal } : undefined,
   );
   if (!response.ok) throw new Error(`orchestrator status read failed: ${response.status}`);
-  return parseIncumbent(await response.json());
+  const incumbent = parseIncumbent(await response.json());
+  const confirmed = workerChanges.get(project);
+  return incumbent && confirmed && confirmed.revision !== revision ? { ...incumbent, workers: confirmed.workers } : incumbent;
 }
 
 /**
@@ -117,6 +132,13 @@ export function useOrchestratorIncumbent(project: string | null, enabled: boolea
 
   useEffect(() => {
     if (!project || !enabled) return;
+    const changed = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === project) {
+        const current = readings.get(project);
+        if (current) setRead(current);
+      }
+    };
+    window.addEventListener(WORKER_CHANGED, changed);
     const controller = new AbortController();
     const load = () => {
       void fetchOrchestratorIncumbent(project, controller.signal)
@@ -131,6 +153,7 @@ export function useOrchestratorIncumbent(project: string | null, enabled: boolea
     load();
     const timer = setInterval(load, INCUMBENT_POLL_MS);
     return () => {
+      window.removeEventListener(WORKER_CHANGED, changed);
       clearInterval(timer);
       controller.abort();
     };

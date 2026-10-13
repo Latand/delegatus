@@ -3,7 +3,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { Flow } from "@/lib/flows/types";
 import type { FileEntry } from "@/lib/types";
-import { projectTaskWorkflows } from "./taskWorkflowModel";
+import { createTaskWorkflowProjector, projectTaskWorkflows } from "./taskWorkflowModel";
 
 const task = (id = "task-a", overrides: Partial<BoardTask> = {}): BoardTask => ({ id, project: "project", text: "Restore delivery",
   status: "assigned", placement: "unplaced", assignments: [], createdAt: "2026-01-01", updatedAt: "2026-01-01", ...overrides });
@@ -98,4 +98,55 @@ test("unlinked history is project-scoped while explicit cross-project workers re
   const linked = projectTaskWorkflows([task()], [foreignPipeline], [], [local, other], "project");
   expect(linked.tasks[0].workers).toEqual([other]);
   expect(linked.unlinkedWorkers).toEqual([local]);
+});
+
+test("a changed conversation rebuilds only its task, retaining unrelated task history", () => {
+  const project = createTaskWorkflowProjector();
+  const files = [file("a"), file("b")];
+  const tasks = [task("a"), task("b")];
+  const pipelines = files.map(f => pipeline(f.conversationId!, [attempt(1, { conversationId: f.conversationId })], { taskIds: [f.conversationId!] }));
+  const first = project(tasks, pipelines, [], files);
+  const updated = { ...files[0], size: 2 };
+  const next = project(tasks, pipelines, [], [updated, files[1]]);
+  expect(next).toEqual(projectTaskWorkflows(tasks, pipelines, [], [updated, files[1]]));
+  expect(next.tasks[0]).not.toBe(first.tasks[0]);
+  expect(next.tasks[0].workers).toEqual([updated]);
+  expect(next.tasks[1]).toBe(first.tasks[1]);
+  expect(next.tasks[1].executions).toBe(first.tasks[1].executions);
+});
+
+test("membership changes, removed work and arriving generations invalidate the affected task", () => {
+  const project = createTaskWorkflowProjector();
+  const assigned = task("a", { assignments: [{ path: "fixtures/a.jsonl", panePid: null, state: "delivered", error: null, at: "2026-01-01" }] });
+  const foreign = pipeline("foreign", [attempt(1, { conversationId: "a", agentPath: "fixtures/older.jsonl" })], { taskIds: [], project: "elsewhere" });
+  const first = project([assigned], [foreign], [], []);
+  expect(first.tasks[0].executions).toHaveLength(0);
+  const arrived = project([assigned], [foreign], [], [file("a")]);
+  expect(arrived.tasks[0].executions.map(e => e.basis)).toEqual(["assignment"]);
+  expect(arrived.tasks[0].workers).toHaveLength(1);
+  const explicit = { ...foreign, taskIds: ["a"] };
+  const linked = project([assigned], [explicit], [], [file("a")]);
+  expect(linked.tasks[0].executions[0].basis).toBe("explicit");
+  const removed = project([assigned], [], [], []);
+  expect(removed.tasks[0].executions).toHaveLength(0);
+  expect(removed.tasks[0].workers).toHaveLength(0);
+  expect(removed.tasks[0].unresolved).toBe(1);
+  expect(project([], [explicit], [], []).unlinkedPipelines).toEqual([explicit]);
+});
+
+test("pipeline and review edits retain unrelated tasks and refresh findings without a file change", () => {
+  const project = createTaskWorkflowProjector();
+  const tasks = [task("a"), task("b")];
+  const p = pipeline("p", [attempt(1, { flowId: "f" })], { taskIds: ["a"] });
+  const f = { id: "f", implementerPath: null, rounds: [] } as unknown as Flow;
+  const first = project(tasks, [p], [f], []);
+  const changed = { ...f, rounds: [{ n: 1, reviewerPath: null, verdict: "APPROVE", findingsCount: 0 }] } as Flow;
+  const reviewed = project(tasks, [p], [changed], []);
+  expect(reviewed.tasks[0].reviews).toBe(1);
+  expect(reviewed.tasks[0]).not.toBe(first.tasks[0]);
+  expect(reviewed.tasks[1]).toBe(first.tasks[1]);
+  const finished = { ...p, state: "completed" as const };
+  const next = project(tasks, [finished], [changed], []);
+  expect(next.tasks[0].executions[0].pipeline.state).toBe("completed");
+  expect(next.tasks[1]).toBe(reviewed.tasks[1]);
 });

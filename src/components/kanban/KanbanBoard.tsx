@@ -45,7 +45,7 @@ import { KanbanCard, resurfaceText, statusLabel, TASK_COLOR_HEX } from "./Kanban
 import { RemoteAgents, type RemoteAgentView } from "./RemoteAgents";
 import { remoteCardsFor, useRemoteFeed, type RemoteCard } from "./remoteFeed";
 import { MoreGlyph } from "./kanbanGlyphs";
-import { buildKanbanModel, holdsOnlyDrafts, KANBAN_STATUSES, taskReasonFiltersOfCard, type KanbanCard as KanbanCardModel, type KanbanModel, type TaskReasonFilter } from "./kanbanModel";
+import { createKanbanModel, holdsOnlyDrafts, KANBAN_STATUSES, taskReasonFiltersOfCard, type KanbanCard as KanbanCardModel, type KanbanModel, type TaskReasonFilter } from "./kanbanModel";
 import { reuseKanbanModel } from "./reuseKanbanModel";
 import { useStableCallback } from "./useStableCallback";
 import { BoardMenu } from "./compactMenu";
@@ -499,6 +499,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The readers a card holds open, for where a new draft stands (kanbanModel's `openReaders`). */
   const unfoldedReaders = useMemo(() => new Set(openReaders.filter((reader) => !reader.folded).map((reader) => reader.key)), [openReaders]);
   const modelNow = Math.floor(props.now / 15) * 15;
+  const buildKanbanModel = useMemo(() => createKanbanModel(), []);
   /* A catalog update rebuilds the model, and a card whose content did not change
      stays the object it was, so only the cards it touched render again (#2218). */
   const previousModel = useRef<KanbanModel | null>(null);
@@ -508,7 +509,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const shared = reuseKanbanModel(previousModel.current, built);
     previousModel.current = shared;
     return shared;
-  }, [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, reasonFilter, seatRefs, query, unfoldedReaders, modelNow]);
+  }, [buildKanbanModel, bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, reasonFilter, seatRefs, query, unfoldedReaders, modelNow]);
   const cardsById = useMemo(() => {
     const map = new Map<string, KanbanCardModel>();
     for (const status of KANBAN_STATUSES) for (const card of model.columns[status].cards) map.set(card.id, card);

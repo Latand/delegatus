@@ -5,6 +5,7 @@ import { attemptPrototypeDelivery, prototypeDelivery, type PrototypeDeliveryPort
 import type { PrototypeDecision } from "./types";
 import { loadSeatRounds } from "./seatRounds";
 import { prototypeWorld } from "./world";
+import { postPrototypeReviewToTelegram } from "./telegramPost";
 
 /*
  * The background delivery of saved prototype decisions.
@@ -114,6 +115,12 @@ export async function sweepPrototypeDeliveries(ports: PrototypeDeliveryPorts = p
   const now = ports.now();
   if (options.rescan !== false) scan(state, now);
   const attempts: Promise<void>[] = [];
+  if (options.rescan !== false) {
+    const rounds = [...loadTasksForList().filter(t => !runsElsewhere(t)).flatMap(t => t.prototypeReviews ?? []), ...loadSeatRounds()];
+    for (const round of rounds) if (round.telegramPost?.state === "pending") {
+      attempts.push(postPrototypeReviewToTelegram(round, round.telegramPost.key).then(() => {}));
+    }
+  }
   for (const [reviewId, taskId] of state.owed) {
     if (state.running.has(reviewId)) { attempts.push(state.running.get(reviewId)!.done); continue; }
     if (!options.force && (state.due.get(reviewId) ?? 0) > now) continue;
