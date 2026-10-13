@@ -21,7 +21,8 @@ test("capacity order follows fixed deadlines, with insertion order for ties and 
     enterRelayHold({ ...base, requestId: "drain", cause: "drain", deadline });
     expect(capacityWaiters(base.relayId, base.targetId)).toBe(1);
     expect(olderCapacityWaiter(base.relayId, "neighbor", "new", later)).toBe(false);
-    const copy = await import("./hold.ts?ordering-copy");
+    const modulePath = "./hold.ts?ordering-copy";
+    const copy: typeof import("./hold") = await import(modulePath);
     expect(copy.capacityWaiters(base.relayId, base.targetId)).toBe(1);
   } finally { for (const id of ["earlier", "later", "tie", "drain"]) leaveRelayHold(id); }
 });
