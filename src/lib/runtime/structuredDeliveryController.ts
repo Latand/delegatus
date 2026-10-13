@@ -23,10 +23,11 @@ import { activeDrain } from "@/lib/selfUpdate/drain";
 import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { actingOperation } from "@/lib/deliveryActuation";
-import { agentRegistry, REGISTRY_WRITER_BUSY, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
+import { agentRegistry, REGISTRY_WRITER_BUSY, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity } from "@/lib/agent/registry";
 import { registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
+import { hostlessConversations, hostlessConversationEvidence } from "./hostlessRegistryEvidence";
 import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
 import { captureProcessIdentity, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { canonicalOrchestratorProject, readOrchestratorSeatRetirementEvidenceOrNull, type OrchestratorSeat } from "@/lib/orchestrator/seats";
@@ -596,42 +597,6 @@ export const HOSTLESS_SETTLE_INTERVAL_MS = 60_000;
     through newest first, this many a minute. What a sweep has left over goes
     to rows already read, longest ago first. */
 const HOSTLESS_SETTLE_BATCH = 64;
-
-/**
- * The conversations whose registry row proves no process hosts them (#2515),
- * each with the instant its row was ended.
- *
- * Ending a host clears its row to `dead` with no host columns, no process and
- * no claim. That row is the proof: every host, live or being adopted, holds a
- * claim or a recorded process on it, and a launch on its way holds a receipt
- * that has not settled. A row that keeps any of those is left to its owner.
- */
-function hostlessConversations(snapshot: RegistryFile): Map<string, { key: string; endedAt: string }> {
-  const launching = new Set<string>();
-  for (const receipt of Object.values(snapshot.receipts)) {
-    if (receipt.state === "completed" || receipt.state === "failed" || receipt.state === "conflicted") continue;
-    launching.add(resolveConversationAlias(snapshot, receipt.conversationId));
-  }
-  const hostless = new Map<string, { key: string; endedAt: string }>();
-  for (const conversation of Object.values(snapshot.conversations)) {
-    const generation = conversation.generations.at(-1);
-    if (!generation || launching.has(conversation.id)) continue;
-    const key = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
-    const entry = snapshot.entries[key];
-    if (!entry || (entry.status !== "dead" && entry.status !== "unhosted")) continue;
-    if (entry.host || entry.structuredHost?.process || entry.claimOwner || entry.pendingAction
-      || (entry.structuredTerminationSurvivors?.length ?? 0) > 0) continue;
-    hostless.set(conversation.id, { key, endedAt: entry.updatedAt });
-  }
-  /* Journal rows keep the id their writer knew, including aliases made by a
-     later conversation migration. Read each historical id under the same
-     canonical owner's proof, even when the row has no artifact path. */
-  for (const alias of Object.keys(snapshot.conversationAliases)) {
-    const owner = hostless.get(resolveConversationAlias(snapshot, alias as `conversation_${string}`));
-    if (owner) hostless.set(alias, owner);
-  }
-  return hostless;
-}
 
 async function publishHostState(
   client: RuntimeHostClient,
@@ -1557,7 +1522,7 @@ export async function bindStructuredDeliveryQueue(
          next sweep, and the rest of this one is left for then too. */
       try { session = listed ? listed.get(conversationId) ?? null : await client.readSession!({ conversationId }); }
       catch { break; }
-      const current = hostlessConversations(registry.readOnlySnapshot()).get(conversationId);
+      const current = hostlessConversationEvidence(registry.readOnlySnapshot(), conversationId);
       if (!current || current.key !== row.key || current.endedAt !== row.endedAt || registrations.has(row.key)) continue;
       if (session && sessionClaimsOpenTurn(session)) {
         /* A write the journal refused or never received settles nothing, as

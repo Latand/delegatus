@@ -33,7 +33,8 @@ import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/mi
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { effectiveRemaining } from "@/lib/accounts/migration/quotaPolicy";
 import { freshSpecFor } from "@/lib/agent/cli";
-import { agentRegistry, deliveryMayHaveArrived, identityMaterializationFence, REGISTRY_WRITER_BUSY, type DurableMembershipInput, type StructuredTerminationCapture, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { agentRegistry, deliveryMayHaveArrived, identityMaterializationFence, REGISTRY_WRITER_BUSY, type DurableMembershipInput, type RegistryFile, type StructuredTerminationCapture, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { registryRowProjection, registryRowsMatching, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
 import { forEachCooperatively } from "@/lib/cooperative";
 import { transcriptAllowed } from "@/lib/agent/spawnParent";
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
@@ -1262,6 +1263,12 @@ function schedulePipelineTick(delayMs: number): void {
   timer.unref?.();
 }
 
+const ADOPTION_MEMBERSHIPS: RegistryRowProjector<"memberships", RegistryFile["memberships"][string]> = {
+  id: "pipeline-adoption-memberships-v1", collection: "memberships",
+  project: memberships => memberships.filter(membership => membership.kind === "pipeline"
+    && membership.containerId && membership.slot.startsWith("adopt:") && membership.stageId && membership.parentConversationId),
+};
+
 export function defaultPipelinePorts(
   dependencies: { liveness?: TurnLivenessDependencies; termination?: StructuredHostTerminationDependencies;
     panes?: { snapshot?: typeof paneInfo; observation?: typeof panePidMap };
@@ -1271,6 +1278,7 @@ export function defaultPipelinePorts(
   const registry = agentRegistry();
   let registrySnapshot: ReturnType<typeof registry.readOnlySnapshot> | null = null;
   let adoptionCandidatesByPipeline: Map<string, PipelineAdoptionCandidate[]> | null = null;
+  let adoptionMemberships: Array<[string, RegistryFile["memberships"][string]]> | null = null;
   let materializationFence: ReturnType<typeof identityMaterializationFence> | null = null;
   let flowSnapshot: Flow[] | null = null;
   let interruptions: InterruptionObligation[] | null = null;
@@ -1295,20 +1303,22 @@ export function defaultPipelinePorts(
   const invalidateRegistryProjection = () => {
     registrySnapshot = null;
     adoptionCandidatesByPipeline = null;
+    adoptionMemberships = null;
     materializationFence = null;
   };
-  const adoptionCandidates = () => {
-    if (adoptionCandidatesByPipeline) return adoptionCandidatesByPipeline;
+  const adoptionCandidates = (pipelineId: string) => {
+    const cached = adoptionCandidatesByPipeline?.get(pipelineId);
+    if (cached) return cached;
     const current = snapshot();
-    const receiptsByConversation = new Map(
-      Object.values(current.receipts).map((receipt) => [receipt.conversationId, receipt] as const),
-    );
-    const grouped = new Map<string, PipelineAdoptionCandidate[]>();
-    for (const [conversationId, memberships] of Object.entries(current.memberships)) {
+    const candidates: PipelineAdoptionCandidate[] = [];
+    adoptionMemberships ??= registryRowProjection(current, ADOPTION_MEMBERSHIPS);
+    for (const [conversationId, memberships] of adoptionMemberships) {
       for (const membership of memberships) {
-        if (membership.kind !== "pipeline" || !membership.containerId
+        if (membership.kind !== "pipeline" || membership.containerId !== pipelineId
           || !membership.slot.startsWith("adopt:") || !membership.stageId || !membership.parentConversationId) continue;
-        const receipt = receiptsByConversation.get(conversationId as ViewerConversationId) ?? null;
+        // Preserve the collection's last-receipt choice while reading only
+        // conversations adopted by the pipeline this caller asked about.
+        const receipt = registryRowsMatching(current, "receipts", "conversationId", conversationId).at(-1) ?? null;
         const conversation = current.conversations[conversationId as ViewerConversationId] ?? null;
         const generation = conversation?.generations.at(-1) ?? null;
         const receiptPublished = receipt ? identityFence().allowsReceipt(receipt) : false;
@@ -1335,7 +1345,6 @@ export function defaultPipelinePorts(
         if (runtime?.engine === "codex" && launchProfile?.serviceTier) {
           runtime.serviceTier = launchProfile.serviceTier;
         }
-        const candidates = grouped.get(membership.containerId) ?? [];
         candidates.push({
           stageId: membership.stageId,
           sourceConversationId: membership.parentConversationId,
@@ -1347,11 +1356,10 @@ export function defaultPipelinePorts(
           startedAt: receipt?.createdAt ?? membership.createdAt,
           runtime,
         });
-        grouped.set(membership.containerId, candidates);
       }
     }
-    adoptionCandidatesByPipeline = grouped;
-    return grouped;
+    (adoptionCandidatesByPipeline ??= new Map()).set(pipelineId, candidates);
+    return candidates;
   };
   return {
     exec: realExec,
@@ -1886,7 +1894,7 @@ export function defaultPipelinePorts(
       const principal = productionDeputyPrincipal(conversationId);
       return principal ? { conversationId: principal.seatConversationId, path: principal.seatPath } : null;
     },
-    pipelineAdoptionCandidates: (pipelineId) => adoptionCandidates().get(pipelineId) ?? [],
+    pipelineAdoptionCandidates: adoptionCandidates,
     createFlow: async (request, entries, preparedGit) => {
       const result = await createFlowFromRequest(request, entries, undefined, preparedGit);
       flowSnapshot = null;
