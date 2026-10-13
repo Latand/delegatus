@@ -6,6 +6,16 @@ import { expect, test } from "bun:test";
 import { checkedAnswer, checkedRound, toolCallResultSchema, descriptorSchema, requestSchema } from "./protocol";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
 
+test("paired service windows and late claims parse in requests and descriptors", () => {
+  const liveness = { ...sampleRequest.liveness, claim_window_s: 120, stall_window_s: 4, ack_window_s: 600, poll_freshness_s: 1 };
+  expect(requestSchema.safeParse({ ...sampleRequest, liveness }).success).toBe(true);
+  expect(descriptorSchema.safeParse({ protocol: "delegatus-relay", versions: [1], name: "Test", description: "Test",
+    api_base: "https://relay.example/v1", kinds: ["answer"], liveness,
+    limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 } }).success).toBe(true);
+  for (const field of ["claim_window_s", "ack_window_s", "poll_freshness_s", "stall_window_s"])
+    expect(requestSchema.safeParse({ ...sampleRequest, liveness: { ...liveness, [field]: 0 } }).success).toBe(false);
+});
+
 test("request limits and additive fields", () => {
   expect(
     requestSchema.safeParse({ ...sampleRequest, x_future: 1 }).success,

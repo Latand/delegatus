@@ -842,11 +842,11 @@ unknown fields, rule A.2.6), so only the CLI answer schema in §A.8 is closed.
       "type": "object",
       "required": ["poll_freshness_s", "claim_window_s", "ack_window_s", "heartbeat_interval_s", "stall_window_s"],
       "properties": {
-        "poll_freshness_s": { "type": "integer", "minimum": 30, "maximum": 300 },
-        "claim_window_s": { "type": "integer", "minimum": 1, "maximum": 60 },
-        "ack_window_s": { "type": "integer", "minimum": 2, "maximum": 120 },
+        "poll_freshness_s": { "type": "integer", "minimum": 1 },
+        "claim_window_s": { "type": "integer", "minimum": 1 },
+        "ack_window_s": { "type": "integer", "minimum": 1 },
         "heartbeat_interval_s": { "type": "integer", "minimum": 2, "maximum": 60 },
-        "stall_window_s": { "type": "integer", "minimum": 10, "maximum": 600 }
+        "stall_window_s": { "type": "integer", "minimum": 1, "maximum": 600 }
       }
     },
 
