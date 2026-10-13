@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { AgentRegistry } from "@/lib/agent/registry";
+import { statePath } from "@/lib/configDir";
 
 import type { RuntimeHostClient } from "../client";
 import type { RuntimeSnapshot } from "../contracts";
@@ -106,7 +107,7 @@ const result = await enqueueStructuredMessage({
   storeImages: (images) => {
     const refs = store.putMany(images);
     if (publishedMarker && publishedMarker !== "-") {
-      fs.writeFileSync(publishedMarker, "published\n");
+      fs.writeFileSync(publishedMarker, JSON.stringify({ accountLeaseHeld: fs.existsSync(statePath("account-selection.lock")) }));
       if (releaseMarker && releaseMarker !== "-") waitForRelease(releaseMarker);
     }
     return refs;

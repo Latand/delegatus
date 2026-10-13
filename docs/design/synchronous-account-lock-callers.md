@@ -51,6 +51,13 @@ blocker read while POST accepts a retry. DELETE then returns 409 with
 `login_pending`, Main stays visible, and routing and project bindings retain
 their prior values. The preparation barrier holds no account lease.
 
+The cross-process image test now coordinates publication with explicit markers
+instead of timing child startup. Its previous assertion required unrelated
+publication to wait behind the account lease, which conflicts with this body
+split. The replacement pauses two publishers outside that lease, lets a
+conflicting payload reserve first, and checks the losing request returns 409
+while both winning reservations retain their exact image bytes.
+
 | Caller | File:line | Foreign holder | Why | Local holder or local waiter |
 | --- | --- | --- | --- | --- |
 | `runIdentityWaveMigrationAtStartup` | `src/lib/agent/identityWaveStartup.ts:196` | 25 ms wait | Boot needs a completed migration result; rerunning the outer startup later remains idempotent. | The Viewer startup wrapper (`src/lib/viewerInstrumentation.ts:573`) yields and retries up to three total attempts, with 5 s and 10 s pauses by default. Exhaustion logs diagnostics and leaves the migration for a later startup. The direct synchronous API raises safe AccountMutationBusyError. |
