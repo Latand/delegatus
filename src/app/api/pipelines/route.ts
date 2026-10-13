@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 import { authenticatedAgentSpawnCaller, isAgentInitiatedSpawn } from "@/app/api/spawn/admission";
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
@@ -49,6 +50,27 @@ const LIST_PARAMETERS = new Set(["project", "state", "includeClosed", "limit"]);
  * silently dropped again.
  */
 export async function GET(req: NextRequest): Promise<NextResponse<PipelinesResponse | ApiError>> {
+  return withViewerOperation("pipelines.get", () => getPipelineList(req));
+}
+
+/** Serialize historical records in short slices. A whole hot response can be
+    tens of megabytes even when each individual record is cheap to encode. */
+async function pipelineListResponse(pipelines: readonly Pipeline[]): Promise<NextResponse<PipelinesResponse>> {
+  const parts = ['{"pipelines":['];
+  let slice = performance.now();
+  for (let index = 0; index < pipelines.length; index++) {
+    if (index) parts.push(",");
+    parts.push(JSON.stringify(pipelines[index]));
+    if (performance.now() - slice >= 4) {
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+      slice = performance.now();
+    }
+  }
+  parts.push("]}");
+  return new NextResponse(parts.join(""), { headers: { "content-type": "application/json" } });
+}
+
+async function getPipelineList(req: NextRequest): Promise<NextResponse<PipelinesResponse | ApiError>> {
   const params = req.nextUrl.searchParams;
   const unknown = [...new Set(params.keys())].filter((key) => !LIST_PARAMETERS.has(key));
   if (unknown.length > 0) {
@@ -57,7 +79,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<PipelinesRespo
     }, { status: 400 });
   }
   try {
-    if (params.size === 0) return NextResponse.json(getPipelines());
+    if (params.size === 0) return await pipelineListResponse(getPipelines().pipelines);
     const includeClosed = params.get("includeClosed") === "true" || params.get("includeClosed") === "1";
     const limit = params.has("limit") ? Number(params.get("limit")) : null;
     const records = includeClosed ? [...getPipelines().pipelines, ...loadArchivedPipelines()] : getPipelines().pipelines;
@@ -67,7 +89,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<PipelinesRespo
       includeClosed,
       limit: Number.isFinite(limit) ? limit : null,
     });
-    return NextResponse.json({ pipelines: [...pipelines] });
+    return await pipelineListResponse(pipelines);
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "pipeline registry unreadable" }, { status: 500 });
   }

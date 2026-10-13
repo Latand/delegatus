@@ -1,9 +1,10 @@
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { spawn, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
+import crypto, { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+import type { StateWriteHealth } from "@/lib/state/diskFull";
 import { statePath } from "@/lib/configDir";
 
 import type { FileCatalogScan } from "./index";
@@ -44,6 +45,8 @@ function idleLimitMs(): number {
 }
 
 export type FilesResponseRepresentation = {
+  stateWrites?: StateWriteHealth;
+  stateDataWrites?: StateWriteHealth;
   body: string;
   contentType: string;
   etag: string;
@@ -63,6 +66,8 @@ export type FilesResponseWorkerRequest = {
   snapshotFile?: string;
   /** Hash of the board scope; asks for a delta from its previous build. */
   deltaScope?: string;
+  /** The parent's certified base, which may differ from a discarded build. */
+  deltaFrom?: { bodyFile: string; etag: string };
 };
 
 export interface FilesResponseWorkerRuntime {
@@ -92,6 +97,7 @@ function record(value: unknown): value is Record<string, unknown> {
 
 type FilesResponseWorkerWireRepresentation = Omit<FilesResponseRepresentation, "body" | "delta" | "snapshotRead"> & {
   bodyFile: string;
+  stateWritesJson?: string;
   deltaFile?: string;
   deltaBase?: string;
   snapshotEpoch?: string;
@@ -104,6 +110,7 @@ function representation(value: unknown): FilesResponseWorkerWireRepresentation |
     || typeof value.contentType !== "string"
     || typeof value.etag !== "string"
     || typeof value.timing !== "string"
+    || (value.stateWritesJson !== undefined && typeof value.stateWritesJson !== "string")
     || (value.deltaFile !== undefined && typeof value.deltaFile !== "string")
     || (value.deltaBase !== undefined && typeof value.deltaBase !== "string")
     || (value.snapshotEpoch !== undefined && typeof value.snapshotEpoch !== "string")
@@ -433,33 +440,49 @@ function askWorker(
   });
 }
 
-function readBody(worker: ResidentWorker, file: string): string {
+async function readBody(worker: ResidentWorker, file: string): Promise<string> {
   const bodyFile = path.resolve(file);
   if (path.dirname(bodyFile) !== worker.resultDirectory) {
     throw new Error("files response worker returned an invalid body path");
   }
-  const body = fs.readFileSync(bodyFile, "utf8");
-  fs.rmSync(bodyFile, { force: true });
+  const body = await fs.promises.readFile(bodyFile, "utf8");
+  await fs.promises.rm(bodyFile, { force: true });
   return body;
 }
 
 async function dispatch(
   request: FilesResponseWorkerRequest,
   runtime: FilesResponseWorkerRuntime,
+  previous?: { body: string; etag: string },
 ): Promise<FilesResponseRepresentation> {
   const worker = residentWorker(runtime);
+  let previousFile: string | undefined;
   try {
+    if (previous && request.deltaScope) {
+      previousFile = path.join(worker.resultDirectory, `${process.pid}-${crypto.randomUUID()}.base.json`);
+      await fs.promises.mkdir(worker.resultDirectory, { recursive: true, mode: 0o700 });
+      await fs.promises.writeFile(previousFile, previous.body, { encoding: "utf8", mode: 0o600 });
+      request = { ...request, deltaFrom: { bodyFile: previousFile, etag: previous.etag } };
+    }
     const result = await askWorker(worker, request, runtime.timeoutMs ?? FILES_RESPONSE_WORKER_TIMEOUT_MS);
-    const { bodyFile, deltaFile, deltaBase, snapshotEpoch, snapshotGeneration, ...metadata } = result;
-    const body = readBody(worker, bodyFile);
-    const delta = deltaFile && deltaBase ? { base: deltaBase, body: readBody(worker, deltaFile) } : undefined;
+    const { bodyFile, deltaFile, deltaBase, snapshotEpoch, snapshotGeneration, stateWritesJson, ...metadata } = result;
+    const stateWrites = stateWritesJson ? JSON.parse(stateWritesJson) as StateWriteHealth : undefined;
+    if (stateWrites && (!record(stateWrites)
+      || !["ok", "disk-full"].includes(stateWrites.state)
+      || (stateWrites.since !== null && typeof stateWrites.since !== "string")
+      || (stateWrites.freeBytes !== null && (typeof stateWrites.freeBytes !== "number" || !Number.isFinite(stateWrites.freeBytes))))) {
+      throw new Error("files response worker emitted invalid write health");
+    }
+    const body = await readBody(worker, bodyFile);
+    const delta = deltaFile && deltaBase ? { base: deltaBase, body: await readBody(worker, deltaFile) } : undefined;
     const generation = snapshotGeneration !== undefined && /^\d+$/.test(snapshotGeneration) ? Number(snapshotGeneration) : undefined;
     const snapshotRead = snapshotEpoch && generation !== undefined && Number.isSafeInteger(generation)
       ? { epoch: snapshotEpoch, generation }
       : undefined;
     pool.__llvFilesResponseWorkerBuilds = (pool.__llvFilesResponseWorkerBuilds ?? 0) + 1;
-    return { ...metadata, body, ...(delta ? { delta } : {}), ...(snapshotRead ? { snapshotRead } : {}) };
+    return { ...metadata, body, ...(stateWrites ? { stateWrites, stateDataWrites: stateWrites } : {}), ...(delta ? { delta } : {}), ...(snapshotRead ? { snapshotRead } : {}) };
   } finally {
+    if (previousFile) await fs.promises.rm(previousFile, { force: true }).catch(() => undefined);
     if (!worker.retired) {
       if (worker.rssBytes > residentLimitBytes()) retire(worker, "size");
       else armIdleTimer(worker);
@@ -476,9 +499,10 @@ async function dispatch(
 export function buildFilesResponseInWorker(
   request: FilesResponseWorkerRequest,
   runtime: FilesResponseWorkerRuntime = testRuntime ?? {},
+  previous?: { body: string; etag: string },
 ): Promise<FilesResponseRepresentation> {
-  const previous = pool.__llvFilesResponseWorkerTail ?? Promise.resolve();
-  const current = previous.catch(() => undefined).then(() => dispatch(request, runtime));
+  const previousBuild = pool.__llvFilesResponseWorkerTail ?? Promise.resolve();
+  const current = previousBuild.catch(() => undefined).then(() => dispatch(request, runtime, previous));
   pool.__llvFilesResponseWorkerTail = current.then(() => undefined, () => undefined);
   return current;
 }

@@ -849,6 +849,13 @@ launches and supervises agents. Ctrl-C stops both. Delegatus listens on
 `127.0.0.1` unless you pass `--hostname`, and opens the page in your browser
 when it can. Set `DELEGATUS_DEBUG=1` to print startup diagnostics.
 
+The web process logs `[viewer loop-gap]` when a ten-millisecond timer is more
+than 500 ms late. The entry names bounded request and controller operations,
+including operations that completed before the delayed tick. A
+`[state lease-hold]` entry names a pipelines lease held for more than one
+second, measured from durable acquisition through release. These entries carry
+operation names and durations without request bodies or account identifiers.
+
 Delegatus used to be called Agent Log Viewer. The old `agent-log-viewer`
 command still works and prints a one-line notice.
 

@@ -32,6 +32,9 @@ function workerRequest(value: unknown): FilesResponseWorkerRequest | null {
     || !Array.isArray(value.headers)
     || (value.snapshotFile !== undefined && typeof value.snapshotFile !== "string")
     || (value.deltaScope !== undefined && (typeof value.deltaScope !== "string" || !/^[0-9a-f]{40}$/.test(value.deltaScope)))
+    || (value.deltaFrom !== undefined && (!record(value.deltaFrom)
+      || typeof value.deltaFrom.bodyFile !== "string" || typeof value.deltaFrom.etag !== "string"
+      || !/^"[0-9a-f]{40}"$/.test(value.deltaFrom.etag)))
     || (value.snapshot === undefined && value.snapshotFile === undefined)
     || (value.snapshot !== undefined && (
       !record(value.snapshot)
@@ -77,11 +80,12 @@ async function build(request: FilesResponseWorkerRequest): Promise<Record<string
   fs.writeFileSync(bodyFile, body, { encoding: "utf8", mode: 0o600 });
   return {
     bodyFile,
+    stateWritesJson: JSON.stringify(JSON.parse(body).systemHealth?.storage?.writes ?? { state: "ok", since: null, freeBytes: null }),
     contentType: response.headers.get("content-type") ?? "application/json",
     etag,
     timing: response.headers.get("server-timing") ?? "",
     ...read,
-    ...(request.deltaScope ? deltaFromBase(resultDirectory, request.deltaScope, body, etag) : {}),
+    ...(request.deltaScope ? deltaFromBase(resultDirectory, request.deltaScope, body, etag, request.deltaFrom) : {}),
   };
 }
 
@@ -94,12 +98,15 @@ const DELTA_BASES_KEPT = 4;
  * so a worker retired for idleness or size still answers the next revision
  * with a delta instead of making every client download the board again.
  */
-function deltaFromBase(resultDirectory: string, scope: string, body: string, etag: string): Record<string, string> {
+function deltaFromBase(resultDirectory: string, scope: string, body: string, etag: string, certified?: FilesResponseWorkerRequest["deltaFrom"]): Record<string, string> {
   if (!/^"[0-9a-f]{40}"$/.test(etag)) return {};
   const basePath = path.join(resultDirectory, `delta-base-${scope}.json`);
   let result: Record<string, string> = {};
+  if (certified && path.dirname(path.resolve(certified.bodyFile)) !== path.resolve(resultDirectory)) {
+    throw new Error("files response worker received an invalid delta base path");
+  }
   try {
-    const stored = fs.readFileSync(basePath, "utf8");
+    const stored = certified ? `${certified.etag}\n${fs.readFileSync(certified.bodyFile, "utf8")}` : fs.readFileSync(basePath, "utf8");
     const newline = stored.indexOf("\n");
     const baseEtag = stored.slice(0, newline);
     if (newline > 0 && baseEtag === etag) return {};
@@ -108,7 +115,8 @@ function deltaFromBase(resultDirectory: string, scope: string, body: string, eta
       fs.writeFileSync(deltaFile, diffFilesBodies(stored.slice(newline + 1), body, baseEtag, etag), { encoding: "utf8", mode: 0o600 });
       result = { deltaFile, deltaBase: baseEtag };
     }
-  } catch {
+  } catch (error) {
+    if (certified) throw error;
     // No base yet, or an unreadable one: this build becomes the base.
   }
   const temporary = `${basePath}.${process.pid}.tmp`;

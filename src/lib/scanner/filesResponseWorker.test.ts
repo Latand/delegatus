@@ -2,6 +2,7 @@ import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIden
 import { signalFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { applyFilesDelta } from "@/lib/filesDelta";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -158,6 +159,8 @@ test("files response projection runs in an isolated worker process", async () =>
     const result = await buildFilesResponseInWorker(request, runtimeFor(stateDir));
     expect(result.etag).toMatch(/^"[a-f0-9]{40}"$/);
     expect(result.contentType).toContain("application/json");
+    expect(result.stateWrites).toEqual(JSON.parse(result.body).systemHealth.storage.writes);
+    expect(result.stateDataWrites).toEqual(result.stateWrites);
     expect(JSON.parse(result.body)).toMatchObject({
       files: [],
       projectCatalog: [],
@@ -311,6 +314,25 @@ test("a retired worker still answers the next revision with a delta from its per
     await stopTestWorker();
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
+});
+
+test("a discarded worker build cannot replace the parent's certified delta base", async () => {
+  const stateDir = scratchState();
+  const scoped = { ...request, url: "http://127.0.0.1/api/files?view=summary", deltaScope: "b".repeat(40) };
+  try {
+    const first = await buildFilesResponseInWorker(scoped, runtimeFor(stateDir));
+    const parent = JSON.parse(first.body);
+    parent.parentOnly = "certified representation";
+    const body = JSON.stringify(parent);
+    const etag = `"${createHash("sha1").update(body).digest("hex")}"`;
+    // This build updates the worker's persisted base but was never published
+    // into the parent cache. The next delta must still start at the parent.
+    await buildFilesResponseInWorker(scoped, runtimeFor(stateDir));
+    const next = await buildFilesResponseInWorker(scoped, runtimeFor(stateDir), { body, etag });
+    expect(next.delta?.base).toBe(etag);
+    expect(applyFilesDelta(parent, JSON.parse(next.delta!.body))).toEqual(JSON.parse(next.body));
+    expect(fs.readdirSync(path.join(stateDir, "files-response-results")).filter(name => !name.startsWith("delta-base-"))).toEqual([]);
+  } finally { await stopTestWorker(); fs.rmSync(stateDir, { recursive: true, force: true }); }
 });
 
 /* #2072: the worker reads the persisted scan snapshot when its turn comes, and

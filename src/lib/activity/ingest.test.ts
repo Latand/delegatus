@@ -11,6 +11,11 @@ import { activityReport, clampMethodParams } from "./method";
 import { ActivityStore, LOCAL_HOST_KEY } from "./store";
 import type { ConversationResolution, TranscriptFacts } from "./transcriptExport";
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
+import { buildRegistryPerformanceDataset, REGISTRY_PERFORMANCE_SHAPE } from "@/lib/agent/registryPerformanceDataset";
+import { recordActivityFromIndexFeed } from "./continuous";
+import { AgentRegistry } from "@/lib/agent/registry";
+import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
+import type { UserRecord } from "./humanInput";
 
 /* The continuous ingest over invented transcripts in a throw-away directory:
    invented projects, ids and text only. */
@@ -79,6 +84,58 @@ function stored<T>(read: (store: ActivityStore) => T): T {
     store.close();
   }
 }
+
+test("a new transcript at production registry size avoids hydrating unrelated history", async () => {
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(dir, "state");
+  try {
+    buildRegistryPerformanceDataset(process.env.LLV_STATE_DIR, {
+      ...REGISTRY_PERFORMANCE_SHAPE, conversations: 5730, entries: 4810, receipts: 4906,
+      heldDeliveries: 5283, deliveryOperationOwners: 7922, lineageEdges: 5112, memberships: 4032,
+      migrationIntents: 43, workers: 0, transcripts: 0,
+    });
+    const file = write("new-delivered.jsonl", [codexMeta("2026-09-23T12:00:00Z"), codexUser("2026-09-23T12:00:01Z", "new-input", "unregistered delivered input")]);
+    let expected = performance.now() + 10, maxGapMs = 0;
+    const timer = setInterval(() => { const at = performance.now(); maxGapMs = Math.max(maxGapMs, at - expected); expected = at + 10; }, 10);
+    try {
+      const result = await recordActivityFromIndexFeed([source(file)], true, Date.now());
+      await new Promise(resolve => setTimeout(resolve, 25));
+      expect(result.failures).toEqual([]);
+      expect(result.filesHeld).toBe(1);
+      expect(result.inputsWritten).toBe(0);
+      console.info(JSON.stringify({ case: "activity-new-transcript", maxGapMs }));
+      expect(maxGapMs).toBeLessThan(200);
+    } finally { clearInterval(timer); }
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+  }
+}, 30_000);
+
+test("scoped activity context preserves roles, custody aliases and delivered submission identities", () => {
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(dir, "state");
+  try {
+    const dataset = buildRegistryPerformanceDataset(process.env.LLV_STATE_DIR, {
+      ...REGISTRY_PERFORMANCE_SHAPE, conversations: 16, entries: 16, receipts: 16,
+      heldDeliveries: 16, deliveryOperationOwners: 16, lineageEdges: 16, memberships: 16,
+      migrationIntents: 1, activeEntries: 4, hotTerminalRows: 8, workers: 0, transcripts: 0,
+    });
+    const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+    const expected = conversationResolver(registry.readOnlySnapshot(), () => registry.readOnlySnapshot());
+    const scoped = conversationResolver(facts => registry.activityConversationSnapshot(facts.path));
+    for (const pathname of dataset.conversationPaths) {
+      const facts: TranscriptFacts = { path: pathname, engine: "codex", cwd: null, entrypoint: null, sessionMeta: null };
+      const before = expected(facts), after = scoped(facts);
+      expect({ ...after, deliveryOrigin: undefined }).toEqual({ ...before, deliveryOrigin: undefined });
+      for (const operationId of [...dataset.coldOperationIds, ...dataset.hotOperationIds]) {
+        const record = { engine: "codex", markerOrigin: "operator", deliveryKey: deliveryDedupToken(operationId) } as UserRecord;
+        expect(after.deliveryOrigin?.(record)).toEqual(before.deliveryOrigin?.(record));
+      }
+    }
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+  }
+});
 
 describe("the continuous ingest", () => {
   test("a resolver made before team claim attributes later ingest as team input", async () => {

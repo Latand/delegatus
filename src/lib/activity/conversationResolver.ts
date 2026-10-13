@@ -22,11 +22,17 @@ import type { ConversationResolution, TranscriptFacts } from "./transcriptExport
  * project and no conversation is registered.
  */
 export function conversationResolver(
-  snapshot: RegistryFile | null,
+  registrySource: RegistryFile | null | ((facts: TranscriptFacts) => RegistryFile | null),
   provenanceRegistrySnapshot?: () => RegistryFile,
 ): (facts: TranscriptFacts) => ConversationResolution {
-  const lookup = snapshot ? readOnlyConversationLookupFromSnapshot(snapshot) : null;
+  const fixedLookup = typeof registrySource !== "function" && registrySource
+    ? readOnlyConversationLookupFromSnapshot(registrySource) : null;
   return (facts) => {
+    const snapshot = typeof registrySource === "function" ? registrySource(facts) : registrySource;
+    const lookup = typeof registrySource === "function" && snapshot ? readOnlyConversationLookupFromSnapshot(snapshot) : fixedLookup;
+    const provenanceSnapshot = provenanceRegistrySnapshot ?? (typeof registrySource === "function"
+      ? () => { const current = registrySource(facts); if (!current) throw new Error("activity custody is unavailable"); return current; }
+      : undefined);
     let mode: "solo" | "team" = "team";
     try {
       const store = existingTeamStore();
@@ -78,7 +84,7 @@ export function conversationResolver(
       try {
         if (rec.engine === "claude") {
           claude ??= claudeMessageProvenance(facts.path,
-            provenanceRegistrySnapshot ? { registrySnapshot: provenanceRegistrySnapshot } : {});
+            provenanceSnapshot ? { registrySnapshot: provenanceSnapshot } : {});
           const found = rec.messageId ? claude[rec.messageId] : undefined;
           if (!found) return null;
           const memberId = authorFor(found.submissionId, null);
@@ -87,7 +93,7 @@ export function conversationResolver(
         }
         if (!rec.markerOrigin) return null;
         codex ??= submissionIdentities(facts.path,
-          provenanceRegistrySnapshot ? { registrySnapshot: provenanceRegistrySnapshot } : {});
+          provenanceSnapshot ? { registrySnapshot: provenanceSnapshot } : {});
         const submission = rec.deliveryKey ? codex[rec.deliveryKey] : undefined;
         const memberId = authorFor(submission, rec.deliveryKey);
         return { origin: rec.markerOrigin, ...(submission ? { idempotencyKey: requestIdentity(submission) } : {}), ...(memberId ? { memberId } : {}) };

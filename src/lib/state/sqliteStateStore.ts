@@ -1,5 +1,6 @@
 import { AccountCommitBusyError, accountMutationHeld } from "@/lib/accounts/accountMutationContext";
 import crypto from "node:crypto";
+import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import { recordBlockingWait } from "@/lib/blockingWaits";
 import fs from "node:fs";
 import path from "node:path";
@@ -42,6 +43,17 @@ function injectWriteFault(site: WriteFault["site"], collection?: string): void {
   throw fault.error;
 }
 
+const holdHost = globalThis as typeof globalThis & { __llvDurableStateHolds?: Map<string, { start: number; operation: string }> };
+const durableHolds = holdHost.__llvDurableStateHolds ??= new Map();
+function finishDurableHold(token: string, collection: string): number {
+  const held = durableHolds.get(token);
+  if (!held) return 0;
+  durableHolds.delete(token);
+  const heldMs = performance.now() - held.start;
+  if (collection === "pipelines" && heldMs > 1000) console.warn("[state lease-hold]", { collection, operation: held.operation, heldMs: Math.round(heldMs) });
+  return heldMs;
+}
+
 type AbandonedLease = { filename: string; collection: string; token: string; abandonedAt: number };
 type AbandonedLeases = { entries: Map<string, Map<string, Map<string, AbandonedLease>>>; timer: ReturnType<typeof setTimeout> | null; deadline?: number; delay: number };
 const leaseGlobal = globalThis as typeof globalThis & { __llvAbandonedStateLeases?: AbandonedLeases };
@@ -60,13 +72,14 @@ function forgetAbandoned(lease: AbandonedLease): void {
 }
 function deleteLease(lease: AbandonedLease): void {
   // If a sandbox or retired database has disappeared, do not recreate it.
-  if (!fs.existsSync(lease.filename)) return;
+  if (!fs.existsSync(lease.filename)) { finishDurableHold(lease.token, lease.collection); return; }
   const db = connectDatabase(lease.filename);
   try {
     db.exec("BEGIN IMMEDIATE");
     injectWriteFault("release", lease.collection);
     db.query("DELETE FROM state_leases WHERE collection = ? AND owner_token = ?").run(lease.collection, lease.token);
     db.exec("COMMIT");
+    finishDurableHold(lease.token, lease.collection);
   } catch (error) { rollbackQuietly(db); throw error; }
   finally { db.close(); }
 }
@@ -891,6 +904,46 @@ export function readStateCollectionsRows(
   }
 }
 
+/** A complete read-only snapshot, decoded one row at a time with actual
+    timer opportunities. No writer lease is held across the read. */
+export async function visitStateCollectionsRows(
+  filename: string,
+  collections: readonly string[],
+  visit: (record: unknown, collection: string) => void,
+): Promise<Map<string, number | null>> {
+  const revisions = new Map<string, number | null>(collections.map(collection => [collection, null]));
+  if (!fs.existsSync(filename) || !collections.length) return revisions;
+  const db = connectReadonlyDatabase(filename);
+  let slice = performance.now();
+  let readingRows = false;
+  try {
+    db.exec("BEGIN");
+    const placeholders = collections.map(() => "?").join(", ");
+    for (const row of db.query<{ collection: string; revision: number }, SQLQueryBindings[]>(
+      `SELECT collection, revision FROM state_collections WHERE collection IN (${placeholders})`,
+    ).all(...collections as SQLQueryBindings[])) revisions.set(row.collection, row.revision);
+    readingRows = true;
+    const rows = db.query<{ collection: string; row_key: string; value_json: string }, SQLQueryBindings[]>(
+      `SELECT collection, row_key, value_json FROM state_rows WHERE collection IN (${placeholders}) ORDER BY collection, row_order, row_key`,
+    ).iterate(...collections as SQLQueryBindings[]);
+    for (const row of rows) {
+      let value: unknown;
+      try { value = JSON.parse(row.value_json); }
+      catch (error) { throw new Error(`corrupt ${row.collection} SQLite row: ${row.row_key}`, { cause: error }); }
+      visit(value, row.collection);
+      if (performance.now() - slice >= 4) {
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        slice = performance.now();
+      }
+    }
+    db.exec("COMMIT");
+    return revisions;
+  } catch (error) {
+    if (!readingRows && /no such table/i.test(error instanceof Error ? error.message : String(error))) return revisions;
+    throw error;
+  } finally { db.close(); }
+}
+
 /** Authoritative revision for cache keys, or null until this collection migrates. */
 export function readStateCollectionRevision(filename: string, collection: string): number | null {
   return readStateCollectionRevisions(filename, [collection]).get(collection) ?? null;
@@ -1112,6 +1165,29 @@ export class SqliteStateCollection<T> {
         return result;
       } finally { db.close(); }
     } finally { if (!heldLease) this.releaseLeaseSync(lease); }
+  }
+
+  /** Admission without materializing the collection. Prepared evidence is
+      revalidated by the caller under this same durable writer lease. */
+  private admissionTail: Promise<unknown> = Promise.resolve();
+  private waitingAdmissions = 0;
+  async admit<R>(operation: () => Promise<R> | R, lockWaitMs?: number, observeHold?: (heldMs: number) => void): Promise<R> {
+    if (lockWaitMs === 0 && this.waitingAdmissions > 0) throw new FileTransactionBusyError(this.options.busyMessage);
+    this.waitingAdmissions++;
+    const deadline = lockWaitMs === undefined ? null : Date.now() + lockWaitMs;
+    const turn = this.admissionTail.catch(() => undefined).then(async () => {
+      // A burst of ready timer callbacks otherwise drains all admissions and
+      // their microtasks before the overdue loop probe or HTTP callback runs.
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+      if (deadline !== null && lockWaitMs !== 0 && Date.now() > deadline) throw new FileTransactionBusyError(this.options.busyMessage);
+      assertSqliteWriteAuthority(this.filename);
+      const lease = await this.acquireLease(deadline === null ? undefined : Math.max(0, deadline - Date.now()));
+      const acquiredAt = durableHolds.get(lease)!.start;
+      try { assertSqliteWriteAuthority(this.filename); return await operation(); }
+      finally { await this.releaseLease(lease); observeHold?.(performance.now() - acquiredAt); }
+    });
+    this.admissionTail = turn.then(() => undefined, () => undefined);
+    return turn.finally(() => { this.waitingAdmissions--; });
   }
 
   async boundedPatchAsync<R>(limit: number, operation: (tx: StateBoundedTransaction<T>) => R, lockWaitMs?: number): Promise<R> {
@@ -1435,7 +1511,7 @@ export class SqliteStateCollection<T> {
   ): Promise<R> {
     assertSqliteWriteAuthority(this.filename);
     const lease = await this.acquireLease(lockWaitMs);
-    const acquiredAt = performance.now();
+    const acquiredAt = durableHolds.get(lease)!.start;
     try {
       const source = controllerOnly ? this.loadControllerReadonly() : this.loadReadonly();
       const session = this.track(source);
@@ -1928,6 +2004,7 @@ export class SqliteStateCollection<T> {
         VALUES (?, ?, ?, ?, ?)
       `).run(this.options.collection, ownerToken, process.pid, procBackend.processIdentity(process.pid), Date.now());
       db.exec("COMMIT");
+      durableHolds.set(ownerToken, { start: performance.now(), operation: viewerLoopMonitor.current() ?? `${this.options.collection}.mutation` });
       if (held) {
         if (now - held.acquired_at > STATE_LEASE_MAX_AGE_MS) console.warn(`[state lease] taking over ${this.options.collection} from pid ${held.owner_pid}, age ${now - held.acquired_at} ms`);
         const old = abandonedTokens(this.filename, this.options.collection)?.get(held.owner_token);

@@ -1,5 +1,8 @@
 # Viewer load stalls, 2026-10-13: step-one investigation
 
+The [build verification](#build-verification-2026-10-13) below records the
+subsequent implementation and its remaining cold-cache acceptance question.
+
 The continuation reproduced a concrete 10–30 second stall mechanism in the pinned Viewer: repeated synchronous `readStateCollectionsRows()` SQL snapshots and `JSON.parse()` of the complete pipeline stores, entered through `withPipelineStartupAdmission()`. With 96 simultaneous admissions at production size, the longest loop gap was **20,513.248 ms**, the first caller's pipelines lease lasted **20,294.309 ms**, and a concurrent page's measured curl time-to-first-byte was **20,684.226 ms**. A 64-caller ordinary mutation control had a 146.931 ms gap and a 136.401 ms longest lease. E8.
 
 The first admission acquires its durable lease before its `await` continuation runs. Competing admissions then perform their synchronous pre-admission integrity reads. Those reads delay the first owner's continuation and release. The trace records 95 full reads while that first lease is held. A second case, with 32 callbacks that also perform the two full evidence reads used by startup, delays page TTFB to 27,067.730 ms. The isolated cause is repeated complete-store decoding without an event-loop opportunity, including work by competing callers while another caller owns the lease. This establishes a reproducible blocker and supports the build stage.
@@ -430,3 +433,125 @@ Prior-context searches opened the handoff transcript and #2812's review discussi
 Decision requested: supply an incident workload/request capture for isolated replay, or accept that the cause remains unknown and leave the fix stage stopped. Isolated replay is recommended. This stage grants no deployment or restart authority.
 
 Validation at 12:31:53Z: the required local privacy gate with committed known-value fingerprints passed for this explicit document path. A no-index whitespace check passed, and worktree status showed only this declared untracked output. No identity/home-path literal was found in a supplemental scan; a broad hostname substring probe matched the ordinary word “work.” and was checked manually. After factual rounding edits, these document checks were repeated before reporting the stage.
+
+
+## Build verification, 2026-10-13
+
+The build removes the reproduced admission burst by preparing a fresh SQLite
+snapshot in short slices before taking the pipelines lease. Concurrent startup
+callers share only an in-flight read. Admission checks both collection revisions
+and database identity; changed evidence defers the callback. Each local startup
+admission yields before acquiring its lease. Admitted readers receive independent
+record copies, and the evidence cell is cleared on completion so inherited async
+resources cannot retain or reuse an archive snapshot. Health reads retain issues;
+healthy historical payloads are released after validation.
+
+The existing files worker now returns write-health metadata and computes deltas
+against the parent's certified base. This preserves delta continuity through a
+discarded worker build and removes duplicate body parsing and comparison from the
+web process. Result-file reads are asynchronous. Pipeline collection GET encodes
+records in short slices with its original response shape and filters.
+
+A further isolated profile traced a residual 391 ms gap to activity ingest:
+`recordActivityFromIndexFeed → conversationResolver → AgentRegistry.readOnlySnapshot
+→ rememberReadOnly → rememberColdProjections → SQLite .all`. This occurs when the
+index encounters new transcript facts. A scoped activity reader now loads that
+conversation's roles, aliases, receipts and delivery custody in one read-only
+transaction. Provenance reads remain fresh. The original complete-snapshot
+resolver remains available to its other callers. This change leaves stored
+registry data and grant decisions untouched.
+
+The Viewer logs overlapping named operations when its ten-millisecond timer is
+more than 500 ms late, including operations completed before the delayed tick.
+Names are grouped and bounded. Pipelines holds over one second are logged from
+successful durable acquisition to successful release, including delay before the
+first await continuation and a retried release. Induced tests exercise a returned
+600 ms operation and a 1.1-second delay immediately after acquisition.
+
+The final comparison used the pinned old implementation and the candidate in the
+same session, on the same machine and Bun 1.4.0, sequentially. Both served a real
+Next production build and its normal compiled projection worker. Each began from
+the same private state seed and fresh synthetic transcript root. The pipeline
+seed contains 304 hot and 500 archived records totaling 95,343,381 JSON characters;
+these are the 804 incident-sized records after the diagnosis's settled-row move.
+The catalog generator reports 37,471 rows, 121,702,694 payload bytes and 4,810
+transcripts on both runs. Resource limits are identical: a private owned gate with
+24 GiB memory, isolated HOME, XDG, TMPDIR, state and gate locks. No heavy checks ran
+alongside either measured sample.
+
+The driver retains the diagnosis's four bursts, then two 25-second mixed windows
+with four concurrent HTTP requests. Each burst also issues snapshot, session-read,
+effect-batch and append through the real Unix runtime client with its unchanged
+30-second deadline. The independent socket server returns a six-megabyte snapshot
+and inert answers. Curl measures `time_starttransfer` for the page and substantive
+board data, `/api/files?view=summary`; the small membership-only board endpoint is
+excluded from the first-data claim. Timer lateness and successful durable
+acquire/delete boundaries are observed inside the web process. Diagnostic hooks
+add no intentional delay. Values below are milliseconds, old → candidate.
+
+| Workload | Longest loop gap | Longest durable hold | Page TTFB | Files TTFB | Runtime batch round trip |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 64 ordinary mutations | 135.230 → 119.760 | 131.790 → 125.227 | 158.139 → 165.837 | 392.051 → 325.776 | 300.503 → 248.405 |
+| 64 startup admissions | 14,403.703 → 51.580 | 14,152.537 → 0.921 | 14,527.890 → 27.172 | 14,776.073 → 73.249 | 14,842.904 → 139.234 |
+| 96 startup admissions | 20,487.717 → 51.638 | 20,251.873 → 0.846 | 20,632.501 → 25.369 | 20,664.677 → 73.278 | 20,712.959 → 267.559 |
+| 32 evidence callbacks | 12,661.432 → 49.433 | 6,623.309 → 20.697 | 19,370.823 → 20.906 | 19,503.441 → 65.785 | 19,559.953 → 149.125 |
+| Mixed, without health | 371.279 → 132.636 | 82.298 → 94.149 | 228.702 → 96.176 | 685.113 → 259.871 | See runtime counts below |
+| Mixed, with health | 587.420 → 115.007 | 307.147 → 50.063 | 461.654 → 86.146 | 933.373 → 289.826 | See runtime counts below |
+
+Every workload HTTP response is 200. An initial connection refusal during each
+server's readiness polling is retained separately. Each burst observes its full
+64, 96 or 32 durable acquisitions, with zero rejected admission promises. There
+are 576 old and 740 candidate runtime requests, with zero runtime failures. Mixed
+windows complete 87/53 old and 90/91 candidate rounds with unchanged scheduling
+and concurrency. These bounded stress cases use synthetic concurrency. The
+historical incoming request sequence remains unknown.
+
+The old 96-admission case delays the first server-side runtime receipt by 20,565
+ms after the caller's runtime phase starts; the candidate delays it by 25 ms.
+Runtime handler callbacks themselves take under 0.012 ms in both samples. Those
+callback timings exclude JSON serialization and socket I/O. The round-trip column
+includes scheduling, transport and decoding. This separates the reproduced
+caller-loop delay from handler execution without claiming a complete host service
+time. The old replay does not induce a thirty-second timeout; the candidate's
+longest burst runtime batch is 268 ms under the real thirty-second deadline.
+Historical host/caller attribution remains unknown.
+
+The failing-first startup test uses 305 hot and 499 archived synthetic records at
+the incident's exact JSON-character totals. It fails on the old source with a
+3,685.924 ms timer gap and passes on the candidate for 64/96 admissions and 32
+evidence callbacks. The activity reproduction uses the production registry shape:
+the old new-transcript path gives a 383.446 ms gap; the scoped path gives
+11.266–25.398 ms in completed runs. Context/provenance comparisons cover registered
+conversations and their delivery identities. Additional tests cover a new owner
+committed while admission waits, fresh corruption without a revision bump,
+unsupported ownership vocabulary, callback non-replay, independent copies,
+inherited-context revocation, zero-wait admission, reader descriptor release and a
+discarded worker delta base.
+
+The fully uncached first files request remains **4,166.999 ms**, compared with
+4,393.728 ms on the old code. Candidate Server-Timing reports 1,677.1 ms for the
+initial scan and 2,102.9 ms for worker construction; these are sequential cold
+costs outside the reproduced archive burst. The cold page answers in 253.107 ms
+and storage health in 694.893 ms. Warm first-data and all measured workload loop
+and lease budgets pass. The one-second requirement for a completely uncached
+first-data miss remains an explicit acceptance question; this report does not
+claim that criterion passes.
+
+Earlier samples are retained as diagnosis and intermediate evidence. One 12 GiB
+replay ended before completing its health window and is excluded from paired
+results. A profiled intermediate candidate still had 564 ms admission-batch gaps
+and 391–401 ms activity gaps; the final comparison includes the fixes for both.
+All recorded parents in the completed paired runs were reaped by the owned
+runner. Production received no test traffic, debugger, signal, restart or deploy.
+Live agents, pending deliveries and user state remain untouched.
+
+Production builds and MCP packaging pass. Explicit-path isolated checks cover the
+pipeline store and compatibility suites, startup responsiveness, files worker and
+route/delta behavior, activity ingest and cross-host provenance, SQLite reader
+lifecycle, controller behavior, and the earlier #2812/#2814/#2816 registry and MCP
+retention suites. The #2813 Overview model suites pass. Three assertions in the
+startup suite fail on both the candidate and a fresh pinned baseline: delivered
+Claude spawn recovery, delivered pipeline retry recovery, and deferred pipeline
+receipt settlement. Their classifications and raw outputs are retained. They are
+not new failures from this change. The cold-cache decision remains separate from
+these baseline test failures.
