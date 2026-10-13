@@ -285,7 +285,7 @@ test("invalid compact completion retries end at the captured request deadline", 
   } finally { accept = true; await pending; clock.mockRestore(); setRelaySwitch("compact", false); setRelaySwitch("chat_conversations", false); await server.close(); }
 }, 10000);
 
-test("an early decline stops heartbeats so failed completions reach the retry deadline", async () => {
+test("an early decline keeps heartbeats during delivery without renewing its deadline", async () => {
   let now = Date.now();
   const clock = spyOn(Date, "now").mockImplementation(() => now);
   let heartbeatCount = 0, completionCount = 0, acceptCompletion = false, settled = false;
@@ -312,19 +312,19 @@ test("an early decline stops heartbeats so failed completions reach the retry de
   const previousSelection = accountManager.resolveHeadlessSpawn;
   accountManager.resolveHeadlessSpawn = (() => ({ kind: "exhausted", resetsAt: null })) as typeof previousSelection;
   const request = { ...sampleRequest, request_id: "early_decline_completion_retry",
-    liveness: { ...sampleRequest.liveness, heartbeat_interval_s: 10, stall_window_s: 120 } };
+    liveness: { ...sampleRequest.liveness, heartbeat_interval_s: 2, stall_window_s: 120 } };
   const pending = runClaimedRequest(paired, request).then(outcome => { settled = true; return outcome; });
   try {
     const firstResult = await Promise.race([
       pending.then(outcome => ({ kind: "settled" as const, outcome })),
-      Bun.sleep(2500).then(() => ({ kind: "timeout" as const })),
+      Bun.sleep(7000).then(() => ({ kind: "timeout" as const })),
     ]);
     expect(firstResult.kind).toBe("settled");
     if (firstResult.kind === "settled") {
       expect(firstResult.outcome).toMatchObject({ outcome: "declined", reason: "no_capacity" });
     }
     expect(completionCount).toBeGreaterThan(0);
-    expect(heartbeatCount).toBe(1);
+    expect(heartbeatCount).toBeGreaterThan(1);
     expect(readAnswerRecord(paired.id, "target_1", request.request_id)?.delivery).toBe("unconfirmed");
     expect(readRunLedger().runs.some(run => run.requestId === request.request_id)).toBe(false);
     expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 1 }]);
@@ -336,7 +336,7 @@ test("an early decline stops heartbeats so failed completions reach the retry de
     clock.mockRestore();
     await server.close();
   }
-});
+}, 12000);
 
 test("heartbeat journal records attempts, step ids and failures without credential or note content", async () => {
   const logs: unknown[][] = [];

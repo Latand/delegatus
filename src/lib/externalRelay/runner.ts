@@ -229,9 +229,6 @@ export async function runClaimedRequest(
   let pendingBeat: Promise<void> | null = null;
   const loopRecord = () => loop ? { rounds, toolCalls: loop.records } : {};
   const finish = async (body: ExternalRelayCompletion, stallMs = 45_000) => {
-    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-    heartbeatStopped = true;
-    if (cadenceTimer) { clearTimeout(cadenceTimer); cadenceTimer = null; }
     if (pendingBeat) await pendingBeat;
     // Persist the local decision before any delivery wait: a restart must
     // leave the generated answer and early declines inspectable.
@@ -258,6 +255,9 @@ export async function runClaimedRequest(
       outcome: completion.outcome === "answered" ? "answered" : `${completion.outcome}:${completion.reason}`,
       delivery: sent.delivery,
     });
+    heartbeatStopped = true;
+    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+    if (cadenceTimer) { clearTimeout(cadenceTimer); cadenceTimer = null; }
     return completion;
   };
   if (!request)
@@ -592,9 +592,6 @@ export async function runClaimedRequest(
       await loop!.runCalls(decision.calls, rounds);
       if (leaseUnavailable) return null;
     }
-    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-    heartbeatStopped = true;
-    if (cadenceTimer) { clearTimeout(cadenceTimer); cadenceTimer = null; }
     if (pendingBeat) await pendingBeat;
     cancelStalledRun();
     if (leaseUnavailable) return null;
@@ -623,9 +620,6 @@ export async function runClaimedRequest(
         );
     return await finish(body, request.liveness.stall_window_s * 1000);
   } catch {
-    if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-    heartbeatStopped = true;
-    if (cadenceTimer) { clearTimeout(cadenceTimer); cadenceTimer = null; }
     if (callAbort.signal.aborted) return null;
     if (run) {
       if (!runFinished) run.cancel();
