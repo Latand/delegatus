@@ -692,10 +692,10 @@ From a clone, point the command at `bin/mcp-server.mjs`, or run
 `scripts/install-mcp.sh`. The script registers the server in your Claude
 Code and Codex configurations and in every account Delegatus manages.
 
-For agents launched by Delegatus, large board, pipeline, transcript, prototype
-and activity reads execute in the running Viewer through its authenticated MCP
-endpoint. Their stdio processes return the same answers without keeping another
-copy of the Viewer's collection caches. These reads require the Viewer to be
+For agents launched by Delegatus, large board, pipeline, transcript, prototype,
+activity and lifecycle reads execute in the running Viewer through its
+authenticated MCP endpoint. Their stdio processes return the same answers
+without keeping another copy of the Viewer's collection caches. These reads require the Viewer to be
 available. See [the memory replay](docs/investigations/mcp-memory-retention.md).
 
 The tools, by area:

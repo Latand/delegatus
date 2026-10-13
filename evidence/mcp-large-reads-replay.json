@@ -625,5 +625,1135 @@
         "retainedHeapBytes": 1364088
       }
     }
+  },
+  "lifecycleExtension": {
+    "baselineCommit": "8f103d02ec68ecae135c5a60d8bb14430ca207b7",
+    "beforeFixCommit": "32125d4789ac9722af10a10b7911a03deeda3936",
+    "benchmarkSha256": "9f314cf1a293578e95023a6ad49ef218141ac0265cf1fb650153996168666d02",
+    "candidateLargeReadsSha256": "5eccdb9da2c046368616058baa1564108513e805bad6dc1ec29bd8305165a157",
+    "method": "Same method and 120-pipeline fixture as the original replay, with lifecycle_events(mode:query,limit:1) appended to each round and an empty runtime deployments ledger. All three revisions measured on the same machine in this follow-up session. Complete answers compared with the original normalizations; no lifecycle fields normalized.",
+    "main": {
+      "measuredAt": "2026-10-13T05:30:17.844Z",
+      "runtime": "1.4.0",
+      "pipelines": 120,
+      "pipelineJsonBytes": 44733021,
+      "rounds": 3,
+      "idleMs": 30000,
+      "peakRss": 397688832,
+      "atSpawn": {
+        "rss": 126881792,
+        "heapSize": 32315807,
+        "heapCapacity": 39145887,
+        "extraMemorySize": 8126543,
+        "objectCount": 448405
+      },
+      "before": {
+        "rss": 119500800,
+        "heapSize": 32422003,
+        "heapCapacity": 37879763,
+        "extraMemorySize": 8138371,
+        "objectCount": 449427
+      },
+      "afterIdle": {
+        "rss": 258965504,
+        "heapSize": 124271791,
+        "heapCapacity": 132348655,
+        "extraMemorySize": 95994207,
+        "objectCount": 529578
+      },
+      "afterGc": {
+        "rss": 254971904,
+        "heapSize": 122932800,
+        "heapCapacity": 131158864,
+        "extraMemorySize": 95066560,
+        "objectCount": 523884
+      },
+      "answers": [
+        {
+          "round": 0,
+          "tool": "list_pipelines",
+          "bytes": 374052,
+          "hash": "71dd682255bc1ce971dcf196bfc3c26b2cd2ec77717daff0e7e7c049b3b4f292",
+          "responseBytes": 749294,
+          "responseHash": "f30c6b024c7399dfe739c69b32dd60f6b4e9ff591550c77cfb8d79085852ac44",
+          "elapsedMs": 125.69308799999999,
+          "rssAfter": 151924736
+        },
+        {
+          "round": 0,
+          "tool": "get_pipeline",
+          "bytes": 373880,
+          "hash": "2ee245de798a0b462052766f3178d49693518fe8973d45548c9c36d4634cbc27",
+          "responseBytes": 748944,
+          "responseHash": "a3533d2fc182f5f39c390fa8c5d6d98281b2407fce3cd34ff986370dca37986e",
+          "elapsedMs": 12.317334999999957,
+          "rssAfter": 158355456
+        },
+        {
+          "round": 0,
+          "tool": "conversation_messages",
+          "bytes": 3222433,
+          "hash": "af067f9703f8c9b49fe014a8896bd5c5dcd0252f44898c0d32e0a175dc0f6d1b",
+          "responseBytes": 6449008,
+          "responseHash": "f41496218a560c9ace1bc7c5f6553e5251667424ba34c53544692780c6b340a7",
+          "elapsedMs": 268.8304599999999,
+          "rssAfter": 181030912
+        },
+        {
+          "round": 0,
+          "tool": "read_prototype_review",
+          "bytes": 10670,
+          "hash": "0887a6738507f7a6ba14155b20c6d89152d04ddbc6c539355f62b66b7bc98c49",
+          "responseBytes": 21482,
+          "responseHash": "4ddefeaaaaf4c073b22713f5d3f70b134e26797742ee27d97e5643670661ce7e",
+          "elapsedMs": 95.35369200000014,
+          "rssAfter": 175423488
+        },
+        {
+          "round": 0,
+          "tool": "agent_activity",
+          "bytes": 1674,
+          "hash": "f12701d3380ff37afe4fcc7ae440440a8b54a47f303ceb93322bd49c9dc292e8",
+          "responseBytes": 3694,
+          "responseHash": "6587b4fe002d0bdba87b0fb78e38aa8714a440e24a8d0266e1fdccc304825692",
+          "elapsedMs": 89.57485599999995,
+          "rssAfter": 258543616
+        },
+        {
+          "round": 0,
+          "tool": "search_transcripts",
+          "bytes": 60087,
+          "hash": "9f2d295f1785c317631119edf5eaf8d0ace57f9b537e07ac05b7a17f955724d7",
+          "responseBytes": 132672,
+          "responseHash": "ca31b7ef31b2914f75ae7337ddd9d95af3dc8951dcad8fc88952574e8b40d6b8",
+          "elapsedMs": 515.7367920000002,
+          "rssAfter": 260276224
+        },
+        {
+          "round": 0,
+          "tool": "lifecycle_events",
+          "bytes": 478,
+          "hash": "6dcdc2becbe5bb198a6667fc81e81d3cadbfac4dede0487c297656dc6b7135e7",
+          "responseBytes": 1084,
+          "responseHash": "4ca364dc54f6380a0b317940016dee23278294b74518272d3dc88aea39b066c7",
+          "elapsedMs": 339.27767600000016,
+          "rssAfter": 364953600
+        },
+        {
+          "round": 1,
+          "tool": "list_pipelines",
+          "bytes": 374052,
+          "hash": "0c8978dd347d7f2018111747cd46b28cb5a8c2686ef8f7bcb8c6e1b33905443e",
+          "responseBytes": 749294,
+          "responseHash": "0c309f89a8274f15a36309bdf9500b45b98f6114b534f205064d06429e253c94",
+          "elapsedMs": 15.923693000000185,
+          "rssAfter": 368664576
+        },
+        {
+          "round": 1,
+          "tool": "get_pipeline",
+          "bytes": 373880,
+          "hash": "692443012eb1d44a9a71d3a9fff26ccd5978af51c364d30af9520c56b04e4401",
+          "responseBytes": 748944,
+          "responseHash": "e564537622202c2db0813d3f3dd4a079c4666c4ba6e3f16010493d8cce85ef22",
+          "elapsedMs": 14.1289569999999,
+          "rssAfter": 371036160
+        },
+        {
+          "round": 1,
+          "tool": "conversation_messages",
+          "bytes": 3222433,
+          "hash": "a6448edb44d643e327e6063b56e32fe44c8ea39f81aee2acbb94d4e2c40d4d7d",
+          "responseBytes": 6449008,
+          "responseHash": "3d7a8567aeab8f82b65844f1c6907f79df75ddba325d48339e8314df15588290",
+          "elapsedMs": 238.70315900000014,
+          "rssAfter": 351182848
+        },
+        {
+          "round": 1,
+          "tool": "read_prototype_review",
+          "bytes": 10670,
+          "hash": "f011bf3d2bde9863a269484ff581278d9994e2aca6a69c603c7e0a4013126923",
+          "responseBytes": 21482,
+          "responseHash": "f75918e339090e1984f780e2b3f126205f2c4e8bc311a081101128c984d585bb",
+          "elapsedMs": 36.51197199999979,
+          "rssAfter": 345833472
+        },
+        {
+          "round": 1,
+          "tool": "agent_activity",
+          "bytes": 1672,
+          "hash": "f5b9f0ee4ae3c6afa56f552f5ed4af8c70894fc2d539df4a197d787386e8f65f",
+          "responseBytes": 3690,
+          "responseHash": "27e3962985a6dd8e1c63b865850a64aca8c1b211ceac79fccff8b7d6fcd27cde",
+          "elapsedMs": 30.53413899999987,
+          "rssAfter": 346476544
+        },
+        {
+          "round": 1,
+          "tool": "search_transcripts",
+          "bytes": 60087,
+          "hash": "c52b17cc9ede8464e3ef8c1904fbee62442758a1da6fea8339c203aed54d861d",
+          "responseBytes": 132672,
+          "responseHash": "01d53ebb462d87e42224a84d12927cffe3f16ad7f554b8a8071df5fa3ac6a658",
+          "elapsedMs": 468.33683699999983,
+          "rssAfter": 339173376
+        },
+        {
+          "round": 1,
+          "tool": "lifecycle_events",
+          "bytes": 475,
+          "hash": "8b0659d99a617eef4376a2deb716e0cbb3eea0320a4c5044ef9e6df7d65f069a",
+          "responseBytes": 1078,
+          "responseHash": "d8e9e0bac901a599c2f14b0222ad6e6613bb545c61e164205f4dec317472855e",
+          "elapsedMs": 21.686769000000368,
+          "rssAfter": 354115584
+        },
+        {
+          "round": 2,
+          "tool": "list_pipelines",
+          "bytes": 374052,
+          "hash": "3915e6adc55169955c1e93f0a157204b4a3aed0db0e742931158a1d84836942f",
+          "responseBytes": 749294,
+          "responseHash": "894cc07e8fec3c30d91e0996cc21f80217b2e8541e3ea6a8365108c1aadc1a58",
+          "elapsedMs": 18.99148299999979,
+          "rssAfter": 355676160
+        },
+        {
+          "round": 2,
+          "tool": "get_pipeline",
+          "bytes": 373880,
+          "hash": "80c00ff3efa514bcf2fd632bb0740cbf1e76ea968a4eb2b5d48f84d8ba7b1e54",
+          "responseBytes": 748944,
+          "responseHash": "b6fbd451312a3bd652357dd7713c5e167b6836258220c1a3abf6c2cf3489aa86",
+          "elapsedMs": 20.255839999999807,
+          "rssAfter": 357429248
+        },
+        {
+          "round": 2,
+          "tool": "conversation_messages",
+          "bytes": 3222433,
+          "hash": "eef28aaeb5c4cf703d8a4f79e07d46b1ca73e0dc00bf215830cd1848c68c6ffd",
+          "responseBytes": 6449008,
+          "responseHash": "80fd37d605b4dc007e51699f5c20ac47cb472a7dffd3824b74e3fe1d49714c90",
+          "elapsedMs": 143.01370700000007,
+          "rssAfter": 371527680
+        },
+        {
+          "round": 2,
+          "tool": "read_prototype_review",
+          "bytes": 10670,
+          "hash": "ba30f634b808cd623ccee94945e345f9bc015d1e27169a35e7c4cb9c53945a7f",
+          "responseBytes": 21482,
+          "responseHash": "de6e1b6ac5e85abaea91792081271f4ed0a36fbdcad4e9f7a3ef00652a7ee305",
+          "elapsedMs": 17.88623800000005,
+          "rssAfter": 371605504
+        },
+        {
+          "round": 2,
+          "tool": "agent_activity",
+          "bytes": 1672,
+          "hash": "3d030682ec00aa9556579e27593b653278537587a91715e5f8878712d937add0",
+          "responseBytes": 3690,
+          "responseHash": "a45abb9f734862ff1a7b3d3487af85175a78a137341f5347f0fb806ab5847e10",
+          "elapsedMs": 12.136363999999958,
+          "rssAfter": 372408320
+        },
+        {
+          "round": 2,
+          "tool": "search_transcripts",
+          "bytes": 60087,
+          "hash": "11cb64a0411265cafa641313af0c914d47a27fa7a1d0e1ad35f5ba8ce1e19005",
+          "responseBytes": 132672,
+          "responseHash": "421bd8c57c523981eb51a6e8e03b5b26813c9c11207d231e8e0c565619ccacd2",
+          "elapsedMs": 445.48636799999986,
+          "rssAfter": 330428416
+        },
+        {
+          "round": 2,
+          "tool": "lifecycle_events",
+          "bytes": 475,
+          "hash": "050c4f03271f8c0c94c9a971ed51b2918ab7b4873a1a9e5e092c2fe1b8ff8337",
+          "responseBytes": 1078,
+          "responseHash": "78612877d4fc3eb7903908079c4aee558d6f5a98fcb61120f7750695883d673a",
+          "elapsedMs": 13.22138300000006,
+          "rssAfter": 336273408
+        }
+      ]
+    },
+    "beforeFix": {
+      "measuredAt": "2026-10-13T05:28:56.374Z",
+      "runtime": "1.4.0",
+      "pipelines": 120,
+      "pipelineJsonBytes": 44733021,
+      "rounds": 3,
+      "idleMs": 30000,
+      "peakRss": 365920256,
+      "atSpawn": {
+        "rss": 77066240,
+        "heapSize": 18141720,
+        "heapCapacity": 23592904,
+        "extraMemorySize": 3413880,
+        "objectCount": 277854
+      },
+      "before": {
+        "rss": 76451840,
+        "heapSize": 18240452,
+        "heapCapacity": 22757940,
+        "extraMemorySize": 3414500,
+        "objectCount": 278925
+      },
+      "afterIdle": {
+        "rss": 308256768,
+        "heapSize": 175436225,
+        "heapCapacity": 183740705,
+        "extraMemorySize": 142863889,
+        "objectCount": 586835
+      },
+      "afterGc": {
+        "rss": 297799680,
+        "heapSize": 122627069,
+        "heapCapacity": 130098797,
+        "extraMemorySize": 94776541,
+        "objectCount": 523738
+      },
+      "answers": [
+        {
+          "round": 0,
+          "tool": "list_pipelines",
+          "bytes": 374052,
+          "hash": "71dd682255bc1ce971dcf196bfc3c26b2cd2ec77717daff0e7e7c049b3b4f292",
+          "responseBytes": 749294,
+          "responseHash": "f30c6b024c7399dfe739c69b32dd60f6b4e9ff591550c77cfb8d79085852ac44",
+          "elapsedMs": 136.54271300000005,
+          "rssAfter": 84467712
+        },
+        {
+          "round": 0,
+          "tool": "get_pipeline",
+          "bytes": 373880,
+          "hash": "2ee245de798a0b462052766f3178d49693518fe8973d45548c9c36d4634cbc27",
+          "responseBytes": 748944,
+          "responseHash": "a3533d2fc182f5f39c390fa8c5d6d98281b2407fce3cd34ff986370dca37986e",
+          "elapsedMs": 26.760410999999976,
+          "rssAfter": 86900736
+        },
+        {
+          "round": 0,
+          "tool": "conversation_messages",
+          "bytes": 3222433,
+          "hash": "157ecdac97ecbb78413c3ae3b736c711f3a044e4e6301298bc7195d057e10668",
+          "responseBytes": 6449008,
+          "responseHash": "bfc58e7ce55c4da382be24028d60719212819734c7c08c357c57a9465fa6fbd1",
+          "elapsedMs": 207.17592100000002,
+          "rssAfter": 114692096
+        },
+        {
+          "round": 0,
+          "tool": "read_prototype_review",
+          "bytes": 10670,
+          "hash": "0887a6738507f7a6ba14155b20c6d89152d04ddbc6c539355f62b66b7bc98c49",
+          "responseBytes": 21482,
+          "responseHash": "4ddefeaaaaf4c073b22713f5d3f70b134e26797742ee27d97e5643670661ce7e",
+          "elapsedMs": 109.7638280000001,
+          "rssAfter": 101220352
+        },
+        {
+          "round": 0,
+          "tool": "agent_activity",
+          "bytes": 1673,
+          "hash": "7b1ab80fbaf4f9d37a9b7542db290ac17a77091de0c8925c0d81cdfeaf77e825",
+          "responseBytes": 3682,
+          "responseHash": "ebec1b471126ed25d6bcbff31798ef16973c8903321a53d91a545ecdb7eb41d5",
+          "elapsedMs": 23.142995999999812,
+          "rssAfter": 101376000
+        },
+        {
+          "round": 0,
+          "tool": "search_transcripts",
+          "bytes": 60087,
+          "hash": "9f2d295f1785c317631119edf5eaf8d0ace57f9b537e07ac05b7a17f955724d7",
+          "responseBytes": 131672,
+          "responseHash": "85863e54256c2d7450466c4a45976aec2743d408aea5a9091cafd60666a1d458",
+          "elapsedMs": 586.0871099999999,
+          "rssAfter": 83308544
+        },
+        {
+          "round": 0,
+          "tool": "lifecycle_events",
+          "bytes": 478,
+          "hash": "6dcdc2becbe5bb198a6667fc81e81d3cadbfac4dede0487c297656dc6b7135e7",
+          "responseBytes": 1084,
+          "responseHash": "4ca364dc54f6380a0b317940016dee23278294b74518272d3dc88aea39b066c7",
+          "elapsedMs": 656.4974549999997,
+          "rssAfter": 352464896
+        },
+        {
+          "round": 1,
+          "tool": "list_pipelines",
+          "bytes": 374052,
+          "hash": "0c8978dd347d7f2018111747cd46b28cb5a8c2686ef8f7bcb8c6e1b33905443e",
+          "responseBytes": 749294,
+          "responseHash": "0c309f89a8274f15a36309bdf9500b45b98f6114b534f205064d06429e253c94",
+          "elapsedMs": 23.39855899999975,
+          "rssAfter": 349368320
+        },
+        {
+          "round": 1,
+          "tool": "get_pipeline",
+          "bytes": 373880,
+          "hash": "692443012eb1d44a9a71d3a9fff26ccd5978af51c364d30af9520c56b04e4401",
+          "responseBytes": 748944,
+          "responseHash": "e564537622202c2db0813d3f3dd4a079c4666c4ba6e3f16010493d8cce85ef22",
+          "elapsedMs": 14.597516999999698,
+          "rssAfter": 352546816
+        },
+        {
+          "round": 1,
+          "tool": "conversation_messages",
+          "bytes": 3222433,
+          "hash": "823e1e4a1d4dee439e490f7eed1c95fd2aaa4393c07a6f4fde78b5ddbc3d3118",
+          "responseBytes": 6449008,
+          "responseHash": "fa8fb79761f440ce11d14ef998c7ba1044fc64363634f163919cdd17191664f7",
+          "elapsedMs": 187.95968300000004,
+          "rssAfter": 361693184
+        },
+        {
+          "round": 1,
+          "tool": "read_prototype_review",
+          "bytes": 10670,
+          "hash": "f011bf3d2bde9863a269484ff581278d9994e2aca6a69c603c7e0a4013126923",
+          "responseBytes": 21482,
+          "responseHash": "f75918e339090e1984f780e2b3f126205f2c4e8bc311a081101128c984d585bb",
+          "elapsedMs": 21.327463999999964,
+          "rssAfter": 361824256
+        },
+        {
+          "round": 1,
+          "tool": "agent_activity",
+          "bytes": 1671,
+          "hash": "b0ced0b8ddc14659d630750a5264caa72449d645c8e811b4c1e2f9ac58d14c49",
+          "responseBytes": 3678,
+          "responseHash": "34bf3d641696d886f8c49fea2ed04cdcfd15435e6ea78c2b39e444c932975807",
+          "elapsedMs": 23.294380000000274,
+          "rssAfter": 361926656
+        },
+        {
+          "round": 1,
+          "tool": "search_transcripts",
+          "bytes": 60087,
+          "hash": "c52b17cc9ede8464e3ef8c1904fbee62442758a1da6fea8339c203aed54d861d",
+          "responseBytes": 131672,
+          "responseHash": "9f97bb43f053cf37aedf9799500a5d0cc5c563bef0ca941786e908469ad99f45",
+          "elapsedMs": 502.8187390000003,
+          "rssAfter": 303280128
+        },
+        {
+          "round": 1,
+          "tool": "lifecycle_events",
+          "bytes": 475,
+          "hash": "8b0659d99a617eef4376a2deb716e0cbb3eea0320a4c5044ef9e6df7d65f069a",
+          "responseBytes": 1078,
+          "responseHash": "d8e9e0bac901a599c2f14b0222ad6e6613bb545c61e164205f4dec317472855e",
+          "elapsedMs": 27.39811099999997,
+          "rssAfter": 320229376
+        },
+        {
+          "round": 2,
+          "tool": "list_pipelines",
+          "bytes": 374052,
+          "hash": "3915e6adc55169955c1e93f0a157204b4a3aed0db0e742931158a1d84836942f",
+          "responseBytes": 749294,
+          "responseHash": "894cc07e8fec3c30d91e0996cc21f80217b2e8541e3ea6a8365108c1aadc1a58",
+          "elapsedMs": 25.46392700000024,
+          "rssAfter": 321683456
+        },
+        {
+          "round": 2,
+          "tool": "get_pipeline",
+          "bytes": 373880,
+          "hash": "80c00ff3efa514bcf2fd632bb0740cbf1e76ea968a4eb2b5d48f84d8ba7b1e54",
+          "responseBytes": 748944,
+          "responseHash": "b6fbd451312a3bd652357dd7713c5e167b6836258220c1a3abf6c2cf3489aa86",
+          "elapsedMs": 26.56728099999964,
+          "rssAfter": 324866048
+        },
+        {
+          "round": 2,
+          "tool": "conversation_messages",
+          "bytes": 3222433,
+          "hash": "a1b13d1fa5c3089ad5a849099ff42be668a9bbfefa5807c5e8dc0856521f06f6",
+          "responseBytes": 6449008,
+          "responseHash": "4261ce3d77702e55e7761f28309cfe46353b06a003c8e40e51935ca975b19667",
+          "elapsedMs": 197.0106139999998,
+          "rssAfter": 328744960
+        },
+        {
+          "round": 2,
+          "tool": "read_prototype_review",
+          "bytes": 10670,
+          "hash": "ba30f634b808cd623ccee94945e345f9bc015d1e27169a35e7c4cb9c53945a7f",
+          "responseBytes": 21482,
+          "responseHash": "de6e1b6ac5e85abaea91792081271f4ed0a36fbdcad4e9f7a3ef00652a7ee305",
+          "elapsedMs": 18.315793000000212,
+          "rssAfter": 328126464
+        },
+        {
+          "round": 2,
+          "tool": "agent_activity",
+          "bytes": 1671,
+          "hash": "255d1093cc100c1bad1fb1959fc52c7a3927ae20ba7413f383d0f6989f51d575",
+          "responseBytes": 3678,
+          "responseHash": "3ba40d64ef7e75761bf5247e2da3bc7d17d19125f8e974786c5f289cb442912b",
+          "elapsedMs": 19.09617399999979,
+          "rssAfter": 328290304
+        },
+        {
+          "round": 2,
+          "tool": "search_transcripts",
+          "bytes": 60087,
+          "hash": "11cb64a0411265cafa641313af0c914d47a27fa7a1d0e1ad35f5ba8ce1e19005",
+          "responseBytes": 131672,
+          "responseHash": "a3d35914a13c12c1ec0cdb12b4aa0873d99b0ea4da5b2b7767627c73b46eb92b",
+          "elapsedMs": 490.50287299999945,
+          "rssAfter": 329457664
+        },
+        {
+          "round": 2,
+          "tool": "lifecycle_events",
+          "bytes": 475,
+          "hash": "050c4f03271f8c0c94c9a971ed51b2918ab7b4873a1a9e5e092c2fe1b8ff8337",
+          "responseBytes": 1078,
+          "responseHash": "78612877d4fc3eb7903908079c4aee558d6f5a98fcb61120f7750695883d673a",
+          "elapsedMs": 15.751499999999396,
+          "rssAfter": 335024128
+        }
+      ]
+    },
+    "afterFix": {
+      "measuredAt": "2026-10-13T05:29:41.131Z",
+      "runtime": "1.4.0",
+      "pipelines": 120,
+      "pipelineJsonBytes": 44733021,
+      "rounds": 3,
+      "idleMs": 30000,
+      "peakRss": 115294208,
+      "atSpawn": {
+        "rss": 76607488,
+        "heapSize": 18143679,
+        "heapCapacity": 23329135,
+        "extraMemorySize": 3412255,
+        "objectCount": 277893
+      },
+      "before": {
+        "rss": 75776000,
+        "heapSize": 18244799,
+        "heapCapacity": 22543247,
+        "extraMemorySize": 3412799,
+        "objectCount": 278980
+      },
+      "afterIdle": {
+        "rss": 81047552,
+        "heapSize": 19462986,
+        "heapCapacity": 23630634,
+        "extraMemorySize": 4287194,
+        "objectCount": 285378
+      },
+      "afterGc": {
+        "rss": 80736256,
+        "heapSize": 15764567,
+        "heapCapacity": 20444135,
+        "extraMemorySize": 1248151,
+        "objectCount": 279116
+      },
+      "answers": [
+        {
+          "round": 0,
+          "tool": "list_pipelines",
+          "bytes": 374052,
+          "hash": "71dd682255bc1ce971dcf196bfc3c26b2cd2ec77717daff0e7e7c049b3b4f292",
+          "responseBytes": 749294,
+          "responseHash": "f30c6b024c7399dfe739c69b32dd60f6b4e9ff591550c77cfb8d79085852ac44",
+          "elapsedMs": 129.95357200000012,
+          "rssAfter": 82960384
+        },
+        {
+          "round": 0,
+          "tool": "get_pipeline",
+          "bytes": 373880,
+          "hash": "2ee245de798a0b462052766f3178d49693518fe8973d45548c9c36d4634cbc27",
+          "responseBytes": 748944,
+          "responseHash": "a3533d2fc182f5f39c390fa8c5d6d98281b2407fce3cd34ff986370dca37986e",
+          "elapsedMs": 21.42163400000004,
+          "rssAfter": 87040000
+        },
+        {
+          "round": 0,
+          "tool": "conversation_messages",
+          "bytes": 3222433,
+          "hash": "7bbd3383d6a17e80688d196c0c6f4635fd7ee7f1dc79c707512bc49d1f994bbb",
+          "responseBytes": 6449008,
+          "responseHash": "f48a734f71757f34a56beb43c0bb0adbc7c91ad15b56b7fe332c797110e7fae0",
+          "elapsedMs": 213.26992400000017,
+          "rssAfter": 114094080
+        },
+        {
+          "round": 0,
+          "tool": "read_prototype_review",
+          "bytes": 10670,
+          "hash": "0887a6738507f7a6ba14155b20c6d89152d04ddbc6c539355f62b66b7bc98c49",
+          "responseBytes": 21482,
+          "responseHash": "4ddefeaaaaf4c073b22713f5d3f70b134e26797742ee27d97e5643670661ce7e",
+          "elapsedMs": 105.69236500000011,
+          "rssAfter": 100712448
+        },
+        {
+          "round": 0,
+          "tool": "agent_activity",
+          "bytes": 1672,
+          "hash": "ec2d3a2940ef2e9b2185238e74771c579827355e4296e9b1a687414e75162068",
+          "responseBytes": 3678,
+          "responseHash": "4258fa3c120ff0cfbedca83c42787d7857db8e787ed4a6beb38ffcc5e97dd091",
+          "elapsedMs": 23.257046000000173,
+          "rssAfter": 100835328
+        },
+        {
+          "round": 0,
+          "tool": "search_transcripts",
+          "bytes": 60087,
+          "hash": "9f2d295f1785c317631119edf5eaf8d0ace57f9b537e07ac05b7a17f955724d7",
+          "responseBytes": 131472,
+          "responseHash": "8ed5fca0d3fc353d5410096542c298dca8f4e7a386bd41636d73c7827f207be6",
+          "elapsedMs": 529.677142,
+          "rssAfter": 82841600
+        },
+        {
+          "round": 0,
+          "tool": "lifecycle_events",
+          "bytes": 478,
+          "hash": "6dcdc2becbe5bb198a6667fc81e81d3cadbfac4dede0487c297656dc6b7135e7",
+          "responseBytes": 1084,
+          "responseHash": "4ca364dc54f6380a0b317940016dee23278294b74518272d3dc88aea39b066c7",
+          "elapsedMs": 366.6895999999997,
+          "rssAfter": 82034688
+        },
+        {
+          "round": 1,
+          "tool": "list_pipelines",
+          "bytes": 374052,
+          "hash": "0c8978dd347d7f2018111747cd46b28cb5a8c2686ef8f7bcb8c6e1b33905443e",
+          "responseBytes": 749294,
+          "responseHash": "0c309f89a8274f15a36309bdf9500b45b98f6114b534f205064d06429e253c94",
+          "elapsedMs": 33.90341699999999,
+          "rssAfter": 86241280
+        },
+        {
+          "round": 1,
+          "tool": "get_pipeline",
+          "bytes": 373880,
+          "hash": "692443012eb1d44a9a71d3a9fff26ccd5978af51c364d30af9520c56b04e4401",
+          "responseBytes": 748944,
+          "responseHash": "e564537622202c2db0813d3f3dd4a079c4666c4ba6e3f16010493d8cce85ef22",
+          "elapsedMs": 22.52267000000029,
+          "rssAfter": 90042368
+        },
+        {
+          "round": 1,
+          "tool": "conversation_messages",
+          "bytes": 3222433,
+          "hash": "ba164316592987bd4c60e7d98b21e3e36ba8e64bd9f456a8cb819a080b496cc1",
+          "responseBytes": 6449008,
+          "responseHash": "09c3e6593ce642f5ba55f2bc8355f6af4945a819a5a48b456bc4e7516bbab0a1",
+          "elapsedMs": 212.61542400000008,
+          "rssAfter": 102133760
+        },
+        {
+          "round": 1,
+          "tool": "read_prototype_review",
+          "bytes": 10670,
+          "hash": "f011bf3d2bde9863a269484ff581278d9994e2aca6a69c603c7e0a4013126923",
+          "responseBytes": 21482,
+          "responseHash": "f75918e339090e1984f780e2b3f126205f2c4e8bc311a081101128c984d585bb",
+          "elapsedMs": 23.435431999999764,
+          "rssAfter": 96079872
+        },
+        {
+          "round": 1,
+          "tool": "agent_activity",
+          "bytes": 1671,
+          "hash": "0969fcff951ba4109e720690521b6e9d9c39f706b45fb699abb6343e03699fc7",
+          "responseBytes": 3676,
+          "responseHash": "756ddcebbef7649f4b8b7ffa7e7ff3601854a17f68d01fc33750cb16e88aaee4",
+          "elapsedMs": 28.186001000000033,
+          "rssAfter": 96165888
+        },
+        {
+          "round": 1,
+          "tool": "search_transcripts",
+          "bytes": 60087,
+          "hash": "c52b17cc9ede8464e3ef8c1904fbee62442758a1da6fea8339c203aed54d861d",
+          "responseBytes": 131472,
+          "responseHash": "5af3c2968592d604764eec060bff5789e0cb4d6942a0374057b7d1911e2069f7",
+          "elapsedMs": 474.9660240000003,
+          "rssAfter": 82980864
+        },
+        {
+          "round": 1,
+          "tool": "lifecycle_events",
+          "bytes": 475,
+          "hash": "8b0659d99a617eef4376a2deb716e0cbb3eea0320a4c5044ef9e6df7d65f069a",
+          "responseBytes": 1078,
+          "responseHash": "d8e9e0bac901a599c2f14b0222ad6e6613bb545c61e164205f4dec317472855e",
+          "elapsedMs": 38.192363000000114,
+          "rssAfter": 83001344
+        },
+        {
+          "round": 2,
+          "tool": "list_pipelines",
+          "bytes": 374052,
+          "hash": "3915e6adc55169955c1e93f0a157204b4a3aed0db0e742931158a1d84836942f",
+          "responseBytes": 749294,
+          "responseHash": "894cc07e8fec3c30d91e0996cc21f80217b2e8541e3ea6a8365108c1aadc1a58",
+          "elapsedMs": 31.12342200000012,
+          "rssAfter": 87375872
+        },
+        {
+          "round": 2,
+          "tool": "get_pipeline",
+          "bytes": 373880,
+          "hash": "80c00ff3efa514bcf2fd632bb0740cbf1e76ea968a4eb2b5d48f84d8ba7b1e54",
+          "responseBytes": 748944,
+          "responseHash": "b6fbd451312a3bd652357dd7713c5e167b6836258220c1a3abf6c2cf3489aa86",
+          "elapsedMs": 31.605405999999675,
+          "rssAfter": 88707072
+        },
+        {
+          "round": 2,
+          "tool": "conversation_messages",
+          "bytes": 3222433,
+          "hash": "66de3cfa46eb092aec34c86074111c5048d3d012d89278753d749cc3dfbccdff",
+          "responseBytes": 6449008,
+          "responseHash": "e5c88682f385bfeff18282a8fd60984a690467317ccd21c22f3ad9333bfa1b7c",
+          "elapsedMs": 249.44775100000015,
+          "rssAfter": 107659264
+        },
+        {
+          "round": 2,
+          "tool": "read_prototype_review",
+          "bytes": 10670,
+          "hash": "ba30f634b808cd623ccee94945e345f9bc015d1e27169a35e7c4cb9c53945a7f",
+          "responseBytes": 21482,
+          "responseHash": "de6e1b6ac5e85abaea91792081271f4ed0a36fbdcad4e9f7a3ef00652a7ee305",
+          "elapsedMs": 30.278433999999834,
+          "rssAfter": 101937152
+        },
+        {
+          "round": 2,
+          "tool": "agent_activity",
+          "bytes": 1672,
+          "hash": "3167590563a39bda9b8b52e7da2959dd94f70e7d354869104b5f450ea9abcc31",
+          "responseBytes": 3678,
+          "responseHash": "1a36d39ac5a9465a975ed7b964d3f43f5965e4c11b4e338d964057393b97b050",
+          "elapsedMs": 25.240225999999893,
+          "rssAfter": 102014976
+        },
+        {
+          "round": 2,
+          "tool": "search_transcripts",
+          "bytes": 60087,
+          "hash": "11cb64a0411265cafa641313af0c914d47a27fa7a1d0e1ad35f5ba8ce1e19005",
+          "responseBytes": 131472,
+          "responseHash": "20dfcc82d3b17b16d2cfe99d4d2e7c99b273527bfba41c7cf4e51f470ca6a9b8",
+          "elapsedMs": 493.85639100000026,
+          "rssAfter": 83615744
+        },
+        {
+          "round": 2,
+          "tool": "lifecycle_events",
+          "bytes": 475,
+          "hash": "050c4f03271f8c0c94c9a971ed51b2918ab7b4873a1a9e5e092c2fe1b8ff8337",
+          "responseBytes": 1078,
+          "responseHash": "78612877d4fc3eb7903908079c4aee558d6f5a98fcb61120f7750695883d673a",
+          "elapsedMs": 24.218292000000474,
+          "rssAfter": 83632128
+        }
+      ]
+    },
+    "mainComparison": {
+      "equivalent": true,
+      "calls": 21,
+      "normalization": [
+        "sandbox root",
+        "fixture conversation id",
+        "activity observation time and positive clock durations; zero/null preserved",
+        "activity phase durations; field names preserved",
+        "transcript cursor scope; offsets and fingerprints preserved"
+      ],
+      "answers": [
+        {
+          "tool": "list_pipelines",
+          "round": 0,
+          "hash": "71dd682255bc1ce971dcf196bfc3c26b2cd2ec77717daff0e7e7c049b3b4f292",
+          "bytes": 374052,
+          "responseHash": "f30c6b024c7399dfe739c69b32dd60f6b4e9ff591550c77cfb8d79085852ac44",
+          "responseBytes": 749294
+        },
+        {
+          "tool": "get_pipeline",
+          "round": 0,
+          "hash": "2ee245de798a0b462052766f3178d49693518fe8973d45548c9c36d4634cbc27",
+          "bytes": 373880,
+          "responseHash": "a3533d2fc182f5f39c390fa8c5d6d98281b2407fce3cd34ff986370dca37986e",
+          "responseBytes": 748944
+        },
+        {
+          "tool": "conversation_messages",
+          "round": 0,
+          "hash": "25d9d7a2239f0b2442fc5943f7652b742881468850f9a77b75f6a465cac83e5a",
+          "bytes": 3222436,
+          "responseHash": "c8047100d59bf9d6b6e7dbee0657d86e4565c40ef30e14cf4dceb25cf05448a7",
+          "responseBytes": 6448956
+        },
+        {
+          "tool": "read_prototype_review",
+          "round": 0,
+          "hash": "0887a6738507f7a6ba14155b20c6d89152d04ddbc6c539355f62b66b7bc98c49",
+          "bytes": 10670,
+          "responseHash": "4ddefeaaaaf4c073b22713f5d3f70b134e26797742ee27d97e5643670661ce7e",
+          "responseBytes": 21482
+        },
+        {
+          "tool": "agent_activity",
+          "round": 0,
+          "hash": "400c7a0f5901752e1f976b69a8d3ae5d5e5f021645dc98c9f3fb9c5c42a6af7c",
+          "bytes": 1783,
+          "responseHash": "e5ffb18a9ff2d6e0e5af2ab9e99e3fb231b50da2c99df5b182908078811b3cd8",
+          "responseBytes": 3796
+        },
+        {
+          "tool": "search_transcripts",
+          "round": 0,
+          "hash": "9f2d295f1785c317631119edf5eaf8d0ace57f9b537e07ac05b7a17f955724d7",
+          "bytes": 60087,
+          "responseHash": "7d75e36d81260f54e58e4fd07c17986053294469d8e31497722c1e37031a0468",
+          "responseBytes": 125472
+        },
+        {
+          "tool": "lifecycle_events",
+          "round": 0,
+          "hash": "6dcdc2becbe5bb198a6667fc81e81d3cadbfac4dede0487c297656dc6b7135e7",
+          "bytes": 478,
+          "responseHash": "4ca364dc54f6380a0b317940016dee23278294b74518272d3dc88aea39b066c7",
+          "responseBytes": 1084
+        },
+        {
+          "tool": "list_pipelines",
+          "round": 1,
+          "hash": "0c8978dd347d7f2018111747cd46b28cb5a8c2686ef8f7bcb8c6e1b33905443e",
+          "bytes": 374052,
+          "responseHash": "0c309f89a8274f15a36309bdf9500b45b98f6114b534f205064d06429e253c94",
+          "responseBytes": 749294
+        },
+        {
+          "tool": "get_pipeline",
+          "round": 1,
+          "hash": "692443012eb1d44a9a71d3a9fff26ccd5978af51c364d30af9520c56b04e4401",
+          "bytes": 373880,
+          "responseHash": "e564537622202c2db0813d3f3dd4a079c4666c4ba6e3f16010493d8cce85ef22",
+          "responseBytes": 748944
+        },
+        {
+          "tool": "conversation_messages",
+          "round": 1,
+          "hash": "e62b3cfb5ad7ee11f0f132046b79be941772675835f467cffa0ae4f69a6ab43d",
+          "bytes": 3222436,
+          "responseHash": "9734f0688c0627077972f3e70a28eea73aee894eb5315f785f7815bc1696cf36",
+          "responseBytes": 6448956
+        },
+        {
+          "tool": "read_prototype_review",
+          "round": 1,
+          "hash": "f011bf3d2bde9863a269484ff581278d9994e2aca6a69c603c7e0a4013126923",
+          "bytes": 10670,
+          "responseHash": "f75918e339090e1984f780e2b3f126205f2c4e8bc311a081101128c984d585bb",
+          "responseBytes": 21482
+        },
+        {
+          "tool": "agent_activity",
+          "round": 1,
+          "hash": "a78a96226a20b0e6a30a193223c434cf82771e02e295b7ce5c861a75e88ff404",
+          "bytes": 1783,
+          "responseHash": "2fd8385a1ec46d581012708a415035d114bffd098cf26b34e76a9846bcba9782",
+          "responseBytes": 3796
+        },
+        {
+          "tool": "search_transcripts",
+          "round": 1,
+          "hash": "c52b17cc9ede8464e3ef8c1904fbee62442758a1da6fea8339c203aed54d861d",
+          "bytes": 60087,
+          "responseHash": "cd1ee0f982b3dbce131b9c3a4e45eecb0d8673cdac0fdaaa299c184d7ddf4f27",
+          "responseBytes": 125472
+        },
+        {
+          "tool": "lifecycle_events",
+          "round": 1,
+          "hash": "8b0659d99a617eef4376a2deb716e0cbb3eea0320a4c5044ef9e6df7d65f069a",
+          "bytes": 475,
+          "responseHash": "d8e9e0bac901a599c2f14b0222ad6e6613bb545c61e164205f4dec317472855e",
+          "responseBytes": 1078
+        },
+        {
+          "tool": "list_pipelines",
+          "round": 2,
+          "hash": "3915e6adc55169955c1e93f0a157204b4a3aed0db0e742931158a1d84836942f",
+          "bytes": 374052,
+          "responseHash": "894cc07e8fec3c30d91e0996cc21f80217b2e8541e3ea6a8365108c1aadc1a58",
+          "responseBytes": 749294
+        },
+        {
+          "tool": "get_pipeline",
+          "round": 2,
+          "hash": "80c00ff3efa514bcf2fd632bb0740cbf1e76ea968a4eb2b5d48f84d8ba7b1e54",
+          "bytes": 373880,
+          "responseHash": "b6fbd451312a3bd652357dd7713c5e167b6836258220c1a3abf6c2cf3489aa86",
+          "responseBytes": 748944
+        },
+        {
+          "tool": "conversation_messages",
+          "round": 2,
+          "hash": "d19220ad161ba009154192df81c13255b9a1ddbbb34b3fca0a289152bcea98ec",
+          "bytes": 3222436,
+          "responseHash": "176775609785e6f15c45762474da48c0d1091cdb6e48a04ced95b2e7efb208c9",
+          "responseBytes": 6448956
+        },
+        {
+          "tool": "read_prototype_review",
+          "round": 2,
+          "hash": "ba30f634b808cd623ccee94945e345f9bc015d1e27169a35e7c4cb9c53945a7f",
+          "bytes": 10670,
+          "responseHash": "de6e1b6ac5e85abaea91792081271f4ed0a36fbdcad4e9f7a3ef00652a7ee305",
+          "responseBytes": 21482
+        },
+        {
+          "tool": "agent_activity",
+          "round": 2,
+          "hash": "d83423ea862a6a57451950f5f401e7382bfe1c87fb805850680d7dc2b353eb2c",
+          "bytes": 1783,
+          "responseHash": "0555d67338768f2d9080de46ba7361a4b89b03d1e6bd5357c3b6db54ff46b3b9",
+          "responseBytes": 3796
+        },
+        {
+          "tool": "search_transcripts",
+          "round": 2,
+          "hash": "11cb64a0411265cafa641313af0c914d47a27fa7a1d0e1ad35f5ba8ce1e19005",
+          "bytes": 60087,
+          "responseHash": "ce05c1797ef45b4f44be2360be846d8d2eac157c1bd8740404a5d61624509061",
+          "responseBytes": 125472
+        },
+        {
+          "tool": "lifecycle_events",
+          "round": 2,
+          "hash": "050c4f03271f8c0c94c9a971ed51b2918ab7b4873a1a9e5e092c2fe1b8ff8337",
+          "bytes": 475,
+          "responseHash": "78612877d4fc3eb7903908079c4aee558d6f5a98fcb61120f7750695883d673a",
+          "responseBytes": 1078
+        }
+      ]
+    },
+    "fixComparison": {
+      "equivalent": true,
+      "calls": 21,
+      "normalization": [
+        "sandbox root",
+        "fixture conversation id",
+        "activity observation time and positive clock durations; zero/null preserved",
+        "activity phase durations; field names preserved",
+        "transcript cursor scope; offsets and fingerprints preserved"
+      ],
+      "answers": [
+        {
+          "tool": "list_pipelines",
+          "round": 0,
+          "hash": "71dd682255bc1ce971dcf196bfc3c26b2cd2ec77717daff0e7e7c049b3b4f292",
+          "bytes": 374052,
+          "responseHash": "f30c6b024c7399dfe739c69b32dd60f6b4e9ff591550c77cfb8d79085852ac44",
+          "responseBytes": 749294
+        },
+        {
+          "tool": "get_pipeline",
+          "round": 0,
+          "hash": "2ee245de798a0b462052766f3178d49693518fe8973d45548c9c36d4634cbc27",
+          "bytes": 373880,
+          "responseHash": "a3533d2fc182f5f39c390fa8c5d6d98281b2407fce3cd34ff986370dca37986e",
+          "responseBytes": 748944
+        },
+        {
+          "tool": "conversation_messages",
+          "round": 0,
+          "hash": "25d9d7a2239f0b2442fc5943f7652b742881468850f9a77b75f6a465cac83e5a",
+          "bytes": 3222436,
+          "responseHash": "c8047100d59bf9d6b6e7dbee0657d86e4565c40ef30e14cf4dceb25cf05448a7",
+          "responseBytes": 6448956
+        },
+        {
+          "tool": "read_prototype_review",
+          "round": 0,
+          "hash": "0887a6738507f7a6ba14155b20c6d89152d04ddbc6c539355f62b66b7bc98c49",
+          "bytes": 10670,
+          "responseHash": "4ddefeaaaaf4c073b22713f5d3f70b134e26797742ee27d97e5643670661ce7e",
+          "responseBytes": 21482
+        },
+        {
+          "tool": "agent_activity",
+          "round": 0,
+          "hash": "400c7a0f5901752e1f976b69a8d3ae5d5e5f021645dc98c9f3fb9c5c42a6af7c",
+          "bytes": 1783,
+          "responseHash": "e5ffb18a9ff2d6e0e5af2ab9e99e3fb231b50da2c99df5b182908078811b3cd8",
+          "responseBytes": 3796
+        },
+        {
+          "tool": "search_transcripts",
+          "round": 0,
+          "hash": "9f2d295f1785c317631119edf5eaf8d0ace57f9b537e07ac05b7a17f955724d7",
+          "bytes": 60087,
+          "responseHash": "7d75e36d81260f54e58e4fd07c17986053294469d8e31497722c1e37031a0468",
+          "responseBytes": 125472
+        },
+        {
+          "tool": "lifecycle_events",
+          "round": 0,
+          "hash": "6dcdc2becbe5bb198a6667fc81e81d3cadbfac4dede0487c297656dc6b7135e7",
+          "bytes": 478,
+          "responseHash": "4ca364dc54f6380a0b317940016dee23278294b74518272d3dc88aea39b066c7",
+          "responseBytes": 1084
+        },
+        {
+          "tool": "list_pipelines",
+          "round": 1,
+          "hash": "0c8978dd347d7f2018111747cd46b28cb5a8c2686ef8f7bcb8c6e1b33905443e",
+          "bytes": 374052,
+          "responseHash": "0c309f89a8274f15a36309bdf9500b45b98f6114b534f205064d06429e253c94",
+          "responseBytes": 749294
+        },
+        {
+          "tool": "get_pipeline",
+          "round": 1,
+          "hash": "692443012eb1d44a9a71d3a9fff26ccd5978af51c364d30af9520c56b04e4401",
+          "bytes": 373880,
+          "responseHash": "e564537622202c2db0813d3f3dd4a079c4666c4ba6e3f16010493d8cce85ef22",
+          "responseBytes": 748944
+        },
+        {
+          "tool": "conversation_messages",
+          "round": 1,
+          "hash": "e62b3cfb5ad7ee11f0f132046b79be941772675835f467cffa0ae4f69a6ab43d",
+          "bytes": 3222436,
+          "responseHash": "9734f0688c0627077972f3e70a28eea73aee894eb5315f785f7815bc1696cf36",
+          "responseBytes": 6448956
+        },
+        {
+          "tool": "read_prototype_review",
+          "round": 1,
+          "hash": "f011bf3d2bde9863a269484ff581278d9994e2aca6a69c603c7e0a4013126923",
+          "bytes": 10670,
+          "responseHash": "f75918e339090e1984f780e2b3f126205f2c4e8bc311a081101128c984d585bb",
+          "responseBytes": 21482
+        },
+        {
+          "tool": "agent_activity",
+          "round": 1,
+          "hash": "a78a96226a20b0e6a30a193223c434cf82771e02e295b7ce5c861a75e88ff404",
+          "bytes": 1783,
+          "responseHash": "2fd8385a1ec46d581012708a415035d114bffd098cf26b34e76a9846bcba9782",
+          "responseBytes": 3796
+        },
+        {
+          "tool": "search_transcripts",
+          "round": 1,
+          "hash": "c52b17cc9ede8464e3ef8c1904fbee62442758a1da6fea8339c203aed54d861d",
+          "bytes": 60087,
+          "responseHash": "cd1ee0f982b3dbce131b9c3a4e45eecb0d8673cdac0fdaaa299c184d7ddf4f27",
+          "responseBytes": 125472
+        },
+        {
+          "tool": "lifecycle_events",
+          "round": 1,
+          "hash": "8b0659d99a617eef4376a2deb716e0cbb3eea0320a4c5044ef9e6df7d65f069a",
+          "bytes": 475,
+          "responseHash": "d8e9e0bac901a599c2f14b0222ad6e6613bb545c61e164205f4dec317472855e",
+          "responseBytes": 1078
+        },
+        {
+          "tool": "list_pipelines",
+          "round": 2,
+          "hash": "3915e6adc55169955c1e93f0a157204b4a3aed0db0e742931158a1d84836942f",
+          "bytes": 374052,
+          "responseHash": "894cc07e8fec3c30d91e0996cc21f80217b2e8541e3ea6a8365108c1aadc1a58",
+          "responseBytes": 749294
+        },
+        {
+          "tool": "get_pipeline",
+          "round": 2,
+          "hash": "80c00ff3efa514bcf2fd632bb0740cbf1e76ea968a4eb2b5d48f84d8ba7b1e54",
+          "bytes": 373880,
+          "responseHash": "b6fbd451312a3bd652357dd7713c5e167b6836258220c1a3abf6c2cf3489aa86",
+          "responseBytes": 748944
+        },
+        {
+          "tool": "conversation_messages",
+          "round": 2,
+          "hash": "d19220ad161ba009154192df81c13255b9a1ddbbb34b3fca0a289152bcea98ec",
+          "bytes": 3222436,
+          "responseHash": "176775609785e6f15c45762474da48c0d1091cdb6e48a04ced95b2e7efb208c9",
+          "responseBytes": 6448956
+        },
+        {
+          "tool": "read_prototype_review",
+          "round": 2,
+          "hash": "ba30f634b808cd623ccee94945e345f9bc015d1e27169a35e7c4cb9c53945a7f",
+          "bytes": 10670,
+          "responseHash": "de6e1b6ac5e85abaea91792081271f4ed0a36fbdcad4e9f7a3ef00652a7ee305",
+          "responseBytes": 21482
+        },
+        {
+          "tool": "agent_activity",
+          "round": 2,
+          "hash": "d83423ea862a6a57451950f5f401e7382bfe1c87fb805850680d7dc2b353eb2c",
+          "bytes": 1783,
+          "responseHash": "0555d67338768f2d9080de46ba7361a4b89b03d1e6bd5357c3b6db54ff46b3b9",
+          "responseBytes": 3796
+        },
+        {
+          "tool": "search_transcripts",
+          "round": 2,
+          "hash": "11cb64a0411265cafa641313af0c914d47a27fa7a1d0e1ad35f5ba8ce1e19005",
+          "bytes": 60087,
+          "responseHash": "ce05c1797ef45b4f44be2360be846d8d2eac157c1bd8740404a5d61624509061",
+          "responseBytes": 125472
+        },
+        {
+          "tool": "lifecycle_events",
+          "round": 2,
+          "hash": "050c4f03271f8c0c94c9a971ed51b2918ab7b4873a1a9e5e092c2fe1b8ff8337",
+          "bytes": 475,
+          "responseHash": "78612877d4fc3eb7903908079c4aee558d6f5a98fcb61120f7750695883d673a",
+          "responseBytes": 1078
+        }
+      ]
+    },
+    "regression": {
+      "failingFirst": "Before lifecycle delegation: both durable receipt modes, delegated routing, and the repeated-large-read stdio case fail. They pass after adding lifecycle_events to VIEWER_LARGE_READS.",
+      "calls": 24,
+      "answeredBytes": 52224063,
+      "retainedHeapBytes": 1513964,
+      "localReceiptDatabaseCreated": false,
+      "focusedComparison": {
+        "files": 9,
+        "newFailures": 0,
+        "preExistingFailures": 0,
+        "removedOrSkipped": 0,
+        "flaky": 0
+      }
+    }
   }
 }

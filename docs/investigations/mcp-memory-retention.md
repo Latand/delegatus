@@ -99,6 +99,55 @@ under the shared gate’s 300% CPU quota, not a general latency bound. All raw
 samples, timestamps, exact byte counts and hashes are in
 [the replay evidence](../../evidence/mcp-large-reads-replay.json).
 
+## Lifecycle follow-up
+
+Review found one omitted reader: `lifecycle_events` loads the entire pipeline
+collection while refreshing the journal, even for `mode:"query",limit:1`.
+It now delegates through the same authenticated Viewer service. Query and
+digest retain their original durable receipt keys; reconnecting and replaying
+an acknowledged digest returns the original relay without advancing its cursor.
+No journal, digest, collection-cache or domain implementation changed.
+
+The same benchmark now appends that query to every round (21 calls total),
+and the fixture serves an honestly empty runtime deployment ledger. This
+follow-up measured the captured main baseline, the reviewed candidate before
+this fix, and the fixed candidate on the same machine in the same session:
+
+| Measurement, MiB | Main | Before lifecycle fix | Fixed |
+| --- | ---: | ---: | ---: |
+| RSS at spawn, before diagnostic GC | 121.00 | 73.50 | 73.06 |
+| RSS after startup diagnostic GC | 113.96 | 72.91 | 72.27 |
+| Peak RSS | 379.27 | 348.97 | 109.95 |
+| RSS after 30 seconds idle | 246.97 | 293.98 | 77.29 |
+| RSS after subsequent diagnostic GC | 243.16 | 284.00 | 77.00 |
+| Live heap after startup GC | 38.68 | 20.65 | 20.65 |
+| Live heap after final GC | 207.90 | 207.33 | 16.22 |
+
+Both comparisons pass all 21 complete MCP answers with the normalizations
+listed above. Lifecycle answers need no normalization: event ids, timestamps,
+counts, journaled counts, cursors, receipt keys and event contents are identical.
+The final live heap is smaller than the startup heap, so this replay no longer
+retains the approximately 207 MiB pipeline graph in the per-agent process.
+
+| Tool | First call main → fixed, ms | Median main → fixed, ms |
+| --- | ---: | ---: |
+| `list_pipelines` | 125.69 → 129.95 | 18.99 → 33.90 |
+| `get_pipeline` | 12.32 → 21.42 | 14.13 → 22.52 |
+| `conversation_messages` | 268.83 → 213.27 | 238.70 → 213.27 |
+| `read_prototype_review` | 95.35 → 105.69 | 36.51 → 30.28 |
+| `agent_activity` | 89.57 → 23.26 | 30.53 → 25.24 |
+| `search_transcripts` | 515.74 → 529.68 | 468.34 → 493.86 |
+| `lifecycle_events` | 339.28 → 366.69 | 21.69 → 38.19 |
+
+Total observed call time was 2,943.60 ms on main, 3,339.47 ms before the
+lifecycle fix, and 3,109.55 ms after it. Against main, the fixed replay adds
+165.95 ms overall; lifecycle adds 27.41 ms cold and 16.50 ms at the median.
+Against the reviewed candidate, lifecycle changes 656.50 → 366.69 ms cold
+and 27.40 → 38.19 ms at the median. These are three observations per tool
+under the existing shared gate, with uncontrolled concurrent machine activity;
+they establish no general latency bound. Exact bytes, times and hashes for
+all three samples are in the evidence file's `lifecycleExtension` object.
+
 ## Reproduction and regression protection
 
 Export the named main commit to scratch and install frozen dependencies there;
@@ -113,20 +162,29 @@ bash scripts/gate-slot.sh bun scripts/mcp-memory-benchmark.ts "$AFTER_OUTPUT"
 bun scripts/mcp-memory-benchmark.ts compare "$BEFORE_OUTPUT" "$AFTER_OUTPUT"
 ```
 
-`largeReads.test.ts` guards the eager import graph and all ten delegated tools,
-including original receipt keys and native-work metadata. Existing revocation,
+`largeReads.test.ts` guards the eager import graph and all eleven delegated tools,
+including original receipt keys and native-work metadata. Its lifecycle query
+and digest cases replay through the production HTTP boundary after reopening
+the SQLite receipt store and reconnecting the stdio facade. Existing revocation,
 replay, cancellation and no-fallback checks remain. `stdio.integration.test.ts`
-answers 20 large calls across all ten tools, checks retained heap and absence of
+answers 24 large calls across all eleven tools (both lifecycle modes), checks retained heap and absence of
 a local receipt database, and exercises real stdio/HTTP independence from a held
 pipeline lease and slow host. Its local-initialization retry coverage remains.
 
-The final tests copied onto the main export fail first in three cases: the eager
+The initial tests copied onto the main export failed first in three cases: the eager
 import boundary, delegated receipt/native-work routing, and repeated large reads.
-On the candidate both files pass (6 boundary tests and 34 stdio integration tests).
-The 20 synthetic stdio answers total 43,520,051 payload bytes; post-GC heap growth
-is 1,364,088 bytes, below a single answer’s size. The slow-host case makes exactly
-one snapshot request and the three independent reads finish in 159–262 ms while
-that dependency is held for three seconds.
+The lifecycle extension fails first on the reviewed candidate in both receipt
+cases, delegated routing and the repeated-large-read case. With delegation
+enabled, the boundary file passes all eight tests. The extended stdio regression
+answers 24 calls totaling 52,224,063 payload bytes; post-GC heap growth is
+1,513,964 bytes, below a single answer's size, with no local receipt database.
+
+The main/head comparison passes all nine selected files with zero new,
+pre-existing, removed/skipped or flaky outcomes: MCP large reads, stdio, server,
+HTTP, deployment reads and bindings; lifecycle digest, liveness and activity.
+Each runs by explicit path in isolated state through the owned gate runner.
+The MCP bundle build also passes. The comparison uses the captured main commit
+above; its head sample includes this follow-up's working-tree changes.
 
 The Viewer-memory (#2512), landing-board (#1838), account-lock (#1935),
 automatic-update (#2515) and registry-refresh lanes’ areas are unchanged.

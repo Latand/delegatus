@@ -144,6 +144,7 @@ if (mode === "compare") {
     if (pathname === "/api/prototype-reviews/read") return reviewReadPOST(new NextRequest(request));
     if (pathname === "/api/prototype-reviews/scope") return reviewScopePOST(new NextRequest(request));
     if (pathname === "/api/search/transcripts") return transcriptSearchPage(request);
+    if (pathname === "/api/runtime/deployments") return Response.json({ deployments: [] });
     return new Response("Fixture route not exposed", { status: 404 });
   } });
   process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${listener.port}`;
@@ -202,6 +203,7 @@ if (mode === "compare") {
       ["read_prototype_review", { taskId: fixture.taskId }],
       ["agent_activity", { full: true, transcriptPath: fixture.transcript, limit: 200 }],
       ["search_transcripts", { query: "fixture", order: "newest", limit: 100, full: true }],
+      ["lifecycle_events", { mode: "query", limit: 1 }],
     ];
     for (let round = 0; round < 3; round++) for (const [tool, args] of steps) {
       const started = performance.now();

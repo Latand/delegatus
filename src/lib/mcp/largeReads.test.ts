@@ -79,6 +79,39 @@ test("forwarded agent_fleet keeps the authenticated caller rather than accepting
   expect(await service.callTool("agent_fleet", { project: "project-two" })).toMatchObject({ ok: false, error: expect.stringContaining("project_out_of_scope") });
 });
 
+test.each(["query", "digest"])("lifecycle_events %s replays the Viewer's durable receipt across stdio reconnects", async mode => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-lifecycle-receipts-"));
+  const receiptPath = path.join(directory, "receipts.sqlite");
+  let receipts = new SqliteMcpReceiptStore(receiptPath);
+  let calls = 0;
+  const bindings = { lifecycle_events: async (args: Record<string, unknown>) => {
+    expect(currentMcpHttpCaller()?.capability).toBe("a".repeat(43));
+    expect(args).toMatchObject({ mode, subscriberId: "fixture-subscriber", acknowledge: true });
+    return { mode, cursor: ++calls, journaled: 1, ...(mode === "digest"
+      ? { relay: { reason: "terminal", items: [], through: calls, omitted: 0 } }
+      : { events: [{ seq: calls, type: "review_verdict" }], count: 1 }) };
+  } } as unknown as McpToolBindings;
+  let upstream = createMcpToolService(bindings, receipts);
+  setMcpHttpDependenciesForTests({ service: async () => upstream, conversationForCapability: () => "conversation_fixture" });
+  fixture(async request => handleMcpHttpRequest(new NextRequest(request)));
+  try {
+    const args = { clientRequestId: `lifecycle-${mode}`, mode, subscriberId: "fixture-subscriber", acknowledge: true };
+    const first = await (await createProductionViewerMcpService(false, true)).callTool("lifecycle_events", args);
+    expect(first).toMatchObject({ ok: true, mode, cursor: 1, replayed: false });
+    // Reopen the durable store and reconnect the stdio facade: an acknowledged
+    // digest must replay the original relay without advancing its cursor again.
+    receipts.close();
+    receipts = new SqliteMcpReceiptStore(receiptPath);
+    upstream = createMcpToolService(bindings, receipts);
+    const reconnected = await createProductionViewerMcpService(false, true);
+    expect(await reconnected.callTool("lifecycle_events", args)).toEqual({ ...first, replayed: true });
+    expect(calls).toBe(1);
+    expect(await reconnected.callTool("lifecycle_events", { ...args, clientRequestId: `next-${mode}` }))
+      .toMatchObject({ ok: true, cursor: 2, replayed: false });
+    expect(calls).toBe(2);
+  } finally { receipts.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 function fixture(handler: (request: Request) => Promise<Response>) {
   const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handler });
   listeners.push(listener);
@@ -102,11 +135,11 @@ test("stdio large reads run in the Viewer and preserve its receipt and native wo
   });
   const service = await createProductionViewerMcpService(false, true);
   const nativeWork = { threadId: "fixture-thread", turnId: "fixture-turn", turnTrigger: "realtime", callId: "fixture-call", itemId: "fixture-item" };
-  for (const name of ["conversation_messages", "resources", "operator_snapshot", "board_snapshot", "agent_fleet", "list_pipelines", "get_pipeline", "read_prototype_review", "agent_activity", "search_transcripts"] as const) {
+  for (const name of ["conversation_messages", "resources", "operator_snapshot", "board_snapshot", "agent_fleet", "list_pipelines", "get_pipeline", "read_prototype_review", "agent_activity", "search_transcripts", "lifecycle_events"] as const) {
     expect(await service.callTool(name, { clientRequestId: "read-key", full: true }, { nativeWork }))
       .toEqual({ ok: true, toolName: name, clientRequestId: "read-key", replayed: true, marker: "Viewer answer" });
   }
-  expect(calls).toHaveLength(10);
+  expect(calls).toHaveLength(11);
   for (const call of calls) expect(call).toMatchObject({ arguments: { clientRequestId: "read-key", full: true }, _meta: {
     threadId: "fixture-thread", callId: "fixture-call", itemId: "fixture-item",
     "x-codex-turn-metadata": { thread_id: "fixture-thread", turn_id: "fixture-turn", turn_trigger: "realtime" },

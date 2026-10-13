@@ -190,6 +190,7 @@ test("a launched stdio server releases repeated large read answers without loadi
   const sandbox = sandboxDir("llv-mcp-large-reads-");
   let calls = 0;
   const http = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    if (new URL(request.url).pathname === "/api/runtime/deployments") return Response.json({ deployments: [] });
     const body = await request.json() as { id: string; params: { name: string } };
     return Response.json({ jsonrpc: "2.0", id: body.id, result: { content: [], structuredContent: {
       ok: true, toolName: body.params.name, clientRequestId: null, replayed: false,
@@ -237,6 +238,8 @@ test("a launched stdio server releases repeated large read answers without loadi
       { name: "read_prototype_review", arguments: {} },
       { name: "agent_activity", arguments: { full: true } },
       { name: "search_transcripts", arguments: { query: "fixture" } },
+      { name: "lifecycle_events", arguments: { mode: "query", limit: 1 } },
+      { name: "lifecycle_events", arguments: { mode: "digest", subscriberId: "fixture-subscriber" } },
     ];
     for (let index = 0; index < reads.length * 2; index++) {
       const read = reads[index % reads.length]!;
@@ -247,8 +250,8 @@ test("a launched stdio server releases repeated large read answers without loadi
     }
     const after = await sample("after");
     console.log(JSON.stringify({ largeReadMemory: { calls, answeredBytes, retainedHeapBytes: after - before } }));
-    expect(calls).toBe(20);
-    expect(answeredBytes).toBeGreaterThan(39 * 1024 * 1024);
+    expect(calls).toBe(24);
+    expect(answeredBytes).toBeGreaterThan(46 * 1024 * 1024);
     expect(after - before).toBeLessThan(8 * 1024 * 1024);
     expect(fs.existsSync(path.join(environment.LLV_STATE_DIR!, "mcp-receipts.sqlite"))).toBe(false);
   } finally { await client.close(); await transport.close(); http.stop(true); }
