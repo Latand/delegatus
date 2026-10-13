@@ -17,12 +17,16 @@ export function flowAwaitingAdmission(flow: Pick<Flow, "mode" | "state" | "round
 
 export const DRAIN_NOTICE_MS = 6 * 60 * 60_000;
 export const DRAIN_LEASE_MS = 10 * 60_000;
-export interface DrainLease { id: string; target: string; since: string; until: number; persistent?: boolean }
+export const DRAIN_START_WINDOW_MS = 2 * 60_000;
+export interface DrainLease { id: string; target: string; since: string; until: number; persistent?: boolean;
+  /** Absolute waiting deadline. Accepted deployment custody has no deadline. */
+  waitingUntil?: number }
 export function drainFile(): string { return statePath("self-update", "auto-drain.json"); }
 export function activeDrain(file = drainFile(), now = Date.now()): DrainLease | null {
   try {
     const value = JSON.parse(readFileSync(file, "utf8")) as DrainLease;
     if (typeof value.id !== "string" || typeof value.target !== "string" || !Number.isFinite(Date.parse(value.since)) || !Number.isFinite(value.until)) throw new Error("invalid drain lease");
+    if (Number.isFinite(value.waitingUntil) && now >= value.waitingUntil!) return null;
     return value.persistent === true || value.until > now ? value : null;
   } catch {
     // An unreadable custody record needs repair; a timer cannot admit work.

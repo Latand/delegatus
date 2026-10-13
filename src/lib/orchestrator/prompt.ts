@@ -69,7 +69,8 @@
  * an outside publication with `outcome`, so it waits in «Готово». v47
  * (docs/design/operator-decision-forms.md §2.7) makes every decision a form. v52
  * combines those rules with automatic release control through the seat-tick
- * setting, incident holds and the reviewed branch's refreshing fence. */
+ * setting, incident holds and the reviewed branch's refreshing fence. v53
+ * combines those rules with the machine-wide worker limit named in each wake. */
 
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { configForVariant, VARIANT_PARAMS, variantParamLabel } from "@/lib/roles/paramConfig";
@@ -97,7 +98,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 52;
+export const ORCHESTRATOR_PROMPT_VERSION = 53;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -465,7 +466,7 @@ ${ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE}
 
 ## How work runs
 Every piece of accepted work runs as a pipeline on its board task: find or create the task, compose the stages, call create_pipeline with taskIds and autoStart, and bring the result to the merge bar. Attach a useful GitHub issue with pipeline_action attach-link; no step waits for an issue.
-- Keep no more workers running at once than your role parameters allow (3 when they name none), in every mode: each running lane and each live spawned agent counts as one.
+- Keep no more workers running at once than the worker limit each wake and get_orchestrator state, in every mode: each running lane and each live spawned agent counts as one.
 - Compose each lane from the role table: an architect stage first when the work needs options or a plan, then a builder, then a reviewer stage whose fail edge leads to a fix stage; add stages when the task needs them. Size the lane first.
 - Review: role reviewer, onFail to builder mode=apply-fixes with implementer's domain/size; fix next returns to a fresh reviewer. The fixer repairs handed findings and in-spec discoveries, adds checks, and leaves grading to reviewers. It fails only when blocked, setting blocked:true and blockedReason; outside-spec observations go under Notes. A self-fail without blocked:true and with a new head proceeds to review as reviewer notes; a fail with no new head parks.
 - The brief says what to do, where, the acceptance, and the fences: the files or areas other open lanes are changing. It never says how to end. Delegatus tells every agent how to report, and the words are pass, fail and needs_decision; never write REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES or NO FINDINGS into a brief.
@@ -636,6 +637,7 @@ export function orchestratorMandateForDelivery(mandate: string, roles: readonly 
     byte-identical to the first attempt whatever the registry says now; null
     is a pending intent recorded before tables existed, which was sent none. */
 export function orchestratorMandateWithRoleTable(mandate: string, roleTable: string | null): string {
+  mandate = mandate.replace("- Keep no more workers running at once than your role parameters allow (3 when they name none), in every mode: each running lane and each live spawned agent counts as one.", "- Keep no more workers running at once than the worker limit each wake and get_orchestrator state, in every mode: each running lane and each live spawned agent counts as one.");
   const withoutShipped = SHIPPED_CLOCK_SECTIONS.reduce(
     (text, shipped) => text.split(shipped).join(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE),
     SHIPPED_GREETING_OFFERS.reduce(

@@ -414,8 +414,10 @@ the code:
     **[rc]** `requester_context` (§A.8), which the install sends on every
     claim, and `chat_conversations` (§A.6 F7, §A.8), which is specified and
     not yet implemented, so no install sends it today. Both sides ignore
-    feature names they do not know. The install reads the descriptor again at least once a
-    day (§B.3), so a service can add a feature without a new pairing.
+    feature names they do not know. The install refreshes descriptor features when
+    a poll loop starts, every five minutes, and on a 4xx naming an unknown
+    feature (§B.3), independently of the owner-tools switch. A service can
+    add a feature without a new pairing, restart, or settings-page read.
 
 ## A.3 Pairing
 
@@ -1320,7 +1322,11 @@ Rules:
   long the run takes.
 - **L2.** Liveness is judged on the relay service's clock, from when polls and
   heartbeats arrive. No timestamp the install sends decides anything.
-- **L3.** The install heartbeats on a timer every `heartbeat_interval_s`, from
+- **L3.** Heartbeat 1 acknowledges a valid claim before filesystem context,
+  account selection, or agent launch. Attempts, acknowledgements and failures
+  enter the service journal with the request prefix, sequence, fixed step name,
+  elapsed time and bounded error code; no credential or free-form note is logged.
+  The install heartbeats on a timer every `heartbeat_interval_s`, from
   accepting the claim until it completes, whether or not the agent has
   written anything. A model turn that emits nothing for a while is still a
   live run.
@@ -1986,13 +1992,13 @@ traffic and never in staging:
 
 - **The pairing watcher** of §B.13, for every pending pairing in
   `relays.json`.
-- **A descriptor refresh**, when a loop starts and every 24 hours. It reads
-  `/.well-known/delegatus-relay.json` again and takes `name`, `description`,
-  `icon_url` (§B.12), `verify_channel`, `features` and `limits` from it. An
-  `api_base` that differs from the stored one is ignored until the operator
-  pairs again, because the credential was issued for the old one. The same
-  daily pass lists the chats of every target that has a conversation, for
-  the reconciliation of §B.14.
+- **A descriptor feature refresh**, when a loop starts and every five minutes,
+  regardless of the owner-tools switch. It reads
+  `/.well-known/delegatus-relay.json` again and updates the stored `features`.
+  A 4xx naming an unknown feature forces another read before the next claim;
+  unchanged refusals retain the normal backoff. Unknown feature names stay
+  inert, and owner tools still require their own switch. The credential’s
+  stored `api_base` remains tied to its pairing.
 - **The target refresh.** Late targets (§A.3 rule 10) appear through the
   install's refresh of `GET {api}/targets` (§A.4 row 6), run when the
   settings dialog opens and on a slow interval. That refresh is being fixed

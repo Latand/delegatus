@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 
 /* The job in `bun-runtime.yml` is the answer to "nobody here can reproduce
    that": it runs the runtime verification at the pull request's own commit so
@@ -82,7 +83,7 @@ test("the job proves its own checks can go red, and does not only report that th
   // And end to end on the runner: each half is handed a subject that does not
   // hold. What makes these controls rather than ceremony is that a check which
   // stays green against one of them fails the job, so the refusals are named.
-  expect(scripts).toContain("bun scripts/verify-bun-runtime-controls.ts");
+  expect(scripts.some(script => script.includes("bun scripts/verify-bun-runtime-controls.ts"))).toBeTrue();
   const control = fs.readFileSync(path.join(repositoryRoot, "scripts/verify-bun-runtime-controls.ts"), "utf8");
   expect(control).toContain("app-page.runtime.prod.js");
   expect(control).toContain("LLV_RUNTIME_HOST_REHEARSAL_ROOT");
@@ -135,7 +136,58 @@ test("both supported Codex CLIs run the full native contracts at the proposed co
   }
 });
 
-test("runtime CI is dispatch-only; pre-push owns the scoped local runs", () => {
+test("runtime CI runs on every PR and supports dispatch", () => {
   const triggers = Bun.YAML.parse(workflowSource) as { on: Record<string, unknown> };
-  expect(Object.keys(triggers.on)).toEqual(["workflow_dispatch"]);
+  expect(Object.keys(triggers.on)).toEqual(["pull_request", "workflow_dispatch"]);
+});
+
+test("one stable runtime context refuses every incomplete upstream verdict", () => {
+  const gate = workflow.jobs["runtime-gate"] as typeof workflow.jobs[string] & { needs: string[] };
+  expect(gate.needs).toEqual(["bun-runtime", "native-codex-runtime"]);
+  expect(gate.if).toBe(`always() && (${workflow.jobs["bun-runtime"]!.if})`);
+  const check = gate.steps[0]!.run!;
+  for (const result of ["success", "failure", "cancelled", "skipped", ""]) {
+    for (const side of ["BUN_RESULT", "CODEX_RESULT"]) {
+      const run = Bun.spawnSync(["bash", "-c", check], { env: { ...process.env, BUN_RESULT: "success", CODEX_RESULT: "success", [side]: result } });
+      expect(run.exitCode === 0).toBe(result === "success");
+    }
+  }
+  expect(scripts.join("\n").match(/bun scripts\/build-mcp\.ts/g)).toBeNull();
+  expect(steps.findIndex(step => step.name === "Build the Viewer")).toBeLessThan(steps.findIndex(step => step.name?.startsWith("Enforce MCP")));
+});
+
+test("parallel runtime controls require both processes to finish successfully", () => {
+  const script = scripts.find(script => script.includes("controls_pid="))!;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-pair-"));
+  try {
+    const bin = path.join(root, "bin"); fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, "bun"), `#!/bin/bash
+set -eu
+if [[ "$1" == test ]]; then
+  touch "$RUNNER_TEMP/held-ready"
+  for attempt in {1..100}; do [[ -f "$RUNNER_TEMP/controls-ready" ]] && break; sleep 0.01; done
+  test -f "$RUNNER_TEMP/controls-ready"
+  echo "Ran checks across 6 files"
+  exit "$HELD_EXIT"
+fi
+touch "$RUNNER_TEMP/controls-ready"
+for attempt in {1..100}; do [[ -f "$RUNNER_TEMP/held-ready" ]] && break; sleep 0.01; done
+test -f "$RUNNER_TEMP/held-ready"
+exit "$CONTROL_EXIT"
+`, { mode: 0o755 });
+    for (const file of script.match(/(?:scripts|src)\/[\w/.-]+\.test\.ts/g)!) {
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.writeFileSync(path.join(root, file), "");
+    }
+    for (const [held, control] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+      const scratch = fs.mkdtempSync(path.join(root, "sample-"));
+      const result = Bun.spawnSync(["bash", "-c", script], {
+        cwd: root, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: scratch,
+          HELD_EXIT: String(held), CONTROL_EXIT: String(control) }, timeout: 5000,
+      });
+      expect(result.exitCode === 0).toBe(held === 0 && control === 0);
+      expect(fs.existsSync(path.join(scratch, "held-ready"))).toBeTrue();
+      expect(fs.existsSync(path.join(scratch, "controls-ready"))).toBeTrue();
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

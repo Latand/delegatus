@@ -98,7 +98,7 @@ test("role registry exposes the thirteen role ids and campaign-ready orchestrato
     const standard = resolveRole("orchestrator", params);
     if (!standard.ok) throw new Error(standard.error);
     for (const label of ["Repository:", "Issue query:", "Urgent list:", "Merge policy:", "Completion policy:"]) expect(standard.value.prompt).not.toContain(label);
-    expect(standard.value.prompt).toContain("In every mode, keep at most 3 workers running at once");
+    expect(roleSpawnPrompt({ role: "orchestrator", scaffold: standard.value.prompt }, "Coordinate work")).toContain("worker limit each wake and get_orchestrator state");
     expect(standard.value.prompt).not.toContain("Backlog campaign:");
     expect(standard.value.prompt).not.toContain("\n\n\n");
   }
@@ -249,14 +249,14 @@ test("spawn role resolution enumerates the selected engine catalog for an invali
   });
 });
 
-test("orchestrator spawn defaults omitted maxWorkers to three and preserves explicit one", () => {
+test("orchestrator spawn retires the launch-only worker number", () => {
   const omitted = resolveSpawnRole({ role: "orchestrator" });
   if (!omitted.ok || !omitted.value) throw new Error("expected resolved orchestrator role");
-  expect(omitted.value.scaffold).toContain("keep at most 3 workers running at once");
+  expect(omitted.value.scaffold).not.toContain("keep at most");
 
   const explicit = resolveSpawnRole({ role: "orchestrator", roleParams: { maxWorkers: 1 } });
   if (!explicit.ok || !explicit.value) throw new Error("expected resolved orchestrator role");
-  expect(explicit.value.scaffold).toContain("keep at most 1 workers running at once");
+  expect(explicit.value.scaffold).toBe(omitted.value.scaffold);
 });
 
 /* docs/design/model-sizing-tiers.md §1 and agent-prompt-contract.md §3 (a):

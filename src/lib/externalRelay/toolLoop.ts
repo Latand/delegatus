@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { ExternalRelayError, relayCall } from "./client";
+import { ExternalRelayError, isUnknownFeatureRefusal, relayCall } from "./client";
 import { isOwnerTool, ownerRateLimitSchema, RELAY_OWNER_TOOLS, toolCallResultSchema, type ExternalRelayRequest, type ExternalRelayRequester, type RoundCall, type ToolCallResult } from "./protocol";
 import { readRelaySwitches } from "./switches";
 import type { PairedRelay } from "./store";
@@ -37,7 +37,7 @@ export type ToolProjection = {
   effect?: "action"; delivered?: true; execution_unknown?: true; summary?: string; expires_in_s?: number;
   status: string; output: string; truncated: boolean; next_cursor?: string; audience?: string; code?: string;
 };
-export type ToolLoopRuntime = { sleep?: (ms: number, signal: AbortSignal) => Promise<void>; now?: () => number };
+export type ToolLoopRuntime = { sleep?: (ms: number, signal: AbortSignal) => Promise<void>; now?: () => number; onUnknownFeature?: () => Promise<unknown> };
 export async function toolSleep(ms: number, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
@@ -147,6 +147,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         return { result };
       } catch (error) {
         if (lease.signal.aborted) throw error;
+        if (isUnknownFeatureRefusal(error)) await runtime.onUnknownFeature?.();
         if (rejectionCode) return refused(rejectionCode);
         if (error instanceof ExternalRelayError) {
           if (error.status === 404 || (error.status === 409 && error.code === "lease_lost")) {

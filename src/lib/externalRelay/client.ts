@@ -21,6 +21,10 @@ export class ExternalRelayError extends Error {
     super(code);
   }
 }
+export function isUnknownFeatureRefusal(error: unknown): error is ExternalRelayError {
+  return error instanceof ExternalRelayError && error.status >= 400 && error.status < 500 &&
+    /^(?:(?:unknown|unsupported)(?:_[a-z]+)*_features?|features?_(?:unknown|unsupported))$/.test(error.code);
+}
 const bare = (host: string) => host.replace(/^\[|\]$/g, "");
 const loopback = (address: string) =>
   address === "::1" || (net.isIP(address) === 4 && address.startsWith("127."));

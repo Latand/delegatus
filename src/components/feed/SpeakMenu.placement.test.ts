@@ -15,6 +15,11 @@ describe("speakMenuPlacement (#1024: the menu is never clipped)", () => {
     expect(place).toEqual({ left: 600, top: 132 });
   });
 
+  test("a dock popover can prefer clear space above its trigger", () => {
+    const place = speakMenuPlacement({ top: 150, bottom: 174, right: 390 }, { width: 256, height: 129 }, { width: 1440, height: 900 }, 8, true);
+    expect(place).toEqual({ left: 134, top: 13 });
+  });
+
   test("flips above a trigger with no room under it", () => {
     /* 40px of viewport left below the button, 700 above: the menu goes up. */
     const place = speakMenuPlacement({ top: 736, bottom: 760, right: 900 }, menu, viewport);

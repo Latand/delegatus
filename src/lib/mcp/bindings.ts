@@ -30,6 +30,8 @@ import path from "node:path";
    binary, so a packaged release with no checkout can still name the repository
    it deploys (#1321). */
 import viewerPackageManifest from "../../../package.json";
+import { effectiveWorkerLimit, projectWorkerLimit, readWorkerLimits, setMachineWorkerLimit, setProjectWorkerLimit, isWorkerLimit } from "@/lib/operator/workerLimit";
+import { projectWorkerCounts } from "@/lib/orchestrator/workerCount";
 
 import { activeClaudeAccountId, claudeAccountsForPrivacy, listClaudeAccounts } from "@/lib/accounts/claude";
 import { activeCodexAccountId, codexAccountsForPrivacy, listCodexAccounts } from "@/lib/accounts/codex";
@@ -1442,6 +1444,7 @@ export function defaultMcpSpawnRoleParams(
   if (raw !== undefined && (!raw || typeof raw !== "object" || Array.isArray(raw))) return undefined;
   const source = raw as Record<string, unknown> | undefined;
   const resolved = { ...source };
+  if (role === "orchestrator") delete resolved.maxWorkers;
   const missing: RoleParameter[] = [];
   const prompt = typeof args.prompt === "string" ? args.prompt : "";
   for (const parameter of definition.parameters.filter((candidate) => candidate.required)) {
@@ -1456,7 +1459,7 @@ export function defaultMcpSpawnRoleParams(
       `missing required roleParams for ${role}: ${missing.map((parameter) => `${parameter.key}: ${roleParamShape(parameter)}`).join("; ")}`,
     );
   }
-  return Object.keys(resolved).length ? resolved : source;
+  return Object.keys(resolved).length || raw !== undefined ? resolved : undefined;
 }
 
 /** The exact body handed to `/api/spawn`, shared by the one dispatch and the
@@ -1546,6 +1549,8 @@ function requireMcpDeployerConfirmation(args: McpToolArgs): void {
 }
 
 async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  const retiredWorkerLimit = text(args.role) === "orchestrator" && objectRecord(args.roleParams) && "maxWorkers" in args.roleParams
+    ? effectiveWorkerLimit(projectForCwd(spawnCwd(args)) ?? "") : null;
   if (text(args.role) === "deployer") requireMcpDeployerCaller(args, spawnTargetProject(args, spawnCwd(args)), dependencies);
   requireMcpDeployerConfirmation(args);
   let autonomous = !!dependencies;
@@ -1622,6 +1627,7 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
   }
   return {
     conversationId: result.conversationId,
+    ...(retiredWorkerLimit ? { ignored: { "roleParams.maxWorkers": `the project's worker limit applies (${retiredWorkerLimit.value}, ${retiredWorkerLimit.source}); change it with role_presets workerLimit` } } : {}),
     transcriptPath: result.path,
     operationId: result.launchId,
     launchId: result.launchId,
@@ -4252,8 +4258,9 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
       : peerSeatMessages(link.key) ? null : "unknown" };
   });
   const revocations = orchestratorRevocations().filter((revocation) => revocation.project === project);
+  const workerLimit = { ...effectiveWorkerLimit(project), running: projectWorkerCounts().byProject.get(project) ?? 0 };
   const base = full ? {
-    project, linkedSeats,
+    project, linkedSeats, workerLimit,
     mergeOnReview: mergeOnReviewEnabled(project),
     bridgeReports: bridgeReportsEnabled(project),
     ...reportFields(project, dependencies),
@@ -4274,7 +4281,7 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
       successorConversationId: revocation.successorConversationId ?? null,
     })),
   } : {
-    project, linkedSeats,
+    project, linkedSeats, workerLimit,
     /* #2187 §4.1: whether finished lanes here merge on their own. */
     mergeOnReview: mergeOnReviewEnabled(project),
     /* #2146: whether this project's bridge reports are on; off, file none. */
@@ -4658,19 +4665,51 @@ function seatTickFenceAnswer(project: string, wakeIntervalMs: number, now: numbe
  * - **What is recorded.** Every write appends who wrote it and each row's before
  *   and after to `role-presets-audit.jsonl` beside role-presets.json.
  */
-function rolePresetsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
-  if (args.overrides === undefined) {
-    if (args.expectedRevision !== undefined) throw new Error("expectedRevision applies to a write; send it with overrides");
-    const detail = args.detail === true;
-    return redactPayload({ ...roleRegistryAnswer(loadRoleRegistrySnapshotOrDefaults(), { detail }), ...(detail ? { choices: roleLaunchChoices() } : {}) });
-  }
-
+async function rolePresetsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const attribution = attributionOf(dependencies);
-  if ((attribution.kind !== "manager" && attribution.kind !== "gateway") || (attribution.kind === "manager" && !attribution.conversationId)) {
+  const writing = args.overrides !== undefined || args.workerLimit !== undefined;
+  if (writing && ((attribution.kind !== "manager" && attribution.kind !== "gateway") || (attribution.kind === "manager" && !attribution.conversationId))) {
     throw new McpToolRefusal(
       "only the designated orchestrator seat and the operator's own session change the role mapping; this session reads it. Ask the orchestrator, or report the request over the bridge.",
       { code: "role_presets_write_refused", callerKind: attribution.kind },
     );
+  }
+  const workerContext = () => {
+    const supplied = dependencies.callerProject?.();
+    const caller = !supplied && attribution.conversationId ? agentRegistry().conversation(attribution.conversationId as never) : null;
+    const cwd = caller?.generations.at(-1)?.launchProfile.cwd;
+    return { own: supplied ?? caller?.projectOwnership?.project ?? (cwd ? projectForCwd(cwd) : null), counts: projectWorkerCounts() };
+  };
+  if (args.overrides === undefined && args.workerLimit === undefined) {
+    if (args.expectedRevision !== undefined) throw new Error("expectedRevision applies to a write; send it with overrides");
+    const detail = args.detail === true;
+    const { own, counts } = workerContext();
+    const stored = readWorkerLimits();
+    const machine = effectiveWorkerLimit("");
+    const project = own ? canonicalOrchestratorProject(own) : null;
+    return redactPayload({ ...roleRegistryAnswer(loadRoleRegistrySnapshotOrDefaults(), { detail }), ...(detail ? { choices: roleLaunchChoices() } : {}), workerLimit: {
+      machine: { value: machine.machine, source: stored.machine ? "machine" : "default", changedAt: stored.machine?.changedAt ?? null, changedBy: stored.machine?.changedBy ?? null },
+      here: project ? { project, value: projectWorkerLimit(project, stored)?.value ?? null, effective: effectiveWorkerLimit(project).value, source: effectiveWorkerLimit(project).source, running: counts.byProject.get(project) ?? 0 } : null,
+      runningMachine: counts.machine, bounds: [1, 64],
+      ...(detail ? { projects: stored.projects, history: stored.history.slice(-20) } : {}),
+    } });
+  }
+
+  if (args.workerLimit !== undefined) {
+    if (args.overrides !== undefined) throw new McpToolRefusal("workerLimit and overrides change separate stores; send separate calls", { code: "worker_limit_with_overrides" });
+    if (args.expectedRevision !== undefined) throw new Error("expectedRevision applies only to overrides");
+    const input = objectRecord(args.workerLimit) ? args.workerLimit : {};
+    if (input.value !== null && !isWorkerLimit(input.value)) throw new Error("worker limit must be an integer from 1 to 64");
+    const reason = text(input.reason);
+    if (!reason || reason.length > 300) throw new Error("worker limit reason is required (1 to 300 characters)");
+    if (input.project !== undefined && !text(input.project)) throw new Error("project must be non-empty");
+    const { own, counts } = workerContext();
+    const project = input.project === undefined ? null : await resolveOrchestratorToolProject(text(input.project), dependencies);
+    const actor = { kind: attribution.kind as "manager" | "gateway", conversationId: attribution.via?.deputy ?? attribution.conversationId, project: own ? canonicalOrchestratorProject(own) : null, via: "tool" };
+    const result = project === null
+      ? setMachineWorkerLimit(input.value as number | null, actor, reason, text(args.clientRequestId) || null)
+      : setProjectWorkerLimit(project, input.value as number | null, actor, reason, text(args.clientRequestId) || null);
+    return redactPayload({ ...result, scope: project === null ? "machine" : project === canonicalOrchestratorProject(own ?? "") ? "project" : "other-project", running: project ? counts.byProject.get(project) ?? 0 : counts.machine });
   }
 
   const expectedRevision = args.expectedRevision;
@@ -4809,6 +4848,7 @@ function autoUpdatesAnswer(snapshot: Record<string, unknown>): McpToolPayload {
       stageList: Array.isArray(auto.blockers.stageList) ? auto.blockers.stageList.slice(0, 20) : [],
     } : null,
     waitingSince: auto.waitingSince ?? null,
+    deferred: auto.deferred ?? null,
     longWait: auto.longWait === true,
     drain: auto.drain ?? null,
     decision: objectRecord(auto.decision) ? { id: auto.decision.id, at: auto.decision.at, project: auto.decision.project } : null,

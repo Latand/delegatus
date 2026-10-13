@@ -38,8 +38,8 @@ import type {
   StageVerdictStatus,
 } from "./types";
 
-export const PIPELINE_LIST_DEFAULT_LIMIT = 100;
-export const PIPELINE_LIST_MAX_LIMIT = 200;
+import { PIPELINE_LIST_DEFAULT_LIMIT, PIPELINE_LIST_MAX_LIMIT } from "./limits";
+export { PIPELINE_LIST_DEFAULT_LIMIT, PIPELINE_LIST_MAX_LIMIT } from "./limits";
 
 /** Free text an operator authored (a task title, a state detail, an attempt
     error) has no length bound in the registry, so a row would not have one

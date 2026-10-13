@@ -3,11 +3,11 @@ import { expect, test } from "bun:test";
 import { ROLE_DEFAULTS } from "./defaults";
 import { defaultRoleParameterValues } from "./parameters";
 
-test("orchestrator draft parameters default omitted maxWorkers to three", () => {
+test("orchestrator drafts offer no launch-only worker limit", () => {
   const orchestrator = ROLE_DEFAULTS.find((role) => role.id === "orchestrator");
   if (!orchestrator) throw new Error("expected orchestrator role");
 
-  expect(defaultRoleParameterValues(orchestrator)).toMatchObject({ maxWorkers: 3 });
+  expect(defaultRoleParameterValues(orchestrator)).not.toHaveProperty("maxWorkers");
 });
 
 test("unrelated integer draft parameters retain their minimum-based default", () => {

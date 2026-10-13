@@ -35,7 +35,7 @@ function isMultiArchInput(file) {
     ".github/workflows/docker-image.yml", "scripts/docker-image-scope.cjs",
     "scripts/whisper_transcribe.py", "scripts/published-image-entrypoint.sh",
     "scripts/newcomer-install.mjs", "scripts/npm-package-smoke.mjs"].includes(file)
-    || ["patches/", "vendor/", "bin/", "src/runtime-host/", "src/lib/platform/"].some(directory => file.startsWith(directory));
+    || ["patches/", "vendor/"].some(directory => file.startsWith(directory));
 }
 
 function changedFiles(base, head, cwd = process.cwd()) {

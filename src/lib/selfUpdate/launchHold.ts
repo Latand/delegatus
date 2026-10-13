@@ -32,6 +32,7 @@ export function describeUpdateWait(blockers: QuietBlockers | null | undefined, l
   const held = blockers.unresolvedBlocking ?? 0;
   const unresolved = held ? t("selfUpdate.launchHold.unresolved", { count: held, minutes: Math.round((blockers.unresolvedGraceMs ?? 0) / 60_000) }) : "";
   if (work.length) return t("selfUpdate.launchHold.work", { work: work.join(t("selfUpdate.launchHold.join")), unresolved });
+  if (held) return t("selfUpdate.launchHold.unverified", { count: held, minutes: Math.round((blockers.unresolvedGraceMs ?? 0) / 60_000) });
   const other = [
     ...(blockers.busyReason ? [t(BUSY_WORDS[blockers.busyReason])] : blockers.busy ? [t("selfUpdate.launchHold.busyOther")] : []),
     ...(blockers.operatorActiveAt ? [t("selfUpdate.launchHold.operator", { minutes: Math.round((blockers.operatorWindowMs ?? 0) / 60_000) })] : []),

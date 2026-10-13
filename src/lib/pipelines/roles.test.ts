@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { resolveRole } from "@/lib/roles/registry";
 import { MAX_SCAFFOLD_LENGTH, saveRoleOverrides } from "@/lib/roles/store";
+import { setMachineWorkerLimit, setProjectWorkerLimit } from "@/lib/operator/workerLimit";
 
 import { pipelineRoleLookup, resolvePipelineRole, validatePipelineRoleParams } from "./roles";
 
@@ -66,6 +67,24 @@ test("production role lookup reads the current Sol Builder preset", () => {
     access: "read-write",
     promptScaffold: null,
   });
+});
+
+test("pipeline role resolution defers legacy worker placeholders until stage launch", () => {
+  const previous = process.env.LLV_STATE_DIR;
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-worker-limit-"));
+  process.env.LLV_STATE_DIR = sandbox;
+  try {
+    saveRoleOverrides({ orchestrator: { promptScaffold: "In every mode, keep at most {{maxWorkers}} workers running at once." } });
+    setMachineWorkerLimit(8, { kind: "operator", via: "test" }, null);
+    setProjectWorkerLimit("one", 10, { kind: "operator", via: "test" }, null);
+    const stage = resolvePipelineRole({ role: { roleId: "orchestrator", params: { maxWorkers: 2 } } }, "run", pipelineRoleLookup, "one");
+    expect(stage.role?.promptScaffold).toContain("at most {{maxWorkers}} workers");
+    expect(pipelineRoleLookup("orchestrator", { maxWorkers: 2 }, "two")?.promptScaffold).toContain("at most {{maxWorkers}} workers");
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 test("stage runtime fields override registry and global defaults", () => {
@@ -217,9 +236,9 @@ test("an orchestrator pipeline stage carries the shared rules", () => {
   expect(scaffold).toContain("The project's own rules govern the work");
 });
 
-test("pipeline role lookup defaults omitted orchestrator maxWorkers to three", () => {
-  expect(pipelineRoleLookup("orchestrator")?.promptScaffold).toContain("keep at most 3 workers running at once");
-  expect(pipelineRoleLookup("orchestrator", { maxWorkers: 1 })?.promptScaffold).toContain("keep at most 1 workers running at once");
+test("pipeline role lookup ignores the retired orchestrator maxWorkers parameter", () => {
+  expect(pipelineRoleLookup("orchestrator")?.promptScaffold).not.toContain("keep at most");
+  expect(pipelineRoleLookup("orchestrator", { maxWorkers: 1 })?.promptScaffold).toBe(pipelineRoleLookup("orchestrator")?.promptScaffold);
   expect(pipelineRoleLookup("reviewer")?.promptScaffold).toContain("Run 1 independent pass(es)");
 });
 

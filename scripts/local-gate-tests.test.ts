@@ -1,11 +1,11 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
-import { execFileSync, spawnSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { afterEach, expect, spyOn, test, setDefaultTimeout } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { appendOwnershipFailure, compareTests, confirmFailures, FLAKY_RERUNS, FLAKY_BUDGET_MS, parseReport, prepareCache, touchedTests, type TestSite, type TestRun } from "./local-gate-tests";
+import { appendOwnershipFailure, compareTests, confirmFailures, FLAKY_RERUNS, FLAKY_BUDGET_MS, parseReport, touchedTests, type TestSite, type TestRun } from "./local-gate-tests";
 import { gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
-import { captureProcessIdentity } from "../src/lib/processIdentity";
 
+setDefaultTimeout(60_000);
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const root = path.resolve(import.meta.dir, "..");
@@ -17,26 +17,13 @@ function fixture(source: string) {
   git("init", "-b", "main"); git("config", "core.hooksPath", "/dev/null"); git("remote", "add", "origin", "https://example.invalid/repository.git");
   writeFileSync(path.join(dir, "example.test.ts"), source);
   git("add", "example.test.ts"); git("commit", "-m", "baseline");
-  const base = git("rev-parse", "HEAD"), logs: string[] = [], cache = path.join(dir, "cache");
-  const run = (files = ["./example.test.ts"]) => touchedTests(dir, base, files, { cache, env, log: line => logs.push(line) });
-  return { dir, env, base, git, run, logs, cache };
+  const base = git("rev-parse", "HEAD"), logs: string[] = [];
+  const run = (files = ["./example.test.ts"]) => touchedTests(dir, base, files, { env, log: line => logs.push(line) });
+  return { dir, env, base, git, run, logs };
 }
 const source = (pass: boolean) => `import { test, expect, describe } from "bun:test"; describe("contract", () => test("same name & Unicode Ω", () => expect(${pass}).toBe(true)));`;
 
-test("private CPU wait ledgers do not invalidate a warm baseline", () => {
-  const f = fixture(source(true));
-  for (const word of ["one", "two"]) {
-    const ledger = path.join(f.dir, word); mkdirSync(ledger);
-    f.env.LLV_CPU_WAIT_ROOTS = JSON.stringify([ledger]);
-    f.env.LLV_GATE_SLOT_LEASE = word;
-    f.logs.length = 0;
-    expect(f.run().introduced).toHaveLength(0);
-  }
-  expect(f.logs.join("\n")).toContain("baseline cache hit");
-  expect(readdirSync(f.cache).filter(file => file.endsWith(".json"))).toHaveLength(1);
-});
-
-test("review evidence names the exact base and head without changing repository refs", () => {
+test("review evidence names the exact base and head without changing repository refs", async () => {
   const f = fixture(source(false));
   // The fixture's private run environment may acquire Bun cache files.
   writeFileSync(path.join(f.dir, ".git/info/exclude"), "env/\n");
@@ -56,16 +43,16 @@ test("review evidence names the exact base and head without changing repository 
   expect(f.git("status", "--porcelain")).toBe("");
 });
 
-test("a new failure blocks by file and full test identity", () => {
+test("a new failure blocks by file and full test identity", async () => {
   const f = fixture(source(true)); writeFileSync(path.join(f.dir, "example.test.ts"), source(false));
-  const result = f.run();
+  const result = await f.run();
   expect(result.introduced).toHaveLength(1); expect(result.preexisting).toHaveLength(0);
   expect(f.logs.join("\n")).toContain("NEW example.test.ts: contract > same name & Unicode Ω");
   expect(f.logs.at(-1)).toContain("1 new failures, 0 pre-existing failures");
   const cli = spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", f.base, "./example.test.ts"], { cwd: f.dir, env: f.env, encoding: "utf8" });
   expect(cli.status).toBe(1); expect(cli.stdout).toContain("NEW example.test.ts");
 });
-test("a failure on both first samples is PRE-EXISTING from the CLI, costs no reruns and is never cached", () => {
+test("a failure on both first samples is PRE-EXISTING from the CLI, costs no reruns and is never cached", async () => {
   const marker = path.join(gateTemporaryRoot(), `gate-marker-${process.pid}-${Math.random()}`); roots.push(marker);
   const f = fixture(`import { test, expect } from "bun:test"; import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(marker)}, ${JSON.stringify("run\n")}); test("old red", () => expect(false).toBe(true));`);
   const samples = () => readFileSync(marker, "utf8").trim().split("\n").length;
@@ -77,67 +64,65 @@ test("a failure on both first samples is PRE-EXISTING from the CLI, costs no rer
   // One process per side: the base sample and the head sample, nothing more.
   expect(samples()).toBe(2);
   f.env.INVOCATION_ID = "another-systemd-scope";
-  const again = f.run(); expect(again.preexisting).toHaveLength(1); expect(again.flaky).toHaveLength(0); expect(again.introduced).toHaveLength(0);
+  const again = await f.run(); expect(again.preexisting).toHaveLength(1); expect(again.flaky).toHaveLength(0); expect(again.introduced).toHaveLength(0);
   expect(samples()).toBe(4);
   expect(f.logs.join("\n")).toContain("baseline run");
-  expect(readdirSync(f.cache)).toHaveLength(0);
 });
-test("a failure fixed by the push is reported; a skipped assertion is kept separate", () => {
+test("a green head needs no main-side evidence, including fixed or skipped assertions", async () => {
   const f = fixture(source(false)); writeFileSync(path.join(f.dir, "example.test.ts"), source(true));
-  expect(f.run().fixed).toHaveLength(1); expect(f.logs.join("\n")).toContain("FIXED example.test.ts");
+  expect((await f.run()).fixed).toHaveLength(0); expect(f.logs.join("\n")).toContain("green head; no baseline");
   writeFileSync(path.join(f.dir, "example.test.ts"), source(false).replace('test("same', 'test.skip("same'));
-  const skipped = f.run(); expect(skipped.fixed).toHaveLength(0); expect(skipped.absent).toHaveLength(1);
+  const skipped = await f.run(); expect(skipped.fixed).toHaveLength(0); expect(skipped.absent).toHaveLength(0);
 });
-test("changing the baseline origin invalidates cache before a same-named regression can hide", () => {
+test("a fresh main sample uses the current origin before classifying a regression", async () => {
   const check = (extra = "true") => `import { test, expect } from "bun:test"; import { execFileSync } from "node:child_process"; const origin = execFileSync("git", ["config", "--get", "remote.origin.url"], { encoding: "utf8" }).trim(); test("origin contract", () => expect(origin.endsWith("green.git") && ${extra}).toBe(true));`;
   const f = fixture(check());
   f.git("remote", "set-url", "origin", "https://example.invalid/red.git");
-  const red = f.run(); expect(red.preexisting).toHaveLength(1); expect(red.flaky).toHaveLength(0);
+  const red = await f.run(); expect(red.preexisting).toHaveLength(1); expect(red.flaky).toHaveLength(0);
   f.git("remote", "set-url", "origin", "https://example.invalid/green.git");
   writeFileSync(path.join(f.dir, "example.test.ts"), check("false"));
   f.logs.length = 0;
-  const warm = f.run();
+  const warm = await f.run();
   expect(warm.introduced.map(site => site.name)).toEqual(["origin contract"]);
   expect(warm.preexisting).toHaveLength(0);
   expect(f.logs.join("\n")).toContain("baseline run");
-  rmSync(f.cache, { recursive: true, force: true });
-  const cold = f.run();
+  const cold = await f.run();
   expect(cold.introduced).toEqual(warm.introduced);
   expect(cold.preexisting).toHaveLength(0);
 });
-test("a new test file is judged alone, even if an existing test with the same name failed", () => {
+test("a new test file is judged alone, even if an existing test with the same name failed", async () => {
   const f = fixture(source(false)); writeFileSync(path.join(f.dir, "new.test.ts"), source(false));
   f.git("remote", "remove", "origin");
-  const result = f.run(["./new.test.ts"]);
+  const result = await f.run(["./new.test.ts"]);
   expect(result.introduced).toHaveLength(1); expect(result.introduced[0]!.file).toBe("new.test.ts");
   expect(f.logs.join("\n")).toContain("1 new file(s), judged on head alone");
 });
-test("a baseline that exits without a complete report blocks and is never cached", () => {
+test("a broken baseline cannot block a green head", async () => {
   const f = fixture('process.exit(0);'); writeFileSync(path.join(f.dir, "example.test.ts"), source(true));
-  expect(() => f.run()).toThrow("baseline: example.test.ts");
-  expect(readdirSync(f.cache)).toHaveLength(0);
+  expect((await f.run()).introduced).toHaveLength(0);
+  expect(f.logs.join("\n")).not.toContain("baseline run");
 });
-test("a head crash is named and blocks without hiding results from other files", () => {
+test("a head crash is named and blocks without hiding results from other files", async () => {
   const f = fixture(source(true)); writeFileSync(path.join(f.dir, "example.test.ts"), "process.exit(0);");
   writeFileSync(path.join(f.dir, "z.test.ts"), source(false));
-  const result = f.run(["./example.test.ts", "./z.test.ts"]);
+  const result = await f.run(["./example.test.ts", "./z.test.ts"]);
   expect(result.introduced).toHaveLength(2); expect(result.introduced[0]!.name).toStartWith("<runner error>");
   expect(f.logs.at(-1)).toContain("2 new failures, 0 pre-existing failures");
 });
-test("per-file processes isolate globals and distinct state/HOME/TMPDIR before imports", () => {
+test("per-file processes isolate globals and distinct state/HOME/TMPDIR before imports", async () => {
   const f = fixture('import { test } from "bun:test"; globalThis.sharedFixture = 1; test("first", () => {});');
   const second = `import { expect, test } from "bun:test"; import { stateDir } from ${JSON.stringify(path.join(root, "src/lib/configDir.ts"))}; test("isolated", () => { expect(globalThis.sharedFixture).toBeUndefined(); for (const key of ["LLV_STATE_DIR", "HOME", "TMPDIR"]) expect(process.env[key]).toStartWith(${JSON.stringify(path.join(gateTemporaryRoot(), "delegatus-test-comparison-"))}); expect(stateDir()).toBe(process.env.LLV_STATE_DIR); });`;
   writeFileSync(path.join(f.dir, "second.test.ts"), second);
-  const result = f.run(["./example.test.ts", "./second.test.ts"]);
+  const result = await f.run(["./example.test.ts", "./second.test.ts"]);
   expect(result.introduced).toHaveLength(0);
 });
-test("duplicate names match occurrences and keep suite ancestry", () => {
+test("duplicate names match occurrences and keep suite ancestry", async () => {
   const site: TestSite = { file: "f.test.ts", name: "same", suite: "suite", kind: "test" };
   const base = { failures: [site], passed: [], elapsedMs: 0, completed: [site.file] };
   const result = compareTests(base, { ...base, failures: [site, site, { ...site, suite: "other" }] });
   expect(result.preexisting).toHaveLength(1); expect(result.introduced).toHaveLength(2);
 });
-test("scope and service guards report an identical surviving tree once across the baseline", () => {
+test("scope and service guards report an identical surviving tree once across the baseline", async () => {
   const file = "fixture.test.ts";
   const failures: TestSite[] = [{ file, suite: "", kind: "error",
     name: "<hook error> owned test scope children survived teardown: 22 (22:2), 21 (21:1)" }];
@@ -149,7 +134,7 @@ test("scope and service guards report an identical surviving tree once across th
   expect(result.preexisting).toHaveLength(1);
   expect(result.preexisting[0]!.name).toContain("21 (21:1), 22 (22:2)");
 });
-test("distinct scope identities and unrelated hook failures remain blocking", () => {
+test("distinct scope identities and unrelated hook failures remain blocking", async () => {
   const file = "fixture.test.ts";
   const failures: TestSite[] = [{ file, suite: "", kind: "error",
     name: "<hook error> owned test scope children survived teardown: 21 (21:9)" },
@@ -159,7 +144,7 @@ test("distinct scope identities and unrelated hook failures remain blocking", ()
   const empty: TestRun = { failures: [], passed: [], completed: [file], elapsedMs: 0 };
   expect(compareTests(empty, { ...empty, failures }).introduced).toHaveLength(3);
 });
-test("swapped duplicate outcomes report the stable head occurrence NEW and the recovered occurrence FIXED", () => {
+test("swapped duplicate outcomes report the stable head occurrence NEW and the recovered occurrence FIXED", async () => {
   const f = fixture(source(true));
   const duplicateSource = (firstFails: boolean, secondFails: boolean) => `import { test, expect } from "bun:test";
 test("same name", () => expect(${!firstFails}).toBe(true));
@@ -174,7 +159,7 @@ test("same name", () => expect(${!secondFails}).toBe(true));`;
   expect(cli.stdout).toContain("FIXED example.test.ts: same name");
   expect(cli.stdout).toContain("1 new failures, 0 pre-existing failures, 1 fixed, 0 removed/skipped, 0 flaky");
 });
-test("report errors are retained; incomplete reports and unidentifiable errors are refused", () => {
+test("report errors are retained; incomplete reports and unidentifiable errors are refused", async () => {
   const xml = '<testsuites tests="1" failures="0"><testsuite><testcase file="f.test.ts" name="Ω &amp; &quot;quoted&quot;&#10;next" classname="outer &gt; inner" /></testsuite></testsuites>';
   const output = '# Unhandled error between tests\n----------------\nerror: failure in /checkout/file.ts\n----------------\n 1 error\n';
   const parsed = parseReport(xml, output, "f.test.ts", "/checkout");
@@ -185,10 +170,10 @@ test("report errors are retained; incomplete reports and unidentifiable errors a
   expect(() => parseReport(xml, " 1 error\n", "f.test.ts", "/checkout")).toThrow();
 });
 
-test("an unnamed teardown failure remains a named blocking diagnostic without a filtered retry", () => {
+test("an unnamed teardown failure remains a named blocking diagnostic without a filtered retry", async () => {
   const f = fixture(source(true));
   writeFileSync(path.join(f.dir, "example.test.ts"), source(true) + '\nimport { afterAll } from "bun:test"; afterAll(() => { throw new Error("synthetic owned child survived teardown"); });');
-  const result = f.run();
+  const result = await f.run();
   expect(result.introduced).toHaveLength(1);
   expect(result.introduced[0]!.kind).toBe("error");
   expect(result.introduced[0]!.name).toContain("synthetic owned child survived teardown");
@@ -196,54 +181,39 @@ test("an unnamed teardown failure remains a named blocking diagnostic without a 
   expect(f.logs.join("\n")).not.toContain("flaky confirmation");
 });
 
-test.skipIf(process.platform !== "linux")("a green JUnit report cannot hide the owned runner's survivor diagnostic", () => {
+test.skipIf(process.platform !== "linux")("a green JUnit report cannot hide the owned runner's survivor diagnostic", async () => {
   const f = fixture(source(true));
   writeFileSync(path.join(f.dir, "example.test.ts"), `import { test } from "bun:test";
 test("detached worker", async () => {
   const child = Bun.spawn([process.execPath, "-e", 'require("node:child_process").spawn("sleep", ["300"], { detached: true, stdio: "ignore" }).unref(); process.exit(0);'], { stdout: "ignore", stderr: "ignore" });
   await child.exited;
 });`);
-  const result = f.run();
+  const result = await f.run();
   expect(result.introduced).toHaveLength(1);
   expect(result.introduced[0]!.kind).toBe("error");
   expect(result.introduced[0]!.name).toContain("owned runner: surviving owned processes:");
   expect(result.introduced[0]!.name).toMatch(/\d+ \(\d+:\d+\)/);
 });
-test.skipIf(process.platform !== "linux")("a completed baseline's owned survivor is FIXED when head reaps it", () => {
+test.skipIf(process.platform !== "linux")("a green head skips an old surviving-helper baseline", async () => {
   const f = fixture(source(true) + `\nimport { spawn } from "node:child_process";
 spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }).unref();`);
   writeFileSync(path.join(f.dir, "example.test.ts"), source(true));
-  const result = f.run();
+  const result = await f.run();
   expect(result.introduced).toHaveLength(0);
-  expect(result.fixed).toHaveLength(1);
-  expect(result.fixed[0]!.kind).toBe("error");
-  expect(f.logs.join("\n")).toMatch(/FIXED .+surviving owned processes: \d+ \(\d+:\d+\)/);
+  expect(result.fixed).toHaveLength(0);
+  expect(f.logs.join("\n")).toContain("green head; no baseline");
 });
-test("cache prunes owned bounded entries, preserves unrelated files, and refuses linked roots", () => {
-  const dir = mkdtempSync(path.join(gateTemporaryRoot(), "gate-cache-test-")); roots.push(dir);
-  const cache = path.join(dir, "cache"); mkdirSync(cache, { mode: 0o700 });
-  for (let i = 0; i < 35; i++) writeFileSync(path.join(cache, `${i.toString(16).padStart(64, "0")}.json`), "{}");
-  writeFileSync(path.join(cache, "keep.txt"), "unrelated");
-  prepareCache(cache); expect(readdirSync(cache).filter(file => file.endsWith(".json"))).toHaveLength(32);
-  const oldest = path.join(cache, readdirSync(cache).find(file => file.endsWith(".json"))!); utimesSync(oldest, 0, 0);
-  prepareCache(cache); expect(existsSync(oldest)).toBeFalse(); expect(existsSync(path.join(cache, "keep.txt"))).toBeTrue();
-  const pending = path.join(cache, `${"e".repeat(64)}.00000000-0000-0000-0000-000000000000.pending`);
-  writeFileSync(pending, "{}"); utimesSync(pending, 0, 0);
-  const oversized = path.join(cache, `${"f".repeat(64)}.json`); writeFileSync(oversized, Buffer.alloc(4 * 1024 * 1024 + 1));
-  prepareCache(cache); expect(existsSync(pending)).toBeFalse(); expect(existsSync(oversized)).toBeFalse();
-  const linked = path.join(dir, "linked"); symlinkSync(cache, linked, "dir"); expect(() => prepareCache(linked)).toThrow("owned private directory");
-});
-test.skipIf(process.platform === "win32")("a surviving test helper fails the run and cannot keep the slot alive", () => {
+test.skipIf(process.platform === "win32")("a surviving test helper fails the run and cannot keep the slot alive", async () => {
   const marker = path.join(gateTemporaryRoot(), `gate-helper-${process.pid}-${Math.random()}`); roots.push(marker);
   const f = fixture(`import { test } from "bun:test"; import { spawn } from "node:child_process"; import { appendFileSync } from "node:fs"; const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }); appendFileSync(${JSON.stringify(marker)}, String(child.pid) + "\\n"); child.unref(); test("helper", () => {});`);
-  expect(f.run().preexisting.length).toBeGreaterThan(0);
+  expect((await f.run()).preexisting.length).toBeGreaterThan(0);
   if (process.platform === "linux") expect(f.logs.join("\n")).toMatch(/PRE-EXISTING .+surviving owned processes: \d+ \(\d+:\d+\)/);
   for (const pid of readFileSync(marker, "utf8").trim().split("\n").map(Number)) {
     const probe = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
     expect(probe.status !== 0 || probe.stdout.trim().startsWith("Z")).toBeTrue();
   }
 });
-test("real pre-push entry permits PRE-EXISTING and refuses NEW after privacy/types/lint", () => {
+test("real pre-push entry permits PRE-EXISTING and refuses NEW after privacy/types/lint", async () => {
   const f = fixture(source(false));
   for (const leaf of [".githooks", ".github/workflows", "shims"]) mkdirSync(path.join(f.dir, leaf), { recursive: true });
   mkdirSync(path.join(f.dir, "scripts"));
@@ -261,7 +231,7 @@ test("real pre-push entry permits PRE-EXISTING and refuses NEW after privacy/typ
   f.git("remote", "set-url", "origin", remote); f.git("update-ref", "refs/remotes/origin/main", hookBase);
   writeFileSync(path.join(f.dir, "example.test.ts"), `// harmless\n${source(false)}`);
   const env = { ...f.env, PATH: `${path.join(f.dir, "shims")}:${f.env.PATH}`, FIXTURE_BUN: process.execPath, LLV_GATE_BUN: process.execPath, FIXTURE_CALLS: calls, LLV_SKIP_HOOKS: "0", LLV_GATE_LOCK_DIR: f.dir };
-  const hook = () => spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env, encoding: "utf8" });
+  const hook = () => { const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env, encoding: "utf8" }); return { ...result, stdout: result.stdout + result.stderr }; };
   const accepted = hook(); if (accepted.status !== 0) throw new Error(accepted.stdout + accepted.stderr); expect(accepted.status).toBe(0);
   expect(accepted.stdout).toContain("PRE-EXISTING example.test.ts: contract > same name & Unicode Ω");
   expect(accepted.stdout).toContain("0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky");
@@ -275,64 +245,8 @@ test("real pre-push entry permits PRE-EXISTING and refuses NEW after privacy/typ
   expect(refused.stdout).toContain("1 new failures, 1 pre-existing failures");
 }, 60000);
 
-test("an incomplete cached baseline is rebuilt before it can certify a comparison", () => {
-  const f = fixture(source(true)); f.run();
-  const entry = path.join(f.cache, readdirSync(f.cache)[0]!);
-  const contents = JSON.parse(readFileSync(entry, "utf8")); contents.run.completed = [];
-  writeFileSync(entry, JSON.stringify(contents)); f.logs.length = 0;
-  expect(f.run().introduced).toHaveLength(0);
-  expect(f.logs.join("\n")).toContain("baseline run");
-});
 
-test("fresh kernel ownership descriptors preserve a warm baseline", () => {
-  const f = fixture(source(true));
-  expect(f.run().introduced).toHaveLength(0);
-  Object.assign(f.env, {
-    LLV_OWNED_TEST_RUNNER_PID: "synthetic-next-runner",
-    LLV_OWNED_TEST_RUN_CGROUP: "/synthetic-next-service",
-    LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)),
-    LLV_FIXTURE_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)),
-  });
-  f.logs.length = 0;
-  expect(f.run().introduced).toHaveLength(0);
-  expect(f.logs.join("\n")).toContain("baseline cache hit");
-});
-
-test.each(["changed failure identity", "missing integrity"])("a cached baseline with %s cannot hide a newly failing test", corruption => {
-  const cases = (a: boolean, b: boolean) => `import { test, expect } from "bun:test"; test("case A", () => expect(${a}).toBe(true)); test("case B", () => expect(${b}).toBe(true));`;
-  const f = fixture(cases(true, true));
-  expect(f.run().introduced).toHaveLength(0);
-  const entry = path.join(f.cache, readdirSync(f.cache)[0]!);
-  const contents = JSON.parse(readFileSync(entry, "utf8"));
-  if (corruption === "changed failure identity") contents.run.failures = [{ file: "example.test.ts", suite: "", name: "case B", kind: "test" }];
-  else delete contents.integrity;
-  writeFileSync(entry, JSON.stringify(contents));
-  writeFileSync(path.join(f.dir, "example.test.ts"), cases(true, false));
-  f.logs.length = 0;
-  const result = f.run();
-  expect(result.introduced.map(site => site.name)).toEqual(["case B"]);
-  expect(result.preexisting).toHaveLength(0);
-  expect(result.fixed).toHaveLength(0);
-  expect(f.logs.join("\n")).toContain("baseline run");
-  expect(f.logs.at(-1)).toContain("1 new failures, 0 pre-existing failures, 0 fixed");
-});
-
-test("shared cache pruning tolerates six simultaneous gate processes", async () => {
-  const dir = mkdtempSync(path.join(gateTemporaryRoot(), "gate-cache-race-")); roots.push(dir);
-  const cache = path.join(dir, "cache"); mkdirSync(cache, { mode: 0o700 });
-  for (let i = 0; i < 1000; i++) writeFileSync(path.join(cache, `${i.toString(16).padStart(64, "0")}.json`), "{}");
-  const env = isolatedEnvironment(path.join(dir, "env"), process.env);
-  const code = `import { prepareCache } from ${JSON.stringify(path.join(root, "scripts/local-gate-tests.ts"))}; prepareCache(${JSON.stringify(cache)});`;
-  const results = await Promise.all(Array.from({ length: 6 }, () => new Promise<number | null>((resolve, reject) => {
-    const child = spawn(process.execPath, ["-e", code], { env, stdio: "ignore" });
-    child.once("error", reject); child.once("exit", resolve);
-  })));
-  expect(results).toEqual([0, 0, 0, 0, 0, 0]);
-  expect(readdirSync(cache).length).toBeLessThanOrEqual(32);
-});
-
-
-test("a changed dependency patch cannot contaminate or reuse the baseline", () => {
+test("a changed dependency patch cannot contaminate or reuse the baseline", async () => {
   const f = fixture('import { test, expect } from "bun:test"; import value from "fixture-dependency"; test("dependency returns true", () => expect(value).toBe(true));');
   const pack = path.join(f.dir, "pack", "package"); mkdirSync(pack, { recursive: true });
   writeFileSync(path.join(pack, "package.json"), JSON.stringify({ name: "fixture-dependency", version: "1.0.0", main: "index.js" }));
@@ -345,21 +259,20 @@ test("a changed dependency patch cannot contaminate or reuse the baseline", () =
   install();
   f.git("add", "package.json", "bun.lock", "dependency.tgz", "dependency.patch"); f.git("commit", "-m", "patched baseline");
   const base = f.git("rev-parse", "HEAD"), manifest = readFileSync(path.join(f.dir, "package.json"), "utf8"), lock = readFileSync(path.join(f.dir, "bun.lock"), "utf8");
-  const run = () => touchedTests(f.dir, base, ["./example.test.ts"], { cache: f.cache, env: f.env, log: line => f.logs.push(line) });
+  const run = () => touchedTests(f.dir, base, ["./example.test.ts"], { env: f.env, log: line => f.logs.push(line) });
   writeFileSync(path.join(f.dir, "dependency.patch"), patch("false")); install("--frozen-lockfile");
   expect(readFileSync(path.join(f.dir, "package.json"), "utf8")).toBe(manifest); expect(readFileSync(path.join(f.dir, "bun.lock"), "utf8")).toBe(lock);
-  expect(run().introduced).toHaveLength(1);
+  expect((await run()).introduced).toHaveLength(1);
   writeFileSync(path.join(f.dir, "dependency.patch"), patch("Boolean(1)")); install("--frozen-lockfile");
-  expect(run().introduced).toHaveLength(0);
-  expect(readdirSync(f.cache).filter(file => file.endsWith(".json"))).toHaveLength(2);
+  expect((await run()).introduced).toHaveLength(0);
   writeFileSync(path.join(f.dir, "dependency.patch"), patch("false")); install("--frozen-lockfile");
   f.logs.length = 0;
-  const warm = run(); expect(warm.introduced).toHaveLength(1); expect(warm.preexisting).toHaveLength(0);
-  expect(f.logs.join("\n")).toContain("baseline cache hit");
+  const warm = await run(); expect(warm.introduced).toHaveLength(1); expect(warm.preexisting).toHaveLength(0);
+  expect(f.logs.join("\n")).toContain("baseline run");
 });
 
 
-test.each(["relative directory", "local override"])("%s dependencies keep a green baseline and block cold and warm CLI runs", kind => {
+test.each(["relative directory", "local override"])("%s dependencies keep a green baseline and block cold and warm CLI runs", async kind => {
   const check = 'import { test, expect } from "bun:test"; import value from "fixture-dependency"; test("dependency returns true", () => expect(value).toBe(true));';
   const f = fixture(check);
   const dependency = path.join(f.dir, "dependency"); mkdirSync(dependency);
@@ -385,7 +298,7 @@ test.each(["relative directory", "local override"])("%s dependencies keep a gree
   install(control);
   expect(spawnSync(process.execPath, ["test", "./example.test.ts"], { cwd: control, env: f.env }).status).toBe(0);
   expect(spawnSync(process.execPath, ["test", "./example.test.ts"], { cwd: f.dir, env: f.env }).status).toBe(1);
-  for (const temperature of ["run", "cache hit"]) {
+  for (const temperature of ["run", "run"]) {
     const cli = spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", base, "./example.test.ts"], { cwd: f.dir, env: f.env, encoding: "utf8" });
     expect(cli.stdout).toContain(`baseline ${temperature}`);
     expect(cli.stdout).toContain("NEW example.test.ts: dependency returns true");
@@ -394,7 +307,7 @@ test.each(["relative directory", "local override"])("%s dependencies keep a gree
   }
 }, 60000);
 
-test("between-test errors match across private roots without hiding a changed path", () => {
+test("between-test errors match across private roots without hiding a changed path", async () => {
   const xml = '<testsuites tests="1" failures="0"><testcase file="f.test.ts" name="passing" /></testsuites>';
   const run = (suffix: string, file = "missing") => {
     const home = path.join(gateTemporaryRoot(), `delegatus-test-comparison-${suffix}`, `test-${suffix}`, "home", file);
@@ -429,21 +342,20 @@ function scheduledFixture(baseFailures: number[], headFailures: number[]) {
   writeFileSync(path.join(f.dir, "example.test.ts"), scheduledSource(marker, baseFailures, headFailures));
   f.git("add", "example.test.ts"); f.git("commit", "-m", "scheduled baseline");
   const base = f.git("rev-parse", "HEAD");
-  const run = () => touchedTests(f.dir, base, ["./example.test.ts"], { cache: f.cache, env: f.env, log: line => f.logs.push(line) });
+  const run = () => touchedTests(f.dir, base, ["./example.test.ts"], { env: f.env, log: line => f.logs.push(line) });
   const cli = () => spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", base, "./example.test.ts"], { cwd: f.dir, env: f.env, encoding: "utf8" });
   return { ...f, marker, run, cli };
 }
 
-test("a base-only scheduled failure is FLAKY with both counts and no unrelated reruns", () => {
+test("a base-only scheduled failure is FLAKY with both counts and no unrelated reruns", async () => {
   const f = scheduledFixture([3], [1, 2, 3, 4]);
-  const result = f.run();
+  const result = await f.run();
   expect(result.introduced).toHaveLength(0); expect(result.flaky).toHaveLength(1);
   expect(f.logs.join("\n")).toContain("FLAKY example.test.ts: inner > outer > target [Ω] (base 3 pass/1 fail; head 0 pass/4 fail)");
-  expect(readFileSync(f.marker + "-unrelated", "utf8").trim().split("\n")).toEqual(["base", "head"]);
-  expect(readdirSync(f.cache)).toHaveLength(0);
+  expect(readFileSync(f.marker + "-unrelated", "utf8").trim().split("\n")).toEqual(["head"]);
 });
 
-test("a base that failed its first sample needs no reruns even when later samples would differ", () => {
+test("a base that failed its first sample needs no reruns even when later samples would differ", async () => {
   const f = scheduledFixture([1], [1, 2, 3, 4]);
   const accepted = f.cli();
   expect(accepted.status).toBe(0);
@@ -462,7 +374,7 @@ ${message === null ? "" : `describe("broken", () => { test("inner", () => {}); t
 const cliAt = (f: ReturnType<typeof fixture>, base: string, files = ["./example.test.ts"]) => spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", base, ...files], { cwd: f.dir, env: f.env, encoding: "utf8" });
 const SAME_WAY = "(the base run of this file is broken the same way)";
 
-test("a between-tests error present on both sides is PRE-EXISTING from the CLI and never blocks", () => {
+test("a between-tests error present on both sides is PRE-EXISTING from the CLI and never blocks", async () => {
   const f = fixture(betweenTests("describe boom"));
   const accepted = cliAt(f, f.base);
   expect(accepted.status).toBe(0);
@@ -472,7 +384,7 @@ test("a between-tests error present on both sides is PRE-EXISTING from the CLI a
   expect(accepted.stdout).not.toContain("gate error"); expect(accepted.stderr).not.toContain("gate error");
 });
 
-test("a retry in a file whose base is broken the same way still confirms its candidates", () => {
+test("a retry in a file whose base is broken the same way still confirms its candidates", async () => {
   const f = fixture(source(true));
   const counter = path.join(f.dir, "between-schedule");
   const recovering = `import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -493,19 +405,18 @@ test("stays red", () => expect(side === "base").toBe(true));`;
   expect(refused.status).toBe(1);
 });
 
-test("a file that cannot finish on either side in the same way is PRE-EXISTING from the CLI and is never cached", () => {
+test("a file that cannot finish on either side in the same way is PRE-EXISTING from the CLI and is never cached", async () => {
   const f = fixture("process.exit(0);");
   writeFileSync(path.join(f.dir, "example.test.ts"), "// harmless edit\nprocess.exit(0);");
   const accepted = cliAt(f, f.base);
   expect(accepted.status).toBe(0);
   expect(accepted.stdout).toMatch(/PRE-EXISTING example\.test\.ts: <runner error> .+ \(the base run of this file is broken the same way\)/);
   expect(accepted.stdout).toContain("0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky");
-  expect(f.run().preexisting).toHaveLength(1);
+  expect((await f.run()).preexisting).toHaveLength(1);
   expect(f.logs.join("\n")).toContain("baseline run");
-  expect(readdirSync(f.cache)).toHaveLength(0);
 });
 
-test("a between-tests error only on the head, or a different one, is NEW from the CLI and blocks", () => {
+test("a between-tests error only on the head, or a different one, is NEW from the CLI and blocks", async () => {
   const f = fixture(betweenTests(null));
   writeFileSync(path.join(f.dir, "example.test.ts"), betweenTests("describe boom"));
   const headOnly = cliAt(f, f.base);
@@ -521,7 +432,7 @@ test("a between-tests error only on the head, or a different one, is NEW from th
   expect(different.stdout).toContain("1 new failures, 1 pre-existing failures, 1 fixed");
 });
 
-test("a head that cannot finish a file the base finished is NEW from the CLI and blocks", () => {
+test("a head that cannot finish a file the base finished is NEW from the CLI and blocks", async () => {
   const f = fixture(source(true));
   writeFileSync(path.join(f.dir, "example.test.ts"), "process.exit(0);");
   const refused = cliAt(f, f.base);
@@ -530,7 +441,7 @@ test("a head that cannot finish a file the base finished is NEW from the CLI and
   expect(refused.stdout).not.toContain(SAME_WAY);
 });
 
-test("a head scheduled recovery passes CLI and never caches a head pass", () => {
+test("a head scheduled recovery passes CLI and never caches a head pass", async () => {
   const f = scheduledFixture([], [1]);
   const accepted = f.cli();
   expect(accepted.status).toBe(0);
@@ -538,29 +449,11 @@ test("a head scheduled recovery passes CLI and never caches a head pass", () => 
   // Keep the baseline key and turn only the head into a stable regression.
   writeFileSync(path.join(f.dir, "example.test.ts"), scheduledSource(f.marker, [], [5, 6, 7, 8]));
   const refused = f.cli();
-  expect(refused.status).toBe(1); expect(refused.stdout).toContain("baseline cache hit");
+  expect(refused.status).toBe(1); expect(refused.stdout).toContain("baseline run");
   expect(refused.stdout).toContain("NEW example.test.ts: inner > outer > target [Ω]");
 });
 
-test("a warm green baseline still gets fresh base retries and flaky evidence is evicted", () => {
-  const f = scheduledFixture([2], []);
-  expect(f.run().flaky).toHaveLength(0);
-  expect(readFileSync(f.marker + "-base", "utf8")).toBe("1");
-  expect(readFileSync(f.marker + "-head", "utf8")).toBe("1");
-  writeFileSync(path.join(f.dir, "example.test.ts"), scheduledSource(f.marker, [], [2, 3, 4, 5]));
-  f.logs.length = 0;
-  expect(f.run().flaky).toHaveLength(1);
-  expect(f.logs.join("\n")).toContain("baseline cache hit");
-  expect(readdirSync(f.cache)).toHaveLength(0);
-  // The retry failure must not turn into a cached PRE-EXISTING on the next run.
-  writeFileSync(path.join(f.dir, "example.test.ts"), scheduledSource(f.marker, [], [6, 7, 8, 9]));
-  f.logs.length = 0;
-  const next = f.run();
-  expect(next.introduced).toHaveLength(1); expect(next.preexisting).toHaveLength(0);
-  expect(f.logs.join("\n")).toContain("baseline run");
-});
-
-test("the stable regression control fails every head sample and refuses CLI", () => {
+test("the stable regression control fails every head sample and refuses CLI", async () => {
   const f = scheduledFixture([], [1, 2, 3, 4]);
   const refused = f.cli();
   expect(refused.status).toBe(1); expect(refused.stdout).toContain("NEW example.test.ts: inner > outer > target [Ω]");
@@ -569,7 +462,7 @@ test("the stable regression control fails every head sample and refuses CLI", ()
   expect(readFileSync(f.marker + "-head", "utf8")).toBe("4");
 });
 
-test("recovering one duplicate-name occurrence leaves the stable occurrence NEW", () => {
+test("recovering one duplicate-name occurrence leaves the stable occurrence NEW", async () => {
   const f = fixture(source(true));
   const marker = path.join(f.dir, "duplicate-schedule");
   const trace = path.join(f.dir, "duplicate-trace");
@@ -596,7 +489,7 @@ test("same name", check);`;
   expect(readFileSync(trace, "utf8").trim().split("\n").filter(line => line.startsWith("head:")).length).toBe(8);
 });
 
-test("overlapping base and head retry evidence belongs to separate duplicate occurrences", () => {
+test("overlapping base and head retry evidence belongs to separate duplicate occurrences", async () => {
   const f = fixture(source(true));
   const marker = path.join(f.dir, "overlapping-duplicate-schedule");
   const duplicate = `import { test, expect } from "bun:test";
@@ -620,7 +513,7 @@ test("same name", check);`;
   expect(cli.stdout).toContain("1 new failures, 0 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
 });
 
-test("any passing head retry makes an occurrence FLAKY", () => {
+test("any passing head retry makes an occurrence FLAKY", async () => {
   const f = scheduledFixture([], [1, 2, 4]);
   const accepted = f.cli();
   expect(accepted.status).toBe(0);
@@ -628,37 +521,7 @@ test("any passing head retry makes an occurrence FLAKY", () => {
   expect(accepted.stdout).toContain("0 new failures, 0 pre-existing failures");
 });
 
-test("a later base retry file error evicts the cache after an earlier failure", () => {
-  const f = scheduledFixture([2, 6], []);
-  const marker = path.join(f.dir, "second-file-runs");
-  const second = `import { expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { basename } from "node:path";
-const side = basename(process.cwd()) === "baseline" ? "base" : "head";
-const file = ${JSON.stringify(marker)} + "-" + side;
-const run = existsSync(file) ? Number(readFileSync(file, "utf8")) + 1 : 1;
-writeFileSync(file, String(run));
-if (side === "base" && run === 2) process.exit(0);
-test("second file", () => expect(side === "base" || run !== 2).toBe(true));`;
-  writeFileSync(path.join(f.dir, "b.test.ts"), second);
-  f.git("add", "b.test.ts"); f.git("commit", "-m", "second retry fixture");
-  const base = f.git("rev-parse", "HEAD");
-  const run = () => touchedTests(f.dir, base, ["./example.test.ts", "./b.test.ts"], { cache: f.cache, env: f.env, log: line => f.logs.push(line) });
-  run();
-  expect(readdirSync(f.cache).some(file => file.endsWith(".json"))).toBe(true);
-  writeFileSync(path.join(f.dir, "example.test.ts"), scheduledSource(f.marker, [2, 6], [1, 2, 3, 4]));
-  expect(() => run()).toThrow("base rerun: b.test.ts");
-  expect(readdirSync(f.cache).some(file => file.endsWith(".json"))).toBe(false);
-  f.logs.length = 0;
-  const next = run();
-  expect(f.logs.join("\n")).toContain("baseline run");
-  // The aborted batch never reached this file, so its scheduled base failure
-  // lands on the rebuilt first sample: a failure on both first samples.
-  expect(next.preexisting.map(site => site.name)).toEqual(["target [Ω]"]);
-  expect(next.flaky).toHaveLength(0); expect(next.introduced).toHaveLength(0);
-});
-
-test("a literal describe separator is filtered inside nested suite ancestry", () => {
+test("a literal describe separator is filtered inside nested suite ancestry", async () => {
   const f = fixture(source(true));
   const marker = path.join(f.dir, "literal-separator");
   const literal = `import { test, expect, describe } from "bun:test";
@@ -676,38 +539,79 @@ describe("outer", () => describe("one > two", () => {
   f.git("add", "example.test.ts"); f.git("commit", "-m", "literal suite baseline");
   const base = f.git("rev-parse", "HEAD");
   writeFileSync(path.join(f.dir, "example.test.ts"), literal);
-  const result = touchedTests(f.dir, base, ["./example.test.ts"], { cache: f.cache, env: f.env, log: line => f.logs.push(line) });
+  const result = await touchedTests(f.dir, base, ["./example.test.ts"], { env: f.env, log: line => f.logs.push(line) });
   expect(result.introduced).toHaveLength(0);
   expect(result.flaky).toHaveLength(1);
   expect(f.logs.join("\n")).toContain("FLAKY example.test.ts: one > two > outer > case (base 4 pass/0 fail; head 3 pass/1 fail)");
-  expect(readFileSync(marker + "-unrelated", "utf8").trim().split("\n")).toEqual(["base", "head"]);
+  expect(readFileSync(marker + "-unrelated", "utf8").trim().split("\n")).toEqual(["head"]);
 });
 
-test("the retry bound stays small and incomplete samples cannot become FLAKY", () => {
+test("the retry bound stays small and incomplete samples cannot become FLAKY", async () => {
   expect(FLAKY_RERUNS).toBe(3); expect(FLAKY_BUDGET_MS).toBe(300000);
   const site: TestSite = { file: "example.test.ts", suite: "", name: "target", kind: "test" };
   const run = (failures: TestSite[], passed: TestSite[]): TestRun => ({ failures, passed, completed: [site.file], elapsedMs: 0 });
   const base = run([], [site]), head = run([site], []);
-  expect(() => confirmFailures(base, head, side => side === "base" ? base : run([], []))).toThrow("missing or skipped test");
-  expect(() => confirmFailures(base, head, () => run([{ ...site, kind: "error" }], []))).toThrow("incomplete runner");
-  expect(() => confirmFailures(base, head, () => { throw new Error("flaky rerun budget exhausted"); })).toThrow("budget exhausted");
+  await expect(confirmFailures(base, head, side => side === "base" ? base : run([], []))).rejects.toThrow("missing or skipped test");
+  await expect(confirmFailures(base, head, () => run([{ ...site, kind: "error" }], []))).rejects.toThrow("incomplete runner");
+  await expect(confirmFailures(base, head, () => { throw new Error("flaky rerun budget exhausted"); })).rejects.toThrow("budget exhausted");
   // A passing duplicate cannot certify recovery of another stable failing copy.
   const first = { ...site, occurrence: 0 }, second = { ...site, occurrence: 1 };
   const duplicate = run([first, second], []);
-  expect(confirmFailures(run([], [first, second]), duplicate, side => side === "base" ? run([], [first, second]) : duplicate).introduced).toHaveLength(2);
+  expect((await confirmFailures(run([], [first, second]), duplicate, side => side === "base" ? run([], [first, second]) : duplicate)).introduced).toHaveLength(2);
 });
 
 
-test("the shared retry deadline blocks before another child starts", () => {
+test("the shared retry deadline blocks before another child starts", async () => {
   const f = fixture(source(true));
   writeFileSync(path.join(f.dir, "example.test.ts"), source(false));
   let clock: ReturnType<typeof spyOn> | undefined;
   try {
-    expect(() => touchedTests(f.dir, f.base, ["./example.test.ts"], { cache: f.cache, env: f.env, log: line => {
-      if (line.startsWith("touched-tests: head ")) {
+    await expect(touchedTests(f.dir, f.base, ["./example.test.ts"], { env: f.env, log: line => {
+      if (line.startsWith("touched-tests: baseline run ")) {
         // The budget starts at zero, then advances past the shared deadline.
         clock = spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(FLAKY_BUDGET_MS + 1);
       }
-    } })).toThrow("flaky rerun budget");
+    } })).rejects.toThrow("flaky rerun budget");
   } finally { clock?.mockRestore(); }
+});
+
+test("three head files rendezvous concurrently before the fourth starts, with distinct roots", async () => {
+  const f = fixture(source(true));
+  const markers = path.join(f.dir, "rendezvous"); mkdirSync(markers);
+  const files = ["one", "two", "three", "four"].map((word, index) => `${index}-${word}.test.ts`);
+  for (const [index, file] of files.entries()) writeFileSync(path.join(f.dir, file), `
+import { test, expect } from "bun:test";
+import { readdirSync, writeFileSync, readFileSync } from "node:fs";
+test("three concurrent roots", async () => {
+  const markers = ${JSON.stringify(markers)}, index = ${index};
+  if (index === 3) expect(readdirSync(markers).filter(f => f.endsWith(".done")).length).toBeGreaterThan(0);
+  writeFileSync(markers + "/" + index + ".root", process.env.HOME!);
+  if (index < 3) {
+    const until = Date.now() + 8000;
+    while (readdirSync(markers).filter(f => f.endsWith(".root") && f !== "3.root").length < 3 && Date.now() < until) await Bun.sleep(20);
+    const roots = readdirSync(markers).filter(f => f.endsWith(".root") && f !== "3.root").map(f => readFileSync(markers + "/" + f, "utf8"));
+    expect(new Set(roots).size).toBe(3);
+  }
+  writeFileSync(markers + "/" + index + ".done", "done");
+}, 10000);`);
+  const result = await f.run(files);
+  expect(result.introduced).toHaveLength(0);
+  expect(f.logs.join("\n")).toContain("green head; no baseline checkout");
+}, 20_000);
+
+test("a red branch with an incomplete main sample fails closed", async () => {
+  const f = fixture("process.exit(0);");
+  writeFileSync(path.join(f.dir, "example.test.ts"), source(false));
+  await expect(f.run()).rejects.toThrow("baseline: example.test.ts");
+});
+
+test("a red branch samples only failing files and names only failing assertions", async () => {
+  const f = fixture('import { test, expect } from "bun:test"; test("red", () => expect(false).toBe(true)); test("unrelated", () => {});');
+  writeFileSync(path.join(f.dir, "good.test.ts"), "process.exit(0);");
+  f.git("add", "good.test.ts"); f.git("commit", "-m", "broken unrelated baseline");
+  const base = f.git("rev-parse", "HEAD");
+  writeFileSync(path.join(f.dir, "good.test.ts"), source(true));
+  const result = await touchedTests(f.dir, base, ["good.test.ts", "example.test.ts"], { env: f.env, log: line => f.logs.push(line) });
+  expect(result.preexisting).toHaveLength(1); expect(result.introduced).toHaveLength(0);
+  expect(f.logs.join("\n")).toContain("1 failing file(s)");
 });
