@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { DecisionSheet } from "@/components/decisions/DecisionSheet";
 import { openOperatorDecisions } from "@/components/decisions/decisionSurface";
-import { usePrototypeReviewJump, usePrototypeReviewNotices, type PrototypeReviewTarget } from "@/hooks/usePrototypeReview";
+import { openPrototypeReview, usePrototypeReviewJump, usePrototypeReviewNotices, type PrototypeReviewTarget } from "@/hooks/usePrototypeReview";
 import { cleanTitle } from "@/components/utils";
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -29,6 +29,13 @@ export function PrototypeReviewHost({ tasks, seatDecisions }: { tasks: readonly 
     if (next.kind === "seat-decision") { openOperatorDecisions({ project: next.project, reviewId: next.reviewId }); return; }
     setTarget(next);
   }, []));
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const reviewId = params.get("prototypeReview"), taskId = params.get("prototypeTask"), project = params.get("project");
+    if (!reviewId || !/^pr_[a-f0-9]{32}$/.test(reviewId)) return;
+    if (taskId) openPrototypeReview({ kind: "prototype-review", taskId, reviewId });
+    else if (project) openOperatorDecisions({ project, reviewId });
+  }, []);
   const close = useCallback(() => setTarget(null), []);
   const task = target ? tasks.find((entry) => entry.id === target.taskId) : undefined;
   return (

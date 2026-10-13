@@ -7540,11 +7540,11 @@ async function recoverSpawn(
 /** The caller and task a prototype call's receipt belongs to, decided by the
     Viewer with the same fences as the call itself. A caller the Viewer refuses
     is refused here, before any receipt is read. */
-async function prototypeReceiptScope(mode: "publish" | "read",args: McpToolArgs,control: ViewerControlDependencies,context?: McpToolCallContext): Promise<string> {
+async function prototypeReceiptScope(mode: "publish" | "read" | "resend",args: McpToolArgs,control: ViewerControlDependencies,context?: McpToolCallContext): Promise<string> {
   const capability = callerCapability();
   if (!capability) throw new Error("prototype reviews require an identified caller");
   const scope = await viewerControlForCall(control,context).post("/api/prototype-reviews/scope",
-    { mode, ...(args.taskId === undefined ? {} : { taskId: args.taskId }) },{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+    { mode, ...(args.taskId === undefined ? {} : { taskId: args.taskId }), ...(args.reviewId === undefined ? {} : { reviewId: args.reviewId }) },{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
   /* A seat asking without a task is scoped to its own questions (docs/design/operator-decision-forms.md §2.1). */
   if (typeof scope.conversationId !== "string" || (typeof scope.taskId !== "string" && scope.taskId !== null)) throw new Error("the Viewer did not name the caller and task of this prototype call");
   return `${scope.conversationId}\n${scope.taskId ?? "seat"}`;
@@ -7702,6 +7702,11 @@ export function viewerMcpBindings(
       if (!capability) throw new Error("prototype publication requires an identified caller");
       return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews",args,{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
     },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("publish",args,controlDependencies,context) }),
+    resend_prototype_review_telegram: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
+      const capability = callerCapability();
+      if (!capability) throw new Error("prototype resend requires an identified caller");
+      return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews/telegram",args,{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("resend",args,controlDependencies,context) }),
     read_prototype_review: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
       const capability = callerCapability();
       if (!capability) throw new Error("prototype reads require an identified caller");

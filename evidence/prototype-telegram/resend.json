@@ -1,0 +1,174 @@
+[
+  {
+    "theme": "light",
+    "failed": {
+      "width": 1440,
+      "button": {
+        "x": 1126.390625,
+        "y": 699,
+        "width": 196.609375,
+        "height": 32
+      },
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "state": "failed"
+    },
+    "sent": {
+      "width": 1440,
+      "button": {
+        "x": 1126.390625,
+        "y": 699,
+        "width": 196.609375,
+        "height": 32
+      },
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "state": "sent"
+    },
+    "calls": 1,
+    "draftPreserved": true
+  },
+  {
+    "theme": "light",
+    "width": 1440,
+    "surface": "seat-form",
+    "button": {
+      "x": 1021.5,
+      "y": 580.765625,
+      "width": 196.609375,
+      "height": 32
+    },
+    "calls": 1
+  },
+  {
+    "theme": "dark",
+    "failed": {
+      "width": 1440,
+      "button": {
+        "x": 1126.390625,
+        "y": 699,
+        "width": 196.609375,
+        "height": 32
+      },
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "state": "failed"
+    },
+    "sent": {
+      "width": 1440,
+      "button": {
+        "x": 1126.390625,
+        "y": 699,
+        "width": 196.609375,
+        "height": 32
+      },
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "state": "sent"
+    },
+    "calls": 1,
+    "draftPreserved": true
+  },
+  {
+    "theme": "dark",
+    "width": 1440,
+    "surface": "seat-form",
+    "button": {
+      "x": 1021.5,
+      "y": 580.765625,
+      "width": 196.609375,
+      "height": 32
+    },
+    "calls": 1
+  },
+  {
+    "theme": "light",
+    "failed": {
+      "width": 390,
+      "button": {
+        "x": 16,
+        "y": 628,
+        "width": 196.609375,
+        "height": 44
+      },
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "state": "failed"
+    },
+    "sent": {
+      "width": 390,
+      "button": {
+        "x": 177.390625,
+        "y": 628,
+        "width": 196.609375,
+        "height": 44
+      },
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "state": "sent"
+    },
+    "calls": 1,
+    "draftPreserved": true
+  },
+  {
+    "theme": "light",
+    "width": 390,
+    "surface": "seat-form",
+    "button": {
+      "x": 25,
+      "y": 794.28125,
+      "width": 196.609375,
+      "height": 44
+    },
+    "calls": 1
+  },
+  {
+    "theme": "dark",
+    "failed": {
+      "width": 390,
+      "button": {
+        "x": 16,
+        "y": 628,
+        "width": 196.609375,
+        "height": 44
+      },
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "state": "failed"
+    },
+    "sent": {
+      "width": 390,
+      "button": {
+        "x": 177.390625,
+        "y": 628,
+        "width": 196.609375,
+        "height": 44
+      },
+      "visible": true,
+      "clipped": false,
+      "overlap": false,
+      "state": "sent"
+    },
+    "calls": 1,
+    "draftPreserved": true
+  },
+  {
+    "theme": "dark",
+    "width": 390,
+    "surface": "seat-form",
+    "button": {
+      "x": 25,
+      "y": 794.28125,
+      "width": 196.609375,
+      "height": 44
+    },
+    "calls": 1
+  }
+]

@@ -67,6 +67,73 @@ type Scheme = "light" | "dark";
 
 const card = (id: string) => `[data-kanban-board] .card[data-id="task:${id}"]`;
 
+describe("prototype Telegram resend", () => {
+  browserTest("the failed post and resend action fit desktop and 390px, and resend preserves the draft", async () => {
+    const out = path.resolve(".artifacts/prototype-telegram"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browserTmp = fs.mkdtempSync(path.join(process.env.PLAYWRIGHT_BROWSERS_PATH ? path.dirname(process.env.PLAYWRIGHT_BROWSERS_PATH) : os.tmpdir(), "tg-"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: browserTmp } });
+    const readings: unknown[] = [];
+    try {
+      for (const width of [1440, 390]) for (const theme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=telegram&prototypeTask=t-search&prototypeReview=pr_${"e".repeat(32)}`, { width, height: phone ? 844 : 900 }, theme, "uk", "reduce", phone);
+        try {
+          const state = page.locator("[data-prototype-telegram-state]");
+          await state.waitFor(); expect(await state.innerText()).toContain("forbidden");
+          const resend = page.locator("[data-prototype-telegram-resend]");
+          expect(await resend.innerText()).toBe("Надіслати в Telegram ще раз");
+          const measure = () => page.evaluate(width => {
+            const action = document.querySelector<HTMLElement>("[data-prototype-telegram-resend]")!;
+            const row = document.querySelector<HTMLElement>("[data-prototype-telegram-actions]")!;
+            const status = document.querySelector<HTMLElement>("[data-prototype-telegram-state]")!;
+            const box = action.getBoundingClientRect(), text = status.getBoundingClientRect();
+            return { width, button: { x: box.x, y: box.y, width: box.width, height: box.height },
+              visible: box.left >= 0 && box.right <= width && box.top >= 0 && box.bottom <= innerHeight,
+              clipped: row.scrollWidth > row.clientWidth + 1 || action.scrollWidth > action.clientWidth + 1,
+              overlap: box.left < text.right && box.right > text.left && box.top < text.bottom && box.bottom > text.top,
+              state: status.dataset.prototypeTelegramState };
+          }, width);
+          const failed = await measure(); expect(failed.visible).toBe(true); expect(failed.clipped).toBe(false); expect(failed.overlap).toBe(false);
+          await page.screenshot({ path: path.join(out, `variant-1-${width}-uk-${theme}-failed.png`) });
+          const field = page.locator("[data-prototype-comment-field]"); await field.fill("Зберегти цей коментар");
+          if (phone) await resend.tap(); else await resend.click();
+          await page.waitForFunction(() => document.querySelector<HTMLElement>("[data-prototype-telegram-state]")?.dataset.prototypeTelegramState === "sent");
+          expect(await field.inputValue()).toBe("Зберегти цей коментар");
+          expect(await page.evaluate(() => (window as unknown as { protoTelegramPosts: unknown[] }).protoTelegramPosts.length)).toBe(1);
+          const sent = await measure(); expect(sent.visible).toBe(true); expect(sent.clipped).toBe(false); expect(sent.overlap).toBe(false);
+          expect(sent.button).toEqual(failed.button);
+          await page.screenshot({ path: path.join(out, `variant-1-${width}-uk-${theme}-sent.png`) });
+          expect(pageErrors).toEqual([]); readings.push({ theme, failed, sent, calls: 1, draftPreserved: true });
+          await page.goto(`${server.base}?proto=telegram&decisions=telegram`);
+          if (phone) {
+            await page.locator("[data-mobile2-seat-open]").click();
+            await page.locator("[data-decision-strip]").click();
+          }
+          await page.locator(`[data-decision-row="pr_${"d".repeat(32)}"]`).click();
+          const seatForm = page.locator(`[data-decision-card="open"][data-decision-review="pr_${"d".repeat(32)}"]`);
+          const seatResend = seatForm.locator("[data-prototype-telegram-resend]");
+          await seatResend.scrollIntoViewIfNeeded();
+          expect(await seatForm.locator("[data-prototype-telegram-state]").innerText()).toContain("forbidden");
+          const seatBox = await seatResend.boundingBox();
+          expect(seatBox!.x).toBeGreaterThanOrEqual(0); expect(seatBox!.x + seatBox!.width).toBeLessThanOrEqual(width);
+          expect(seatBox!.y).toBeGreaterThanOrEqual(0); expect(seatBox!.y + seatBox!.height).toBeLessThanOrEqual(phone ? 844 : 900);
+          expect(await seatResend.evaluate(element => element.scrollWidth > element.clientWidth + 1)).toBe(false);
+          const seatComment = seatForm.locator("[data-decision-comment]"); await seatComment.fill("Зберегти коментар форми");
+          await page.screenshot({ path: path.join(out, `variant-1-${width}-uk-${theme}-seat-failed.png`) });
+          if (phone) await seatResend.tap(); else await seatResend.click();
+          await seatForm.locator('[data-prototype-telegram-state="sent"]').waitFor();
+          expect(await seatComment.inputValue()).toBe("Зберегти коментар форми");
+          await page.screenshot({ path: path.join(out, `variant-1-${width}-uk-${theme}-seat-sent.png`) });
+          expect(pageErrors).toEqual([]); readings.push({ theme, width, surface: "seat-form", button: seatBox, calls: 1 });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/prototype-telegram", { recursive: true });
+      fs.writeFileSync("evidence/prototype-telegram/resend.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); fs.rmSync(browserTmp, { recursive: true, force: true }); }
+  }, 90_000);
+});
+
 describe("CPU admission queue", () => {
   browserTest("the waiting card shows queue position and remaining minutes in en and uk", async () => {
     const out = path.resolve(".artifacts/cpu-queue");

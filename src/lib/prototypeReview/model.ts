@@ -27,7 +27,10 @@ export function prototypeRoundMetadata(round: PrototypeReviewRound): PrototypeRo
 }
 export function prototypeReviewReplica(task: BoardTask): PrototypeReviewReplica | undefined {
   const summary = prototypeReviewSummary(task.prototypeReviews ?? []);
-  return summary ? { summary, rounds: task.prototypeReviews!.map(round => prototypeRoundMetadata({ ...round, taskId: task.id, project: task.project })) } : task.prototypeReviewReplica;
+  return summary ? { summary, rounds: task.prototypeReviews!.map(round => {
+    const { telegramPost: _localPost, ...metadata } = prototypeRoundMetadata({ ...round, taskId: task.id, project: task.project });
+    return metadata;
+  }) } : task.prototypeReviewReplica;
 }
 
 /** What the summary reads of a round: a stored round and its public view both carry it. */

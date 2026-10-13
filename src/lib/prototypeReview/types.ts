@@ -100,6 +100,14 @@ export interface PrototypeReviewRound {
   questions?: PrototypeQuestion[];
   decision?: PrototypeDecision;
   mediaRemovedAt?: string;
+  /** Local Telegram receipt. Reasons are codes, never provider descriptions. */
+  telegramPost?: PrototypeTelegramPost;
+}
+export interface PrototypeTelegramPost {
+  state: "pending" | "sent" | "failed" | "uncertain";
+  key: string;
+  at: string;
+  reason?: string;
 }
 export interface PrototypeMediaView extends PrototypeMedia { available: boolean; url: string | null }
 export interface PrototypeRoundView extends Omit<PrototypeReviewRound, "publicationKey" | "inputDigest" | "critic" | "decision" | "variants"> {

@@ -99,6 +99,25 @@ export function usePrototypeReview(taskId: string | null,enabled = true) {
     } finally { if (writing.current === taskId) writing.current = null; }
   },[taskId]);
   const retry = useCallback((reviewId: string) => write({ reviewId,retry: true }),[write]);
+  const telegramKeys = useRef(new Map<string, string>());
+  const resendTelegram = useCallback(async (reviewId: string) => {
+    if (!taskId || writing.current === taskId) return;
+    writing.current = taskId; ++sequence.current;
+    const key = telegramKeys.current.get(reviewId) ?? crypto.randomUUID();
+    telegramKeys.current.set(reviewId, key);
+    setSnapshot(previous => ({ ...previous, saving: true, error: null }));
+    try {
+      const response = await fetch("/api/prototype-reviews/telegram", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reviewId, clientRequestId: key }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "Telegram post could not be resent");
+      telegramKeys.current.delete(reviewId);
+      if (active.current === taskId) setSnapshot(previous => ({ ...previous, saving: false,
+        data: previous.data ? { ...previous.data, rounds: previous.data.rounds.map(round => round.id === reviewId ? { ...round, telegramPost: result.telegramPost } : round) } : null }));
+      fireTasksChanged();
+    } catch (error) {
+      if (active.current === taskId) setSnapshot(previous => ({ ...previous, saving: false, error: error instanceof Error ? error.message : "Telegram post could not be resent" }));
+    } finally { if (writing.current === taskId) writing.current = null; }
+  }, [taskId]);
   const save = useCallback((decision: DecidePrototypeInput) => write(decision),[write]);
   const hide = useCallback(async (reviewId: string, undo: boolean, surface: "desktop" | "phone") => {
     if (!taskId || writing.current === taskId) return false;
@@ -129,5 +148,5 @@ export function usePrototypeReview(taskId: string | null,enabled = true) {
     if (writing.current === taskId) writing.current = null;
     return result.ok;
   }, [taskId, refresh]);
-  return { data,error,saving,loading: enabled && !!taskId && data === null && error === null,refresh,save,retry,hide };
+  return { data,error,saving,loading: enabled && !!taskId && data === null && error === null,refresh,save,retry,hide,resendTelegram };
 }
