@@ -3037,6 +3037,14 @@ function mockRender(width: number, height: number, hue: number, label: string, p
 const PROTO = params.get("proto") ?? (CALM ? "1" : null);
 const protoPosts: unknown[] = [];
 const protoTelegramPosts: unknown[] = [];
+/* `&tgstate=sent|uncertain|unknown` starts the Telegram record in that state; the default is a failed post. */
+function telegramFixturePost(key: string): PrototypeRoundView["telegramPost"] {
+  const state = params.get("tgstate");
+  if (state === "unknown") return undefined;
+  if (state === "sent") return { key, state: "sent", at: iso(MIN) };
+  if (state === "uncertain") return { key, state: "uncertain", reason: "send_uncertain", at: iso(MIN) };
+  return { key, state: "failed", reason: "forbidden", at: iso(MIN) };
+}
 const protoRounds: Record<string, PrototypeRoundView[]> = {};
 const protoHidden = new Map<string, AttentionDismissalMark>();
 const protoSaveState: Record<string, PrototypeDeliveryState> = { "t-upload": "no-orchestrator" };
@@ -3093,7 +3101,7 @@ if (PROTO) {
   }
   if (PROTO === "telegram") {
     protoRounds["t-search"]![0]!.id = `pr_${"e".repeat(32)}`;
-    protoRounds["t-search"]![0]!.telegramPost = { key: "fixture-automatic", state: "failed", reason: "forbidden", at: iso(MIN) };
+    protoRounds["t-search"]![0]!.telegramPost = telegramFixturePost("fixture-automatic");
   }
   protoRounds["t-upload"] = [round("r-upload", "t-upload", L("Upload progress sheet", "Панель перебігу завантаження"), 9 * MIN, [
     { number: 1, name: L("Progress under the attached file with speed, size and a stop", "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп"), description: L("A new design: the bar sits under the attached file.\nNothing existing changes.", "Новий дизайн: смуга стоїть під прикріпленим файлом.\nНаявне не змінюється."), videos: [], frames: [
@@ -3219,7 +3227,7 @@ if (DECISIONS) {
     { number: 2, name: L("Split by engine", "Розподіл за рушієм"), description: "", videos: [], frames: [{ image: frame(32, "split · 1440"), caption: L("Night", "Ніч"), width: 1440 }] },
   ];
   if (DECISIONS === "reject") seatRounds[0]!.variants = protoRounds["t-search"]![0]!.variants;
-  if (DECISIONS === "telegram") seatRounds[0]!.telegramPost = { key: "fixture-seat-post", state: "failed", reason: "forbidden", at: iso(MIN) };
+  if (DECISIONS === "telegram") seatRounds[0]!.telegramPost = telegramFixturePost("fixture-seat-post");
   /* `&decisions=long`: the first seat question has a title of ninety characters and a recommended option of a sentence. */
   if (DECISIONS === "long") {
     const held = seatRounds[0]!;

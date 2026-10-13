@@ -181,7 +181,7 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
       ) : null}
       {asks ? (
         <footer data-decision-footer="" className="flex min-w-0 flex-col gap-1.5 p-3">
-          <PrototypeTelegramActions key={decision.id} round={decision} disabled={sending} stacked />
+          <PrototypeTelegramActions key={decision.id} round={decision} disabled={sending} />
           {decision.variants.length ? (
             <button type="button" role="checkbox" aria-checked={reject} data-decision-reject="" disabled={sending}
               className={`${SECONDARY} self-start ${reject ? "border-warning/60 bg-warning-soft text-warning" : ""}`} onClick={() => setReject((held) => !held)}>
@@ -268,7 +268,7 @@ export function DecisionRecord({ decision, onRetry, retrying = false, retryError
       ) : null}
       {made.comment ? <p data-decision-record-comment="" className="m-0 whitespace-pre-wrap break-words px-3 pb-2.5 text-ui text-primary">{made.comment}</p> : null}
       <footer className="flex min-w-0 flex-col gap-2 px-3 pb-2.5">
-        <PrototypeTelegramActions key={decision.id} round={decision} disabled={retrying} stacked />
+        <PrototypeTelegramActions key={decision.id} round={decision} disabled={retrying} />
         {retry ? (
           <button type="button" data-decision-retry="" className={SECONDARY} disabled={retrying} onClick={onRetry}>
             {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <RotateCw className="h-3.5 w-3.5" aria-hidden />}

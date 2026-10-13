@@ -5,8 +5,8 @@ import { useLocale } from "@/lib/i18n";
 import type { PrototypeRoundView, PrototypeTelegramPost } from "@/lib/prototypeReview/types";
 
 /** Shared action area for the task review and the seat's taskless form. */
-export function PrototypeTelegramActions({ round, disabled = false, onResend, stacked = false }: {
-  round: PrototypeRoundView; disabled?: boolean; onResend?: () => Promise<unknown>; stacked?: boolean;
+export function PrototypeTelegramActions({ round, disabled = false, onResend }: {
+  round: PrototypeRoundView; disabled?: boolean; onResend?: () => Promise<unknown>;
 }) {
   const { t } = useLocale();
   const [local, setLocal] = useState<{ id: string; post: PrototypeTelegramPost } | null>(null);
@@ -16,7 +16,7 @@ export function PrototypeTelegramActions({ round, disabled = false, onResend, st
   const post = local?.id === round.id && local.post.at > (round.telegramPost?.at ?? "") ? local.post : round.telegramPost;
   const reason = post?.reason ?? "unavailable";
   const reasonCode = (["forbidden", "no_relay", "paused", "no_target", "not_configured", "bot_not_connected", "send_uncertain"] as const).find(code => code === reason);
-  const described = reasonCode ? `${t(`proto.telegram.reason.${reasonCode}`)} (${reason})` : reason;
+  const described = reasonCode ? t(`proto.telegram.reason.${reasonCode}`) : reason;
   const resend = async () => {
     if (busy || disabled) return;
     if (onResend) { await onResend(); return; }
@@ -30,11 +30,18 @@ export function PrototypeTelegramActions({ round, disabled = false, onResend, st
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Telegram post could not be resent"); }
     finally { setBusy(false); }
   };
-  return <div className={`grid min-w-0 grid-cols-1 items-start gap-2 ${stacked ? "" : "sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"}`} data-prototype-telegram-actions="">
-    <span role="status" data-prototype-telegram-state={post?.state ?? "unknown"} className={`min-h-[2lh] min-w-0 text-label [overflow-wrap:anywhere] ${stacked ? "" : "sm:min-h-0"} ${post?.state === "failed" || post?.state === "uncertain" ? "text-warning" : "text-secondary"}`}>
-      {t(`proto.telegram.${post?.state ?? "unknown"}`, { reason: described })}
+  const state = post?.state ?? "unknown";
+  /* A post that arrived (or is on its way) is one quiet line; the bordered button is for the states that need a repair. */
+  const quiet = state === "sent" || state === "pending";
+  const warn = state === "failed" || state === "uncertain";
+  const action = quiet
+    ? <button type="button" className="inline cursor-pointer border-0 bg-transparent p-0 text-left text-label text-secondary underline underline-offset-2 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 [@media(pointer:coarse)]:-my-2.5 [@media(pointer:coarse)]:py-2.5" data-prototype-telegram-resend="" data-prototype-telegram-quiet="" disabled={disabled || busy} onClick={() => void resend()}>{t("proto.telegram.resend")}</button>
+    : <button type="button" className="inline-flex min-h-8 max-w-full items-center justify-center rounded-control border border-border bg-card px-3 text-left text-ui font-semibold text-primary hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 [@media(pointer:coarse)]:min-h-11" data-prototype-telegram-resend="" disabled={disabled || busy} onClick={() => void resend()}>{t("proto.telegram.resend")}</button>;
+  return <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2" data-prototype-telegram-actions="">
+    <span role="status" data-prototype-telegram-state={state} className={`min-w-0 text-label [overflow-wrap:anywhere] ${warn ? "text-warning" : "text-secondary"}`}>
+      {t(`proto.telegram.${state}`, { reason: described })}
     </span>
-    <button type="button" className="inline-flex min-h-8 max-w-full items-center justify-center justify-self-start rounded-control border border-border bg-card px-3 text-left text-ui font-semibold text-primary hover:border-accent/45 hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 [@media(pointer:coarse)]:min-h-11" data-prototype-telegram-resend="" disabled={disabled || busy} onClick={() => void resend()}>{t("proto.telegram.resend")}</button>
-    {error ? <p role="alert" className="col-span-full m-0 w-full text-label text-danger [overflow-wrap:anywhere]">{error}</p> : null}
+    {state === "pending" && !busy ? null : action}
+    {error ? <p role="alert" className="m-0 basis-full text-label text-danger [overflow-wrap:anywhere]">{error}</p> : null}
   </div>;
 }

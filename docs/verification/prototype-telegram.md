@@ -61,12 +61,18 @@ Focused tests use fake bot transport and the production MCP/HTTP handlers
 against isolated state. No test posts to a real Telegram chat.
 
 The existing `kanbanBoard.browser.test.tsx` driver owns the new case. Variant
-1, **Existing review action area**, places the failure reason and resend
-action above the existing answer controls. It covers the task review and the
-seat form, light and dark themes, desktop 1440px and phone 390px. Captures
+1, **Existing review action area**, places the Telegram row above the existing
+answer controls in the task review and the seat form. A delivered post is one
+quiet line: «Sent to Telegram» with a small underlined text action to send
+again. The bordered button appears only when the post failed, arrived
+unconfirmed or was never recorded, set beside its status with the footer's
+8 px gap and sharing a row when the form is wide enough. The failed line names
+the human reason alone; the reason code stays in the seat's wake item and the
+logs. The case covers light and dark, 1440, 1000 and 390px, those four states,
+and a resend by click or tap that keeps the draft. It asserts no bordered
+button and a one-line row in the sent state, and the gap in the others. Captures
 live in `.artifacts/prototype-telegram`; committed geometry is in
-`evidence/prototype-telegram/resend.json`. The case clicks or taps resend and
-checks draft preservation, action visibility, clipping and overlap.
+`evidence/prototype-telegram/resend.json`.
 
 ## Deployment handoff
 
