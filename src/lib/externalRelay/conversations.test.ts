@@ -2,9 +2,9 @@ import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { conversationContext, reserveConversations, releaseConversation, readConversations, prepareConversationAccount, isRelayConversationDir, sweepConversations } from "./conversations";
+import { conversationContext, reserveConversations, releaseConversation, readConversations, prepareConversationAccount, isRelayConversationDir, sweepConversations, sweepConversationsAsync, reserveConversationsAsync } from "./conversations";
 import { sampleRequest } from "./request.fixture";
-import { newTargetSettings, type PairedRelay } from "./store";
+import { newTargetSettings, reserveRun, dropRun, withFileLock, writeRelayFile, type PairedRelay } from "./store";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-conversations-"));
 process.env.LLV_STATE_DIR = root;
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -63,4 +63,24 @@ test("a malformed conversation map is preserved and replaced on recovery", () =>
   expect(fs.readFileSync(path.join(path.dirname(file), saved), "utf8")).toBe("broken JSON");
   expect(reserveConversations(relay, target, "r".repeat(32), "recover", ["member"])).toHaveLength(1);
   sweepConversations([], []);
+});
+
+test("async orphan recovery rechecks turns born while it waits for the conversation lock", async () => {
+  const file = path.join(root, "external-relay/conversations.json");
+  const record = reserveConversations(relay, target, "live-chat", "before-wait", ["member"])![0]!;
+  releaseConversation(record.id);
+  let pending!: Promise<void>;
+  try {
+    withFileLock(file, () => {
+      pending = sweepConversationsAsync([relay], Date.now(), Date.now() + 5000, relay.id);
+      reserveRun({ requestId: "new-live-turn", leaseId: "fixture-lease", relayId: relay.id, targetId: target.id,
+        childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: "fixture", runDir: root, startedAt: new Date().toISOString() });
+      const rows = readConversations(); const live = rows.find(r => r.id === record.id)!;
+      live.state = "running"; live.runningRequestId = "new-live-turn";
+      writeRelayFile(file, { v: 1, conversations: rows });
+    });
+    await pending;
+    expect(readConversations().find(r => r.id === record.id)).toMatchObject({ state: "running", runningRequestId: "new-live-turn" });
+    expect(await reserveConversationsAsync(relay, target, "live-chat", "contender", ["owner"], Date.now() + 5000)).toBeNull();
+  } finally { await pending; releaseConversation(record.id); dropRun("new-live-turn"); }
 });

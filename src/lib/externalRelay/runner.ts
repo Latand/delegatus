@@ -472,8 +472,9 @@ export async function runClaimedRequest(
           admissionDecline = declined(leaseId, "busy", null, lastCause === "chat" ? "chat busy" : null);
           return false;
         }
+        const liveRuns = usesConversation ? readRunLedger().runs : [];
         let cause: RelayHoldCause | null = activeDrain() ? "drain" : usesConversation && readConversations().some(r =>
-          r.relayId === relay.id && r.targetId === target.id && r.chatKey === request.chat!.key && r.state === "running") ? "chat" :
+          r.relayId === relay.id && r.targetId === target.id && r.chatKey === request.chat!.key && r.state === "running" && liveRuns.some(run => run.requestId === r.runningRequestId)) ? "chat" :
           olderCapacityWaiter(relay.id, target.id, requestId, deadline) ? "capacity" : null;
         if (releaseRequested || releasingRelayHolds()) { admissionDecline = declined(leaseId, "busy", null, cause === "chat" ? "chat busy" : null); releaseRequested = true; return false; }
         if (!cause) {
@@ -484,7 +485,7 @@ export async function runClaimedRequest(
             else {
               recorded = true; markActive(relay, target);
               if (usesConversation) {
-                await sweepConversationsAsync([relay], readRunLedger().runs, Date.now(), deadline.declineAt, relay.id);
+                await sweepConversationsAsync([relay], Date.now(), deadline.declineAt, relay.id);
                 const reserved = await reserveConversationsAsync(relay, target, request.chat!.key, requestId, [context!], deadline.declineAt);
                 if (!reserved) { await releaseAdmission(); cause = "chat"; }
                 else conversation = reserved[0]!;

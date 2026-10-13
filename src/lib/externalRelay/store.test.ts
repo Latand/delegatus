@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +7,8 @@ import {
   mergeRelayTargets,
   reserveRun,
   reserveRunAsync,
+  withFileLock,
+  withFileLockAsync,
   readRunLedger,
   readRelayStore,
   updateRelayStore,
@@ -188,3 +190,18 @@ fs.rmSync(${JSON.stringify(lock)});
     expect(await child.exited).toBe(0);
   } finally { clearInterval(probe); if (child.exitCode === null) child.kill(); await child.exited; dropRun("contended"); }
 }, 10000);
+
+test("a contended store lock that frees at the cutoff cannot commit expired waiting work", async () => {
+  let now = 1000, writes = 0;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const file = path.join(root, "deadline-lock.json");
+  let pending!: Promise<string>;
+  try {
+    withFileLock(file, () => {
+      pending = withFileLockAsync(file, () => { writes++; return "committed"; }, 1010);
+      now = 1010;
+    });
+    await expect(pending).rejects.toThrow("relay store is busy");
+    expect(writes).toBe(0);
+  } finally { await pending.catch(() => {}); clock.mockRestore(); }
+});

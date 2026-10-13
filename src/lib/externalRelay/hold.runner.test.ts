@@ -221,6 +221,17 @@ test("capacity returning at the admission cutoff cannot start expired waiting wo
   } finally { dropRun("cutoff-blocker"); await pending; clock.mockRestore(); await server.close(); }
 }, 5000);
 
+test("an orphan conversation has free chat capacity and is recovered before admission", async () => {
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const relay = paired(`${server.origin}/v1`);
+  const request = claim("orphan-chat", 11000);
+  setRelaySwitch("chat_conversations", true);
+  const record = reserveConversations(relay, relay.targets[0]!, request.chat.key, "absent-owner", ["member"])![0]!;
+  try {
+    expect(await runClaimedRequest(relay, request, undefined, { command })).toMatchObject({ outcome: "answered" });
+  } finally { releaseConversation(record.id); setRelaySwitch("chat_conversations", false); await server.close(); }
+});
+
 test("demotion sends one explicit busy attempt and respects its own bounded exit", async () => {
   let attempts = 0;
   const server = await startTestRelay(async (req, body) => {

@@ -6,7 +6,7 @@ import { statePath } from "@/lib/configDir";
 import { claudeProjectRoots } from "@/lib/accounts/claude";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import type { ExternalRelayRequester } from "./protocol";
-import { withFileLock, withFileLockAsync, writeRelayFile, type PairedRelay, type RelayTargetSettings, type RunRecord } from "./store";
+import { withFileLock, withFileLockAsync, readRunLedger, writeRelayFile, type PairedRelay, type RelayTargetSettings, type RunRecord } from "./store";
 export type ConversationContext = "member" | "owner";
 export type RelayConversation = {
   id: string; relayId: string; targetId: string; chatKey: string; context: ConversationContext;
@@ -118,9 +118,9 @@ export function sweepConversations(relays: PairedRelay[], runs: RunRecord[], now
   if (!fs.existsSync(file())) return;
   change(sweepAction(relays, runs, now, removeRelayId, onlyRelayId));
 }
-export async function sweepConversationsAsync(relays: PairedRelay[], runs: RunRecord[], now: number, until: number, onlyRelayId?: string): Promise<void> {
+export async function sweepConversationsAsync(relays: PairedRelay[], now: number, until: number, onlyRelayId?: string): Promise<void> {
   if (!fs.existsSync(file())) return;
-  await changeAsync(sweepAction(relays, runs, now, undefined, onlyRelayId), until);
+  await changeAsync(rows => sweepAction(relays, readRunLedger().runs, now, undefined, onlyRelayId)(rows), until);
 }
 function sweepAction(relays: PairedRelay[], runs: RunRecord[], now: number, removeRelayId?: string, onlyRelayId?: string) {
   return (rows: RelayConversation[]) => {
