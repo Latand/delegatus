@@ -44,6 +44,52 @@ const said = (delta: string, at: number, speaker: "input" | "output" = "input") 
 const spoken = (f: ReturnType<typeof fixture>) => f.provider.commands.filter(row => row.type === "session.commentary.append");
 const large = { input_tokens: 1_050_000, input_tokens_details: { cached_tokens: 0 }, output_tokens: 512 };
 
+test("real voice scope refusals explain that nothing was read and PR cache follows the project in view", async () => {
+  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+  const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
+  const { createCompanionBoardReadPaths } = await import("./readPaths");
+  const { CompanionBoardReads } = await import("./boardReads");
+  const at = "2026-10-10T12:00:00.000Z";
+  const tasks = ["board-a", "board-b"].map(project => ({ id: `task-${project}`, project, text: `${project} cards`, status: "done" as const, placement: "unplaced" as const, assignments: [], createdAt: at, updatedAt: at,
+    workLinks: [{ repository: "acme/widgets", number: 2800, kind: "pr" as const, addedAt: at, addedBy: "operator" as const }] }));
+  replaceConversationCatalog(["board-a", "board-b", "empty-board"].map(project => ({ path: path.join(root, `${project}.jsonl`), root: "claude-projects" as const, name: "fixture", project, projectName: project === "empty-board" ? "Empty" : "Duplicate", title: "Fixture", firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const, mtime: 0, size: 0 })));
+  const paths = createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies, taskSelectionSource: undefined, pipelineSelectionSource: undefined, listTaskRecords: () => tasks, listPipelineRecords: () => [] } });
+  let dispatched = 0;
+  const reads = new CompanionBoardReads({ ...paths, call: (name, args, redact) => { dispatched++; return paths.call(name, args, redact); } });
+  const f = fixture();
+  const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => "synthetic-credential", timers: false });
+  const s = await service.start({ project: "board-a", locale: "en", sdp: "v=0" });
+  let next = 0;
+  const read = async (args: Record<string, unknown>) => {
+    const id = `scope-read-${next++}`;
+    f.provider.responder = calling(functionCall(id, "list_tasks", args));
+    f.provider.replay(s.providerId, delegationCreated(id, next * 100));
+    await service.drain(s.sessionId);
+    return JSON.parse(f.provider.requests.at(-1)!.input.filter(item => item.type === "function_call_output").at(-1)!.output as string);
+  };
+  try {
+    expect(await read({ project: null, query: "PR 2800", openOnly: null })).toMatchObject({ total: 1, rows: [{ handle: "task-board-a" }] });
+    expect(await read({ query: "#2800" })).toMatchObject({ repeated: true, total: 1 });
+    expect(dispatched).toBe(1);
+    await service.context(s.sessionId, "board-b");
+    expect(await read({ query: "2800" })).toMatchObject({ total: 1, rows: [{ handle: "task-board-b" }] });
+    expect(dispatched).toBe(2);
+    for (const [project, code] of [["Unknown", "PROJECT_REFUSED"], ["Duplicate", "PROJECT_AMBIGUOUS"]]) {
+      const answer = await read({ project, query: "PR 2800" });
+      expect(answer).toMatchObject({ status: "refused", code });
+      expect(answer.speech).toContain("Nothing was read");
+      expect(answer.speech).not.toContain("0 tasks");
+      expect(answer.total).toBeUndefined();
+    }
+    await service.context(s.sessionId, "stale-context");
+    expect(await read({ project: null })).toMatchObject({ status: "refused", code: "PROJECT_REFUSED" });
+    await service.context(s.sessionId, null);
+    expect(await read({ project: null })).toMatchObject({ status: "refused", code: "PROJECT_REQUIRED" });
+    expect(dispatched).toBe(2);
+    expect(await read({ project: "Empty" })).toMatchObject({ total: 0, speech: "0 tasks. " });
+  } finally { await service.close(s.sessionId); replaceConversationCatalog([]); }
+});
+
 test("minting is server configured, a model request is delivered at once with no tap, and a later tap or a closed media call adds nothing", async () => {
   const f = fixture();
   f.provider.responder = calling(functionCall("call-a", "request_orchestrator_delegation", { instruction: "Review the plan" }));

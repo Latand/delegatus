@@ -2688,7 +2688,7 @@ export function createMcpToolService(
             requestId,
             error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
             error instanceof Error ? error.message : String(error),
-            false,
+            error instanceof McpUnadmittedRefusal && error.details.retryable === true,
             false,
             error instanceof McpToolRefusal ? error.details : undefined,
           );
@@ -2908,7 +2908,8 @@ export function createMcpToolService(
             } catch (error) {
               return failure(typedTool, requestId,
                 error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
-                error instanceof Error ? error.message : String(error), false, false,
+                error instanceof Error ? error.message : String(error),
+                error instanceof McpUnadmittedRefusal && error.details.retryable === true, false,
                 error instanceof McpToolRefusal ? error.details : undefined);
             }
           }
@@ -2928,7 +2929,8 @@ export function createMcpToolService(
             outcome = "failure";
             return failure(typedTool, requestId,
               error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
-              error instanceof Error ? error.message : String(error), false, false,
+              error instanceof Error ? error.message : String(error),
+              error instanceof McpUnadmittedRefusal && error.details.retryable === true, false,
               error instanceof McpToolRefusal ? error.details : undefined);
           }
           /* Nothing has claimed this key HERE — an observation, never a
@@ -3114,7 +3116,8 @@ export function createMcpToolService(
             } catch (error) {
               return failure(typedTool, requestId,
                 error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
-                error instanceof Error ? error.message : String(error), false, false,
+                error instanceof Error ? error.message : String(error),
+                error instanceof McpUnadmittedRefusal && error.details.retryable === true, false,
                 error instanceof McpToolRefusal ? error.details : undefined);
             }
           }
@@ -3172,7 +3175,7 @@ export function createMcpToolService(
           /* Named issue, cross-project and orchestrator refusals preserve the
              server's cause and whether the same call can succeed later. */
           const namedRefusal = error instanceof McpToolRefusal && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
-            && (typedTool === "issue_report" || error.details.code === "cross_project_refused"
+            && (error instanceof McpUnadmittedRefusal || typedTool === "issue_report" || error.details.code === "cross_project_refused"
               || ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel"].includes(typedTool))
             ? { code: error.details.code, retryable: error.details.retryable } : null;
           unadmitted = error instanceof McpUnadmittedRefusal;
@@ -4080,7 +4083,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Compact by default; false restores the previous board-card projection. Each row is id, task (first line), state, cursor, stateDetail and per stage {id, latestAttempt: {n, state, verdict}}."),
     cursor: z.unknown().optional().describe("Pass nextCursor unchanged with the same filters and a fresh clientRequestId. Invalid cursors restart with cursorReset:true."),
     ids: z.unknown().optional().describe("Only these durable ids (array or comma-separated string). Unknown ids match no records."),
-    query: z.string().optional().describe("Case-insensitive substring in task text/title."),
+    query: z.string().optional().describe("Case-insensitive text query, or whole PR reference (2800, #2800, PR 2800, pull request 2800). PR references match stored links and linked pipelines on tasks. A designated seat reads only its own project; omission uses its designation."),
     updatedSince: z.unknown().optional().describe("Inclusive ISO timestamp. Invalid timestamps are ignored. Tasks use updatedAt; pipelines use createdAt."),
   }).passthrough(),
   conversation_action: z.object({
@@ -4148,7 +4151,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     limit: boundedNumericInput("list_tasks", "limit"),
     cursor: z.unknown().optional().describe("Pass nextCursor unchanged with the same filters and a fresh clientRequestId. Invalid cursors restart with cursorReset:true."),
     ids: z.unknown().optional().describe("Only these durable ids (array or comma-separated string). Unknown ids match no records."),
-    query: z.string().optional().describe("Case-insensitive substring in task text/title."),
+    query: z.string().optional().describe("Case-insensitive text query, or whole PR reference (2800, #2800, PR 2800, pull request 2800). PR references match stored links and linked pipelines on tasks. A designated seat reads only its own project; omission uses its designation."),
     updatedSince: z.unknown().optional().describe("Inclusive ISO timestamp. Invalid timestamps are ignored. Tasks use updatedAt; pipelines use createdAt."),
   }).passthrough(),
   get_task: z.object({
