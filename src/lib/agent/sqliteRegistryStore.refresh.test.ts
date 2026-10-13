@@ -42,8 +42,10 @@ function fixture(local: boolean) {
   const parent = receipt.parentConversationId!;
   const entry = `${receipt.key!.engine}:${receipt.key!.sessionId}`;
   const unrelated = dataset.grantSubjects.find(({ collection, key }) => collection === "receipts"
-    && initial.receipts[key]!.parentConversationId !== parent && initial.receipts[key]!.conversationId !== parent)!;
+    && initial.receipts[key]!.parentConversationId !== parent && initial.receipts[key]!.conversationId !== parent
+    && initial.conversations[initial.receipts[key]!.conversationId])!;
   expect(unrelated).toBeDefined();
+  const unrelatedConversation = initial.receipts[unrelated.key]!.conversationId;
   let decisions = 0;
   const observed = reader as unknown as { decideStoredRow: (...args: unknown[]) => unknown };
   const decide = observed.decideStoredRow.bind(reader);
@@ -71,7 +73,7 @@ function fixture(local: boolean) {
     expect(grants(held)).toEqual({ entry: ["viewer", "telegram"], receipt: ["viewer", "telegram"], conversation: ["viewer", "telegram"] });
     return { ...grants(view), count };
   };
-  return { reader, initial, receipt, child, parent, mixedWrite, refresh };
+  return { reader, initial, receipt, child, parent, unrelatedConversation, mixedWrite, refresh };
 }
 
 for (const local of [false, true]) {
@@ -90,7 +92,7 @@ for (const local of [false, true]) {
   });
 
   test(`${mode}: mixed writes revoke and restore grants in the first refresh, including absent and contradictory attestors`, () => {
-    const { initial, receipt, child, parent, mixedWrite, refresh } = fixture(local);
+    const { initial, receipt, child, parent, unrelatedConversation, mixedWrite, refresh } = fixture(local);
     const allowed = ["viewer", "telegram"];
     const denied = ["viewer"];
 
@@ -113,15 +115,16 @@ for (const local of [false, true]) {
     expect(refresh()).toMatchObject({ entry: allowed, receipt: allowed, conversation: allowed });
 
     // Receipt authority changes reach the entry and conversation in the same
-    // refresh as an otherwise harmless conversation write.
+    // refresh as an unrelated conversation write. Restamping the parent here
+    // would also invalidate the child and hide missing receipt dependencies.
     mixedWrite((file) => {
       file.receipts[receipt.launchId]!.telegramSeatGrant = false;
-      file.conversations[parent]!.updatedAt = "2026-10-13T00:00:03.000Z";
+      file.conversations[unrelatedConversation]!.updatedAt = "2026-10-13T00:00:03.000Z";
     });
     expect(refresh()).toMatchObject({ entry: denied, receipt: denied, conversation: denied });
     mixedWrite((file) => {
       file.receipts[receipt.launchId] = structuredClone(receipt);
-      file.conversations[parent]!.updatedAt = "2026-10-13T00:00:04.000Z";
+      file.conversations[unrelatedConversation]!.updatedAt = "2026-10-13T00:00:04.000Z";
     });
     expect(refresh()).toMatchObject({ entry: allowed, receipt: allowed, conversation: allowed });
 
