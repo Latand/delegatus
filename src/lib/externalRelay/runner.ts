@@ -7,7 +7,7 @@ import { runOwnerAgent, ownerClarificationAnswer, type OwnerRunPorts } from "./o
 import { readRelaySwitches } from "./switches";
 import { compactRequestSchema } from "./protocol";
 import { runCompactRequest } from "./compact";
-import { conversationContext, reserveConversations, releaseConversation, prepareConversationAccount, conversationCodexHome, sweepConversations, type RelayConversation } from "./conversations";
+import { conversationContext, reserveConversationsAsync, releaseConversationAsync, prepareConversationAccount, conversationCodexHome, sweepConversationsAsync, type RelayConversation } from "./conversations";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import fs from "node:fs";
 import os from "node:os";
@@ -48,9 +48,9 @@ import {
   RELAY_MEMBER_LIMIT_WINDOW_MS,
 } from "./profile";
 import {
-  changeRun,
-  dropRun,
-  reserveRun,
+  changeRunAsync,
+  dropRunAsync,
+  reserveRunAsync,
   readRunLedger,
   type PairedRelay,
   type RelayTargetSettings,
@@ -307,7 +307,7 @@ export async function runClaimedRequest(
       runDir,
       startedAt: new Date().toISOString(),
     };
-    const admission = reserveRun(record, target.concurrency);
+    const admission = await reserveRunAsync(record, target.concurrency, deadline.declineAt);
     if (admission === "duplicate") { duplicate = true; return null; }
     if (admission === "full") return await finish(declined(leaseId, "busy"));
     recorded = true;
@@ -439,17 +439,17 @@ export async function runClaimedRequest(
     }
     if (owner) {
       allowOwnerReply = () => ownerRelayAuthorized(relay.id, target.id, requestId);
-      changeRun(requestId, current => ({ ...current, ownerTurn: { clientAttemptId: `relay-owner-${requestId}`,
+      await changeRunAsync(requestId, current => ({ ...current, ownerTurn: { clientAttemptId: `relay-owner-${requestId}`,
         request: { text: owner!.text, requestText: owner!.requestText },
         ...(owner!.bridgeReport ? { bridgeReport: owner!.bridgeReport } : {}),
-        ...(prototype && target.ownerTier !== true ? { prototype: true as const } : {}) } }));
+        ...(prototype && target.ownerTier !== true ? { prototype: true as const } : {}) } }), deadline.at);
     }
     if (activeDrain()) return await finish(declined(leaseId, "busy"));
     if (owner && !prototype && ownerNeedsClarification(owner)) return await finish({ lease_id: leaseId, outcome: "answered", answer: ownerClarificationAnswer(request, owner), duration_ms: 0 });
     const context = conversationContext(request.input.requester);
     if (!owner && readRelaySwitches().chat_conversations && request.chat && context) {
-      sweepConversations([relay], readRunLedger().runs.filter((r) => r.requestId !== requestId), Date.now(), undefined, relay.id);
-      const reserved = reserveConversations(relay, target, request.chat.key, requestId, [context]);
+      await sweepConversationsAsync([relay], readRunLedger().runs.filter((r) => r.requestId !== requestId), Date.now(), deadline.declineAt, relay.id);
+      const reserved = await reserveConversationsAsync(relay, target, request.chat.key, requestId, [context], deadline.declineAt);
       if (!reserved) return await finish(declined(leaseId, "busy", null, "chat busy"));
       conversation = reserved[0]!;
     }
@@ -514,8 +514,8 @@ export async function runClaimedRequest(
           credentials: [relay.credential],
           request, owner, target, accountId: selection!.account.accountId,
           hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
-          onConversation: (conversationId) => {
-            changeRun(requestId, current => ({ ...current, conversationId }));
+          onConversation: async (conversationId) => {
+            await changeRunAsync(requestId, current => ({ ...current, conversationId }), Date.now() + 5000);
             recorder?.bindConversation(conversationId);
           },
           ...(steps ? { onProgress: steps.observe } : {}),
@@ -552,20 +552,20 @@ export async function runClaimedRequest(
       // Record launched children and authenticated owner controls. The profile
       // identifies prototype decisions that used no agent or account capacity.
       if ((launchedRun.pid || owner) && !recorder?.begun) recorder?.begin(target.engine, target.model, owner ? { ...profile, owner: true, ...(prototype ? { prototype: prototype.round.id } : {}) } : profile);
-      changeRun(requestId, (current) => ({
+      await changeRunAsync(requestId, (current) => ({
         ...current,
         childPid: launchedRun.pid,
         childIdentity: launchedRun.identity,
-      }));
+      }), Date.now() + 5000);
       if (launchedRun.pid && !launchedRun.identity)
         for (const delay of [100, 500, 2000]) {
           const timer = setTimeout(() => {
             const identity = procBackend.processIdentity(launchedRun.pid!);
             if (identity && run === launchedRun)
-              changeRun(requestId, (current) => ({
+              void changeRunAsync(requestId, (current) => ({
                 ...current,
                 childIdentity: identity,
-              }));
+              }), Date.now() + 5000).catch(() => console.error("External relay child identity persistence unavailable"));
           }, delay);
           timer.unref();
           identityTimers.push(timer);
@@ -636,10 +636,10 @@ export async function runClaimedRequest(
     callAbort.abort();
     if (conversation) {
       const compacted = conversationEvidence.compacted;
-      releaseConversation(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,
+      await releaseConversationAsync(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,
         ...(conversationEvidence.sessionId ? { accountId: conversation.accountId, turns: conversation.turns + 1, turnsSinceCompaction: compacted ? 0 : conversation.turnsSinceCompaction + 1,
           lastTurnAt: new Date().toISOString(), seen: compacted ? [] : turn?.seen ?? [], staticDigest: compacted ? null : turn?.digest ?? null,
-          lastPromptTokens: conversationEvidence.promptTokens ?? null, compactions: conversation.compactions + (compacted ? 1 : 0) } : {}) });
+          lastPromptTokens: conversationEvidence.promptTokens ?? null, compactions: conversation.compactions + (compacted ? 1 : 0) } : {}) }, Date.now() + 5000);
     }
     for (const timer of identityTimers) clearTimeout(timer);
     // The only way out without a completion is a lost lease.
@@ -648,7 +648,7 @@ export async function runClaimedRequest(
     try {
       const held = readRunLedger().runs.find(r => r.requestId === requestId);
       const custodyPending = !!held?.ownerTurn?.cancel && !held.ownerTurn.confirmed;
-      if (recorded && !custodyPending) dropRun(requestId);
+      if (recorded && !custodyPending) await dropRunAsync(requestId, Date.now() + 5000);
     } catch (error) {
       console.error("External relay run ledger cleanup failed", error instanceof Error ? error.name : "unknown");
     }

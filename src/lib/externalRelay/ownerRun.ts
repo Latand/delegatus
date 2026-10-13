@@ -260,7 +260,7 @@ export function runOwnerAgent(input: {
   request: ExternalRelayRequest; owner: OwnerInstruction; target: RelayTargetSettings;
   accountId: string | null; hardCapMs: number; ports?: OwnerRunPorts;
   authorize?: () => void; credentials?: readonly string[];
-  onConversation(conversationId: string): void;
+  onConversation(conversationId: string): void | Promise<void>;
   onProgress?(observed: RelayStepObservation): void;
 }): EphemeralAgentRun {
   if (ownerNeedsClarification(input.owner)) {
@@ -320,7 +320,7 @@ export function runOwnerAgent(input: {
           const recovered = readRunLedger().runs.find(r => r.requestId === input.request.request_id)?.conversationId;
           if (recovered && recovered !== turn.conversationId) {
             turn.conversationId = recovered;
-            input.onConversation(recovered);
+            await input.onConversation(recovered);
           }
         } catch { /* The retained local attribution keeps stop retries possible. */ }
       } else if (turn.conversationId) {
@@ -367,7 +367,7 @@ export function runOwnerAgent(input: {
       if (typeof id === "string" && id.startsWith("conversation_")) {
         turn.conversationId = id;
         if (custody) custody = { ...custody, conversationId: id };
-        input.onConversation(id); // attribution persists even after a pending cutoff
+        await input.onConversation(id); // attribution persists even after a pending cutoff
       }
       changeRun(input.request.request_id, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, admissionComplete: true } }));
       if (launched.body.initialMessage === "queued") { stopped = "kill"; cancelStatus = "failed"; persistStop(); await applyStop(); return; }

@@ -241,6 +241,62 @@ export function withFileLock<T>(file: string, action: () => T): T {
     fs.rmSync(lock, { force: true });
   }
 }
+export class RelayStoreBusy extends Error {
+  constructor() { super("relay store is busy"); this.name = "RelayStoreBusy"; }
+}
+export async function withFileLockAsync<T>(file: string, action: () => T, until: number): Promise<T> {
+  const lock = `${file}.lock`;
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  let fd: number | null = null;
+  const deadline = Math.min(Date.now() + 5_000, until);
+  while (fd === null) {
+    try {
+      fd = fs.openSync(lock, "wx", 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const stat = fs.statSync(lock, { throwIfNoEntry: false });
+      if (stat && Date.now() - stat.mtimeMs > 1_000) {
+        try {
+          const owner = JSON.parse(fs.readFileSync(lock, "utf8")) as {
+            pid?: number;
+            identity?: string;
+          };
+          if (
+            !owner.pid ||
+            !owner.identity ||
+            procBackend.processIdentity(owner.pid) !== owner.identity
+          )
+            fs.rmSync(lock, { force: true });
+        } catch {
+          fs.rmSync(lock, { force: true });
+        }
+      }
+      if (Date.now() >= deadline) throw new RelayStoreBusy();
+      await new Promise<void>(resolve => setTimeout(resolve, Math.min(10, Math.max(0, deadline - Date.now()))));
+    }
+  }
+  try {
+    fs.writeSync(
+      fd,
+      JSON.stringify({
+        pid: process.pid,
+        identity: procBackend.processIdentity(process.pid),
+      }),
+    );
+    return action();
+  } finally {
+    fs.closeSync(fd);
+    fs.rmSync(lock, { force: true });
+  }
+}
+export async function updateRunLedgerAsync(change: (ledger: RunLedger) => RunLedger, until: number): Promise<RunLedger> {
+  const file = externalRelayFile("runs");
+  return withFileLockAsync(file, () => {
+    const next = change(readRunLedger());
+    writeRelayFile(file, next);
+    return next;
+  }, until);
+}
 export function reserveRun(
   record: RunRecord,
   maxConcurrent?: number,
@@ -280,6 +336,48 @@ export function dropRun(requestId: string): void {
     ...ledger,
     runs: ledger.runs.filter((run) => run.requestId !== requestId),
   }));
+}
+export async function reserveRunAsync(
+  record: RunRecord,
+  maxConcurrent: number | undefined,
+  until: number,
+): Promise<"added" | "duplicate" | "full"> {
+  let outcome: "added" | "duplicate" | "full" = "full";
+  await updateRunLedgerAsync((ledger) => {
+    if (ledger.runs.some((run) => run.requestId === record.requestId)) {
+      outcome = "duplicate";
+      return ledger;
+    }
+    if (
+      maxConcurrent !== undefined &&
+      ledger.runs.filter(
+        (run) =>
+          run.relayId === record.relayId && run.targetId === record.targetId,
+      ).length >= maxConcurrent
+    )
+      return ledger;
+    outcome = "added";
+    return { ...ledger, runs: [...ledger.runs, record] };
+  }, until);
+  return outcome;
+}
+export async function changeRunAsync(
+  requestId: string,
+  change: (record: RunRecord) => RunRecord,
+  until: number,
+): Promise<void> {
+  await updateRunLedgerAsync((ledger) => ({
+    ...ledger,
+    runs: ledger.runs.map((run) =>
+      run.requestId === requestId ? change(run) : run,
+    ),
+  }), until);
+}
+export async function dropRunAsync(requestId: string, until: number): Promise<void> {
+  await updateRunLedgerAsync((ledger) => ({
+    ...ledger,
+    runs: ledger.runs.filter((run) => run.requestId !== requestId),
+  }), until);
 }
 /** A target this install has not configured: no engine, so it is not
  * answered until the operator picks one (§B.9). */

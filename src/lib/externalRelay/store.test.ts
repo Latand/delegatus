@@ -6,6 +6,7 @@ import {
   dropRun,
   mergeRelayTargets,
   reserveRun,
+  reserveRunAsync,
   readRunLedger,
   readRelayStore,
   updateRelayStore,
@@ -158,3 +159,32 @@ test("a target refresh keeps settings of listed targets, adds new ones unconfigu
   ]);
   expect(mergeRelayTargets(stored, [])).toEqual([]);
 });
+
+test("store contention yields to short timers while waiting for the same live lock", async () => {
+  const lock = path.join(root, "external-relay/runs.json.lock");
+  const ready = path.join(root, "contention-ready");
+  const childFile = path.join(root, "contention-child.ts");
+  fs.writeFileSync(childFile, `import fs from "node:fs";
+import { procBackend } from ${JSON.stringify(path.join(process.cwd(), "src/lib/proc/index.ts"))};
+fs.mkdirSync(${JSON.stringify(path.dirname(lock))}, { recursive: true });
+fs.writeFileSync(${JSON.stringify(lock)}, JSON.stringify({ pid: process.pid, identity: procBackend.processIdentity(process.pid) }), { flag: "wx" });
+fs.writeFileSync(${JSON.stringify(ready)}, "ready");
+await Bun.sleep(1500);
+fs.rmSync(${JSON.stringify(lock)});
+`);
+  const child = Bun.spawn([process.execPath, childFile], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  let previous = performance.now(), largest = 0;
+  const probe = setInterval(() => { const now = performance.now(); largest = Math.max(largest, now - previous - 10); previous = now; }, 10);
+  try {
+    for (let i = 0; i < 200 && !fs.existsSync(ready); i++) await Bun.sleep(5);
+    expect(fs.existsSync(ready)).toBe(true);
+    const row = { requestId: "contended", leaseId: "lease", relayId: "contention", targetId: "target", childPid: null,
+      childIdentity: null, ownerPid: process.pid, ownerIdentity: "fixture", runDir: root, startedAt: new Date().toISOString() };
+    const started = performance.now();
+    expect(await reserveRunAsync(row, 1, Date.now() + 5000)).toBe("added");
+    expect(performance.now() - started).toBeGreaterThan(1400);
+    await Bun.sleep(30);
+    expect(largest).toBeLessThan(100);
+    expect(await child.exited).toBe(0);
+  } finally { clearInterval(probe); if (child.exitCode === null) child.kill(); await child.exited; dropRun("contended"); }
+}, 10000);
