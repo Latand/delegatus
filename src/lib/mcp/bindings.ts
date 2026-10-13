@@ -146,7 +146,7 @@ import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParent
 import { beginSeatDeployment, forgetSeatDeploymentRequest, recoverSeatDeploymentRequests, recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
-import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, readOrchestratorSeatFileOrNull, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
@@ -169,10 +169,9 @@ import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
 import { listFiles } from "@/lib/scanner";
 import { validExplicitProject } from "@/lib/accounts/migration/contracts";
-import { describe, projectForCwd, projectInfoFromCwd, reprojectFileDescription } from "@/lib/scanner/describe";
+import { describe, projectForCwd, reprojectFileDescription } from "@/lib/scanner/describe";
 import { pathAllowed, scanRootEntries } from "@/lib/scanner/roots";
 import { completedFileScan, lastScannedFiles, lastScannedProjectCatalog, type FileScanSnapshot } from "@/lib/scanner/scanCache";
-import { catalogMemberProjects } from "@/lib/scanner/memberProjects";
 import { completedScanForMcp } from "./completedScan";
 import { readCachedResourceSessions, readResources, readResourcesWithDiagnostic } from "@/lib/resources";
 import { adoptLiveRootSession, conversationRole, liveRootSession, type RootSessionSource } from "@/lib/root/adopt";
@@ -772,9 +771,6 @@ export interface ViewerMcpDomainDependencies {
       a scan; null before any generation completed. Absent in harnesses that
       inject their own complete scan. */
   lastCompletedCatalog?(): { projectCatalog: FileScanSnapshot["projectCatalog"]; files: readonly FileScanSnapshot["files"][number][] } | null;
-  /** The project of every transcript under the scanner roots now, read
-      without a scan; null when that cannot be established for all of them. */
-  catalogMemberProjects?(): Promise<readonly { project: string; projectName?: string }[] | null>;
   registrySnapshot(): RegistrySnapshot;
   boardFor(project: string): ReturnType<typeof boardFor>;
   applyBoardCommand(input: unknown, snapshot: RegistrySnapshot): ReturnType<typeof applyBoardCommand>;
@@ -1285,7 +1281,6 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
     const files = lastScannedFiles();
     return projectCatalog && files ? { projectCatalog, files } : null;
   },
-  catalogMemberProjects,
   registrySnapshot: () => agentRegistry().readOnlySnapshot(),
   readSpawnAdmissionFence,
   validateSpawnAdmission: (body, context) => productionViewerControlDependencies().post(
@@ -4128,149 +4123,71 @@ function orchestratorDispatchRefusal(error: unknown): McpDispatchNotExecutedErro
   return new McpDispatchNotExecutedError(error.message, details);
 }
 
-/** Resolve tool input from known identities before any seat lookup or claim.
-    Catalog completion never governs whether an existing seat is addressable. */
-async function resolveOrchestratorToolProject(named: string, dependencies: ViewerMcpDomainDependencies, directory?: string): Promise<string> {
+/** Resolve a member name through aliases and active seats before any claim. */
+async function resolveOrchestratorToolProject(named: string, dependencies: ViewerMcpDomainDependencies): Promise<string> {
   const requested = named.trim();
   const folded = requested.toLowerCase();
   const aliases = projectAliasSnapshot({ strict: true });
-  const keys = new Map<string, Set<string>>();
+  const active = new Set(activeOrchestratorSeats().map((seat) => canonicalOrchestratorProject(seat.project)));
   const names = new Map<string, Set<string>>();
   const labels = new Map<string, string>();
-  const canonicalKeys = new Map<string, string>();
-  const directories = new Map<string, ReturnType<typeof projectInfoFromCwd>>();
-  const directoryInfo = (root: string) => {
-    if (!directories.has(root)) directories.set(root, projectInfoFromCwd(root));
-    return directories.get(root);
-  };
-  const protectedProjects = new Set<string>();
-  for (const key of Object.keys(recordedProjectRemotes({ strict: true }))) protectedProjects.add(canonicalOrchestratorProject(key));
-  const registryConversations = Object.values(dependencies.registrySnapshot?.().conversations ?? {});
-  const provenWorktreeOwners = new Map<string, Set<string>>();
-  for (const conversation of registryConversations) {
-    const owner = conversation.projectOwnership?.project;
-    const cwd = conversation.generations.at(-1)?.launchProfile?.cwd;
-    // A recorded remote identity keeps its own project key. A row's cwd proves
-    // that row's grouping; it cannot globally reassign every name of the owner.
-    // For other owners, inspect worktree evidence so stale memberships can be
-    // recovered and conflicting parents remain visible as ambiguity.
-    if (owner && protectedProjects.has(canonicalOrchestratorProject(owner))
-      && (!cwd || path.basename(cwd).trim().toLowerCase() !== folded)) continue;
-    const info = cwd ? directoryInfo(cwd) : null;
-    if (!owner || !info?.worktree) continue;
-    const oldProject = canonicalOrchestratorProject(owner);
-    const parentProject = canonicalOrchestratorProject(info.project);
-    if (oldProject !== parentProject && !protectedProjects.has(oldProject)) {
-      for (const key of new Set([owner, oldProject])) {
-        const parents = provenWorktreeOwners.get(key) ?? new Set<string>();
-        parents.add(parentProject);
-        provenWorktreeOwners.set(key, parents);
-      }
-    }
-  }
-  const canonicalKey = (key: string) => {
-    const cached = canonicalKeys.get(key);
-    if (cached) return cached;
-    const canonical = canonicalOrchestratorProject(key);
-    const proven = provenWorktreeOwners.get(key) ?? provenWorktreeOwners.get(canonical);
-    const resolved = proven?.size === 1 ? canonicalOrchestratorProject([...proven][0]!) : canonical;
-    canonicalKeys.set(key, resolved);
-    return resolved;
-  };
-  const index = (map: Map<string, Set<string>>, value: string, project: string) => {
-    const normalized = value.trim().toLowerCase();
+  const known = new Set(active);
+  const index = (name: string, project: string) => {
+    const normalized = name.trim().toLowerCase();
     if (!normalized) return;
-    const candidates = map.get(normalized) ?? new Set<string>();
+    known.add(project);
+    const candidates = names.get(normalized) ?? new Set<string>();
     candidates.add(project);
-    map.set(normalized, candidates);
+    names.set(normalized, candidates);
   };
-  const add = (key: string, name?: string, root?: string | null, inspectRoot = false) => {
-    const info = root && (inspectRoot || path.basename(root).trim().toLowerCase() === folded) ? directoryInfo(root) : null;
-    const canonical = canonicalKey(info?.worktree ? info.project : key);
-    const ambiguousParents = provenWorktreeOwners.get(key);
-    const projects = ambiguousParents && ambiguousParents.size > 1 && !protectedProjects.has(canonicalOrchestratorProject(key))
-      ? [...ambiguousParents]
-      : [canonical];
-    for (const project of projects) {
-      index(keys, key, project);
-      index(keys, project, project);
-      const display = projectDisplayName(project, aliases.displayNames[project] ?? name ?? aliases.displayNames[key]);
-      if (name || aliases.displayNames[project] || !labels.has(project)) labels.set(project, display);
-      index(names, display, project);
-      if (name) index(names, name, project);
-    }
-    if (root) for (const project of projects) index(names, path.basename(info?.repo ?? root), project);
-  };
-  if (directory) {
-    const info = directoryInfo(directory);
-    if (info) add(info.project, info.displayName, info.repo ?? directory);
+  for (const project of active) {
+    const displayName = projectDisplayName(project, aliases.displayNames[project]);
+    labels.set(project, displayName);
+    index(project, project);
+    index(displayName, project);
   }
-  for (const [key, name] of Object.entries(aliases.displayNames)) add(key, name);
   for (const [source, target] of Object.entries(aliases.aliases)) {
-    add(target);
-    index(keys, source, canonicalKey(target));
+    const canonical = canonicalOrchestratorProject(target);
+    index(source, canonical);
   }
-  for (const [key, remote] of Object.entries(recordedProjectRemotes({ strict: true }))) {
-    add(key);
-    index(names, remote.replace(/\.git$/i, "").split("/").at(-1) ?? "", canonicalKey(key));
+  for (const [key, displayName] of Object.entries(aliases.displayNames)) {
+    index(key, canonicalOrchestratorProject(key));
+    index(displayName, canonicalOrchestratorProject(key));
   }
-  for (const key of Object.keys(readOrchestratorSeatFileOrNull()?.seats ?? {})) add(key);
-  for (const seat of dependencies.authorizedSeats?.() ?? []) if (seat.project) add(seat.project);
-  const callerProject = dependencies.callerProject?.();
-  if (callerProject) add(callerProject);
-  const describedProjects = new Set<string>();
-  const describedDirectories = new Set<string>();
-  for (const conversation of registryConversations) {
-    const cwd = conversation.generations.at(-1)?.launchProfile?.cwd;
-    const owner = conversation.projectOwnership?.project;
-    const cwdMatchesRequest = !!cwd && path.basename(cwd).trim().toLowerCase() === folded;
-    const inspectWorktree = !!cwd && (!owner || !protectedProjects.has(canonicalOrchestratorProject(owner)));
-    const cwdInfo = cwd && (cwdMatchesRequest || inspectWorktree) ? directoryInfo(cwd) : null;
-    // A proven worktree path is the shared project identity, even when a
-    // retained ownership row still names the lookalike project it used to be.
-    const project = cwdInfo?.worktree ? cwdInfo.project : conversation.projectOwnership?.project ?? cwdInfo?.project;
-    if (!project) continue;
-    const canonical = canonicalKey(project);
-    if (!describedProjects.has(canonical)) {
-      describedProjects.add(canonical);
-      add(project);
-    }
-    if (cwd && cwdInfo) {
-      const evidence = `${canonical}\0${cwd}`;
-      if (!describedDirectories.has(evidence)) {
-        describedDirectories.add(evidence);
-        // Pass the recorded cwd so add() can apply worktree grouping before
-        // indexing its stale key and the repository basename.
-        add(conversation.projectOwnership?.project ?? project, cwdInfo.displayName, cwd);
-      }
-    }
-  }
+  // The completed project catalogue provides each member's repository root.
+  // Reading its basename names the project without examining conversation cwd
+  // history or invoking a catalog scan.
   const last = dependencies.lastCompletedCatalog?.() ?? null;
   for (const entry of last?.projectCatalog ?? []) {
-    const matchingName = entry.displayName?.trim().toLowerCase() === folded;
-    add(entry.project, entry.displayName, entry.projectRoot, matchingName);
+    const project = canonicalOrchestratorProject(entry.project);
+    const displayName = entry.displayName || projectDisplayName(project, aliases.displayNames[project]);
+    labels.set(project, displayName);
+    index(displayName, project);
+    if (entry.projectRoot) index(path.basename(entry.projectRoot), project);
   }
-  for (const entry of last?.files ?? []) add(entry.project, entry.projectName, entry.projectRoot);
-  // Fresh bounded member attribution detects names introduced since the last
-  // generation. A lagging index contributes no complete scan dependency.
-  for (const member of await dependencies.catalogMemberProjects?.() ?? []) add(member.project, member.projectName);
-  // Keys, aliases and human/repository names share one namespace. A hit in
-  // either namespace cannot conceal a second project in the other.
-  const candidates = [...new Set([...(keys.get(folded) ?? []), ...(names.get(folded) ?? [])])].sort();
+  for (const entry of last?.files ?? []) {
+    const project = canonicalOrchestratorProject(entry.project);
+    if (entry.projectName) {
+      labels.set(project, labels.get(project) ?? entry.projectName);
+      index(entry.projectName, project);
+    }
+  }
+
+  const candidates = [...(names.get(folded) ?? [])].sort();
   const details = { outcome: "not-executed", evidence: "project-resolution", nextAction: "new-request-permitted", retryable: false };
   if (candidates.length > 1) {
     throw new McpToolRefusal(`ambiguous project "${requested}": ${candidates.join(", ")}; pass one of these project keys`, {
       ...details, code: "ambiguous_project", candidates,
     });
   }
-  if (candidates.length === 1) return candidates[0]!;
-  const closeMatches = [...labels].map(([project, name]) => ({ project, name,
-    distance: projectNameDistance(folded, name.toLowerCase()),
-  })).filter(match => match.distance <= Math.max(2, Math.floor(folded.length / 3)))
+  if (candidates.length === 1 && active.has(candidates[0]!)) return candidates[0]!;
+  const closeMatches = [...active].map((project) => ({ project, name: labels.get(project) ?? projectDisplayName(project),
+    distance: projectNameDistance(folded, (labels.get(project) ?? projectDisplayName(project)).toLowerCase()),
+  })).filter((match) => match.distance <= Math.max(2, Math.floor(folded.length / 3)))
     .sort((a, b) => a.distance - b.distance || a.project.localeCompare(b.project))
     .slice(0, 5).map(({ project, name }) => ({ project, name }));
   throw new McpToolRefusal(`no such project "${requested}"; ${closeMatches.length
-    ? `close matches: ${closeMatches.map(match => `${match.name} (${match.project})`).join(", ")}`
+    ? `close matches: ${closeMatches.map((match) => `${match.name} (${match.project})`).join(", ")}`
     : "no close matches; pass a known project key, display name or repository name"}`, {
     ...details, code: "unknown_project", closeMatches,
   });
@@ -4294,7 +4211,7 @@ function projectNameDistance(left: string, right: string): number {
 async function namedLaunchProject(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, field: "cwd" | "repoDir"): Promise<McpToolArgs> {
   if (!text(args.project)) return args;
   const directory = field === "cwd" ? spawnCwd(args) : path.resolve(required(args, field));
-  const project = await resolveOrchestratorToolProject(text(args.project), dependencies, directory);
+  const project = await resolveOrchestratorToolProject(text(args.project), dependencies);
   const canonical = projectForCwd(directory);
   if (project !== canonical) throw new McpToolRefusal(`project contradicts the canonical project of ${field}; omit it or name the launch directory's own project`, {
     code: "invalid_request", status: 400, canonicalProject: canonical,

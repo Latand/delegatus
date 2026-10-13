@@ -40,7 +40,7 @@ function seat(project: string, name: string, conversationId = "conversation_targ
   completeOrchestratorSeatIntent({ project, clientRequestId: `seat-${conversationId}`, conversationId, path: null });
 }
 
-function harness(owner = false, members: Array<{ project: string; projectName?: string }> | null = [], overrides: Partial<ViewerMcpDomainDependencies> = {}) {
+function harness(owner = false, overrides: Partial<ViewerMcpDomainDependencies> = {}) {
   const registry = agentRegistry();
   const caller = registry.ensureConversation("codex", "/sessions/source.jsonl", null);
   if (owner) {
@@ -52,18 +52,38 @@ function harness(owner = false, members: Array<{ project: string; projectName?: 
     }] });
   }
   let scans = 0;
+  let snapshotReads = 0;
   const held = new Promise<never>((resolve) => releases.push(() => resolve(undefined as never)));
+  const suppliedRegistrySnapshot = overrides.registrySnapshot;
   const domain: ViewerMcpDomainDependencies = {
     ...productionDomainDependencies,
-    registrySnapshot: () => registry.readOnlySnapshot(),
     authorizedSeats: () => owner ? [] : [{ conversationId: caller.id, path: "/sessions/source.jsonl", project: "source-project" }],
     attentionAuthority: () => ({ kind: "worker", conversationId: caller.id, role: "orchestrator" }),
     callerAttribution: () => ({ kind: "agent", conversationId: caller.id, role: "orchestrator" }),
     recoveryPredecessors: () => [],
     lastCompletedCatalog: () => null,
-    catalogMemberProjects: async () => members,
     completedFileScan: async () => { scans += 1; return held; },
     ...overrides,
+    registrySnapshot: () => {
+      snapshotReads += 1;
+      const base = registry.readOnlySnapshot();
+      const supplied = suppliedRegistrySnapshot?.();
+      if (!supplied) return base;
+      const template = Object.values(base.conversations)[0];
+      const supplemental = Object.fromEntries(Object.entries(supplied.conversations).map(([id, raw]) => {
+        if (!template) return [id, raw];
+        const row = raw as typeof template;
+        const generations = row.generations?.map((generation, index) => {
+          const prior = template.generations[index] ?? template.generations[0]!;
+          return { ...prior, ...generation, launchProfile: { ...prior.launchProfile, ...generation.launchProfile } };
+        }) ?? template.generations;
+        const ownership = row.projectOwnership?.source ? row.projectOwnership : row.projectOwnership
+          ? { ...row.projectOwnership, source: "operator" as const, setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" }
+          : template.projectOwnership;
+        return [id, { ...template, ...row, id: id as typeof template.id, generations, projectOwnership: ownership }];
+      }));
+      return { ...base, conversations: { ...base.conversations, ...supplemental } };
+    },
   };
   const posts: Array<{ pathname: string; body: Record<string, unknown> }> = [];
   const control = { post: async (pathname: string, body: Record<string, unknown>) => {
@@ -86,14 +106,14 @@ function harness(owner = false, members: Array<{ project: string; projectName?: 
       return result;
     } finally { clearTimeout(timer!); }
   };
-  return { service, call, posts, scans: () => scans, receipts };
+  return { service, call, posts, scans: () => scans, snapshotReads: () => snapshotReads, receipts };
 }
 
 for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-relay"] as const) {
   const tool = route === "owner-relay" ? "send_message_to_orchestrator" : route;
   test(`${route} resolves case and whitespace without a completed scan`, async () => {
     seat("target-project", "Example Board");
-    const h = harness(route === "owner-relay", null);
+    const h = harness(route === "owner-relay");
     for (const project of ["  eXaMpLe BoArD  ", " TARGET-PROJECT "]) {
       expect(await h.call(tool, project)).toMatchObject({ ok: true, project: "target-project" });
     }
@@ -111,7 +131,7 @@ for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-
     fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/RemoteWidgets.git\n');
     const project = projectForCwd(root)!;
     seat(project, "Example Board");
-    const h = harness(route === "owner-relay", null, { lastCompletedCatalog: () => ({ files: [], projectCatalog: [{ project, displayName: "Example Board", projectRoot: root, smt: 1, conversations: 1 }] }) });
+    const h = harness(route === "owner-relay", { lastCompletedCatalog: () => ({ files: [], projectCatalog: [{ project, displayName: "Example Board", projectRoot: root, smt: 1, conversations: 1 }] }) });
     expect(await h.call(tool, "  wIDGETSrEPO  ")).toMatchObject({ ok: true, project });
     expect(h.scans()).toBe(0);
   });
@@ -145,7 +165,7 @@ for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-
   test(`${route} refuses a folded key that collides with another project's display name`, async () => {
     seat("atlas", "Atlas", "conversation_atlas");
     seat("named-project", "ATLAS", "conversation_named");
-    const h = harness(route === "owner-relay", null);
+    const h = harness(route === "owner-relay");
     const tool = route === "owner-relay" ? "send_message_to_orchestrator" : route;
     const result = await h.call(tool, " ATLAS ");
     expect(result).toMatchObject({ ok: false, code: "ambiguous_project", retryable: false,
@@ -157,100 +177,116 @@ for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-
   });
 }
 
-test("a recovered worktree lookalike name addresses only its canonical parent seat", async () => {
-  seat("lookalike-project", "Parent Board lane", "conversation_lookalike");
-  seat("parent-project", "Parent Board", "conversation_parent");
-  expect(persistProjectAliases([{ source: "lookalike-project", target: "parent-project", displayName: "Parent Board" }])).toBe(true);
-  const h = harness(false, [{ project: "lookalike-project", projectName: "Parent Board lane" }]);
-  const result = await h.call("send_message_to_orchestrator", " parent board LANE ");
-  expect(result).toMatchObject({ ok: true, project: "parent-project", conversationId: "conversation_parent" });
-  expect(h.posts.map(p => p.body.conversationId)).toEqual(["conversation_parent"]);
-});
-
 for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-relay"] as const) {
-  test(`${route} preserves a verified project owner when another retained cwd names a foreign worktree`, async () => {
-    const alphaRoot = path.join(directory, "AlphaRepo");
-    const betaRoot = path.join(directory, "BetaRepo");
-    for (const root of [alphaRoot, betaRoot]) {
-      fs.mkdirSync(path.join(root, ".git"), { recursive: true });
-      fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
-    }
-    fs.writeFileSync(path.join(alphaRoot, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/AlphaRemote.git\n');
-    fs.writeFileSync(path.join(betaRoot, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/BetaRemote.git\n');
-    const alpha = projectForCwd(alphaRoot)!;
-    const betaWorktree = path.join(betaRoot, "worktrees", "deleted-lane");
-    seat(alpha, "Alpha Board", "conversation_alpha");
-    seat(projectForCwd(betaRoot)!, "Beta Board", "conversation_beta");
-    const snapshot = {
-      conversations: {
-        conversation_alpha: { id: "conversation_alpha", projectOwnership: { project: alpha, source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" }, generations: [{ launchProfile: { cwd: alphaRoot } }], continuityPaths: [] },
-        conversation_beta: { id: "conversation_beta", projectOwnership: { project: projectForCwd(betaRoot), source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" }, generations: [{ launchProfile: { cwd: betaRoot } }], continuityPaths: [] },
-        conversation_alpha_root: {
-          id: "conversation_alpha_root",
-          projectOwnership: { project: alpha, source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" },
-          generations: [{ launchProfile: { cwd: alphaRoot } }], continuityPaths: [],
-        },
-        conversation_alpha_foreign_cwd: {
-          id: "conversation_alpha_foreign_cwd",
-          projectOwnership: { project: alpha, source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" },
-          generations: [{ launchProfile: { cwd: betaWorktree } }], continuityPaths: [],
-        },
-      },
-      conversationAliases: {}, lineageEdges: {}, memberships: {}, receipts: {},
-    };
-    fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
-    fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "project-remotes.json"), JSON.stringify({ schemaVersion: 1, remotes: { [alpha]: "github.com/team/AlphaRemote" } }));
-    const h = harness(route === "owner-relay", null, { registrySnapshot: () => snapshot as never });
+  test(`${route} refuses a display-name collision with a known project that has no active seat`, async () => {
+    seat("atlas", "Atlas", "conversation_atlas");
+    const h = harness(route === "owner-relay", { lastCompletedCatalog: () => ({ files: [], projectCatalog: [
+      { project: "retired-atlas", displayName: "ATLAS", projectRoot: "/repos/RetiredAtlas", smt: 1, conversations: 1 },
+    ] }) });
     const tool = route === "owner-relay" ? "send_message_to_orchestrator" : route;
-    for (const name of [alpha, "Alpha Board", "AlphaRepo", "AlphaRemote"]) {
-      const result = await h.call(tool, name);
-      if (result.ok) expect(result).toMatchObject({ project: alpha, ...(tool === "get_orchestrator" ? {} : { conversationId: "conversation_alpha" }) });
-      else expect(result).toMatchObject({ code: "ambiguous_project", details: { candidates: [alpha, projectForCwd(betaRoot)] } });
-    }
-    expect(h.posts.every(post => post.body.conversationId !== "conversation_beta")).toBe(true);
+    const result = await h.call(tool, " atlas ");
+    expect(result).toMatchObject({ ok: false, code: "ambiguous_project", retryable: false,
+      details: { candidates: ["atlas", "retired-atlas"] } });
+    expect("error" in result && result.error).toBe('ambiguous project "atlas": atlas, retired-atlas; pass one of these project keys');
+    expect(h.posts).toEqual([]);
+    expect(h.receipts.lookup(`${tool}:resolve-1`)).toBeNull();
     expect(h.scans()).toBe(0);
   });
 }
 
 for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-relay"] as const) {
-  for (const alphaFirst of [true, false]) {
-    test(`${route} refuses conflicting deleted-worktree parents independent of registry order`, async () => {
+  for (const originless of [false, true]) {
+    test(`${route} keeps Alpha's identity with a missing remote ledger (${originless ? "originless" : "remote repository"})`, async () => {
       const alphaRoot = path.join(directory, "AlphaRepo");
       const betaRoot = path.join(directory, "BetaRepo");
       for (const root of [alphaRoot, betaRoot]) {
         fs.mkdirSync(path.join(root, ".git"), { recursive: true });
         fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
       }
-      fs.writeFileSync(path.join(alphaRoot, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/AlphaRemote.git\n');
-      fs.writeFileSync(path.join(betaRoot, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/BetaRemote.git\n');
+      if (!originless) {
+        fs.writeFileSync(path.join(alphaRoot, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/AlphaRemote.git\n');
+        fs.writeFileSync(path.join(betaRoot, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/BetaRemote.git\n');
+      }
       const alpha = projectForCwd(alphaRoot)!;
       const beta = projectForCwd(betaRoot)!;
       seat(alpha, "Alpha Board", "conversation_alpha");
       seat(beta, "Beta Board", "conversation_beta");
-      const owner = "lookalike-project";
-      const alphaRow = { id: "conversation_stale_alpha", projectOwnership: { project: owner, source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" }, generations: [{ launchProfile: { cwd: path.join(alphaRoot, "worktrees", "deleted-alpha") } }], continuityPaths: [] };
-      const betaRow = { id: "conversation_stale_beta", projectOwnership: { project: owner, source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" }, generations: [{ launchProfile: { cwd: path.join(betaRoot, "worktrees", "deleted-beta") } }], continuityPaths: [] };
-      const snapshot = { conversations: Object.fromEntries((alphaFirst ? [alphaRow, betaRow] : [betaRow, alphaRow]).map(row => [row.id, row])), conversationAliases: {}, lineageEdges: {}, memberships: {}, receipts: {} };
-      const h = harness(route === "owner-relay", null, {
-        registrySnapshot: () => snapshot as never,
-        lastCompletedCatalog: () => ({ files: [], projectCatalog: [{ project: owner, displayName: "Shared lane", smt: 2, conversations: 2 }] }),
-      });
+      const snapshot = {
+        conversations: {
+          conversation_alpha: { id: "conversation_alpha", projectOwnership: { project: alpha }, generations: [{ launchProfile: { cwd: alphaRoot } }] },
+          conversation_beta: { id: "conversation_beta", projectOwnership: { project: beta }, generations: [{ launchProfile: { cwd: betaRoot } }] },
+          conversation_stale_alpha: { id: "conversation_stale_alpha", projectOwnership: { project: alpha }, generations: [{ launchProfile: { cwd: path.join(betaRoot, "worktrees", "gone") } }] },
+        },
+        conversationAliases: {}, lineageEdges: {}, memberships: {}, receipts: {},
+      };
+      const catalog = {
+        files: [],
+        projectCatalog: [
+          { project: alpha, displayName: "Alpha Board", projectRoot: alphaRoot, smt: 1, conversations: 2 },
+          { project: beta, displayName: "Beta Board", projectRoot: betaRoot, smt: 1, conversations: 1 },
+        ],
+      };
+      const h = harness(route === "owner-relay", { registrySnapshot: () => snapshot as never, lastCompletedCatalog: () => catalog });
       const tool = route === "owner-relay" ? "send_message_to_orchestrator" : route;
-      const result = await h.call(tool, " Shared lane ");
-      const candidates = [alpha, beta].sort();
-      expect(result).toMatchObject({ ok: false, code: "ambiguous_project", retryable: false, details: { candidates } });
-      expect("error" in result && result.error).toBe(`ambiguous project "Shared lane": ${candidates.join(", ")}; pass one of these project keys`);
-      expect(h.posts).toEqual([]);
-      expect(h.receipts.lookup(`${tool}:resolve-1`)).toBeNull();
+      const startedAt = performance.now();
+      for (const name of [alpha, " alpha board ", " alpharepo "]) {
+        expect(await h.call(tool, name)).toMatchObject({ ok: true, project: alpha,
+          ...(tool === "get_orchestrator" ? {} : { conversationId: "conversation_alpha" }) });
+      }
+      expect(performance.now() - startedAt).toBeLessThan(300);
+      expect(h.posts.every(post => post.body.conversationId !== "conversation_beta")).toBe(true);
       expect(h.scans()).toBe(0);
     });
   }
 }
 
+for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-relay"] as const) {
+  for (const alphaFirst of [true, false]) {
+    test(`${route} preserves the alias-map recipient when retained worktree rows disagree`, async () => {
+      const oldOwner = "old-lookalike";
+      expect(persistProjectAliases([{ source: oldOwner, target: "lookalike-project", displayName: "Legacy lane" }])).toBe(true);
+      seat("lookalike-project", "Legacy lane", "conversation_lookalike");
+      seat("alpha-project", "Alpha Board", "conversation_alpha");
+      seat("beta-project", "Beta Board", "conversation_beta");
+      const rows = [
+        { id: "conversation_stale_alpha", projectOwnership: { project: oldOwner }, generations: [{ launchProfile: { cwd: "/AlphaRepo/worktrees/gone-alpha" } }] },
+        { id: "conversation_canonical_beta", projectOwnership: { project: "lookalike-project" }, generations: [{ launchProfile: { cwd: "/BetaRepo/worktrees/gone-beta" } }] },
+      ];
+      const snapshot = { conversations: Object.fromEntries((alphaFirst ? rows : [...rows].reverse()).map(row => [row.id, row])), conversationAliases: {}, lineageEdges: {}, memberships: {}, receipts: {} };
+      const h = harness(route === "owner-relay", { registrySnapshot: () => snapshot as never });
+      const tool = route === "owner-relay" ? "send_message_to_orchestrator" : route;
+      for (const name of [oldOwner, "lookalike-project", "Legacy lane"]) {
+        expect(await h.call(tool, name)).toMatchObject({ ok: true, project: "lookalike-project",
+          ...(tool === "get_orchestrator" ? {} : { conversationId: "conversation_lookalike" }) });
+      }
+      if (tool !== "get_orchestrator") expect(h.posts.map(post => post.body.conversationId)).toEqual(Array(3).fill("conversation_lookalike"));
+      expect(h.posts.every(post => post.body.conversationId !== "conversation_alpha" && post.body.conversationId !== "conversation_beta")).toBe(true);
+      expect(h.scans()).toBe(0);
+    });
+  }
+}
+
+test("a worktree lookalike without an active seat is refused with its known parent as a close match", async () => {
+  seat("parent-project", "Parent Board", "conversation_parent");
+  const h = harness(false, {
+    lastCompletedCatalog: () => ({ files: [], projectCatalog: [
+      { project: "parent-project", displayName: "Parent Board", projectRoot: "/repos/ParentRepo", smt: 1, conversations: 1 },
+      { project: "lookalike-project", displayName: "Parent Board lane", projectRoot: "/repos/ParentRepo/worktrees/lane", smt: 1, conversations: 1 },
+    ] }),
+  });
+  const result = await h.call("send_message_to_orchestrator", " Parent Board lane ");
+  expect(result).toMatchObject({ ok: false, code: "unknown_project", retryable: false,
+    details: { closeMatches: [{ project: "parent-project", name: "Parent Board" }] } });
+  expect("error" in result && result.error).toBe('no such project "Parent Board lane"; close matches: Parent Board (parent-project)');
+  expect(h.posts).toEqual([]);
+  expect(h.receipts.lookup("send_message_to_orchestrator:resolve-1")).toBeNull();
+  expect(h.scans()).toBe(0);
+});
+
 for (const tool of ["rotate_orchestrator", "seat_tick_settings", "create_orchestrator", "ask_orchestrator_in_parallel", "bridge_directive"] as const) {
   test(`${tool} resolves a named project before its control or settings operation`, async () => {
     seat("target-project", "Example Board");
-    const h = harness(false, [], tool === "bridge_directive" ? { callerAttribution: () => ({ kind: "gateway", conversationId: "conversation_gateway", role: null }), authorizedSeats: () => [{ project: "target-project", conversationId: "conversation_target", path: null }] } : {});
+    const h = harness(false, tool === "bridge_directive" ? { callerAttribution: () => ({ kind: "gateway", conversationId: "conversation_gateway", role: null }), authorizedSeats: () => [{ project: "target-project", conversationId: "conversation_target", path: null }] } : {});
     const result = await h.call(tool, " eXAMPLE bOARD ");
     // The operation receives the canonical project after name admission.
     expect(result.ok).toBe(true);
@@ -288,81 +324,6 @@ for (const tool of ["spawn_agent", "create_pipeline"] as const) {
 }
 
 
-test("a stale directory lookalike with a deleted worktree root is never the recipient", async () => {
-  const root = path.join(directory, "ParentRepo");
-  fs.mkdirSync(path.join(root, ".git"), { recursive: true });
-  fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
-  const parent = projectForCwd(root)!;
-  seat("lookalike-project", "ParentRepo lane", "conversation_lookalike");
-  seat(parent, "Parent Board", "conversation_parent");
-  const checkout = path.join(root, "worktrees", "gone-lane");
-  const h = harness(false, null, { lastCompletedCatalog: () => ({ files: [], projectCatalog: [{ project: "lookalike-project", displayName: "ParentRepo lane", projectRoot: checkout, smt: 1, conversations: 1 }] }) });
-  const result = await h.call("send_message_to_orchestrator", " PARENTREPO LANE ");
-  if (result.ok) expect(result).toMatchObject({ project: parent, conversationId: "conversation_parent" });
-  else expect(result).toMatchObject({ code: "ambiguous_project" });
-  expect(h.posts.every(post => post.body.conversationId !== "conversation_lookalike")).toBe(true);
-  expect(h.scans()).toBe(0);
-});
-
-for (const route of ["send_message_to_orchestrator", "owner-relay"] as const) {
-  test(`${route} canonicalizes stale registry ownership from a deleted nested worktree cwd`, async () => {
-    const root = path.join(directory, "ParentRepo");
-    fs.mkdirSync(path.join(root, ".git"), { recursive: true });
-    fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
-    const checkout = path.join(root, "worktrees", "deleted-lane");
-    const parent = projectForCwd(checkout)!;
-    seat("lookalike-project", "ParentRepo lane", "conversation_lookalike");
-    seat(parent, "ParentRepo", "conversation_parent");
-    const snapshot = {
-      conversations: {
-        conversation_stale: {
-          id: "conversation_stale",
-          projectOwnership: { project: "lookalike-project", source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" },
-          generations: [{ launchProfile: { cwd: checkout } }], continuityPaths: [],
-        },
-      },
-      conversationAliases: {}, lineageEdges: {}, memberships: {}, receipts: {},
-    };
-    const h = harness(route === "owner-relay", null, { registrySnapshot: () => snapshot as never });
-    expect(await h.call("get_orchestrator", " PARENTREPO LANE ")).toMatchObject({ ok: true, project: parent, designated: true });
-    const result = await h.call("send_message_to_orchestrator", " PARENTREPO LANE ");
-    expect(result).toMatchObject({ ok: true, project: parent, conversationId: "conversation_parent" });
-    expect(h.posts.map(post => post.body.conversationId)).toEqual(["conversation_parent"]);
-    expect(h.receipts.lookup("send_message_to_orchestrator:resolve-2")).not.toBeNull();
-    expect(h.scans()).toBe(0);
-  });
-}
-
-for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-relay"] as const) {
-  for (const cwdFirst of [false, true]) {
-    test(`${route} finds repository directory evidence after ${cwdFirst ? "cwd" : "ownership-only"} row order`, async () => {
-      const root = path.join(directory, "WidgetsRepo");
-      fs.mkdirSync(path.join(root, ".git"), { recursive: true });
-      fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
-      fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/RemoteWidgets.git\n');
-      const project = projectForCwd(root)!;
-      seat(project, "Example Board");
-      const ownershipOnly = {
-        id: "conversation_owner_only",
-        projectOwnership: { project, source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" },
-        generations: [], continuityPaths: [],
-      };
-      const cwdEvidence = {
-        id: "conversation_cwd_evidence",
-        generations: [{ launchProfile: { cwd: root } }], continuityPaths: [],
-      };
-      const rows = cwdFirst ? [cwdEvidence, ownershipOnly] : [ownershipOnly, cwdEvidence];
-      const snapshot = { conversations: Object.fromEntries(rows.map(row => [row.id, row])), conversationAliases: {}, lineageEdges: {}, memberships: {}, receipts: {} };
-      const h = harness(route === "owner-relay", null, { registrySnapshot: () => snapshot as never });
-      const tool = route === "owner-relay" ? "send_message_to_orchestrator" : route;
-      const result = await h.call(tool, " wIDGETSrEPO ");
-      expect(result).toMatchObject({ ok: true, project });
-      if (tool === "send_message_to_orchestrator") expect(h.posts.map(post => post.body.conversationId)).toEqual(["conversation_target"]);
-      expect(h.scans()).toBe(0);
-    });
-  }
-}
-
 for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-relay"] as const) {
   test(`${route} refuses case-colliding project keys before selecting a seat`, async () => {
     seat("CaseProject", "First Board", "conversation_first");
@@ -384,25 +345,32 @@ test("a fresh name lookup after succession selects the current seat", async () =
   expect(h.posts.map(post => post.body.conversationId)).toEqual(["conversation_retired", "conversation_successor"]);
 });
 
-test("retained registry history keeps a cold name lookup within one second", async () => {
-  seat("target-project", "Example Board");
-  const parentRoot = path.join(directory, "ParentRepo");
-  fs.mkdirSync(path.join(parentRoot, ".git"), { recursive: true });
-  fs.writeFileSync(path.join(parentRoot, ".git", "HEAD"), "ref: refs/heads/main\n");
-  fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
-  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "project-remotes.json"), JSON.stringify({ schemaVersion: 1, remotes: { "target-project": "github.com/team/example-board" } }));
+for (const originless of [false, true]) {
+test(`30,000 retained cwd rows do not slow cold lookups without a recorded remote (${originless ? "originless repository" : "unrecorded remote"})`, async () => {
+  const root = path.join(directory, originless ? "OriginlessRepo" : "UnrecordedRemoteRepo");
+  fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+  if (!originless) fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/UnrecordedRemote.git\n');
+  const project = projectForCwd(root)!;
+  seat(project, "Example Board");
   registry.ensureConversation("codex", "/sessions/history.jsonl", null);
   const original = registry.readOnlySnapshot();
   const template = Object.values(original.conversations)[0]!;
   const snapshot = { ...original, conversations: Object.fromEntries(Array.from({ length: 30_000 }, (_, index) => [
-    `conversation_history_${index}`, { ...template, projectOwnership: { project: "target-project", source: "operator", setAt: "2026-10-13T00:00:00.000Z", operationId: "fixture" },
-      generations: [{ launchProfile: { cwd: path.join(parentRoot, "worktrees", `deleted-lane-${index}`) } }] },
+    `conversation_history_${index}`, { ...template, projectOwnership: { project },
+      generations: [{ launchProfile: { cwd: path.join(root, "worktrees", `deleted-lane-${index}`) } }] },
   ])) as typeof original.conversations };
-  const h = harness(false, null, { registrySnapshot: () => snapshot });
-  expect(await h.call("get_orchestrator", " EXAMPLE BOARD ")).toMatchObject({ ok: true, project: "target-project" });
+  const catalog = { files: [], projectCatalog: [{ project, displayName: "Example Board", projectRoot: root, smt: 30_000, conversations: 30_000 }] };
+  const h = harness(false, { registrySnapshot: () => snapshot, lastCompletedCatalog: () => catalog });
+  const startedAt = performance.now();
+  for (const name of [project, " EXAMPLE BOARD ", ` ${path.basename(root)} `]) {
+    expect(await h.call("get_orchestrator", name)).toMatchObject({ ok: true, project });
+  }
+  expect(performance.now() - startedAt).toBeLessThan(300);
   expect(h.scans()).toBe(0);
+  expect(h.snapshotReads()).toBe(0);
 });
-
+}
 
 for (const tool of ["spawn_agent", "create_pipeline"] as const) {
   test(`${tool} replays a named-project receipt after the display name changes`, async () => {
