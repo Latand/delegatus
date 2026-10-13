@@ -72,6 +72,30 @@ async function render(node: React.ReactNode) {
 }
 const click = async (element: Element | null) => { expect(element).not.toBeNull(); await act(async () => (element as HTMLElement).click()); };
 
+test("rejecting variants in a decision form requires corrections and keeps the rejected draft after a refused write", async () => {
+  const posts: unknown[] = [];
+  let refuse = true;
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    posts.push(JSON.parse(String(init?.body)));
+    return new Response(JSON.stringify(refuse ? { error: "try again" } : { project: "project-a", decisions: [] }), { status: refuse ? 409 : 200 });
+  }) as typeof fetch;
+  const host = await render(<DecisionList project="project-a" initial={[taskDecision()]} />);
+  await click(host.querySelector("[data-decision-reject]"));
+  expect(host.querySelector<HTMLButtonElement>("[data-decision-send]")!.disabled).toBe(true);
+  const field = host.querySelector<HTMLTextAreaElement>("[data-decision-comment]")!;
+  const props = (field as unknown as Record<string, { onChange: (event: { target: { value: string } }) => void }>)[Object.keys(field).find(key => key.startsWith("__reactProps$"))!]!;
+  await act(async () => { props.onChange({ target: { value: "Simplify every frame." } }); });
+  await click(host.querySelector("[data-decision-send]"));
+  expect(host.querySelector("[data-decision-error]")?.textContent).toContain("try again");
+  expect(host.querySelector("[data-decision-reject]")?.getAttribute("aria-checked")).toBe("true");
+  expect(host.querySelector<HTMLTextAreaElement>("[data-decision-comment]")!.value).toBe("Simplify every frame.");
+  refuse = false;
+  await click(host.querySelector("[data-decision-send]"));
+  expect(posts).toHaveLength(2);
+  expect(posts[0]).toEqual(posts[1]);
+  expect(posts[1]).toMatchObject({ reject: true, chosen: [], comment: "Simplify every frame." });
+});
+
 test("one decision stands open as its form with the recommended answers chosen; one click and «Відповісти» answer it, and it leaves the column", async () => {
   const posts: unknown[] = [];
   globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {

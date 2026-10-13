@@ -804,3 +804,17 @@ test("a task card with a prototype review carries the review button beside its f
   render([task("p", "assigned")]);
   expect(q(host, "[data-phone-card-prototype-button]")).toBeNull();
 });
+
+test("a phone card with a shown lane and stopped work with no reason keeps its state line text", () => {
+  const files = [file(1)];
+  const finished = {
+    id: "done-lane", task: "Mobile data: stop repeated full-board downloads", project: "fixture", state: "completed", taskIds: ["t1"], cursor: null, closedAt: new Date((NOW - 300) * 1000).toISOString(),
+    stages: [{ id: "implement", kind: "run", prompt: "", next: null, effectiveRole: {} }],
+    runs: [{ stageId: "implement", attempts: [{ n: 1, state: "passed", startedAt: new Date((NOW - 2_460) * 1000).toISOString(), completedAt: new Date((NOW - 600) * 1000).toISOString(), effectiveRole: {} }] }],
+    createdAt: "2026-09-14T10:00:00.000Z",
+  } as unknown as Pipeline;
+  const { host } = mount({ files, tasks: [task("t1", "assigned", [files[0]!.path], "Mobile data: stop repeated full-board downloads")], pipelines: [finished] });
+  const card = q(host, '[data-phone-card="task:t1"]')!;
+  expect(q(card, '[data-density="card"]')).not.toBeNull();
+  expect(q(card, "[data-card-state-text]")!.textContent).toMatch(/^Stopped, no reason given/);
+});

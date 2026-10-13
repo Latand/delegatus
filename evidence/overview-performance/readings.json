@@ -1,0 +1,320 @@
+[
+  {
+    "variant": "main",
+    "browser": "153.0.8010.12",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "catalog": {
+      "projects": 194,
+      "conversations": 1071,
+      "tasks": 1331,
+      "pipelines": 1071
+    },
+    "samples": [
+      {
+        "longTasks": [
+          517
+        ],
+        "totalBlockingMs": 467,
+        "taskDurationMs": 613.1,
+        "longestTaskMs": 517.352
+      },
+      {
+        "longTasks": [
+          413
+        ],
+        "totalBlockingMs": 363,
+        "taskDurationMs": 505.1,
+        "longestTaskMs": 413.538
+      },
+      {
+        "longTasks": [
+          352
+        ],
+        "totalBlockingMs": 302,
+        "taskDurationMs": 418.3,
+        "longestTaskMs": 352.436
+      },
+      {
+        "longTasks": [
+          312
+        ],
+        "totalBlockingMs": 262,
+        "taskDurationMs": 383.8,
+        "longestTaskMs": 312.619
+      },
+      {
+        "longTasks": [
+          504
+        ],
+        "totalBlockingMs": 454,
+        "taskDurationMs": 586,
+        "longestTaskMs": 504.041
+      },
+      {
+        "longTasks": [
+          338
+        ],
+        "totalBlockingMs": 288,
+        "taskDurationMs": 405.3,
+        "longestTaskMs": 338.683
+      },
+      {
+        "longTasks": [
+          344
+        ],
+        "totalBlockingMs": 294,
+        "taskDurationMs": 398.7,
+        "longestTaskMs": 344.457
+      },
+      {
+        "longTasks": [
+          334
+        ],
+        "totalBlockingMs": 284,
+        "taskDurationMs": 456.9,
+        "longestTaskMs": 334.822
+      }
+    ],
+    "renderedText": "1331 tasks on the board\nInbox0\nIn progress12\nWaiting0\nDone1319\nInbox\n0 of 0\nIn progress\n12 of 12\n12 working\ncatalog-0\nCatalog task 0\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-1\nCatalog task 1\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-10\nCatalog task 10\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-11\nCatalog task 11\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-2\nCatalog task 2\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-3\nCatalog task 3\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-4\nCatalog task 4\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-5\nCatalog task 5\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-6\nCatalog task 6\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-7\nCatalog task 7\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-8\nCatalog task 8\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-9\nCatalog task 9\nWorking · 1\nBuild\n→\nReview\n1h\nWaiting\n0 of 0\nDone\n0 of 1319\nNo agent is working in any project right now.\nOnly cards someone is working on appear here; a project's own board holds the rest.",
+    "geometry": [
+      {
+        "id": "task:catalog-0",
+        "x": 337,
+        "y": 198,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-1",
+        "x": 337,
+        "y": 339.9375,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-10",
+        "x": 337,
+        "y": 481.875,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-11",
+        "x": 337,
+        "y": 623.8125,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-2",
+        "x": 337,
+        "y": 765.75,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-3",
+        "x": 337,
+        "y": 907.6875,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-4",
+        "x": 337,
+        "y": 1049.625,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-5",
+        "x": 337,
+        "y": 1191.5625,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-6",
+        "x": 337,
+        "y": 1333.5,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-7",
+        "x": 337,
+        "y": 1475.4375,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-8",
+        "x": 337,
+        "y": 1617.375,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-9",
+        "x": 337,
+        "y": 1759.3125,
+        "width": 454,
+        "height": 129.9375
+      }
+    ]
+  },
+  {
+    "variant": "incremental",
+    "browser": "153.0.8010.12",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "catalog": {
+      "projects": 194,
+      "conversations": 1071,
+      "tasks": 1331,
+      "pipelines": 1071
+    },
+    "samples": [
+      {
+        "longTasks": [],
+        "totalBlockingMs": 0,
+        "taskDurationMs": 88.6,
+        "longestTaskMs": 32.423
+      },
+      {
+        "longTasks": [],
+        "totalBlockingMs": 0,
+        "taskDurationMs": 118.7,
+        "longestTaskMs": 33.425
+      },
+      {
+        "longTasks": [],
+        "totalBlockingMs": 0,
+        "taskDurationMs": 95.5,
+        "longestTaskMs": 27.596
+      },
+      {
+        "longTasks": [],
+        "totalBlockingMs": 0,
+        "taskDurationMs": 97.6,
+        "longestTaskMs": 27.596
+      },
+      {
+        "longTasks": [],
+        "totalBlockingMs": 0,
+        "taskDurationMs": 70.2,
+        "longestTaskMs": 32.709
+      },
+      {
+        "longTasks": [],
+        "totalBlockingMs": 0,
+        "taskDurationMs": 129.6,
+        "longestTaskMs": 32.974
+      },
+      {
+        "longTasks": [],
+        "totalBlockingMs": 0,
+        "taskDurationMs": 77.3,
+        "longestTaskMs": 21.356
+      },
+      {
+        "longTasks": [],
+        "totalBlockingMs": 0,
+        "taskDurationMs": 106.7,
+        "longestTaskMs": 25.343
+      }
+    ],
+    "renderedText": "1331 tasks on the board\nInbox0\nIn progress12\nWaiting0\nDone1319\nInbox\n0 of 0\nIn progress\n12 of 12\n12 working\ncatalog-0\nCatalog task 0\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-1\nCatalog task 1\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-10\nCatalog task 10\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-11\nCatalog task 11\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-2\nCatalog task 2\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-3\nCatalog task 3\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-4\nCatalog task 4\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-5\nCatalog task 5\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-6\nCatalog task 6\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-7\nCatalog task 7\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-8\nCatalog task 8\nWorking · 1\nBuild\n→\nReview\n1h\ncatalog-9\nCatalog task 9\nWorking · 1\nBuild\n→\nReview\n1h\nWaiting\n0 of 0\nDone\n0 of 1319\nNo agent is working in any project right now.\nOnly cards someone is working on appear here; a project's own board holds the rest.",
+    "geometry": [
+      {
+        "id": "task:catalog-0",
+        "x": 337,
+        "y": 198,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-1",
+        "x": 337,
+        "y": 339.9375,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-10",
+        "x": 337,
+        "y": 481.875,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-11",
+        "x": 337,
+        "y": 623.8125,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-2",
+        "x": 337,
+        "y": 765.75,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-3",
+        "x": 337,
+        "y": 907.6875,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-4",
+        "x": 337,
+        "y": 1049.625,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-5",
+        "x": 337,
+        "y": 1191.5625,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-6",
+        "x": 337,
+        "y": 1333.5,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-7",
+        "x": 337,
+        "y": 1475.4375,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-8",
+        "x": 337,
+        "y": 1617.375,
+        "width": 454,
+        "height": 129.9375
+      },
+      {
+        "id": "task:catalog-9",
+        "x": 337,
+        "y": 1759.3125,
+        "width": 454,
+        "height": 129.9375
+      }
+    ]
+  }
+]

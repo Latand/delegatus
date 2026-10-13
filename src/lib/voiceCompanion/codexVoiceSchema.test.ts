@@ -44,6 +44,8 @@ test.if(Bun.which(codexBinary) !== null)("the installed Codex experimental schem
       ["v2/ThreadStartParams", codexVoiceThread(directory, false)],
       ["v2/ThreadStartParams", codexVoiceThread(directory, true)],
       ["v2/ThreadRealtimeStartParams", codexVoiceStart("fixture", "en", "v=0\n", "Fixture")],
+      ["v2/ThreadStartParams", codexVoiceThread(directory,true,"M".repeat(2400))],
+      ["v2/ThreadRealtimeStartParams", codexVoiceStart("fixture", "en", "v=0\n", "Fixture", undefined,"M".repeat(2400))],
       ["v2/ThreadRealtimeStopParams", { threadId: "fixture" }],
       ["v2/ThreadRealtimeAppendSpeechParams", { threadId: "fixture", text: "The board could not be read just now." }],
       ["v2/ThreadInjectItemsParams", codexVoiceContext("fixture", "The operator views the second project.")],

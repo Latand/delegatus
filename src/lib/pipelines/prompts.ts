@@ -34,10 +34,18 @@ export function renderStagePrompt(
   stage: PipelineStage,
   role: EffectivePipelineRole,
   previousOutput: string,
+  /** The live machine/project worker limit. Only server launch paths know it
+      (the store reads Viewer state), so the client previews pass nothing and
+      show the scaffold as persisted. */
+  workerLimit?: number,
 ): string {
   let body = replaceAll(stage.prompt, "{{task}}", pipeline.task);
   body = replaceAll(body, RELAY_PLACEHOLDER, previousOutput);
   let roleScaffold = role.promptScaffold ? replaceAll(role.promptScaffold, "{{task}}", pipeline.task) : null;
+  if (roleScaffold && role.roleId === "orchestrator" && workerLimit !== undefined) {
+    roleScaffold = replaceAll(roleScaffold, "{{maxWorkers}}", String(workerLimit));
+    roleScaffold = roleScaffold.replace(/\bat most \d+ workers\b/gu, `at most ${workerLimit} workers`);
+  }
   if (roleScaffold) roleScaffold = replaceAll(roleScaffold, RELAY_PLACEHOLDER, previousOutput);
   /* The controller persists the predecessor's output on the attempt whether or
      not the author placed the placeholder (#1678): a prompt that never names it
@@ -87,7 +95,7 @@ export function renderStagePrompt(
     pipeline.spec?.trim() || "No separate pinned specification was supplied.",
     "",
     ...roleContext,
-    "Design and UI stages publish variants with publish_prototype_review; it binds to this pipeline's task, so omit taskId. Use read_prototype_review to read the operator's choice and exact comment.",
+    "Prototype stages render numbered variants and report their frame directory. A prototype lane is prototype → visual-critic (onFail proto-fix, maxRounds 2, onExhausted advance) → publish. Only its publish stage calls publish_prototype_review after the critic passes or its findings are fixed; omit taskId. Use read_prototype_review to read the operator's choice and exact comment.",
     access,
     hostAccess,
     ...baseLine,

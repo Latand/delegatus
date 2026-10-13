@@ -1281,6 +1281,78 @@ function ComposerWithOutbox({ file }: { file: FileEntry }) {
   return <><OutboxBubbles cardId={file.conversationId!} entries={entries} /><TmuxComposer file={file} /></>;
 }
 
+test("a late successful response keeps its automatic text-file attachment on the delivered bubble", async () => {
+  setLocale("en");
+  mobileViewport = false;
+  setComposerAdmissionTimingForTests({
+    admissionDeadlineMs: 8,
+    receiptReconciliationMs: 200,
+    receiptPollIntervalMs: 2,
+  });
+  const conversationId = "conv-expiry-late-text-file";
+  const original = "я".repeat(30_000);
+  const sentKeys: string[] = [];
+  const priorFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    if (String(input) === "/api/tmux/targets") {
+      return { ok: true, json: async () => ({ targets: { "0": null } }) } as Response;
+    }
+    if (String(input) !== "/api/tmux") throw new Error(`unexpected request: ${String(input)}`);
+    const body = JSON.parse(String(init?.body)) as { clientMessageId: string };
+    sentKeys.push(body.clientMessageId);
+    await sleep(35);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        structured: true,
+        operationId: `late-${body.clientMessageId}`,
+        receipt: {
+          operationId: `late-${body.clientMessageId}`,
+          idempotencyKey: body.clientMessageId,
+          conversationId,
+          kind: "send",
+          status: "delivered",
+          text: "Read the file in full: /inbox/message.txt",
+          at: new Date().toISOString(),
+          revision: 1,
+        },
+        textAttachment: {
+          name: "message.txt",
+          path: "/inbox/message.txt",
+          text: "The full message is attached as message.txt. Read the file in full before responding.\n/inbox/message.txt",
+        },
+      }),
+    } as Response;
+  }) as typeof fetch;
+  sessionStorage.setItem(`llvDraft:${conversationId}`, original);
+
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(<ComposerWithOutbox file={fileFor(conversationId)} />));
+  const form = (host.querySelector("textarea") as HTMLTextAreaElement).closest("form")!;
+
+  try {
+    flushSync(() => form.dispatchEvent(new dom.Event("submit", { bubbles: true, cancelable: true }) as unknown as Event));
+    await until(() => readOutbox(conversationId).find((entry) => entry.id === sentKeys[0])?.state === "delivered");
+
+    const entry = readOutbox(conversationId).find((candidate) => candidate.id === sentKeys[0])!;
+    expect(entry.state).toBe("delivered");
+    expect(entry.textAttachment?.name).toBe("message.txt");
+    expect(host.querySelectorAll("[data-text-attachment]")).toHaveLength(1);
+    expect(host.querySelector("[data-text-attachment]")?.textContent).toContain("message.txt");
+    expect(host.textContent).not.toContain(original);
+    expect(sentKeys).toHaveLength(1);
+  } finally {
+    flushSync(() => root.unmount());
+    globalThis.fetch = priorFetch;
+    sessionStorage.clear();
+    host.remove();
+  }
+});
+
 test.each([
   ["headers", false], ["body", false], ["headers", true], ["body", true],
 ] as const)("an idle conversation drains when the seat lookup loses its %s response (image=%s)", async (lost, attachment) => {
@@ -1394,6 +1466,7 @@ test.each([
   } as unknown as RuntimeSessionView;
   let polls = 0;
   const admitted = new Map<string, RuntimeReceipt>();
+  let admissionReadable = false;
   setTmuxComposerRuntimeDependenciesForTests({
     refreshRuntime: async () => { polls += 1; return false; },
     useRuntimeReceiptsForArtifact: () => useSyncExternalStore(
@@ -1415,6 +1488,8 @@ test.each([
        answers it out of the same `admitted` map the POST half writes: the
        server's own record of what it accepted. */
     if (String(input).startsWith("/api/runtime/send?")) {
+      // The initial receipt outage keeps fate unknown until this recovery case releases it.
+      if (!admissionReadable) return Response.json({ outcome: "unknown" });
       const key = new URL(String(input), "http://127.0.0.1").searchParams.get("clientMessageId") ?? "";
       const record = admitted.get(key);
       return Response.json(record
@@ -1528,6 +1603,7 @@ test.each([
        may already be delivering. The control asks instead, and the send count
        stays at the one attempt that was actually made. */
     const key = sends[0]!.idempotencyKey;
+    admissionReadable = true;
     flushSync(() => host.querySelector<HTMLButtonElement>("[data-outbox-check]")!.click());
     /* The reconciliation window may already have parked this entry as a
        failure; what the LOOKUP settles is its uncertainty, so that is what the

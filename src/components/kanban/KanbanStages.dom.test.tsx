@@ -7,10 +7,16 @@ import type { PatchPipelineRequest, Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
+import { laneRouteKey } from "@/lib/attention/routeTypes";
 import { stageDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 
 import type { PipelinePorts, PipelineWriteResult } from "./pipelinePorts";
 import type { TaskMutationPorts } from "./useTaskMutations";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* Stages on the kanban board (#1695 K5b), rendered by React: the card's
    Stages button and pipeline actions over the pipeline route, the Stages
@@ -339,7 +345,8 @@ test("retry and skip name the stage the pipeline waits on and send the action al
   click(laneMenu(host));
   expect(menuItem(host, "Retry Verify")?.getAttribute("aria-disabled")).toBeNull();
   click(menuItem(host, "Skip Verify"));
-  await tick();
+  /* Skip waits out its receipt, which Undo cancels (docs/design/calm-task-cards-build.md §4.1). */
+  await tick(4_300);
   /* The stage and attempt the operator saw ride along; the engine checks them before it acts. */
   expect(route.patches).toEqual([{ id: "p-search", body: { action: "skip-stage", expectedStageId: "verify", expectedAttempt: 2 } }]);
   expect(route.reads).toEqual([]);
@@ -674,7 +681,7 @@ test("a refused skip's Retry sends the same guarded expectations; with the curso
   route.state.answers.push({ ok: false, status: 409, error: "the stage worktree has uncommitted changes" });
   click(laneMenu(host));
   click(menuItem(host, "Skip Verify"));
-  await tick();
+  await tick(4_300);
   expect(route.reads).toEqual([]);
   const guarded: PatchPipelineRequest = { action: "skip-stage", expectedStageId: "verify", expectedAttempt: 2 };
   expect(route.patches.map((patch) => patch.body)).toEqual([guarded]);
@@ -920,7 +927,7 @@ test("a stage waiting before any attempt of its own is expected as attempt 0, an
   started.runs.push({ stageId: "merge", attempts: [attempt(1, "needs_decision", merge1, 30)] } as never);
   route.state.record = started;
   click(menuItem(host, "Skip Merge"));
-  await tick();
+  await tick(4_300);
   expect(route.patches.map((patch) => patch.body)).toEqual([{ action: "skip-stage", expectedStageId: "merge", expectedAttempt: 0 }]);
   expect(receiptTexts(host)).toEqual(["Skip Merge was not sent: a newer attempt of Merge waits now."]);
 
@@ -959,8 +966,8 @@ test("readers of stages that share a role preset carry the stage's name and atte
   await tick();
   click(card(host).querySelector('.pb-pills [data-stage="critique"]'));
   await tick();
-  /* The earlier critique opens from the card's past attempts. */
-  click([...card(host).querySelectorAll<HTMLElement>("[data-past] .hopen")].find((button) => button.closest("[data-past]")?.querySelector(".lbl")?.textContent?.startsWith("Critique")));
+  /* The earlier critique opens from the card's timeline. */
+  click([...card(host).querySelectorAll<HTMLElement>("[data-chronology-entry] .chronology-open")].find((button) => button.textContent?.startsWith("Critique")));
   await tick();
   expect(headers().map((header) => header.textContent).sort()).toEqual([`Critique · 1 · ${title}`, `Critique · 2 · ${title}`, `Design · ${title}`]);
   /* The preset is secondary: in the tooltip only, and left out nowhere it adds. */
@@ -976,7 +983,7 @@ test("readers of stages that share a role preset carry the stage's name and atte
   expect([...sheet(host)!.querySelectorAll<HTMLElement>(".pane .pname")].map((name) => name.textContent)).toEqual(["1. Design", "2. Critique"]);
 });
 
-/* ── #2072: the lane row answers in place ─────────────────────────────────── */
+/* ── The lane's answers are its ⋯ (#2072, docs/design/calm-task-cards-build.md §4) ── */
 
 /* Verify's second attempt came back failed and the lane waits on the operator. */
 const parkedOnVerify = () => searchPipeline({
@@ -987,51 +994,89 @@ const parkedOnVerify = () => searchPipeline({
 } as Partial<Pipeline>);
 const answer = (host: HTMLElement, action: string) => card(host).querySelector<HTMLButtonElement>(`.pblock [data-answer-action="${action}"]`);
 
-test("a lane that waits on a decision is answered on the card, and Retry sends exactly what the ⋯ menu's Retry sends", async () => {
-  const onCard = mount(parkedOnVerify());
-  await tick();
-  expect(answer(onCard.host, "skip-stage")?.textContent).toBe("Skip Verify");
-  expect(answer(onCard.host, "retry-stage")?.textContent).toBe("Retry Verify");
-  /* What it stopped on, in place: the parked stage's first finding. */
-  expect(card(onCard.host).querySelector(".pb-answer .stage-findings li")?.textContent).toBe("P1the alias swaps before the new index answers");
-  click(answer(onCard.host, "retry-stage"));
-  await tick();
-
-  const fromMenu = mount(parkedOnVerify());
-  await tick();
-  click(laneMenu(fromMenu.host));
-  click(menuItem(fromMenu.host, "Retry Verify"));
-  await tick();
-
-  expect(onCard.route.patches).toEqual([{ id: "p-search", body: { action: "retry-stage", expectedStageId: "verify", expectedAttempt: 2 } }]);
-  expect(onCard.route.patches).toEqual(fromMenu.route.patches);
-  expect(receiptTexts(onCard.host).at(-1)).toBe("Retrying Verify in «Restore search results after the index rebuild»");
-});
-
-test("Skip on the card waits out its receipt before anything is sent, and its Undo sends nothing", async () => {
+test("a lane that waits on a decision says what it stopped on and offers no answer on its row; the ⋯ holds Skip and Retry in their words", async () => {
   const { host, route } = mount(parkedOnVerify());
   await tick();
-  click(answer(host, "skip-stage"));
+  expect(card(host).querySelectorAll("[data-answer-action]")).toHaveLength(0);
+  /* What it stopped on, in place: the parked stage's first finding. */
+  expect(card(host).querySelector(".pb-answer .stage-findings li")?.textContent).toBe("P1the alias swaps before the new index answers");
+  click(laneMenu(host));
+  expect(menuItem(host, "Skip Verify")?.getAttribute("data-cm-item")).toBe("answer:skip-stage");
+  click(menuItem(host, "Retry Verify"));
+  await tick();
+  expect(route.patches).toEqual([{ id: "p-search", body: { action: "retry-stage", expectedStageId: "verify", expectedAttempt: 2 } }]);
+  expect(receiptTexts(host).at(-1)).toBe("Retrying Verify in «Restore search results after the index rebuild»");
+});
+
+/* The orchestrator owns the lane (docs/design/calm-task-cards-build.md §4, the chosen form): Skip and Retry are quiet links on the stop's timeline entry, held out of the ⋯. */
+const seatOwnedOnVerify = (): Pipeline => {
+  const lane = parkedOnVerify();
+  lane.attentionRoute = { key: laneRouteKey(lane, "lane-decision"), owner: "seat", seat: "conversation_seat" };
+  return lane;
+};
+
+test("a seat-owned stop carries Skip and Retry as links on its entry, not in the ⋯; Retry sends one request", async () => {
+  const { host, route } = mount(seatOwnedOnVerify());
+  await tick();
+  const links = [...card(host).querySelectorAll<HTMLElement>('[data-chronology-stop="p-search"] [data-chronology-link]')];
+  expect(links.map((link) => [link.getAttribute("data-chronology-link"), link.textContent])).toEqual([["skip-stage", "Skip Verify"], ["retry-stage", "Retry Verify"]]);
+  /* One row: both links share the same acts container, and the stop has no ⋯ of its own. */
+  expect(new Set(links.map((link) => link.parentElement)).size).toBe(1);
+  expect(card(host).querySelector("[data-chronology-stop-menu]")).toBeNull();
+  click(laneMenu(host));
+  expect(menuItem(host, "Skip Verify")).toBeNull();
+  expect(menuItem(host, "Retry Verify")).toBeNull();
+  click(laneMenu(host));
+  click(links[1]);
+  await tick();
+  expect(route.patches).toEqual([{ id: "p-search", body: { action: "retry-stage", expectedStageId: "verify", expectedAttempt: 2 } }]);
+});
+
+test("Skip as a link is held for its receipt before anything is sent", async () => {
+  const { host, route } = mount(seatOwnedOnVerify());
+  await tick();
+  click(card(host).querySelector('[data-chronology-link="skip-stage"]'));
+  await tick();
+  expect(route.patches).toEqual([]);
+  expect(receiptTexts(host).at(-1)).toBe("Skipping Verify in «Restore search results after the index rebuild»");
+  await tick(4_300);
+  expect(route.patches).toEqual([{ id: "p-search", body: { action: "skip-stage", expectedStageId: "verify", expectedAttempt: 2 } }]);
+});
+
+test("the operator's own stop keeps its ⋯ and shows no link", async () => {
+  const { host } = mount(parkedOnVerify());
+  await tick();
+  expect(card(host).querySelector("[data-chronology-link]")).toBeNull();
+  expect(card(host).querySelector('[data-chronology-stop="p-search"] [data-chronology-stop-menu]')).toBeTruthy();
+});
+
+test("Skip from the ⋯ waits out its receipt before anything is sent, and its Undo sends nothing", async () => {
+  const { host, route } = mount(parkedOnVerify());
+  await tick();
+  click(laneMenu(host));
+  click(menuItem(host, "Skip Verify"));
   await tick();
   expect(route.patches).toEqual([]);
   expect(receiptTexts(host).at(-1)).toBe("Skipping Verify in «Restore search results after the index rebuild»");
   expect(card(host).querySelector("[data-pipeline-acting]")?.textContent).toBe("Skipping…");
   /* One answer at a time. */
-  expect(answer(host, "retry-stage")?.disabled).toBe(true);
+  click(laneMenu(host));
+  expect(menuItem(host, "Retry Verify")?.getAttribute("aria-disabled")).toBe("true");
+  click(laneMenu(host));
   const undo = [...host.querySelectorAll<HTMLElement>("[data-kanban-receipt] .act")].find((button) => button.textContent === "Undo");
   click(undo);
   await tick();
   expect(card(host).querySelector("[data-pipeline-acting]")).toBeNull();
-  expect(answer(host, "retry-stage")?.disabled).toBe(false);
   expect(route.patches).toEqual([]);
 
-  /* Left alone, the window closes and the same guarded skip the menu sends goes out. */
-  click(answer(host, "skip-stage"));
+  /* Left alone, the window closes and the guarded skip goes out. */
+  click(laneMenu(host));
+  click(menuItem(host, "Skip Verify"));
   await tick(4_300);
   expect(route.patches).toEqual([{ id: "p-search", body: { action: "skip-stage", expectedStageId: "verify", expectedAttempt: 2 } }]);
 });
 
-test("a lane stopped after its last fix offers Accept as is and Review again; each reads the revision and sends one request (#1938, #2187)", async () => {
+test("a lane stopped after its last fix says why on its row, and its ⋯ offers Accept as is, which reads the revision and sends one request (#1938, #2187)", async () => {
   const spent = searchPipeline({
     state: "needs_review",
     cursor: null,
@@ -1043,25 +1088,19 @@ test("a lane stopped after its last fix offers Accept as is and Review again; ea
   const reason = card(host).querySelector(".pb-answer [data-review-stop]");
   expect(reason?.textContent).toBe("Stopped after the last fix, as this pipeline asked: the fix is not reviewed.");
   expect(reason?.getAttribute("title")).toBe("last review fail on 4f1c2a9d · current head 9b2e7d4c unreviewed");
-  expect(answer(host, "close")).toBeNull();
-  expect(answer(host, "accept-head")?.textContent).toBe("Accept as is");
-  expect(answer(host, "continue-review")?.textContent).toBe("Review again");
+  /* No answer on the row (docs/design/calm-task-cards-build.md §6.2). */
+  expect(card(host).querySelectorAll("[data-answer-action]")).toHaveLength(0);
   /* The lane's state word is the warning one, not the grey of an idle lane (#2080). */
   expect(card(host).querySelector('.pb-head .pstate-word[data-pstate="needs_review"]')?.textContent).toBe("needs review");
-  click(answer(host, "continue-review"));
+  click(laneMenu(host));
+  const accept = menuItem(host, "Accept as is");
+  expect(accept?.getAttribute("data-cm-item")).toBe("answer:accept-head");
+  click(accept);
   await tick(20);
   expect(route.reads).toEqual(["p-search"]);
   expect(route.patches).toHaveLength(1);
   const body = route.patches[0]!.body as PatchPipelineRequest & { clientRequestId: string };
-  expect({ ...body, clientRequestId: body.clientRequestId.startsWith("board-") }).toEqual({ action: "continue-review", addRounds: 1, expectedRevision: REVISION, clientRequestId: true });
-  expect(receiptTexts(host).at(-1)).toBe("One more review round for «Restore search results after the index rebuild»");
-
-  click(answer(host, "accept-head"));
-  await tick(20);
-  expect(route.reads).toEqual(["p-search", "p-search"]);
-  expect(route.patches).toHaveLength(2);
-  const accept = route.patches[1]!.body as PatchPipelineRequest & { clientRequestId: string };
-  expect({ ...accept, clientRequestId: accept.clientRequestId.startsWith("board-") }).toEqual({ action: "accept-head", expectedRevision: REVISION, clientRequestId: true });
+  expect({ ...body, clientRequestId: body.clientRequestId.startsWith("board-") }).toEqual({ action: "accept-head", expectedRevision: REVISION, clientRequestId: true });
   expect(receiptTexts(host).at(-1)).toBe("Accepted «Restore search results after the index rebuild» as is");
 });
 

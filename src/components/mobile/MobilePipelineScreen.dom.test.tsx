@@ -242,20 +242,22 @@ test("the passed stages before the current one fold into one row, which opens an
   expect(qa(one, ".pb-stage[data-stage]").map((el) => el.getAttribute("data-stage"))).toEqual(["design", "implement", "review", "fix", "merge"]);
 });
 
-test("the decision is answered inside the stage it parked on: its finding, then Skip stage and Retry stage", () => {
+test("the decision says what it stopped on inside the stage it parked on; Skip and Retry are rows of the ⋯ sheet", async () => {
   const answered: string[] = [];
   const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={(entry) => answered.push(entry.path)} />);
   const current = q(host, ".pb-stage[data-stage-current]")!;
   expect(current.getAttribute("data-stage")).toBe("review");
-  /* The answer and its report live in the stage; nothing above the list answers. */
-  expect(qa(host, "[data-answer-action]").every((button) => current.contains(button as never))).toBe(true);
-  expect(qa(current, "[data-answer-action]").map((el) => [el.getAttribute("data-answer-action"), el.textContent])).toEqual([
-    ["skip-stage", translate("en", "mobile2.pipeline.skip")],
-    ["retry-stage", translate("en", "mobile2.pipeline.retry")],
+  /* The report lives in the stage; no answer is on the screen's face
+     (docs/design/calm-task-cards-build.md §4.2). */
+  expect(qa(host, "[data-answer-action]")).toEqual([]);
+  click(q(host, '[data-mobile2-open="menu"]'));
+  await settle();
+  expect(Array.from(dom.document.querySelectorAll("[data-mobile2-pipeline-menu] [data-phone-lane-answer]")).map((el) => [el.getAttribute("data-phone-lane-answer"), el.textContent])).toEqual([
+    ["skip-stage", translate("en", "kanban.pipelineAct.label.skip-stage", { stage: "Review" })],
+    ["retry-stage", translate("en", "kanban.pipelineAct.label.retry-stage", { stage: "Review" })],
   ]);
-  /* The pipeline screen's 44 px buttons, Retry the primary one. */
-  expect(q(current, ".pb-actions")!.className).toContain("large");
-  expect(q(current, '[data-answer-action="retry-stage"]')!.className).toContain("primary");
+  /* Each is a 44 px sheet row. */
+  expect(Array.from(dom.document.querySelectorAll("[data-phone-lane-answer]")).every((el) => (el as unknown as HTMLElement).className.includes("min-h-11"))).toBe(true);
   /* The first finding with its rank, then how many more (§3.13). */
   const finding = qa(current, ".stage-findings li");
   expect(finding[0]!.textContent).toContain("the feed cache is dropped");
@@ -615,7 +617,7 @@ test("in Ukrainian the stage names stay the pipeline's and every word is the des
   click(q(host, "[data-passed-fold]"));
   expect(qa(host, ".pb-stage[data-stage] .pb-name").map((el) => el.textContent)).toEqual(["Design", "Implement", "Review", "Fix", "Merge"]);
   expect(q(host, "[data-mobile2-meta] .pstate-word")!.textContent).toBe(translate("uk", "pipelineState.needs_decision"));
-  expect(qa(host, "[data-answer-action]").map((el) => el.textContent)).toEqual([translate("uk", "mobile2.pipeline.skip"), translate("uk", "mobile2.pipeline.retry")]);
+  expect(qa(host, "[data-answer-action]")).toEqual([]);
   expect(q(host, "[data-open-conversation]")!.textContent).toBe(translate("uk", "pipelineStage.openAgent"));
 });
 

@@ -6,7 +6,7 @@ import { startComposerPayloadRuntime, type ComposerPayloadRuntime } from "@/lib/
 import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentStore";
 import { saveTasks, loadTasks, TASKS_FILE } from "@/lib/tasks/store";
 import { setConversationHostDependenciesForTests } from "@/app/api/conversation-host/dependencies";
-import { publishPOST, reviewGET, reviewPOST } from "./http";
+import { publishPOST as gatedPublishPOST, reviewGET, reviewPOST } from "./http";
 import { decidePrototype, prototypeDecisionText, prototypeDelivery, prototypeDeliveryResponse, type PrototypeDelivery, type PrototypeDeliveryPorts } from "./decision";
 import { prototypeCopyLine, parsePrototypeAnswer } from "./telegramAnswer";
 import { deliverPrototypeDecision, resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests, sweepPrototypeDeliveries } from "./deliveryWorker";
@@ -20,6 +20,14 @@ let world: PrototypeWorld;
 let delivery: PrototypeDelivery;
 let reviewId: string;
 let scans = 0;
+import { criticLane } from "./criticGate.fixture";
+const publishPOST: typeof gatedPublishPOST = (request, world) => gatedPublishPOST(request, {
+  ...world,
+  caller: () => ({ conversationId: "conversation_publisher", project: "project-a" }),
+  stage: () => ({ taskIds: ["task-prototype"], project: "project-a", source: { conversationId: "conversation_publisher", pipelineId: "prototype-lane", stageId: "publish" } }),
+  pipeline: () => criticLane(), orchestrator: () => null,
+});
+
 const root = path.join(process.env.TMPDIR!,"runtime");
 const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
 const comment = "  Combine the navigation of 1 and spacing of 2.\nKeep these words exactly.  ";

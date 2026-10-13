@@ -22,6 +22,8 @@ import { recoverPendingStructuredSpawns, terminalizeStaleStructuredSpawns } from
 import { StructuredRuntimeRequirementError } from "@/lib/proc/darwinIdentity";
 import { executeOrchestratorSeatRequest, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
 import { beginDeputy, recordDeputyFork } from "@/lib/orchestrator/deputies";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
+import { setMachineWorkerLimit, setProjectWorkerLimit } from "@/lib/operator/workerLimit";
 import { authenticatedAgentSpawnCaller, isAgentInitiatedSpawn, spawnLineageSelectorForCaller } from "./admission";
 import { POST } from "./route";
 import { conversationResolver } from "@/lib/activity/conversationResolver";
@@ -3010,6 +3012,53 @@ test("agent capability binds src to the caller conversation", () => {
   expect(authenticatedAgentSpawnCaller(request, other.generations[0]!.path, store)).toEqual({
     error: "src must identify the authenticated caller conversation",
   });
+});
+
+test("assigned seat spawn admission follows the current project worker limit above twenty", () => {
+  const store = registry();
+  const capability = "L".repeat(43);
+  const parentPath = "/sessions/assigned-seat.jsonl";
+  const parent = store.beginSpawnRequest({
+    engine: "codex", cwd: "/repo", role: "orchestrator",
+    spawnCapabilityDigest: crypto.createHash("sha256").update(capability).digest("hex"),
+    launchProfile: { title: "Assigned seat" },
+  });
+  if (parent.kind !== "created") throw new Error("expected seat conversation");
+  expect(store.settleSpawn(parent.receipt.launchId, {
+    key: { engine: "codex", sessionId: "assigned-seat" }, artifactPath: parentPath, cwd: "/repo", accountId: "terra",
+    status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+  }).kind).toBe("settled");
+  beginOrchestratorSeatIntent({ project: "worker-limit-project", mandate: "Coordinate work", clientRequestId: "seat-activate", mode: "spawn" });
+  completeOrchestratorSeatIntent({ project: "worker-limit-project", clientRequestId: "seat-activate", conversationId: parent.receipt.conversationId, path: parentPath });
+  setMachineWorkerLimit(32, { kind: "operator", via: "test" }, null);
+  setProjectWorkerLimit("worker-limit-project", 28, { kind: "operator", via: "test" }, null);
+
+  const request = new NextRequest("http://127.0.0.1:8898/api/spawn", { headers: { "x-llv-spawn-capability": capability } });
+  const caller = authenticatedAgentSpawnCaller(request, parentPath, store);
+  expect(caller).toMatchObject({ kind: "agent", liveChildrenCap: 28 });
+  if ("error" in caller || caller.kind !== "agent") throw new Error("expected authenticated seat caller");
+
+  for (let index = 0; index < 20; index++) {
+    const begun = store.beginSpawnRequest({
+      engine: "codex", cwd: "/repo", role: "builder", parentConversationId: parent.receipt.conversationId,
+      origin: { kind: "agent", conversationId: parent.receipt.conversationId },
+      launchProfile: { title: `Live child ${index}` },
+    });
+    if (begun.kind !== "created") throw new Error("expected child receipt");
+    expect(store.settleSpawn(begun.receipt.launchId, {
+      key: { engine: "codex", sessionId: `child-${index}` }, artifactPath: `/sessions/child-${index}.jsonl`, cwd: "/repo", accountId: "terra",
+      status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+    }).kind).toBe("settled");
+  }
+  const twentyFirst = store.beginSpawnRequest({
+    engine: "codex", cwd: "/repo", role: "builder", parentConversationId: parent.receipt.conversationId,
+    origin: { kind: "agent", conversationId: parent.receipt.conversationId }, liveChildrenCap: caller.liveChildrenCap,
+    launchProfile: { title: "Twenty first child" },
+  });
+  expect(twentyFirst.kind).toBe("created");
+
+  setProjectWorkerLimit("worker-limit-project", 30, { kind: "operator", via: "test" }, null);
+  expect(authenticatedAgentSpawnCaller(request, parentPath, store)).toMatchObject({ kind: "agent", liveChildrenCap: 30 });
 });
 
 test("operator capability skips conversation binding and rotation rejects the previous token", () => {

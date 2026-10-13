@@ -7,7 +7,14 @@ blocking unrelated calls in the same MCP process; the candidate removes that
 unused work from availability checks. Production phase evidence is still
 needed to attribute the original incident.
 
-## Dispatch path
+The [2026-10-13 memory follow-up](mcp-memory-retention.md) delegates
+`get_pipeline` and `search_transcripts` through the authenticated MCP HTTP
+service for launched agents. The dispatch description and measurements below
+describe the earlier revision. The held-lease/slow-host regression now exercises
+the delegated reads through a separate real HTTP tool-service process, keeping
+the same latency and request-count assertions.
+
+## Dispatch path at the measured revision
 
 For `list_tasks`, `get_task`, and `get_pipeline`, the packaged stdio server runs
 the SDK callback, `createMcpToolService`, and `viewerMcpBindings` in one process.

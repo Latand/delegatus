@@ -15,7 +15,8 @@ import { TASK_PRIORITIES, type BoardTask, type TaskColor, type TaskPriority, typ
 import type { FileEntry } from "@/lib/types";
 import { MAX_VISIBLE_PATHS } from "@/lib/view/types";
 import { latestAttempt, pipelineStateLabel, stagePromptExtra } from "@/components/pipelines/pipelineModel";
-import type { PipelineAnswer } from "@/components/pipelines/pipelineBlockModel";
+import { openPrototypeReview } from "@/hooks/usePrototypeReview";
+import { clearedLine } from "@/components/attention/decision";
 import { finishesTaskOffer, toggleFinishesTask } from "@/components/pipelines/finishesTask";
 import type { BranchGroup } from "@/components/projectModel";
 import type { SchemeLayout } from "@/components/scheme/layout";
@@ -44,7 +45,7 @@ import { KanbanCard, resurfaceText, statusLabel, TASK_COLOR_HEX } from "./Kanban
 import { RemoteAgents, type RemoteAgentView } from "./RemoteAgents";
 import { remoteCardsFor, useRemoteFeed, type RemoteCard } from "./remoteFeed";
 import { MoreGlyph } from "./kanbanGlyphs";
-import { buildKanbanModel, holdsOnlyDrafts, KANBAN_STATUSES, taskReasonFiltersOfCard, type KanbanCard as KanbanCardModel, type KanbanModel, type TaskReasonFilter } from "./kanbanModel";
+import { createKanbanModel, holdsOnlyDrafts, KANBAN_STATUSES, taskReasonFiltersOfCard, type KanbanCard as KanbanCardModel, type KanbanModel, type TaskReasonFilter } from "./kanbanModel";
 import { reuseKanbanModel } from "./reuseKanbanModel";
 import { useStableCallback } from "./useStableCallback";
 import { BoardMenu } from "./compactMenu";
@@ -60,6 +61,9 @@ import { allCards, cardAnchors, cardOnScreen, conversationOwners, cssEscape, kan
 import { closeReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
 import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type ReaderOwner, type ReaderStop, type ReaderView } from "./KanbanReaders";
 import { stagePanelKey } from "./KanbanCard";
+import { kanbanCardsOpenByDefault } from "./cardOpenDefault";
+import { formAnswerTarget, laneState, type CardState } from "./cardState";
+import { heldAnswer, laneAnswerItems, menuAnswers, type LaneAnswerItem } from "./laneAnswerMenu";
 import { isLaunchedConversation, LAUNCH_HOLD_MS, launchClockMs } from "../launchedConversations";
 import { cycleOpenAgent, openAgents } from "./openAgents";
 import { AgentWindow, OPEN_AGENTS_SHORTCUT, OpenAgentsPill } from "./AgentWindow";
@@ -207,6 +211,25 @@ export interface KanbanBoardProps {
   readerStorage?: Pick<Storage, "getItem" | "setItem"> | null;
   /** The pipeline routes; the browser's own by default. */
   pipelinePorts?: PipelinePorts;
+  /** Cards start open; closed by default (docs/design/calm-task-cards-build.md §6.1). */
+  initialOpen?: boolean;
+}
+
+/** Which cards are closed: every card but the ones flipped from the default. */
+interface CardFolds {
+  byDefault: "open" | "closed";
+  flipped: ReadonlySet<string>;
+}
+
+const cardIsOpen = (folds: CardFolds, id: string): boolean => (folds.byDefault === "open") !== folds.flipped.has(id);
+
+/** The same folds with one card open or closed. */
+function withCardOpen(folds: CardFolds, id: string, open: boolean): CardFolds {
+  if (cardIsOpen(folds, id) === open) return folds;
+  const flipped = new Set(folds.flipped);
+  if (flipped.has(id)) flipped.delete(id);
+  else flipped.add(id);
+  return { ...folds, flipped };
 }
 
 /** A waiting stage open on a card: its first message, before it has a conversation. */
@@ -372,7 +395,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const [query, setQuery] = useState("");
   const [reasonFilter, setReasonFilter] = useState<TaskReasonFilter | undefined>();
   const [linkQuery, setLinkQuery] = useState("");
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(EMPTY_SET);
+  /* Closed by default (§6.1): the chevron, the ⋯ item and the state line open
+     a card for this session, and editing or going to a card opens it. */
+  const [cardFolds, setCardFolds] = useState<CardFolds>(() => ({ byDefault: props.initialOpen ?? kanbanCardsOpenByDefault() ? "open" : "closed", flipped: EMPTY_SET }));
+  const collapsed = useMemo(() => ({ has: (id: string) => !cardIsOpen(cardFolds, id) }), [cardFolds]);
   /* The other machines' agents and lanes. On the Overview the feed
      covers every linked project, and only its lanes and hosts are drawn. */
   const remoteFeed = useRemoteFeed(props.overview ? null : project);
@@ -473,6 +499,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The readers a card holds open, for where a new draft stands (kanbanModel's `openReaders`). */
   const unfoldedReaders = useMemo(() => new Set(openReaders.filter((reader) => !reader.folded).map((reader) => reader.key)), [openReaders]);
   const modelNow = Math.floor(props.now / 15) * 15;
+  const buildKanbanModel = useMemo(() => createKanbanModel(), []);
   /* A catalog update rebuilds the model, and a card whose content did not change
      stays the object it was, so only the cards it touched render again (#2218). */
   const previousModel = useRef<KanbanModel | null>(null);
@@ -482,7 +509,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const shared = reuseKanbanModel(previousModel.current, built);
     previousModel.current = shared;
     return shared;
-  }, [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, reasonFilter, seatRefs, query, unfoldedReaders, modelNow]);
+  }, [buildKanbanModel, bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, reasonFilter, seatRefs, query, unfoldedReaders, modelNow]);
   const cardsById = useMemo(() => {
     const map = new Map<string, KanbanCardModel>();
     for (const status of KANBAN_STATUSES) for (const card of model.columns[status].cards) map.set(card.id, card);
@@ -991,14 +1018,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       /* A borrowed title (a placeholder no agent will name) is where the
          rename starts, so accepting it as shown makes it the task's own. */
       : { field, draft: field === "title" ? (card.titlePending ? "" : card.title) : base, base }));
-    if (field === "description" || field === "details") {
-      setCollapsed((current) => {
-        if (!current.has(card.id)) return current;
-        const next = new Set(current);
-        next.delete(card.id);
-        return next;
-      });
-    }
+    if (field === "description" || field === "details") setCardFolds((current) => withCardOpen(current, card.id, true));
   }, []);
   /* `base` is the field as the edit found it: a save whose stored field still
      reads `base` goes onto the stored text, whatever else moved there. */
@@ -1443,6 +1463,13 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (value.kind === "status") {
       return { label: t("kanban.statusOf", { title }), items: [{ type: "head", label: t("kanban.moveTo") }, ...statusItems(card, true), ...common] };
     }
+    /* A flagged conversation or lane on no task: no task to move or rename, so its ⋯ holds only the flag's Dismiss or Undo. */
+    if (!card.task) {
+      const flag: KanbanMenuItem[] = card.needsYou && card.reasons.length
+        ? [{ type: "item", id: "dismissFlag", label: t("cardState.dismissMenu"), why: t("needs.dismissHint"), onSelect: () => dismissCard(card) }]
+        : !card.needsYou && card.cleared.length ? [{ type: "item", id: "undoFlag", label: t("cardState.undoMenu"), why: clearedLine(t, card.cleared[0]!, modelNow), onSelect: () => undoDismissCard(card) }] : [];
+      return flag.length ? { label: t("kanban.cardActions", { title }), items: flag } : null;
+    }
     const swatches: KanbanMenuItem = {
       type: "swatches",
       id: "colour",
@@ -1490,6 +1517,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
         { type: "item", id: "rename", label: t("kanban.rename"), kbd: "Enter", keepFocus: true, onSelect: () => startEdit(card, "title") },
         { type: "item", id: "describe", label: card.description ? t("kanban.editDescription") : t("kanban.addDescription"), kbd: "E", keepFocus: true, onSelect: () => startEdit(card, "description") },
         ...(card.task ? [linksItem({ kind: "task", id: card.task.id })] : []),
+        /* The foot's ✓ and its Undo (§2.2): stop flagging what the card asks, or flag it again. */
+        ...(card.needsYou && card.reasons.length ? [{ type: "item" as const, id: "dismissFlag", label: t("cardState.dismissMenu"), why: t("needs.dismissHint"), onSelect: () => dismissCard(card) }]
+          : !card.needsYou && card.cleared.length ? [{ type: "item" as const, id: "undoFlag", label: t("cardState.undoMenu"), why: clearedLine(t, card.cleared[0]!, modelNow), onSelect: () => undoDismissCard(card) }] : []),
         ...laneGroups,
         { type: "sep" },
         card.holdsSeat
@@ -1589,6 +1619,28 @@ export function KanbanBoard(props: KanbanBoardProps) {
     }
     const pauseOrResume = options.get("resume") ?? options.get("pause")!;
     const decision = retry.stageId ? names.get(retry.stageId) ?? retry.stageId : null;
+    /* The lane's answers left its row for this menu (docs/design/calm-task-cards-build.md
+       §4.1), in their buttons' words and marked manual where the orchestrator
+       owns the lane. A lane with none keeps Retry and Skip with their refusals. */
+    const owner = laneState(pipeline).owner;
+    const answers = laneAnswerItems(t, pipeline, owner, (stage) => names.get(stage.id) ?? stage.id);
+    /* On a task's card the seat-handled stop carries Skip and Retry as links on
+       its timeline entry; they are not repeated here. */
+    const inMenu = card.task ? menuAnswers(answers, owner) : answers;
+    const answerItems: KanbanMenuItem[] = answers.length ? inMenu.map((answer) => ({
+      type: "item",
+      id: `answer:${answer.action}`,
+      label: answer.label,
+      why: busy ? t("kanban.pipelineAct.busy", { action: t(`kanban.pipelineAct.pending.${busy}`) }) : answer.why,
+      disabled: Boolean(busy),
+      onSelect: () => startPipelineAction(
+        { pipelineId: pipeline.id, title, action: answer.action, stageId: answer.stageId, stageName: answer.stageName, expectedAttempt: answer.expectedAttempt },
+        { hold: heldAnswer(answer) },
+      ),
+    })) : [
+      item(retry, decision ? t("kanban.pipelineAct.retryStage", { stage: decision }) : t("kanban.pipelineAct.retryAny"), t("kanban.pipelineAct.retryWhy")),
+      item(skip, decision ? t("kanban.pipelineAct.skipStage", { stage: decision }) : t("kanban.pipelineAct.skipAny"), t("kanban.pipelineAct.skipWhy")),
+    ];
     /* #2187 §6: whether this lane finishes the card's task, with the count of
        other open lanes Done would wait for, checked or not. */
     const taskId = card.task?.id ?? null;
@@ -1610,8 +1662,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         /* In the card's ⋯ the task's own Attach sits a few rows up, so the lane's names what it attaches to. */
         linksItem({ kind: "pipeline", id: pipeline.id }, inCardMenu ? t("workLinks.attachPipeline") : undefined),
         item(pauseOrResume, t(`kanban.pipelineAct.label.${pauseOrResume.action}`, { title, stage: "" }), pauseOrResume.action === "pause" ? t("kanban.pipelineAct.pauseWhy") : null),
-        item(retry, decision ? t("kanban.pipelineAct.retryStage", { stage: decision }) : t("kanban.pipelineAct.retryAny"), t("kanban.pipelineAct.retryWhy")),
-        item(skip, decision ? t("kanban.pipelineAct.skipStage", { stage: decision }) : t("kanban.pipelineAct.skipAny"), t("kanban.pipelineAct.skipWhy")),
+        ...answerItems,
         ...finishItems,
         { type: "sep" },
         item(options.get("close")!, t("kanban.pipelineAct.label.close", { title, stage: "" }), t("kanban.pipelineAct.closeWhy")),
@@ -1716,12 +1767,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const openStatusMenu = useCallback((card: KanbanCardModel, anchor: HTMLElement) => menu.setOpen({ anchor, value: { kind: "status", cardId: card.id } }), [menu]);
   const openCardMenu = useCallback((card: KanbanCardModel, anchor: HTMLElement) => menu.setOpen({ anchor, value: { kind: "card", cardId: card.id } }), [menu]);
   const toggleCollapsed = useCallback((id: string) => {
-    setCollapsed((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+    setCardFolds((current) => withCardOpen(current, id, !cardIsOpen(current, id)));
   }, []);
 
   /* ── Keyboard on a card ──────────────────────────────────────────────── */
@@ -1749,7 +1795,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       event.preventDefault();
       const more = element.querySelector<HTMLElement>("[data-menu]");
       if (more) openStatusMenu(card, more);
-    } else if ((key === "m" || key === "M") && card.task) {
+    } else if ((key === "m" || key === "M") && (card.task || element.querySelector("[data-menu]"))) {
       event.preventDefault();
       const more = element.querySelector<HTMLElement>("[data-menu]");
       if (more) openCardMenu(card, more);
@@ -1867,12 +1913,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     if (windowAgentRef.current) setWindow(null, null);
     const card = cardsByIdRef.current.get(cardId);
     if (card) {
-      setCollapsed((current) => {
-        if (!current.has(cardId)) return current;
-        const next = new Set(current);
-        next.delete(cardId);
-        return next;
-      });
+      setCardFolds((current) => withCardOpen(current, cardId, true));
       if (query && !cardMatchesShown(modelRef.current, card)) setQuery("");
       if (modeRef.current === "tabs") setTab(card.status);
     }
@@ -2047,6 +2088,15 @@ export function KanbanBoard(props: KanbanBoardProps) {
     }
     return new Map([...byCard].map(([cardId, lines]) => [cardId, lines.join("\n")] as const));
   }, [stagePanels]);
+  /* A waiting stage's panel or an agent draft opens its card when it appears
+     (§2.3): they are forms the card stands in. The operator can close it again. */
+  const formCards = useRef<ReadonlySet<string>>(EMPTY_SET);
+  useLayoutEffect(() => {
+    const now = new Set(cards.filter((card) => card.drafts.length > 0 || panelsByCard.has(card.id)).map((card) => card.id));
+    const fresh = [...now].filter((id) => !formCards.current.has(id));
+    formCards.current = now;
+    if (fresh.length) setCardFolds((current) => fresh.reduce((folds, id) => withCardOpen(folds, id, true), current));
+  }, [cards, panelsByCard]);
 
   /* ── The Stages sheet ─────────────────────────────────────────────────── */
   const openSheet = useCallback((cardId: string, pipeline: Pipeline, stageId?: string) => {
@@ -2106,14 +2156,25 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const openPipelineMenu = useCallback((cardId: string, pipeline: Pipeline, anchor: HTMLElement) => {
     menu.setOpen({ anchor, value: { kind: "pipeline", cardId, pipelineId: pipeline.id } });
   }, [menu]);
-  /* A lane row's answer in place (#2072): the same intent the ⋯ menu sends,
-     with Skip and Close held for their receipt's window. */
-  const answerPipeline = useCallback((_cardId: string, title: string, pipeline: Pipeline, answer: PipelineAnswer) => {
+  /* Skip or Retry pressed as a link on the stop's entry: the menu row's request, with Skip held for its receipt. */
+  const answerLane = useCallback((cardId: string, pipeline: Pipeline, answer: LaneAnswerItem) => {
+    /* Read through the ref: a handler that follows the card list would re-render every card on each catalog answer. */
+    const card = cardsByIdRef.current.get(cardId);
     startPipelineAction(
-      { pipelineId: pipeline.id, title, action: answer.action, stageId: answer.stageId, stageName: answer.stageName, expectedAttempt: answer.expectedAttempt },
-      { hold: answer.action === "skip-stage" || answer.action === "close" },
+      { pipelineId: pipeline.id, title: card ? (card.titlePending ? t("kanban.untitled") : card.title) : pipeline.task, action: answer.action, stageId: answer.stageId, stageName: answer.stageName, expectedAttempt: answer.expectedAttempt },
+      { hold: heldAnswer(answer) },
     );
-  }, [startPipelineAction]);
+  }, [startPipelineAction, t]);
+  /* «Answer» on a closed card (§4.3) goes where the answer is given: the
+     decision form, the asking conversation, or the lane's menu. */
+  const answerCard = useCallback((card: KanbanCardModel, state: CardState, anchor: HTMLElement) => {
+    const subject = state.subject;
+    if (subject.kind === "form") openPrototypeReview(formAnswerTarget(subject, card.project));
+    else if (subject.kind === "conversation") openReaderFor(subject.need.file);
+    else if (subject.kind === "lane") menu.setOpen({ anchor, value: { kind: "pipeline", cardId: card.id, pipelineId: subject.lane.pipeline.id } });
+  }, [menu, openReaderFor]);
+  /* The timeline names the seat's answers the orchestrator's. */
+  const seatConversationIds = useMemo(() => [...(seatRefs?.conversationIds ?? []), ...(seatRefs?.previous?.conversationIds ?? [])], [seatRefs]);
   const openWorkLinks = useCallback((target: WorkLinkTarget, anchor: HTMLElement) => {
     menu.setOpen({ anchor, value: { kind: "links", target } });
   }, [menu]);
@@ -2706,8 +2767,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
         onUseTheirs: takeTheirs,
         onKeepMine: keepMine,
         onHide: hideCard,
-        onDismiss: dismissCard,
-        onUndoDismiss: undoDismissCard,
         holdEditingId: holdEditing,
         onSaveHold: cardSaveHold,
         onCancelHold: cardCancelHold,
@@ -2720,8 +2779,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
         pipelinePorts,
         onOpenSheet: openSheet,
         onPipelineMenu: openPipelineMenu,
+        onLaneAnswer: answerLane,
         onWorkLinks: openWorkLinks,
-        onAnswer: answerPipeline,
+        onAnswerCard: answerCard,
+        seatConversationIds,
         onStagePanelFold: foldStagePanel,
         onStagePanelClose: closeStagePanel,
         onStagePanelMenu: openStagePanelMenu,
@@ -3083,9 +3144,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
 type CardHandlers = Pick<
   React.ComponentProps<typeof KanbanCard>,
   | "onToggleCollapsed" | "onCardMenu" | "onKey" | "onPointerDown" | "onOpenMember" | "onOpenStage" | "onFocusCard" | "onOpenConversations"
-  | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide" | "onDismiss" | "onUndoDismiss" | "onIconMenu"
+  | "onStartEdit" | "onEditDraft" | "onCommitEdit" | "onCancelEdit" | "onRetryEdit" | "onDiscardEdit" | "onUseTheirs" | "onKeepMine" | "onHide" | "onIconMenu"
   | "graphChoices" | "onToggleGraph" | "onOpenAttempt" | "onDismissLaunch"
-  | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onWorkLinks" | "onAnswer" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent" | "onAsked"
+  | "drafts" | "pipelinePorts" | "onOpenSheet" | "onPipelineMenu" | "onLaneAnswer" | "onWorkLinks" | "onAnswerCard" | "seatConversationIds" | "onStagePanelFold" | "onStagePanelClose" | "onStagePanelMenu" | "onAddAgent" | "onAsked"
   | "projectNames" | "onOpenProject" | "onSaveHold" | "onCancelHold"
 > & { holdEditingId?: string | null };
 
@@ -3118,7 +3179,7 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   filtering: boolean;
   /** Title and body an empty column draws while a narrowing hides cards, or null. */
   emptyFiltered: { title: string; body: string } | null;
-  collapsed: ReadonlySet<string>;
+  collapsed: { has(id: string): boolean };
   nowMs: number;
   remoteAgents: readonly RemoteAgentView[];
   remoteAgentsByTask: ReadonlyMap<string, readonly RemoteAgentView[]>;
@@ -3151,12 +3212,11 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
       holdEditing={holdEditingId === card.id}
     />
   );
-  // Motion ordering keeps stopped work in a trailing suffix, including
-  // tasks whose finished conversations are still attached.
-  let split = shown.length;
-  if (status === "assigned") while (split > 0 && shown[split - 1]!.motion.key === "stopped") split -= 1;
-  const active = shown.slice(0, split);
-  const idle = shown.slice(split);
+  // The long-quiet stopped cards gather under the divider, in column order;
+  // a card that stopped after recent work stays among the live ones.
+  const parked = new Set(column.parked);
+  const active = shown.filter((card) => !parked.has(card.id));
+  const idle = shown.filter((card) => parked.has(card.id));
   const held = (card: KanbanCardModel) => !card.task && !card.drafts.length && card.members.length > 0
     && card.members.every((member) => heldLaunches.has(conversationIdentity(member.file)));
   const unlinked = status === "inbox" ? model.unlinkedShown.filter((card) => !(holdsOnlyDrafts(card) && card.status === "assigned") && !held(card)) : [];

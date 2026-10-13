@@ -14,6 +14,7 @@ import {
   type AccountProjectBinding,
 } from "@/lib/accounts/projectBindings";
 import { agentRegistry } from "@/lib/agent/registry";
+import { hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
 import { projectAliasSnapshot } from "@/lib/projects/aliases";
 import { accountProjection, currentObservation, liveFreshObservation } from "@/lib/accounts/accountProjection";
 import { AUTO_BALANCE_THRESHOLD } from "@/lib/accounts/migration/quotaPolicy";
@@ -31,7 +32,27 @@ function copilotLaunchSection() {
   };
 }
 
-function migrationProjection(engine: MigrationEngine, snapshot: ReturnType<ReturnType<typeof agentRegistry>["snapshot"]>) {
+/** Each intent's conversations' migration phases (#2761). The archive never
+    takes a conversation that carries a migration, so the hot rows hold every
+    one; enumerating every conversation of the history once per completed
+    intent held this panel for 15-20 s with eight views open. */
+function migrationPhasesByIntent(snapshot: ReturnType<ReturnType<typeof agentRegistry>["snapshot"]>): Map<string, string[]> {
+  const phases = new Map<string, string[]>();
+  for (const [, conversation] of hotRegistryRows(snapshot, "conversations")) {
+    const migration = conversation.migration;
+    if (!migration) continue;
+    const known = phases.get(migration.intentId);
+    if (known) known.push(migration.phase);
+    else phases.set(migration.intentId, [migration.phase]);
+  }
+  return phases;
+}
+
+function migrationProjection(
+  engine: MigrationEngine,
+  snapshot: ReturnType<ReturnType<typeof agentRegistry>["snapshot"]>,
+  phasesByIntent: ReadonlyMap<string, readonly string[]>,
+) {
   const intent = Object.values(snapshot.migrationIntents)
     .filter((candidate) => {
       if (candidate.engine !== engine) return false;
@@ -39,13 +60,12 @@ function migrationProjection(engine: MigrationEngine, snapshot: ReturnType<Retur
          its card carries its own annotation, the panel banner stays down. */
       if (candidate.scope === "conversation") return false;
       if (candidate.state === "draining") return true;
-      return candidate.state === "complete" && Object.values(snapshot.conversations)
-        .some((conversation) => conversation.migration?.intentId === candidate.id && conversation.migration.phase === "failed-recoverable");
+      return candidate.state === "complete" && (phasesByIntent.get(candidate.id) ?? []).includes("failed-recoverable");
     })
     .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0] ?? null;
   if (!intent) return null;
-  const conversations = Object.values(snapshot.conversations).filter((conversation) => conversation.migration?.intentId === intent.id);
-  const count = (phase: string) => conversations.filter((conversation) => conversation.migration?.phase === phase).length;
+  const phases = phasesByIntent.get(intent.id) ?? [];
+  const count = (phase: string) => phases.filter((candidate) => candidate === phase).length;
   const committed = count("committed");
   const rolledBack = count("rolled-back");
   const targetLabel = (engine === "claude" ? listClaudeAccounts() : listCodexAccounts())
@@ -61,9 +81,9 @@ function migrationProjection(engine: MigrationEngine, snapshot: ReturnType<Retur
     counts: {
       done: committed + rolledBack,
       waitingTurn: count("waiting-turn"),
-      inFlight: conversations.filter((conversation) => ["requested", "preparing", "successor-starting", "verifying"].includes(conversation.migration?.phase ?? "")).length,
+      inFlight: phases.filter((phase) => ["requested", "preparing", "successor-starting", "verifying"].includes(phase)).length,
       failed: count("failed-recoverable"),
-      total: conversations.length,
+      total: phases.length,
     },
     startedAt: intent.createdAt,
   };
@@ -179,8 +199,9 @@ export async function GET() {
       login,
     };
   });
-  const codexMigration = migrationProjection("codex", snapshot);
-  const claudeMigration = migrationProjection("claude", snapshot);
+  const phasesByIntent = migrationPhasesByIntent(snapshot);
+  const codexMigration = migrationProjection("codex", snapshot, phasesByIntent);
+  const claudeMigration = migrationProjection("claude", snapshot, phasesByIntent);
   const codexAuto = autoBalanceProjection("codex", snapshot, now);
   const claudeAuto = autoBalanceProjection("claude", snapshot, now);
   const [claudeCli, codexCli] = await cliProbe;

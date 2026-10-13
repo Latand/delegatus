@@ -6,6 +6,8 @@ import type { AgentRegistry } from "@/lib/agent/registry";
 import { matchesOperatorSpawnCapability, OperatorSpawnCapabilityError } from "@/lib/agent/operatorCapability";
 import { VIEWER_SPAWN_CAPABILITY_HEADER, VIEWER_SPAWN_ENDPOINT } from "@/lib/agent/spawnPolicy";
 import { spawnParentForCaller } from "@/lib/orchestrator/deputies";
+import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
+import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
 
 export const AGENT_SPAWN_LIVE_CHILD_CAP = 20;
 export const AGENT_SPAWN_LINEAGE_ERROR = `Agent-initiated spawns require role; reviewer spawns also require reviews (the implementer conversation or transcript). The parent is inferred from the authenticated caller conversation; src stays optional verification. POST ${VIEWER_SPAWN_ENDPOINT} with {engine, model, cwd, prompt, role, src?, reviews?}.`;
@@ -108,10 +110,13 @@ export function authenticatedAgentSpawnCaller(
       }
     }
     const parentConversationId = spawnParentForCaller(conversationId) as ViewerConversationId;
+    const canonicalParentId = registry.canonicalConversationId(parentConversationId);
+    const seat = activeOrchestratorSeats().find(candidate => candidate.conversationId
+      && registry.canonicalConversationId(candidate.conversationId as ViewerConversationId) === canonicalParentId);
     return {
       kind: "agent",
       conversationId,
-      liveChildrenCap: AGENT_SPAWN_LIVE_CHILD_CAP,
+      liveChildrenCap: seat ? effectiveWorkerLimit(seat.project).value : AGENT_SPAWN_LIVE_CHILD_CAP,
       ...(parentConversationId !== conversationId ? { parentConversationId } : {}),
     };
   }

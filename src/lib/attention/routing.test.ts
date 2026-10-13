@@ -194,6 +194,28 @@ test("parked lanes, spent review budgets and stopped merges go to the seat; an a
   expect(buildNeedsYouQueue([], [decision, review, merge, retry], now, [])).toEqual([]);
 });
 
+test("a wait someone already cleared routes to nobody, and its card says who cleared it; one cleared before it stopped still goes to the seat", () => {
+  /* docs/design/calm-task-cards-build.md §7.3: «Leave the PR open» or a
+     dismissed decision answers the wait, so no seat is woken for it again. */
+  const blockedAt = new Date((now - 300) * 1000).toISOString();
+  const seatClear = { kind: "manager", conversationId: "conversation_seat", role: null } as const;
+  const merge = lane("merge", "completed", { merge: { state: "blocked", reason: "the PR was closed", updatedAt: blockedAt, blockedAt } as Pipeline["merge"], dismissedAt: new Date((now - 60) * 1000).toISOString(), dismissedBy: seatClear });
+  const decision = lane("decision", "needs_decision", { dismissedAt: new Date((now - 60) * 1000).toISOString(), dismissedBy: seatClear });
+  /* Cleared before the merge stopped: the stop is new and still asks. */
+  const earlier = lane("earlier", "completed", { merge: { state: "blocked", reason: "the PR was closed", updatedAt: blockedAt, blockedAt } as Pipeline["merge"], dismissedAt: new Date((now - 900) * 1000).toISOString(), dismissedBy: seatClear });
+  stampAttentionRoutes([], [merge, decision, earlier], now, inputs());
+  expect(merge.attentionRoute).toBeUndefined();
+  expect(decision.attentionRoute).toBeUndefined();
+  expect(earlier.attentionRoute).toEqual({ key: `lane:earlier:merge:${blockedAt}`, owner: "seat", seat: "conversation_seat" });
+  for (const entry of [merge, decision]) {
+    const found = laneNeed(entry);
+    expect(found?.cleared?.by).toEqual(seatClear);
+    expect(pipelineAsks(entry)).toBe(false);
+  }
+  expect(seatAgendaAsks({ files: [], pipelines: [merge, decision, earlier] }, now, "project-a").map((item) => item.id)).toEqual(["earlier"]);
+  expect(buildNeedsYouQueue([], [merge, decision], now, [])).toEqual([]);
+});
+
 test("the operator keeps the unreviewed head of a lane they created, and every lane when no seat can be woken", () => {
   const own = lane("own", "needs_review", { srcConversationId: null });
   const decision = lane("own-decision", "needs_decision", { srcConversationId: null });

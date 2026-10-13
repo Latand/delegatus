@@ -13,10 +13,9 @@ import { FOCUS_TARGET_SHAPES } from "@/lib/attention/targets";
 import { statePath } from "@/lib/configDir";
 import { openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
-import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/liveness";
+import { DEFAULT_STALL_AFTER_MS } from "@/lib/lifecycle/limits";
 import { operatorLocale } from "@/lib/operator/settings";
-import { MEMORY_KINDS } from "@/lib/memory/parsers";
-import { PIPELINE_LIST_DEFAULT_LIMIT, PIPELINE_LIST_MAX_LIMIT } from "@/lib/pipelines/listProjection";
+import { MEMORY_KINDS } from "@/lib/memory/kinds";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -28,13 +27,15 @@ import {
   MAX_STAGE_REPORT_FINDINGS,
   MAX_STAGE_REPORT_SUMMARY_CHARS,
   MIN_STARTED_PIPELINE_STAGES,
+  PIPELINE_LIST_DEFAULT_LIMIT,
+  PIPELINE_LIST_MAX_LIMIT,
 } from "@/lib/pipelines/limits";
 import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, STAGE_FINDING_SEVERITIES } from "@/lib/pipelines/types";
 import { procBackend } from "@/lib/proc";
 import { parseMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, PROBLEM_MAX_CHARS, PROBLEM_EVIDENCE_MAX_CHARS } from "@/lib/memory/roleTypes";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
-import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
+import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/limits";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
 import { renderTaskPriorityRule } from "@/lib/tasks/priority";
 import { TASK_STEPS_LIMIT } from "@/lib/tasks/steps";
@@ -92,6 +93,7 @@ export const MCP_TOOL_NAMES = [
   "request_attention",
   "suggest_replies",
   "publish_prototype_review",
+  "resend_prototype_review_telegram",
   "read_prototype_review",
   "dismiss_attention",
   "bridge_report",
@@ -111,6 +113,7 @@ export const MCP_TOOL_NAMES = [
   "telegram_bot_send_media",
   "telegram_bot_send_document",
   "telegram_bot_messages",
+  "relay_owner_history",
   "issue_report",
 ] as const;
 
@@ -155,6 +158,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      under a question the operator has since answered. */
   "suggest_replies",
   "publish_prototype_review",
+  "resend_prototype_review_telegram",
   /* Clears a needs-you flag the operator is shown, durably and attributed. A
      replayed clientRequestId must answer with the first result rather than
      clear again something that asked anew since. */
@@ -203,8 +207,12 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
   "issue_report",
 ]);
 
+/** Private reads must never persist their answer, even with an explicit key. */
+export const RECEIPT_FREE_READ_TOOLS = new Set<McpToolName>(["relay_owner_history"]);
+
 /** Explicit allowlist: read-like tools with durable effects still need keys. */
 export const OPTIONAL_READ_KEY_TOOLS = new Set<McpToolName>([
+  "relay_owner_history",
   "read_prototype_review",
   "message_receipt", "list_conversations", "search_transcripts", "get_conversation",
   "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot",
@@ -251,6 +259,7 @@ const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolN
      one it did, whose copies no longer need the source files. A changed
      payload under the same key is refused by the digest check above. */
   "publish_prototype_review",
+  "resend_prototype_review_telegram",
   /* Deliberately NOT here: `suggest_replies`. Its write is idempotent over the
      record, but the record is retired by something outside the call — the
      operator's own answer — so re-running an interrupted write would put the
@@ -393,12 +402,12 @@ export interface McpBoundedNumericArg {
  */
 export const MCP_BOUNDED_NUMERIC_ARGS: Partial<Record<McpToolName, readonly McpBoundedNumericArg[]>> = {
   spawn_agent: [
-    { path: ["roleParams", "maxWorkers"], min: 1, max: 20, fallback: 3, role: "orchestrator" },
     { path: ["roleParams", "parallelN"], min: 1, max: 8, fallback: 1, role: "reviewer" },
   ],
   list_conversations: [
     { path: ["limit"], min: 1, max: 100, fallback: 50 },
   ],
+  relay_owner_history: [{ path: ["limit"], min: 1, max: 100, fallback: 50 }],
   telegram_bot_messages: [
     { path: ["limit"], ...BOT_MESSAGES_LIMIT },
     { path: ["maxChars"], ...BOT_MESSAGES_MAX_CHARS },
@@ -2574,8 +2583,8 @@ export function createMcpToolService(
       const retention: ReceiptRetention = MUTATING_MCP_TOOL_NAMES.has(typedTool) ? "durable" : "bounded";
       const requestId = clientRequestId(effectiveArgs);
       // Omitted keys on pure reads mean a fresh observation, without a receipt.
-      // Explicit keys continue through the unchanged claim/replay path below.
-      if ((typedTool === "backfill_worktree_projects" && effectiveArgs.dryRun !== false)
+      // Private reads bypass receipts with explicit keys too; other keyed reads replay below.
+      if (RECEIPT_FREE_READ_TOOLS.has(typedTool) || (typedTool === "backfill_worktree_projects" && effectiveArgs.dryRun !== false)
         || (effectiveArgs.clientRequestId === undefined && OPTIONAL_READ_KEY_TOOLS.has(typedTool))) {
         const verdict = permit();
         if (verdict && !verdict.allowed) return finish(failure(typedTool, null, verdict.code, verdict.error, false), "failure");
@@ -2679,7 +2688,7 @@ export function createMcpToolService(
             requestId,
             error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
             error instanceof Error ? error.message : String(error),
-            false,
+            error instanceof McpUnadmittedRefusal && error.details.retryable === true,
             false,
             error instanceof McpToolRefusal ? error.details : undefined,
           );
@@ -2899,7 +2908,8 @@ export function createMcpToolService(
             } catch (error) {
               return failure(typedTool, requestId,
                 error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
-                error instanceof Error ? error.message : String(error), false, false,
+                error instanceof Error ? error.message : String(error),
+                error instanceof McpUnadmittedRefusal && error.details.retryable === true, false,
                 error instanceof McpToolRefusal ? error.details : undefined);
             }
           }
@@ -2919,7 +2929,8 @@ export function createMcpToolService(
             outcome = "failure";
             return failure(typedTool, requestId,
               error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
-              error instanceof Error ? error.message : String(error), false, false,
+              error instanceof Error ? error.message : String(error),
+              error instanceof McpUnadmittedRefusal && error.details.retryable === true, false,
               error instanceof McpToolRefusal ? error.details : undefined);
           }
           /* Nothing has claimed this key HERE — an observation, never a
@@ -3105,7 +3116,8 @@ export function createMcpToolService(
             } catch (error) {
               return failure(typedTool, requestId,
                 error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "tool_failed",
-                error instanceof Error ? error.message : String(error), false, false,
+                error instanceof Error ? error.message : String(error),
+                error instanceof McpUnadmittedRefusal && error.details.retryable === true, false,
                 error instanceof McpToolRefusal ? error.details : undefined);
             }
           }
@@ -3163,7 +3175,7 @@ export function createMcpToolService(
           /* Named issue, cross-project and orchestrator refusals preserve the
              server's cause and whether the same call can succeed later. */
           const namedRefusal = error instanceof McpToolRefusal && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
-            && (typedTool === "issue_report" || error.details.code === "cross_project_refused"
+            && (error instanceof McpUnadmittedRefusal || typedTool === "issue_report" || error.details.code === "cross_project_refused"
               || ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel"].includes(typedTool))
             ? { code: error.details.code, retryable: error.details.retryable } : null;
           unadmitted = error instanceof McpUnadmittedRefusal;
@@ -3376,7 +3388,8 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Authority is the same as request_attention's, and for the same reason \u2014 this writes into the surface they are answering in: the operator's own session or a designated orchestrator seat. A worker or unidentified caller is refused (SUGGEST_REPLIES_NOT_PERMITTED) with nothing recorded.",
     "The drafts always land under your OWN message: conversationId defaults to your conversation, and naming any other one is refused. To offer drafts elsewhere, ask that conversation's own session to offer them.",
   ].join(" "),
-  publish_prototype_review: "questions (1–7): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. A seat may omit taskId: the form (questions required) then lives in its conversation and the «Рішення» column. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state; nothing is uploaded. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
+  publish_prototype_review: "questions (3–7 on a task, 1–7 without one): {id, text, options: 2–6 {label, recommended?} with exactly one recommended, multiple?, other?}; a review may carry questions without variants. Publish a prototype review on a TASK. Variants require a lane visual-critic pass or a passed fix after its last fail; use prototype → critic → proto-fix (2 rounds) → publish, whose publish stage calls this tool. A refusal names the missing evidence; retry after it is resolved with a new clientRequestId. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. A seat may omit taskId: the form (questions required) then lives in its conversation and the «Рішення» column. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state. The paired owner also receives a rich Telegram carousel with up to 50 image previews; a definite Telegram limit refusal uses a smaller preview and a link to the full review. Failed or unconfirmed posts carry telegramPost state and a reason on the review and in the seat wake. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
+  resend_prototype_review_telegram: "Resend a saved round to the paired owner as a rich Telegram carousel by reviewId. Only the caller’s project is readable, as with read_prototype_review. The same clientRequestId sends once; a new key intentionally sends another copy. The answer includes durable telegramPost state and a reason code on failure or uncertainty. This does not choose a variant or send the operator’s answer to the seat.",
   read_prototype_review: "Rounds carry questions; decision.answers holds option indexes per question id, and skipped:true means the operator took the recommendations. Read a task's prototype reviews, newest waiting round, chosen variant numbers, exact operator comment, time and delivery state. Only the newest round can wait; an undecided round a later decision retired stays in the history with supersededBy naming that decided round. Pipeline callers may omit taskId; a seat that omits it reads its own taskless questions; other callers supply it. Only your own project is readable. Media URLs are installation-local and absent where copies are unavailable. This tool makes no choice and sends no message.",
   dismiss_attention: [
     "Omit target to read exactly this project's Waiting-for-you panel, with each row's clear target and server evidence as hints. project defaults to your seat or maintenance run; the operator names one. Compact by default: 40 rows, 24 KB, nextCursor for more; kinds filters and full evidence are available. Use a fresh clientRequestId for each observation.",
@@ -3417,8 +3430,9 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "`project` defaults to your own on a list, and is required to add or remove.",
   ].join(" "),
   role_presets: [
+    "workerLimit reads the machine default and each project's own worker limit, with current running counts; detail:true adds overrides and the newest 20 changes. Set workerLimit {value: 1..64 or null, project?: project, reason: required text up to 300 characters} to change the machine default or one project's limit; running seats read it at their next wake. Do not combine workerLimit with overrides; expectedRevision applies only to overrides.",
     "Read — and change — which engine, model and effort each role runs on (builder, reviewer, verifier, architect, orchestrator, cleaner, prod-auditor, deployer, maintainer, and the builder and reviewer variants such as `trivial`, `frontend` or `apply-fixes`), the mapping the Settings agent mapping edits and `PUT /api/roles` writes.",
-    "Called without `overrides` it is a read: per role its `config` and its `variants`, plus the registry `revision`, its `health` and any `resets` a retirement made. `detail: true` adds each role's `shipped` values and whether its prompt text is overridden, and `choices`, every valid model per engine with the efforts each accepts.",
+    "Called without `overrides` or `workerLimit` it is a read: per role its `config` and its `variants`, plus the registry `revision`, its `health` and any `resets` a retirement made. `detail: true` adds each role's `shipped` values and whether its prompt text is overridden, and `choices`, every valid model per engine with the efforts each accepts.",
     "`overrides` writes, in the shape of the PUT: `{ [roleId]: { config?, variants? } }`, where a full `{ engine, model, effort }` sets a row and `null` resets it to the shipped default; an absent key is left alone, and `promptScaffold: null` restores the shipped prompt text (a scaffold cannot be set from here). Example: `{ builder: { config: { engine: \"claude\", model: \"claude-sonnet-5-5\", effort: \"high\" } }, reviewer: { config: null } }`.",
     "Only the designated orchestrator seat and the operator's own session write; any other caller reads, and its write is refused with `role_presets_write_refused` before anything else is checked.",
     "The whole write is refused, and nothing is stored, when a row names an engine, model or effort outside the launch catalogue (`role_presets_invalid`, with the offending `violations` and `choices`) or when `expectedRevision` is not the current revision (`role_presets_stale_revision`, carrying the current registry to resend against). `expectedRevision` is optional.",
@@ -3462,6 +3476,10 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "`document.path` is absolute on the Viewer host and must resolve, symlinks followed, under a document root the operator set in the Telegram panel (by default `handoff/` in the Viewer host's home), so write reports there first. Paths through a dot-directory or the Delegatus state directory are refused even inside a root.",
     "Types: .md .markdown .txt .log .json .csv .pdf .png .jpg .jpeg .html, non-empty, at most 20 MB; text files are scanned, as UTF-8 and UTF-16, for private keys, tokens and credentials (including `password: word` assignments) and refused with document_secret naming the class (`details.secretClass`). Other refusals: document_invalid, document_outside_roots, document_forbidden_path, document_type, document_too_large.",
     "`document.filename` is the shown name (default the file's own name) and must keep the file's type class (text, PDF or image: a .md may be shown as .txt, never as .pdf); `document.caption` up to 1024 characters, plain or html by `format`. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send: a completed send replays its receipt, an unconfirmed one answers send_uncertain instead of sending twice. The post appears in telegram_bot_messages with kind document and its filename.",
+  ].join(" "),
+  relay_owner_history: [
+    "Read the operator's Telegram groups where Celestia or a clone is present. action groups lists them; action messages reads one page for chat and today or inclusive from/to dates. The existing owner-tools switch defaults OFF. The operator's stored time zone is sent to Celestia. Messages are oldest first; sentAt is when Celestia stored them. A short page may continue: pass nextCursor alone as cursor, retaining the original dates and zone; nextCursor null ends the range. oldestStoredAt marks retained history. Received edits keep first text; Telegram-side deletions may remain stored. Author ids and file ids are excluded. Live relay agents replying in Telegram cannot read this history. No MCP receipt is stored, even with an explicit clientRequestId.",
+    "Use history only to answer the operator in this conversation. Never copy message text, names, usernames, chat titles or chat ids into bridge reports, requests or messages to other agents or seats, spawn prompts, task text or details, files, commits, pull requests, issues or lessons. A report may say the answer is in this conversation.",
   ].join(" "),
   telegram_bot_messages: [
     "Read recent messages the operator's Telegram bot received in one chat, newest first, from Delegatus's local store — a bot has no history API, so only what arrived while it was connected exists.",
@@ -3656,6 +3674,7 @@ const taskStepsInputSchema = z.array(z.object({
 
 export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   publish_prototype_review: prototypePublishSchema,
+  resend_prototype_review_telegram: z.object({ clientRequestId: clientRequestIdSchema, reviewId: z.string().regex(/^pr_[a-f0-9]{32}$/) }).strict(),
   read_prototype_review: z.object({ clientRequestId: clientRequestIdSchema.optional(), taskId: z.string().min(1).optional() }).strict(),
   spawn_agent: z.object({
     clientRequestId: clientRequestIdSchema,
@@ -4065,7 +4084,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Compact by default; false restores the previous board-card projection. Each row is id, task (first line), state, cursor, stateDetail and per stage {id, latestAttempt: {n, state, verdict}}."),
     cursor: z.unknown().optional().describe("Pass nextCursor unchanged with the same filters and a fresh clientRequestId. Invalid cursors restart with cursorReset:true."),
     ids: z.unknown().optional().describe("Only these durable ids (array or comma-separated string). Unknown ids match no records."),
-    query: z.string().optional().describe("Case-insensitive substring in task text/title."),
+    query: z.string().optional().describe("Case-insensitive text query, or whole PR reference (2800, #2800, PR 2800, pull request 2800). PR references match stored links and linked pipelines on tasks. A designated seat reads only its own project; omission uses its designation."),
     updatedSince: z.unknown().optional().describe("Inclusive ISO timestamp. Invalid timestamps are ignored. Tasks use updatedAt; pipelines use createdAt."),
   }).passthrough(),
   conversation_action: z.object({
@@ -4133,7 +4152,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     limit: boundedNumericInput("list_tasks", "limit"),
     cursor: z.unknown().optional().describe("Pass nextCursor unchanged with the same filters and a fresh clientRequestId. Invalid cursors restart with cursorReset:true."),
     ids: z.unknown().optional().describe("Only these durable ids (array or comma-separated string). Unknown ids match no records."),
-    query: z.string().optional().describe("Case-insensitive substring in task text/title."),
+    query: z.string().optional().describe("Case-insensitive text query, or whole PR reference (2800, #2800, PR 2800, pull request 2800). PR references match stored links and linked pipelines on tasks. A designated seat reads only its own project; omission uses its designation."),
     updatedSince: z.unknown().optional().describe("Inclusive ISO timestamp. Invalid timestamps are ignored. Tasks use updatedAt; pipelines use createdAt."),
   }).passthrough(),
   get_task: z.object({
@@ -4333,6 +4352,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       .describe("Project whose allowed set to read or change. Defaults to your own on a list; required to add or remove."),
   }).passthrough(),
   seat_tick_settings: z.object({
+    release: z.object({ enabled: z.boolean().optional(), askBeforePublish: z.boolean().optional(), minChanges: z.union([z.number(), z.string()]).nullable().optional(), minGapHours: z.union([z.number(), z.string()]).nullable().optional(), why: z.string().nullable().optional(), requestNow: z.boolean().optional(), taskId: z.string().optional(), hold: z.string().nullable().optional() }).optional()
+      .describe("Automatic releases: off until enabled, 30 visible changes, 12-hour gap, six-hour production soak and screenshots every time. why is required from agents. requestNow skips amount/gap but keeps every blocker; hold names an incident, null clears it. Only the project seat or operator may turn askBeforePublish off, quoting the operator request. Read release status here."),
     problemId: z.string().trim().min(1).max(128).optional().describe("Read the full local problem report named by a wake, including after delivery. Undo or replacement returns null for the old identity."),
     autoRotate: z.object({ enabled: z.boolean().optional(), thresholdPercent: z.union([z.number(), z.string(), z.null()]).optional(), why: z.string().nullable().optional() }).optional()
       .describe("Automatic context rotation, off by default. thresholdPercent is 50–90 (default 50; null restores it). Every non-gateway change requires why, naming the request."),
@@ -4368,6 +4389,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   role_presets: z.object({
     clientRequestId: clientRequestIdSchema,
+    workerLimit: z.object({ value: z.number().int().min(1).max(64).nullable(), project: z.string().trim().min(1).optional(), reason: z.string().trim().min(1).max(300) }).optional(),
     overrides: z.record(z.string(), z.object({
       config: z.object({ engine: z.string(), model: z.string(), effort: z.string(), serviceTier: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional() }).nullable().optional()
         .describe("A full { engine, model, effort } sets the role's row; null resets it to the shipped default."),
@@ -4442,6 +4464,10 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     topicId: z.number().int().positive().optional().describe("Forum topic (message_thread_id) to post into."),
     silent: z.boolean().optional().describe("Send without a notification sound."),
   }).passthrough(),
+  relay_owner_history: z.object({
+    action: z.enum(["groups", "messages"]), chat: z.string().optional(), from: z.string().optional(), to: z.string().optional(),
+    cursor: z.string().max(400).optional(), limit: boundedNumericInput("relay_owner_history", "limit"),
+  }),
   telegram_bot_messages: z.object({
     clientRequestId: clientRequestIdSchema,
     chat: z.string().trim().min(1).describe("The chat's alias or chat id, as telegram_bot_chats lists it."),

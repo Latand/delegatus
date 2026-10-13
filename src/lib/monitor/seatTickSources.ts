@@ -1,4 +1,7 @@
+import { readReleaseProject } from "@/lib/release/store";
 import { readSeatTurnOutcome, type SeatTurnOutcome } from "./seatAuthIncident";
+import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
+import { projectWorkerCounts } from "@/lib/orchestrator/workerCount";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { contextReading, readOrchestratorTranscriptFacts } from "@/lib/orchestrator/health";
 import type { SeatContextUsage } from "./seatAutoRotation";
@@ -71,6 +74,8 @@ import { scanRootEntries } from "@/lib/scanner/roots";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import type { StructuredHostRetirementReport } from "@/lib/runtime/structuredHostRetirement";
 import { loadTasks } from "@/lib/tasks/store";
+import { telegramPostSignals } from "@/lib/prototypeReview/telegramPostSignals";
+import { loadSeatRounds } from "@/lib/prototypeReview/seatRounds";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { evidenceFromPipelines, evidenceFromTasks } from "./evidence";
@@ -485,6 +490,7 @@ export interface SeatTickSources {
   seatEverHeld?: (project: string) => boolean;
   /** Projects that currently hold an active seat. */
   activeSeats: () => string[];
+  workerCounts?: typeof projectWorkerCounts;
   pipelines: () => readonly Pipeline[];
   /** Settled lanes the hot store has already let go of (#1289). Cold storage,
       so it is read only once a check has decided it would pay for a `gh`
@@ -691,6 +697,7 @@ export function defaultSeatTickSources(): SeatTickSources {
     seatFor: (project) => orchestratorSeatForCurrentProject(project),
     seatEverHeld: (project) => orchestratorSeatEverHeld(project),
     activeSeats: () => activeSeatsByCurrentProject().map((seat) => seat.project),
+    workerCounts: projectWorkerCounts,
     pipelines: () => loadPipelinesForList(),
     archivedPipelines: () => loadArchivedPipelines(),
     tasks: () => loadTasks(),
@@ -1385,7 +1392,7 @@ export function readRetirementJournalWindow(filename: string, sinceMs: number): 
 }
 
 function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
-  const found: SeatTickSignalInput[] = [];
+  const found: SeatTickSignalInput[] = telegramPostSignals(project, sources.tasks(), loadSeatRounds(project));
   if (viewerOwnProjectKeys().includes(project)) {
     found.push(...selfUpdateSignals(readAuto(statePath("self-update", "auto.json"))));
   }
@@ -1798,7 +1805,7 @@ async function unmergedPullRequests(context: {
     if (!lane || !isFinished(lane)) continue;
     /* #2187 §4.6: a pull request the merge runner is working on is the
        runner's, not the seat's; one it stopped on comes back with its reason. */
-    if (lane.merge && PIPELINE_MERGE_LIVE_STATES.has(lane.merge.state)) continue;
+    if (lane.merge && (PIPELINE_MERGE_LIVE_STATES.has(lane.merge.state) || lane.merge.state === "refreshing")) continue;
     found.push({
       number: pullRequest.number,
       title: redactBounded(pullRequest.title, PULL_REQUEST_TITLE_LIMIT),
@@ -2426,6 +2433,13 @@ export async function gatherSeatTickInput(
   try { endedMaintenance = sources.maintenanceRuns?.(canonical) ?? []; }
   catch { /* The maintenance controller journals its own store failure; unrelated seat work still wakes. */ }
   const settledMaintenance = endedMaintenance.filter(run => !maintenanceRunIsLive(run) && run.endedAt && now - Date.parse(run.endedAt) <= policy.backlogAfterMs && !(state.announcedMaintenance ?? []).includes(run.runId)).slice(-3);
+  const releaseAlerts: NonNullable<SeatTickCheckInput["releaseAlerts"]> = [];
+  try {
+    const release = readReleaseProject(canonical);
+    for (const run of release.history) if (now - run.at <= policy.backlogAfterMs) releaseAlerts.push({ kind: "release-settled", id: `release-settled:${run.key}:${run.at}`, label: `Release ${run.outcome}; task ${run.taskId}, lane ${run.pipelineId}. Read its stage summaries for any product defect seen in the README pictures.` });
+    if (release.blocked && now - release.blocked.since >= 24 * 3_600_000) releaseAlerts.push({ kind: "release-blocked", id: `release-blocked:${release.blocked.episode}`, label: `A due release has waited 24 hours: ${release.observation?.reason ?? "unreadable blocker"}. Read seat_tick_settings release status.` });
+  } catch { /* The release controller journals store failures; other seat work still wakes. */ }
+
 
   /* The open set spans EVERY project, not this one's lanes: an event is history
      because its own lane finished, and reading a lane from another project as
@@ -2476,6 +2490,10 @@ export async function gatherSeatTickInput(
     project: canonical,
     now,
     seat,
+    workers: { ...(() => {
+      const limit = effectiveWorkerLimit(canonical);
+      return { limit: limit.value, source: limit.source, machine: limit.machine };
+    })(), running: sources.workerCounts?.().byProject.get(canonical) ?? 0 },
     ...(seat ? {} : { seatEverHeld: sources.seatEverHeld?.(canonical) ?? true }),
     pipelines,
     tasks,
@@ -2488,6 +2506,7 @@ export async function gatherSeatTickInput(
     ownLanes,
     settledDeploys,
     settledMaintenance,
+    releaseAlerts,
     children,
     childrenUnavailable,
     changeFingerprint: changeFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable, ownLanes, settledDeploys, settledMaintenance),

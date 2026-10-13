@@ -132,7 +132,7 @@ export function findPrototypeRound(taskId: string | null, reviewId: string): Pro
 /** Metadata is a task extension in the existing revisioned, linked SQLite store.
     A null task is the seat asking without one: the round goes to the seat's
     collection under `seatProject`, and nothing else about it differs. */
-export async function publishPrototype(input: PublishPrototypeInput, taskId: string | null, source: PrototypeReviewRound["source"], seatProject?: string): Promise<PrototypeReviewRound> {
+export async function publishPrototype(input: PublishPrototypeInput, taskId: string | null, source: PrototypeReviewRound["source"], seatProject?: string, critic?: PrototypeReviewRound["critic"]): Promise<PrototypeReviewRound> {
   if (taskId === null && !seatProject) throw new PrototypeError("a seat round needs its project");
   const publicationKey = `${source.conversationId ?? "operator"}:${input.clientRequestId}`;
   const inputDigest = crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex");
@@ -158,8 +158,9 @@ export async function publishPrototype(input: PublishPrototypeInput, taskId: str
     const removed: string[] = [];
     try {
       await fs.writeFile(path.join(staging,"manifest.json"),JSON.stringify({ id }), { mode: 0o600, flush: true });
-      const round: PrototypeReviewRound = { id, taskId, project: seatProject ?? "", title: input.title, publicationKey, inputDigest, source,
+      const round: PrototypeReviewRound = { id, taskId, project: seatProject ?? "", title: input.title, publicationKey, inputDigest, source, ...(critic ? { critic } : {}),
         createdAt: new Date().toISOString(), variants: [], ...(input.questions ? { questions: input.questions } : {}) };
+      round.telegramPost = { key: id, state: "pending", at: round.createdAt };
       let bytes = 0, imageBytes = 0;
       const copy = async (raw: string) => {
         const media = await copyMedia(raw,staging); bytes += media.bytes;

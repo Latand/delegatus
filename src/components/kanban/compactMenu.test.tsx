@@ -76,7 +76,8 @@ test("a closed row that opens in place points down, and only a row that opens a 
 test("a pipeline's and a stage's menu are the plain list they were", () => {
   for (const kind of ["pipeline", "stage"]) {
     const markup = renderToStaticMarkup(<BoardMenu anchor={null as never} label="menu" items={[item("pause", "Pause", { why: "The pipeline does not move on." })]} onClose={() => {}} kind={kind} />);
-    expect(markup).toBe('<div class="menu" role="menu" aria-label="menu"><button type="button" role="menuitem"><span class="lbl">Pause<span class="why">The pipeline does not move on.</span></span></button></div>');
+    /* Each row names its entry for a driver (`data-menu-item`), as the compact rows do. */
+    expect(markup).toBe('<div class="menu" role="menu" aria-label="menu"><button type="button" role="menuitem" data-menu-item="pause"><span class="lbl">Pause<span class="why">The pipeline does not move on.</span></span></button></div>');
   }
 });
 

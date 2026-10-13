@@ -5,6 +5,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { byteShort, captionHead, matchRounds, reviewAnswer, selectFrames } from "./prototypeRead";
 import { cleanStrings, withoutCredentials, withoutLocalPaths } from "./redaction";
 import { READ_SCHEMAS, validToolValue } from "./readSchemas";
+import { normalizedBoardQuery } from "@/lib/mcp/pullRequestQuery";
 
 export const READ_TOOL_NAMES = ["list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages", "orchestrator_messages", "search_transcripts", "read_prototype_review", "view_prototype_frame", "agent_fleet"] as const;
 export type ReadToolName = typeof READ_TOOL_NAMES[number];
@@ -64,6 +65,7 @@ export class CompanionBoardReads {
     const schema = READ_SCHEMAS[name]; if (!schema) throw new Error("TOOL_NOT_ALLOWED");
     if (Object.keys(args).some(key => !Object.hasOwn(schema,key)) || Object.entries(schema).some(([key,property]) => !validToolValue(property,args[key]))) throw new Error("INVALID_TOOL_ARGUMENTS");
     const values = Object.fromEntries(Object.entries(args).filter(([key,value]) => key !== "project" && key !== "refresh" && value !== null && value !== undefined));
+    if ((name === "list_tasks" || name === "list_pipelines") && typeof values.query === "string") values.query = normalizedBoardQuery(values.query);
     return { ...values, project, ...(name.startsWith("list_") || name.endsWith("messages") ? {limit:values.limit ?? 10} : {}),
       ...(name === "agent_fleet" ? {limit:values.limit ?? 10} : {}),
       ...(name === "agent_activity" ? {liveOnly:values.liveOnly ?? true,limit:values.limit ?? 10} : {}),

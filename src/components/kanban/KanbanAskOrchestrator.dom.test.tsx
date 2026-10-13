@@ -5,6 +5,11 @@ import type { Root } from "react-dom/client";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 
 import type { TaskMutationPorts } from "./useTaskMutations";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* The card's one «Ask the orchestrator» button: it puts a reference to THIS
    task into its project's orchestrator composer as a chip, and changes nothing

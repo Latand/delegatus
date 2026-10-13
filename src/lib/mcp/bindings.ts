@@ -1,3 +1,6 @@
+import { releaseStatus } from "@/lib/release/answer";
+import { releaseControlChange } from "@/lib/release/store";
+import { RELEASE_DEFAULTS } from "@/lib/release/settings";
 import { liveOwnerRelayConversation, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 import { peerSeatMessages } from "@/lib/links/boardLinks";
 import { recoverSeatMessage, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
@@ -27,6 +30,8 @@ import path from "node:path";
    binary, so a packaged release with no checkout can still name the repository
    it deploys (#1321). */
 import viewerPackageManifest from "../../../package.json";
+import { effectiveWorkerLimit, projectWorkerLimit, readWorkerLimits, setMachineWorkerLimit, setProjectWorkerLimit, isWorkerLimit } from "@/lib/operator/workerLimit";
+import { projectWorkerCounts } from "@/lib/orchestrator/workerCount";
 
 import { activeClaudeAccountId, claudeAccountsForPrivacy, listClaudeAccounts } from "@/lib/accounts/claude";
 import { activeCodexAccountId, codexAccountsForPrivacy, listCodexAccounts } from "@/lib/accounts/codex";
@@ -167,6 +172,7 @@ import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { describe, projectForCwd, reprojectFileDescription } from "@/lib/scanner/describe";
 import { pathAllowed, scanRootEntries } from "@/lib/scanner/roots";
 import { completedFileScan } from "@/lib/scanner/scanCache";
+import { completedScanForMcp } from "./completedScan";
 import { readCachedResourceSessions, readResources, readResourcesWithDiagnostic } from "@/lib/resources";
 import { adoptLiveRootSession, conversationRole, liveRootSession, type RootSessionSource } from "@/lib/root/adopt";
 import { appendRoleMappingAudit, changedMappingRows, type RoleMappingAuditRow, roleLaunchChoices, roleMappingViolations, roleRegistryAnswer } from "@/lib/roles/mcpMapping";
@@ -212,6 +218,7 @@ import { applyAssignmentPatches, createTask, patchTask, type CreateTaskInput, ty
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { recordAuthors, type RecordAuthor } from "@/lib/team";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
+import { normalizedBoardQuery, pullRequestQuery, titleHasPullRequest } from "./pullRequestQuery";
 import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, reportHeaderName, type EffectiveReportTelegram } from "@/lib/projects/settings";
 import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
@@ -1264,7 +1271,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
     ...productionSelectedContextDependencies,
     voiceUtteranceContext: productionVoiceUtteranceContext,
   },
-  completedFileScan,
+  completedFileScan: completedScanForMcp,
   registrySnapshot: () => agentRegistry().readOnlySnapshot(),
   readSpawnAdmissionFence,
   validateSpawnAdmission: (body, context) => productionViewerControlDependencies().post(
@@ -1423,6 +1430,7 @@ export function defaultMcpSpawnRoleParams(
   if (raw !== undefined && (!raw || typeof raw !== "object" || Array.isArray(raw))) return undefined;
   const source = raw as Record<string, unknown> | undefined;
   const resolved = { ...source };
+  if (role === "orchestrator") delete resolved.maxWorkers;
   const missing: RoleParameter[] = [];
   const prompt = typeof args.prompt === "string" ? args.prompt : "";
   for (const parameter of definition.parameters.filter((candidate) => candidate.required)) {
@@ -1437,7 +1445,7 @@ export function defaultMcpSpawnRoleParams(
       `missing required roleParams for ${role}: ${missing.map((parameter) => `${parameter.key}: ${roleParamShape(parameter)}`).join("; ")}`,
     );
   }
-  return Object.keys(resolved).length ? resolved : source;
+  return Object.keys(resolved).length || raw !== undefined ? resolved : undefined;
 }
 
 /** The exact body handed to `/api/spawn`, shared by the one dispatch and the
@@ -1527,6 +1535,8 @@ function requireMcpDeployerConfirmation(args: McpToolArgs): void {
 }
 
 async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  const retiredWorkerLimit = text(args.role) === "orchestrator" && objectRecord(args.roleParams) && "maxWorkers" in args.roleParams
+    ? effectiveWorkerLimit(projectForCwd(spawnCwd(args)) ?? "") : null;
   if (text(args.role) === "deployer") requireMcpDeployerCaller(args, spawnTargetProject(args, spawnCwd(args)), dependencies);
   requireMcpDeployerConfirmation(args);
   let autonomous = !!dependencies;
@@ -1603,6 +1613,7 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
   }
   return {
     conversationId: result.conversationId,
+    ...(retiredWorkerLimit ? { ignored: { "roleParams.maxWorkers": `the project's worker limit applies (${retiredWorkerLimit.value}, ${retiredWorkerLimit.source}); change it with role_presets workerLimit` } } : {}),
     transcriptPath: result.path,
     operationId: result.launchId,
     launchId: result.launchId,
@@ -4211,8 +4222,9 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
       : peerSeatMessages(link.key) ? null : "unknown" };
   });
   const revocations = orchestratorRevocations().filter((revocation) => revocation.project === project);
+  const workerLimit = { ...effectiveWorkerLimit(project), running: projectWorkerCounts().byProject.get(project) ?? 0 };
   const base = full ? {
-    project, linkedSeats,
+    project, linkedSeats, workerLimit,
     mergeOnReview: mergeOnReviewEnabled(project),
     bridgeReports: bridgeReportsEnabled(project),
     ...reportFields(project, dependencies),
@@ -4233,7 +4245,7 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
       successorConversationId: revocation.successorConversationId ?? null,
     })),
   } : {
-    project, linkedSeats,
+    project, linkedSeats, workerLimit,
     /* #2187 §4.1: whether finished lanes here merge on their own. */
     mergeOnReview: mergeOnReviewEnabled(project),
     /* #2146: whether this project's bridge reports are on; off, file none. */
@@ -4408,6 +4420,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   const current = readSettings(project);
 
   const change: SeatTickSettingsChange = {};
+  if (args.release !== undefined) change.release = args.release as SeatTickSettingsChange["release"];
   if (args.autoRotate !== undefined) change.autoRotate = args.autoRotate as SeatTickSettingsChange["autoRotate"];
   if (args.maintenance !== undefined) change.maintenance = args.maintenance as SeatTickSettingsChange["maintenance"];
   if (args.enabled !== undefined) change.enabled = args.enabled as boolean;
@@ -4449,6 +4462,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     };
     const applied = applySeatTickSettingsChange(current, change, { at: new Date().toISOString(), actor });
     if (!applied.ok) throw new Error(applied.error);
+    if (change.release) releaseControlChange(project, change.release, actor, applied.settings.updatedAt!);
     writeSettings(project, applied.settings);
     settings = applied.settings;
     maintenanceNotes = applied.notes;
@@ -4468,6 +4482,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   const { monitorPrompt: storedPrompt, reason: storedReason, ...settingsWithoutPrompt } = settings;
   delete settingsWithoutPrompt.maintenance;
   delete settingsWithoutPrompt.autoRotate;
+  delete settingsWithoutPrompt.release;
   /* #2030: a write is acknowledged, never read back. The caller holds what it
      sent; the revision and the stored length are what it needs to know the row
      took it. A change to another project's tick still says so out loud. */
@@ -4527,6 +4542,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     /* What a project that has never been configured runs on, so a caller can
        see what it is restoring before it restores it. */
     ...(verbose ? { defaults: seatTickScheduleDefaults(project) } : {}),
+    release: { ...RELEASE_DEFAULTS, ...settings.release, status: releaseStatus(project) },
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? 50,
       ...(verbose ? { setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null } : {}),
       ...autoRotationFailureAnswer(project) },
@@ -4613,19 +4629,51 @@ function seatTickFenceAnswer(project: string, wakeIntervalMs: number, now: numbe
  * - **What is recorded.** Every write appends who wrote it and each row's before
  *   and after to `role-presets-audit.jsonl` beside role-presets.json.
  */
-function rolePresetsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
-  if (args.overrides === undefined) {
-    if (args.expectedRevision !== undefined) throw new Error("expectedRevision applies to a write; send it with overrides");
-    const detail = args.detail === true;
-    return redactPayload({ ...roleRegistryAnswer(loadRoleRegistrySnapshotOrDefaults(), { detail }), ...(detail ? { choices: roleLaunchChoices() } : {}) });
-  }
-
+async function rolePresetsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const attribution = attributionOf(dependencies);
-  if ((attribution.kind !== "manager" && attribution.kind !== "gateway") || (attribution.kind === "manager" && !attribution.conversationId)) {
+  const writing = args.overrides !== undefined || args.workerLimit !== undefined;
+  if (writing && ((attribution.kind !== "manager" && attribution.kind !== "gateway") || (attribution.kind === "manager" && !attribution.conversationId))) {
     throw new McpToolRefusal(
       "only the designated orchestrator seat and the operator's own session change the role mapping; this session reads it. Ask the orchestrator, or report the request over the bridge.",
       { code: "role_presets_write_refused", callerKind: attribution.kind },
     );
+  }
+  const workerContext = () => {
+    const supplied = dependencies.callerProject?.();
+    const caller = !supplied && attribution.conversationId ? agentRegistry().conversation(attribution.conversationId as never) : null;
+    const cwd = caller?.generations.at(-1)?.launchProfile.cwd;
+    return { own: supplied ?? caller?.projectOwnership?.project ?? (cwd ? projectForCwd(cwd) : null), counts: projectWorkerCounts() };
+  };
+  if (args.overrides === undefined && args.workerLimit === undefined) {
+    if (args.expectedRevision !== undefined) throw new Error("expectedRevision applies to a write; send it with overrides");
+    const detail = args.detail === true;
+    const { own, counts } = workerContext();
+    const stored = readWorkerLimits();
+    const machine = effectiveWorkerLimit("");
+    const project = own ? canonicalOrchestratorProject(own) : null;
+    return redactPayload({ ...roleRegistryAnswer(loadRoleRegistrySnapshotOrDefaults(), { detail }), ...(detail ? { choices: roleLaunchChoices() } : {}), workerLimit: {
+      machine: { value: machine.machine, source: stored.machine ? "machine" : "default", changedAt: stored.machine?.changedAt ?? null, changedBy: stored.machine?.changedBy ?? null },
+      here: project ? { project, value: projectWorkerLimit(project, stored)?.value ?? null, effective: effectiveWorkerLimit(project).value, source: effectiveWorkerLimit(project).source, running: counts.byProject.get(project) ?? 0 } : null,
+      runningMachine: counts.machine, bounds: [1, 64],
+      ...(detail ? { projects: stored.projects, history: stored.history.slice(-20) } : {}),
+    } });
+  }
+
+  if (args.workerLimit !== undefined) {
+    if (args.overrides !== undefined) throw new McpToolRefusal("workerLimit and overrides change separate stores; send separate calls", { code: "worker_limit_with_overrides" });
+    if (args.expectedRevision !== undefined) throw new Error("expectedRevision applies only to overrides");
+    const input = objectRecord(args.workerLimit) ? args.workerLimit : {};
+    if (input.value !== null && !isWorkerLimit(input.value)) throw new Error("worker limit must be an integer from 1 to 64");
+    const reason = text(input.reason);
+    if (!reason || reason.length > 300) throw new Error("worker limit reason is required (1 to 300 characters)");
+    if (input.project !== undefined && !text(input.project)) throw new Error("project must be non-empty");
+    const { own, counts } = workerContext();
+    const project = input.project === undefined ? null : await resolveOrchestratorToolProject(text(input.project), dependencies);
+    const actor = { kind: attribution.kind as "manager" | "gateway", conversationId: attribution.via?.deputy ?? attribution.conversationId, project: own ? canonicalOrchestratorProject(own) : null, via: "tool" };
+    const result = project === null
+      ? setMachineWorkerLimit(input.value as number | null, actor, reason, text(args.clientRequestId) || null)
+      : setProjectWorkerLimit(project, input.value as number | null, actor, reason, text(args.clientRequestId) || null);
+    return redactPayload({ ...result, scope: project === null ? "machine" : project === canonicalOrchestratorProject(own ?? "") ? "project" : "other-project", running: project ? counts.byProject.get(project) ?? 0 : counts.machine });
   }
 
   const expectedRevision = args.expectedRevision;
@@ -4914,6 +4962,13 @@ function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
   });
   if (accountId && accounts.length === 0) throw new Error(`no ${engine || "claude, codex or copilot"} account has the id ${accountId}`);
   return redactPayload({ count: accounts.length, accounts });
+}
+
+async function relayOwnerHistory(args: McpToolArgs, control: ViewerControlDependencies, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  if (ownerRelayCaller(dependencies)) throw new McpToolRefusal("Group history cannot be read while answering in Telegram.", { code: "owner_history_refused" });
+  return redactPayload(await control.post("/api/external-relay/owner-history", {
+    op: args.action, ...Object.fromEntries(["chat", "from", "to", "limit", "cursor"].filter(key => args[key] !== undefined).map(key => [key, args[key]])),
+  }, callerCapabilityHeaders()));
 }
 
 /*
@@ -5229,12 +5284,12 @@ function compactMergeFields(pipeline: Pipeline): { mergeOnReview?: true; bridgeR
 /** #2187 §4.1: whether the lane's project merges when the review passes, and
     where the lane's own merge stands when the runner took it. #2146: whether
     the project's bridge reports are on. */
-function mergeFields(pipeline: Pipeline): { mergeOnReview: boolean; bridgeReports: boolean; merge?: { state: PipelineMergeState; reason: string | null; by: "auto-merge" | "outside" | null; pr: number | null } } {
+function mergeFields(pipeline: Pipeline): { mergeOnReview: boolean; bridgeReports: boolean; merge?: { state: PipelineMergeState; reason: string | null; by: "auto-merge" | "outside" | null; pr: number | null; refresh?: string } } {
   const merge = pipeline.merge;
   return {
     mergeOnReview: mergeOnReviewEnabled(pipeline.project),
     bridgeReports: bridgeReportsEnabled(pipeline.project),
-    ...(merge ? { merge: { state: merge.state, reason: merge.reason, by: merge.by, pr: merge.prNumber } } : {}),
+    ...(merge ? { merge: { state: merge.state, reason: merge.reason, by: merge.by, pr: merge.prNumber, ...(merge.refresh?.pipelineId ? { refresh: merge.refresh.pipelineId } : {}) } } : {}),
   };
 }
 
@@ -5428,6 +5483,54 @@ async function flowAction(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
   return redactPayload({ flowId, flow: result.flow, ...mutationReceipt(operationId) });
 }
 
+/** A seat's list scope comes from its authenticated designation. */
+function boardReadProject(
+  args: McpToolArgs,
+  dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "authorizedSeats"> & Partial<Pick<ViewerMcpDomainDependencies, "attentionAuthority">>,
+): string {
+  const requested = text(args.project);
+  const caller = dependencies.callerAttribution?.() ?? (dependencies.attentionAuthority ? callerAttributionFrom(dependencies.attentionAuthority(), () => false) : null);
+  if (!caller || (caller.kind !== "manager" && caller.kind !== "gateway")) return requested ? canonicalProject(requested) : "";
+  const seat = caller.conversationId && (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+    .find(candidate => candidate.conversationId === caller.conversationId);
+  if (!seat && caller.kind === "gateway") return requested ? canonicalProject(requested) : "";
+  if (!seat || !seat.project) throw new McpToolRefusal("the caller's project designation is unavailable; nothing was read", { code: "project_scope_refused", status: 403 });
+  const own = canonicalProject(seat.project);
+  if (requested && canonicalProject(requested) !== own) throw new McpToolRefusal("an orchestrator seat reads only its own project's board; use send_message_to_orchestrator for another project", { code: "cross_project_refused", status: 403, retryable: false });
+  return own;
+}
+
+function pipelineReferenceRows(dependencies: ViewerMcpDomainDependencies, project: string): Pipeline[] {
+  const source = dependencies.pipelineSelectionSource?.();
+  return source ? boardSelection(source.filename, "pipelines").referenceRecords(source, project)
+    : (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines).filter(row => !project || canonicalProject(row.project) === project);
+}
+
+function pipelineMatchesPr(pipeline: Pipeline, number: number): boolean {
+  return recordMatchesPr(pipeline.task, pipelineWorkLinks(pipeline), number);
+}
+
+function recordMatchesPr(title: string, resolved: ReturnType<typeof pipelineWorkLinks>, number: number): boolean {
+  const matching = resolved.links.filter(link => link.number === number);
+  return matching.some(link => link.kind === "pr")
+    || (!matching.some(link => link.kind === "issue") && titleHasPullRequest(title, number));
+}
+
+function taskReferenceIds(dependencies: ViewerMcpDomainDependencies, project: string, number: number): string[] {
+  const pipelines = pipelineReferenceRows(dependencies, project);
+  const carrying = new Map<string, Set<string>>();
+  for (const pipeline of pipelines) if (pipelineMatchesPr(pipeline, number)) {
+    const ids = carrying.get(canonicalProject(pipeline.project)) ?? new Set<string>();
+    for (const id of pipeline.taskIds ?? []) ids.add(id);
+    carrying.set(canonicalProject(pipeline.project), ids);
+  }
+  const source = dependencies.taskSelectionSource?.();
+  const tasks = source ? boardSelection(source.filename, "tasks").referenceRecords(source, project)
+    : (dependencies.listTaskRecords?.() ?? dependencies.loadTasks()).filter(row => !project || canonicalProject(row.project) === project);
+  return tasks.filter(task => carrying.get(canonicalProject(task.project))?.has(task.id)
+    || recordMatchesPr(task.text, taskWorkLinks(task, []), number)).map(task => task.id).sort();
+}
+
 /** Lists reuse the store's immutable generation and materialize one page. */
 async function listPipelines(
   args: McpToolArgs,
@@ -5436,8 +5539,11 @@ async function listPipelines(
 ): Promise<McpToolPayload> {
   throwIfCallEnded(context);
   const states = stringSet(args.state, ["open", "draft", "provisioning", "running", "paused", "needs_decision", "needs_review", "completed", "closed"]);
-  const scope = { project: text(args.project), states, includeClosed: args.includeClosed === true,
-    ids: stringSet(args.ids), query: text(args.query).trim().toLowerCase(), updatedSince: sinceTime(args.updatedSince) };
+  const scope = { project: boardReadProject(args, dependencies), states, includeClosed: args.includeClosed === true,
+    ids: stringSet(args.ids), query: normalizedBoardQuery(text(args.query)), updatedSince: sinceTime(args.updatedSince),
+    queryIds: undefined as string[] | undefined };
+  const number = pullRequestQuery(scope.query);
+  if (number !== null) scope.queryIds = pipelineReferenceRows(dependencies, scope.project).filter(row => pipelineMatchesPr(row, number)).map(row => row.id).sort();
   const source = dependencies.pipelineSelectionSource?.();
   /* #2059: the compact row names its PR in one string, the full forms carry
      every resolved link. */
@@ -5453,11 +5559,11 @@ async function listPipelines(
     : await listPageAsync(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines, {
     scope, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))),
     identity: pipeline => ({ id: pipeline.id, time: pipeline.createdAt ?? "" }),
-    matches: pipeline => (!scope.project || pipeline.project === scope.project)
+    matches: pipeline => (!scope.project || canonicalProject(pipeline.project) === scope.project)
       && (!states.length || states.includes(pipeline.state) || (states.includes("open") && !["completed", "closed"].includes(pipeline.state)))
       && (scope.includeClosed || (pipeline.state !== "closed" && !pipeline.hiddenAt))
       && (!scope.ids.length || scope.ids.includes(pipeline.id))
-      && (!scope.query || pipeline.task.toLowerCase().includes(scope.query))
+      && (scope.queryIds !== undefined ? scope.queryIds.includes(pipeline.id) : !scope.query || pipeline.task.toLowerCase().includes(scope.query))
       && (!scope.updatedSince || pipeline.createdAt >= scope.updatedSince),
     project,
   }, () => throwIfCallEnded(context));
@@ -5512,9 +5618,12 @@ function listTaskRow(task: TaskPipelineReadModel) {
 
 function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext = {}): McpToolPayload {
   const statuses = stringSet(args.statuses ?? args.status, ["inbox", "assigned", "blocked", "done"]);
-  const scope = { project: text(args.project), statuses, placement: stringSet(args.placement, ["pinned", "unplaced"])[0] ?? "",
-    openOnly: args.openOnly === true, updatedSince: sinceTime(args.updatedSince), ids: stringSet(args.ids), query: text(args.query).trim().toLowerCase(),
+  const scope = { project: boardReadProject(args, dependencies), statuses, placement: stringSet(args.placement, ["pinned", "unplaced"])[0] ?? "",
+    openOnly: args.openOnly === true, updatedSince: sinceTime(args.updatedSince), ids: stringSet(args.ids), query: normalizedBoardQuery(text(args.query)),
+    queryIds: undefined as string[] | undefined,
     priorities: stringSet(args.priority, [...TASK_PRIORITIES]) };
+  const number = pullRequestQuery(scope.query);
+  if (number !== null) scope.queryIds = taskReferenceIds(dependencies, scope.project, number);
   const source = dependencies.taskSelectionSource?.();
   const project = (source: TaskPipelineReadModel) => {
     const task = projectReadText(source, context);
@@ -5525,13 +5634,13 @@ function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies,
     : listPage(taskReadModel(dependencies), {
     scope, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, 100))),
     identity: task => ({ id: task.id, time: task.updatedAt ?? "" }),
-    matches: task => (!scope.project || task.project === scope.project)
+    matches: task => (!scope.project || canonicalProject(task.project) === scope.project)
       && (!statuses.length || statuses.includes(task.status)) && (!scope.openOnly || task.status !== "done")
       && (!scope.placement || task.placement === scope.placement)
       && (!scope.priorities.length || scope.priorities.includes(taskPriority(task)))
       && (!scope.updatedSince || task.updatedAt >= scope.updatedSince)
       && (!scope.ids.length || scope.ids.includes(task.id))
-      && (!scope.query || task.text.toLowerCase().includes(scope.query)),
+      && (scope.queryIds !== undefined ? scope.queryIds.includes(task.id) : !scope.query || task.text.toLowerCase().includes(scope.query)),
     project,
   });
   const { rows: tasks, ...pagination } = page;
@@ -6086,18 +6195,20 @@ async function archiveConversationAction(
     }
   };
 
-  applyResolved(resolved.flatMap((target, index) => target ? [{ index, target }] : []));
-
+  const registryResolved = resolved.flatMap((target, index) => target ? [{ index, target }] : []);
+  const scanResolved: Array<{ index: number; target: ResolvedConversationArchiveTarget }> = [];
   const unresolvedIndexes = resolved.flatMap((target, index) => target ? [] : [index]);
   if (unresolvedIndexes.length > 0) {
     let files: readonly FileEntry[] | null = null;
     try {
       files = (await dependencies.completedFileScan()).snapshot.files;
-    } catch {
+    } catch (error) {
+      // Resolve the whole batch before any write so a pending scan can safely
+      // release admission and let the caller retry under the same key.
+      if (error instanceof McpUnadmittedRefusal) throw error;
       files = null;
     }
     throwIfCallEnded(context);
-    const scanResolved: Array<{ index: number; target: ResolvedConversationArchiveTarget }> = [];
     for (const index of unresolvedIndexes) {
       const target = files ? resolveArchiveTargetFromFiles(inputs[index]!, files) : null;
       if (target) {
@@ -6113,8 +6224,9 @@ async function archiveConversationAction(
         outcome: files ? "not-found" : "resolution-failed",
       };
     }
-    applyResolved(scanResolved);
   }
+  applyResolved(registryResolved);
+  applyResolved(scanResolved);
 
   const operationId = mcpOperationId("conversation_action", requestId(args));
   const projects = [...resolvedProjects];
@@ -7526,11 +7638,11 @@ async function recoverSpawn(
 /** The caller and task a prototype call's receipt belongs to, decided by the
     Viewer with the same fences as the call itself. A caller the Viewer refuses
     is refused here, before any receipt is read. */
-async function prototypeReceiptScope(mode: "publish" | "read",args: McpToolArgs,control: ViewerControlDependencies,context?: McpToolCallContext): Promise<string> {
+async function prototypeReceiptScope(mode: "publish" | "read" | "resend",args: McpToolArgs,control: ViewerControlDependencies,context?: McpToolCallContext): Promise<string> {
   const capability = callerCapability();
   if (!capability) throw new Error("prototype reviews require an identified caller");
   const scope = await viewerControlForCall(control,context).post("/api/prototype-reviews/scope",
-    { mode, ...(args.taskId === undefined ? {} : { taskId: args.taskId }) },{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+    { mode, ...(args.taskId === undefined ? {} : { taskId: args.taskId }), ...(args.reviewId === undefined ? {} : { reviewId: args.reviewId }) },{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
   /* A seat asking without a task is scoped to its own questions (docs/design/operator-decision-forms.md §2.1). */
   if (typeof scope.conversationId !== "string" || (typeof scope.taskId !== "string" && scope.taskId !== null)) throw new Error("the Viewer did not name the caller and task of this prototype call");
   return `${scope.conversationId}\n${scope.taskId ?? "seat"}`;
@@ -7688,6 +7800,11 @@ export function viewerMcpBindings(
       if (!capability) throw new Error("prototype publication requires an identified caller");
       return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews",args,{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
     },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("publish",args,controlDependencies,context) }),
+    resend_prototype_review_telegram: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
+      const capability = callerCapability();
+      if (!capability) throw new Error("prototype resend requires an identified caller");
+      return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews/telegram",args,{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("resend",args,controlDependencies,context) }),
     read_prototype_review: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
       const capability = callerCapability();
       if (!capability) throw new Error("prototype reads require an identified caller");
@@ -7711,6 +7828,7 @@ export function viewerMcpBindings(
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_document: (args, context) => telegramBotSendDocument(args, viewerControlForCall(controlDependencies, context)),
+    relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
     issue_report: (args, context) => issueReportTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
   };

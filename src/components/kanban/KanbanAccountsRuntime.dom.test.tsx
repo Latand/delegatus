@@ -12,6 +12,11 @@ import type { RuntimeBus, RuntimeBusState } from "@/hooks/runtimeBus";
 
 import type { PipelinePorts, PipelineWriteResult } from "./pipelinePorts";
 import type { TaskMutationPorts } from "./useTaskMutations";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* A conversation's account switch as the runtime session reports it (#1695
    K6): the journal projects a queued reconfigure on the session

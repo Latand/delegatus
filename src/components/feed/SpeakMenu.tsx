@@ -38,9 +38,10 @@ const ALERT_WIDTH = 224;
  * Pure placement math for the read-aloud menu (kept out of the effect so it is
  * unit-testable). The menu hangs off the trigger's right edge and prefers to
  * open BELOW it — a context menu drops from where the pointer is — flipping
- * above only when it cannot fit below and above has more room. Both axes are
- * clamped into the viewport, so the menu is whole on screen even when the
- * message it belongs to sits at the very bottom or the very right of the feed.
+ * above only when it cannot fit below and above has more room. A caller may
+ * prefer above when that space is clear for the content behind its anchor.
+ * Both axes are clamped into the viewport, so the menu is whole on screen even
+ * when the message it belongs to sits at the very bottom or the very right.
  *
  * (`verdictPlacement` in the pipeline strip solves the same clipping with the
  * opposite policy — centred on its chip and above-first — so the two stay
@@ -51,11 +52,14 @@ export function speakMenuPlacement(
   content: { width: number; height: number },
   viewport: { width: number; height: number },
   margin = MARGIN,
+  preferAbove = false,
 ): { left: number; top: number } {
   const left = Math.max(margin, Math.min(anchor.right - content.width, viewport.width - content.width - margin));
   const roomBelow = viewport.height - anchor.bottom - margin;
   const roomAbove = anchor.top - margin;
-  const flip = content.height > roomBelow && roomAbove > roomBelow;
+  const flip = preferAbove
+    ? content.height <= roomAbove || content.height > roomBelow && roomAbove > roomBelow
+    : content.height > roomBelow && roomAbove > roomBelow;
   /* One clamp for both branches: the flipped side used to carry only the lower
      bound, so an anchor scrolled far below the fold placed the menu below the
      fold with it. */
@@ -97,6 +101,7 @@ export function useAnchoredBox(
   anchorRef: RefObject<HTMLElement | null>,
   rootRef: RefObject<HTMLElement | null>,
   fallbackWidth = MENU_WIDTH,
+  preferAbove = false,
 ): { style: CSSProperties; onScreen: boolean } {
   const [box, setBox] = useState<{ left: number; top: number } | null>(null);
   const [onScreen, setOnScreen] = useState(true);
@@ -114,11 +119,13 @@ export function useAnchoredBox(
       { top: rect.top, bottom: rect.bottom, right: rect.right },
       { width: root.offsetWidth || fallbackWidth, height: root.offsetHeight },
       viewport,
+      MARGIN,
+      preferAbove,
     );
     /* Replaced only when it actually moved, so a re-measure that agrees with
        the current placement does not schedule another render. */
     setBox((previous) => (previous && previous.left === next.left && previous.top === next.top ? previous : next));
-  }, [anchorRef, rootRef, fallbackWidth]);
+  }, [anchorRef, rootRef, fallbackWidth, preferAbove]);
 
   useLayoutEffect(measure);
 

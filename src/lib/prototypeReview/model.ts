@@ -16,22 +16,26 @@ export function prototypeDeliveryPhase(delivery: PrototypeDecision["delivery"], 
 
 /** Only presentation metadata crosses installation boundaries. */
 export function prototypeRoundMetadata(round: PrototypeReviewRound): PrototypeRoundView {
-  const { publicationKey: _key, inputDigest: _digest, decision, variants, ...publicRound } = round;
+  const { publicationKey: _key, inputDigest: _digest, critic: _critic, decision, variants, ...publicRound } = round;
+  void _critic;
   const media = (item: PrototypeMedia) => ({ ...item, available: false, url: null });
   return { ...publicRound, variants: variants.map(v => ({ ...v,
     frames: v.frames.map(({ image, original, ...frame }) => ({ ...frame, image: media(image), ...(original ? { original: media(original) } : {}) })),
     videos: v.videos.map(video => ({ ...video, media: media(video.media) })) })),
-    ...(decision ? { decision: { chosen: decision.chosen, ...(decision.answers ? { answers: decision.answers } : {}), ...(decision.skipped ? { skipped: decision.skipped } : {}), comment: decision.comment, at: decision.at,
+    ...(decision ? { decision: { chosen: decision.chosen, ...(decision.rejected ? { rejected: decision.rejected } : {}), ...(decision.answers ? { answers: decision.answers } : {}), ...(decision.skipped ? { skipped: decision.skipped } : {}), comment: decision.comment, at: decision.at,
       delivery: { state: decision.delivery.state, retryable: ["failed", "uncertain", "no-orchestrator", "pending"].includes(decision.delivery.state) } } } : {}) };
 }
 export function prototypeReviewReplica(task: BoardTask): PrototypeReviewReplica | undefined {
   const summary = prototypeReviewSummary(task.prototypeReviews ?? []);
-  return summary ? { summary, rounds: task.prototypeReviews!.map(round => prototypeRoundMetadata({ ...round, taskId: task.id, project: task.project })) } : task.prototypeReviewReplica;
+  return summary ? { summary, rounds: task.prototypeReviews!.map(round => {
+    const { telegramPost: _localPost, ...metadata } = prototypeRoundMetadata({ ...round, taskId: task.id, project: task.project });
+    return metadata;
+  }) } : task.prototypeReviewReplica;
 }
 
 /** What the summary reads of a round: a stored round and its public view both carry it. */
 type SummaryRound = Pick<PrototypeReviewRound, "id" | "title" | "createdAt" | "questions"> & { variants: ReadonlyArray<{ number: number; name: string }>;
-  decision?: Pick<PrototypeDecision, "chosen" | "comment" | "at"> & { delivery: { state: PrototypeDeliveryState } } };
+  decision?: Pick<PrototypeDecision, "chosen" | "comment" | "at" | "rejected"> & { delivery: { state: PrototypeDeliveryState } } };
 /** Pure selectors: at most one waiting round per task, and only the newest.
     A newer round replaces every undecided round before it, and a decision
     retires every older undecided round: the operator has answered the task.
@@ -41,7 +45,7 @@ export function prototypeReviewSummary(rounds: readonly SummaryRound[]): Prototy
   if (!latest) return undefined;
   return { latestReviewId: latest.id, waitingReviewId: latest.decision ? null : latest.id, title: latest.title,
     rounds: rounds.length, createdAt: latest.createdAt, ...(latest.questions?.length ? { asks: "questions" as const } : {}),
-    ...(latest.decision ? { decision: { ...(latest.questions?.length ? { answered: true as const } : {}), chosen: latest.variants.filter(v => latest.decision!.chosen.includes(v.number)).map(v => ({ number: v.number, name: v.name })),
+    ...(latest.decision ? { decision: { ...(latest.decision.rejected ? { rejected: true as const } : {}), ...(latest.questions?.length ? { answered: true as const } : {}), chosen: latest.variants.filter(v => latest.decision!.chosen.includes(v.number)).map(v => ({ number: v.number, name: v.name })),
       comment: latest.decision.comment, at: latest.decision.at, delivery: latest.decision.delivery.state } } : {}) };
 }
 /** A summary built elsewhere (an older installation's replica, a held poll)

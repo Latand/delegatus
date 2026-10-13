@@ -32,17 +32,19 @@ globalThis.fetch = (async (input: unknown) => {
   const url = String(input);
   if (url.includes("/api/memory/settings")) return Response.json(working);
   if (url.includes("/api/asks-you/key")) return Response.json({ present: true, source: "file" });
+  if (url.includes("/api/operator/worker-limit")) return Response.json({ machine: { value: 8 }, project: { key: "atlas", value: null, effective: 8, source: "machine" }, running: { here: 7, machine: 19 } });
   return Response.json({}, { status: 404 });
 }) as typeof fetch;
 
 const { HeaderMenuPanel, HeaderMenuSheet } = await import("./HeaderMenu");
 const { RailHeaderMenu } = await import("@/components/ProjectRail");
 const { OPEN_VOICE_COMPANION_SETTINGS_EVENT } = await import("@/components/voiceCompanion/VoiceCompanionSetting");
+const { hidePhoneVoice, readPhoneVoice, resetPhoneVoiceForTests, setPhoneVoiceAvailable } = await import("@/components/voiceCompanion/phoneVoiceStore");
 
 let root: Root | undefined;
 afterEach(() => {
   act(() => root?.unmount()); root = undefined;
-  document.body.innerHTML = ""; localStorage.clear(); setLocale("en");
+  document.body.innerHTML = ""; localStorage.clear(); setLocale("en"); resetPhoneVoiceForTests();
 });
 process.on("exit", () => { globalThis.fetch = originalFetch; });
 
@@ -69,7 +71,7 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: at rest, three cells an
   const settings = host.querySelector("[data-rail-menu-settings]")!;
   expect(settings.textContent).toContain(translate(lang, "headerMenu.settings"));
   expect(settings.querySelector("[data-memory-state]")!.textContent).toBe(translate(lang, "memoryState.short", { state: translate(lang, "memoryState.short.working") }));
-  expect(settings.textContent).toContain("10");
+  expect(settings.textContent).toContain("11");
   /* Nothing of the settings page shows at rest, and no entry appears twice. */
   expect(host.querySelector("[data-rail-menu-agent-mapping]")).toBeNull();
   expect(host.querySelector("[data-rail-menu-memory]")).toBeNull();
@@ -83,6 +85,7 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: at rest, three cells an
   expect(page.querySelector("[data-rail-menu-memory] [data-memory-state]")!.textContent).toBe(translate(lang, "memoryState.working", { count: 61 }));
   expect(page.querySelector("[data-rail-menu-key] [data-key-state]")!.textContent).toBe(translate(lang, "keyPage.saved"));
   expect(page.querySelector("[data-rail-menu-agent-mapping]")!.textContent).toBe(translate(lang, "headerMenu.mapping"));
+  expect(page.querySelector("[data-header-menu-workers]")!.textContent).toContain(translate(lang, "workers.hereRunning", { here: 7, machine: 19 }));
   expect(page.querySelector("[data-rail-menu-external-relay]")!.textContent).toBe(translate(lang, "headerMenu.relay"));
 
   await click(page.querySelector("[data-rail-menu-memory]"));
@@ -137,6 +140,43 @@ test("phone: Voice Delegatus is reachable through Settings and closes the sheet"
   } finally { window.removeEventListener(OPEN_VOICE_COMPANION_SETTINGS_EVENT, open); }
 });
 
+for (const lang of ["en", "uk"] as const) test(`${lang} phone: «Показати голос» stands directly above Settings only while the voice head is on and hidden, and a tap closes the sheet and shows the head`, async () => {
+  setLocale(lang);
+  dom.innerWidth = 390;
+  let closed = 0;
+  const nav = { closeSheet: () => {}, leave: () => {} } as unknown as MobileNav;
+  await mount(<HeaderMenuSheet title="atlas" project="atlas" nav={nav} board={[]} onClose={() => { closed += 1; }} />);
+  const keys = () => [...document.querySelectorAll("[data-mobile2-menu-row]")].map((row) => row.getAttribute("data-mobile2-menu-row"));
+  const atRest = keys();
+  expect(atRest).not.toContain("voice-show");
+  /* Hidden while the companion is off: nothing to show. */
+  await act(async () => hidePhoneVoice());
+  expect(keys()).toEqual(atRest);
+  /* Shown while on: the menu is as it was. */
+  await act(async () => { resetPhoneVoiceForTests(); localStorage.clear(); setPhoneVoiceAvailable(true); });
+  expect(keys()).toEqual(atRest);
+  await act(async () => hidePhoneVoice());
+  const withRow = keys();
+  expect(withRow.indexOf("voice-show")).toBe(withRow.indexOf("settings") - 1);
+  expect(withRow.filter((key) => key !== "voice-show")).toEqual(atRest);
+  const row = document.querySelector('[data-mobile2-menu-row="voice-show"]')!;
+  expect(row.textContent).toBe(translate(lang, "voiceCompanion.show"));
+  expect(row.textContent).toBe(lang === "uk" ? "Показати голос" : "Show voice");
+  await click(row);
+  expect(closed).toBe(1);
+  expect(readPhoneVoice()).toEqual({ hidden: false, side: "right", available: true });
+  expect(keys()).not.toContain("voice-show");
+});
+
+test("desktop: the ⋯ menu never offers «Показати голос»", async () => {
+  setPhoneVoiceAvailable(true);
+  hidePhoneVoice();
+  const host = await mount(<HeaderMenuPanel project="atlas" onClose={() => {}} />);
+  expect(host.textContent).not.toContain(translate("en", "voiceCompanion.show"));
+  await click(host.querySelector("[data-rail-menu-settings]"));
+  expect(host.textContent).not.toContain(translate("en", "voiceCompanion.show"));
+});
+
 test("Help and learning opens in place under its own row", async () => {
   const host = await mount(<HeaderMenuPanel project="atlas" onClose={() => {}} />);
   const help = host.querySelector("[data-rail-menu-help]")!;
@@ -153,7 +193,7 @@ test("the overview has no project: Settings carries no memory state and its page
   const host = await mount(<HeaderMenuPanel project={null} onClose={() => {}} />);
   const settings = host.querySelector("[data-rail-menu-settings]")!;
   expect(settings.querySelector("[data-memory-state]")).toBeNull();
-  expect(settings.textContent).toContain("9");
+  expect(settings.textContent).toContain("10");
   await click(settings);
   expect(host.querySelector("[data-rail-menu-memory]")).toBeNull();
   expect(host.querySelector("[data-rail-menu-key]")).not.toBeNull();

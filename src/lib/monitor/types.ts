@@ -203,6 +203,8 @@ export type SeatTickWakeReasonKind =
   /** A deployment the seat itself started with deploy_exact_sha reached a
       terminal phase (#2063). The seat ended its turn so the promotion could
       replace its host, and this is the wake that brings it back, once. */
+  | "release-settled"
+  | "release-blocked"
   | "maintenance-settled"
   | "deploy-settled"
   /** A lane's stage or a spawned child holds a tool permission request nobody
@@ -227,6 +229,8 @@ export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "interval",
   "child-terminal",
   "own-lane-settled",
+  "release-settled",
+  "release-blocked",
   "maintenance-settled",
   "deploy-settled",
   "permission-request",
@@ -1298,7 +1302,9 @@ export interface SeatTickWorkerAskInput {
 }
 
 export interface SeatTickCheckInput {
+  releaseAlerts?: { kind: "release-settled" | "release-blocked"; id: string; label: string }[];
   project: string;
+  workers?: { limit: number; source: string; machine: number; running: number };
   now: number;
   seat: SeatTickSeatInput | null;
   /** Read only while {@link seat} is null: whether an orchestrator ever held

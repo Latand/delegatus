@@ -1,3 +1,5 @@
+import { releaseControllerForSources } from "@/lib/release/production";
+import type { ReleaseController } from "@/lib/release/run";
 import { runSeatAutoRotation, type SeatAutoRotationPorts } from "./seatAutoRotation";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import type { SeatCommandResult } from "@/lib/orchestrator/seatCommand";
@@ -126,6 +128,7 @@ export interface SeatTickControllerDependencies {
   seatAuth?: SeatAuthRecoveryPorts;
   seatAutoRotation?: SeatAutoRotationPorts;
   maintenance?: BoardMaintenanceController | null;
+  release?: ReleaseController | null;
   curation?: CurationController | null;
   sources?: SeatTickSources;
   /** Records the identity successions seated projects owe (#1874); the sweep
@@ -1344,6 +1347,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
   const payload = verdict.kind === "wake"
     ? seatTickWakePayload({
       project: input.project,
+      workers: input.workers,
       snapshotAt,
       reasons: verdict.reasons,
       /* A settled child's final message rides on its line (#1881), read from
@@ -1368,6 +1372,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
     })
     : { items: [], text: seatTickProposalMessage({
       project: input.project,
+      workers: input.workers,
       snapshotAt,
       issues,
       signals: input.signals,
@@ -1644,6 +1649,8 @@ async function check(
   const maintenanceDetails: string[] = [];
   try { const detail = await dependencies.curation?.reconcile(canonical); if (detail) maintenanceDetails.push(detail); }
   catch (error) { maintenanceDetails.push(`curation reconcile: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
+  try { const detail = await dependencies.release?.reconcile(canonical); if (detail) maintenanceDetails.push(detail); }
+  catch (error) { maintenanceDetails.push(`release reconcile: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
   try { const detail = await dependencies.maintenance?.reconcile(canonical); if (detail) maintenanceDetails.push(detail); }
   catch (error) { maintenanceDetails.push(`maintenance reconcile: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
   const gathered = await gatherSeatTickInput(canonical, settled, policy, sources);
@@ -1922,6 +1929,8 @@ async function check(
   }
   try { const detail = !activeDrain() && await dependencies.curation?.launchIfDue(input); if (detail) maintenanceDetails.push(detail); }
   catch (error) { maintenanceDetails.push(`curation launch: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
+  try { const detail = await dependencies.release?.launchIfDue(input); if (detail) maintenanceDetails.push(detail); }
+  catch (error) { maintenanceDetails.push(`release launch: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
   try { const detail = !activeDrain() && await dependencies.maintenance?.launchIfDue(input); if (detail) maintenanceDetails.push(detail); }
   catch (error) { maintenanceDetails.push(`maintenance launch: ${redactMonitorText(error instanceof Error ? error.message : "failed")}`); }
   const record: SeatTickRunRecord = {
@@ -2150,7 +2159,7 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
     if (!first) await yieldToRuntime();
     first = false;
     try {
-      const record = await runSeatTickCheck(project, { ...dependencies, sources, curation: dependencies.curation === undefined ? productionCurationController(sources) : dependencies.curation, maintenance: dependencies.maintenance === undefined ? productionBoardMaintenanceController(sources) : dependencies.maintenance });
+      const record = await runSeatTickCheck(project, { ...dependencies, sources, release: dependencies.release === undefined ? releaseControllerForSources(sources) : dependencies.release, curation: dependencies.curation === undefined ? productionCurationController(sources) : dependencies.curation, maintenance: dependencies.maintenance === undefined ? productionBoardMaintenanceController(sources) : dependencies.maintenance });
       if (record) records.push(record);
     } catch (error) {
       /* Only an unwritable journal reaches here; the check itself records its

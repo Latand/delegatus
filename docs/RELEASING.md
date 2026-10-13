@@ -174,17 +174,46 @@ A Dependabot pull request opened before this workflow merged still carries older
 
 ## Package release
 
-High-severity dependency exceptions require a reason and expiry in [`security/audit-allowlist.json`](../security/audit-allowlist.json); expired entries fail the audit gate.
+Automatic releases are configured in the project's seat tick panel. They start
+at 30 visible changes and a twelve-hour gap by default, from the newest main
+revision production has served for six hours without a rollback. Every release
+retakes the README pictures. Asking before publication is on until the operator
+chooses «Випустити й більше не питати» or turns the checkbox off.
 
-1. Bump `version` in `package.json`.
-2. Run `npm publish --dry-run` and inspect the file list. It should contain
-   `bin/`, `dist/`, `README.md`, `LICENSE`, and `package.json`.
-3. Run `npm publish`.
+1. Start a release branch at that verified cut. Keep changes to the changelog,
+   version, audit pins/lockfile, README text/pictures and capture scripts.
+   Product fixes go through their own deployment and soak.
+2. Write the user-facing changelog from every PR in the range, including closed
+   batch-merged PRs. Pick minor for additions/changes, patch for fixes/security.
+   Breaking changes require an operator decision. Bump `package.json`.
+3. Build and run `scripts/capture-readme-media.ts` under isolated state through
+   `scripts/gate-slot.sh`. Commit the eight vectors and their provenance. Have
+   the pictures checked visually, then have the complete release reviewed.
+4. Run `bun scripts/release-verify.ts --preflight --cut <full-cut-sha> --tag vX.Y.Z`
+   on the reviewed clean head. It refuses an existing local/remote tag or npm
+   version, stale picture provenance, or a product file in the diff.
+5. Obtain the operator's go when the release setting requires it. Push an
+   annotated `vX.Y.Z` tag on the reviewed release head, message `Delegatus X.Y.Z`.
+   The release PR merges into main after the pipeline finishes; the tag carries
+   the soaked product source plus release metadata.
+6. The tag starts `publish.yml` (OIDC npm publication) and `docker-image.yml`.
+   `macos-newcomer.yml` follows successful npm publication through
+   [GitHub's workflow_run trigger](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run).
+   It installs the exact version from the publisher's immutable receipt,
+   including when publication was recovered by a dispatch from main.
+7. Run `bun scripts/release-verify.ts --tag vX.Y.Z`. It waits up to 90 minutes
+   for npm version/latest/integrity, all three Docker tags with amd64 and arm64
+   on the same manifest, and successful macOS installation. It is read-only
+   and safe to repeat after an interruption.
 
-The `prepack` script runs automatically for `npm pack`, `npm publish`, and
-their dry runs. It builds with `LLV_STANDALONE=1`, copies `.next/standalone` to
-`dist/standalone`, and copies `.next/static` into
-`dist/standalone/.next/static`.
+Never retag, delete the tag or publish a version again. A failed publish can be
+recovered by dispatching `publish.yml` with the existing immutable tag; it skips
+an npm version that already exists. Otherwise release a patch. Automatic
+releases stay off until enabled, and missing capture tools hold the lane before
+it starts. The screenshot driver remains the existing one.
 
-Observed `npm pack --dry-run` output lists package-relative paths such as
-`dist/standalone/server.js`; those are the paths inside the tarball.
+High-severity dependency exceptions require a reason and expiry in
+[`security/audit-allowlist.json`](../security/audit-allowlist.json); expired
+entries fail the audit gate. The `prepack` script builds the standalone package
+for `npm pack` and CI publication. Package-relative tarball paths include
+`dist/standalone/server.js`.

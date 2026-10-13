@@ -3,13 +3,48 @@ import crypto from "node:crypto";
 import sharp from "sharp";
 import { loadTasks } from "@/lib/tasks/store";
 import { telegramBotService, TelegramBotError, type TelegramRichMessage } from "@/lib/telegram/bot/service";
-import { prototypeRoot, storedMediaPath } from "./store";
+import { prototypeRoot, storedMediaPath, findPrototypeRound, mutatePrototypeRound } from "./store";
+import path from "node:path";
+import { withFileTransaction } from "@/lib/state/fileTransaction";
+import { ownerReviewDestination } from "@/lib/externalRelay/telegramPublication";
+import type { PrototypeTelegramPost } from "./types";
+import { readSelf } from "@/lib/links/self";
+import { publicEntry } from "@/lib/links/publicEntry";
 import { prototypeCopyLine, prototypeReference } from "./telegramAnswer";
 import type { PrototypeFrame, PrototypeReviewRound } from "./types";
 
 const inline = (text: string) => text.replace(/\s+/g, " ").replace(/([\\`*_{}\[\]()#+.!|<>~-])/g, "\\$1");
 const attribute = (text: string) => text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 export interface PrototypeSlide { id: string; variantNumber: number; caption: string; blob: Blob }
+
+export function prototypeTelegramLink(round: PrototypeReviewRound): string {
+  const url = new URL(readSelf()?.publicUrl ?? `http://localhost:${publicEntry().port}`);
+  if (round.taskId) url.searchParams.set("prototypeTask", round.taskId);
+  url.searchParams.set("prototypeReview", round.id);
+  url.searchParams.set("project", round.project);
+  return url.href;
+}
+function withReviewLink(message: TelegramRichMessage, round: PrototypeReviewRound, previews: number): TelegramRichMessage {
+  const link = prototypeTelegramLink(round);
+  const count = round.variants.reduce((n, v) => n + v.frames.length, 0);
+  return { ...message,
+    markdown: `${message.markdown}\n\nКадри: ${previews}/${count}. [Повне рев’ю у Delegatus](<${link}>)`,
+    plainText: `${message.plainText}\n\nКадри: ${previews}/${count}. ${link}` };
+}
+
+/** Only a definitive Telegram limit refusal uses this smaller rich carousel. */
+export function renderPrototypeTelegramSummary(round: PrototypeReviewRound, slides: readonly PrototypeSlide[], taskTitle = ""): TelegramRichMessage {
+  const compact = { ...round, title: round.title.slice(0, 120),
+    questions: round.questions?.map(q => ({ ...q, text: q.text.slice(0, 80), options: q.options.map(o => ({ ...o, label: o.label.slice(0, 40) })) })),
+    variants: round.variants.map(v => ({ ...v, description: v.description.slice(0, 160) })) };
+  const previews = round.variants.flatMap(v => slides.filter(s => s.variantNumber === v.number).slice(0, 1).map(s => ({ ...s, caption: s.caption.slice(0, 160) })));
+  const message = renderPrototypeTelegram(compact, previews, taskTitle.slice(0, 200));
+  const count = round.variants.reduce((n, v) => n + v.frames.length, 0);
+  const link = prototypeTelegramLink(round);
+  message.markdown += `\n\nСкорочене рев’ю · ${count} кадрів. [Повне рев’ю у Delegatus](<${link}>)`;
+  message.plainText += `\n\nСкорочене рев’ю · ${count} кадрів. ${link}`;
+  return message;
+}
 
 /** First valid frame of each variant gets priority when the round exceeds 50. */
 export async function prototypeSlides(round: PrototypeReviewRound): Promise<PrototypeSlide[]> {
@@ -81,15 +116,35 @@ export function renderPrototypeTelegram(round: PrototypeReviewRound, slides: rea
   return { markdown: lines.join("\n"), plainText: plain.join("\n"), images: slides.map(({ id, blob }) => ({ id, blob })) };
 }
 
-export async function postPrototypeReviewToTelegram(round: PrototypeReviewRound): Promise<void> {
-  try {
-    const task = loadTasks().find(t => t.id === round.taskId);
-    const slides = await prototypeSlides(round);
-    const fallback = renderPrototypeTelegram(round, [], task?.text);
-    await telegramBotService().sendOwnerReview({ clientRequestId: round.id,
-      message: renderPrototypeTelegram(round, slides, task?.text), fallbackMarkdown: fallback.markdown, fallbackPlainText: fallback.plainText });
-  } catch (error) {
-    // Never log a task title, Telegram description, path or destination.
-    console.warn("prototype Telegram post refused", error instanceof TelegramBotError ? error.code : "unavailable");
-  }
+export async function postPrototypeReviewToTelegram(round: PrototypeReviewRound, key = round.id): Promise<PrototypeTelegramPost | undefined> {
+  return withFileTransaction(path.join(prototypeRoot(), `${round.id}.telegram.lock`), "Telegram review post is busy", async () => {
+    const current = findPrototypeRound(round.taskId, round.id);
+    if (!current) return undefined;
+    if (key === round.id && current.telegramPost && current.telegramPost.key !== key) return current.telegramPost;
+    if (round.telegramPost?.state === "pending" && round.telegramPost.key === key && current.telegramPost?.key !== key) return current.telegramPost;
+    // A durable pending claim survives a stopped process. The bot's journal
+    // reconciles it under this same key without issuing a duplicate send.
+    if (current.telegramPost?.key === key && current.telegramPost.state !== "pending") return current.telegramPost;
+    const record = (state: PrototypeTelegramPost["state"], reason?: string) => {
+      const post = { key, state, at: new Date().toISOString(), ...(reason ? { reason } : {}) };
+      mutatePrototypeRound(round.taskId, round.id, held => { held.telegramPost = post; });
+      return post;
+    };
+    record("pending");
+    try {
+      const task = loadTasks().find(t => t.id === round.taskId);
+      const slides = await prototypeSlides(current);
+      const fallback = withReviewLink(renderPrototypeTelegram(current, [], task?.text), current, 0);
+      const result = await telegramBotService().sendOwnerReview({ clientRequestId: key,
+        message: withReviewLink(renderPrototypeTelegram(current, slides, task?.text), current, slides.length), fallbackMarkdown: fallback.markdown, fallbackPlainText: fallback.plainText,
+        limitFallback: renderPrototypeTelegramSummary(current, slides, task?.text) });
+      if (!result) return record("failed", ownerReviewDestination().reason ?? "destination_unavailable");
+      return record("sent");
+    } catch (error) {
+      // Never log a task title, Telegram description, path or destination.
+      const reason = error instanceof TelegramBotError ? error.code : "unavailable";
+      console.warn("prototype Telegram post refused", reason);
+      return record(reason === "send_uncertain" ? "uncertain" : "failed", reason);
+    }
+  });
 }

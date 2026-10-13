@@ -246,6 +246,12 @@ open, the review can instead hold three to seven questions; answer them in
 one message or skip to the recommended answers. On a phone the review fills
 the screen, and a tap opens a frame full screen with zoom and swipe.
 
+Published reviews also go to the paired owner's Telegram as rich carousels.
+A round over Telegram's limits is sent as a compact preview with a link to
+the full review. A failed or unconfirmed post stays visible on the review
+with its reason and appears in the project's seat wake. **Send to Telegram
+again** is available in the review's action area, including older rounds.
+
 When the orchestrator starts a pipeline, launches a stage, creates a task or
 moves one, a wire runs from the orchestrator to that card for about a minute
 and then fades. Point at a wire to see its task's title, and click it to go
@@ -653,7 +659,13 @@ requester who is allowed to, perform one action at a time. **Full agent for
 the owner**, off by default on each target, runs the relay owner's requests
 as ordinary Delegatus agents with full access to this computer. The card
 shows each relay's state and, for each target, the engine, model and effort
-it answers with; answers are kept for 30 days. The protocol is in
+it answers with; answers are kept for 30 days. Polling refreshes the service’s
+features every five minutes and after an unknown-feature refusal. A claim is
+acknowledged before account selection or agent launch. The service journal
+records heartbeat attempts and results with request prefixes and fixed step
+names, withholding credentials and free-form progress text. A cancelled owner
+launch that has failed and has no remaining execution custody settles after
+a one-minute grace from the claim; uncertain or live work keeps its custody. The protocol is in
 [docs/design/relay.md](docs/design/relay.md).
 
 <a id="connect-an-orchestrator-through-mcp"></a>
@@ -686,6 +698,12 @@ From a clone, point the command at `bin/mcp-server.mjs`, or run
 `scripts/install-mcp.sh`. The script registers the server in your Claude
 Code and Codex configurations and in every account Delegatus manages.
 
+For agents launched by Delegatus, large board, pipeline, transcript, prototype,
+activity and lifecycle reads execute in the running Viewer through its
+authenticated MCP endpoint. Their stdio processes return the same answers
+without keeping another copy of the Viewer's collection caches. These reads require the Viewer to be
+available. See [the memory replay](docs/investigations/mcp-memory-retention.md).
+
 The tools, by area:
 
 - **conversations:** `list_conversations`, `get_conversation`,
@@ -697,6 +715,9 @@ The tools, by area:
   `get_task`, `update_task`, and `publish_prototype_review` and
   `read_prototype_review`, which post numbered variants to a task for you to
   choose from and read back your choice;
+  `resend_prototype_review_telegram` sends a round again by `reviewId`, within
+  the caller's project. Reusing `clientRequestId` replays the result; use a
+  fresh key for an intentional new copy;
 - **pipelines:** `create_pipeline`, `list_pipelines`, `get_pipeline`,
   `pipeline_action`, `link_task_to_pipeline`, `stage_report`, which a
   stage agent calls to report its verdict, and `leave_lesson`, which stores

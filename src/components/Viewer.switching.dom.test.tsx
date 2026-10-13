@@ -29,6 +29,11 @@ import { en } from "@/lib/i18n/en";
 import type { FileEntry, LogChunk } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 installActEnv();
 /* Before react-dom loads: the renderer reads the DevTools hook once. */

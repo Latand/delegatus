@@ -8,6 +8,11 @@ import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import type { TaskMutationPorts } from "./useTaskMutations";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
+
+/* Cards start closed (docs/design/calm-task-cards-build.md §6.1); this suite reads
+   what an open card holds, so its cards start open. */
+setKanbanCardsOpenByDefault(true);
 
 /* A card's pipeline on the kanban board (#1695 K5a), rendered by React: the
    stage graph by default on an active workspace card, the summary it toggles
@@ -250,19 +255,22 @@ test("with a helper conversation adopted last on Implement, the graph keeps the 
   }
 });
 
-test("Past attempts lists every finished attempt and settled round, the latest ones too, and leaves out the running attempt; a row opens its conversation", async () => {
+test("the timeline lists every finished attempt and settled round, the latest ones too, and the running attempt as running; an entry opens its conversation", async () => {
+  /* docs/design/calm-task-cards-build.md §3: attempts and rounds moved from
+     «Past attempts» into the expanded card's timeline. */
   const { host } = mount([searchPipeline()], "blocked");
   await tick();
-  const past = card(host).querySelector<HTMLDetailsElement>("details.history")!;
-  const labels = [...past.querySelectorAll('[data-past-kind] .lbl')].map((node) => node.textContent);
-  /* Named by stage id, which says more than the role here (#1765). */
+  const entries = [...card(host).querySelectorAll<HTMLElement>("[data-chronology-entry]")];
+  const keys = entries.map((entry) => entry.dataset.chronologyEntry);
+  for (const key of ["p-search:implement:attempt:1", "p-search:implement:attempt:2", "p-search:review:attempt:1", "p-search:review:attempt:1:round:1", "p-search:verify:attempt:1"]) expect(keys).toContain(key);
+  expect(keys).not.toContain("p-search:verify:attempt:2");
+  expect(entries.filter((entry) => entry.dataset.chronologyKind === "attempt-running").map((entry) => entry.textContent)).toEqual([expect.stringContaining("Verify is running")]);
   /* The one attempt caption (#1892): a stage that ran once is its name alone. */
-  expect(labels.sort()).toEqual(["Implement · 1", "Implement · 2", "Review", "Review · round 1", "Verify · 1"]);
-  expect(past.querySelector(".hl")?.textContent).toBe("Past attempts · 5");
-  expect(labels).not.toContain("Verify · 2");
-  const verify = [...past.querySelectorAll("li")].find((row) => row.querySelector(".lbl")?.textContent === "Verify · 1")!;
-  expect(verify.querySelector(".verdict")?.textContent).toBe("failed");
-  click(verify.querySelector(".hopen"));
+  const verify = entries.find((entry) => entry.dataset.chronologyEntry === "p-search:verify:attempt:1")!;
+  expect(verify.querySelector(".chronology-open")?.textContent).toMatch(/^Verify · 1/);
+  /* No helper and nothing elsewhere: the old section has nothing left to list. */
+  expect(card(host).querySelector("details.history")).toBeNull();
+  click(verify.querySelector(".chronology-open"));
   expect(await inWindow(host)).toBe("conversation_verify-1");
 });
 
@@ -640,8 +648,18 @@ test("the card draws no activity line: the footer counts the conversations, and 
   await tick();
   expect(card(parked.host).dataset.attention).toBe("needs");
   expect(card(parked.host).querySelector(".pb-head .pstate-word")?.textContent).toBe("needs a decision");
-  /* The footer names why and on which stage, beside its Dismiss
-     (docs/design/needs-attention.md §4). */
-  expect(card(parked.host).querySelector("[data-foot-needs]")?.textContent).toMatch(/^needs a decision · /);
-  expect(card(parked.host).querySelector("[data-dismiss]")).not.toBeNull();
+  /* The state line names why, once; Dismiss is the card's ⋯
+     (docs/design/calm-task-cards-build.md §2.2). */
+  expect(card(parked.host).querySelector("[data-card-state]")?.getAttribute("data-card-state")).toBe("you");
+  expect(card(parked.host).querySelector("[data-card-state-text]")?.textContent).toMatch(/^Needs your answer: /);
+  expect(card(parked.host).querySelector("[data-foot-needs], [data-dismiss]")).toBeNull();
+});
+
+/* #2800: a motion line that is the state line's sentence is never quieted by a lane row. */
+test("an open card whose lane finished and whose work is stopped with no reason still says so in its state line", async () => {
+  const { host } = mount([headPipeline("completed", "build", "passed", { cursor: null, closedAt: iso(300) })]);
+  await tick();
+  expect(card(host).dataset.collapsed).toBe("0");
+  expect(card(host).querySelector(".pblock")).not.toBeNull();
+  expect(card(host).querySelector("[data-card-state-text]")?.textContent).toMatch(/^Stopped, no reason given/);
 });

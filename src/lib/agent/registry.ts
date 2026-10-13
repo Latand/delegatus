@@ -89,7 +89,8 @@ import {
 } from "./registryBackendIdentity";
 import {
   SqliteAgentRegistryStore,
-  registryRowsMatching, registryKeysMatching, registryConversationsForPath,
+  registryRowsMatching, registryKeysMatching, registryConversationsForPath, registryHasPathIndex,
+  registryConversationsForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported,
   type SqliteRegistryReplacement,
   type SqliteRegistrySnapshot,
@@ -1100,12 +1101,21 @@ const SYSTEM_LOCK_TIMING: RegistryLockTiming = {
   wait: async (delayMs) => { await new Promise((resolve) => setTimeout(resolve, delayMs)); },
 };
 
-function correlatePathPendingReceipts(file: RegistryFile, observations: ConversationObservation[]): Map<string, string> {
+/** A provider-history fork observation, which groups by walking every Codex conversation. */
+function providerForkObservation(observation: ConversationObservation): boolean {
+  return observation.engine === "codex"
+    && typeof observation.forkSourceThreadId === "string"
+    && observation.forkSourceThreadId.length > 0
+    && (observation.forkIntent ?? "provider-history") === "provider-history";
+}
+
+function correlatePathPendingReceipts(file: RegistryFile, observations: ConversationObservation[], keyed = false): Map<string, string> {
   type PendingReceipt = { launchId: string; cwd: string; accountId: string | null; expectedStart: number };
   type PendingObservation = { path: string; cwd: string; accountId: string | null; observedStart: number };
   type Pair = [string, string];
   type Correlation = { count: number; distance: number; assignments: Pair[][] };
-  const receipts: PendingReceipt[] = Object.values(file.receipts).flatMap((receipt) => {
+  const candidates = keyed ? registryRowsMatching(file, "receipts", "state", "path-pending") : Object.values(file.receipts);
+  const receipts: PendingReceipt[] = candidates.flatMap((receipt) => {
     if (receipt.engine !== "codex" || receipt.state !== "path-pending" || receipt.artifactPath !== null || !receipt.pathCorrelation) return [];
     const expectedStart = Date.parse(receipt.pathCorrelation.startedAt);
     return Number.isFinite(expectedStart)
@@ -1119,7 +1129,11 @@ function correlatePathPendingReceipts(file: RegistryFile, observations: Conversa
     const observedStart = Date.parse(observation.startedAt);
     if (!Number.isFinite(observedStart)) continue;
     const nativeId = sessionKeyFromTranscript(observation.engine, observation.path)?.sessionId ?? null;
-    const knownOwners = Object.values(file.conversations).filter((conversation) =>
+    const knownOwners = (keyed
+      ? [...new Map([...registryConversationsForPath(file, observation.path),
+        ...(nativeId !== null ? registryConversationsForEntryKey(file, `${observation.engine}:${nativeId}`) : [])]
+        .map((conversation) => [conversation.id, conversation] as const)).values()]
+      : Object.values(file.conversations)).filter((conversation) =>
       conversation.engine === observation.engine
       && (conversationOwnsPath(conversation, observation.path)
         || (nativeId !== null && conversation.generations.some((generation) => generation.id === nativeId))));
@@ -1974,6 +1988,20 @@ const EMPTY: RegistryFile = {
 
 export class RegistryReadError extends Error {}
 
+/** The conversations a single entry's grant decision reads, selected by the
+    generation identity and path indexes when the file has them: those holding
+    a generation of the entry and those recording its transcript path. Without
+    the indexes the decision reads the whole collection, as it always did. */
+function entryGrantAttestors(file: RegistryFile, key: SessionKey): ((entry: { artifactPath?: string | null }) => Array<[string, RegistryConversation]>) | undefined {
+  if (!registryHasEntryKeyIndex(file) || !registryHasPathIndex(file)) return undefined;
+  return (entry) => {
+    const selected = new Map<string, RegistryConversation>();
+    for (const conversation of registryConversationsForEntryKey(file, sessionKeyId(key))) selected.set(conversation.id, conversation);
+    if (entry.artifactPath) for (const conversation of registryConversationsForPath(file, entry.artifactPath)) selected.set(conversation.id, conversation);
+    return [...selected];
+  };
+}
+
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
@@ -2495,6 +2523,18 @@ function conversationRows<C extends "heldDeliveries" | "deliveryOperationOwners"
   return registryRowsMatching(file, collection, "conversationId", conversationIdentities(file, id));
 }
 
+/** One conversation's delivery rows with their keys, its aliases included,
+    read through the conversation index. A per-request reader that enumerated
+    the whole collection read every archived delivery and operation owner of
+    the history on each call (#2761). */
+export function conversationRegistryEntries<C extends "heldDeliveries" | "deliveryOperationOwners">(
+  file: RegistryFile, collection: C, id: ViewerConversationId,
+): Array<[string, RegistryFile[C][string]]> {
+  const rows = file[collection] as Record<string, RegistryFile[C][string]>;
+  return registryKeysMatching(file, collection, "conversationId", conversationIdentities(file, id))
+    .flatMap((key) => rows[key] ? [[key, rows[key]!] as [string, RegistryFile[C][string]]] : []);
+}
+
 function heldDeliveryRequestDigests(
   file: RegistryFile,
   conversationId: ViewerConversationId,
@@ -2702,7 +2742,12 @@ function failInitialSpawnReceiptForDelivery(file: RegistryFile, delivery: HeldDe
     journal outcome. Returns changed delivery ids and is idempotent. */
 function terminalizeFailedSpawnDeliveriesInFile(file: RegistryFile, onlyLaunchId?: string): string[] {
   const changed: string[] = [];
-  for (const delivery of Object.values(file.heldDeliveries)) {
+  /* A launch's first message carries its launch in its operation id, so one
+     launch's failure reads that row by index, not every retained delivery. */
+  const deliveries = onlyLaunchId === undefined
+    ? Object.values(file.heldDeliveries)
+    : registryRowsMatching(file, "heldDeliveries", "command.operationId", `spawn_message_${onlyLaunchId}`);
+  for (const delivery of deliveries) {
     const receipt = initialSpawnReceiptOf(file, delivery);
     if (!receipt) continue;
     /* A launch's own failure ends its own first message; other launches'
@@ -3257,6 +3302,22 @@ function recordObservedLineage(
   };
 }
 
+/** Every id that resolves to `conversationId`: itself and each alias whose
+    chain ends there, found through the alias index where the file has one. */
+export function conversationIdsResolvingTo(file: RegistryFile, conversationId: ViewerConversationId): ViewerConversationId[] {
+  const ids = new Set<ViewerConversationId>([conversationId]);
+  const pending = [conversationId];
+  while (pending.length) {
+    const target = pending.pop()!;
+    for (const alias of registryKeysMatching(file, "conversationAliases", "alias", target) as ViewerConversationId[]) {
+      if (ids.has(alias) || resolveConversationAlias(file, alias) !== conversationId) continue;
+      ids.add(alias);
+      pending.push(alias);
+    }
+  }
+  return [...ids];
+}
+
 export function resolveConversationAlias(file: Pick<RegistryFile, "conversationAliases">, id: ViewerConversationId): ViewerConversationId {
   const seen = new Set<ViewerConversationId>();
   let current = id;
@@ -3476,7 +3537,27 @@ export function conversationLookupFromSnapshot(snapshot: RegistryFile): Conversa
     never mutate the returned conversations; mutating paths keep the cloning
     `conversationLookupFromSnapshot`. */
 export function readOnlyConversationLookupFromSnapshot(snapshot: RegistryFile): ConversationLookup {
-  return snapshotConversationLookup(snapshot, (conversation) => conversation);
+  if (!registryHasPathIndex(snapshot)) return snapshotConversationLookup(snapshot, (conversation) => conversation);
+  /* An indexed snapshot answers each path from the relational path index.
+     Enumerating every conversation per lookup read each cold history payload
+     again for every launch a projection resolved (#2761). */
+  const byPath = new Map<string, RegistryConversation | null>();
+  return {
+    conversationForPath(artifactPath) {
+      let conversation = byPath.get(artifactPath);
+      if (conversation === undefined) {
+        conversation = registryConversationsForPath(snapshot, artifactPath)[0] ?? null;
+        byPath.set(artifactPath, conversation);
+      }
+      return conversation;
+    },
+    canonicalConversationId(id) {
+      return resolveConversationAlias(snapshot, id);
+    },
+    conversation(id) {
+      return snapshot.conversations[resolveConversationAlias(snapshot, id)] ?? null;
+    },
+  };
 }
 
 function snapshotConversationLookup(
@@ -5509,6 +5590,40 @@ export class AgentRegistry {
     });
   }
 
+  /** Worker inventory: only live host rows and their keyed lineage/membership.
+      No complete registry snapshot or historical seat-child page is read. */
+  liveWorkerChildren(): { conversationId: string; parentConversationId: string; pipeline: boolean; deputy: boolean }[] {
+    if (this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")) return this.sqliteStore.liveWorkerChildren();
+    return this.readKeyed(file => {
+      const children = new Map<string, { conversationId: string; parentConversationId: string; pipeline: boolean; deputy: boolean }>();
+      for (const host of registryRowsMatching(file, "entries", "status", ["starting", "live", "idle", "handoff"])) {
+        if (!host.structuredHost) continue;
+        const conversation = registryConversationsForPath(file, host.artifactPath)[0];
+        if (!conversation) continue;
+        const edge = file.lineageEdges[conversation.id];
+        if (!edge || edge.source !== "viewer-spawn") continue;
+        const memberships = file.memberships[conversation.id] ?? [];
+        children.set(conversation.id, {
+          conversationId: conversation.id,
+          parentConversationId: resolveConversationAlias(file, edge.parentConversationId),
+          pipeline: memberships.some(row => row.kind === "pipeline"),
+          deputy: memberships.some(row => row.kind === "orchestrator"),
+        });
+      }
+      return [...children.values()];
+    });
+  }
+
+  /** Latest launch directories for worker counting, without registry inventory. */
+  workerSeatContexts(ids: readonly string[]): Map<string, { conversationId: string; directories: string[] }> {
+    if (this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")) return this.sqliteStore.workerSeatContexts(ids);
+    return this.readKeyed(file => new Map(ids.map(id => {
+      const conversationId = resolveConversationAlias(file, id as ViewerConversationId);
+      const conversation = file.conversations[conversationId];
+      return [id, { conversationId, directories: (conversation?.generations ?? []).toReversed().flatMap(generation => generation.launchProfile?.cwd ? [generation.launchProfile.cwd] : []) }];
+    })));
+  }
+
   /** Current credential identity for the seat's stdio MCP heartbeat. */
   seatMcpReceipt(conversationId: string): { spawnCapabilityDigest: string; createdAt: string; viewerMcpTransport: "stdio" | "http" | null } | null {
     if (this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")) {
@@ -5556,7 +5671,7 @@ export class AgentRegistry {
   }
 
   /** Existing reaper hygiene owns these bounded storage-only moves. */
-  archiveInactiveRows(limit = 1_000): number {
+  archiveInactiveRows(limit?: number): number {
     assertStateStartupMutation(path.dirname(this.filename),"agent registry archive");
     return this.sqliteMode === "sqlite" ? this.sqliteStore!.archiveInactive(limit) : 0;
   }
@@ -5606,7 +5721,9 @@ export class AgentRegistry {
   }
 
   rotateSpawnCapabilityForPath(artifactPath: string): string | null {
-    return this.rotateSpawnCapabilityWhere((file) => Object.values(file.conversations)
+    /* By the path index: every host a boot re-hosts rotates, and a scan of
+       every conversation per host cost a retained history seconds (#2761). */
+    return this.rotateSpawnCapabilityWhere((file) => registryConversationsForPath(file, artifactPath)
       .find((candidate) => conversationOwnsPath(candidate, artifactPath))?.id ?? null)?.capability ?? null;
   }
 
@@ -5672,7 +5789,7 @@ export class AgentRegistry {
     return this.mutate((file) => {
       const conversationId = conversationOf(file);
       if (!conversationId) return null;
-      const receipts = Object.values(file.receipts)
+      const receipts = registryRowsMatching(file, "receipts", "conversationId", conversationIdsResolvingTo(file, conversationId))
         .filter((candidate) => resolveConversationAlias(file, candidate.conversationId) === conversationId)
         .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
       const current = receipts[0];
@@ -7538,7 +7655,7 @@ export class AgentRegistry {
       /* Adoption builds its host options from the entry this returns, and a
          mutation loads rows lazily rather than from an assembled snapshot, so
          the origin decision is applied to this one row here (#739). */
-      reboundEntryMcpGrant(file, key, this.mcpGrantPolicy);
+      reboundEntryMcpGrant(file, key, this.mcpGrantPolicy, entryGrantAttestors(file, key));
       /* A terminal status permits adoption of an orphaned wrapper while the
          claim owner remains the writer fence. A host can publish `dead` before
          its late reap releases that claim, and its live writer must finish
@@ -7562,7 +7679,7 @@ export class AgentRegistry {
         const changedHostPaths = activeHostPathsChangedByEntry(file, keyId, entry);
         const readinessBefore = migrationReadinessSignature(file, key.engine, changedHostPaths);
         file.entries[keyId] = entry;
-        reboundEntryMcpGrant(file, key, this.mcpGrantPolicy);
+        reboundEntryMcpGrant(file, key, this.mcpGrantPolicy, entryGrantAttestors(file, key));
         advanceMigrationScopeRevision(file, key.engine, readinessBefore, changedHostPaths);
       }
       return clone(entry);
@@ -7804,10 +7921,25 @@ export class AgentRegistry {
     return this.mutate((file) => {
       const scopeChanged = new Set<AgentEngine>();
       const firstPathByNativeSession = new Map<string, string>();
-      const pathPendingLaunches = correlatePathPendingReceipts(file, observations);
+      /* Over a store with path and generation identity indexes, each
+         observation reads its owners and receipts by index. Indexing every
+         conversation and receipt instead held the write lock and the event
+         loop for seconds per inventory over a retained history (#2761).
+         Provider-fork grouping still walks the collection, so a batch that
+         carries a fork takes the complete index. */
+      const keyed = registryHasPathIndex(file) && registryHasEntryKeyIndex(file)
+        && !observations.some(providerForkObservation);
+      const pathPendingLaunches = correlatePathPendingReceipts(file, observations, keyed);
       const conversationsByPath = new Map<string, RegistryConversation[]>();
       const conversationsByNativeSession = new Map<string, RegistryConversation[]>();
+      const pathOwnersOf = (pathname: string): RegistryConversation[] => keyed
+        ? registryConversationsForPath(file, pathname)
+        : conversationsByPath.get(pathname) ?? [];
+      const nativeOwnersOf = (nativeSessionId: string): RegistryConversation[] => keyed
+        ? registryConversationsForEntryKey(file, nativeSessionId)
+        : conversationsByNativeSession.get(nativeSessionId) ?? [];
       const indexConversation = (conversation: RegistryConversation) => {
+        if (keyed) return;
         for (const generation of conversation.generations) {
           const pathOwners = conversationsByPath.get(generation.path) ?? [];
           if (!pathOwners.includes(conversation)) pathOwners.push(conversation);
@@ -7822,13 +7954,18 @@ export class AgentRegistry {
           conversationsByPath.set(pathname, owners);
         }
       };
-      for (const conversation of Object.values(file.conversations)) indexConversation(conversation);
+      if (!keyed) for (const conversation of Object.values(file.conversations)) indexConversation(conversation);
       /* Provider-fork history is grouped before identity allocation (#708):
          once the fork is a continuity path of its source conversation, the
          path index below finds an owner and no lookalike root is minted. */
       if (adoptProviderForkHistory(file, observations, conversationsByPath, indexConversation)) scopeChanged.add("codex");
       const resumeReceiptsByConversation = new Map<ViewerConversationId, SpawnReceipt[]>();
+      const resumeReceiptsOf = (conversationId: ViewerConversationId): SpawnReceipt[] => keyed
+        ? registryRowsMatching(file, "receipts", "conversationId", conversationIdsResolvingTo(file, conversationId))
+          .filter((receipt) => receipt.purpose === "resume-successor" && resolveConversationAlias(file, receipt.conversationId) === conversationId)
+        : resumeReceiptsByConversation.get(conversationId) ?? [];
       const refreshResumeReceiptIndex = () => {
+        if (keyed) return;
         resumeReceiptsByConversation.clear();
         for (const receipt of Object.values(file.receipts)) {
           if (receipt.purpose !== "resume-successor") continue;
@@ -7840,7 +7977,11 @@ export class AgentRegistry {
       };
       refreshResumeReceiptIndex();
       const migrationReceiptByPath = new Map<string, SpawnReceipt>();
-      for (const receipt of Object.values(file.receipts)) {
+      const migrationReceiptFor = (engine: AgentEngine, pathname: string): SpawnReceipt | undefined => keyed
+        ? registryRowsMatching(file, "receipts", "artifactPath", pathname).find((receipt) => receipt.engine === engine
+          && receipt.purpose === "migration-successor" && receipt.state !== "failed" && receipt.state !== "conflicted")
+        : migrationReceiptByPath.get(`${engine}:${pathname}`);
+      if (!keyed) for (const receipt of Object.values(file.receipts)) {
         const receiptPath = receipt.artifactPath ? `${receipt.engine}:${receipt.artifactPath}` : null;
         if (receiptPath && receipt.purpose === "migration-successor"
           && receipt.state !== "failed" && receipt.state !== "conflicted"
@@ -7849,7 +7990,11 @@ export class AgentRegistry {
         }
       }
       const pendingStructuredReceiptsByPath = new Map<string, SpawnReceipt[]>();
-      for (const receipt of Object.values(file.receipts)) {
+      const pendingStructuredReceiptsFor = (engine: AgentEngine, pathname: string): SpawnReceipt[] => keyed
+        ? registryRowsMatching(file, "receipts", "artifactPath", pathname).filter((receipt) => receipt.engine === engine
+          && receipt.transport === "structured" && receipt.artifactLifecycle === "pending")
+        : pendingStructuredReceiptsByPath.get(`${engine}:${pathname}`) ?? [];
+      if (!keyed) for (const receipt of Object.values(file.receipts)) {
         if (receipt.transport !== "structured" || receipt.artifactLifecycle !== "pending" || !receipt.artifactPath) continue;
         const pathKey = `${receipt.engine}:${receipt.artifactPath}`;
         const receipts = pendingStructuredReceiptsByPath.get(pathKey) ?? [];
@@ -7857,7 +8002,7 @@ export class AgentRegistry {
         pendingStructuredReceiptsByPath.set(pathKey, receipts);
       }
       for (const observation of observations) {
-        for (const receipt of pendingStructuredReceiptsByPath.get(`${observation.engine}:${observation.path}`) ?? []) {
+        for (const receipt of pendingStructuredReceiptsFor(observation.engine, observation.path)) {
           receipt.artifactLifecycle = "materialized";
         }
         const nativeId = sessionKeyFromTranscript(observation.engine, observation.path)?.sessionId ?? null;
@@ -7882,7 +8027,7 @@ export class AgentRegistry {
             if (recoveredConversation) indexConversation(recoveredConversation);
           }
         }
-        const exactOwners = (conversationsByPath.get(observation.path) ?? []).filter((candidate) =>
+        const exactOwners = pathOwnersOf(observation.path).filter((candidate) =>
           file.conversations[candidate.id] === candidate
           && candidate.engine === observation.engine
           && conversationOwnsPath(candidate, observation.path));
@@ -7899,12 +8044,12 @@ export class AgentRegistry {
         const nativeSessionId = nativeId ? `${observation.engine}:${nativeId}` : null;
         const firstObservedPath = nativeSessionId ? firstPathByNativeSession.get(nativeSessionId) : undefined;
         if (nativeSessionId && firstObservedPath === undefined) firstPathByNativeSession.set(nativeSessionId, observation.path);
-        const nativeOwner = nativeId ? preferredConversationOwner(file, (conversationsByNativeSession.get(`${observation.engine}:${nativeId}`) ?? [])
+        const nativeOwner = nativeId ? preferredConversationOwner(file, nativeOwnersOf(`${observation.engine}:${nativeId}`)
           .filter((candidate) => file.conversations[candidate.id] === candidate
             && candidate.generations.some((generation) => generation.id === nativeId))) : null;
         const resumeInventoryFenced = nativeOwner !== null
           && !resumeCanRebaseMigration(nativeOwner.migration)
-          && (resumeReceiptsByConversation.get(nativeOwner.id) ?? []).some(receiptStillAwaitsResumeSuccessor);
+          && resumeReceiptsOf(nativeOwner.id).some(receiptStillAwaitsResumeSuccessor);
         let conversation = exactOwner ?? nativeOwner ?? null;
         let adoptedSuccessorPath = false;
         if (!resumeInventoryFenced && exactOwner && nativeOwner && exactOwner.id !== nativeOwner.id
@@ -7948,7 +8093,7 @@ export class AgentRegistry {
           }
         }
         if (!conversation) {
-          const migrationReceipt = migrationReceiptByPath.get(`${observation.engine}:${observation.path}`);
+          const migrationReceipt = migrationReceiptFor(observation.engine, observation.path);
           const migrationOwner = migrationReceipt ? file.conversations[migrationReceipt.conversationId] : null;
           if (migrationOwner) {
             conversation = migrationOwner;
@@ -8046,7 +8191,7 @@ export class AgentRegistry {
          atomically. Authoritative viewer-spawn edges are preserved; self-edges
          and cycles are refused. */
       const ownerForPath = (pathname: string, engine: AgentEngine): RegistryConversation | null =>
-        preferredConversationOwner(file, (conversationsByPath.get(pathname) ?? []).filter((candidate) =>
+        preferredConversationOwner(file, pathOwnersOf(pathname).filter((candidate) =>
           file.conversations[candidate.id] === candidate
           && candidate.engine === engine
           && conversationOwnsPath(candidate, pathname)));

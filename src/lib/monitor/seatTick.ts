@@ -1262,7 +1262,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
      deploy into thirty minutes of paused lanes. */
   const settledDeploys = seatSettledDeploys(input);
   const settledMaintenance = seatSettledMaintenance(input);
-  const childrenSettled = settledMaintenance.length > 0 || harvest.length > 0 || persistedChildStalls.length > 0 || settledDeploys.length > 0;
+  const childrenSettled = (input.releaseAlerts?.length ?? 0) > 0 || settledMaintenance.length > 0 || harvest.length > 0 || persistedChildStalls.length > 0 || settledDeploys.length > 0;
   const liveChildren = runningChildren.filter((child) => !isStalledActivity(child.activity));
   const childInterval = childrenSettled
     ? SEAT_TICK_SETTLED_CHILD_WAKE_INTERVAL_MS
@@ -1319,6 +1319,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
        (#1749): a lane it launched that settled and is standing there is the
        obligation the tick was blind to for the whole of the evidence in that
        issue, while five slots went to children of seats two weeks retired. */
+    for (const alert of input.releaseAlerts ?? []) candidates.push({ kind: alert.kind, detail: alert.label });
     if (settledMaintenance.length > 0) {
       const newest = settledMaintenance.at(-1)!;
       candidates.push({ kind: "maintenance-settled", detail: newest.state === "failed" ? `board maintenance failed: ${newest.failure?.kind}` : `board maintenance finished: ${newest.counts.tasks} task(s) changed, ${newest.log.attention.length} item(s) for the operator` });
@@ -1430,6 +1431,8 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       case "unmerged-pr": return item.kind === "pull-request";
       case "unstarted-task": return item.kind === "task";
       case "permission-request": return item.kind === "permission";
+      case "release-settled": return item.kind === "signal" && item.id.startsWith("release-settled:");
+      case "release-blocked": return item.kind === "signal" && item.id.startsWith("release-blocked:");
       case "worker-ask": return item.kind === "ask";
       case "disk-pressure": return item.kind === "signal" && item.id === "disk-space";
       case "lane-event": return item.mergeEventSeq !== undefined;
@@ -1439,7 +1442,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       default: return false;
     }
   });
-  const versionedReasons = new Set<SeatTickWakeReasonKind>(["unmerged-pr", "unstarted-task", "own-lane-settled", "stalled", "interval", "permission-request", "worker-ask", "disk-pressure"]);
+  const versionedReasons = new Set<SeatTickWakeReasonKind>(["unmerged-pr", "unstarted-task", "own-lane-settled", "stalled", "interval", "permission-request", "worker-ask", "disk-pressure", "release-settled", "release-blocked"]);
   const cards: SeatTickCard[] = [];
   const reasons: SeatTickWakeReason[] = [];
   let guardHeld = 0;
@@ -1742,6 +1745,8 @@ export function seatTickReportLines(
 ): string[] {
   const reports = input.reports;
   if (!reports?.bridgeReports) return [];
+  const asks = state.asksOwed ?? [];
+  const compactLedger = !!input.workers && asks.length > 1;
   const language = reports.operatorLocale ? `, in ${LANGUAGE_NAME[reports.operatorLocale]}` : "";
   const lines: string[] = [];
   const owed: { key: string; label: string }[] = [...(state.reportsOwed ?? [])];
@@ -1756,16 +1761,17 @@ export function seatTickReportLines(
     const named = compact ? `${owed.length} outcome(s)` : labels;
     const more = !compact && owed.length > OWED_NAMED_LIMIT ? `, and ${owed.length - OWED_NAMED_LIMIT} more` : "";
     const dropped = state.reportsOwedDropped ? ` (${state.reportsOwedDropped} older owed outcome(s) no longer listed)` : "";
-    lines.push(`Report owed${language}, before this turn ends: ${named}${more}${dropped}. File one report with key ${owed[0]!.key} and coversOwed: true.`);
+    lines.push(compactLedger
+      ? `Report owed${language}: ${named}${more}${dropped}. File key ${owed[0]!.key}, coversOwed: true, before turn ends.`
+      : `Report owed${language}, before this turn ends: ${named}${more}${dropped}. File one report with key ${owed[0]!.key} and coversOwed: true.`);
     if (!input.pipelines.some(isOpenLane) && owed.some((entry) => entry.key.startsWith("lane:"))) {
-      lines.push("Nothing is running now: the report says so.");
+      lines.push(compactLedger ? `Report ${input.workers!.running} running workers.` : "Nothing is running now: the report says so.");
     }
   }
-  const asks = state.asksOwed ?? [];
   if (asks.length > 1) {
     // Keep all durable keys visible without repeating the same bridge action
     // sixteen times in the reserved tail of a bounded wake.
-    lines.push(`Question reports owed: file bridge_report with class: question, the question in the decision section, and each matching key: ${asks.map(ask => ask.key).join(", ")}.`);
+    lines.push(`${compactLedger ? "Question reports owed: bridge_report class: question; question in decision section; keys: " : "Question reports owed: file bridge_report with class: question, the question in the decision section, and each matching key: "}${asks.map(ask => ask.key).join(", ")}.`);
   } else for (const ask of asks) {
     lines.push(`Question report owed: the question offered at ${clock(ask.at)} has no matching bridge report. File bridge_report with class: question, key ${ask.key} and the question in the decision section.`);
   }
@@ -1884,6 +1890,7 @@ function wakeItems(context: {
       deploy: { deploymentId: deploy.deploymentId, phase: deploy.phase, sha: deploy.sha, error: deploy.error },
     });
   }
+  for (const alert of input.releaseAlerts ?? []) items.push({ kind: "signal", id: alert.id, label: alert.label });
   for (const run of seatSettledMaintenance(input)) {
     items.push({ kind: "maintenance", id: run.taskId ?? run.runId, label: maintenanceItemLabel(run), maintenance: { runId: run.runId } });
   }

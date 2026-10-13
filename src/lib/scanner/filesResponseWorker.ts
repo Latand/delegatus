@@ -114,6 +114,11 @@ function representation(value: unknown): FilesResponseWorkerWireRepresentation |
 function workerLaunch(cwd = process.cwd()): { executable: string; workerPath: string } {
   const source = path.join(cwd, "src/lib/filesResponse.worker.ts");
   const bundled = path.join(cwd, ".next/server/files-response-worker.js");
+  /* The candidate performance gate runs the Viewer from source and measures
+     the worker the same way; a bundle left by an earlier build is other code. */
+  if (fs.existsSync(source) && process.env.LLV_FILES_RESPONSE_WORKER_LAUNCH === "source") {
+    return { executable: process.versions.bun ? process.execPath : (process.env.LLV_BUN_EXECUTABLE || "bun"), workerPath: source };
+  }
   if (fs.existsSync(source) && fs.existsSync("/usr/local/bin/bun-container")) {
     return { executable: "/usr/local/bin/bun-container", workerPath: source };
   }
@@ -222,6 +227,26 @@ export function shutdownFilesResponseWorker(reason = "shutdown"): void {
   const worker = pool.__llvFilesResponseWorker ?? null;
   if (worker) retire(worker, reason);
   pool.__llvFilesResponseWorkerTail = undefined;
+}
+
+/** Let the resident worker finish what it was asked and exit on its own, then
+    forget it; one that outlives `timeoutMs` is stopped as `shutdown` stops it. */
+export async function drainFilesResponseWorker(reason = "drained", timeoutMs = 5_000): Promise<void> {
+  const worker = pool.__llvFilesResponseWorker ?? null;
+  if (!worker || worker.retired) return;
+  const exited = new Promise<void>((resolve) => {
+    if (worker.child.exitCode !== null || worker.child.signalCode !== null) resolve();
+    else worker.child.once("exit", () => resolve());
+  });
+  try { worker.child.stdin?.end(); } catch { /* the pipe is already gone */ }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([exited, new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); })]);
+  if (timer) clearTimeout(timer);
+  retire(worker, reason);
+  pool.__llvFilesResponseWorkerTail = undefined;
+  /* A worker stopped at the deadline is gone once its exit is observed. */
+  await Promise.race([exited, new Promise<void>((resolve) => { timer = setTimeout(resolve, 2_000); })]);
+  if (timer) clearTimeout(timer);
 }
 
 /**

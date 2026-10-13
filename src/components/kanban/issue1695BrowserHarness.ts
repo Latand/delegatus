@@ -186,6 +186,193 @@ export async function openFixture(
   return { context, page, pageErrors };
 }
 
+type WorkersRowReading = { icon: number; titleSize: number; titleWeight: number; titleColor: string; titleX: number; stateWeight: number; stateColor: string;
+  inputWeight: number; inputAlign: string; inputX: number; inputY: number; inputH: number; stateRight: number; stateTop: number; stateBottom: number };
+
+/** Worker-limit frames shared by the board and phone drivers. The fixture
+    serves invented counts and the frame's own operator language. */
+export async function captureWorkerLimitFrames(browser: Browser, base: string, out: string, phone: boolean) {
+  const readings: unknown[] = [];
+  const failures: string[] = [];
+  async function frame(page: Page, selector: string, name: string, budget?: number, expectedHostWidth?: number) {
+    const target = page.locator(selector).first();
+    await target.waitFor();
+    await target.scrollIntoViewIfNeeded();
+    const measurement = await target.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      const clipped: string[] = [];
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      let node: Node | null;
+      while ((node = walker.nextNode())) {
+        if (!node.textContent?.trim() || !node.parentElement) continue;
+        const range = document.createRange(); range.selectNodeContents(node);
+        const text = range.getBoundingClientRect(); const parent = node.parentElement.getBoundingClientRect();
+        if (!text.width || !text.height) continue;
+        if (text.left < parent.left - 1 || text.right > parent.right + 1 || text.top < parent.top - 1 || text.bottom > parent.bottom + 1) clipped.push(node.textContent.trim());
+      }
+      const input = element.querySelector("input");
+      const dot = element.querySelector("[data-worker-limit-own]")?.getBoundingClientRect();
+      const overlappingText: { text: string; rect: number[] }[] = [];
+      if (element.matches("[data-worker-limit-popover]")) {
+        const scroller = document.querySelector<HTMLElement>("[data-kanban-seat].side [data-log-feed-scroller]");
+        if (scroller) {
+          const scroll = scroller.getBoundingClientRect();
+          const readable = { left: scroll.left, right: scroll.right, top: scroll.top + 8, bottom: scroll.bottom - 8 };
+          const popup = box;
+          const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+          let textNode: Node | null;
+          while ((textNode = walker.nextNode())) {
+            if (!textNode.textContent?.trim() || !textNode.parentElement) continue;
+            let visible = true;
+            for (let parent: HTMLElement | null = textNode.parentElement; parent && parent !== scroller; parent = parent.parentElement) {
+              const style = getComputedStyle(parent);
+              if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) { visible = false; break; }
+            }
+            if (!visible) continue;
+            const range = document.createRange(); range.selectNodeContents(textNode);
+            for (const rect of range.getClientRects()) if (rect.right > popup.left && rect.left < popup.right
+              && rect.bottom > popup.top && rect.top < popup.bottom
+              && rect.bottom > readable.top && rect.top < readable.bottom
+              && rect.right > readable.left && rect.left < readable.right) {
+              overlappingText.push({ text: textNode.textContent.trim(), rect: [rect.left, rect.top, rect.right, rect.bottom] });
+            }
+          }
+        }
+      }
+      let left = 0, right = innerWidth, top = 0, bottom = innerHeight;
+      for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        const style = getComputedStyle(ancestor); const rect = ancestor.getBoundingClientRect();
+        if (/hidden|clip|auto|scroll/.test(style.overflowX)) { left = Math.max(left, rect.left); right = Math.min(right, rect.right); }
+        if (/hidden|clip|auto|scroll/.test(style.overflowY)) { top = Math.max(top, rect.top); bottom = Math.min(bottom, rect.bottom); }
+      }
+      const titleEl = element.querySelector("[data-worker-limit-title]"), stateEl = element.querySelector("[data-worker-limit-state]"), iconEl = element.querySelector("[data-worker-limit-icon]");
+      const row = titleEl && stateEl && iconEl && input ? (() => {
+        const title = getComputedStyle(titleEl), state = getComputedStyle(stateEl), field = getComputedStyle(input);
+        const stateBox = stateEl.getBoundingClientRect(), inputBox = input.getBoundingClientRect();
+        return { icon: iconEl.getBoundingClientRect().width, titleSize: parseFloat(title.fontSize), titleWeight: Number(title.fontWeight), titleColor: title.color,
+          titleX: titleEl.getBoundingClientRect().left - box.left, stateWeight: Number(state.fontWeight), stateColor: state.color,
+          inputWeight: Number(field.fontWeight), inputAlign: field.textAlign, inputX: inputBox.left, inputY: inputBox.top, inputH: inputBox.height,
+          stateRight: stateBox.right, stateTop: stateBox.top, stateBottom: stateBox.bottom };
+      })() : null;
+      return { rect: [box.x, box.y, box.width, box.height], clipped, clippedControl: box.left < left - .5 || box.right > right + .5 || box.top < top - .5 || box.bottom > bottom + .5, overlappingText, inputWidth: input?.getBoundingClientRect().width ?? null, row, dot: dot ? [dot.width, dot.height] : null, text: element.textContent, overflow: document.documentElement.scrollWidth > innerWidth };
+    });
+    const dock = page.locator("[data-kanban-seat].side").first();
+    const picture = expectedHostWidth !== undefined && selector.includes("popover")
+      ? target
+      : expectedHostWidth !== undefined
+        ? dock
+      : selector === "[data-worker-limit-chip]" ? page.locator(phone ? "[data-mobile2-sheet='seat']" : "[data-orchestrator-incumbent]").first() : target;
+    const hostRect = expectedHostWidth !== undefined
+      ? await dock.boundingBox()
+      : await picture.boundingBox();
+    readings.push({ name, ...measurement, frameRect: hostRect });
+    if (measurement.clipped.length) failures.push(`${name}: clipped labels ${measurement.clipped.join(" | ")}`);
+    if (measurement.overflow) failures.push(`${name}: horizontal page overflow`);
+    if (measurement.clippedControl) failures.push(`${name}: control is sliced by its visible band`);
+    if (measurement.overlappingText.length) failures.push(`${name}: popover overlaps transcript text ${measurement.overlappingText.map(item => item.text).join(" | ")}`);
+    if (budget && measurement.rect[3]! > budget + 1) failures.push(`${name}: height ${measurement.rect[3]} exceeds ${budget}`);
+    if (expectedHostWidth !== undefined && Math.abs((hostRect?.width ?? 0) - expectedHostWidth) > 1) failures.push(`${name}: dock width ${hostRect?.width ?? "missing"} does not match ${expectedHostWidth}px`);
+    if (selector === "[data-header-menu-workers]") {
+      if (Math.abs((measurement.inputWidth ?? 0) - 48) > .5) failures.push(`${name}: wrong field width ${measurement.inputWidth}`);
+      const row = measurement.row as WorkersRowReading | null;
+      const want = phone ? { icon: 18, title: 13, titleX: 46, stateWeight: 500 } : { icon: 16, title: 12, titleX: 32, stateWeight: 500 };
+      if (!row) failures.push(`${name}: row geometry missing`);
+      else {
+        if (Math.abs(row.icon - want.icon) > .5) failures.push(`${name}: icon ${row.icon}px, siblings ${want.icon}px`);
+        if (Math.abs(row.titleSize - want.title) > .5 || row.titleWeight !== 600) failures.push(`${name}: title ${row.titleSize}px/${row.titleWeight}`);
+        if (Math.abs(row.titleX - want.titleX) > .5) failures.push(`${name}: label x ${row.titleX}, siblings ${want.titleX}`);
+        if (row.stateWeight !== want.stateWeight || row.stateColor === row.titleColor) failures.push(`${name}: state line ${row.stateWeight}/${row.stateColor} is not the muted sibling word`);
+        if (row.inputWeight !== 400 || row.inputAlign !== "center") failures.push(`${name}: field number weight ${row.inputWeight}, align ${row.inputAlign}`);
+        if (row.inputX < row.stateRight - .5 && row.inputY < row.stateBottom - .5 && row.inputY + row.inputH > row.stateTop + .5) failures.push(`${name}: field overlaps the state line`);
+      }
+    }
+    if (selector.includes("popover")) {
+      const viewport = page.viewportSize()!;
+      const [x, y, w, h] = measurement.rect as [number, number, number, number];
+      if (x < 8 - .5 || x + w > viewport.width - 8 + .5 || y < 8 - .5 || y + h > viewport.height - 8 + .5) failures.push(`${name}: popover leaves viewport margins`);
+      if (Math.abs(w - 256) > 1) failures.push(`${name}: popover width ${w}`);
+    }
+    await picture.screenshot({ path: path.join(out, `${name}.png`) });
+    return measurement;
+  }
+  for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const scene of ["machine", "own", "over"] as const) {
+    const name = `${phone ? 390 : 1440}-${lang}-${theme}-${scene}`;
+    const { page, context, pageErrors } = await openFixture(browser, `${base}?scenario=seat-head&workers=${scene}&lang=${lang}`, { width: phone ? 390 : 1440, height: phone ? 844 : 900 }, theme, lang, "reduce", phone);
+    let step = "initial render";
+    try {
+      await page.waitForTimeout(350);
+      await page.evaluate(() => { for (const button of document.querySelectorAll<HTMLElement>("[data-attention-toast] button")) button.click(); });
+      if (phone) { step = "open phone seat"; await page.locator("[data-mobile2-open=seat]").first().click(); }
+      const chip = page.locator("[data-worker-limit-chip]").first(); await chip.waitFor();
+      const closed = await frame(page, "[data-worker-limit-chip]", `${name}-closed`, phone ? 44 : undefined);
+      if (phone && Math.abs(closed.rect[3]! - 44) > .5) failures.push(`${name}: phone row is not 44 px`);
+      if ((scene === "machine") !== (closed.dot === null)) failures.push(`${name}: wrong override dot`);
+      if (closed.dot && (closed.dot[0] !== 4 || closed.dot[1] !== 4)) failures.push(`${name}: dot is not 4 px`);
+      const warning = await chip.evaluate(element => element.classList.contains("text-warning"));
+      if (warning !== (scene === "over")) failures.push(`${name}: wrong warning tone`);
+      step = "open worker-limit popover";
+      await chip.click();
+      await frame(page, "[data-worker-limit-popover]", `${name}-popover`);
+      await page.keyboard.press("Escape");
+      await page.locator("[data-worker-limit-popover]").waitFor({ state: "detached" });
+      if (!phone && scene === "machine") {
+        // Exercise the production side dock, whose width owns the incumbent
+        // header's flex budget. Styling the header itself leaves its flex slot
+        // at the board width and does not test the dock's minimum width.
+        const seat = page.locator("[data-kanban-seat]").first();
+        await seat.locator("[data-seat-placement]").waitFor({ state: "visible" });
+        step = "switch seat to dock";
+        await seat.locator("[data-seat-placement]").click({ force: true });
+        await seat.evaluate(element => (element as HTMLElement).style.setProperty("--seat-w", "360px"));
+        await page.waitForFunction(() => {
+          const dock = document.querySelector<HTMLElement>("[data-kanban-seat].side");
+          return dock && Math.abs(dock.getBoundingClientRect().width - 360) <= 1;
+        });
+        const dockChip = seat.locator("[data-worker-limit-chip]").first();
+        await frame(page, "[data-worker-limit-chip]", `${name}-floor360`, undefined, 360);
+        step = "open dock worker-limit popover";
+        await dockChip.click();
+        await frame(page, "[data-worker-limit-popover]", `${name}-floor360-popover`, undefined, 360);
+        await page.keyboard.press("Escape");
+      }
+      if (phone) {
+        // Escape closes the seat's layer before opening the board menu.
+        await page.keyboard.press("Escape");
+        await page.locator('[data-mobile2-open="menu"]').first().click();
+        await page.locator('[data-mobile2-menu-row="settings"]').click();
+      } else {
+        await page.locator("[data-rail-menu]").first().click();
+        await page.locator("[data-rail-menu-settings]").click();
+      }
+      await page.locator("[data-header-menu-workers] input").waitFor();
+      await frame(page, "[data-header-menu-workers]", `${name}-settings-row`);
+      /* The 232 px panel wraps the override line («7 here (own limit 10) · 19 on machine») onto a second state line: 14 px more than the machine scene. */
+      await frame(page, phone ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]", `${name}-settings`, phone ? 743 : 436);
+      if (!phone && scene === "machine") {
+        await page.keyboard.press("Escape");
+        await page.locator("[data-rail-overview]").click();
+        await page.locator("[data-rail-menu]").first().click();
+        await page.locator("[data-rail-menu-settings]").click();
+        await page.locator("[data-header-menu-workers] input").waitFor();
+        await frame(page, "[data-header-menu-workers]", `${name}-overview`);
+      }
+      if (phone && scene === "machine") {
+        await page.keyboard.press("Escape");
+        await page.locator("[data-mobile2-open='projects']").first().click();
+        await page.locator("[data-mobile2-project='__overview__']").click();
+        await page.locator("[data-mobile2-open='menu']").first().click();
+        await page.locator("[data-mobile2-menu-row='settings']").click();
+        await page.locator("[data-header-menu-workers] input").waitFor();
+        const overview = await frame(page, "[data-header-menu-workers]", `${name}-overview`);
+        if (overview.text?.includes(lang === "en" ? " here" : " тут")) failures.push(`${name}: overview names a project's running count`);
+      }
+      if (pageErrors.length) failures.push(`${name}: ${pageErrors.join(" | ")}`);
+    } catch (error) { failures.push(`${name}: ${step}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`); }
+    finally { await context.close(); }
+  }
+  return { readings, failures };
+}
+
 /** Waits until an opened `<details>` shows all of its content. The board's
  * sections ease their content open from no height under `overflow: clip`, so
  * a control near the end is clipped for a moment; a click there lands on the
@@ -638,18 +825,18 @@ export async function captureSeatMandateHandover(browser: Browser, base: string,
 export async function capturePrototypeQuestions(page: Page, phone: boolean) {
   return page.evaluate((phone) => {
     const frame = document.querySelector<HTMLElement>(phone ? "[data-mobile2-sheet=prototype-review]" : "[data-prototype-review] [role=dialog]")!;
-    const questions = document.querySelector<HTMLElement>("[data-prototype-questions]")!;
-    const stage = document.querySelector<HTMLElement>("[data-prototype-stage]");
+    const questions = frame.querySelector<HTMLElement>("[data-prototype-questions]")!;
+    const stage = frame.querySelector<HTMLElement>("[data-prototype-gallery]");
     const bounds = frame.getBoundingClientRect();
-    const options = [...document.querySelectorAll<HTMLElement>("[data-prototype-option], [data-prototype-other]")];
-    const pillOverflow = [...document.querySelectorAll<HTMLElement>("[data-prototype-recommended]")].filter(pill => {
+    const options = [...frame.querySelectorAll<HTMLElement>("[data-prototype-option], [data-prototype-other]")];
+    const pillOverflow = [...frame.querySelectorAll<HTMLElement>("[data-prototype-recommended]")].filter(pill => {
       const box = pill.getBoundingClientRect(); const row = pill.closest("button")!.getBoundingClientRect();
       return box.left < row.left || box.right > row.right + 0.5;
     }).length;
-    const actions = [...document.querySelectorAll<HTMLElement>("[data-prototype-save], [data-prototype-skip]")].map(button => {
+    const actions = [...frame.querySelectorAll<HTMLElement>("[data-prototype-save], [data-prototype-skip]")].map(button => {
       const b = button.getBoundingClientRect(); return { text: button.textContent, visible: b.top >= bounds.top && b.bottom <= bounds.bottom + 0.5, x: b.x, y: b.y, width: b.width };
     });
-    const marks = [...document.querySelectorAll<HTMLElement>("[data-prototype-mark]")].map(mark => {
+    const marks = [...frame.querySelectorAll<HTMLElement>("[data-prototype-mark]")].map(mark => {
       const box = mark.getBoundingClientRect();
       return { multiple: mark.closest("button")!.getAttribute("role") === "checkbox", radius: parseFloat(getComputedStyle(mark).borderTopLeftRadius), width: box.width };
     });
@@ -660,16 +847,16 @@ export async function capturePrototypeQuestions(page: Page, phone: boolean) {
       return button.getBoundingClientRect().height - Math.max(44, need);
     }));
     const unpicked = options.filter(o => o.getAttribute("aria-checked") === "false");
-    const decision = document.querySelector<HTMLElement>("[data-prototype-decision]");
-    return { heightExcess, markLetters: [...document.querySelectorAll("[data-prototype-mark]")].filter(m => (m.textContent ?? "").trim() !== "").length,
-      hints: document.querySelectorAll("[data-prototype-hint]").length,
+    const decision = frame.querySelector<HTMLElement>("[data-prototype-decision]");
+    return { heightExcess, markLetters: [...frame.querySelectorAll("[data-prototype-mark]")].filter(m => (m.textContent ?? "").trim() !== "").length,
+      hints: frame.querySelectorAll("[data-prototype-hint]").length,
       unpickedFaded: unpicked.length > 0 && unpicked.every(o => parseFloat(getComputedStyle(o).opacity) < 1),
       statusLine: decision ? decision.querySelector("span")?.textContent ?? null : null, decisionText: decision?.textContent ?? null,
-      title: document.querySelector<HTMLElement>(phone ? "[data-mobile2-sheet=prototype-review] h2" : "[role=dialog] header p")?.textContent ?? null,
+      title: frame.querySelector<HTMLElement>(phone ? "h2" : "header p")?.textContent ?? null,
       sideways: frame.scrollWidth - frame.clientWidth, questionWidth: questions.getBoundingClientRect().width,
-      stageWidth: stage?.getBoundingClientRect().width ?? null, questionCount: document.querySelectorAll("[data-prototype-question]").length,
+      stageWidth: stage?.getBoundingClientRect().width ?? null, questionCount: frame.querySelectorAll("[data-prototype-question]").length,
       optionHeight: Math.min(...options.map(o => o.getBoundingClientRect().height)), pillOverflow, marks, actions,
-      actionsWidth: document.querySelector<HTMLElement>("[data-prototype-actions]")?.getBoundingClientRect().width ?? null,
-      readonly: options.every(o => (o as HTMLButtonElement).disabled), skipped: Boolean(document.querySelector("[data-prototype-skipped]")) };
+      actionsWidth: frame.querySelector<HTMLElement>("[data-prototype-actions]")?.getBoundingClientRect().width ?? null,
+      readonly: options.every(o => (o as HTMLButtonElement).disabled), skipped: Boolean(frame.querySelector("[data-prototype-skipped]")) };
   }, phone);
 }

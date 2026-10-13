@@ -345,3 +345,22 @@ export const compactCompletionSchema = z.union([
     detail: boundedString(200).nullable(), retry_after_s: z.number().int().nonnegative().nullable() }),
   z.object({ lease_id: leaseId, outcome: z.literal("failed"), reason: z.enum(["agent_error", "invalid_answer", "profile_violation", "hard_cap", "install_restarted", "cancelled"]), detail: boundedString(200).nullable() }),
 ]);
+
+// Celestia H1–H3: strict wire objects reject undocumented private fields.
+export const ownerHistoryGroupsSchema = z.object({ groups: z.array(z.object({
+  chat_id: z.number().int(), title: z.string(),
+}).strict()) }).strict();
+export const ownerHistoryPageSchema = z.object({
+  chat_id: z.number().int(), title: z.string(), timezone: z.string(), start: time, end: time,
+  oldest_stored_at: z.iso.datetime().nullable(),
+  messages: z.array(z.object({
+    message_id: z.number().int(), sent_at: z.iso.datetime(),
+    author: z.object({ user_id: z.number().int(), name: z.string().nullable(), username: z.string().nullable() }).strict(),
+    from_assistant: z.boolean(), thread_id: z.number().int().nullable(), reply_to_message_id: z.number().int().nullable(),
+    text: boundedString(4096), media: z.object({ kind: z.string(), description: boundedString(1000).nullable() }).strict().nullable(),
+    truncated: z.boolean(),
+  }).strict()).max(100),
+  next_cursor: z.string().regex(/^[1-9][0-9]{0,9}$/).nullable(),
+}).strict();
+export type OwnerHistoryGroups = z.infer<typeof ownerHistoryGroupsSchema>;
+export type OwnerHistoryPage = z.infer<typeof ownerHistoryPageSchema>;

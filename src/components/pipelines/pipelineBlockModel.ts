@@ -356,6 +356,7 @@ export function laneMergeWord(pipeline: Pick<Pipeline, "state" | "merge">): Lane
     case "checking":
     case "waiting-checks":
       return "waiting";
+    case "refreshing":
     case "updating":
       return "updating";
     case "merging":
@@ -400,6 +401,8 @@ export function mergeReasonText(t: TFunction, reason: string | null): string {
   if (check) return t("pipelineBlock.mergeReason.check", { name: check[1]! });
   const merge = MERGE_REASON_PATTERNS.refusedMerge.exec(reason);
   if (merge) return t("pipelineBlock.mergeReason.refusedMerge", { message: merge[1]! });
+  const refresh = MERGE_REASON_PATTERNS.refusedRefresh.exec(reason);
+  if (refresh) return t("pipelineBlock.mergeReason.refusedRefresh", { message: refresh[1]! });
   const update = MERGE_REASON_PATTERNS.refusedUpdate.exec(reason);
   if (update) return t("pipelineBlock.mergeReason.refusedUpdate", { message: update[1]! });
   return reason;

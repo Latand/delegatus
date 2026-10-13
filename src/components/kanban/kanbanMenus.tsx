@@ -151,6 +151,7 @@ export function KanbanMenu({ anchor, label, items, onClose }: KanbanMenuProps) {
             role={item.type === "radio" ? "menuitemradio" : item.type === "check" ? "menuitemcheckbox" : "menuitem"}
             aria-checked={item.type === "radio" || item.type === "check" ? Boolean(item.checked) : undefined}
             aria-disabled={item.disabled ? true : undefined}
+            data-menu-item={item.id}
             onClick={() => {
               if (item.disabled) return;
               onClose(!item.keepFocus);

@@ -1,3 +1,5 @@
+import type { CallMemory } from "./callMemory";
+import type { OwnerHistoryRead } from "@/lib/externalRelay/ownerHistory";
 import { createHash, randomUUID } from "node:crypto";
 import { reportHeaderName } from "@/lib/projects/settings";
 import { hardenedRedact } from "@/lib/view/compactText";
@@ -10,7 +12,7 @@ import { jsonObject, type LiveConnection, type LiveProvider } from "./provider";
 import { cleanStrings, withoutCredentials, withoutLocalPaths, withoutSeparators } from "./redaction";
 import { speechParts } from "./reportSpeech";
 import { backendRequest, type BackendItem } from "./sessionConfig";
-import { runCompanionTool } from "./tools";
+import { PRIVATE_RESULT_TOOLS, runCompanionTool } from "./tools";
 import { byteShort } from "./prototypeRead";
 import { backendUsageTokens, backendUsageUsd, BACKEND_RESPONSE_RESERVE_USD, BACKEND_ROUNDS, LIVE_SESSION_LIMIT_MS, LIVE_USD_PER_SECOND, SESSION_START_ROOM_USD, VOICE_SESSION_RESERVE_USD } from "./usage";
 
@@ -33,13 +35,20 @@ function triedTool(name: string, args: string, speech: string): string {
   const labels: Record<string, string> = { list_tasks: "searched the tasks", list_pipelines: "searched the pipelines", get_task: "read a task", get_pipeline: "read a pipeline",
     agent_activity: "checked agents", conversation_messages: "read a conversation", orchestrator_messages: "read orchestrator messages", search_transcripts: "searched conversations",
     read_prototype_review: "read prototype reviews", view_prototype_frame: "requested prototype frames", orchestrator_reports: "read reports", reread_orchestrator_report: "reread a report",
-    request_orchestrator_delegation: "asked the orchestrator", resolve_orchestrator_confirmation: "answered confirmation", end_conversation: "requested hang-up" };
+    relay_owner_history: "read a Telegram group", request_orchestrator_delegation: "asked the orchestrator", resolve_orchestrator_confirmation: "answered confirmation", end_conversation: "requested hang-up" };
   let query = ""; try { const parsed = JSON.parse(args); if (typeof parsed.query === "string") query = ` for «${byteShort(parsed.query, 80)}»`; } catch { /* Invalid arguments have no query to report. */ }
   return byteShort(`${labels[name] ?? "called a tool"}${query}: ${speech.split(". ")[0].replace(/\.$/, "")}`, 150);
 }
+function hasEmptyArguments(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && Object.keys(parsed).length === 0;
+  } catch { return false; }
+}
 /** A backing turn's project, send source turn and waiting confirmation stay frozen; the operator's latest
  * attempt steered into it moves on, and it alone binds hang-up intent and an explicit ask again. */
-interface CodexTurnContext { project: string | null; sourceTurn?: number; confirmationProposalId: string | null; endSourceTurn?: number; attempt?: OperatorAttempt }
+interface CodexTurnContext { project: string | null; sourceTurn?: number; confirmationProposalId: string | null; endSourceTurn?: number; attempt?: OperatorAttempt; privateHistory?: boolean }
 interface ActiveSession {
   id: string; providerId: string; transcript: LiveTranscript; connection?: LiveConnection;
   /** The provider this call runs on, chosen at its start; a Codex call has no key, cap or charge. */
@@ -64,12 +73,18 @@ interface ActiveSession {
   codexTurn?: CodexTurnContext;
   runningCodexTurnId?: string;
   codexTurns: Map<string, CodexTurnContext>;
+  /** A private owner-history result remains in provider context for the life of the session. */
+  privateHistory?: boolean;
+  memory?: string;
+  releaseState?: () => void;
   /** The paying account's plan ran out: the call says so once and ends with reason limit. */
   limitReached?: boolean;
   /** The latest handoff: the operator turn then latest, the turn it was given, and whether the voice spoke since. */
   lastHandoff?: { latest?: number; turn?: number; replied: boolean; attempt: string };
 }
 interface Options {
+  memory?: CallMemory;
+  ownerHistory?: OwnerHistoryRead;
   key?(): string; now?(): number; closeTimeoutMs?: number; timers?: boolean;
   /** The API provider beside a Codex one: new calls when the settings choose
    * the API, and the hangup of API calls already open. */
@@ -185,12 +200,18 @@ export class CompanionLiveSessions {
       || !input.sdp.trim() || input.sdp.length > 96_000) throw new Error("INVALID_REQUEST");
     const session = this.admission.create({ project: input.project, locale: input.locale, authority: "live-model", startedBy: input.startedBy });
     const id = session.id;
+    if (this.options.memory) {
+      const start = this.admission.transcriptRecord(id).entries.find(row => row.kind === "session_start")!;
+      this.admission.record(id, { ...start, data: { ...start.data, memoryVersion: settings.callMemory ? 1 : 0 } });
+    }
     try {
       this.storage.change(document => {
         if (Object.values(document.sessions).some(row => row.id !== id && row.mintRequestId === requestId)) throw new Error("SESSION_CLOSED");
         Object.assign(document.sessions[id], { mintRequestId: requestId, mintDigest: digest, owner: { pid: process.pid, instance: this.instance } });
       });
     } catch (error) { this.admission.retire(id); throw error; }
+    const memory = this.options.memory?.block(input.startedBy) ?? "";
+    this.options.memory?.retry(input.startedBy);
     const provider = this.providerFor(settings.backend);
     const codex = provider.backend === "codex";
     try { if (!codex) this.storage.reserve(id, VOICE_SESSION_RESERVE_USD, SESSION_START_ROOM_USD); }
@@ -202,17 +223,18 @@ export class CompanionLiveSessions {
     // Subscription auth never uses the API key. Transcript masking still
     // protects any credential the installation holds, even in short pieces.
     const secrets = [...new Set([key.trim(), ...this.storage.credentials()])].filter(Boolean);
-    const active: ActiveSession = { id, providerId: "", transcript: new LiveTranscript(secrets), provider, codex, key, secrets, queue: [], seen: new Set(),
+    const active: ActiveSession = { id, memory, providerId: "", transcript: new LiveTranscript(secrets), provider, codex, key, secrets, queue: [], seen: new Set(),
       delegations: new Set(), reads: new Map(), reading: new Map(), backend: new Set(), abort: new AbortController(), timers: [], ended: false, endRequested: false, lastSeen: this.now(),
       createdAt: this.now(), voiceAllowanceSeconds: LIVE_SESSION_LIMIT_MS / 1_000, codexTurns: new Map() };
     this.active.set(id, active);
+    active.releaseState = this.storage.hold(id);
     // Recorded before the provider is asked: a lost answer or a stop before the
     // id is stored leaves a session that may be open and that nobody can name.
     this.storage.change(document => { Object.assign(document.sessions[id], { ...(codex ? { backend: "codex" } : {}), usage: { seconds: 0, responses: {} }, remoteOpen: true, mintUncertain: true }); });
     let refused = false;
     let hungUpUnnamed = false;
     try {
-      const minted = await provider.create(key, input.locale, input.sdp, withoutLocalPaths(withoutCredentials(reportHeaderName(input.project, input.locale), secrets)), input.project).catch(error => {
+      const minted = await provider.create(key, input.locale, input.sdp, withoutLocalPaths(withoutCredentials(reportHeaderName(input.project, input.locale), secrets)), input.project, memory).catch(error => {
         refused = codex || error instanceof Error && error.message === "PROVIDER_REFUSED";
         throw error;
       });
@@ -235,7 +257,7 @@ export class CompanionLiveSessions {
         if (active.ended || active.closePromise || active.limitReached) throw new Error("SESSION_CLOSED");
         const context = active.codexTurns.get(turnId) ?? active.codexTurn;
         if (context && !active.codexTurns.has(turnId)) this.codexTurn(active, turnId, context);
-        const result = await this.tool(active, { name, call_id: callId, arguments: JSON.stringify(args) }, turnId, name === "end_conversation" ? context?.endSourceTurn ?? context?.sourceTurn : context?.sourceTurn, context?.confirmationProposalId, context?.project, context?.attempt);
+        const result = await this.tool(active, { name, call_id: callId, arguments: JSON.stringify(args) }, turnId, name === "end_conversation" ? context?.endSourceTurn ?? context?.sourceTurn : context?.sourceTurn, context?.confirmationProposalId, context?.project, context?.attempt, context?.privateHistory === true);
         // Let the RPC owner's microtask write the tool result before hanging up.
         if (active.endRequested) active.timers.push(setTimeout(() => { void this.close(id, "tool"); }, 0));
         return result;
@@ -252,7 +274,7 @@ export class CompanionLiveSessions {
           const chargeMonth = this.storage.read().charges[id]?.month;
           if (!settings.enabled || (!codex && (chargeMonth !== settings.month || settings.monthlyCapUsd < settings.usageUsd + settings.reservedUsd)) || this.now() - active.lastSeen > 30_000)
             void this.close(id, settings.enabled ? "cap" : "operator");
-          else this.renewVoice(active);
+          else { this.renewVoice(active); this.options.memory?.checkpoint(id); }
         } catch { void this.forceHangup(active); } }, 5_000);
         active.timers.push(watchdog);
       }
@@ -362,7 +384,8 @@ export class CompanionLiveSessions {
         const running = active.runningCodexTurnId ? active.codexTurns.get(active.runningCodexTurnId) : undefined;
         // A handoff steered into the running turn is a later operator attempt, unless it duplicates the previous handoff.
         if (running) Object.assign(running, { endSourceTurn: turn }, duplicate ? {} : { attempt });
-        active.codexTurn = { project: stored.currentProject === undefined ? stored.project : stored.currentProject, sourceTurn: turn, confirmationProposalId: this.admission.awaiting(active.id)?.proposalId ?? null };
+        active.codexTurn = { project: stored.currentProject === undefined ? stored.project : stored.currentProject, sourceTurn: turn, confirmationProposalId: this.admission.awaiting(active.id)?.proposalId ?? null,
+          privateHistory: active.privateHistory === true };
       } else this.delegate(active, delegation.id, turn, attempt);
     } else if (event.type === "codex.plan" && active.codex) {
       const plan = companionPlan(event.plan);
@@ -422,6 +445,7 @@ export class CompanionLiveSessions {
       const refusalReasons: string[] = [];
       const tried: string[] = [];
       let viewed = false;
+      let ownerHistoryInContext = active.privateHistory === true;
       const stored = this.admission.session(active.id);
       // Freeze default context for this backend turn: a browser switch while a
       // read is awaiting must not change the target of its following send.
@@ -434,7 +458,7 @@ export class CompanionLiveSessions {
       const scrub = (text: string) => withoutLocalPaths(withoutCredentials(text, active.secrets));
       const awaitingList = awaiting.map(request => scrub(`- ${request.handle}, project ${JSON.stringify(reportHeaderName(request.project, stored.locale))}, sent ${request.sentMinutesAgo} min ago, ${request.progressReports} progress report(s)${request.askedBack ? ", the orchestrator asked back" : ""}: ${JSON.stringify(request.instruction)}`)).join("\n").slice(-3000);
       const latest = (sourceTurn === undefined ? stored.inputs.slice(-1) : stored.inputs.filter(row => row.turn === sourceTurn)).map(row => row.text).join(" ").slice(-2_000);
-      const input: BackendItem[] = [{ role: "user", content: `Project currently in view: ${projectLabel}. Default reads and sends to this project; a named project overrides it.\nReads earlier in this call, newest last:\n${previousReads || "(none)"}\n\nRequests sent to the orchestrator in this call that still wait for its report:\n${awaitingList || "(none)"}\nAn ask that repeats or rephrases one of these passes its handle as pending_request. orchestrator_reports reads what came back.\n\nThe conversation so far, oldest first:\n${record || "(no transcript yet)"}\n\nThe operator's latest turn, which this delegation answers: ${latest ? JSON.stringify(scrub(latest)) : "(not transcribed yet)"}\nAct on that turn alone. Earlier questions are context; never put them into a send.\n\nThe voice delegated here. Answer it with the registry tools, or send the operator's explicit orchestrator request.${waiting
+      const input: BackendItem[] = [...(active.memory ? [{ role: "developer", content: active.memory }] : []), { role: "user", content: `Project currently in view: ${projectLabel}. Default reads and sends to this project; a named project overrides it.\nReads earlier in this call, newest last:\n${previousReads || "(none)"}\n\nRequests sent to the orchestrator in this call that still wait for its report:\n${awaitingList || "(none)"}\nAn ask that repeats or rephrases one of these passes its handle as pending_request. orchestrator_reports reads what came back.\n\nThe conversation so far, oldest first:\n${record || "(no transcript yet)"}\n\nThe operator's latest turn, which this delegation answers: ${latest ? JSON.stringify(scrub(latest)) : "(not transcribed yet)"}\nAct on that turn alone. Earlier questions are context; never put them into a send.\n\nThe voice delegated here. Answer it with the registry tools, or send the operator's explicit orchestrator request.${waiting
         ? `\n\nA request to the orchestrator is waiting for the operator's answer and has not been sent: "${waiting.instruction}". When the operator has just answered it, pass that answer on with resolve_orchestrator_confirmation.` : ""}` }];
       const calls = new Set<string>();
       // Tool rounds, then one answer with tools off, so what the reads returned is still spoken.
@@ -474,18 +498,22 @@ export class CompanionLiveSessions {
         }
         for (const item of asked) {
           calls.add(item.call_id as string);
+          const privateHistoryBlocked = ownerHistoryInContext && item.name !== "relay_owner_history"
+            && !(item.name === "end_conversation" && hasEmptyArguments(item.arguments));
           // Execute the original selector, but replay only scrubbed text to the
           // backend. Opaque call references must still pair with their output.
           const scrub = (text: string) => withoutLocalPaths(withoutCredentials(text,active.secrets));
-          const replayId = scrub(item.call_id as string) === item.call_id ? item.call_id
+          const replayId = privateHistoryBlocked ? `private_history_${createHash("sha256").update(item.call_id as string).digest("hex").slice(0,32)}`
+            : scrub(item.call_id as string) === item.call_id ? item.call_id
             : `voice_call_${createHash("sha256").update(item.call_id as string).digest("hex").slice(0,32)}`;
           let replayArguments: string;
-          try { replayArguments = JSON.stringify(cleanStrings(JSON.parse(item.arguments as string),scrub,true)); }
+          try { replayArguments = privateHistoryBlocked ? "{}" : JSON.stringify(cleanStrings(JSON.parse(item.arguments as string),scrub,true)); }
           catch { replayArguments = scrub(item.arguments as string); }
           input.push({ type: "function_call", call_id: replayId,
-            name: scrub(item.name as string) === item.name ? item.name : "redacted_tool", arguments: replayArguments });
-          const toolResult = await this.tool(active, item, delegationId, sourceTurn, waiting?.proposalId ?? null, project, attempt);
+            name: privateHistoryBlocked ? "private_history_blocked" : scrub(item.name as string) === item.name ? item.name : "redacted_tool", arguments: replayArguments });
+          const toolResult = await this.tool(active, item, delegationId, sourceTurn, waiting?.proposalId ?? null, project, attempt, privateHistoryBlocked);
           const resultObject = jsonObject(toolResult);
+          if (item.name === "relay_owner_history" && resultObject?.status === "done") ownerHistoryInContext = true;
           tried.push(triedTool(String(item.name), replayArguments, String(resultObject?.speech ?? "no answer")));
           if (["request_orchestrator_delegation", "resolve_orchestrator_confirmation"].includes(String(item.name))
             && resultObject?.status === "sent"
@@ -511,26 +539,46 @@ export class CompanionLiveSessions {
     });
   }
   private async tool(active: ActiveSession, item: Record<string, unknown>, delegationId: string, sourceTurn: number | undefined,
-    confirmationProposalId?: string | null, project: string | null = this.admission.session(active.id).project, attempt?: OperatorAttempt): Promise<unknown> {
+    confirmationProposalId?: string | null, project: string | null = this.admission.session(active.id).project, attempt?: OperatorAttempt,
+    privateHistoryContext = false): Promise<unknown> {
     const callId = item.call_id as string; const name = item.name as string;
+    const privateHistoryBlocked = (privateHistoryContext || active.privateHistory === true) && name !== "relay_owner_history"
+      && !(name === "end_conversation" && hasEmptyArguments(item.arguments));
+    const recordedCallId = privateHistoryBlocked || PRIVATE_RESULT_TOOLS.has(name)
+      ? `private_${createHash("sha256").update(callId).digest("hex").slice(0,32)}` : callId;
     const atMs = this.now() - active.createdAt;
     let argumentsText: string;
-    try { argumentsText = JSON.stringify(cleanStrings(JSON.parse(item.arguments as string),
+    try { argumentsText = privateHistoryBlocked || PRIVATE_RESULT_TOOLS.has(name) ? "[private owner history arguments omitted]" : JSON.stringify(cleanStrings(JSON.parse(item.arguments as string),
       text=>withoutLocalPaths(withoutCredentials(text,active.secrets)),true), null, 2); } catch { argumentsText = String(item.arguments); }
-    const toolData = { name, callId, delegationId, arguments: withoutLocalPaths(withoutCredentials(argumentsText, active.secrets)).slice(0, 4_000) };
-    this.admission.record(active.id, { id: `tool-${callId}`, kind: "tool", atMs, data: { ...toolData, status: "running" } }, false);
-    this.admission.emit(active.id, { type: "tool.called", callId, name: name.slice(0, 80), summary: name.slice(0, 80).replaceAll("_", " ") });
+    const toolData = { name: privateHistoryBlocked ? "private_history_blocked" : name, callId: recordedCallId, delegationId, sourceTurn, arguments: argumentsText.slice(0, 4_000) };
+    this.admission.record(active.id, { id: `tool-${recordedCallId}`, kind: "tool", atMs, data: { ...toolData, status: "running" } }, false);
+    this.admission.emit(active.id, { type: "tool.called", callId: recordedCallId, name: toolData.name.slice(0, 80), summary: toolData.name.replaceAll("_", " ") });
+    if (privateHistoryBlocked) {
+      const result = { status: "refused", code: "private_history_boundary", reason: "private history is limited to this conversation",
+        speech: "I can only use that history to answer you here." };
+      this.admission.record(active.id, { id: `tool-${recordedCallId}`, kind: "tool", atMs,
+        data: { ...toolData, status: "failed", code: result.code, reason: result.reason, result: JSON.stringify(result, null, 2) } });
+      this.admission.emit(active.id, { type: "tool.result", callId: recordedCallId, status: "failed", summary: result.speech });
+      return result;
+    }
     try {
       const result = await runCompanionTool({ project, sessionId: active.id, callId, delegationId, sourceTurn, confirmationProposalId, ...(attempt ? { attempt } : {}),
-        admission: this.admission, reads: this.reads, read:(name,args)=>this.read(active,project,name,args,delegationId), endConversation: () => { active.endRequested = true; } }, name, JSON.parse(item.arguments as string));
+        admission: this.admission, reads: this.reads, ownerHistory: this.options.ownerHistory, read:(name,args)=>this.read(active,project,name,args,delegationId), endConversation: () => { active.endRequested = true; } }, name, JSON.parse(item.arguments as string));
       const output = jsonObject(result);
+      if (name === "relay_owner_history" && output?.status === "done") {
+        active.privateHistory = true;
+      }
+      if (active.codex && name === "relay_owner_history" && output?.status === "done") {
+        const context = active.codexTurns.get(delegationId) ?? active.codexTurn;
+        if (context) context.privateHistory = true;
+      }
       // Codex voices queued speech after the turn's own answer, so a report asked for again is handed at once.
       if (active.codex) this.speakReports(active);
       const status = output?.status === "refused" || output?.status === "failed" ? "failed" : "done";
-      this.admission.record(active.id, { id: `tool-${callId}`, kind: "tool", atMs,
+      this.admission.record(active.id, { id: `tool-${recordedCallId}`, kind: "tool", atMs,
         data: { ...toolData, status, code: output?.code, reason: output?.reason ?? output?.speech,
-          result: JSON.stringify(cleanStrings(result,text=>withoutLocalPaths(withoutCredentials(text,active.secrets))), null, 2).slice(0, 8_000) } });
-      this.admission.emit(active.id, { type: "tool.result", callId, status,
+          result: JSON.stringify(cleanStrings(PRIVATE_RESULT_TOOLS.has(name) ? { status: output?.status, speech: output?.speech } : result,text=>withoutLocalPaths(withoutCredentials(text,active.secrets))), null, 2).slice(0, 8_000) } });
+      this.admission.emit(active.id, { type: "tool.result", callId: recordedCallId, status,
         summary: typeof output?.speech === "string" ? output.speech.slice(0, 240) : "Completed" });
       return result;
     } catch (error) {
@@ -540,9 +588,9 @@ export class CompanionLiveSessions {
       const result = { status: "refused", code, reason, speech: boardRead
         ? `The read failed: ${reason}. Nothing was read by this call. Say that you could not read it and what you tried.`
         : `The tool failed: ${reason}.` };
-      this.admission.record(active.id, { id: `tool-${callId}`, kind: "tool", atMs,
+      this.admission.record(active.id, { id: `tool-${recordedCallId}`, kind: "tool", atMs,
         data: { ...toolData, status: "failed", code, reason, result: JSON.stringify(result, null, 2) } });
-      this.admission.emit(active.id, { type: "tool.result", callId, status: "failed", summary: result.speech });
+      this.admission.emit(active.id, { type: "tool.result", callId: recordedCallId, status: "failed", summary: result.speech });
       return result;
     }
   }
@@ -661,6 +709,7 @@ export class CompanionLiveSessions {
    * it may have run. */
   async recover(): Promise<void> {
     for (const row of this.orphans()) await this.reap(row.id);
+    this.options.memory?.recover();
   }
   /** Stored voice sessions this service must close: still open here or at the
    * provider, and owned by no session in memory and no other living process. */
@@ -713,7 +762,7 @@ export class CompanionLiveSessions {
           if (confirmed) delete document.sessions[id].mintUncertain;
         });
         if (confirmed) this.retrying.delete(id); else this.retryHangup(id);
-        if (!session.closed) { this.admission.emit(id, { type: "session.closed", reason: "transport", incomplete: true }); this.admission.retire(id); }
+        if (!session.closed) { this.admission.emit(id, { type: "session.closed", reason: "transport", incomplete: true }); this.admission.retire(id); this.options.memory?.trigger(id); }
         return;
       }
       const remote = !!session.providerId && (session.remoteOpen ?? !session.closed);
@@ -737,6 +786,7 @@ export class CompanionLiveSessions {
         this.storage.settle(id, null);
         this.admission.emit(id, { type: "session.closed", reason: "transport", incomplete: true });
         this.admission.retire(id);
+        this.options.memory?.trigger(id);
       }
       if (remote) this.chargeOpenTime(id);
       if (uncertain) this.chargeOpenTime(id);
@@ -832,6 +882,11 @@ export class CompanionLiveSessions {
     try {
       if (active.providerClosed || active.hungUp) this.storage.change(document => { if (document.sessions[active.id]) document.sessions[active.id].remoteOpen = false; });
       if (this.admission.session(active.id).closed) return;
+      if (this.options.memory) {
+        const start = this.admission.transcriptRecord(active.id).entries.find(row => row.kind === "session_start")!;
+        const memoryVersion = this.storage.settings().callMemory ? 1 : 0;
+        if (start.data.memoryVersion !== memoryVersion) this.admission.record(active.id, { ...start, data: { ...start.data, memoryVersion } });
+      }
       this.transcript(active, active.transcript.finish());
       if (active.codex) this.storage.change(document => {
         const usage = document.sessions[active.id].usage!;
@@ -845,10 +900,12 @@ export class CompanionLiveSessions {
       // own clock and its plan holds no reservation to keep.
       this.admission.emit(active.id, { type: "session.closed", reason: active.reason ?? (finalized ? "operator" : "transport"), incomplete: !active.codex && !complete });
       this.admission.retire(active.id);
+      this.options.memory?.trigger(active.id);
     } finally {
       for (const timer of active.timers) clearTimeout(timer);
       active.connection?.dispose(); active.resolveClose?.();
       this.active.delete(active.id);
+      active.releaseState?.();
       // The provider never confirmed this session closed: keep asking.
       if (active.providerId && !active.providerClosed && !active.hungUp) this.retryHangup(active.id);
     }

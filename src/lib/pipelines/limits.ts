@@ -8,6 +8,8 @@ export const MAX_STAGE_PROMPT_LENGTH = 8_000;
 export const MAX_STAGE_OUTPUTS = 20;
 export const MAX_STAGE_OUTPUT_PATH_LENGTH = 240;
 export const MAX_ROLE_PARAM_TEXT_LENGTH = 2_000;
+export const PIPELINE_LIST_DEFAULT_LIMIT = 100;
+export const PIPELINE_LIST_MAX_LIMIT = 200;
 
 /** Conversation-graph bounds (#353, schema v3): a pipeline holds 1–8 stages
     once started (drafts may momentarily hold 0 while assembled); fail-edge

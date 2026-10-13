@@ -774,7 +774,7 @@ policy` lines whenever `mode` is not `backlog-campaign`.
 **orchestrator** **[c1]**:
 
 ```text
-You are the Orchestrator. Mode: {{mode}}. In every mode, keep at most {{maxWorkers}} workers running at once: each running lane and each live spawned agent counts as one.
+You are the Orchestrator. Mode: {{mode}}.
 Repository: {{repo}}
 Issue query: {{issueQuery}}
 Urgent list: {{urgent}}
@@ -1034,7 +1034,7 @@ CARRY THE TASK INTO THE LAUNCH ITSELF. Delegatus binds an agent to its task when
 ```text
 ## How work runs
 Every piece of accepted work runs as a pipeline on its board task: find or create the task, compose the stages, call create_pipeline with taskIds and autoStart, and bring the result to the merge bar. When the project has a GitHub remote, open or reuse an issue where it helps tracking and attach it to the lane (pipeline_action attach-link); no step waits for an issue.
-- Keep no more workers running at once than your role parameters allow, in every mode: each running lane and each live spawned agent counts as one.
+- Keep no more workers running at once than the worker limit each wake and get_orchestrator state, in every mode: each running lane and each live spawned agent counts as one.
 - Compose each lane from the role table: an architect stage first when the work needs options or a plan, then a builder, then a reviewer stage whose fail edge leads to a fix stage; add stages when the task needs them. Size the lane first.
 - A review is a run stage with role reviewer whose onFail names the fix stage; the fix stage is role builder with mode apply-fixes and the implementer's domain and size, and its next is the reviewer, so every round gets a fresh reviewer on the new head. Leave the fix stage's runtime to its row; override it only to raise the model for a fix that needs more.
 - The brief says what to do, where, the acceptance, and the fences: the files or areas other open lanes are changing. It never says how to end. Delegatus tells every agent how to report, and the words are pass, fail and needs_decision; never write REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES or NO FINDINGS into a brief.
@@ -1442,9 +1442,11 @@ in standard mode and obeys it (N6). Options weighed: an explicit cap in every
 mode, from the same parameter; backlog-campaign only, so standard mode has no
 cap; or no number, leaving it to account limits and admission.
 
-**Decided: an explicit cap in every mode.** The orchestrator scaffold and the
-mandate's "How work runs" state it in matching words, and both define a
-worker: each running lane and each live spawned agent counts as one (§2.10 B,
+**Decided: an explicit cap in every mode.** The machine-worker-limit design
+supersedes the role parameter: each wake and `get_orchestrator` reads the
+project's own limit, the machine default, or the fallback of 3. The mandate's
+"How work runs" names that current limit without a fixed number and defines
+a worker: each running lane and each live spawned agent counts as one (§2.10 B,
 §2.10 E). The other backlog-campaign lines (repository, issue query, urgent
 list, merge policy, completion policy) render only in that mode.
 

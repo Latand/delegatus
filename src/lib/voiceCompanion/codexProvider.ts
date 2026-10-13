@@ -59,15 +59,15 @@ export const CODEX_VOICE_ARGS = ["-c", "cli_auth_credentials_store=file", "-c", 
 export function codexVoiceEnvironment(home: string, source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { ...Object.fromEntries(Object.entries(source).filter(([name]) => !/_API_KEY$/i.test(name) && !/^(OPENAI_|CHATGPT_)/i.test(name))), NODE_ENV: source.NODE_ENV, CODEX_HOME: home };
 }
-export function codexVoiceThread(cwd: string, compactPrompt = true) {
-  const instructions = BACKEND_INSTRUCTIONS.replace("whose answer is under Reads earlier in this call", "whose answer is in this thread");
+export function codexVoiceThread(cwd: string, compactPrompt = true, memory = "") {
+  const instructions = BACKEND_INSTRUCTIONS.replace("whose answer is under Reads earlier in this call", "whose answer is in this thread") + (memory ? `\n\n${memory}` : "");
   return { model: LIVE_BACKEND_MODEL, cwd, approvalPolicy: "never", sandbox: "read-only", ephemeral: true,
     dynamicTools: COMPANION_TOOL_REGISTRY.map(({ name, description, parameters }) => ({ type: "function", name, description, inputSchema: parameters })),
     developerInstructions: instructions, ...(compactPrompt ? { environments: [], baseInstructions: instructions } : {}) };
 }
-export function codexVoiceStart(threadId: string, locale: Locale, sdp: string, projectName?: string, voice: CodexVoice = CODEX_VOICE) {
+export function codexVoiceStart(threadId: string, locale: Locale, sdp: string, projectName?: string, voice: CodexVoice = CODEX_VOICE, memory = "") {
   return { threadId, version: "v3", model: "gpt-live-1-codex", outputModality: "audio", transport: { type: "webrtc", sdp: sdp.replace(/\r?\n/g, "\r\n") },
-    clientManagedHandoffs: false, prompt: liveInstructions(locale, projectName), voice };
+    clientManagedHandoffs: false, prompt: liveInstructions(locale, projectName, memory), voice };
 }
 export function codexVoiceContext(threadId: string, text: string) {
   return { threadId, items: [{ type: "message", role: "developer", content: [{ type: "input_text", text }] }] };
@@ -106,7 +106,7 @@ export class CodexLiveProvider implements LiveProvider {
   private readonly now: () => number;
   constructor(private readonly options: CodexVoiceOptions = {}) { this.now = options.now ?? Date.now; }
 
-  async create(_key: string, locale: Locale, sdp: string, projectName?: string, project?: string) {
+  async create(_key: string, locale: Locale, sdp: string, projectName?: string, project?: string, memory = "") {
     const account = selectVoiceAccount((this.options.accounts ?? listCodexAccounts)(), (this.options.observations ?? (() => agentRegistry().quotaObservations("codex")))(),
       (this.options.bindings ?? accountProjectBindings)(), project ?? null, this.now());
     const directory = statePath("scratch", "voice-codex"); fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -133,7 +133,7 @@ export class CodexLiveProvider implements LiveProvider {
         } });
       if ((await client.readAccount()).account?.type !== "chatgpt") throw new CodexVoiceError("CODEX_AUTH_REQUIRED");
       // The window the call starts from is read beside the thread, so it costs the start no time.
-      const [started, reading] = await Promise.all([client.request("thread/start", codexVoiceThread(cwd, this.options.compactPrompt)).then(jsonObject),
+      const [started, reading] = await Promise.all([client.request("thread/start", codexVoiceThread(cwd, this.options.compactPrompt, memory)).then(jsonObject),
         client.request("account/rateLimits/read").then(jsonObject, () => null)]);
       const id = jsonObject(started?.thread)?.id;
       if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(id)) throw new CodexVoiceError("CODEX_UNSUPPORTED");
@@ -186,7 +186,7 @@ export class CodexLiveProvider implements LiveProvider {
         }
       });
       try {
-        await client.request("thread/realtime/start", codexVoiceStart(id, locale, sdp, projectName, this.options.voice));
+        await client.request("thread/realtime/start", codexVoiceStart(id, locale, sdp, projectName, this.options.voice, memory));
         const answerSdp = await answer;
         if (active.failed || active.stopping) throw new CodexVoiceError("PROVIDER_ERROR");
         return { id, sdp: answerSdp };

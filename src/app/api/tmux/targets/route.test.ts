@@ -27,9 +27,11 @@ mock.module("@/lib/agent/transcriptHost", () => ({
     return snapshot;
   },
 }));
+let completedScanOptions: unknown;
 mock.module("@/lib/scanner/scanCache", () => ({
-  completedFileScan: async () => {
+  completedFileScan: async (options?: unknown) => {
     completedScanReads += 1;
+    completedScanOptions = options;
     return { snapshot: { files: completedFiles } };
   },
 }));
@@ -74,4 +76,13 @@ test("/api/tmux/targets projects every path from one canonical host snapshot", a
   expect(completedScanReads).toBe(1);
   expect(suppliedFiles).toBe(completedFiles);
   expect(pidResolutionFiles).toBe(completedFiles);
+});
+
+/* #2761: every open view polls this; its batch answers from the last
+   completed scan and never waits for one to take in a new transcript. */
+test("/api/tmux/targets answers from the last completed scan without waiting for a rescan", async () => {
+  completedScanOptions = undefined;
+  const response = await POST(request({ reqs: [{ id: "first", path: FIRST_PATH }] }));
+  expect(await response.json()).toEqual({ targets: { first: "agents:4.0" } });
+  expect(completedScanOptions).toEqual({ revalidate: false });
 });

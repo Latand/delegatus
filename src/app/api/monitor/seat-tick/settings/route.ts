@@ -1,3 +1,4 @@
+import { releaseControlChange } from "@/lib/release/store";
 import { NextRequest, NextResponse } from "next/server";
 
 import { agentRegistry } from "@/lib/agent/registry";
@@ -116,6 +117,7 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
      one place that decides what each field may be, and it names the field and
      the rule in the refusal it returns. */
   const change: SeatTickSettingsChange = {};
+  if (body.release !== undefined) change.release = body.release as SeatTickSettingsChange["release"];
   if (body.autoRotate !== undefined) change.autoRotate = body.autoRotate as SeatTickSettingsChange["autoRotate"];
   if (body.maintenance !== undefined) change.maintenance = body.maintenance as SeatTickSettingsChange["maintenance"];
   if (body.enabled !== undefined) change.enabled = body.enabled as boolean;
@@ -143,6 +145,7 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
     }
     const applied = applySeatTickSettingsChange(readSeatTickSettings(project), change, { at: new Date().toISOString(), actor });
     if (!applied.ok) return NextResponse.json({ error: applied.error }, { status: 400 });
+    if (change.release) releaseControlChange(project, change.release, actor, applied.settings.updatedAt!);
     writeSeatTickSettings(project, applied.settings);
     return NextResponse.json({ ...seatTickSettingsAnswer(project, true, actor), ...(applied.notes ? { notes: applied.notes } : {}) }, { headers: NO_STORE });
   } catch (error) {

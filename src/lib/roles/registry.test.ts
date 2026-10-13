@@ -98,7 +98,7 @@ test("role registry exposes the thirteen role ids and campaign-ready orchestrato
     const standard = resolveRole("orchestrator", params);
     if (!standard.ok) throw new Error(standard.error);
     for (const label of ["Repository:", "Issue query:", "Urgent list:", "Merge policy:", "Completion policy:"]) expect(standard.value.prompt).not.toContain(label);
-    expect(standard.value.prompt).toContain("In every mode, keep at most 3 workers running at once");
+    expect(roleSpawnPrompt({ role: "orchestrator", scaffold: standard.value.prompt }, "Coordinate work")).toContain("worker limit each wake and get_orchestrator state");
     expect(standard.value.prompt).not.toContain("Backlog campaign:");
     expect(standard.value.prompt).not.toContain("\n\n\n");
   }
@@ -249,14 +249,14 @@ test("spawn role resolution enumerates the selected engine catalog for an invali
   });
 });
 
-test("orchestrator spawn defaults omitted maxWorkers to three and preserves explicit one", () => {
+test("orchestrator spawn retires the launch-only worker number", () => {
   const omitted = resolveSpawnRole({ role: "orchestrator" });
   if (!omitted.ok || !omitted.value) throw new Error("expected resolved orchestrator role");
-  expect(omitted.value.scaffold).toContain("keep at most 3 workers running at once");
+  expect(omitted.value.scaffold).not.toContain("keep at most");
 
   const explicit = resolveSpawnRole({ role: "orchestrator", roleParams: { maxWorkers: 1 } });
   if (!explicit.ok || !explicit.value) throw new Error("expected resolved orchestrator role");
-  expect(explicit.value.scaffold).toContain("keep at most 1 workers running at once");
+  expect(explicit.value.scaffold).toBe(omitted.value.scaffold);
 });
 
 /* docs/design/model-sizing-tiers.md §1 and agent-prompt-contract.md §3 (a):
@@ -468,7 +468,7 @@ test("the visual critic ends needs_decision with no findings when a touched surf
   const text = resolved.value.prompt;
   expect(text).toContain(`When you cannot frame a touched surface (no existing driver renders it, or a driver needs access you lack), the verdict is ${VISUAL_CRITIC_UNFRAMED}`);
   expect(VISUAL_CRITIC_UNFRAMED).toStartWith("needs_decision with no findings");
-  expect(text).toContain("Report only what a frame you produced shows");
+  expect(text).toContain("Report only what a frame you inspected shows");
   expect(text).toContain("needs_decision when a touched surface cannot be framed");
   expect(text).not.toContain("is a finding that names it");
 });
@@ -486,4 +486,11 @@ test("spawning a visual critic takes a Claude runtime and refuses Codex", () => 
   expect(resolveRole("visual-critic", {}, { engine: "codex", model: "gpt-6.1-sol" })).toEqual({ ok: false, error: "visual-critic runs on claude only" });
   const architect = resolveSpawnRole({ role: "architect", engine: "codex", model: "gpt-6.1-sol" });
   expect(architect.ok && architect.value?.config.engine).toBe("codex");
+});
+
+
+test("the visual critic judges every prototype variant with the operator's checklist", () => {
+  const resolved = resolveRole("visual-critic", {});
+  if (!resolved.ok) throw new Error(resolved.error);
+  for (const words of ["judge exactly those frames", "every frame of every variant", "summary names each variant", "clutter", "no clear place to click", "many identical elements"]) expect(resolved.value.prompt).toContain(words);
 });

@@ -6,7 +6,7 @@ import { useLayoutEffect, useRef, useState, type Dispatch, type ReactNode, type 
 import { Select } from "@/components/ui/Select";
 import { requestAccountPanel } from "@/lib/accounts/openPanel";
 import type { BoardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
-import { useLocale } from "@/lib/i18n";
+import { useLocale, type MessageKey } from "@/lib/i18n";
 import type { SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 
 import { maintenanceReading, seatTickAge, seatTickLocalTime, seatTickReading, type MaintenanceReading, type SeatTickReading, type StatusSegment } from "./seatTickView";
@@ -170,10 +170,28 @@ function autoRotateChangeOf(draft: AutoRotateDraft, record: SeatTickSettingsAnsw
   return change;
 }
 
+interface ReleaseDraft { enabled: boolean; ask: boolean; changes: string; hours: string; clearHold: boolean }
+function releaseDraftOf(record: SeatTickSettingsAnswer | null): ReleaseDraft {
+  return { enabled: record?.release?.enabled ?? false, ask: record?.release?.askBeforePublish ?? true,
+    changes: String(record?.release?.minChanges ?? 30), hours: String(record?.release?.minGapHours ?? 12), clearHold: false };
+}
+function releaseChangeOf(draft: ReleaseDraft, record: SeatTickSettingsAnswer | null): NonNullable<SeatTickChange["release"]> {
+  const current = releaseDraftOf(record); const change: NonNullable<SeatTickChange["release"]> = {};
+  if (draft.enabled !== current.enabled) change.enabled = draft.enabled;
+  if (draft.ask !== current.ask) change.askBeforePublish = draft.ask;
+  const number = (value: string) => !value.trim() ? null : Number.isFinite(Number(value)) ? Number(value) : value;
+  if (draft.changes !== current.changes) change.minChanges = number(draft.changes);
+  if (draft.hours !== current.hours) change.minGapHours = number(draft.hours);
+  if (draft.clearHold) change.hold = null;
+  return change;
+}
+
 const sameRuntime = (left: MaintainerRuntime, right: MaintainerRuntime) =>
   left.engine === right.engine && left.model === right.model && left.effort === right.effort;
 
 export interface SeatTickDraftState {
+  release: ReleaseDraft;
+  setRelease: Dispatch<SetStateAction<ReleaseDraft>>;
   draft: SeatTickDraft;
   setDraft: Dispatch<SetStateAction<SeatTickDraft>>;
   autoRotate: AutoRotateDraft;
@@ -230,6 +248,10 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
   const [autoAdopted, setAutoAdopted] = useState(() => autoRotateSignatureOf(record));
   const autoSignature = autoRotateSignatureOf(record);
   if (autoSignature !== autoAdopted) { setAutoAdopted(autoSignature); setAutoRotate(autoRotateDraftOf(record)); }
+  const [release, setRelease] = useState(() => releaseDraftOf(record));
+  const releaseSignature = JSON.stringify([record?.release?.updatedAt, releaseDraftOf(record)]);
+  const [releaseAdopted, setReleaseAdopted] = useState(releaseSignature);
+  if (releaseSignature !== releaseAdopted) { setReleaseAdopted(releaseSignature); setRelease(releaseDraftOf(record)); }
   const maintainer = useMaintainerRole(true);
   const [runtimeDraft, setRuntimeDraft] = useState<MaintainerRuntime | null>(null);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
@@ -244,7 +266,8 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
   const maintenanceChange = maintenanceChangeOf(maintenance, record?.maintenance);
   const maintenanceDirty = Object.keys(maintenanceChange).length > 0;
   const autoChange = autoRotateChangeOf(autoRotate, record);
-  const change: SeatTickChange = { ...tickChange, ...(maintenanceDirty ? { maintenance: maintenanceChange } : {}), ...(Object.keys(autoChange).length ? { autoRotate: autoChange } : {}) };
+  const releaseChange = releaseChangeOf(release, record);
+  const change: SeatTickChange = { ...(Object.keys(releaseChange).length ? { release: releaseChange } : {}), ...tickChange, ...(maintenanceDirty ? { maintenance: maintenanceChange } : {}), ...(Object.keys(autoChange).length ? { autoRotate: autoChange } : {}) };
   const requestDirty = Object.keys(change).length > 0;
 
   const save = async () => {
@@ -263,6 +286,7 @@ export function useSeatTickDraft(read: SeatTickSettingsRead): SeatTickDraftState
   };
 
   return {
+    release, setRelease,
     draft,
     setDraft,
     maintenance,
@@ -645,6 +669,8 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
 
       {record?.autoRotate ? <SeatTickAutoRotate value={record.autoRotate} state={state} control={control} row={row} phone={phone} now={now} locale={locale} /> : null}
 
+      {record?.release?.available ? <SeatTickRelease value={record.release} state={state} control={control} row={row} phone={phone} now={now} locale={locale} tickEnabled={record.effective.enabled} /> : null}
+
       {/* On the desktop the popover scrolls under its own cap, so the Save
           sticks to the bottom edge of what is visible; the phone's sits in
           the sheet's footer. */}
@@ -656,6 +682,43 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
       {record ? <SeatTickDetails record={record} lastDelivery={reading.lastDelivery} now={now} locale={locale} phone={phone} /> : null}
     </div>
   );
+}
+
+function SeatTickRelease({ value, state, control, row, phone, now, locale, tickEnabled }: {
+  value: NonNullable<SeatTickSettingsAnswer["release"]>; state: SeatTickDraftState; control: string; row: string; phone: boolean; now: number; locale: "en" | "uk"; tickEnabled: boolean;
+}) {
+  const { t } = useLocale();
+  const draft = state.release;
+  const observation = value.status.observation;
+  const reasons: Record<string, MessageKey> = { "releases-off": "seatTick.release.wait.off", "tick-off": "seatTick.release.wait.tick", "merge-off": "seatTick.release.wait.merge", "release-in-flight": "seatTick.release.wait.flight", "checks-red": "seatTick.release.wait.checks", "checks-pending": "seatTick.release.wait.checks", rollback: "seatTick.release.wait.rollback", hold: "seatTick.release.wait.hold", "no-cut": "seatTick.release.wait.cut", draining: "seatTick.release.wait.deploy", deploying: "seatTick.release.wait.deploy", gap: "seatTick.release.wait.gap", changes: "seatTick.release.wait.changes", "declined-cut": "seatTick.release.wait.declined" };
+  const reason = !value.enabled && !value.status.request && !value.status.live ? "seatTick.release.wait.off" : !tickEnabled ? "seatTick.release.wait.tick" : observation?.reason.startsWith("capture-tools:") ? "seatTick.release.wait.tools" : observation?.reason ? reasons[observation.reason] : null;
+  return <div data-seat-tick-release className="flex min-w-0 flex-col gap-2 border-t border-border pt-2.5">
+    <div className={`flex items-center gap-2 ${row}`}>
+      <p className="min-w-0 flex-1 text-label font-semibold uppercase tracking-wide text-muted">{t("seatTick.release.head")}</p>
+      <Toggle on={draft.enabled} label={t("seatTick.release.head")} disabled={state.saving}
+        onToggle={() => state.setRelease({ ...draft, enabled: !draft.enabled })} phone={phone} attr={{ "data-seat-tick-release-enabled": String(draft.enabled) }} />
+    </div>
+    <p className="text-caption leading-4 text-secondary">{t("seatTick.release.about")}</p>
+    <label className={`flex items-center gap-2 ${row} cursor-pointer text-ui text-primary`}>
+      <span className="min-w-0 flex-1">{t("seatTick.release.ask")}</span>
+      <input data-seat-tick-release-ask type="checkbox" checked={draft.ask} disabled={state.saving} className={phone ? "size-6" : "size-4"}
+        onChange={event => state.setRelease({ ...draft, ask: event.target.checked })} />
+    </label>
+    {([{ field: "changes", label: "changesLabel", min: 1, max: 500 }, { field: "hours", label: "hoursLabel", min: 1, max: 720 }] as const).map(({ field, label, min, max }) =>
+      <label className={`flex items-center gap-2 ${row}`} key={field}><span className="min-w-0 flex-1 text-ui text-primary">{t(`seatTick.release.${label}`)}</span>
+        <input type="number" min={min} max={max} data-seat-tick-release-field={field} value={draft[field]} disabled={state.saving}
+          className={`${control} w-20 shrink-0 rounded border border-border bg-input px-2 text-ui text-primary`}
+          onChange={event => state.setRelease({ ...draft, [field]: event.target.value })} /></label>)}
+    {observation ? <p className="text-caption leading-4 text-secondary">{t("seatTick.release.count", { count: observation.count, target: value.minChanges })}</p> : null}
+    {reason ? <p data-seat-tick-release-reason role="status" className="text-caption leading-4 text-muted">{t(reason)}</p> : null}
+    {observation ? <p className="text-caption text-muted">{t("seatTick.release.last", { version: observation.lastTag })}</p> : null}
+    {observation?.reason === "gap" ? <p className="text-caption text-muted">{t("seatTick.release.next", { time: seatTickLocalTime(new Date(observation.nextEligibleAt).toISOString(), now, locale) ?? t("seatTick.unknown") })}</p> : null}
+    {value.status.hold && !draft.clearHold ? <div className={`flex items-center gap-2 ${row}`}>
+      <p className="min-w-0 flex-1 text-caption text-warning [overflow-wrap:anywhere]">{value.status.hold.reason}</p>
+      <button type="button" data-seat-tick-release-clear className={`${control} shrink-0 rounded border border-border px-2 text-caption`} disabled={state.saving}
+        onClick={() => state.setRelease({ ...draft, clearHold: true })}>{t("seatTick.release.clear")}</button>
+    </div> : null}
+  </div>;
 }
 
 function SeatTickAutoRotate({ value, state, control, row, phone, now, locale }: {
@@ -688,7 +751,7 @@ function SeatTickAutoRotate({ value, state, control, row, phone, now, locale }: 
   </div>;
 }
 
-function SeatTickMaintenance({ project, maintenance, view, state, control, row, phone, onOpenedCard }: {
+function SeatTickMaintenance({ maintenance, view, state, control, row, phone, onOpenedCard }: {
   project: string;
   maintenance: BoardMaintenanceAnswer;
   view: MaintenanceReading;

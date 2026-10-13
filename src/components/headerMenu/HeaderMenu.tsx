@@ -25,8 +25,10 @@ import { SoundToggle } from "@/components/SoundToggle";
 import { teamMobileMenuEntry } from "@/components/team/menuEntry";
 import { useTeamView } from "@/components/team/teamClient";
 import { openTelemetrySettings } from "@/components/telemetry/TelemetrySettings";
+import { showPhoneVoice, usePhoneVoice } from "@/components/voiceCompanion/phoneVoiceStore";
 import { openVoiceCompanionSettings } from "@/components/voiceCompanion/VoiceCompanionSetting";
 import { useLocale } from "@/lib/i18n";
+import { WorkerLimitSettingsRow } from "@/components/orchestrator/WorkerLimitChip";
 
 import { HEADER_LAYOUTS, type HeaderItem } from "./headerMenuModel";
 
@@ -135,6 +137,8 @@ export function HeaderMenuPanel({ project, onClose }: { project: string | null; 
         );
       case "mapping":
         return <button key={item} type="button" data-rail-menu-agent-mapping="" className={ROW} onClick={act(() => openOnboarding("mapping"))}><Icon icon={SlidersHorizontal} /><Title>{t("headerMenu.mapping")}</Title></button>;
+      case "workers":
+        return <WorkerLimitSettingsRow key={item} project={project} />;
       case "dictation":
         return <button key={item} type="button" data-rail-menu-dictation="" className={ROW} onClick={act(() => openOnboarding("voice"))}><Icon icon={Mic} /><Title>{t("onboarding.menu.voice")}</Title></button>;
       case "voice":
@@ -265,6 +269,7 @@ export function HeaderMenuSheet(props: {
 function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClose }: Parameters<typeof HeaderMenuSheet>[0]) {
   const { t } = useLocale();
   const keepAwake = useKeepAwake();
+  const voice = usePhoneVoice();
   /* As on the desktop: a page that opens takes focus on its back row, and back returns it to the row that opened the page. */
   const [{ view, focus }, setPlace] = useState<{ view: PhoneView; focus: string | null }>({ view: "rest", focus: null });
   useEffect(() => {
@@ -319,6 +324,8 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
         return row("key", KeyRound, t("providerKey.label"), () => go("key"), <><KeyStateWord size="sheet" />{chevron}</>);
       case "mapping":
         return mapping?.kind === "row" ? { ...mapping, label: t("headerMenu.mapping") } : null;
+      case "workers":
+        return { kind: "custom", key: "workers", node: <WorkerLimitSettingsRow project={project} phone /> };
       case "dictation":
         return dictation ?? null;
       case "voice":
@@ -368,6 +375,8 @@ function PhoneMenu({ title, project, nav, create = [], board, rules = [], onClos
           </div>
         ),
       },
+      /* The voice head the operator hid comes back from here, only while it is hidden (docs/design/phone-voice-head-build.md). */
+      ...(voice.available && voice.hidden ? [row("voice-show", AudioLines, t("voiceCompanion.show"), () => { close(); showPhoneVoice(); })] : []),
       row("settings", Settings, t("headerMenu.settings"), () => go("settings"), <>{project ? <MemoryStateWord short size="sheet" /> : null}<span className="tabular-nums">{settingsItems.length}</span>{chevron}</>),
       row("help", LifeBuoy, t("headerMenu.help"), () => go("help"), <><span className="tabular-nums">{helpItems.length}</span>{chevron}</>),
       ...(ruleCount ? [row("rules", ListChecks, t("headerMenu.rules"), () => go("rules"), <><span className="tabular-nums">{ruleCount}</span>{chevron}</>)] : []),

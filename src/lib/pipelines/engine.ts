@@ -108,6 +108,7 @@ import { pipelineRepoPreflightError, pipelineRepoPreflightStatus, preflightPipel
 import { classifyProviderCondition, type ProviderCondition } from "./providerConditions";
 import { pipelineDeliveryGuidance, renderCutRetryInput, renderDecisionInput, renderOutOfMemoryRetryInput } from "./prompts";
 import { composeStageInput } from "./stageInput";
+import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
 import { renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { isReadOnlyLockedRole } from "@/lib/roles/locks";
@@ -5860,7 +5861,7 @@ async function spawnRunStage(
     if (attempt.activation?.prepareInput || prepareInput) {
       const bound = attemptStage(stage, attempt);
       const previousOutput = attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline);
-      if (restartStagePrompt(renderStagePrompt(pipeline, bound, attempt.effectiveRole, previousOutput), attempt) !== spawnInput.prompt) throw new ActivationSuperseded();
+      if (restartStagePrompt(renderStagePrompt(pipeline, bound, attempt.effectiveRole, previousOutput, effectiveWorkerLimit(pipeline.project).value), attempt) !== spawnInput.prompt) throw new ActivationSuperseded();
       const expected = JSON.stringify(pipeline);
       const abort = new AbortController();
       const revalidate = () => {
@@ -6544,6 +6545,7 @@ async function tickRunStage(
         bound,
         attempt.effectiveRole,
         attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline),
+        effectiveWorkerLimit(pipeline.project).value,
       );
       const prompt = restartStagePrompt(stagePrompt, attempt);
       /* The retried attempt supersedes its predecessor's round (issue #383):
@@ -9900,7 +9902,7 @@ function stageViolations(violations: PipelineValidationViolation[]): { error: st
   return { error: pipelineValidationError(violations), violations };
 }
 
-function normalizeStages(
+export function normalizeStages(
   value: unknown,
   lookup?: PipelineRoleLookup | null,
   preservedStages?: ReadonlyMap<string, PipelineStage>,
@@ -9910,6 +9912,7 @@ function normalizeStages(
      acyclic pass edges, valid fail edges, review-loop reachability — apply
      either way. */
   minStages: number = MIN_STARTED_PIPELINE_STAGES,
+  project = "",
 ): { stages?: PipelineStage[]; error?: string; violations?: PipelineValidationViolation[]; legacyReview?: legacyReview.NewLegacyReviewOutcome } {
   if (!Array.isArray(value) || value.length < minStages || value.length > MAX_PIPELINE_STAGES) {
     return stageViolations([{
@@ -10105,7 +10108,7 @@ function normalizeStages(
       next: stage.next ?? null,
       onFail: onFailEdge,
     };
-    const resolved = preservedStage ? { role: preservedStage.effectiveRole } : resolvePipelineRole(input, stage.kind as PipelineStage["kind"], lookup);
+    const resolved = preservedStage ? { role: preservedStage.effectiveRole } : resolvePipelineRole(input, stage.kind as PipelineStage["kind"], lookup, project);
     if (!resolved.role) {
       const field = "field" in resolved && resolved.field ? resolved.field : "role";
       violations.push({
@@ -10216,7 +10219,7 @@ function replaceDraftStages(
   const preserved = new Map(pipeline.stages.map((stage) => [stage.id, stage]));
   /* Draft edits may empty the plan entirely (remove down to zero); the 1-stage
      floor is enforced only at Start (#136, #353). */
-  const normalized = normalizeStages(relinked, lookup, preserved, 0);
+  const normalized = normalizeStages(relinked, lookup, preserved, 0, pipeline.project);
   if (!normalized.stages) return { error: normalized.error ?? "invalid stages", ...(normalized.violations ? { violations: normalized.violations } : {}) };
   /* The entry stage (the draft cursor rests on stages[0]) must be a run: a
      review-loop entry has no preceding run to review and would park on Start.
@@ -10352,7 +10355,7 @@ function replaceStartedStages(
     onFail: stage.onFail && keptIds.has(stage.onFail.to) ? stage.onFail : null,
   }));
   const preserved = new Map(pipeline.stages.map((stage) => [stage.id, stage]));
-  const normalized = normalizeStages(relinked, lookup, preserved, MIN_STARTED_PIPELINE_STAGES);
+  const normalized = normalizeStages(relinked, lookup, preserved, MIN_STARTED_PIPELINE_STAGES, pipeline.project);
   if (!normalized.stages) return { error: normalized.error ?? "invalid stages", ...(normalized.violations ? { violations: normalized.violations } : {}) };
   if (normalized.stages[0]!.kind !== "run") {
     return { error: `review-loop stage ${normalized.stages[0]!.id} may not be the first stage: the first stage must be a run stage whose session a review-loop then reviews` };
@@ -10523,6 +10526,7 @@ export function resolvePipelineCreatorLineage(
 }
 
 type CreatePipelineOptions = {
+  refreshOf?: { pipelineId: string; base: string; lineage: PipelineCreatorLineage };
   creationRequest?: { key: string; digest: string };
   ensureTask?: BoardTask;
   spawnParams?: TaskPipelineSpawnParams;
@@ -10648,7 +10652,9 @@ export async function createPipelineFromRequest(
   const operatorDraftWithoutLineage = options.allowOperatorDraftWithoutLineage
     && req.autoStart === false
     && (typeof req.src !== "string" || !req.src.trim());
-  const creator = taskSpawn
+  const creator = options.refreshOf
+    ? { lineage: options.refreshOf.lineage }
+    : taskSpawn
     ? taskSpawnCreatorLineage(taskSpawn.params, ports)
     : operatorDraftWithoutLineage
       ? { lineage: { srcPath: null, srcConversationId: null } }
@@ -10663,7 +10669,8 @@ export async function createPipelineFromRequest(
   /* A draft (autoStart:false) may be created empty and assembled on the canvas
      (#136); an immediately-started pipeline needs at least its one implement
      conversation (#353). */
-  const normalized = normalizeStages(req.stages, ports.roleLookup, undefined, req.autoStart === false ? 0 : MIN_STARTED_PIPELINE_STAGES);
+  const roleProject = requestedRepoDir ? ports.projectForCwd(requestedRepoDir) ?? path.basename(requestedRepoDir) : "";
+  const normalized = normalizeStages(req.stages, ports.roleLookup, undefined, req.autoStart === false ? 0 : MIN_STARTED_PIPELINE_STAGES, roleProject);
   if (!normalized.stages) {
     violations.push(...(normalized.violations ?? [{ field: "stages", message: normalized.error ?? "invalid stages", expected: STAGE_OBJECT_SHAPE }]));
   }
@@ -10769,6 +10776,7 @@ export async function createPipelineFromRequest(
   const target = { repository, remote: origin, branch: targetInput?.branch ?? `refs/heads/${pipeline.branch}`,
     ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(targetInput?.rejectedHead ? { rejectedHead: targetInput.rejectedHead } : {}) };
   pipeline.creationRequest = options.creationRequest;
+  if (options.refreshOf) pipeline.refreshOf = { pipelineId: options.refreshOf.pipelineId, base: options.refreshOf.base };
   if (!options.ensureTask) {
     const tasks = loadTasks();
     const taskLinkError = pipelineTaskLinkError(pipeline, taskIds, tasks);
@@ -10777,8 +10785,9 @@ export async function createPipelineFromRequest(
     if (elsewhere) return elsewhere;
     let created: Pipeline;
     try {
-      created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison);
+      created = await createPipelineWithDelivery(pipeline, target, targetInput?.comparison, { requireOwner: !!options.refreshOf });
     } catch (error) {
+      if (options.refreshOf && error instanceof Error && error.message.startsWith("target already owned")) return { error: error.message, status: 409 };
       if (!options.queueWhenBusy || !(error instanceof StoreBusyBeforeAdmissionError)) throw error;
       const entry = queuePipelineCreation(pipeline, target, targetInput?.comparison === true, error.message);
       return { pipeline, queued: { reason: entry.reason, queuedAt: entry.queuedAt }, ...(engineWarnings.length ? { warnings: engineWarnings } : {}), ...legacyAnswer };
@@ -12594,6 +12603,7 @@ export async function patchPipeline(
           },
           target.kind,
           ports.roleLookup,
+          pipeline.project,
         );
         if (!resolved.role) return { error: resolved.error ?? "invalid stage role", status: 400 };
         /* The store keeps a stage's input-level role/engine/model/effort
