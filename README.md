@@ -781,7 +781,14 @@ The tools, by area:
   seat's `create_task`, `create_pipeline` or `spawn_agent` on another project
   is refused with a pointer to `send_message_to_orchestrator`, which
   designates that project's orchestrator first when it has none, unless you
-  asked for it and the seat quotes your request in `crossProjectRequest`;
+  asked for it and the seat quotes your request in `crossProjectRequest`.
+  Project inputs accept known keys, display names and repository names in any
+  letter case, with surrounding whitespace. Lookup uses known project
+  identities without waiting for catalog scan completion. Ambiguous names
+  refuse immediately with candidate keys; unknown names say “no such project”
+  and list close matches. Named `create_task` inputs store the canonical key;
+  optional `project` on `create_pipeline` and `spawn_agent` must agree with
+  `repoDir` and `cwd`, respectively;
 - **accounts:** `account_limits`, `account_project_binding`,
   `conversation_migration`;
 - **roles:** `role_presets` reads which engine, model and effort each role

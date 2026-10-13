@@ -15,6 +15,17 @@ for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR",
 process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 process.env.LLV_RUNTIME_HOST_SOCKET = path.join(sandbox, "absent.sock");
 process.env.LLV_RUNTIME_HOST_CONTROL_SOCKET = path.join(sandbox, "absent-control.sock");
+const { persistProjectAliases } = await import("@/lib/projects/aliases");
+expect(persistProjectAliases([
+  { source: "mcp-findings-fixture-old", target: "mcp-findings", displayName: "mcp-findings" },
+])).toBe(true);
+const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+for (const project of ["mcp-findings", "finding-maintenance"]) {
+  const clientRequestId = `finding-seat-${project}`;
+  const conversationId = `conversation-${project}`;
+  beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId, mode: "existing", conversationId });
+  completeOrchestratorSeatIntent({ project, clientRequestId, conversationId, path: null });
+}
 const { viewerMcpBindings, viewerMcpToolPolicy } = await import("./bindings");
 const { createMcpToolService, createViewerMcpServer, MemoryMcpReceiptStore, SqliteMcpReceiptStore } = await import("./server");
 const { loadTasks } = await import("@/lib/tasks/store");

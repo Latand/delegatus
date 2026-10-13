@@ -34,7 +34,7 @@ function bindingsFor(callerProject: string | null = ATLAS, projects = [
   return viewerMcpBindings(undefined, undefined, {
     callerProject: () => callerProject,
     registrySnapshot: () => ({ conversations: {} }),
-    completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: projects, complete: true } }),
+    lastCompletedCatalog: () => ({ files: [], projectCatalog: projects }),
     listBindableAccounts: (engine: "claude" | "codex") => engine === "claude"
       ? [{ accountId: RESERVED, label: "Reserved" }, { accountId: SPARE, label: "Spare" }]
       : [],
@@ -73,7 +73,7 @@ test("an unknown project list refuses instead of reporting an unrestricted polic
   const service = createMcpToolService(tool, new MemoryMcpReceiptStore());
   const read = await service.callTool("account_project_binding", { clientRequestId: "binding-unknown", action: "list", project: "Missing project" });
   expect(read).toMatchObject({ ok: false, details: { code: "unknown_project", outcome: "not-executed" } });
-  expect(read.error).toContain('unknown project "Missing project"');
+  expect(read.error).toContain('no such project "Missing project"');
   expect(read).not.toHaveProperty("allowedFor");
   expect(accountProjectBindings()).toEqual([expect.objectContaining({ project: ATLAS, accountId: RESERVED })]);
 });

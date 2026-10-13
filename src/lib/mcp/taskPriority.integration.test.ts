@@ -24,6 +24,13 @@ for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR",
 process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 process.env.LLV_RUNTIME_HOST_SOCKET = path.join(sandbox, "runtime.sock");
 process.env.LLV_RUNTIME_HOST_CONTROL_SOCKET = path.join(sandbox, "absent.sock");
+const { persistProjectAliases } = await import("@/lib/projects/aliases");
+expect(persistProjectAliases([
+  { source: "priority-project-fixture-old", target: "priority-project", displayName: "priority-project" },
+])).toBe(true);
+const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+beginOrchestratorSeatIntent({ project: "priority-project", mandate: "own the board", clientRequestId: "priority-project-seat", mode: "existing", conversationId: "conversation_priority_project" });
+completeOrchestratorSeatIntent({ project: "priority-project", clientRequestId: "priority-project-seat", conversationId: "conversation_priority_project", path: null });
 const { viewerMcpBindings } = await import("./bindings");
 const { createMcpToolService, createViewerMcpServer, SqliteMcpReceiptStore } = await import("./server");
 const { TASKS_FILE, loadTasks } = await import("@/lib/tasks/store");

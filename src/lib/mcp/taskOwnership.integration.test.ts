@@ -27,6 +27,13 @@ const state = process.env.LLV_STATE_DIR!;
 fs.mkdirSync(path.join(state, "links"), { recursive: true });
 fs.writeFileSync(path.join(state, "links/self.json"), JSON.stringify({ v: 1, installId: SELF, label: "alpha", publicUrl: null, check: null }));
 fs.writeFileSync(path.join(state, "links/grants.json"), JSON.stringify({ v: 1, codes: [], grants: [{ id: ["0d0d0d0d", "4444", "4444", "8444", "444444444444"].join("-"), hash: "x", install: PEER, label: "beta", scopes: ["board:sync"], created: 1, lastUsed: null, requests: 0, movedAt: null, flushedAt: null }] }));
+const { persistProjectAliases } = await import("@/lib/projects/aliases");
+expect(persistProjectAliases([
+  { source: "fixture-project-fixture-old", target: "fixture-project", displayName: "fixture-project" },
+])).toBe(true);
+const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+beginOrchestratorSeatIntent({ project: "fixture-project", mandate: "own the board", clientRequestId: "task-ownership-seat", mode: "existing", conversationId: "conversation_task_ownership" });
+completeOrchestratorSeatIntent({ project: "fixture-project", clientRequestId: "task-ownership-seat", conversationId: "conversation_task_ownership", path: null });
 const { viewerMcpBindings } = await import("./bindings");
 const { createMcpToolService, createViewerMcpServer, SqliteMcpReceiptStore } = await import("./server");
 const { saveTasks } = await import("@/lib/tasks/store");
