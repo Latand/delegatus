@@ -246,6 +246,16 @@ jobs:
           trap - EXIT
           cat "$RUNNER_TEMP/red-controls.log"
 
+      # Cache compiler work only; every run still builds and verifies its own
+      # output. Dependency, interpreter and build-config changes fence reuse.
+      - name: Cache Next compiler work
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: .next/cache
+          key: next-runtime-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.version }}-${{ hashFiles('bun.lock', 'next.config.*', 'tsconfig*.json') }}-${{ hashFiles('src/**', 'package.json', 'scripts/build-mcp.ts') }}
+          restore-keys: |
+            next-runtime-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.version }}-${{ hashFiles('bun.lock', 'next.config.*', 'tsconfig*.json') }}-
+
       # The same environment the image's build stage sets. NODE_ENV belongs to
       # the build and not to the install above, which needs the dev
       # dependencies the compiler runs on.
