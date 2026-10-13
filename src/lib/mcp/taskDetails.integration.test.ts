@@ -27,6 +27,11 @@ for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR",
 process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 process.env.LLV_RUNTIME_HOST_SOCKET = path.join(sandbox, "runtime.sock");
 process.env.LLV_RUNTIME_HOST_CONTROL_SOCKET = path.join(sandbox, "absent.sock");
+const { persistProjectAliases } = await import("@/lib/projects/aliases");
+expect(persistProjectAliases([
+  { source: "details-project-fixture-old", target: "details-project", displayName: "details-project" },
+  { source: "details-list-fixture-old", target: "details-list", displayName: "details-list" },
+])).toBe(true);
 const { viewerMcpBindings } = await import("./bindings");
 const { LIST_TASKS_DETAILS_CHARS } = await import("./bindings");
 const { createMcpToolService, createViewerMcpServer, SqliteMcpReceiptStore } = await import("./server");

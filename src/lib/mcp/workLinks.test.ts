@@ -18,7 +18,7 @@ fs.writeFileSync(creatorPath, "{}\n");
 
 const repoDir = path.join(sandbox, "widgets");
 fs.mkdirSync(repoDir);
-const git = (...args: string[]) => execFileSync("git", args, { cwd: repoDir, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" } }).trim();
+const git = (...args: string[]) => execFileSync("git", args, { cwd: repoDir, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME ?? "Fixture", GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL ?? "noreply@example.invalid", GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME ?? "Fixture", GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL ?? "noreply@example.invalid" } }).trim();
 git("init", "-q", "-b", "main");
 git("remote", "add", "origin", "https://github.com/acme/widgets.git");
 fs.writeFileSync(path.join(repoDir, "README.md"), "widgets\n");
@@ -34,6 +34,10 @@ afterAll(() => {
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
+const { persistProjectAliases } = await import("@/lib/projects/aliases");
+expect(persistProjectAliases([
+  { source: "widgets-board-fixture-old", target: "widgets-board", displayName: "widgets-board" },
+])).toBe(true);
 const { viewerMcpBindings } = await import("./bindings");
 const { agentRegistry } = await import("@/lib/agent/registry");
 agentRegistry().ensureConversation("codex", creatorPath, null);
