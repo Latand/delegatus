@@ -172,6 +172,7 @@ import { validExplicitProject } from "@/lib/accounts/migration/contracts";
 import { describe, projectForCwd, reprojectFileDescription } from "@/lib/scanner/describe";
 import { pathAllowed, scanRootEntries } from "@/lib/scanner/roots";
 import { completedFileScan } from "@/lib/scanner/scanCache";
+import { completedScanForMcp } from "./completedScan";
 import { readCachedResourceSessions, readResources, readResourcesWithDiagnostic } from "@/lib/resources";
 import { adoptLiveRootSession, conversationRole, liveRootSession, type RootSessionSource } from "@/lib/root/adopt";
 import { appendRoleMappingAudit, changedMappingRows, type RoleMappingAuditRow, roleLaunchChoices, roleMappingViolations, roleRegistryAnswer } from "@/lib/roles/mcpMapping";
@@ -1270,7 +1271,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
     ...productionSelectedContextDependencies,
     voiceUtteranceContext: productionVoiceUtteranceContext,
   },
-  completedFileScan,
+  completedFileScan: completedScanForMcp,
   registrySnapshot: () => agentRegistry().readOnlySnapshot(),
   readSpawnAdmissionFence,
   validateSpawnAdmission: (body, context) => productionViewerControlDependencies().post(
@@ -6194,18 +6195,20 @@ async function archiveConversationAction(
     }
   };
 
-  applyResolved(resolved.flatMap((target, index) => target ? [{ index, target }] : []));
-
+  const registryResolved = resolved.flatMap((target, index) => target ? [{ index, target }] : []);
+  const scanResolved: Array<{ index: number; target: ResolvedConversationArchiveTarget }> = [];
   const unresolvedIndexes = resolved.flatMap((target, index) => target ? [] : [index]);
   if (unresolvedIndexes.length > 0) {
     let files: readonly FileEntry[] | null = null;
     try {
       files = (await dependencies.completedFileScan()).snapshot.files;
-    } catch {
+    } catch (error) {
+      // Resolve the whole batch before any write so a pending scan can safely
+      // release admission and let the caller retry under the same key.
+      if (error instanceof McpUnadmittedRefusal) throw error;
       files = null;
     }
     throwIfCallEnded(context);
-    const scanResolved: Array<{ index: number; target: ResolvedConversationArchiveTarget }> = [];
     for (const index of unresolvedIndexes) {
       const target = files ? resolveArchiveTargetFromFiles(inputs[index]!, files) : null;
       if (target) {
@@ -6221,8 +6224,9 @@ async function archiveConversationAction(
         outcome: files ? "not-found" : "resolution-failed",
       };
     }
-    applyResolved(scanResolved);
   }
+  applyResolved(registryResolved);
+  applyResolved(scanResolved);
 
   const operationId = mcpOperationId("conversation_action", requestId(args));
   const projects = [...resolvedProjects];
@@ -7634,11 +7638,11 @@ async function recoverSpawn(
 /** The caller and task a prototype call's receipt belongs to, decided by the
     Viewer with the same fences as the call itself. A caller the Viewer refuses
     is refused here, before any receipt is read. */
-async function prototypeReceiptScope(mode: "publish" | "read",args: McpToolArgs,control: ViewerControlDependencies,context?: McpToolCallContext): Promise<string> {
+async function prototypeReceiptScope(mode: "publish" | "read" | "resend",args: McpToolArgs,control: ViewerControlDependencies,context?: McpToolCallContext): Promise<string> {
   const capability = callerCapability();
   if (!capability) throw new Error("prototype reviews require an identified caller");
   const scope = await viewerControlForCall(control,context).post("/api/prototype-reviews/scope",
-    { mode, ...(args.taskId === undefined ? {} : { taskId: args.taskId }) },{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+    { mode, ...(args.taskId === undefined ? {} : { taskId: args.taskId }), ...(args.reviewId === undefined ? {} : { reviewId: args.reviewId }) },{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
   /* A seat asking without a task is scoped to its own questions (docs/design/operator-decision-forms.md §2.1). */
   if (typeof scope.conversationId !== "string" || (typeof scope.taskId !== "string" && scope.taskId !== null)) throw new Error("the Viewer did not name the caller and task of this prototype call");
   return `${scope.conversationId}\n${scope.taskId ?? "seat"}`;
@@ -7796,6 +7800,11 @@ export function viewerMcpBindings(
       if (!capability) throw new Error("prototype publication requires an identified caller");
       return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews",args,{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
     },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("publish",args,controlDependencies,context) }),
+    resend_prototype_review_telegram: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
+      const capability = callerCapability();
+      if (!capability) throw new Error("prototype resend requires an identified caller");
+      return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews/telegram",args,{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("resend",args,controlDependencies,context) }),
     read_prototype_review: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
       const capability = callerCapability();
       if (!capability) throw new Error("prototype reads require an identified caller");
