@@ -221,6 +221,51 @@ for (const backend of ["api","codex"] as const) test(`${backend}: a truncated jo
   const next = await start(h); expect(h.provider.sessions.at(-1)?.memory ?? "").not.toContain("sentinel"); await h.service.close(next.sessionId);
 });
 
+for (const backend of ["api","codex"] as const) test(`${backend}: a crash before session_end preserves truncation and excludes private history from recovered memory`, async () => {
+  const inputs: SummaryInput[] = [];
+  const h = harness(backend,async input => { inputs.push(input); return result({ asked:[input.text],done:[],decided:[],open:[] }); });
+  const call = await start(h); speech(h,call.sessionId);
+  h.admission.record(call.sessionId,{ id:"private-question",kind:"utterance",atMs:7000,data:{ final:true,text:"Read the private group history." } });
+  h.admission.record(call.sessionId,{ id:"private-delegation",kind:"delegation",atMs:7100,data:{ delegationId:"private-turn" } });
+  h.admission.record(call.sessionId,{ id:"private-reply",kind:"reply",atMs:7200,data:{ final:true,text:"Private group title sentinel and private message sentinel." } });
+
+  const file = path.join(process.env.LLV_STATE_DIR!,"voice-companion","transcripts",`${call.sessionId}.jsonl`);
+  const currentBytes = fs.statSync(file).size;
+  const filler = { id:"capacity-fill",kind:"tool" as const,atMs:7300,data:{ name:"ordinary_tool",status:"done",result:"" },order:h.admission.records.read(call.sessionId).entries.length };
+  const overhead = Buffer.byteLength(JSON.stringify(filler)+"\n");
+  filler.data.result = "x".repeat(4*1024*1024-8192-80-currentBytes-overhead);
+  h.admission.record(call.sessionId,filler);
+  h.admission.record(call.sessionId,{ id:"history-running",kind:"tool",atMs:7400,data:{ name:"relay_owner_history",status:"running",delegationId:"private-turn" } });
+  h.admission.record(call.sessionId,{ id:"history-done",kind:"tool",atMs:7500,data:{ name:"relay_owner_history",status:"done",delegationId:"private-turn" } });
+
+  // Replacing the writer models a Viewer crash: no held in-memory flag survives.
+  const coldRecords = new CompanionTranscriptRecords();
+  const coldJournal = coldRecords.read(call.sessionId);
+  expect(coldJournal.truncated).toBe(true);
+  expect(coldJournal.entries.find(row => row.id === "private-reply")?.data.text).toContain("private message sentinel");
+  expect(coldJournal.entries.some(row => row.id === "history-running" || row.id === "history-done")).toBe(false);
+  h.storage.change(document => {
+    const session = document.sessions[call.sessionId];
+    session.closed = true;
+    session.endedAt = h.now();
+  });
+  coldRecords.put(call.sessionId,{ id:"end",kind:"session_end",atMs:8000,data:{ endedAt:h.now() } },true);
+  coldRecords.finish(call.sessionId);
+
+  const recovered = new CallMemory(h.storage,new CompanionTranscriptRecords(),async input => {
+    inputs.push(input);
+    return result({ asked:[input.text],done:[],decided:[],open:[] });
+  },h.now);
+  recovered.recover(); await recovered.drain();
+  expect(inputs).toEqual([]);
+  expect(recovered.records.summary(call.sessionId)).toBeNull();
+  expect(recovered.list({ operator:true })).toEqual([]);
+  expect(recovered.block({ operator:true })).not.toContain("private");
+  const next = await start(h);
+  expect(h.provider.sessions.at(-1)?.memory ?? "").not.toContain("private");
+  await h.service.close(next.sessionId);
+});
+
 test("a private-history cut immediately hides an older checkpoint from recall and list while replacement is pending", async () => {
   let requests = 0; let rejectReplacement!: (error: Error) => void;
   const h = harness("codex",async input => {
