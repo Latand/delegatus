@@ -119,3 +119,17 @@ test("member stdout recognizes native search and final output while proposals st
     expect(relayStepFor(stepObservationFromRecords([{ type: "result", structured_output: { action } }]))).toBe("thinking");
   }
 });
+
+test("queued progress appears after three seconds even on a two-second heartbeat grid", () => {
+  const steps = createRelaySteps(["progress_steps"])!;
+  expect(steps.beat(1, 0, false)?.label).toBe("accepted");
+  steps.observe({ queued: true });
+  expect(steps.beat(2, 2000, false)).toBeNull();
+  expect(steps.changeDue(2999)).toBe(false);
+  expect(steps.changeDue(3000)).toBe(true);
+  expect(steps.beat(3, 3000, true)?.label).toBe("queued");
+  expect(steps.changeDue(6000)).toBe(false);
+  steps.observe({});
+  expect(steps.changeDue(5999)).toBe(false);
+  expect(steps.beat(4, 6000, true)?.label).toBe("thinking");
+});

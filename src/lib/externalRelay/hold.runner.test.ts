@@ -1,5 +1,5 @@
 import { setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -35,7 +35,7 @@ function paired(api_base: string): PairedRelay {
 }
 const claim = (id: string, budget = 14000) => ({ ...contextRequest, request_id: id, claimed_at: "2026-10-13T12:00:00Z",
   deadline_at: new Date(Date.parse("2026-10-13T12:00:00Z") + budget).toISOString(), chat: { key: "ck_3Rw9TtYqL0pZx7VbN2mD4e" },
-  input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_admin: false, is_owner: false } } });
+  input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, key: String(contextRequest.input.requester.key), is_admin: false, is_owner: false } } });
 function blocker(relay: PairedRelay, id: string) {
   return { requestId: id, leaseId: "fixture-lease", relayId: relay.id, targetId: "target_1", childPid: null, childIdentity: null,
     ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid), runDir: root, startedAt: new Date().toISOString() };
@@ -50,7 +50,7 @@ for (const cause of ["drain", "capacity", "chat"] as const) for (const release o
       return { body: { status: "ok" } };
     });
     const relay = paired(`${server.origin}/v1`); if (cause === "chat") relay.targets[0]!.concurrency = 2;
-    const held = claim(`${cause}-${release}`);
+    const held = { ...claim(`${cause}-${release}`, release ? 15000 : 14000), liveness: { ...contextRequest.liveness, heartbeat_interval_s: cause === "drain" && release ? 2 : 10 } };
     setRelaySwitch("chat_conversations", cause === "chat");
     let conversationId: string | undefined;
     const clear = () => { releaseDrain(drainFile(), "hold-test"); if (conversationId) releaseConversation(conversationId); dropRun("blocker"); };
@@ -76,7 +76,7 @@ for (const cause of ["drain", "capacity", "chat"] as const) for (const release o
     } finally { clear(); await pending; setRelaySwitch("chat_conversations", false); await server.close(); }
   }, 12000);
 
-test("capacity waiters take released slots in order and never create a fourth runner", async () => {
+test("capacity waiters take released slots in order within the configured limit", async () => {
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const relay = paired(`${server.origin}/v1`);
   const orderFile = path.join(root, "admission-order");
@@ -209,6 +209,17 @@ for (const recovery of [true, false]) test(`owner first-message hold ${recovery 
     expect(performance.now() - start).toBeLessThan(5000);
   } finally { await server.close(); }
 }, 10000);
+
+test("capacity returning at the admission cutoff cannot start expired waiting work", async () => {
+  let now = Date.now(); const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const relay = paired(`${server.origin}/v1`); reserveRun(blocker(relay, "cutoff-blocker"));
+  const pending = runClaimedRequest(relay, claim("cutoff-return", 11000), undefined, { command });
+  try {
+    await Bun.sleep(150); now += 1000; dropRun("cutoff-blocker");
+    expect(await pending).toMatchObject({ outcome: "declined", reason: "busy" });
+  } finally { dropRun("cutoff-blocker"); await pending; clock.mockRestore(); await server.close(); }
+}, 5000);
 
 test("demotion sends one explicit busy attempt and respects its own bounded exit", async () => {
   let attempts = 0;

@@ -788,3 +788,18 @@ not touched. `src/lib/viewerInstrumentation.ts` gains one awaited call in
 4. After S1 (the fixed heartbeat grid) runs on this install, the gaps we
    cause are the interval plus milliseconds, so the interim ~13 s tolerance
    can tighten whenever you choose (§5.4).
+
+## Implementation verification (2026-10-13)
+
+The parser, grid, deadline/delivery, asynchronous store, hold and owner slices
+have focused regression tests. `hold.runner.test.ts` exercises every busy
+cause through release and expiry, sampled ledger/child concurrency and
+admission order, preserved early outcomes, deadline non-renewal through lock
+contention and drain reentry, owner first-message recovery, and bounded
+one-attempt demotion delivery.
+
+The new `queued` step measures its three-second debounce from the previous
+progress step, so a two-second regular heartbeat grid can show it. Existing
+step ids keep their debounce from every heartbeat. The progress runner test
+now allows regular null heartbeats between its five existing steps; the dated
+capture stays as the record of the earlier schedule.

@@ -186,6 +186,9 @@ export async function runClaimedRequest(
   runtime?: HeadlessReviewRuntime & ToolLoopRuntime & { timeoutMs?: number; ownerPorts?: OwnerRunPorts; onUnknownFeature?: () => Promise<unknown> },
 ): Promise<ExternalRelayCompletion | null> {
   const deadline = relayRequestDeadline(raw);
+  const claimId = raw && typeof raw === "object" ? (raw as Record<string, unknown>).request_id : null;
+  if (deadline.fallback && typeof claimId === "string")
+    console.info("External relay deadline", { request: claimId.slice(0, 8), fallback: deadline.fallback });
   if (readRelaySwitches().compact && raw && typeof raw === "object" && (raw as Record<string, unknown>).kind === "compact") {
     const compact = compactRequestSchema.safeParse(raw);
     if (compact.success) return runCompactRequest(relay, compact.data, onFreed, runtime);
@@ -209,7 +212,6 @@ export async function runClaimedRequest(
   const requestId = request?.request_id ?? (rawId as string);
   const leaseId = request?.lease_id ?? (rawLease as string);
   let heartbeatAt = deadline.receivedAt;
-  if (deadline.fallback) console.info("External relay deadline", { request: requestId.slice(0, 8), fallback: deadline.fallback });
   if (request) console.info("External relay claim received", { request: requestId.slice(0, 8), kind: request.kind });
   if (inflight.has(requestId) || readRunLedger().runs.some((run) => run.requestId === requestId)) return null;
   const rawRequest = raw as Record<string, unknown>;
@@ -237,6 +239,7 @@ export async function runClaimedRequest(
   let pendingBeat: Promise<void> | null = null;
   const loopRecord = () => loop ? { rounds, toolCalls: loop.records } : {};
   const finish = async (body: ExternalRelayCompletion, stallMs = 45_000) => {
+    leaveRelayHold(requestId);
     if (pendingBeat) await pendingBeat;
     // Persist the local decision before any delivery wait: a restart must
     // leave the generated answer and early declines inspectable.
@@ -383,7 +386,6 @@ export async function runClaimedRequest(
       if (!beatBusy) cancelStalledRun();
       if (!beatBusy && !leaseUnavailable) {
         if (steps?.changeDue(Date.now())) pendingBeat = beat(true);
-
       }
     }, 1000);
     heartbeatTimer.unref();
@@ -458,7 +460,12 @@ export async function runClaimedRequest(
     };
     const admit = async (): Promise<boolean> => {
       let waited = false;
+      let lastCause: RelayHoldCause | null = null;
       while (!leaseUnavailable) {
+        if (waited && Date.now() >= deadline.declineAt) {
+          admissionDecline = declined(leaseId, "busy", null, lastCause === "chat" ? "chat busy" : null);
+          return false;
+        }
         let cause: RelayHoldCause | null = activeDrain() ? "drain" : usesConversation && readConversations().some(r =>
           r.relayId === relay.id && r.targetId === target.id && r.chatKey === request.chat!.key && r.state === "running") ? "chat" :
           olderCapacityWaiter(relay.id, target.id, requestId, deadline) ? "capacity" : null;
@@ -493,7 +500,7 @@ export async function runClaimedRequest(
           if (conversation && selection?.kind === "available") { prepareConversationAccount(conversation, selection.account); conversation.accountId = selection.account.accountId; }
           return true;
         }
-        waited = true;
+        waited = true; lastCause = cause;
         enterRelayHold({ requestId, relayId: relay.id, targetId: target.id, cause, deadline,
           release: () => { releaseRequested = true; wakeHold?.(); return released; } });
         steps?.observe({ queued: true });

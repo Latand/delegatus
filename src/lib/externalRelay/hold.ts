@@ -11,11 +11,10 @@ export function capacityWaiters(relayId: string, targetId: string): number {
   return [...registry.rows.values()].filter(h => h.relayId === relayId && h.targetId === targetId && h.cause === "capacity").length;
 }
 export function olderCapacityWaiter(relayId: string, targetId: string, requestId: string, deadline: RelayRequestDeadline): boolean {
-  const own = registry.rows.get(requestId);
   for (const h of registry.rows.values()) {
     if (h.requestId === requestId) break;
     if (h.relayId === relayId && h.targetId === targetId && h.cause === "capacity" &&
-      (h.deadline.at <= deadline.at || !own)) return true;
+      h.deadline.at <= deadline.at) return true;
   }
   return [...registry.rows.values()].some(h => h.requestId !== requestId && h.relayId === relayId && h.targetId === targetId && h.cause === "capacity" && h.deadline.at < deadline.at);
 }

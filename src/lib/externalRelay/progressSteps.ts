@@ -29,15 +29,18 @@ export function createRelaySteps(features?: readonly string[]) {
   let current: ExternalRelayStepId = "thinking";
   let sent: ExternalRelayStepId | null = null;
   let lastBeatAt = -Infinity;
+  let lastStepAt = -Infinity;
+  const changeInterval = (now: number) => now - (current === "queued" ? lastStepAt : lastBeatAt) >= 3000;
   return {
     observe(observed: RelayStepObservation) { current = relayStepFor(observed); },
-    changeDue(now: number) { return sent !== current && now - lastBeatAt >= 3000; },
+    changeDue(now: number) { return sent !== current && changeInterval(now); },
     beat(seq: number, now: number, change: boolean): ExternalRelayStepProgress | null {
-      const due = now - lastBeatAt >= 3000;
+      const due = changeInterval(now);
       lastBeatAt = now; // Failed attempts also consume the beat interval.
       const label = seq === 1 ? "accepted" : change && due && current !== sent ? current : null;
       if (!label || !ids.has(label)) return null;
       sent = label;
+      lastStepAt = now;
       return { kind: "step", label, tool: null, status: null, at: new Date(now).toISOString() };
     },
   };
