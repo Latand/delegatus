@@ -2334,9 +2334,10 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           const publication = request.directory + "/bounded.ts";
           for (let sample = 0; sample < 4; sample++) {
             for (const [size, text] of request.texts.entries()) {
+              if (sample === 0 && size === 1) continue;
               // Fresh bytes per pair keep preparation cold for the first
               // source and shared for the following sources, at both sizes.
-              // The first pair warms runtime code and is discarded.
+              // A small warm-up primes runtime code; retain three CPU pairs.
               const contents = text + "\\n" + " ".repeat(sample + 1);
               require("node:fs").writeFileSync(publication, contents);
               for (const [index, batch] of request.batches.entries()) {
@@ -2360,8 +2361,11 @@ exec "$LLV_TEST_REAL_GIT" "$@"
         stdin: Buffer.from(JSON.stringify({ gate, directory, batches, texts: [specimen.text(1), specimen.text(8)],
           quadratic: process.env.LLV_PRIVACY_TEST_QUADRATIC === "1",
           stall: process.env.LLV_PRIVACY_TEST_STALL_CASE === specimen.name })), stdout: "pipe", stderr: "pipe",
-      }, { timeoutMs: process.env.LLV_PRIVACY_TEST_STALL_CASE === specimen.name ? 100 : 120_000 }); // Cancellation guard; CPU scaling determines the work verdict.
-      expect(result.exitCode, `${specimen.name}: ${result.stderr}`).toBe(0);
+      }, {
+        timeoutMs: process.env.LLV_PRIVACY_TEST_STALL_CASE === specimen.name ? 100 : 600_000,
+        cpuBudgetMs: 120_000,
+      }); // Linux CPU cancellation ignores descheduling; scaling determines bounded work.
+      expect(result.exitCode, `${specimen.name} (${result.stoppedBy ?? "exit"}): ${result.stderr}`).toBe(0);
       expect(result.stderr.toString()).toBe("");
       const results = JSON.parse(result.stdout.toString()) as Array<{
         source: string; small: Array<{ cpu: number; value: { findings: string[]; report: string } }>;
@@ -2379,7 +2383,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           case: specimen.name, source: entry.source, small: entry.small.map(sample => sample.cpu), large: entry.large.map(sample => sample.cpu),
         }));
       }
-    }, 150_000);
+    }, 660_000);
     // Read each immutable corpus across all configurations before moving to
     // the next channel. This keeps the production preparation cache useful
     // without sharing configuration-specific verdicts. Every scanner still

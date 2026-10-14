@@ -7,6 +7,7 @@ test("a cancelled privacy child releases capacity and later cases keep their own
     cmd: [process.execPath, "-e", "setInterval(() => {}, 1000)"], stdout: "pipe", stderr: "pipe",
   }, { timeoutMs: 100 });
   expect(slow.exitCode).toBe(137);
+  expect(slow.stoppedBy).toBe("wall");
   const following = await Promise.all(Array.from({ length: 5 }, () => runPrivacyTestProcess({
     cmd: [process.execPath, "-e", "process.stdout.write('independent')"], stdout: "pipe", stderr: "pipe",
   })));
@@ -20,4 +21,18 @@ test("the work bound admits scaled linear work and refuses quadratic growth", ()
     expect(() => assertPrivacyWorkBound(samples(1), samples(8), "linear")).not.toThrow();
     expect(() => assertPrivacyWorkBound(samples(1), samples(64), "quadratic")).toThrow("exceeds 32x");
   }
+});
+
+test.skipIf(process.platform !== "linux")("the privacy CPU guard ignores a sleeping child and cancels a spinning child", async () => {
+  const sleeping = await runPrivacyTestProcess({
+    cmd: [process.execPath, "-e", "await Bun.sleep(300); process.stdout.write('awake')"], stdout: "pipe", stderr: "pipe",
+  }, { cpuBudgetMs: 100, timeoutMs: 4000 });
+  expect(sleeping.exitCode).toBe(0);
+  expect(sleeping.stoppedBy).toBeUndefined();
+  expect(sleeping.stdout.toString()).toBe("awake");
+  const spinning = await runPrivacyTestProcess({
+    cmd: [process.execPath, "-e", "for (;;) {}"], stdout: "pipe", stderr: "pipe",
+  }, { cpuBudgetMs: 100, timeoutMs: 4000 });
+  expect(spinning.exitCode).toBe(137);
+  expect(spinning.stoppedBy).toBe("cpu");
 });

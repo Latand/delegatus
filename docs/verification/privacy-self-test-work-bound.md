@@ -38,7 +38,7 @@ it supplies no evidence of a new quadratic scanner path in either incident.
 Each specimen has its own child and result in
 `scripts/privacy-publication-gate.test.ts:2308`. Each source inspects a 1x input
 and the original full-size 8x input. Three paired CPU samples follow a discarded
-warm-up pair. Input shapes, findings and value-free reports are checked at both
+small-input warm-up. Input shapes, findings and value-free reports are checked at both
 sizes. Fresh bytes keep preparation cold for the first source and shared for
 later sources at both sizes, preserving the production cache behavior.
 
@@ -46,11 +46,14 @@ later sources at both sizes, preserving the production cache behavior.
 The 8x input must stay below 32x CPU growth. The multiplier permits overhead
 above linear growth and rejects quadratic growth, which tends toward 64x.
 Descheduling contributes no process CPU time. The observed ordinary ratios
-range from 1.12x to 27.46x. This is a growth bound on the retained specimens;
+range from 0.69x to 12.70x. This is a growth bound on the retained specimens;
 it is not a proof about every possible input or an absolute latency guarantee.
 
-The per-child 120-second guard and per-test 150-second guard are cancellation
-limits. The CPU ratio decides bounded work. The workflow gives the existing
+The Linux child guard samples process CPU ticks from `/proc/<pid>/stat`, binds
+those observations to the captured kernel start time, and cancels after 120
+CPU seconds. Its CPU accounting excludes descheduling. A ten-minute wall guard
+and eleven-minute test guard provide infrastructure cancellation; other
+platforms retain that wall guard. The CPU ratio decides bounded work. The workflow gives the existing
 owned runner a ten-minute cancellation guard inside a twelve-minute step, in
 both trusted and candidate test commands. `systemd-run --wait` and
 `KillMode=control-group` in `scripts/owned-runner.ts:128` let cleanup finish
@@ -62,13 +65,17 @@ failure and cannot become a passing work verdict.
 With `LLV_PRIVACY_TEST_QUADRATIC=1`, the test wrapper rescans in proportion to
 input size: one scan for 1x, eight for 8x, with fresh equivalent bytes to keep
 preparation work present. It drives real `inspectPaths` calls. The JSON
-specimen failed with **43.10x CPU growth**, against 32x, and suite exit 1.
+specimen failed with **43.79x CPU growth**, against 32x, and suite exit 1.
 Its child completed normally; the cancellation guard did not cause the failure.
 
 With `LLV_PRIVACY_TEST_STALL_CASE='unclosed block comments'`, that child's
 100-ms induced cancellation returned 137. The following JSON test passed and
 the suite returned 1. `scripts/privacy-test-process.test.ts:5` also verifies
 that cancellation releases queue capacity for five independent passing children.
+
+A guard control verifies that a sleeping child completes within the CPU
+allowance, while a spinning child is stopped specifically by the CPU guard.
+It asserts the cancellation reason so the wall guard cannot satisfy that check.
 
 The existing `scripts/owned-runner.integration.test.ts` probes for `exit` and
 `deadline` both passed. They observe the fixture and detached child becoming
@@ -78,41 +85,64 @@ invocation, and zero load-worker survivors after cleanup.
 
 ## Stress comparison
 
-Both experiments used Bun 1.3.3 and five fresh isolated executions per side,
+The final comparison used Bun 1.3.3 and two fresh isolated executions per side,
 alternating base and head. An outer `scripts/gate-slot.sh` admission contained
-the collector and load workers. Each test execution entered its own owned
-runner before `taskset` pinned it to CPU 0. Load workers were recorded by PID,
-pinned to that CPU, and killed and awaited through those recorded handles.
-The two collectors overlapped for part of the experiment; unrelated machine
-load also varied. The counts below identify each collector's own load workers.
+the collector and its recorded busy worker. Each test execution entered its own
+owned runner before `taskset` pinned it to CPU 2, together with that busy worker.
+All **15 bounded specimens and nine sources** ran on each head invocation.
+The scanner/test sources were frozen in a separate archive before comparison.
 
-The same explicit test path and filter were used on both sides:
+The same explicit path and filter were used on both sides:
 
 ```sh
-bun scripts/owned-runner.ts taskset -c 0 bun test \
+bun scripts/owned-runner.ts taskset -c 2 bun test \
   scripts/privacy-publication-gate.test.ts \
-  --test-name-pattern '(unclosed block comments|large quoted JSON): all sources stay bounded'
+  --test-name-pattern 'all sources stay bounded'
 ```
 
-Each run set fresh `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `TMPDIR` and
-`LLV_STATE_DIR`; its outer owned cancellation guard was 180 seconds. The base
-checkout was an archive of the pinned commit with the same dependency tree.
-Filtering the baseline still runs its entire cached matrix, exposing the
-original first-case timeout and following-case cascade. Head filtering runs
-only those two independent specimens. These are stress rates for the selected
-regressions; the full touched files are verified separately.
+Each invocation set fresh `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `TMPDIR`
+and `LLV_STATE_DIR`. The collector's safety guard was thirty minutes, allowing
+CPU contention to slow the whole matrix while its per-case CPU guard remained
+active. The baseline was an archive of the pinned commit with the same
+installed dependencies. The worker used `for (;;) { Math.sqrt(Math.random()); }`
+under the same affinity, and was killed and awaited by its recorded handle.
 
-| Owned load workers | Base failures | Head failures | Base wall seconds | Head wall seconds |
-| --- | --- | --- | --- | --- |
-| 2 | 3/5 (60%) | 0/5 (0%) | 52.017, 57.532, 60.727, 61.165, 60.916 | 9.110, 9.570, 19.543, 17.263, 17.350 |
-| 4 | 3/5 (60%) | 0/5 (0%) | 61.136, 61.659, 61.313, 43.690, 42.386 | 19.982, 22.547, 7.624, 7.137, 7.932 |
+| Repetition | Base exit | Head exit | Base wall seconds | Head wall seconds | Extra live owned processes |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 0 | 0 | 59.723 | 271.131 | 0 on both sides |
+| 2 | 1 | 0 | 60.894 | 264.950 | 0 on both sides |
 
-Every failing base run shows child exit 137 near the batch's 60-second cap,
-then an immediate failure for the following JSON case. All head invocations
-returned 0. Per-run CPU samples, exit codes and cleanup observations are in
-[the samples file](privacy-self-test-work-bound.samples.json). Five observations
-per experiment demonstrate this reproduction; they do not estimate a general
-hosted-runner failure probability.
+The complete-matrix failure rates are **base 1/2 (50%), head 0/2 (0%)**.
+The red base run reproduces child exit 137 near its 60-second batch cap and
+immediate failures for every following specimen. Both head runs pass all 15
+cases, with zero extra live owned processes after each invocation and zero
+load-worker survivors after the collector returns. Small samples describe
+this reproduction and do not estimate a general hosted-runner probability.
+
+### Earlier focused comparisons, 2026-10-14
+
+Before refining the CPU cancellation guard, two collectors each ran five
+alternating base/head pairs with the filter
+`(unclosed block comments|large quoted JSON): all sources stay bounded`.
+Their own recorded load workers were pinned with the tests to CPU 0. The
+collectors overlapped for part of the experiment, and background load varied.
+
+| Owned load workers | Base failures | Head failures |
+| --- | --- | --- |
+| 2 | 3/5 (60%) | 0/5 (0%) |
+| 4 | 3/5 (60%) | 0/5 (0%) |
+
+The subsequent whole-matrix run exposed the initial 120-second wall guard:
+a single-quote case was cancelled while the following case passed. Charging
+that guard in CPU seconds removed this additional scheduling dependency.
+Overlapping experiments also exhausted an overall ten-minute collector
+limit; those incomplete invocations prompted the longer safety allowance and
+separate CPU affinity in the final complete-matrix comparison above.
+
+Per-run exits/timings, CPU samples, guard controls and source hashes are in
+[the samples file](privacy-self-test-work-bound.samples.json). Earlier focused
+rows are labelled separately from the final full matrix. The full touched
+files are verified separately from the stress filter.
 
 ## Verification and workflow provenance
 
@@ -123,8 +153,10 @@ inherited Git author/committer overrides and hook configuration so fixture
 identities come from each fixture's own configuration. Publication commands
 retain the launched agent's credentials, identity and hooks.
 
-The checks are the three touched test files, the two existing owned-runner
-probes, typecheck, changed-file lint, and the privacy gate with
+The three touched files passed 663 tests in a clean isolated environment.
+After reducing warm-up to the small input, the latest bounded-only run also
+passed all 15 specimens. The two existing owned-runner probes, typecheck,
+changed-file lint and privacy gate passed. The gate uses
 `LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE` pointing to the committed catalog
 and `--require-known-values --base <merge-base>`.
 
