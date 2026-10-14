@@ -91,7 +91,7 @@ import {
 } from "./registryBackendIdentity";
 import {
   SqliteAgentRegistryStore,
-  registryRowsMatching, registryKeysMatching, registryConversationsForPath, registryHasPathIndex,
+  registryRowsMatching, registryKeysMatching, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported,
   type SqliteRegistryReplacement,
@@ -10526,7 +10526,14 @@ export class AgentRegistry {
       const keyFor = (candidateConversationId: ViewerConversationId, candidateOperationId: string) =>
         `${resolveConversationAlias(file, candidateConversationId)}\u0000${candidateOperationId}`;
       const deliveries = new Map<string, HeldDelivery>();
-      for (const delivery of Object.values(file.heldDeliveries)) {
+      // Select each recipient once in collection order. Legacy commands can
+      // derive their operation ID during normalization, so selecting raw stored
+      // operation IDs would miss acknowledgements for those deliveries.
+      const canonicalIds = [...new Set(outcomes.map(outcome => resolveConversationAlias(file, outcome.conversationId)))];
+      const candidates = registryHasLookupIndex(file)
+        ? canonicalIds.flatMap(id => conversationRows(file, "heldDeliveries", id))
+        : outcomes.length ? Object.values(file.heldDeliveries) : [];
+      for (const delivery of candidates) {
         const key = keyFor(delivery.conversationId, delivery.command.operationId);
         if (!deliveries.has(key)) deliveries.set(key, delivery);
       }

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, normalizeRegistry } from "./registry";
@@ -870,4 +870,160 @@ test("promoted and deleted cold versions release their grant dependency metadata
     expect(held.receipts["independent-root-0"]!.error).toBeNull();
     expect(held.receipts["independent-root-0"]!.launchProfile.mcpServers).toEqual(["viewer", "telegram"]);
   } finally { db.close(); }
+});
+
+
+test("first cold snapshot defers collection assembly and keeps an unread generation across external changes", () => {
+  const { open, conversationId } = fixture();
+  const writer = open();
+  archiveAll(writer);
+  const reader = open();
+  const defineProperty = Object.defineProperty;
+  const archivedKeys = new Set([conversationId(0), "archive-launch-0", "archive-delivery-0"]);
+  let installed = 0;
+  const spy = spyOn(Object, "defineProperty").mockImplementation((target, key, descriptor) => {
+    if (archivedKeys.has(String(key))) installed++;
+    return defineProperty(target, key, descriptor);
+  });
+  let held: ReturnType<typeof reader.readOnlySnapshot>["file"];
+  try {
+    held = reader.readOnlySnapshot().file;
+    expect(installed).toBe(0);
+  } finally { spy.mockRestore(); }
+  const expected = reader.snapshot().file;
+  writer.mutate(file => {
+    file.receipts["archive-launch-0"]!.state = "path-pending";
+    file.heldDeliveries["archive-delivery-0"]!.state = "failed";
+    delete file.conversations[conversationId(0)];
+  }, false);
+  const current = reader.readOnlySnapshot().file;
+  expect(current.receipts["archive-launch-0"]!.state).toBe("path-pending");
+  expect(current.deliveryOperationOwners["archive-operation-0"]!.terminalState).toBe("failed");
+  expect(current.conversations[conversationId(0)]).toBeUndefined();
+  // No archived collection of held was read before the writer changed it.
+  expect(held!).toEqual(expected);
+  expect(Object.keys(held!.receipts)).toEqual(Object.keys(expected.receipts));
+  expect(Object.isFrozen(held!)).toBe(true);
+  expect(Object.isFrozen(held!.receipts)).toBe(true);
+  expect(Object.isFrozen(held!.receipts["archive-launch-0"])).toBe(true);
+  expect(Reflect.deleteProperty(held!.receipts, "archive-launch-0")).toBe(false);
+});
+
+test("cold collection descriptors retain numeric and prototype-named own keys", () => {
+  const { open, initial, filename } = fixture();
+  const template = initial.receipts["archive-launch-0"]!;
+  for (const launchId of ["42", "7", "constructor", "toString"]) {
+    initial.receipts[launchId] = { ...structuredClone(template), launchId, key: null };
+  }
+  archiveAll(open());
+  // A stored legacy key must remain an own accessor even when its name is
+  // Object.prototype's setter. Preserve the reader's existing row semantics.
+  const db = new Database(filename);
+  try {
+    const row = db.query<{ value_json: string; row_order: number }, []>(
+      "SELECT value_json,row_order FROM registry_rows WHERE collection='receipts' AND row_key='archive-launch-0'").get()!;
+    db.run("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES ('receipts','__proto__',?,?)",
+      [JSON.stringify({ ...JSON.parse(row.value_json), launchId: "__proto__" }), row.row_order + 100]);
+  } finally { db.close(); }
+  archiveAll(open());
+  const reader = open();
+  const view = reader.readOnlySnapshot().file;
+  expect(Object.keys(view.receipts).slice(0, 2)).toEqual(["7", "42"]);
+  for (const key of ["42", "7", "constructor", "toString", "__proto__"]) {
+    expect(Object.hasOwn(view.receipts, key)).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(view.receipts, key)?.get).toBeFunction();
+  }
+  expect(Object.getPrototypeOf(view.receipts)).toBe(Object.prototype);
+});
+
+test("delivery outcome selection reads requested operations under the writer lock without expanding history", async () => {
+  const { initial, open, directory, filename, conversationId } = fixture();
+  const target = initial.heldDeliveries["archive-delivery-0"]!;
+  target.state = "delivery-uncertain";
+  target.conversationId = "conversation_old";
+  initial.conversationAliases.conversation_old = "conversation_middle";
+  initial.conversationAliases.conversation_middle = conversationId(0);
+  // A duplicate operation for the same canonical owner retains collection
+  // order; another conversation using that key cannot take its outcome.
+  initial.heldDeliveries["duplicate"] = { ...structuredClone(target), id: "duplicate" };
+  initial.heldDeliveries["different-conversation"] = { ...structuredClone(target), id: "different-conversation", conversationId: conversationId(1) };
+  delete initial.deliveryOperationOwners[target.command.operationId];
+  for (let index = 0; index < 240; index++) {
+    const key = `unrelated-delivery-${index}`;
+    initial.heldDeliveries[key] = { ...structuredClone(target), id: key,
+      conversationId: conversationId(2), state: "delivered", command: { ...target.command, operationId: `unrelated-operation-${index}` } };
+  }
+  archiveAll(open());
+  let reads = 0;
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", sqliteFilename: filename,
+    onSqliteRowPayloadRead: (_collection, count) => { reads += count; },
+  });
+  try {
+    reads = 0;
+    const written = await registry.deliveryWrite({ label: "test-outcome" }, () => registry.recordDeliveryOutcomesForOperations([
+      { conversationId: conversationId(0), operationId: target.command.operationId, state: "delivered" },
+      { conversationId: "conversation_old", operationId: target.command.operationId, state: "delivered" },
+      ...Array.from({ length: 501 }, (_, index) => ({
+        conversationId: conversationId(0), operationId: `missing-operation-${index}`, state: "failed" as const,
+      })),
+    ]));
+    expect(reads).toBeLessThan(80);
+    expect(written.acquired).toBe(true);
+    if (!written.acquired) throw new Error("writer was not acquired");
+    expect(written.value.slice(0, 2).map(row => row?.id)).toEqual([target.id, target.id]);
+    expect(written.value.slice(2)).toEqual(Array(501).fill(null));
+    expect(written.value[0]).toMatchObject({ state: "delivered", text: "" });
+    const state = registry.snapshot();
+    expect(state.heldDeliveries.duplicate!.state).toBe("delivery-uncertain");
+    expect(state.heldDeliveries["different-conversation"]!.state).toBe("delivery-uncertain");
+    reads = 0;
+    expect(registry.recordDeliveryOutcomesForOperations([])).toEqual([]);
+    expect(reads).toBeLessThan(10);
+  } finally { registry.close(); }
+});
+
+test("fresh mixed cold and synthesized hot operation owners retain every owner", () => {
+  const { open,initial,filename } = fixture();
+  const hotId = "hot-ownerless-delivery", hotOp = "hot-ownerless-operation";
+  initial.heldDeliveries[hotId] = { ...structuredClone(initial.heldDeliveries["archive-delivery-0"]!),
+    id: hotId,state: "held",command: { ...initial.heldDeliveries["archive-delivery-0"]!.command,operationId: hotOp } };
+  initial.deliveryOperationOwners[hotOp] = { ...structuredClone(initial.deliveryOperationOwners["archive-operation-0"]!),
+    deliveryId: hotId,terminalState: null,terminalDisposition: null,
+    command: { ...initial.deliveryOperationOwners["archive-operation-0"]!.command,operationId: hotOp } };
+  archiveAll(open());
+  const db = new Database(filename);
+  try {
+    db.run("DELETE FROM registry_rows WHERE collection='deliveryOperationOwners' AND row_key=?", [hotOp]);
+    expect(db.query("SELECT 1 FROM registry_cold WHERE collection='deliveryOperationOwners'").get()).toBeTruthy();
+    expect(db.query("SELECT 1 FROM registry_hot_rows WHERE collection='heldDeliveries' AND row_key=?").get(hotId)).toBeTruthy();
+  } finally { db.close(); }
+  const reader=open();
+  const held=reader.readOnlySnapshot().file;
+  const expected=open().snapshot().file;
+  expect(expected.deliveryOperationOwners[hotOp]?.deliveryId).toBe(hotId);
+  expect(held.deliveryOperationOwners[hotOp]).toEqual(expected.deliveryOperationOwners[hotOp]);
+  expect(Object.keys(held.deliveryOperationOwners)).toEqual(Object.keys(expected.deliveryOperationOwners));
+});
+test("mixed cold legacy commands can still acknowledge their normalized operation", async () => {
+  const { open,initial,filename,directory,conversationId } = fixture();
+  const legacyId="legacy-command-delivery";
+  const template=initial.heldDeliveries["archive-delivery-0"]!;
+  initial.heldDeliveries[legacyId] = { ...structuredClone(template),id: legacyId,state:"delivery-uncertain",
+    command: { ...template.command,operationId:legacyId } };
+  archiveAll(open());
+  const db=new Database(filename);
+  try { db.run("UPDATE registry_rows SET value_json=json_remove(value_json,'$.command') WHERE collection='heldDeliveries' AND row_key=?", [legacyId]); }
+  finally { db.close(); }
+  const registry = new AgentRegistry(path.join(directory,"agent-registry.json"),undefined,undefined,{
+    sqliteMode:"sqlite",sqliteFilename:filename });
+  try {
+    const write=await registry.deliveryWrite({label:"review.legacy"},()=>registry.recordDeliveryOutcomesForOperations([
+      {conversationId:conversationId(0),operationId:legacyId,state:"delivered"}
+    ]));
+    expect(write.acquired).toBe(true);
+    if(!write.acquired) throw new Error("not acquired");
+    expect(write.value[0]?.id).toBe(legacyId);
+    expect(write.value[0]?.state).toBe("delivered");
+  } finally {registry.close();}
 });
