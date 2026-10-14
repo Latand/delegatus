@@ -46,8 +46,8 @@ test.each([
     .filter(([key]) => !key.startsWith("LLV_") && !key.startsWith("DELEGATUS_")));
   const child = spawn(process.execPath, ["run", "src/runtime-host/main.ts"], {
     cwd: path.resolve(import.meta.dir, "../.."),
-    env: { ...environment, ...inherited, LLV_STATE_DIR: directory, LLV_AGENT_REGISTRY_SQLITE: "sqlite",
-      LLV_RUNTIME_HOST_SOCKET: socketPath, LLV_VIEWER_DEPLOYMENTS: "0", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" } as NodeJS.ProcessEnv,
+    env: { ...environment, ...inherited, NODE_ENV: "production", LLV_STATE_DIR: directory, LLV_AGENT_REGISTRY_SQLITE: "sqlite",
+      LLV_RUNTIME_HOST_SOCKET: socketPath, LLV_VIEWER_DEPLOYMENTS: "0", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
