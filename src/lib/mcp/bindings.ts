@@ -7653,10 +7653,22 @@ async function recoverSpawn(
   if (legacy && ownership !== "established") {
     return { outcome: "unknown", evidence: "legacy-receipt-unbound", reason: "no durable evidence establishes the owner of this launch", ids: {}, ownership: "unknown" };
   }
-  if ((receipt.parentConversationId !== null && receipt.parentConversationId !== callerParent)
-    || (binding.target.identity && path.resolve(receipt.cwd) !== binding.target.identity)
-    || (typeof args?.prompt === "string" && receipt.launchDisplay && receipt.launchDisplay.prompt !== args.prompt)) {
-    return { outcome: "unknown", evidence: "spawn-receipt", reason: "the durable launch owner or payload contradicts the bound request", ids: {}, ownership: "unknown" };
+  const refused = (reason: string): McpRecoveryEvidence => ({
+    outcome: "unknown", evidence: "spawn-receipt", reason, ids: {}, ownership: "unknown",
+    facts: { nextAction: "correct-request" },
+  });
+  if (binding.caller.kind === "unidentified") {
+    return refused("caller authority is unavailable; restore the caller's MCP registration before inspecting this original launch. No redispatch is permitted");
+  }
+  if (receipt.parentConversationId !== null && receipt.parentConversationId !== callerParent) {
+    return refused("the durable launch owner contradicts the bound request");
+  }
+  if (binding.target.identity && path.resolve(receipt.cwd) !== binding.target.identity) {
+    return refused("the durable launch cwd contradicts the bound request");
+  }
+  // executeSpawnRequest trims the user prompt before persisting launchDisplay.
+  if (typeof args?.prompt === "string" && receipt.launchDisplay && receipt.launchDisplay.prompt !== args.prompt.trim()) {
+    return refused("the durable launch prompt contradicts the bound request");
   }
   const ids: Record<string, string> = {
     launchId: receipt.launchId,
