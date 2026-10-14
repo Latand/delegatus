@@ -504,7 +504,9 @@ function maskApprovedPublicValues(text: string): string {
         : !continued && !insideLiteral && !uriPrefix) });
     return `${delimiter}${marker}${index}${marker}`;
   });
-  if (candidates.length === 0) return text;
+  // Later checks only withhold approval. With no eligible candidate, keep
+  // the original text without building raw ownership and decoded projections.
+  if (!candidates.some((candidate) => candidate.allowed)) return text;
   while (literal) completeLiteral();
   advanceSyntax(text.length);
   // Validate raw wrapper spans independently of source comments and URI

@@ -18,21 +18,23 @@ privacy command and scanner unchanged.
 | --- | ---: | ---: | ---: |
 | Main | 77.42 | 0 | 52.58 |
 | Unmodified PR | 130.02 | 124 | 0 (timed out) |
-| Reduced probes with independent concurrent cases | 74.72 | 0 | 55.28 |
+| Reduced probes, concurrent cases and rejected-candidate shortcut | 60.47 | 0 | 69.53 |
 
 Main passes 681 tests; the optimized PR passes all 684 tests. Repeating the
 large escaped-string scans accounts for most of the added cost: the unmodified
-PR completes only 13 bounded cases before cancellation. The smaller probes
-reduce that CPU work, and independent children overlap through the existing
-four-child cap. Every case retains its own result and cancellation guard.
+PR is still executing bounded cases when the deadline cancels it. The smaller probes reduce that CPU work, and independent children overlap
+through the existing four-child cap. The scanner also returns the original text
+as soon as all raw candidates are ineligible; every later approval write can
+only set `allowed` to false, so the skipped ownership/projection passes cannot
+change its result. The complete bounded matrix now takes 4.13 seconds locally. Every case retains its own result and cancellation guard.
 
 All 135 shape/source pairs retain three CPU pairs, the 8x input ratio, the 32x
 CPU growth limit, and finding/report assertions at both sizes. The final local
-ratio range is 0.29x–20.54x. An 800/6,400 escaped-quote experiment failed the
+ratio range is 0.30x–11.92x. An 800/6,400 escaped-quote experiment failed the
 unchanged limit (39.91x–55.80x under throttling) and was discarded. The retained counts are
 3,200/25,600. Wall duration never decides a passing work-bound assertion.
 
-The induced quadratic control rejects 43.92x CPU growth, with no guard
+The induced quadratic control rejects 43.94x CPU growth, with no guard
 expiration. The reduced JSON inputs exposed overlapping whitespace suffixes
 in that control: later samples reused preparation and incorrectly passed with
 `CI=true`. Disjoint suffix ranges now keep each sample fresh. The same control
@@ -40,12 +42,20 @@ then exits 1. Cancelling the block-comment child still leaves the JSON peer
 passing; the suite reports the induced failure.
 
 At a kernel-verified 25% CPU quota (`cpu.max` 5000/20000), the same explicit
-bounded-case filter reproduces main's 60-second batch cancellation and 15-case
-cascade (61.90 seconds, exit 1). The optimized branch passes all 15 cases and
-135 shape/source pairs in 314.47 seconds; its single-quote case passes after
-312.34 seconds. The slow control uses a separate 600-second infrastructure
-allowance, while the normal candidate command above retains 130 seconds.
-Its CPU growth range is 0.48x–11.40x; descheduling does not supply the passing verdict.
+bounded-case filter reproduces main's batch cancellation and 15-case cascade
+(61.67 seconds, exit 1). The final branch passes all 15 cases and 135 shape/source
+pairs in 51.94 seconds, with CPU growth of 0.52x–14.93x. Its chained-call case
+passes after 50.70 seconds. The slow control uses a separate 600-second
+infrastructure allowance; the normal candidate command above retains 130 seconds.
+The intermediate version passed at 314.47 seconds before the rejected-candidate
+shortcut removed its repeated projections. Both observations remain in the samples.
+
+The first improvement using only smaller/concurrent probes passed the
+[required GitHub job](https://github.com/Latand/delegatus/actions/runs/38654339316/job/116160421102),
+but its candidate step still took 123 seconds (seven seconds of margin). The
+runner spent 43 seconds in the quote probes. The rejected-candidate shortcut
+removes those repeated projections while retaining the same verdicts and CPU
+sampling. The final PR comment records the hosted result after that change.
 
 ## Original failure diagnosis (2026-10-14)
 
