@@ -7,6 +7,7 @@ import { createPortal } from "react-dom";
 
 import { ArrowRight, ArrowUpToLine, Check, ChevronRight, Layers, Loader2, Play, RotateCw, Trash2, X } from "@/components/icons";
 import { ContextToggle } from "./ContextToggle";
+import { isSettledLaunchPlaceholder } from "./launchHistoryModel";
 import { turnReading, useContextMode } from "./composerContextMode";
 import { CircleAlert, RotateCcw } from "lucide-react";
 
@@ -5750,7 +5751,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           ? t("composer.placeholderResolving")
           : relayMode
             ? t("composer.placeholderRelay")
-            : spawnMode
+            : spawnMode && !isSettledLaunchPlaceholder(file)
               ? t("composer.placeholderSpawn")
               : t("composer.placeholderSend"))}
       sendSlot={isMobile ? { kind: slotKind, busy: slotBusy, ...SLOT[slotKind] } : null}

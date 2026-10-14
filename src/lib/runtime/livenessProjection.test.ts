@@ -8,6 +8,13 @@ import { AgentRegistry } from "@/lib/agent/registry";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import type { FileEntry } from "@/lib/types";
 
+import { turnIsRunning } from "@/components/turnDuration";
+import { workingSince } from "@/components/workingSince";
+import { isWorkingAgent } from "@/components/workingAgents";
+import { mobileRowState } from "@/components/mobile/mobileBoardModel";
+import { cardStatus } from "@/components/cardStatus";
+import { activityDot } from "@/components/utils";
+
 import { projectStructuredFileLiveness } from "./livenessProjection";
 
 const NOW = Date.parse("2026-08-30T03:00:00.000Z");
@@ -113,6 +120,12 @@ test("a structured pid that has exited never projects running", async () => {
     });
 
     expect(file).toMatchObject({ activity: "stalled", proc: "killed", pid: null });
+    expect(turnIsRunning(file)).toBe(false);
+    expect(isWorkingAgent(file, NOW / 1000)).toBe(false);
+    expect(mobileRowState(file, NOW / 1000).key).toBe("killed");
+    expect(cardStatus(file, NOW)).toBeNull();
+    expect(workingSince(file)).toBeNull();
+    expect(activityDot(file.activity)).not.toContain("bg-success");
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

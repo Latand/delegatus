@@ -1294,6 +1294,10 @@ const mergeSetting = { enabled: true };
 const bridgeSetting = { enabled: new URLSearchParams(location.search).get("bridge") !== "off" };
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
+  // The driver supplies the real server projection for the liveness case.
+  if (new URLSearchParams(location.search).get("scenario") === "stale-working"
+    && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
+
   if (RUNTIME_PERF && url.pathname === "/api/runtime/snapshot") return serverFetch(input, init);
   const method = (init?.method ?? "GET").toUpperCase();
   /* The voice head's scenes: the companion on in the settings, and no session route at all. */
