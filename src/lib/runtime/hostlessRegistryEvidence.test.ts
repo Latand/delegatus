@@ -79,8 +79,11 @@ test("warm ended-owner discovery and one-row revalidation do not reread retained
     expect(hostlessConversations(snapshot)).toEqual(expected);
     expect([...reads.values()].reduce((sum, count) => sum + count, 0)).toBeLessThan(10);
     const id = expected.keys().next().value!;
+    const expectedEvidence = expected.get(id);
+    expect(expectedEvidence).toBeDefined();
+    if (expectedEvidence === undefined) throw new Error("ended-owner evidence is undefined");
     reads.clear();
-    expect<ReturnType<typeof hostlessConversationEvidence> | undefined>(hostlessConversationEvidence(registry.readOnlySnapshot(), id)).toEqual(expected.get(id));
+    expect(hostlessConversationEvidence(registry.readOnlySnapshot(), id)).toEqual(expectedEvidence);
     expect((reads.get("conversations") ?? 0) + (reads.get("entries") ?? 0)).toBeLessThan(10);
     expect(reads.get("receipts") ?? 0).toBeLessThan(200);
   } finally { registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
