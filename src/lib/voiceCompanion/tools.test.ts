@@ -36,7 +36,7 @@ test("all declarations execute through one allowlist, parameter schema and proje
     fleet: async () => ({ summary: { agents: { live: 1, running: 1 }, byEngine: { claude: [1, 1] } }, agents: [] }) });
   const context = { project: "fixture", sessionId: session.id, callId: "call-a", delegationId: "delegation-a", admission, reads, endConversation: () => { ended = true; } };
   const args: Record<string, Record<string, unknown>> = { list_tasks: {}, get_task: { taskId: "task-a" }, list_pipelines: {}, get_pipeline: { pipelineId: "pipeline-a" },
-    agent_activity: {}, agent_fleet: {}, conversation_messages: { conversationId: "conversation_a" }, orchestrator_messages:{},search_transcripts:{query:"plan"},read_prototype_review:{taskId:"task-a"},view_prototype_frame:{taskId:"task-a",variants:[1]}, relay_owner_history: { action: "groups" }, orchestrator_reports: {}, reread_orchestrator_report: { report: null }, request_orchestrator_delegation: { instruction: "Review it", confirmation_reason: null },
+    agent_activity: {}, agent_fleet: {}, get_orchestrator: {}, list_projects: {}, conversation_messages: { conversationId: "conversation_a" }, orchestrator_messages:{},search_transcripts:{query:"plan"},read_prototype_review:{taskId:"task-a"},view_prototype_frame:{taskId:"task-a",variants:[1]}, relay_owner_history: { action: "groups" }, orchestrator_reports: {}, reread_orchestrator_report: { report: null }, request_orchestrator_delegation: { instruction: "Review it", confirmation_reason: null },
     resolve_orchestrator_confirmation: { decision: "send" }, end_conversation: {} };
   expect(COMPANION_TOOLS.map(row => row.name)).toEqual(COMPANION_TOOL_REGISTRY.map(row => row.name));
   for (const tool of COMPANION_TOOL_REGISTRY) {

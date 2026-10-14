@@ -208,7 +208,7 @@ test("the prototype frame crosses the dynamic tool reply as inputImage alongside
 });
 
 test("a credential arriving in short Codex fragments stays masked in every published segment and transcript record", async () => {
-  const credential = ["fixture", "secret", "fragment", "stream"].join("");
+  const credential = ["Zr9QvB", "synthetic", "fragment", "stream"].join("");
   const f = await fixture([credential]);
   try {
     for (const [index, piece] of credential.match(/.{1,5}/g)!.entries()) {

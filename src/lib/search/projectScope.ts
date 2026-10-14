@@ -1,4 +1,5 @@
 import os from "node:os";
+import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal } from "@/lib/projects/nameResolution";
 import { canonicalProject, projectAliasSnapshot, recordedProjectRemotes } from "@/lib/projects/aliases";
 import { projectForCwd } from "@/lib/scanner/describe";
 
@@ -15,7 +16,17 @@ export function resolveProjectScope(requested: string, indexed: ReadonlySet<stri
     const canonical = canonicalProject(key);
     if (key === canonical || !known.has(canonical)) known.set(canonical, key);
   }
-  let resolved = known.get(canonicalProject(requested));
+  const directory = namedProjectDirectory({}, [...indexed]);
+  directory.names = new Map([...directory.names].flatMap(([name, keys]) => {
+    const selected = new Set([...keys].filter(key => known.has(key)));
+    return selected.size ? [[name, selected] as const] : [];
+  }));
+  let resolved: string | undefined;
+  const select = (name: string) => {
+    try { return known.get(resolveNamedProject(name, directory)); }
+    catch (error) { if (!(error instanceof ProjectNameRefusal)) throw error; return undefined; }
+  };
+  resolved = select(requested);
   if (!resolved && /^(?:\/|~\/|[A-Za-z]:[\\/])/u.test(requested)) {
     const key = projectForCwd(requested.replace(/^~(?=\/)/u, os.homedir()));
     if (key) resolved = known.get(canonicalProject(key));
@@ -38,7 +49,10 @@ export function resolveProjectScope(requested: string, indexed: ReadonlySet<stri
         if (candidate.length === specificity) matches.add(indexedKey);
       }
     }
-    if (matches.size === 1) resolved = [...matches][0];
+    if (matches.size) {
+      directory.names.set(requested.trim().toLowerCase(), new Set([...matches].map(canonicalProject)));
+      resolved = select(requested);
+    }
   }
   return resolved ? { requested, resolved } : {
     requested, resolved: null, note: "names no unique indexed project; searched every project",

@@ -318,3 +318,43 @@ test("pipeline titles are masked before the shared compact cutoff and newline sp
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(4000);
   }
 });
+
+
+test("voice reads select the single seated parent when a catalog lookalike shares its everyday name", async () => {
+  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const project = "orion-parent";
+  persistProjectAliases([{ source: "orion-old", target: project, displayName: "Orion Works" }]);
+  beginOrchestratorSeatIntent({ project, mandate: "Own this board", clientRequestId: "orion-seat", mode: "spawn", promptVersion: null });
+  completeOrchestratorSeatIntent({ project, clientRequestId: "orion-seat", conversationId: "conversation_orion", path: null });
+  replaceConversationCatalog([project, "orion-lookalike"].map(key => ({ path: path.join(root, `${key}.jsonl`), root: "claude-projects" as const,
+    name: "fixture", project: key, projectName: "Orion Works", title: "Fixture", firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const, mtime: 0, size: 0 })));
+  const transcript = path.join(root, "orion-seat.jsonl");
+  fs.writeFileSync(transcript, JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Routing checked" }] } }) + "\n");
+  const paths = createCompanionBoardReadPaths({ transcript: {
+    selectedContext: { selectedConversation: () => ({ resolve: id => id === "conversation_orion" ? { conversationId: id, engine: "claude", path: transcript, project } : null, readTail: () => null }), pathAllowed: candidate => candidate === transcript },
+    pinnedTranscript: candidate => { const descriptor = fs.openSync(candidate, "r"); return { descriptor, stat: fs.fstatSync(descriptor), rootName: "claude-projects", root, sameIdentity: () => true }; },
+  } });
+  const reads = new CompanionBoardReads(paths);
+  const at = "2026-10-14T08:00:00Z";
+  saveTasks([{ id: "orion-task", project, text: "Check routing", status: "assigned", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at }]);
+  savePipelines([buildPipeline({ id: "orion-pipeline", project, task: "Check routing", repoDir: root, srcPath: null, srcConversationId: null, now: at, stages: [{ id: "build", kind: "run", prompt: "Build", next: null, effectiveRole: { roleId: null, engine: "claude", model: null, effort: null, access: "read-only", promptScaffold: null } }] })]);
+  try {
+    expect(await reads.call(project, "list_tasks", { project: " oRiOn WoRkS " })).toMatchObject({ total: 1, rows: [{ handle: "orion-task" }] });
+    expect(await reads.call(project, "list_pipelines", { project: "Orion Works" })).toMatchObject({ total: 1 });
+    expect(await reads.call(project, "list_tasks", {})).toMatchObject({ total: 1 });
+    expect(await reads.call(project, "get_orchestrator", { project: "Orion Works" })).toMatchObject({ item: { project, liveSeat: true, conversationId: "conversation_orion" } });
+    expect(await reads.call(project, "orchestrator_messages", { project: "Orion Works" })).toMatchObject({ rows: [{ excerpt: "Routing checked" }] });
+    expect(reads.projects().find(row => row.project === project)).toMatchObject({ displayName: "Orion Works", liveSeat: true, openTaskCount: 1 });
+    const { CompanionAdmission } = await import("./admission");
+    const { CompanionStorage } = await import("./storage");
+    const { runCompanionTool } = await import("./tools");
+    const sent: string[] = [];
+    const admission = new CompanionAdmission(new CompanionStorage(), { recipient: selected => { sent.push(selected); return { project: selected, conversationId: "conversation_orion", seatEpoch: 1, engine: "claude" }; }, reports: () => [], send: async () => ({ status: "delivered", operationId: "orion-send" }) });
+    const session = admission.create({ project, locale: "en", authority: "live-model" });
+    sent.length = 0;
+    expect(await runCompanionTool({ project, sessionId: session.id, callId: "orion-call", delegationId: "orion-turn", admission, reads, endConversation: () => undefined }, "request_orchestrator_delegation", { project: "Orion Works", instruction: "Check the routing", confirmation_reason: null })).toMatchObject({ status: "sent" });
+    expect(sent).toContain(project);
+  } finally { replaceConversationCatalog([]); }
+});
