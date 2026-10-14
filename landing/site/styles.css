@@ -299,8 +299,8 @@ h1 { font-size: clamp(2.6rem, 5.6vw, 5.6rem); line-height: 1.02; }
 .d-tools li .ic:last-child { width: 13px; height: 13px; color: var(--green); }
 .d-tools b { font: 600 9px/1 var(--mono); letter-spacing: 0.04em; color: var(--product-muted); }
 .d-tools span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.d-worked { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--product-muted); }
-.d-worked::before, .d-worked::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.d-worked { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 600; color: var(--product-muted); }
+.d-worked::before { content: ""; flex: none; width: 20px; height: 1px; background: var(--line); }
 .demo-stage .d-turn { display: flex; align-items: center; flex: none; gap: 6px; height: 18px; margin: 0 12px 2px; font-size: 11px; font-weight: 600; color: var(--amber); }
 .d-turn i { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
 
