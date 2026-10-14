@@ -140,7 +140,12 @@ test.each(["enabled", "disabled", "long-reservation"])("prototype owner control 
       if (result?.outcome === "answered") expect(result.answer.text).toContain("рекомендовані з застереженням");
     } else expect(decision.comment).toBe("Keep these controls.");
     expect(decision.delivery.clientMessageId).toBe(`prototype-decision:${round.id}`);
-    expect(decision.delivery.text).toBe(prototypeDecisionText(task, round, decision));
+    if (kind === "long-reservation") {
+      expect(Buffer.byteLength(decision.delivery.text)).toBeLessThanOrEqual(32_000);
+      expect(decision.delivery.text).toContain("recommended with reservation");
+      expect(decision.delivery.text).toContain("Read read_prototype_review");
+      expect(decision.delivery.text).not.toContain("\uFFFD");
+    } else expect(decision.delivery.text).toBe(prototypeDecisionText(task, round, decision));
     expect(readAnswerRecord(paired.id, "target_1", request.request_id)?.profile).toMatchObject({ owner: true, prototype: round.id });
     expect(readRunLedger().runs).toEqual([]);
     const persisted = JSON.stringify(loadTasks());
