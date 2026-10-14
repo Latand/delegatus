@@ -982,3 +982,48 @@ test("delivery outcome selection reads requested operations under the writer loc
     expect(reads).toBeLessThan(10);
   } finally { registry.close(); }
 });
+
+test("fresh mixed cold and synthesized hot operation owners retain every owner", () => {
+  const { open,initial,filename } = fixture();
+  const hotId = "hot-ownerless-delivery", hotOp = "hot-ownerless-operation";
+  initial.heldDeliveries[hotId] = { ...structuredClone(initial.heldDeliveries["archive-delivery-0"]!),
+    id: hotId,state: "held",command: { ...initial.heldDeliveries["archive-delivery-0"]!.command,operationId: hotOp } };
+  initial.deliveryOperationOwners[hotOp] = { ...structuredClone(initial.deliveryOperationOwners["archive-operation-0"]!),
+    deliveryId: hotId,terminalState: null,terminalDisposition: null,
+    command: { ...initial.deliveryOperationOwners["archive-operation-0"]!.command,operationId: hotOp } };
+  archiveAll(open());
+  const db = new Database(filename);
+  try {
+    db.run("DELETE FROM registry_rows WHERE collection='deliveryOperationOwners' AND row_key=?", [hotOp]);
+    expect(db.query("SELECT 1 FROM registry_cold WHERE collection='deliveryOperationOwners'").get()).toBeTruthy();
+    expect(db.query("SELECT 1 FROM registry_hot_rows WHERE collection='heldDeliveries' AND row_key=?").get(hotId)).toBeTruthy();
+  } finally { db.close(); }
+  const reader=open();
+  const held=reader.readOnlySnapshot().file;
+  const expected=open().snapshot().file;
+  expect(expected.deliveryOperationOwners[hotOp]?.deliveryId).toBe(hotId);
+  expect(held.deliveryOperationOwners[hotOp]).toEqual(expected.deliveryOperationOwners[hotOp]);
+  expect(Object.keys(held.deliveryOperationOwners)).toEqual(Object.keys(expected.deliveryOperationOwners));
+});
+test("mixed cold legacy commands can still acknowledge their normalized operation", async () => {
+  const { open,initial,filename,directory,conversationId } = fixture();
+  const legacyId="legacy-command-delivery";
+  const template=initial.heldDeliveries["archive-delivery-0"]!;
+  initial.heldDeliveries[legacyId] = { ...structuredClone(template),id: legacyId,state:"delivery-uncertain",
+    command: { ...template.command,operationId:legacyId } };
+  archiveAll(open());
+  const db=new Database(filename);
+  try { db.run("UPDATE registry_rows SET value_json=json_remove(value_json,'$.command') WHERE collection='heldDeliveries' AND row_key=?", [legacyId]); }
+  finally { db.close(); }
+  const registry = new AgentRegistry(path.join(directory,"agent-registry.json"),undefined,undefined,{
+    sqliteMode:"sqlite",sqliteFilename:filename });
+  try {
+    const write=await registry.deliveryWrite({label:"review.legacy"},()=>registry.recordDeliveryOutcomesForOperations([
+      {conversationId:conversationId(0),operationId:legacyId,state:"delivered"}
+    ]));
+    expect(write.acquired).toBe(true);
+    if(!write.acquired) throw new Error("not acquired");
+    expect(write.value[0]?.id).toBe(legacyId);
+    expect(write.value[0]?.state).toBe("delivered");
+  } finally {registry.close();}
+});

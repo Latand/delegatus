@@ -1969,8 +1969,9 @@ export class SqliteAgentRegistryStore {
     for (const [collection,archived] of collections) {
       let order = this.orderedKeys(collection);
       if (collection === "deliveryOperationOwners") {
-        const stored = new Set(order);
-        order = [...order, ...[...archived.keys()].filter(key => !stored.has(key))];
+        // Normalization also synthesizes owners for hot legacy deliveries;
+        // neither these nor cold synthetic owners have a stored order yet.
+        order = [...new Set([...order, ...Object.keys(file[collection]), ...archived.keys()])];
       }
       const built = this.mergedArchiveReader(archived,order,file[collection] as Record<string, unknown>);
       Object.defineProperty(file,collection,{ enumerable: true,configurable: false,get: built });

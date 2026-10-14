@@ -10526,20 +10526,16 @@ export class AgentRegistry {
       const keyFor = (candidateConversationId: ViewerConversationId, candidateOperationId: string) =>
         `${resolveConversationAlias(file, candidateConversationId)}\u0000${candidateOperationId}`;
       const deliveries = new Map<string, HeldDelivery>();
-      // Select all requested operations once in collection order. A terminal
-      // acknowledgement must not expand retained history under the write lock.
-      const operationIds = [...new Set(outcomes.map(outcome => outcome.operationId))];
-      const indexed = registryHasLookupIndex(file);
-      // Plain JSON files retain one enumeration for the entire batch.
-      const batchSize = indexed ? 500 : Math.max(1, operationIds.length);
-      for (let start = 0; start < operationIds.length; start += batchSize) {
-        const candidates = indexed
-          ? registryRowsMatching(file, "heldDeliveries", "command.operationId", operationIds.slice(start, start + batchSize))
-          : Object.values(file.heldDeliveries);
-        for (const delivery of candidates) {
-          const key = keyFor(delivery.conversationId, delivery.command.operationId);
-          if (!deliveries.has(key)) deliveries.set(key, delivery);
-        }
+      // Select each recipient once in collection order. Legacy commands can
+      // derive their operation ID during normalization, so selecting raw stored
+      // operation IDs would miss acknowledgements for those deliveries.
+      const canonicalIds = [...new Set(outcomes.map(outcome => resolveConversationAlias(file, outcome.conversationId)))];
+      const candidates = registryHasLookupIndex(file)
+        ? canonicalIds.flatMap(id => conversationRows(file, "heldDeliveries", id))
+        : outcomes.length ? Object.values(file.heldDeliveries) : [];
+      for (const delivery of candidates) {
+        const key = keyFor(delivery.conversationId, delivery.command.operationId);
+        if (!deliveries.has(key)) deliveries.set(key, delivery);
       }
       const compactConversations = new Set<ViewerConversationId>();
       const settled = outcomes.map((outcome) => {
