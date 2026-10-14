@@ -17117,6 +17117,12 @@ describe("narrow card: the pipeline stages read as one vertical chain", () => {
 });
 
 describe("fast TTS header", () => {
+  browserTest("read-aloud provider voice menu states", async () => {
+    const { captureReadAloudVoiceMenu } = await import("@/components/kanban/issue1695BrowserHarness");
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try { await captureReadAloudVoiceMenu(browser, false); } finally { await browser.close(); }
+  }, 600_000);
+
   browserTest("Fish Audio read-aloud menu models in both locales and free, paid and ended states", async () => {
     const { captureFishAudioMenu } = await import("@/components/kanban/issue1695BrowserHarness");
     const browser = await chromium.launch(LAUNCH);
