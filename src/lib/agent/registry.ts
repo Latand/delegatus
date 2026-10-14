@@ -91,7 +91,7 @@ import {
 } from "./registryBackendIdentity";
 import {
   SqliteAgentRegistryStore,
-  registryRowsMatching, registryKeysMatching, registryConversationsForPath, registryHasPathIndex,
+  registryRowsMatching, registryKeysMatching, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported,
   type SqliteRegistryReplacement,
@@ -10529,8 +10529,14 @@ export class AgentRegistry {
       // Select all requested operations once in collection order. A terminal
       // acknowledgement must not expand retained history under the write lock.
       const operationIds = [...new Set(outcomes.map(outcome => outcome.operationId))];
-      for (let start = 0; start < operationIds.length; start += 500) {
-        for (const delivery of registryRowsMatching(file, "heldDeliveries", "command.operationId", operationIds.slice(start, start + 500))) {
+      const indexed = registryHasLookupIndex(file);
+      // Plain JSON files retain one enumeration for the entire batch.
+      const batchSize = indexed ? 500 : Math.max(1, operationIds.length);
+      for (let start = 0; start < operationIds.length; start += batchSize) {
+        const candidates = indexed
+          ? registryRowsMatching(file, "heldDeliveries", "command.operationId", operationIds.slice(start, start + batchSize))
+          : Object.values(file.heldDeliveries);
+        for (const delivery of candidates) {
           const key = keyFor(delivery.conversationId, delivery.command.operationId);
           if (!deliveries.has(key)) deliveries.set(key, delivery);
         }
