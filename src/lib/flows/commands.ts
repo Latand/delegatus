@@ -174,6 +174,7 @@ export async function createFlowFromRequest(
   entries: FileEntry[],
   actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
   preparedGit?: PreparedFlowGit,
+  assertAuthorized?: () => void,
 ): Promise<{ flow?: Flow; error?: string; status?: number }> {
   const normalizedSpec = normalizeFlowSpec(req.spec);
   if (!normalizedSpec.ok) {
@@ -279,6 +280,7 @@ export async function createFlowFromRequest(
     closedAt: null,
   };
   const admission = await withFlowMutation((flows, persist) => {
+    assertAuthorized?.();
     if (flows.some((current) =>
       (current.implementerConversationId === owner.id || current.implementerPath === resolvedPath)
       && current.closedAt === null && current.state !== "closed")) {
