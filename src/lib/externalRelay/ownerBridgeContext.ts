@@ -31,7 +31,7 @@ function recordedChatId(alias: string): string | null {
   } finally { db.close(); }
 }
 
-/** A reply, or a bare approval's immediately preceding message, must match a confirmed
+/** A reply or the immediately preceding message must match a confirmed
  * publication receipt and the report's own Telegram message id and chat. */
 export function resolveOwnerBridgeContext(request: ExternalRelayRequest, owner: OwnerInstruction, apiBase: string,
   ports: OwnerBridgeContextPorts = {
@@ -44,7 +44,7 @@ export function resolveOwnerBridgeContext(request: ExternalRelayRequest, owner: 
   const trigger = messages[triggerIndex];
   if (!trigger) return null;
   const previous = messages.slice(0, triggerIndex).at(-1);
-  const messageKey = trigger.reply_to ?? (ownerNeedsClarification({ ...owner, bridgeReport: null }) ? previous?.id : undefined);
+  const messageKey = trigger.reply_to ?? previous?.id;
   if (!messageKey) return null;
   const reference = ports.reference(messageKey);
   if (!reference || reference.apiBase !== apiBase || reference.targetId !== request.target_id) return null;
@@ -66,11 +66,4 @@ export function resolveOwnerReplyContext(request: ExternalRelayRequest, owner: O
   const earlier = target.reply_to ? messages.find(message => message.id === target.reply_to) : undefined;
   return { message_id: target.id, text: target.text, reply_to: target.reply_to,
     earlier_request: earlier ? { message_id: earlier.id, text: earlier.text } : null };
-}
-
-/** Bare approvals need a resolved report or an explicit reply with text. */
-export function ownerNeedsClarification(owner: OwnerInstruction, request?: ExternalRelayRequest): boolean {
-  if (owner.bridgeReport || request && resolveOwnerReplyContext(request, owner)) return false;
-  const text = (owner.requestText ?? owner.text).replace(/^\s*\/ai(?:@\S+)?\s*/i, "").trim().toLowerCase().replace(/[.!?]+$/u, "");
-  return !text || /^(?:го|go|go ahead|так|да|yes|yep|ok|ок|окей|ага|давай|погнали|вперед|запускай|починай|роби|продовжуй|continue|proceed|start|do it|do that|зроби це|це|це роби|that|this|[1-9]|(?:варіант|вариант|option)\s*[1-9])$/u.test(text);
 }
