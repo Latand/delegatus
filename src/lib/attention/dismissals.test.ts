@@ -8,6 +8,7 @@ import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentSto
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { readPrototypeReviews, withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
 import { prototypeReviewNotices } from "@/lib/prototypeReview/model";
 
@@ -48,6 +49,7 @@ beforeEach(() => {
   process.env.LLV_STATE_DIR = sandbox;
 });
 afterEach(() => {
+  closeAgentRegistryForTests();
   resetLegacyDocumentStoresForTests();
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
@@ -70,13 +72,18 @@ test.each(["done", "relaunched"])("a %s launch leaves both waiting projections w
   expect(clears).toHaveLength(1);
   expect(systemClearAttention(clears, now)).toHaveLength(1);
   const record = readAttentionDismissals(undefined, now).records[0]!;
+  expect(record.subject).toBe(file.path);
+  expect(record.conversationId).toBeNull();
   expect(record.by).toEqual({ kind: "system", rule: settlement === "done" ? "launch-task-done" : "launch-relaunched" });
   const body = { files: [file], tasks: [task], pipelines: [] };
   const evidence = () => ({ tasks: [task], pipelines: [], dismissals: readAttentionDismissals(undefined, now).records, reports: null, admissions: [], unavailable: [] });
   overlayAttentionDismissals(body.files);
-  expect(needsYouAnswer(body, null, now.getTime() / 1000, file.project, evidence())).toMatchObject({ count: 0, cleared: [{ kind: "launch", cleared: { by: record.by } }] });
+  const hidden = needsYouAnswer(body, null, now.getTime() / 1000, file.project, evidence());
+  expect(hidden).toMatchObject({ count: 0, cleared: [{ kind: "launch", cleared: { by: record.by }, undo: { path: file.path } }] });
+  expect(hidden.cleared).toHaveLength(1);
   expect(systemClearAttention(attentionSystemClears(body.files, now.getTime() / 1000, facts), now)).toEqual([]);
-  await dismissAttention({ kind: "conversation", path: file.path }, OPERATOR, { undo: true, ports: { ...harness().ports, resolveConversation: () => ({ conversationId: file.conversationId!, path: file.path }), now: () => now } });
+  await dismissAttention({ kind: "conversation", conversationId: file.conversationId, path: file.path, reasonId: `spawn:launch-settled:launch-failed` }, OPERATOR, { undo: true });
+  expect(readAttentionDismissals(undefined, now).records[0]).toMatchObject({ subject: file.path, restoredAt: expect.any(String) });
   overlayAttentionDismissals(body.files);
   expect(needsYouAnswer(body, null, now.getTime() / 1000, file.project, evidence())).toMatchObject({ count: 1 });
   expect(systemClearAttention(attentionSystemClears(body.files, now.getTime() / 1000, facts), now)).toEqual([]);

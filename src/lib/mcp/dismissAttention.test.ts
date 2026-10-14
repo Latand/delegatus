@@ -11,7 +11,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
-import { callerAttributionFrom, viewerMcpBindings } from "./bindings";
+import { callerAttributionFrom, targetedConversationAtPath, viewerMcpBindings, type TargetedConversationDependencies } from "./bindings";
 import { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES, TOOL_INPUT_SCHEMAS, type McpToolResult } from "./server";
 
 /*
@@ -263,6 +263,29 @@ test.each(["spawn:launch_missing", "/t/missing.jsonl"])("an unresolved path %s i
   const result = await serviceAs(ROOT).callTool("dismiss_attention", { clientRequestId: "unknown-path", target: { kind: "conversation", path } });
   expect(result).toMatchObject({ ok: false, code: "CONVERSATION_NOT_FOUND", retryable: false });
   expect((result as { error: string }).error).toContain("spawn:<launchId>");
+  expect(readAttentionDismissals().records).toEqual([]);
+});
+
+test("a catalogued transcript that is temporarily empty remains retryable", async () => {
+  const root = path.join(sandbox, "transcripts");
+  fs.mkdirSync(root);
+  const transcriptPath = path.join(root, "empty.jsonl");
+  fs.writeFileSync(transcriptPath, "");
+  const pathAllowed = (candidate: string) => {
+    try { return fs.realpathSync(candidate).startsWith(fs.realpathSync(root) + path.sep); } catch { return false; }
+  };
+  const catalogued = { ...ASKER, path: transcriptPath, root: "codex-sessions" } as FileEntry;
+  const targetedDependencies: TargetedConversationDependencies = { roots: [["codex-sessions", root]], pathAllowed };
+  const service = serviceAs(ROOT, world(), new MemoryMcpReceiptStore(), {
+    completedFileScan: async () => ({ snapshot: { files: [catalogued], projectCatalog: [], complete: true } }),
+    targetedFileEntry: (pathname: string, options?: { signal?: AbortSignal; deadlineAt?: number; tailLines?: number }) => targetedConversationAtPath(pathname, options, targetedDependencies),
+  });
+  const result = await service.callTool("dismiss_attention", {
+    clientRequestId: "empty-known-transcript",
+    target: { kind: "conversation", path: transcriptPath },
+  });
+  expect(result).toMatchObject({ ok: false, retryable: true });
+  expect((result as { error: string }).error).toContain("temporarily unavailable");
   expect(readAttentionDismissals().records).toEqual([]);
 });
 

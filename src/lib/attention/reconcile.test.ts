@@ -4,6 +4,7 @@ import type { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardTask } from "@/lib/tasks/types";
+import { failUnstartedLaunchMembership } from "@/lib/tasks/membership";
 
 import { attentionSystemClears, retiredSeatConversations, type ReconcileFacts } from "./reconcile";
 import { reconcileAttentionOnce, type AttentionReconcilePorts } from "./reconcileController";
@@ -144,9 +145,12 @@ test("failed launches clear only when their task is done or a different assignme
   expect(evaluate()).toEqual([]);
   expect(evaluate([task])).toEqual([]);
   const later = new Date((now - 60) * 1000).toISOString();
-  // Recording the original assignment after admission is no relaunch.
+  // Updating this assignment in place does not create a later assignment.
   expect(evaluate([{ ...task, assignments: [{ ...assignment, at: later }] }])).toEqual([]);
-  expect(evaluate([{ ...task, assignments: [assignment, { ...assignment, launchId: "launch-b", conversationId: "conversation_later", path: "/t/later.jsonl", at }] }])).toEqual([]);
+  const laterAssignment = { ...assignment, launchId: "launch-b", conversationId: "conversation_later", path: "/t/later.jsonl", at };
+  expect(evaluate([{ ...task, assignments: [assignment, laterAssignment] }])).toMatchObject([
+    { path: launch.path, reason: "launch", rule: "launch-relaunched" },
+  ]);
   expect(evaluate([{ ...task, assignments: [assignment, { ...assignment, launchId: "launch-b", conversationId: "conversation_later", path: "/t/later.jsonl", at: later }] }])).toMatchObject([
     { path: launch.path, reason: "launch", reasonId: "spawn:launch-a:launch-failed", rule: "launch-relaunched" },
   ]);
@@ -154,4 +158,20 @@ test("failed launches clear only when their task is done or a different assignme
     { path: launch.path, reason: "launch", reasonId: "spawn:launch-a:launch-failed", rule: "launch-task-done" },
   ]);
   expect(evaluate([{ ...task, status: "done", assignments: [{ ...assignment, launchId: "unrelated", conversationId: "conversation_other", path: "/t/other.jsonl" }] }])).toEqual([]);
+});
+
+test("a late failure timestamp cannot make the newest failed launch look superseded", () => {
+  const admittedA = new Date((now - 3600) * 1000).toISOString();
+  const admittedB = new Date((now - 3590) * 1000).toISOString();
+  const launchA = file("failed-a", { path: "spawn:launch-a", conversationId: "conversation_a", spawn: { state: "failed", admittedAt: Date.parse(admittedA) } as FileEntry["spawn"] });
+  const launchB = file("failed-b", { path: "spawn:launch-b", conversationId: "conversation_b", spawn: { state: "failed", admittedAt: Date.parse(admittedB) } as FileEntry["spawn"] });
+  let task = { id: "task-race", project: "project-a", status: "assigned", assignments: [
+    { launchId: "launch-a", conversationId: "conversation_a", path: launchA.path, at: admittedA, state: "linked", panePid: null, error: null },
+    { launchId: "launch-b", conversationId: "conversation_b", path: launchB.path, at: admittedB, state: "linked", panePid: null, error: null },
+  ] } as unknown as BoardTask;
+  task = failUnstartedLaunchMembership([task], { launchId: "launch-a", clientAttemptId: null, conversationId: "conversation_a", error: "launch failed" }, new Date((now - 3570) * 1000).toISOString()).tasks[0]!;
+  task = failUnstartedLaunchMembership([task], { launchId: "launch-b", clientAttemptId: null, conversationId: "conversation_b", error: "launch failed" }, new Date((now - 3560) * 1000).toISOString()).tasks[0]!;
+
+  const clears = attentionSystemClears([launchA, launchB], now, facts({ tasks: [task] }));
+  expect(clears.map(clear => [clear.path, clear.rule])).toEqual([[launchA.path, "launch-relaunched"]]);
 });

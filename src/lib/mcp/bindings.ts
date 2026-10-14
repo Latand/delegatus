@@ -2843,6 +2843,7 @@ async function entryForPath(
         reason: "MCP conversation catalog budget exceeded",
       })
     : null;
+  let knownInCompletedCatalog = false;
   try {
     if (catalog) {
       try {
@@ -2855,6 +2856,7 @@ async function entryForPath(
         const completedRead = dependencies.completedFileScan({ signal: catalog.signal });
         const completed = (await Promise.race([completedRead, catalogWait]).finally(releaseCatalogWait)).snapshot.files;
         const known = completed.find((candidate) => candidate.path === transcriptPath);
+        knownInCompletedCatalog = Boolean(known);
         /* A catalog row is a discovery hint. The transcript may have grown or
            been replaced since that row was measured, so production reopens it
            through the descriptor-pinned reader before deriving truncation or
@@ -2878,7 +2880,15 @@ async function entryForPath(
         deadlineAt: context.deadlineAt,
         ...(context.tailLines === undefined ? {} : { tailLines: context.tailLines }),
       });
-      if (!targeted) return undefined;
+      if (!targeted) {
+        if (knownInCompletedCatalog) {
+          throw new McpToolRefusal("the known conversation transcript is temporarily unavailable; retry after its write or replacement finishes", {
+            code: "CONVERSATION_READ_UNAVAILABLE",
+            retryable: true,
+          });
+        }
+        return undefined;
+      }
       if (!("entry" in targeted)) return { entry: targeted };
       const partialAtDeadline = callDeadlineExceeded({ signal: overall.signal, deadlineAt: context.deadlineAt });
       if (!partialAtDeadline) throwIfCallEnded({ signal: overall.signal, deadlineAt: context.deadlineAt });

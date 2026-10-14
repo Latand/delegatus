@@ -198,7 +198,12 @@ function clearedRows(body: NeedsYouBody, decision: AutoView["decision"], now: nu
 function systemClearedRows(body: NeedsYouBody, project: string, ports: NeedsYouEvidencePorts, live: readonly ClearedRow[]): ClearedRow[] {
   const key = canonicalOrchestratorProject(project);
   const canonical = ports.canonicalConversationId ?? ((id: string) => id);
-  const shown = new Set(live.flatMap(row => row.undo.kind === "conversation" ? [row.undo.conversationId ? canonical(row.undo.conversationId) : row.undo.path] : []));
+  const shown = new Set(live.flatMap(row => row.undo.kind === "conversation"
+    ? [
+        ...(row.undo.conversationId ? [canonical(row.undo.conversationId)] : []),
+        ...(row.undo.path ? [row.undo.path] : []),
+      ]
+    : []));
   const rows: ClearedRow[] = [];
   for (const record of ports.dismissals) {
     if (record.by.kind !== "system" || record.restoredAt || !record.cleared || record.kind === "prototype" || record.kind === "escalation") continue;

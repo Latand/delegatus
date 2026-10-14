@@ -95,9 +95,12 @@ export function attentionSystemClears(files: readonly FileEntry[], now: number, 
         ? assignment.launchId === launchId
         : assignment.path === file.path || Boolean(canonical && assignment.conversationId && facts.canonicalConversationId(assignment.conversationId) === canonical);
       const task = facts.tasks?.find(task => task.assignments.some(sameLaunch));
-      const relaunched = task?.assignments.some(assignment => !sameLaunch(assignment)
-        && Boolean(assignment.launchId || assignment.conversationId || assignment.path)
-        && Date.parse(assignment.at) > reason.raisedAt * 1000);
+      const ownAssignmentIndex = task?.assignments.findIndex(sameLaunch) ?? -1;
+      /* Assignment rows are appended in admission order. Their `at` field is
+         mutable: failing a launch rewrites it, so it cannot prove that another
+         launch was admitted later. */
+      const relaunched = ownAssignmentIndex >= 0 && task?.assignments.some((assignment, index) => index > ownAssignmentIndex
+        && Boolean(assignment.launchId || assignment.conversationId || assignment.path));
       if (task?.status === "done" || relaunched) {
         clears.push({ ...base, reasonId: reason.id, rule: task?.status === "done" ? "launch-task-done" : "launch-relaunched" });
         continue;
