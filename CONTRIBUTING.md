@@ -293,9 +293,9 @@ selections.
 The pre-push gate reuses the platform import closure to scope Linux tests.
 Viewer/runtime-host and native Codex verification run locally only for
 `Dockerfile`, `src/runtime-host/**` or `bin/**` changes. Every PR runs both jobs
-under the Dockerfile pin; `runtime-gate` joins them into one stable context.
-After the workflow lands, the seat adds it to main branch protection; a PR
-pushed earlier needs another push or close and reopen.
+under the Dockerfile pin; `runtime-gate` joins them into one stable context
+and is a required check on main. A PR pushed before the workflow landed needs
+another push or close and reopen to report it.
 Scoped Linux tests use the same merge-base
 comparison as touched tests, so a platform test `origin/main` already fails is
 `PRE-EXISTING`. A push that changes no file against the merge base (a read-only
@@ -398,5 +398,6 @@ receipt replay and terminal exit codes. The changed test is selected by the
 pre-push touched-tests gate. Run it by path in isolated home/config/state.
 
 After this workflow switch, a merge already waiting on a removed check name
-may need to be re-armed once. Branch protection needs no change: keep exactly
-`privacy-publication` and `privacy-tracker-audit`, with strict updates enabled.
+may need to be re-armed once. Main's branch protection requires exactly three
+checks, `privacy-publication`, `privacy-tracker-audit` and `runtime-gate`, with
+strict updates enabled.
