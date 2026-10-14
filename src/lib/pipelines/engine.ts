@@ -12810,9 +12810,17 @@ export async function patchPipeline(
         persist();
         return { pipeline };
       }
-      const pendingContinuations = attempt?.conversationId && stage && needsProviderContinuationCancellation(attempt)
-        ? [{ stageId: stage.id, attempt: attempt.n, conversationId: attempt.conversationId,
-          agentPath: attempt.agentPath, paneId: attempt.paneId, launchId: attempt.launchId }] : [];
+      const pendingContinuations: NonNullable<PipelineCloseReport["pendingContinuations"]> = [];
+      if (attempt?.conversationId && stage && needsProviderContinuationCancellation(attempt)) {
+        // Withdraw an admitted continuation before close returns. A host outage
+        // leaves a durable cancellation obligation without refusing the close.
+        try { await ports.invalidateProviderContinuation?.(attempt.conversationId); }
+        catch (error) {
+          pendingContinuations.push({ stageId: stage.id, attempt: attempt.n, conversationId: attempt.conversationId,
+            agentPath: attempt.agentPath, paneId: attempt.paneId, launchId: attempt.launchId,
+            detail: `runtime-host automatic continuation cancellation failed: ${String(error)}` });
+        }
+      }
       for (const run of pipeline.runs) for (const item of run.attempts) {
         const pendingSwitch = openRuntimeSwitch(item);
         if (pendingSwitch) { pendingSwitch.phase = "superseded"; pendingSwitch.settledAt = ports.now(); pendingSwitch.outcome = "pipeline closed"; }

@@ -36,12 +36,13 @@ test.each(["actionAt", "continuationRequestedAt"] as const)("close persists a pa
   const saved = loadPipelines()[0]!;
   expect({ status: closed.status, state: saved.state, closedAt: saved.closedAt })
     .toMatchObject({ status: undefined, state: "closed", closedAt: expect.any(String) });
-  expect(cancellations).toBe(0);
-  expect(closed.close).toMatchObject({ status: "pending", pendingContinuations: [{ conversationId: "conversation_stage_1" }] });
+  expect(cancellations).toBe(1);
+  expect(closed.close).toMatchObject({ status: "pending", pendingContinuations: [{ conversationId: "conversation_stage_1",
+    detail: expect.stringContaining("runtime host is unavailable") }] });
   const closeId = saved.closeTeardown!.id;
   const closedAt = saved.closedAt;
   await engineModule.drainStageActivations(h.ports);
-  expect(cancellations).toBe(1);
+  expect(cancellations).toBe(2);
   expect(loadPipelines()[0]).toMatchObject({ state: "closed", closedAt,
     closeTeardown: { id: closeId, phase: "pending" },
     closeReport: { status: "pending", pending: [],
@@ -51,7 +52,7 @@ test.each(["actionAt", "continuationRequestedAt"] as const)("close persists a pa
   expect([...report.stopped, ...report.alreadyStopped]).toHaveLength(1);
   const replay = await patchPipeline(pipeline.id, request, h.ports);
   expect(replay.pipeline).toMatchObject({ closedAt, closeTeardown: { id: closeId } });
-  expect(cancellations).toBe(1);
+  expect(cancellations).toBe(2);
   const acknowledged = await patchPipeline(pipeline.id, { action: "close", acknowledgeHosts: true }, h.ports);
   expect(acknowledged.close?.status).toBe("pending");
   expect(acknowledged.close?.pendingContinuations).toHaveLength(1);
@@ -62,10 +63,26 @@ test.each(["actionAt", "continuationRequestedAt"] as const)("close persists a pa
     closeTeardown: { id: closeId, phase: "settled" },
     closeReport: { status: "settled", pendingContinuations: [] },
   });
-  expect(cancellations).toBe(2);
+  expect(cancellations).toBe(3);
   await patchPipeline(pipeline.id, request, h.ports);
   await engineModule.drainStageActivations(h.ports);
-  expect(cancellations).toBe(2);
+  expect(cancellations).toBe(3);
+});
+
+test.each(["actionAt", "continuationRequestedAt"] as const)("close withdraws a continuation before returning when the runtime host is available (%s)", async (marker) => {
+  const { h, pipeline } = await continuationCloseFixture(marker);
+  let cancellations = 0;
+  h.ports.invalidateProviderContinuation = async () => { cancellations++; };
+  const request = { action: "close", clientRequestId: "close-provider-available" } as const;
+  const closed = await patchPipeline(pipeline.id, request, h.ports);
+  expect(closed.pipeline?.state).toBe("closed");
+  expect(cancellations).toBe(1);
+  expect(closed.close?.pendingContinuations).toBeUndefined();
+  expect(loadPipelines()[0]!.closeReport?.pendingContinuations).toBeUndefined();
+  await patchPipeline(pipeline.id, request, h.ports);
+  await engineModule.drainStageActivations(h.ports);
+  expect(cancellations).toBe(1);
+  expect(loadPipelines()[0]!.closeReport?.status).toBe("settled");
 });
 
 test("a new controller process settles durable continuation cancellation after a close outage", async () => {
