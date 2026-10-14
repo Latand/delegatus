@@ -799,6 +799,37 @@ test("an interrupted removal leaves only a trash name, finished next sweep", asy
   expect(fs.readdirSync(root)).toEqual([]);
 });
 
+test.each(["fresh-write", "pin", "git-metadata", "worktree-owner", "entry-limit"])("trash replay preserves new or uncertain content: %s", async kind => {
+  const { root, directory, options } = boundedFixture();
+  const interrupted = await realSweep({ ...options, now: () => Date.now() + 2 * DAY, remove: async () => { throw new Error("interrupted"); } });
+  expect(interrupted.errors).toHaveLength(1);
+  const trash = path.join(root, fs.readdirSync(root).find(name => name.startsWith(".delegatus-trash-"))!);
+  if (kind === "fresh-write") fs.writeFileSync(path.join(trash, "unique.txt"), "new operator data");
+  if (kind === "pin") fs.writeFileSync(path.join(trash, ".delegatus-keep"), "");
+  if (kind === "git-metadata") fs.mkdirSync(path.join(trash, ".git"));
+  if (kind === "worktree-owner") options.currentWorktrees = () => [directory];
+  if (kind === "entry-limit") options.inspect = (candidate, settings) => candidate === trash
+    ? { newestMs: 0, entries: 200_001, hold: "entry-limit" } : inspectTree(candidate, { ...settings, threshold: Infinity });
+  const resumed = await realSweep({ ...options, now: () => Date.now() + 2 * DAY });
+  expect(resumed.trashFinished).toBe(0);
+  expect(fs.existsSync(directory) || fs.existsSync(trash)).toBeTrue();
+  expect(fs.existsSync(path.join(fs.existsSync(directory) ? directory : trash, kind === "fresh-write" ? "unique.txt" : kind === "pin" ? ".delegatus-keep" : kind === "git-metadata" ? ".git" : "file.txt"))).toBeTrue();
+});
+
+test("a fresh file created after the post-rename inspection is preserved", async () => {
+  const { root, directory, options } = boundedFixture(); let created = false;
+  options.currentScan = () => {
+    const name = fs.readdirSync(root).find(entry => entry.startsWith(".delegatus-trash-"));
+    if (name && !created) { created = true; fs.writeFileSync(path.join(root, name, "late-unique.txt"), "keep"); }
+    return noProcesses;
+  };
+  const report = await realSweep({ ...options, now: () => Date.now() + 2 * DAY });
+  expect(created).toBeTrue();
+  expect(fs.existsSync(directory)).toBeTrue();
+  expect(fs.readFileSync(path.join(directory, "late-unique.txt"), "utf8")).toBe("keep");
+  expect(report.removed).toEqual([]);
+});
+
 
 test("a symlink inside a removed tree is unlinked and its target survives", async () => {
   const { root, directory, options } = boundedFixture();

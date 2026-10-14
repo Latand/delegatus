@@ -378,16 +378,19 @@ export function tempSweepMode(env: NodeJS.ProcessEnv = process.env): "on" | "dry
 export async function removeTreeViaTrash(directory: string, options: {
   journal: string; held: (trash: string) => boolean; remove?: (trash: string) => Promise<void>;
   context?: { sha: string };
+  validate?: (trash: string) => boolean;
 }): Promise<boolean> {
   const trash = path.join(path.dirname(directory), `.delegatus-trash-${path.basename(directory)}-${randomUUID()}`);
   const original = fs.lstatSync(directory);
   if (!original.isDirectory() || original.isSymbolicLink()) return false;
   const uid = original.uid;
   const identity = `${original.dev}:${original.ino}`;
-  writeJsonDurably(options.journal, { directory, trash, uid, identity, ...(options.context ? { context: options.context } : {}) });
+  const snapshot = snapshotTree(directory);
+  writeJsonDurably(options.journal, { directory, trash, uid, identity, snapshot, ...(options.context ? { context: options.context } : {}) });
   fs.renameSync(directory, trash);
   const moved = fs.lstatSync(trash);
-  if (`${moved.dev}:${moved.ino}` !== identity || options.held(trash) || mountPointsUnder(trash).length) {
+  if (`${moved.dev}:${moved.ino}` !== identity || options.held(trash) || options.validate && !options.validate(trash)
+    || !matchesSnapshot(trash, snapshot) || mountPointsUnder(trash).length) {
     try { fs.lstatSync(directory); throw new Error("original path was acquired while trash is held; preserved both paths"); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     fs.renameSync(trash, directory);
@@ -400,17 +403,44 @@ export async function removeTreeViaTrash(directory: string, options: {
 }
 
 /** Replay only a same-parent, same-owner trash path from our durable intent. */
-export async function finishTreeTrash(journal: string, held: (trash: string) => boolean, remove?: (trash: string) => Promise<void>): Promise<boolean> {
-  const row = JSON.parse(fs.readFileSync(journal, "utf8")) as { directory: string; trash: string; uid: number; identity: string };
+export async function finishTreeTrash(journal: string, held: (trash: string) => boolean, remove?: (trash: string) => Promise<void>, validate?: (trash: string) => boolean): Promise<boolean> {
+  const row = JSON.parse(fs.readFileSync(journal, "utf8")) as { directory: string; trash: string; uid: number; identity: string; snapshot?: TreeSnapshot };
   if (path.dirname(row.directory) !== path.dirname(row.trash)
     || !path.basename(row.trash).startsWith(`.delegatus-trash-${path.basename(row.directory)}-`)) return false;
   if (!fs.existsSync(row.trash)) { fs.unlinkSync(journal); return false; }
   const stat = fs.lstatSync(row.trash);
   if (!stat.isDirectory() || stat.dev !== fs.statSync(path.dirname(row.trash)).dev || `${stat.dev}:${stat.ino}` !== row.identity || stat.uid !== row.uid || (process.getuid && stat.uid !== process.getuid())
-    || held(row.trash) || mountPointsUnder(row.trash).length) return false;
+    || !row.snapshot || !matchesSnapshot(row.trash, row.snapshot) || held(row.trash) || validate && !validate(row.trash) || mountPointsUnder(row.trash).length) return false;
   await (remove ?? (target => fs.promises.rm(target, { recursive: true, force: true })))(row.trash);
   fs.unlinkSync(journal);
   return true;
+}
+
+type TreeSnapshot = { entries: Record<string, { kind: "directory" | "file" | "symlink" | "other"; dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number; mode: number }>; count: number };
+function snapshotTree(directory: string): TreeSnapshot {
+  const root = fs.lstatSync(directory); const entries: TreeSnapshot["entries"] = {}; const pending = [directory]; let count = 0;
+  while (pending.length) {
+    const current = pending.pop()!; const stat = fs.lstatSync(current); const relative = path.relative(directory, current);
+    if (++count > TREE_INSPECTION_ENTRY_LIMIT || stat.dev !== root.dev) throw new Error("tree snapshot is uncertain or over the inspection limit");
+    entries[relative] = { kind: stat.isDirectory() ? "directory" : stat.isFile() ? "file" : stat.isSymbolicLink() ? "symlink" : "other",
+      dev: stat.dev, ino: stat.ino, size: stat.isDirectory() ? 0 : stat.size, mtimeMs: stat.isDirectory() ? 0 : stat.mtimeMs,
+      ctimeMs: stat.isDirectory() ? 0 : stat.ctimeMs, mode: stat.mode };
+    if (stat.isDirectory()) for (const name of fs.readdirSync(current)) pending.push(path.join(current, name));
+  }
+  return { entries, count };
+}
+
+/** Missing paths are allowed after an interrupted recursive remove; additions and changed extant files are held. */
+function matchesSnapshot(directory: string, snapshot: TreeSnapshot): boolean {
+  try {
+    const current = snapshotTree(directory);
+    for (const [relative, entry] of Object.entries(current.entries)) {
+      const before = snapshot.entries[relative];
+      if (!before || before.kind !== entry.kind || before.dev !== entry.dev || before.ino !== entry.ino || before.size !== entry.size
+        || before.mtimeMs !== entry.mtimeMs || before.ctimeMs !== entry.ctimeMs || before.mode !== entry.mode) return false;
+    }
+    return true;
+  } catch { return false; }
 }
 
 /** Allocated bytes under a directory, without following symlinks; a lower bound past the entry limit. */
@@ -523,6 +553,15 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     return readScan().processes.some(proc => proc.paths.some(entry => inside(path.resolve(entry), canonical)
       || inside(resolvePhysicalPath(root.via + entry), physical)));
   };
+  const pinned = (directory: string) => {
+    try { fs.lstatSync(path.join(directory, ".delegatus-keep")); return true; } catch { return false; }
+  };
+  const trashPolicyHolds = (root: TempSweepRoot, trash: string, original: string) => {
+    const inspection = inspect(trash, root, original);
+    const protectedTrees = [...readWorktrees(), ...accounted].map(entry => path.resolve(entry));
+    return !!pinned(trash) || !!inspection.hold || (options.now?.() ?? Date.now()) - inspection.newestMs < options.maxAgeMs
+      || protectedTrees.some(entry => inside(entry, original) || inside(original, entry));
+  };
   const trashJournal = (root: TempSweepRoot) => path.join(root.via + root.path, `.delegatus-sweep-${randomUUID()}.json`);
   const seenCandidates = new Set<string>();
   const seenAllocations = new Set<string>();
@@ -545,7 +584,8 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         const journal = path.join(root.via + root.path, name);
         const row = JSON.parse(fs.readFileSync(journal, "utf8"));
         if (path.dirname(row.directory) !== root.via + root.path || !isOwnedTempName(path.basename(row.directory))) continue;
-        if (await finishTreeTrash(journal, trash => trashHolds(root, trash), options.remove)) report.trashFinished!++;
+        if (await finishTreeTrash(journal, trash => trashHolds(root, trash), options.remove,
+          trash => !trashPolicyHolds(root, trash, path.resolve(row.directory)))) report.trashFinished!++;
       } catch (error) { report.errors.push(String(error)); }
     }
     for (const name of names.sort()) {
@@ -674,6 +714,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       if (options.mode !== "dry-run" && !await removeTreeViaTrash(reachable, {
         journal: trashJournal(root), remove: options.remove,
         held: trash => trashHolds(root, trash),
+        validate: trash => !trashPolicyHolds(root, trash, path.resolve(candidate)),
       })) { await keep("inUse", bytes); continue; }
       report.removed.push({ path: candidate, via: root.via, bytes, ageHours: Math.round((now - newest) / HOUR_MS) });
       report.removedBytes += bytes;

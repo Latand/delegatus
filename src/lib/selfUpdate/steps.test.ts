@@ -45,6 +45,7 @@ function harness(scripts: Partial<Record<StepName, Script>>, overrides: Partial<
     buildIdReadable: () => true,
     publish: (release) => { published.push(release); },
     now: () => clock,
+    prepareExistingRelease: async () => null,
     ...overrides,
   };
   const runner = new UpdateRunner(
@@ -477,7 +478,7 @@ describe("UpdateRunner", () => {
   test("a release directory left by an earlier attempt is checked out in place", async () => {
     const { runner, calls, cwds } = harness({}, { exists: (path) => path === RELEASE });
     await runner.start(TARGET);
-    expect(calls[1]).toEqual(["git", "checkout", "--force", "--detach", TARGET]);
+    expect(calls[1]).toEqual(["git", "checkout", "--detach", TARGET]);
     expect(cwds[1]).toBe(RELEASE);
   });
 
@@ -718,6 +719,7 @@ describe("a release directory that already passed its ready check", () => {
       },
       memAvailableMb: () => memory, revParse: async (ref) => ref === "HEAD" ? head : TARGET,
       exists: existsSync, buildIdReadable: real.buildIdReadable, builtRevision: real.builtRevision, markBuilt: real.markBuilt,
+      prepareExistingRelease: async () => null,
       publish: (release) => { published.push(release); }, now: () => 1_000, ...overrides,
     };
     const runner = () => new UpdateRunner({ checkout: CHECKOUT, remote: "/var/tmp/remote.git", branch: "main", bun: "/opt/bun", logDir: join(base, "logs"), releasesDir, env: { PATH: "/usr/bin" } }, ports, () => {});
@@ -734,7 +736,7 @@ describe("a release directory that already passed its ready check", () => {
     const again = h.runner(); await again.start(TARGET, { trigger: "auto" });
     expect(again.state.state).toBe("done");
     expect(commands(h.calls)).toEqual(["fetch", "checkout"]);
-    expect(h.calls[1]).toEqual(["git", "checkout", "--force", "--detach", TARGET]);
+    expect(h.calls[1]).toEqual(["git", "checkout", "--detach", TARGET]);
     expect(again.state.steps.map((step) => [step.name, step.state])).toEqual(STEP_NAMES.map((name) => [name, "done"]));
     expect(h.published).toEqual([{ sha: TARGET, dir: h.dir }, { sha: TARGET, dir: h.dir }]);
     expect(readFileSync(again.logPath("build"), "utf8")).toContain("the build is reused");
@@ -896,4 +898,32 @@ test("checkout of an existing release directory restores deleted tracked files",
   const runner = new UpdateRunner({ checkout: root, releasesDir: releases, remote: "fixture", branch: "main", bun: "bun", logDir: join(root, "logs"), env: {} }, ports, () => {});
   await runner.start(target);
   expect(runner.state.state).toBe("done"); expect(readFileSync(join(release, "tracked.txt"), "utf8")).toBe("recoverable");
+});
+
+test("retrying an existing release preserves tracked edits and untracked obstructions", async () => {
+  const root = mkdtempSync(join(process.env.TMPDIR!, "llv-release-preserve-")); roots.push(root);
+  const git = (args: string[], cwd = root) => {
+    const result = childProcess.spawnSync("git", args, { cwd, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  git(["init", "-q", "-b", "main"]);
+  writeFileSync(join(root, "source.txt"), "committed source\n"); writeFileSync(join(root, ".gitignore"), "operator.local\n"); git(["add", "."]);
+  git(["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-qm", "fixture"]);
+  const target = git(["rev-parse", "HEAD"]); const releases = join(root, "releases");
+  const release = releaseDirFor(releases, target); git(["worktree", "add", "--detach", release]);
+  writeFileSync(join(release, "source.txt"), "unique operator edit\n");
+  writeFileSync(join(release, "obstructing.txt"), "keep this too\n");
+  writeFileSync(join(release, "operator.local"), "ignored operator data\n");
+  const ports: StepPorts = {
+    run: async (command, options) => command.includes("checkout") ? (git(command.slice(1), options.cwd), 0) : 0,
+    memAvailableMb: () => 8192, revParse: async () => target, exists: existsSync, buildIdReadable: () => true,
+    now: Date.now, publish: () => {},
+  };
+  const runner = new UpdateRunner({ checkout: root, releasesDir: releases, remote: "fixture", branch: "main", bun: "bun", logDir: join(root, "logs"), env: {} }, ports, () => {});
+  await runner.start(target);
+  expect(runner.state.state).toBe("failed");
+  expect(readFileSync(join(release, "source.txt"), "utf8")).toBe("unique operator edit\n");
+  expect(readFileSync(join(release, "obstructing.txt"), "utf8")).toBe("keep this too\n");
+  expect(readFileSync(join(release, "operator.local"), "utf8")).toBe("ignored operator data\n");
 });

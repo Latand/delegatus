@@ -2586,6 +2586,23 @@ test.each(["deletions", "untracked", "new-head", "holder"])("an interrupted remo
   expect(report.removed).toHaveLength(kind === "deletions" ? 1 : 0);
 });
 
+test("an untracked file written at the resumed Git removal boundary survives", async () => {
+  const root = repository(); const { dir, tip } = lane(root, path.join(caseDir, "interrupted-late-write"), "topic/interrupted-late-write");
+  const options = ports({ repositories: [root], prs: [merged(304, "topic/interrupted-late-write", tip)] });
+  const intents = path.join(process.env.LLV_STATE_DIR!, "worktree-sweep-removals"); fs.mkdirSync(intents, { recursive: true });
+  fs.writeFileSync(path.join(intents, createHash("sha256").update(dir).digest("hex") + ".json"), JSON.stringify({ path: dir, root, head: tip, preservation: "merged-pr", at: new Date().toISOString() }));
+  fs.unlinkSync(path.join(dir, "README.md"));
+  const git = options.git;
+  options.git = async (args, cwd) => {
+    if (args[0] === "worktree" && args[1] === "remove") fs.writeFileSync(path.join(dir, "late-unique.txt"), "keep");
+    return git(args, cwd);
+  };
+  const report = await sweepMergedWorktrees(options);
+  expect(report.removed).toEqual([]);
+  expect(fs.existsSync(dir)).toBeTrue();
+  expect(fs.readFileSync(path.join(dir, "late-unique.txt"), "utf8")).toBe("keep");
+});
+
 test("an interrupted trim leaves a trash name the next sweep finishes", async () => {
   const root = repository(); const dir = path.join(path.dirname(root), `${path.basename(root)}-pipeline-trim-crash`);
   lane(root, dir, "topic/trim-crash");

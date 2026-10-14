@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { finishTreeTrash, mountPointsUnder, removeTreeViaTrash, resolvePhysicalPath, scanProcesses, type ProcessScan } from "@/lib/tempSweep";
-import { parseWorktreeList } from "@/lib/pipelines/worktreeSweep";
+import { classifyStatus, disposableGeneratedTree, disposableIgnoredPath, keptIgnored, parseWorktreeList } from "@/lib/pipelines/worktreeSweep";
 import { runGit } from "./git";
 import { builtRevision } from "./steps";
 import type { LauncherRecord } from "./launcher";
@@ -139,6 +139,20 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     // Validate every safety input before the first mutation.
     const protectedSet = new Map(candidates.map(candidate => [candidate.dir, protect(candidate, initial, processes)]));
     const newest = new Set(candidates.filter(candidate => !protectedSet.get(candidate.dir) && now() - candidate.age >= DAY).sort((a, b) => b.age - a.age).slice(0, keepCount).map(candidate => candidate.dir));
+    const worktreeStatus = async (directory: string) => {
+      const status = await run(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], directory);
+      if (status.code !== 0) return { ok: false, changed: ["status unavailable"], ignored: [] as string[], allIgnored: [] as string[] };
+      const classified = classifyStatus(status.stdout, true);
+      return { ok: true, changed: classified.changed, ignored: keptIgnored(directory, classified.ignored), allIgnored: classified.ignored };
+    };
+    const safeTrackedFlags = async (directory: string) => {
+      const tagged = await run(["ls-files", "--cached", "-v", "-z"], directory);
+      return tagged.code === 0 && tagged.stdout.split("\0").filter(Boolean).every(row => row.startsWith("H "));
+    };
+    const safeRef = async (sha: string) => {
+      const refs = await run(["for-each-ref", "--contains", sha, "--format=%(refname)", "refs/heads", "refs/remotes", "refs/self-update/tip"], record.checkout!);
+      return refs.code === 0 && refs.stdout.split("\n").some(ref => ref.trim().length > 0);
+    };
     for (const candidate of candidates.sort((a, b) => a.age - b.age)) {
       try {
         const current = read();
@@ -176,6 +190,28 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           if (!entry || entry.locked || entry.head !== candidate.sha || protect(candidate, read(), scan()) || mounts(candidate.dir).length) {
             report.kept.push({ dir: candidate.dir, reason: "changed", bytes: 0 }); continue;
           }
+          let content = await worktreeStatus(candidate.dir);
+          if (!content.ok || content.changed.length || content.ignored.length || !await safeTrackedFlags(candidate.dir)
+            || !await safeRef(candidate.sha)) {
+            report.kept.push({ dir: candidate.dir, reason: "uncommitted", bytes: bytesOf(candidate.dir) }); continue;
+          }
+          for (const ignored of content.allIgnored) {
+            if (!disposableIgnoredPath(candidate.dir, ignored)) { content = { ...content, ignored: [ignored] }; break; }
+            const target = path.join(candidate.dir, ignored);
+            let stat: fs.Stats;
+            try { stat = fs.lstatSync(target); } catch { content = { ...content, ignored: [ignored] }; break; }
+            if (!stat.isDirectory() || stat.isSymbolicLink()) { content = { ...content, ignored: [ignored] }; break; }
+            const generated = ignored.split("/").some(name => ["node_modules", ".next", ".turbo", ".cache", ".parcel-cache", ".svelte-kit", "out", "dist", "build", "coverage", "test-results", "playwright-report", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis", ".venv", "venv", ".tox", ".nox"].includes(name) || name.endsWith(".egg-info"));
+            const journal = path.join(path.dirname(reportFile), `release-output-trash-${randomUUID()}.json`);
+            if (!await removeTreeViaTrash(target, { journal, remove: ports.removeTree,
+              held: trash => !disposableGeneratedTree(trash, generated) || !!protect(candidate, read(), scan(), true),
+            })) { content = { ...content, ignored: [ignored] }; break; }
+            content = await worktreeStatus(candidate.dir);
+            if (!content.ok || content.changed.length || content.ignored.length || !await safeTrackedFlags(candidate.dir)) break;
+          }
+          if (!content.ok || content.changed.length || content.ignored.length) {
+            report.kept.push({ dir: candidate.dir, reason: "uncommitted", bytes: bytesOf(candidate.dir) }); continue;
+          }
         }
         const bytes = bytesOf(candidate.dir);
         if (protect(candidate, read(), scan()) || mounts(candidate.dir).length || identity(candidate.dir) !== candidate.identity || fs.realpathSync(candidate.dir) !== candidate.dir) {
@@ -186,25 +222,44 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           if (fs.existsSync(path.dirname(marker)) && fs.realpathSync(path.dirname(marker)) !== path.dirname(marker)) {
             report.kept.push({ dir: candidate.dir, reason: "changed", bytes }); continue;
           }
+          const finalContent = await worktreeStatus(candidate.dir);
+          if (!finalContent.ok || finalContent.changed.length || finalContent.ignored.length
+            || !await safeTrackedFlags(candidate.dir) || !await safeRef(candidate.sha)) {
+            report.kept.push({ dir: candidate.dir, reason: "uncommitted", bytes }); continue;
+          }
           fs.rmSync(marker, { force: true });
-          const result = await run(["worktree", "remove", "--force", candidate.dir], record.checkout);
+          const result = await run(["worktree", "remove", candidate.dir], record.checkout);
           if (result.code !== 0) throw new Error(`cannot remove release: ${result.stderr || result.stdout}`);
         } else {
           const journal = path.join(path.dirname(reportFile), `package-trash-${randomUUID()}.json`);
-          if (!await removeTreeViaTrash(candidate.dir, { journal, context: { sha: candidate.sha }, held: trash => heldByProcess(trash, scan()), remove: ports.removeTree })) continue;
+          if (!await removeTreeViaTrash(candidate.dir, { journal, context: { sha: candidate.sha }, held: trash => {
+            const current = read(); const activeProcesses = scan();
+            const reason = protect({ dir: candidate.dir, sha: candidate.sha, age: candidate.age, locked: candidate.locked, identity: candidate.identity }, current, activeProcesses, true);
+            if (reason) report.kept.push({ dir: candidate.dir, reason, bytes: 0 });
+            return !!reason || heldByProcess(trash, activeProcesses);
+          }, remove: ports.removeTree })) continue;
         }
         report.removed.push({ dir: candidate.dir, sha: candidate.sha, bytes });
       } catch (error) { report.errors.push(`${candidate.dir}: ${String(error)}`); }
     }
     // Recover only intents whose original path belongs to this releases root.
     for (const file of previousTrash) {
-      if (!/^(cache|package)-trash-.*\.json$/.test(file)) continue;
+      if (!/^(cache|package|release-output)-trash-.*\.json$/.test(file)) continue;
       const journal = path.join(path.dirname(reportFile), file);
       try {
         const row = JSON.parse(fs.readFileSync(journal, "utf8"));
         const packageTrash = file.startsWith("package-");
+        const outputTrash = file.startsWith("release-output-");
+        let outputCandidate: Candidate | undefined;
+        let generatedOutput = false;
         if (packageTrash) {
           if (record.checkout || path.dirname(row.directory) !== root || !/^npm-\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(path.basename(row.directory))) continue;
+        } else if (outputTrash) {
+          outputCandidate = candidates.find(candidate => under(row.directory, candidate.dir) && row.directory !== candidate.dir);
+          if (!record.checkout || !outputCandidate || mounts(outputCandidate.dir).length || identity(outputCandidate.dir) !== outputCandidate.identity) continue;
+          const relative = path.relative(outputCandidate.dir, row.directory);
+          generatedOutput = relative.split(path.sep).some(name => ["node_modules", ".next", ".turbo", ".cache", ".parcel-cache", ".svelte-kit", "out", "dist", "build", "coverage", "test-results", "playwright-report", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis", ".venv", "venv", ".tox", ".nox"].includes(name) || name.endsWith(".egg-info"));
+          if (!generatedOutput) continue;
         } else {
           const candidate = candidates.find(candidate => row.directory === path.join(candidate.dir, ".next/cache/webpack"));
           if (!candidate || mounts(candidate.dir).length || identity(candidate.dir) !== candidate.identity) continue;
@@ -212,6 +267,11 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
         const held = (trash: string) => {
           const processes = scan();
           if (heldByProcess(trash, processes) || heldByProcess(row.directory, processes)) return true;
+          if (outputCandidate) {
+            const reason = protect(outputCandidate, read(), processes, true);
+            if (reason) report.kept.push({ dir: outputCandidate.dir, reason, bytes: 0 });
+            return !!reason;
+          }
           if (!packageTrash) return (read().inputs.inFlight ?? []).some(dir => under(row.directory, dir));
           const reason = protect({ dir: row.directory, sha: row.context?.sha ?? "", age: 0, locked: false, identity: row.identity }, read(), processes, true);
           if (reason) report.kept.push({ dir: row.directory, reason, bytes: 0 });
@@ -219,9 +279,10 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
         };
         if (mounts(row.trash).length) { report.kept.push({ dir: row.directory, reason: "mount-boundary", bytes: 0 }); continue; }
         const bytes = fs.existsSync(row.trash) ? bytesOf(row.trash) : 0;
-        if (await finishTreeTrash(journal, held, ports.removeTree)) {
+        if (await finishTreeTrash(journal, held, ports.removeTree,
+          trash => !outputCandidate || disposableGeneratedTree(trash, generatedOutput))) {
           if (packageTrash) report.removed.push({ dir: row.directory, sha: row.context?.sha ?? "", bytes });
-          else report.reclaimedCacheBytes += bytes;
+          else if (!outputTrash) report.reclaimedCacheBytes += bytes;
         }
       } catch (error) { report.errors.push(String(error)); }
     }

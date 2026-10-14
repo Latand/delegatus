@@ -44,6 +44,9 @@ function fixture(count = 8) {
     if (args[0] === "worktree" && args[1] === "list") return { code: 0, stderr: "", stdout: dirs.filter(dir => fs.existsSync(dir)).map(dir =>
       `worktree ${dir}\0HEAD ${shas[dirs.indexOf(dir)]}\0${locked.has(dir) ? "locked fixture\0" : ""}\0`).join("") };
     if (args[0] === "rev-parse") return { code: 0, stderr: "", stdout: shas[dirs.indexOf(cwd)]! };
+    if (args[0] === "status") return { code: 0, stderr: "", stdout: "" };
+    if (args[0] === "ls-files") return { code: 0, stderr: "", stdout: "H fixture.txt\0" };
+    if (args[0] === "for-each-ref") return { code: 0, stderr: "", stdout: "refs/heads/main\n" };
     if (args[0] === "worktree" && args[1] === "remove") { fs.rmSync(args.at(-1)!, { recursive: true, force: true }); return { code: 0, stderr: "", stdout: "" }; }
     throw new Error(`unexpected Git command: ${args.join(" ")}`);
   };
@@ -184,6 +187,81 @@ test("retention never prunes other registrations", async () => {
   await h.run(); expect(git(["worktree", "list", "--porcelain"])).toContain(pipeline);
 });
 
+function realReleaseFixture() {
+  const h = fixture(0); const checkout = path.join(h.root, "source"); fs.mkdirSync(checkout);
+  const git = (args: string[], cwd = checkout) => {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  };
+  git(["init", "-q", "-b", "main"]);
+  fs.writeFileSync(path.join(checkout, ".gitignore"), ".next/\n");
+  fs.writeFileSync(path.join(checkout, "source.txt"), "first\n"); git(["add", "."]);
+  git(["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-qm", "first"]);
+  const first = git(["rev-parse", "HEAD"]);
+  fs.writeFileSync(path.join(checkout, "next.txt"), "second\n"); git(["add", "."]);
+  git(["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-qm", "second"]);
+  const second = git(["rev-parse", "HEAD"]);
+  fs.writeFileSync(path.join(checkout, "third.txt"), "third\n"); git(["add", "."]);
+  git(["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-qm", "third"]);
+  const third = git(["rev-parse", "HEAD"]);
+  const active = path.join(h.record.releasesDir, first.slice(0, 12));
+  const candidate = path.join(h.record.releasesDir, second.slice(0, 12));
+  const newest = path.join(h.record.releasesDir, third.slice(0, 12));
+  git(["worktree", "add", "--detach", active, first]); git(["worktree", "add", "--detach", candidate, second]); git(["worktree", "add", "--detach", newest, third]);
+  for (const [dir, sha, age] of [[active, first, 3], [candidate, second, 4], [newest, third, 2]] as const) {
+    fs.mkdirSync(path.join(dir, ".next"), { recursive: true });
+    fs.writeFileSync(path.join(dir, ".next/DELEGATUS_RELEASE_READY"), sha);
+    fs.writeFileSync(path.join(dir, ".next/BUILD_ID"), "fixture");
+    const date = new Date(h.now - age * DAY);
+    for (const file of [dir, path.join(dir, ".next"), path.join(dir, ".next/DELEGATUS_RELEASE_READY"), path.join(dir, ".next/BUILD_ID")]) fs.utimesSync(file, date, date);
+  }
+  h.record.checkout = checkout;
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: active, sha: first }));
+  h.ports.git = runGit;
+  h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
+  h.ports.mountPoints = () => [];
+  return { ...h, active, candidate, newest, git };
+}
+
+test.each(["tracked-edit", "untracked-file", "unpublished-commit"])("release retention preserves %s", async kind => {
+  const h = realReleaseFixture();
+  if (kind === "tracked-edit") fs.writeFileSync(path.join(h.candidate, "source.txt"), "unique operator edit\n");
+  if (kind === "untracked-file") fs.writeFileSync(path.join(h.candidate, "unique.txt"), "preserve me\n");
+  if (kind === "unpublished-commit") {
+    fs.writeFileSync(path.join(h.candidate, "private.txt"), "unpublished\n"); h.git(["add", "private.txt"], h.candidate);
+    h.git(["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-qm", "unpublished"], h.candidate);
+  }
+  const old = new Date(h.now - 4 * DAY);
+  for (const file of [h.candidate, path.join(h.candidate, ".next/DELEGATUS_RELEASE_READY"), path.join(h.candidate, ".next/BUILD_ID")]) fs.utimesSync(file, old, old);
+  const report = await h.run();
+  expect(report.removed.some(row => row.dir === h.candidate)).toBeFalse();
+  expect(fs.existsSync(h.candidate)).toBeTrue();
+  if (kind === "tracked-edit") expect(fs.readFileSync(path.join(h.candidate, "source.txt"), "utf8")).toBe("unique operator edit\n");
+  if (kind === "untracked-file") expect(fs.readFileSync(path.join(h.candidate, "unique.txt"), "utf8")).toBe("preserve me\n");
+  if (kind === "unpublished-commit") expect(h.git(["status", "--porcelain"], h.candidate)).toBe("");
+});
+
+test("a late release edit is refused by Git's final removal guard", async () => {
+  const h = realReleaseFixture(); let changed = false; const git = h.ports.git!;
+  h.ports.git = async (args, cwd) => {
+    if (args[0] === "worktree" && args[1] === "remove" && args.at(-1) === h.candidate) {
+      changed = true; fs.writeFileSync(path.join(h.candidate, "source.txt"), "late operator edit\n");
+    }
+    return git(args, cwd);
+  };
+  const report = await h.run();
+  expect(changed).toBeTrue(); expect(fs.existsSync(h.candidate)).toBeTrue();
+  expect(fs.readFileSync(path.join(h.candidate, "source.txt"), "utf8")).toBe("late operator edit\n");
+  expect(report.removed.some(row => row.dir === h.candidate)).toBeFalse();
+});
+
+test("a clean disposable release still expires", async () => {
+  const h = realReleaseFixture(); const report = await h.run();
+  expect(report.removed.map(row => row.dir)).toContain(h.candidate);
+  expect(fs.existsSync(h.active)).toBeTrue(); expect(fs.existsSync(h.candidate)).toBeFalse();
+});
+
 test("ten successive applies stay bounded by protected plus newest K", async () => {
   const h = fixture(0);
   for (let i = 0; i < 10; i++) {
@@ -270,6 +348,29 @@ test.each([false, true])("package trash resumes safely with a new active pointer
   expect(exists(dirs[1]!)).toBeTrue();
   if (reactivated) expect(resumed.kept).toContainEqual(expect.objectContaining({ dir: row.directory, reason: "active" }));
   else expect(resumed.removed.some(removed => removed.dir === row.directory)).toBeTrue();
+});
+
+test.each(["active", "rollback", "in-flight"])("package activation after rename preserves the %s container", async protection => {
+  const h = fixture(0); h.record.checkout = null;
+  const dirs = Array.from({ length: 8 }, (_, i) => path.join(h.record.releasesDir, `npm-2.0.${i}`));
+  for (const dir of dirs) { fs.mkdirSync(dir); fs.writeFileSync(path.join(dir, "package.json"), "{}"); fs.utimesSync(dir, 1, 1); fs.utimesSync(path.join(dir, "package.json"), 1, 1); }
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: dirs[0] })); h.inputs.rollbackPackage = dirs[1];
+  const target = dirs[2]!; let acquired = false;
+  h.ports.scan = () => {
+    const renamed = fs.readdirSync(h.record.releasesDir).find(name => name.startsWith(".delegatus-trash-npm-2.0.2-"));
+    if (renamed && !acquired) {
+      acquired = true;
+      if (protection === "active") fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: target }));
+      if (protection === "rollback") h.inputs.rollbackPackage = target;
+      if (protection === "in-flight") h.inputs.inFlight = [target];
+    }
+    return EMPTY;
+  };
+  const report = await h.run();
+  expect(acquired).toBeTrue(); expect(exists(target)).toBeTrue();
+  expect(exists(path.join(target, "package.json"))).toBeTrue();
+  expect(report.removed.some(row => row.dir === target)).toBeFalse();
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir: target, reason: protection }));
 });
 
 

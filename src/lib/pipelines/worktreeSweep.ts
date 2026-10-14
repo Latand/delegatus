@@ -326,7 +326,18 @@ function disposableIgnored(worktree: string, ignored: string): boolean {
   } catch { return false; }
 }
 
-function keptIgnored(worktree: string, ignored: readonly string[]): string[] {
+/** Release cleanup uses the same bounded proof before dropping generated output. */
+export function disposableIgnoredPath(worktree: string, ignored: string): boolean {
+  return disposableIgnored(worktree, ignored);
+}
+
+/** Recheck a quarantined generated directory after rename and during replay. */
+export function disposableGeneratedTree(directory: string, generated: boolean): boolean {
+  try { return fs.lstatSync(directory).isDirectory() && onlyRebuildableContents(directory, generated); }
+  catch { return false; }
+}
+
+export function keptIgnored(worktree: string, ignored: readonly string[]): string[] {
   return ignored.filter(entry => !disposableIgnored(worktree, entry));
 }
 
@@ -1120,11 +1131,23 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         const finalNested = finalWorktrees.find(other => resolve(other.path) !== worktree && inside(resolve(other.path), worktree));
         if (finalNested) { keep({ ...base, reason: "holds-worktree", detail: finalNested.path }); continue; }
         const trackedBefore = await ports.git(["ls-files", "-z"], worktree);
-        const originalTracked = trackedBefore.code === 0 ? trackedSnapshot(accessible(worktree), trackedBefore.stdout, resuming) : null;
+        let originalTracked = trackedBefore.code === 0 ? trackedSnapshot(accessible(worktree), trackedBefore.stdout, resuming) : null;
         if (originalTracked === null) { keep({ ...base, reason: "uncommitted", detail: "tracked contents could not be inspected" }); continue; }
-        const finalStatus = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
-        const finalClass = classifyStatus(finalStatus.stdout, true);
+        let finalStatus = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
+        let finalClass = classifyStatus(finalStatus.stdout, true);
         if (finalStatus.code !== 0 || (finalClass.changed.length && !(resuming && onlyDeletions(finalStatus.stdout)))) { keep({ ...base, reason: "uncommitted" }); continue; }
+        if (resuming && finalClass.changed.length) {
+          const missing = await ports.git(["ls-files", "--deleted", "-z"], worktree);
+          const paths = missing.stdout.split("\0").filter(Boolean);
+          if (missing.code !== 0 || !paths.length) { keep({ ...base, reason: "uncommitted", detail: "interrupted removal's missing files could not be identified" }); continue; }
+          const restored = await ports.git(["checkout", "--", ...paths], worktree);
+          if (restored.code !== 0) { keep({ ...base, reason: "uncommitted", detail: "interrupted removal's missing files could not be restored" }); continue; }
+          finalStatus = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
+          finalClass = classifyStatus(finalStatus.stdout, true);
+          if (finalStatus.code !== 0 || finalClass.changed.length) { keep({ ...base, reason: "uncommitted" }); continue; }
+          originalTracked = trackedSnapshot(accessible(worktree), trackedBefore.stdout);
+          if (originalTracked === null) { keep({ ...base, reason: "uncommitted", detail: "restored tracked contents could not be inspected" }); continue; }
+        }
         const finalHead = await ports.git(["rev-parse", "--verify", "HEAD"], worktree);
         if (finalHead.code !== 0 || finalHead.stdout.trim() !== proof.head) {
           keep({ ...base, reason: retained ? "local-only-commits" : "unmerged-commits", detail: "HEAD changed after its preservation proof" });
@@ -1169,7 +1192,9 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         }
         /* Only a journaled deletion-only checkout at the proven HEAD can force recovery. */
         writeJsonDurably(intentFile(worktree), { path: worktree, root, head: proof.head, preservation: proof.preservation, at: report.at });
-        const removed = await ports.git(["worktree", "remove", ...(resuming ? ["--force"] : []), worktree], root);
+        /* Git's own dirty-worktree check is the last guard against a write
+           arriving after the filesystem and status snapshots above. */
+        const removed = await ports.git(["worktree", "remove", worktree], root);
         if (removed.code !== 0) {
           keep({ ...base, reason: "remove-failed", detail: (removed.stderr || removed.stdout).trim() });
           continue;
@@ -1204,7 +1229,11 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
             if (!inside(row.directory, accessible(worktree))) continue;
             if ((ports.mountPoints ? ports.mountPoints(worktree) : mountPointsUnder(accessible(worktree))).length) continue;
             await finishTreeTrash(journal, trash => !!heldBy(readGuards(), worktree)
-              || !!inspectTree(trash, { git: true, mounts: (ports.mountPoints ?? mountPointsUnder)(trash) }).hold, ports.removeTree);
+              || !!inspectTree(trash, { git: true, mounts: (ports.mountPoints ?? mountPointsUnder)(trash) }).hold, ports.removeTree,
+              trash => {
+                return !inspect(trash, true) && !fs.existsSync(path.join(trash, ".delegatus-keep"))
+                  && !heldBy(readGuards(), worktree);
+              });
           }
         } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") report.errors.push(String(error)); }
       }
@@ -1295,6 +1324,10 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
             fs.mkdirSync(path.dirname(journal), { recursive: true });
             if (!await removeTreeViaTrash(accessible(next), { journal, remove: ports.removeTree,
               held: trash => !!heldBy(readGuards(), worktree) || ports.scan().processes.some(proc => proc.paths.some(entry => inside(entry, trash))),
+              validate: trash => {
+                return !inspect(trash, true) && !fs.existsSync(path.join(accessible(trash), ".delegatus-keep"))
+                  && !heldBy(readGuards(), worktree);
+              },
             })) continue;
           }
           report.trimmed.push({ path: next, bytes, pipelineId: owner.id });

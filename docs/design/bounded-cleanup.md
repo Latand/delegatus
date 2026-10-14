@@ -28,7 +28,7 @@ on, and what triggers it.
 | D2 | Merged or retained linked worktree, `git worktree remove <dir>` (never `--force`) | `src/lib/pipelines/worktreeSweep.ts:1138` | a linked worktree of a registered repository; merged PR whose head contains HEAD (squash-safe), or past the 4-day retention with HEAD on an advertised remote ref or equal to the lane base; no open pipeline, process, live conversation, merge-batch hold, lock, nested worktree, change, unknown ignored file; HEAD and Git locks held through the last checks (`:1072`) | `startWorktreeSweep` (hourly, first after 10 min), same Viewer; `LLV_WORKTREE_SWEEP=dry-run` reports only |
 | D3 | Build-cache trim inside a settled lane, `fs.promises.rm(recursive)` | `worktreeSweep.ts:1240` | the lane's own `<repo>-pipeline-<id>` checkout; a top-level rebuildable directory (`node_modules`, `.next`, …) Git ignores, or an `.artifacts/**/bundle` holding only `*.fixture.js`; no tracked files; identity unchanged | same sweep |
 | D4 | Own HEAD/ref lock files | `worktreeSweep.ts:659-676` | inodes the sweep recorded in `state/worktree-sweep-locks/*.json` | same sweep, and recovery after a dead sweeper |
-| D5 | Old self-update release, `git worktree remove --force <dir>` | `src/lib/selfUpdate/auto.ts:155` | a worktree of the install checkout directly under `releasesDir` named `<sha12>`; not the pointer's dir, not the rollback pointer's dir, not a revision web/host/launcher report, not the newest remaining by mtime | `finishCheckoutDrain` (`service.ts:787-794`), i.e. **only when an automatic checkout drain finishes** |
+| D5 | Old self-update release, generated-output quarantine followed by `git worktree remove <dir>` | `src/lib/selfUpdate/retention.ts` | a registered SHA-named worktree whose tracked contents are unchanged, whose HEAD is contained by a head or remote ref, whose ignored output passes the bounded generated-content proof, and which is outside active, rollback, serving, in-flight, process and mount protection | successful self-update retention after an apply |
 | D6 | `git worktree prune` of the **whole install repository** | `auto.ts:158` | every registration in that repository whose directory is missing | right after D5 |
 | D7 | The ready marker of a release about to be rebuilt | `steps.ts:405` | `markBuilt(dir, null)` at build start | build step |
 | D8 | Preflight scratch made by `mkdtemp` in the same call | `service.ts:1615` | its own path | operator/seat apply preflight |
@@ -161,11 +161,13 @@ For every recursive `fs.rm` (D1, D3, the cache reclamation in §6.4):
 
 An interrupted removal leaves only a trash-named directory. Its original name
 no longer exists, so no later user can mistake a half-deleted tree for a whole
-one. Each sweep first finishes trash it recognizes: exact trash prefix, inside
-a root that sweep owns, same uid, no process holding it, no mount point under
-it. Trash gets no age floor, because its content was already judged
-disposable before the rename. The sweep journals each rename before making it,
-so a trash directory is always explained.
+one. Each sweep replays trash only after rechecking the original policy,
+current ownership, pins, Git metadata, mounts, freshness, inspection bounds
+and process holders. The journal records a bounded path and file identity
+snapshot; missing entries are allowed after an interrupted recursive remove,
+while additions or changed extant files hold the trash. A journal explains a
+rename and preserves evidence to check it again; it never grants lasting
+permission to delete later contents.
 
 ### 3.4 Process scan, widened
 
@@ -283,11 +285,10 @@ It changes in four places:
    leave no growing journal. At sweep start, an open intent whose checkout is
    still listed is resumed only when HEAD still equals the recorded `head`,
    `git status` reports nothing but deletions of tracked files, every live guard
-   passes and no mount point is under it. Resumption runs
-   `git worktree remove --force` (the `--force` is needed only because the
-   tracked files are already gone). Anything else keeps it as
-   `interrupted-removal`, a decision reason. The branch ref is never touched,
-   so the recorded preservation proof still stands.
+   passes and no mount point is under it. The sweep restores those missing
+   tracked paths from the index and then runs ordinary `git worktree remove`.
+   Anything else keeps it as `interrupted-removal`, a decision reason. The
+   branch ref is never touched, so the recorded preservation proof still stands.
 
 ## 6. Self-update release retention (#2886)
 
@@ -319,8 +320,8 @@ release fence, so no await separates the check from the flag. Only that Viewer
 runs self-update at all.
 
 The first run after this ships removes the backlog (about 44 directories on
-this machine). Each removal is one `git worktree remove --force` of a
-50 000-entry tree; the flag keeps updates out for that minute or two. A seat
+this machine). Each removal checks worktree contents and protected state; the
+flag keeps updates out while retention runs. A seat
 deploy that asks during it gets `busy` and retries, as it does for any
 other busy state.
 
@@ -341,7 +342,7 @@ Protected, never removed:
 | **Rollback target** | the last apply intent's `rollbackPointer` (`apply.json`, kept after the apply settles) and `auto.rollbackPointer`; for a package install, `rollbackPackage` |
 | **In flight** | the runner's `state.releaseDir` whenever its state is `running` or `failed` (a retry reuses it), and `releaseDirFor(apply.current.target)` |
 | **Used by a running process** | §3.4 scan: any process whose cwd, exe, root, open file, mapped file, argv token or environment value is inside or names the release path. Read once to choose, and again immediately before each removal |
-| **Pinned** | `git worktree lock` on the release (the porcelain `locked` line). Today a locked release makes `--force` fail and aborts the pass; now it is skipped and reported |
+| **Pinned** | `git worktree lock` on the release (the porcelain `locked` line). A locked release is skipped and reported |
 | **Recent** | built within the last 24 h. Age is the newest of `.next/DELEGATUS_RELEASE_READY`, `.next/BUILD_ID` and the directory's own mtime (package: the container's `package.json`) |
 | **Newest K** | the `K` most recent remaining candidates by the same age, `K = LLV_SELF_UPDATE_KEEP_RELEASES`, default 3, minimum 1 |
 
@@ -383,24 +384,25 @@ For each non-protected candidate, in oldest-first order:
 
 1. Re-read the protected set (process scan, runner, apply, pointer) and
    `mountPointsUnder(dir)`. A change keeps the candidate.
-2. Withdraw the ready marker (`markBuilt(dir, null)`). From here the directory
-   can never be reused or published as a built release, whatever happens next.
-3. `git worktree remove --force <dir>` from the checkout. Releases are
-   generated: they hold no user work, and untracked `scripts/__pycache__/`
-   appears in several of them today, which a non-forced removal refuses.
-   For a package container, rename-then-remove (§3.3).
+2. Inspect Git status including ignored paths and index flags. Tracked changes,
+   untracked files, hidden tracked edits and commits absent from relevant head
+   or remote refs keep the release. Ignored output is removed only after the
+   shared bounded generated-content proof and quarantine checks.
+3. Withdraw the ready marker (`markBuilt(dir, null)`) and call ordinary
+   `git worktree remove <dir>`. Git's final dirty-worktree check remains active
+   for changes that arrive after the last status read. For a package container,
+   rename-then-remove (§3.3) and re-read the complete protected set after rename.
 4. **No `git worktree prune`.** `remove` deletes its own registration; the
    repository-wide prune (D6) is dropped. A release directory deleted by
    someone else leaves a stale registration that Git's own
    `gc.worktreePruneExpire` handles.
 
-A removal interrupted after step 2 leaves a half-deleted directory with no
-marker. If an update later targets the same sha, the checkout step finds the
-directory and runs `git checkout --detach <target>` (`steps.ts:302`), which
-does not restore deleted tracked files. That command gains `--force`, a
-one-word change: in a release directory, which holds no user work, it restores
-the target's tracked contents. Install and build then run because the marker
-is gone.
+An interrupted removal can leave a partial worktree with its ready marker
+withdrawn. A retry checks its contents first. When its only changes are missing
+tracked files and the ready marker is absent, the retry restores those paths
+from the index, verifies the checkout is clean, then checks out the target
+without force. Any tracked edit, untracked obstruction or uncertain recovery
+state refuses the retry and preserves the directory.
 
 ### 6.6 Failure handling
 
@@ -427,7 +429,7 @@ is gone.
 | Remove of a trash path fails partway | trash stays and is finished next sweep; error recorded |
 | Holder found after rename | renamed back, kept `inUse` |
 | `git worktree remove` fails | worktree: `remove-failed` (unchanged); release: error, next candidate |
-| Viewer killed mid-removal | temp/trim: a trash name remains, finished next sweep; worktree: intent journal resumes or holds as `interrupted-removal`; release: marker already withdrawn, `--force` checkout restores it if reused, retention finishes it next time |
+| Viewer killed mid-removal | temp/trim: a trash name remains and is revalidated next sweep; worktree: intent journal resumes or holds as `interrupted-removal`; release: marker is withdrawn, a retry restores only proven missing tracked paths, and retention rechecks contents |
 | Retention throws after a successful apply | apply stays `done`; error in `retention.json` and the log |
 
 ## 8. Must-not-delete cases, each with a test
@@ -533,10 +535,9 @@ test's.
 
 1. Ship. The temp sweep only becomes more conservative. The worktree sweep
    gains a 24 h floor, so merged checkouts leave a day later. Release retention
-   starts at the next settled apply.
-2. The first settled apply after deploy removes the backlog. Releases are
-   rebuildable from their commits on `main`, so this is the one large
-   deletion, and it touches only registered release worktrees outside the
+   starts at the next settled apply and preserves dirty or unpublished work.
+2. The first settled apply after deploy removes only registered releases whose
+   contents and commits pass the preservation checks and which are outside the
    protected set.
 3. The operator can preview the temp sweep with `LLV_TEMP_SWEEP=dry-run` and
    the worktree sweep with `LLV_WORKTREE_SWEEP=dry-run`; their reports are

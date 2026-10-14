@@ -14,6 +14,7 @@ import { recordHelperGroup } from "@/lib/helperLease";
 import { wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { machineCpuPressureGate, waitForCpuPressure, type CpuPressureGate } from "@/lib/runtime/cpuPressure";
 import { runGit, TIP_REF } from "./git";
+import { classifyStatus, disposableIgnoredPath } from "@/lib/pipelines/worktreeSweep";
 import { readStartIdentity, sameProcess, signalGroup, type RecordedPid } from "./pid";
 import { releaseDirFor, type Release } from "./release";
 import { CHECKOUT_STEPS, idleUpdate, pendingSteps, shortSha, type CheckoutStepName, type Step, type StepFailure, type UpdateState } from "./types";
@@ -46,6 +47,8 @@ export interface StepPorts {
       the directory records one; a new build withdraws the record first. */
   builtRevision?(dir: string): string | null;
   markBuilt?(dir: string, sha: string | null): void;
+  /** Refuses dirty existing checkouts; the real port restores proven missing paths. */
+  prepareExistingRelease?(dir: string): Promise<string | null>;
 }
 
 /** Written by the ready step: the build in this release directory passed its
@@ -59,6 +62,27 @@ export function builtRevision(dir: string): string | null {
 /** Whether `dir` holds a build of `sha` that already passed the ready check. */
 export function releaseBuilt(dir: string, sha: string): boolean {
   return builtRevision(dir) === sha && existsSync(join(dir, ".next", "BUILD_ID"));
+}
+
+/** Restore only missing tracked paths left by an interrupted removal. */
+export async function prepareExistingRelease(dir: string): Promise<string | null> {
+  const status = await runGit(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], dir);
+  if (status.code !== 0) return `cannot inspect existing release contents: ${status.stderr || status.stdout}`;
+  const classified = classifyStatus(status.stdout, true);
+  const onlyMissingTracked = classified.changed.length > 0 && status.stdout.split("\0").filter(Boolean).every(row => /^( D|D ) /.test(row) || row.startsWith("!! "));
+  if (classified.changed.length && (!onlyMissingTracked || existsSync(join(dir, BUILT_MARKER)))) return "Existing release has local changes; checkout was refused to preserve them";
+  if (classified.ignored.some(entry => !disposableIgnoredPath(dir, entry))) return "Existing release has ignored contents that cannot be proven generated; checkout was refused";
+  if (!classified.changed.length) return null;
+  const missing = await runGit(["ls-files", "--deleted", "-z"], dir);
+  const paths = missing.stdout.split("\0").filter(Boolean);
+  if (missing.code !== 0 || !paths.length) return "Existing release has changes that cannot be proven to come from interrupted removal";
+  const restored = await runGit(["checkout", "--", ...paths], dir);
+  if (restored.code !== 0) return `cannot restore missing release files: ${restored.stderr || restored.stdout}`;
+  const checked = await runGit(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], dir);
+  if (checked.code !== 0) return "Existing release status could not be checked after deletion recovery";
+  const after = classifyStatus(checked.stdout, true);
+  if (after.changed.length || after.ignored.some(entry => !disposableIgnoredPath(dir, entry))) return "Existing release still has local changes after deletion recovery; checkout was refused";
+  return null;
 }
 
 export interface RunnerConfig {
@@ -299,7 +323,11 @@ export class UpdateRunner {
       }
       case "checkout":
         /* A directory an earlier attempt at this target left is reused. */
-        if (this.ports.exists(release)) return command(["git", "checkout", "--force", "--detach", target], release);
+        if (this.ports.exists(release)) {
+          const refusal = await (this.ports.prepareExistingRelease ?? prepareExistingRelease)(release);
+          if (refusal) { push(refusal, false); throw new CommandFailure(1); }
+          return command(["git", "checkout", "--detach", target], release);
+        }
         return command(["git", "worktree", "add", "--detach", release, target], checkout);
       case "install":
         if (await reusable()) { push(`${shortSha(target)} is already built in ${release}; its dependencies are kept`, false); return null; }
