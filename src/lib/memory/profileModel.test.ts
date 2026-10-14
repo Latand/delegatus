@@ -1,10 +1,23 @@
 import { describe, expect, test } from "bun:test";
-import { directJsonCaller, directProfileCaller, MEMORY_PROFILE_MODEL, prepareJsonCaller, prepareProfileCaller, type ProfileFetch } from "./profileModel";
+import { directJsonCaller, directProfileCaller, MEMORY_PROFILE_MODEL, MEMORY_PROFILE_FALLBACK_MODEL, prepareJsonCaller, prepareProfileCaller, type ProfileFetch } from "./profileModel";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { profileInputs } from "./profile";
 import { sampleAnswer, sampleMemory } from "./profile.fixture";
 
 describe("direct profile request", () => {
+  for (const [model, ceilings] of [[MEMORY_PROFILE_MODEL, [8192, 4096]], [MEMORY_PROFILE_FALLBACK_MODEL, [4096, 2048]]] as const) {
+    test(`${model}: overall and slice ceilings leave space for thinking and prose`, async () => {
+      for (const [index, input] of profileInputs(sampleMemory()).slice(0, 2).entries()) {
+        const call = directProfileCaller("sample", model, async (_, init) => {
+          const body = JSON.parse(init.body as string);
+          expect(body.max_tokens).toBe(ceilings[index]);
+          expect(body.output_config.effort).toBe("low");
+          return Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(sampleAnswer()) }] });
+        });
+        expect(await call(input, "en")).toEqual({ answer: sampleAnswer(), model });
+      }
+    });
+  }
   test("leaves room for thinking before a complete structured answer", async () => {
     for (const input of profileInputs(sampleMemory()).slice(0, 2)) {
       const call = directProfileCaller("sample", MEMORY_PROFILE_MODEL, async (_, init) => {
@@ -15,7 +28,7 @@ describe("direct profile request", () => {
           { type: "text", text: complete ? JSON.stringify(sampleAnswer()) : "{" },
         ] });
       });
-      await expect(call(input, "en")).resolves.toEqual(sampleAnswer());
+      await expect(call(input, "en")).resolves.toMatchObject({ answer: sampleAnswer(), model: MEMORY_PROFILE_MODEL });
     }
   });
   test("subscription requests carry the client identity required for model admission", async () => {
@@ -33,30 +46,31 @@ describe("direct profile request", () => {
       expect(payload.tools).toBeUndefined();
       return Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(sampleAnswer()) }] });
     });
-    await expect(call(profileInputs(sampleMemory())[0]!, "en")).resolves.toEqual(sampleAnswer());
+    await expect(call(profileInputs(sampleMemory())[0]!, "en")).resolves.toMatchObject({ answer: sampleAnswer(), model: MEMORY_PROFILE_MODEL });
   });
-  test("selects the catalogue's Haiku 5.5 and forwards its pinned Messages id", async () => {
-    expect(MEMORY_PROFILE_MODEL).toBe("claude-haiku-5-5");
+  test("selects the catalogue's Opus 5.5 and forwards its pinned Messages id", async () => {
+    expect(MEMORY_PROFILE_MODEL).toBe("claude-opus-5-5");
     const call = directProfileCaller("sample", MEMORY_PROFILE_MODEL, async (_, init) => {
       const payload = JSON.parse(init.body as string);
-      expect(payload.model).toBe("claude-haiku-5-5");
+      expect(payload.model).toBe("claude-opus-5-5");
       expect(payload.output_config.effort).toBe("low");
       return Response.json({ stop_reason: "end_turn", content: [{ type: "thinking", thinking: "", signature: "sample" }, { type: "redacted_thinking", data: "sample" }, { type: "text", text: JSON.stringify(sampleAnswer()) }] });
     });
-    await expect(call(profileInputs(sampleMemory())[0]!, "en")).resolves.toEqual(sampleAnswer());
+    await expect(call(profileInputs(sampleMemory())[0]!, "en")).resolves.toMatchObject({ answer: sampleAnswer(), model: MEMORY_PROFILE_MODEL });
   });
   test("keeps project admission when excluding provider and expired accounts", async () => {
     const requested: string[][] = [];
     const context = (accountId: string): AccountContext => ({ engine: "claude", accountId, kind: "managed", home: accountId, transcriptRoot: "sample", env: { NODE_ENV: "test" } });
     const accounts = [{ ...context("provider"), claudeProvider: { baseUrl: "https://provider.example", model: "sample", smallFastModel: null } }, context("expired"), context("ready")];
     const caller = await prepareProfileCaller("garden", {
-      model: "haiku", manager: { resolveHeadlessSpawn: (_engine, _requested, _excluded, project, model, unavailable = []) => {
+      model: "haiku", request: async () => { throw new Error("fixture refusal"); }, manager: { resolveHeadlessSpawn: (_engine, _requested, _excluded, project, model, unavailable = []) => {
         expect(project).toBe("garden"); expect(model).toBe("haiku"); requested.push([...unavailable]);
         const account = accounts.find(account => !unavailable.includes(account.accountId));
         return account ? { kind: "available", account } : { kind: "unavailable" };
       } },
       credentials: home => ({ state: "present", source: "file", document: { claudeAiOauth: { accessToken: "sample", expiresAt: home === "expired" ? 0 : Date.now() + 60_000 } } }),
     });
+    await expect(caller(profileInputs(sampleMemory())[0]!, "en")).rejects.toThrow();
     expect(typeof caller).toBe("function"); expect(requested).toEqual([[], ["provider"], ["provider", "expired"]]);
   });
   test("uses structured output and no tools without rewriting the requested model", async () => {
@@ -67,7 +81,7 @@ describe("direct profile request", () => {
       return Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(sampleAnswer()) }] });
     }) as ProfileFetch);
     const answer = await call(profileInputs(sampleMemory())[1]!, "en");
-    expect(answer).toEqual(sampleAnswer());
+    expect(answer).toMatchObject({ answer: sampleAnswer(), model: "another-model" });
     expect(payload.model).toBe("another-model");
     expect(payload.tools).toBeUndefined();
     expect(payload.max_tokens).toBe(650);
@@ -84,6 +98,61 @@ describe("direct profile request", () => {
     await expect(refused(input, "uk")).rejects.toThrow("account");
     const timedOut = directProfileCaller("sample", "haiku", (async () => { throw new DOMException("private response", "TimeoutError"); }) as ProfileFetch);
     await expect(timedOut(input, "uk")).rejects.toThrow("timeout");
+  });
+});
+
+const available: AccountContext = { engine: "claude", accountId: "sample-account", kind: "managed", home: "sample-home", transcriptRoot: "sample", env: { NODE_ENV: "test" } };
+function profilePorts(request: ProfileFetch, admitted: (model: string) => boolean = () => true) {
+  return { model: MEMORY_PROFILE_MODEL, request,
+    manager: { resolveHeadlessSpawn: (_engine: unknown, _requested: unknown, _excluded: unknown, project: string | null | undefined, model: string | null | undefined) => {
+      expect(project).toBe("garden");
+      return admitted(model!) ? { kind: "available" as const, account: available } : { kind: "unavailable" as const };
+    } },
+    credentials: () => ({ state: "present" as const, source: "file" as const, document: { claudeAiOauth: { accessToken: "sample", expiresAt: Date.now() + 60_000 } } }),
+  };
+}
+const success = () => Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(sampleAnswer()) }] });
+describe("Opus profile fallback", () => {
+  for (const failure of ["admission", "401", "403", "429", "provider", "refusal", "timeout", "body-timeout"] as const) {
+    test(`${failure}: falls back once and attributes the answer to Haiku`, async () => {
+      const models: string[] = [];
+      const caller = await prepareProfileCaller("garden", profilePorts(async (_, init) => {
+        const { model } = JSON.parse(init.body as string); models.push(model);
+        if (model === MEMORY_PROFILE_FALLBACK_MODEL) return success();
+        if (failure === "timeout") throw new DOMException("private response", "TimeoutError");
+        if (failure === "body-timeout") {
+          const response = success(); response.json = async () => { throw new DOMException("private response", "AbortError"); }; return response;
+        }
+        if (failure === "refusal") return Response.json({ stop_reason: "refusal", content: [] });
+        return new Response("private response", { status: failure === "provider" ? 503 : Number(failure) });
+      }, model => failure !== "admission" || model !== MEMORY_PROFILE_MODEL));
+      expect(await caller(profileInputs(sampleMemory())[0]!, "en")).toMatchObject({ answer: sampleAnswer(), model: MEMORY_PROFILE_FALLBACK_MODEL });
+      expect(models).toEqual(failure === "admission" ? [MEMORY_PROFILE_FALLBACK_MODEL] : [MEMORY_PROFILE_MODEL, MEMORY_PROFILE_FALLBACK_MODEL]);
+    });
+  }
+  test("successful Opus never admits or requests Haiku", async () => {
+    const models: string[] = [];
+    const caller = await prepareProfileCaller("garden", profilePorts(async () => success(), model => { models.push(model); return true; }));
+    expect((await caller(profileInputs(sampleMemory())[0]!, "en")).model).toBe(MEMORY_PROFILE_MODEL);
+    expect(models).toEqual([MEMORY_PROFILE_MODEL]);
+  });
+  test("a failed fallback propagates without a third request", async () => {
+    const models: string[] = [];
+    const caller = await prepareProfileCaller("garden", profilePorts(async (_, init) => {
+      models.push(JSON.parse(init.body as string).model); return new Response(null, { status: 429 });
+    }));
+    await expect(caller(profileInputs(sampleMemory())[0]!, "en")).rejects.toThrow("account");
+    expect(models).toEqual([MEMORY_PROFILE_MODEL, MEMORY_PROFILE_FALLBACK_MODEL]);
+  });
+  test("invalid and truncated answers retain validation failure without fallback", async () => {
+    for (const stop_reason of ["end_turn", "max_tokens"]) {
+      let calls = 0;
+      const caller = await prepareProfileCaller("garden", profilePorts(async () => {
+        calls++; return Response.json({ stop_reason, content: [{ type: "text", text: "{" }] });
+      }));
+      await expect(caller(profileInputs(sampleMemory())[0]!, "en")).rejects.toThrow("invalid");
+      expect(calls).toBe(1);
+    }
   });
 });
 

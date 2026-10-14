@@ -392,7 +392,7 @@ describe("memory profile", () => {
         topic.title = unbroken(35);
         if (topic.text) topic.text = unbroken(100);
       }
-      return answer;
+      return { answer, model: "haiku" };
     } });
     let state: "none" | "ready" | "running" | "error" | "stale" | "empty" = "none";
     const server = await serveEvidenceFixture(out, undefined, {
@@ -487,7 +487,7 @@ describe("memory profile window: one top, whole rows, level order, named topic",
     const service = createProfileService({ rules: () => structuredClone(rules), read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: "haiku", prepare: async () => async (_, locale) => {
       const answer = sampleAnswer(locale === "uk");
       answer.topics[0]!.title = locale === "uk" ? "Ізольовані тести" : "Isolated tests";
-      return answer;
+      return { answer, model: "haiku" };
     } });
     type State = "none" | "ready" | "stale" | "error";
     let state: State = "none";

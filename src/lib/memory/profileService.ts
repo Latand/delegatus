@@ -68,11 +68,17 @@ export function createProfileService(ports: Ports, runs = new Map<string, Profil
           const partStarted = performance.now();
           try {
             let answer;
+            let model = ports.model;
             for (let attempt = 0; attempt < 2; attempt++) {
-              try { answer = validateProfileAnswer(await call(input, locale), input, locale); break; }
+              try {
+                const result = await call(input, locale);
+                answer = validateProfileAnswer(result.answer, input, locale);
+                model = result.model;
+                break;
+              }
               catch (error) { if (!(error instanceof MemoryProfileError && error.code === "language" && attempt === 0)) throw error; }
             }
-            const part = { scope: input.scope, model: ports.model, promptVersion: PROFILE_PROMPT_VERSION, hash: input.hash, basis: input.basis, answer: answer!, createdAt: new Date().toISOString(), durationMs: Math.round(performance.now() - partStarted) };
+            const part = { scope: input.scope, model, promptVersion: PROFILE_PROMPT_VERSION, hash: input.hash, basis: input.basis, answer: answer!, createdAt: new Date().toISOString(), durationMs: Math.round(performance.now() - partStarted) };
             row.parts = [...row.parts.filter(part => part.scope !== input.scope), part];
             row.run!.firstResultMs ??= Math.round(performance.now() - started);
           } catch (error) {
