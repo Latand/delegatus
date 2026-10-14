@@ -1,11 +1,185 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { initializeStateCollections, SqliteStateCollection } from "./sqliteStateStore";
+import { Database } from "bun:sqlite";
+import { initializeStateCollections, SqliteStateCollection, StateSnapshotChangedError } from "./sqliteStateStore";
 import { publishHotStateAuthority } from "./hotStateAuthority";
+import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 
 type Row = { key: string; value: number };
+
+test("controller caches follow decoding authority and refuse writes that race snapshot preparation", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-authority-"));
+  const rows = Array.from({ length: 32 }, (_, n) => ({ key: `row-${n}`, value: n }));
+  let authority = 0, onDecode = () => {};
+  const options = { collection: "authority", schemaVersion: 1, busyMessage: "busy", key: (row: Row) => row.key,
+    decodeAuthority: () => authority, clone: (row: Row) => structuredClone(row),
+    decode: (raw: unknown) => { onDecode(); const row = raw as Row; return { ...row, value: row.value + authority }; } };
+  try {
+    const filename = path.join(dir, "state.sqlite");
+    initializeStateCollections(filename, [{ ...options, migrationId: "one", loadRecords: () => rows }]);
+    const store = new SqliteStateCollection(filename, options);
+    await store.reconcileSnapshot(records => { records[0]!.value = 999; });
+    await store.reconcileSnapshot(records => { expect(records[0]!.value).toBe(0); });
+    authority = 10;
+    await store.reconcileSnapshot(records => { expect(records[0]!.value).toBe(10); });
+    const peer = new SqliteStateCollection(filename, options);
+    let queued = false, entered = false;
+    authority = 20;
+    onDecode = () => {
+      if (queued) return;
+      queued = true;
+      queueMicrotask(() => peer.boundedPatch(1, tx => tx.put({ key: "row-0", value: 500 })));
+    };
+    await expect(store.reconcileSnapshot(() => { entered = true; })).rejects.toThrow(StateSnapshotChangedError);
+    expect(entered).toBe(false);
+    expect(store.get("row-0")?.value).toBe(520);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("controller candidate indexes backfill retained rows and follow peer writes, deletion and rollback", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-index-"));
+  type WorkRow = Row & { state: string; runs: unknown[]; remoteAction?: { state: string }; pendingReviewFlowCleanup?: string[];
+    closeTeardown?: { phase: string }; closeReport?: { unconfirmed: string[]; stillRunning: string[] } };
+  const selected: WorkRow = { key: "closed-launch", value: 1, state: "closed",
+    runs: [{ attempts: [{ launchId: "pending", state: "spawning", verdict: null }] }] };
+  const other: WorkRow = { key: "parked", value: 2, state: "needs_decision", runs: [], remoteAction: { state: "pending" } };
+  const rows: WorkRow[] = [selected, other, ...Array.from({ length: 2_000 }, (_, n) => ({ key: `retained-${n}`, value: n,
+    state: "closed", runs: [{ attempts: [{ launchId: `settled-${n}`, state: "failed", verdict: null }] }] })),
+    { key: "future", value: 3, state: "future", runs: ["opaque", { attempts: ["opaque"] }] }];
+  let decodes = 0, duringRead = () => {};
+  const options = { collection: "pipelines", schemaVersion: 1, busyMessage: "busy", key: (row: WorkRow) => row.key,
+    decode: (raw: unknown) => { decodes++; duringRead(); return raw as WorkRow; }, clone: (row: WorkRow) => structuredClone(row) };
+  try {
+    const filename = path.join(dir, "state.sqlite");
+    initializeStateCollections(filename, [{ ...options, migrationId: "one", loadRecords: () => rows }]);
+    const db = new Database(filename);
+    // Recreate the shape of a database written before this index existed.
+    for (const name of ["insert", "update", "delete"]) db.exec(`DROP TRIGGER pipeline_controller_work_${name}`);
+    db.exec("DROP TABLE pipeline_controller_work");
+    const store = new SqliteStateCollection(filename, options);
+    expect(await store.pipelineControllerSelection("closed-launch")).toEqual([selected]);
+    expect(decodes).toBe(1);
+    expect(await store.pipelineControllerSelection("remote")).toEqual([other]);
+    const closing = { ...selected, key: "close-custody", runs: [], closeTeardown: { phase: "settled" },
+      closeReport: { unconfirmed: [], stillRunning: [] } };
+    store.boundedPatch(1, tx => tx.put(closing));
+    expect(await store.pipelineControllerSelection("close")).toEqual([]);
+    store.boundedPatch(1, tx => tx.put({ ...closing, closeReport: { unconfirmed: ["unknown-host"], stillRunning: [] } }));
+    expect((await store.pipelineControllerSelection("close")).map(row => row.key)).toEqual([closing.key]);
+    // The pre-index writer's ordinary row SQL still maintains the projection.
+    const updated = { ...selected, runs: [], pendingReviewFlowCleanup: ["flow"] };
+    db.exec("BEGIN IMMEDIATE");
+    db.query("UPDATE state_rows SET value_json = ?, row_revision = row_revision + 1 WHERE collection = 'pipelines' AND row_key = ?")
+      .run(JSON.stringify(updated), selected.key);
+    db.query("UPDATE state_collections SET revision = revision + 1 WHERE collection = 'pipelines'").run();
+    db.exec("COMMIT");
+    expect(await store.pipelineControllerSelection("closed-launch")).toEqual([]);
+    expect(await store.pipelineControllerSelection("cleanup")).toEqual([updated]);
+    const peer = new SqliteStateCollection(filename, options);
+    expect(() => peer.boundedPatch(2, tx => { tx.delete(other.key); throw new Error("refused"); })).toThrow("refused");
+    expect(await store.pipelineControllerSelection("remote")).toEqual([other]);
+    peer.boundedPatch(1, tx => tx.delete(other.key));
+    expect(await store.pipelineControllerSelection("remote")).toEqual([]);
+    peer.boundedPatch(1, tx => tx.put(other));
+    duringRead = () => {
+      duringRead = () => {};
+      peer.boundedPatch(1, tx => tx.put({ ...other, remoteAction: { state: "settled" } }));
+    };
+    expect(await store.pipelineControllerSelection("remote")).toEqual([other]);
+    expect(await store.pipelineControllerSelection("remote")).toEqual([]);
+    const throughOrder = store.pipelineControllerRowOrder();
+    const fresh = { ...other, key: "fresh-provisioning", state: "provisioning" };
+    peer.boundedPatch(2, tx => {
+      tx.put(fresh);
+      tx.put({ ...other, state: "provisioning" });
+    });
+    expect((await store.pipelineControllerSelection("provisioning", throughOrder)).map(row => row.key)).toEqual([other.key]);
+    expect((await store.pipelineControllerSelection("provisioning")).map(row => row.key)).toEqual([other.key, fresh.key]);
+    db.close();
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("reconciliation avoids inactive revisions and warm decoding while yielding between history batches", async () => {
+  type HistoryRow = Row & { attempts: number[] };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reconcile-batches-"));
+  const rows = Array.from({ length: 2_128 }, (_, n): HistoryRow => ({ key: `row-${n}`, value: n < 128 ? n + 1 : -1,
+    attempts: Array.from({ length: 200 }, (_, i) => i) }));
+  let decoded = 0;
+  const options = { collection: "reconcile-test", schemaVersion: 1, busyMessage: "busy",
+    key: (row: HistoryRow) => row.key, controllerActive: (row: HistoryRow) => row.value > 0,
+    decode: (raw: unknown) => { decoded++; return raw as HistoryRow; }, clone: (row: HistoryRow) => structuredClone(row) };
+  try {
+    const filename = path.join(dir, "state.sqlite");
+    initializeStateCollections(filename, [{ ...options, migrationId: "one", loadRecords: () => rows }]);
+    const store = new SqliteStateCollection(filename, options);
+    const census = spyOn(store, "rowRevisions");
+    let pulses = 0;
+    const timer = setInterval(() => { pulses++; }, 0);
+    try {
+      await store.reconcileSnapshot(records => { expect(records.length).toBe(128); });
+      expect(census).not.toHaveBeenCalled();
+      expect(decoded).toBe(128);
+      expect(pulses).toBeGreaterThan(0);
+      decoded = 0;
+      const stringify = JSON.stringify;
+      let baselines = 0;
+      const serialization = spyOn(JSON, "stringify").mockImplementation(((...args: Parameters<typeof stringify>) => {
+        if (args[0]?.attempts) baselines++;
+        return stringify(...args);
+      }) as typeof JSON.stringify);
+      try {
+        await store.reconcileSnapshot(records => {
+          expect(records.map(row => row.value)).toEqual(rows.slice(0, 128).map(row => row.value));
+        }, undefined, true);
+        expect(decoded).toBe(0);
+        expect(baselines).toBe(0);
+      } finally { serialization.mockRestore(); }
+    } finally { clearInterval(timer); census.mockRestore(); }
+    // Detached writes and ordinary implicit checkpoints retain their contract.
+    await store.reconcileSnapshot((records, persist, assertCurrent) => {
+      records[0]!.value = 500;
+      persist();
+      assertCurrent(records[0]!);
+      records[1]!.value = 600;
+      persist([records[1]!]);
+    });
+    expect(store.get("row-0")?.value).toBe(500);
+    expect(store.get("row-1")?.value).toBe(600);
+    const peer = new SqliteStateCollection(filename, options);
+    await expect(store.reconcileSnapshot(async (records, persist, assertCurrent) => {
+      const stale = records[0]!;
+      peer.boundedPatch(2, tx => { const row = tx.get(stale.key)!; tx.put({ ...row, value: 700 }); });
+      expect(() => assertCurrent(stale)).toThrow(StateSnapshotChangedError);
+      stale.value = 800;
+      persist([stale]);
+    })).rejects.toThrow(StateSnapshotChangedError);
+    expect(store.get("row-0")?.value).toBe(700);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a controller decoding stall names its synchronous inner step", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reconcile-label-"));
+  const lines: string[] = [];
+  const restore = viewerLoopMonitor.setLogSink(line => lines.push(line));
+  try {
+    const filename = path.join(dir, "state.sqlite");
+    initializeStateCollections(filename, [{ collection: "labels", schemaVersion: 1, migrationId: "one",
+      key: (row: Row) => row.key, loadRecords: () => [{ key: "one", value: 1 }] }]);
+    const store = new SqliteStateCollection(filename, { collection: "labels", schemaVersion: 1, busyMessage: "busy",
+      key: (row: Row) => row.key, clone: structuredClone, decode: raw => {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 550);
+        viewerLoopMonitor.tick();
+        return raw as Row;
+      } });
+    viewerLoopMonitor.tick();
+    await store.reconcileSnapshot(() => undefined);
+    const gaps = lines.filter(line => line.startsWith("[viewer loop-gap] "))
+      .flatMap(line => JSON.parse(line.slice("[viewer loop-gap] ".length)).operations);
+    expect(gaps).toContainEqual(expect.objectContaining({ name: "pipelines.controller-decode" }));
+  } finally { restore(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
 test.each(["snapshot", "snapshotForController"] as const)("%s passes only the record to structuredClone and keeps returned rows independent", (method) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "state-snapshot-clone-"));
   try {

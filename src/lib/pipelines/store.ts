@@ -8,7 +8,7 @@ import { isDismissedBy } from "@/lib/attention/dismissalTypes";
 import { pipelineHasPullRequest } from "@/lib/forge/resolve";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { statePath } from "@/lib/configDir";
-import { canonicalProject } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { effortScale } from "@/lib/agent/efforts";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
@@ -1046,6 +1046,18 @@ export function loadPipelines(): Pipeline[] {
   return pipelineStore().snapshot();
 }
 
+export async function loadPipelinesAsync(): Promise<Pipeline[]> {
+  return pipelineStore().snapshotAsync();
+}
+
+export function controllerPipelineRowOrder(): number {
+  return pipelineStore().pipelineControllerRowOrder();
+}
+
+export async function selectControllerPipelines(kind: import("@/lib/state/pipelineControllerIndex").PipelineControllerSelection, throughOrder?: number): Promise<Pipeline[]> {
+  return pipelineStore().pipelineControllerSelection(kind, throughOrder);
+}
+
 type PreparedPipelineEvidence = { pipelines: Pipeline[]; issues: RegistryRecordIssue[]; signature: string };
 const admittedEvidence = new AsyncLocalStorage<{ current: PreparedPipelineEvidence | null }>();
 const pendingEvidence = new Map<string, Promise<PreparedPipelineEvidence>>();
@@ -1385,6 +1397,8 @@ function stores(): { active: SqliteStateCollection<Pipeline>; archive: SqliteSta
     decode: decodePipeline,
     preserveRejectedRecords: true,
     clone: reviveLoadedPipeline,
+    cloneController: (pipeline: Pipeline) => reviveLoadedPipeline(structuredClone(pipeline)),
+    decodeAuthority: () => JSON.stringify(projectAliasSnapshot()),
     decodeError: (error: unknown) => error instanceof PipelineStoreError
       ? error
       : new PipelineStoreError("pipeline registry contains malformed records", { cause: error }),
@@ -1512,8 +1526,9 @@ export async function withPipelineControllerMutation<T>(
     (records: readonly Pipeline[]): void;
   }, assertCurrent: (pipeline: Pipeline) => void) => Promise<T> | T,
   observeHold?: (heldMs: number) => void,
+  explicitOnly = false,
 ): Promise<T> {
-  return withViewerOperation("pipelines.controller-mutation", () => pipelineStore().reconcileSnapshot(mutate, observeHold));
+  return withViewerOperation("pipelines.controller-mutation", () => pipelineStore().reconcileSnapshot(mutate, observeHold, explicitOnly));
 }
 
 /** Short startup state admission under the existing cross-process lease.
