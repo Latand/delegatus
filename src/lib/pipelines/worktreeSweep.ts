@@ -717,7 +717,7 @@ function recoverCheckoutHeadLocks(accessible: (directory: string) => string, err
 /** Git commits and ref updates honor these locks. Prepare an inode and record
     it durably BEFORE linking it at Git's lock name, covering a crash at every
     point between acquisition and removal without claiming somebody else's lock. */
-function lockCheckoutHead(directory: string, accessible: (directory: string) => string, errors: string[]): (() => void) | null {
+export function lockCheckoutHead(directory: string, accessible: (directory: string) => string, errors: string[]): (() => void) | null {
   const journal = path.join(HEAD_LOCK_RECORDS(), `${randomUUID()}.json`);
   const record: SweepHeadLockRecord = { owner: captureProcessIdentity(process.pid), locks: [] };
   const release = () => {
@@ -825,10 +825,10 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   const measure = ports.measure ?? ((directory: string) => exclusiveBytes(accessible(directory)));
   const maxRemovals = ports.maxRemovals ?? MAX_REMOVALS_PER_SWEEP;
   const dryRun = ports.mode === "dry-run";
-  const inspect = (directory: string, git = false): WorktreeKeptReason | null => {
+  const inspect = (directory: string, git = false, afterQuarantine = false): WorktreeKeptReason | null => {
     try {
       const result = (ports.inspect ?? inspectTree)(accessible(directory), { git, threshold: now() - 24 * HOUR_MS,
-        mounts: (ports.mountPoints ? ports.mountPoints(directory) : mountPointsUnder(accessible(directory))) });
+        mounts: (ports.mountPoints ? ports.mountPoints(directory) : mountPointsUnder(accessible(directory))), ignoreRootCtime: afterQuarantine });
       return (result.hold === "git-checkout" ? "ignored-files" : result.hold) ?? (now() - result.newestMs < 24 * HOUR_MS ? "recent-writes" : null);
     } catch { return "unreadable-tree"; }
   };
@@ -1140,7 +1140,9 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
           const missing = await ports.git(["ls-files", "--deleted", "-z"], worktree);
           const paths = missing.stdout.split("\0").filter(Boolean);
           if (missing.code !== 0 || !paths.length) { keep({ ...base, reason: "uncommitted", detail: "interrupted removal's missing files could not be identified" }); continue; }
-          const restored = await ports.git(["checkout", "--", ...paths], worktree);
+          // No --force: checkout-index fills absent paths and refuses to
+          // replace a file another process created after ls-files --deleted.
+          const restored = await ports.git(["checkout-index", "--", ...paths], worktree);
           if (restored.code !== 0) { keep({ ...base, reason: "uncommitted", detail: "interrupted removal's missing files could not be restored" }); continue; }
           finalStatus = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
           finalClass = classifyStatus(finalStatus.stdout, true);
@@ -1325,7 +1327,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
             if (!await removeTreeViaTrash(accessible(next), { journal, remove: ports.removeTree,
               held: trash => !!heldBy(readGuards(), worktree) || ports.scan().processes.some(proc => proc.paths.some(entry => inside(entry, trash))),
               validate: trash => {
-                return !inspect(trash, true) && !fs.existsSync(path.join(accessible(trash), ".delegatus-keep"))
+                return !inspect(trash, true, true) && !fs.existsSync(path.join(accessible(trash), ".delegatus-keep"))
                   && !heldBy(readGuards(), worktree);
               },
             })) continue;

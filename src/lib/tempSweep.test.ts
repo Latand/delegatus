@@ -707,6 +707,18 @@ test("a restored mtime with a fresh ctime is young", async () => {
   expect(fs.existsSync(file)).toBeTrue();
 });
 
+test("a stale scratch tree survives its own quarantine rename ctime", async () => {
+  const { directory, options } = boundedFixture();
+  const inspect = (target: string, settings: Parameters<typeof inspectTree>[1]) => inspectTree(target, { ...settings, stat: file => {
+    const stat = fs.lstatSync(file);
+    if (file !== target || !path.basename(target).startsWith(".delegatus-trash-")) stat.ctimeMs = stat.mtimeMs;
+    return stat;
+  } });
+  const report = await realSweep({ ...options, inspect });
+  expect(report.removed).toHaveLength(1);
+  expect(fs.existsSync(directory)).toBeFalse();
+});
+
 test("hard-linked dependency ctimes do not keep a stale tree", async () => {
   const { root, directory, options } = boundedFixture();
   const file = path.join(directory, "node_modules/pkg/index.js");
@@ -799,7 +811,7 @@ test("an interrupted removal leaves only a trash name, finished next sweep", asy
   expect(fs.readdirSync(root)).toEqual([]);
 });
 
-test.each(["fresh-write", "pin", "git-metadata", "worktree-owner", "entry-limit"])("trash replay preserves new or uncertain content: %s", async kind => {
+test.each(["fresh-write", "pin", "git-metadata", "worktree-owner", "entry-limit", "post-scan-new", "post-scan-change"])("trash replay preserves new or uncertain content: %s", async kind => {
   const { root, directory, options } = boundedFixture();
   const interrupted = await realSweep({ ...options, now: () => Date.now() + 2 * DAY, remove: async () => { throw new Error("interrupted"); } });
   expect(interrupted.errors).toHaveLength(1);
@@ -808,12 +820,28 @@ test.each(["fresh-write", "pin", "git-metadata", "worktree-owner", "entry-limit"
   if (kind === "pin") fs.writeFileSync(path.join(trash, ".delegatus-keep"), "");
   if (kind === "git-metadata") fs.mkdirSync(path.join(trash, ".git"));
   if (kind === "worktree-owner") options.currentWorktrees = () => [directory];
+  if (kind === "post-scan-new" || kind === "post-scan-change") {
+    let changed = false;
+    options.currentScan = () => {
+      const currentTrash = fs.readdirSync(root).find(name => name.startsWith(".delegatus-trash-"));
+      if (currentTrash && !changed) {
+        changed = true;
+        const target = path.join(root, currentTrash, kind === "post-scan-new" ? "scan-created.txt" : "file.txt");
+        fs.writeFileSync(target, kind === "post-scan-new" ? "new scan data" : "changed scan data");
+      }
+      return noProcesses;
+    };
+  }
   if (kind === "entry-limit") options.inspect = (candidate, settings) => candidate === trash
     ? { newestMs: 0, entries: 200_001, hold: "entry-limit" } : inspectTree(candidate, { ...settings, threshold: Infinity });
   const resumed = await realSweep({ ...options, now: () => Date.now() + 2 * DAY });
   expect(resumed.trashFinished).toBe(0);
   expect(fs.existsSync(directory) || fs.existsSync(trash)).toBeTrue();
-  expect(fs.existsSync(path.join(fs.existsSync(directory) ? directory : trash, kind === "fresh-write" ? "unique.txt" : kind === "pin" ? ".delegatus-keep" : kind === "git-metadata" ? ".git" : "file.txt"))).toBeTrue();
+  const preservedRoot = fs.existsSync(directory) ? directory : trash;
+  const preservedFile = kind === "fresh-write" ? "unique.txt" : kind === "pin" ? ".delegatus-keep"
+    : kind === "git-metadata" ? ".git" : kind === "post-scan-new" ? "scan-created.txt" : "file.txt";
+  expect(fs.existsSync(path.join(preservedRoot, preservedFile))).toBeTrue();
+  if (kind === "post-scan-change") expect(fs.readFileSync(path.join(preservedRoot, "file.txt"), "utf8")).toBe("changed scan data");
 });
 
 test("a fresh file created after the post-rename inspection is preserved", async () => {

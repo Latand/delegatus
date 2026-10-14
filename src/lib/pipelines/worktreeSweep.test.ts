@@ -2572,7 +2572,7 @@ test.each(["fresh", "mount"])("a build cache with %s activity is not trimmed", a
   expect(report.kept).toContainEqual(expect.objectContaining({ path: cache, reason: kind === "fresh" ? "recent-writes" : "mount-boundary" }));
 });
 
-test.each(["deletions", "untracked", "new-head", "holder"])("an interrupted removal resumes only for pure deletions: %s", async kind => {
+test.each(["deletions", "untracked", "new-head", "holder", "late-file"])("an interrupted removal resumes only for pure deletions: %s", async kind => {
   const root = repository(); const { dir, tip } = lane(root, path.join(caseDir, "interrupted"), "topic/interrupted");
   const options = ports({ repositories: [root], prs: [merged(303, "topic/interrupted", tip)] });
   const intents = path.join(process.env.LLV_STATE_DIR!, "worktree-sweep-removals"); fs.mkdirSync(intents, { recursive: true });
@@ -2581,9 +2581,17 @@ test.each(["deletions", "untracked", "new-head", "holder"])("an interrupted remo
   if (kind === "untracked") fs.writeFileSync(path.join(dir, "unique.txt"), "keep");
   if (kind === "new-head") { git(["checkout", "--", "README.md"], dir); git(["commit", "--allow-empty", "-qm", "new tip"], dir); }
   if (kind === "holder") options.conversationCwds = () => [dir];
+  if (kind === "late-file") {
+    const run = options.git;
+    options.git = async (args, cwd) => {
+      if (args[0] === "checkout-index") fs.writeFileSync(path.join(dir, "README.md"), "unique writer bytes\n");
+      return run(args, cwd);
+    };
+  }
   const report = await sweepMergedWorktrees(options);
   expect(fs.existsSync(dir)).toBe(kind !== "deletions");
   expect(report.removed).toHaveLength(kind === "deletions" ? 1 : 0);
+  if (kind === "late-file") expect(fs.readFileSync(path.join(dir, "README.md"), "utf8")).toBe("unique writer bytes\n");
 });
 
 test("an untracked file written at the resumed Git removal boundary survives", async () => {
@@ -2619,4 +2627,23 @@ test("an interrupted trim leaves a trash name the next sweep finishes", async ()
   const resumed = await sweepMergedWorktrees(options);
   expect(resumed.errors).toEqual([]);
   expect(fs.readdirSync(dir).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+});
+
+test("stale worktree cache trim tolerates only the quarantine root's real rename ctime", async () => {
+  const root = repository(); const dir = path.join(path.dirname(root), `${path.basename(root)}-pipeline-trim-ctime`);
+  lane(root, dir, "topic/trim-ctime");
+  const owner = pipeline({ id: "trim-ctime", state: "closed", repoDir: root, worktreeDir: dir, branch: "topic/trim-ctime",
+    closedAt: new Date(Date.now() - FINISHED_WORKTREE_RETENTION_MS - 2 * 24 * 60 * 60 * 1000).toISOString() });
+  fs.appendFileSync(path.join(dir, ".gitignore"), ".next/\n");
+  const cache = path.join(dir, ".next"); fs.mkdirSync(cache); fs.writeFileSync(path.join(cache, "output"), "stale cache");
+  const old = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+  for (const target of [cache, path.join(cache, "output")]) fs.utimesSync(target, old, old);
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], now: Date.now,
+    inspect: (target, settings) => inspectTree(target, { ...settings, stat: file => {
+      const stat = fs.lstatSync(file);
+      if (file !== target || !path.basename(target).startsWith(".delegatus-trash-")) stat.ctimeMs = stat.mtimeMs;
+      return stat;
+    } }) }));
+  expect(report.trimmed).toContainEqual(expect.objectContaining({ path: cache }));
+  expect(fs.existsSync(cache)).toBeFalse();
 });

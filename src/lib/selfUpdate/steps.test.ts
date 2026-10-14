@@ -5,8 +5,9 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { builtRevision, realPorts, releaseBuilt, UpdateRunner, type StepPorts } from "./steps";
+import { builtRevision, prepareExistingRelease, realPorts, releaseBuilt, UpdateRunner, type StepPorts } from "./steps";
 import { releaseDirFor } from "./release";
+import { runGit } from "./git";
 import { setCpuPortsForTests } from "@/lib/runtime/cpuPlacement";
 import { CpuPressureGate, DEFAULT_CPU_PRESSURE_POLICY } from "@/lib/runtime/cpuPressure";
 import { CHECKOUT_STEPS as STEP_NAMES, type CheckoutStepName as StepName } from "./types";
@@ -18,6 +19,24 @@ const RELEASES = "/var/tmp/releases";
 const RELEASE = `${RELEASES}/a1b2c3d4e5f6`;
 const roots: string[] = [];
 afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force: true }); });
+
+test("retry recovery preserves a file created after the deleted-path listing", async () => {
+  const root = mkdtempSync(join(tmpdir(), "llv-release-recovery-race-")); roots.push(root);
+  const git = (args: string[]) => {
+    const result = childProcess.spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", ...args], { cwd: root, encoding: "utf8" });
+    expect(result.status).toBe(0);
+  };
+  git(["init", "-q", "-b", "main"]);
+  writeFileSync(join(root, "source.txt"), "committed\n"); git(["add", "source.txt"]); git(["commit", "-qm", "initial"]);
+  rmSync(join(root, "source.txt"));
+  let injected = false;
+  const refusal = await prepareExistingRelease(root, async (args, cwd) => {
+    if (args[0] === "checkout-index") { injected = true; writeFileSync(join(root, "source.txt"), "late unique data\n"); }
+    return runGit(args, cwd);
+  });
+  expect(injected).toBeTrue(); expect(refusal).not.toBeNull();
+  expect(readFileSync(join(root, "source.txt"), "utf8")).toBe("late unique data\n");
+});
 
 interface Script { lines?: string[]; exit?: number }
 

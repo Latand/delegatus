@@ -334,6 +334,8 @@ export function mountPointsUnder(directory: string, via = "", read = (file: stri
 /** One bounded, symlink-safe freshness and preservation walk. */
 export function inspectTree(directory: string, options: {
   limit?: number; threshold?: number; git?: boolean; mounts?: readonly string[];
+  /** A quarantine rename may refresh only this directory's ctime. */
+  ignoreRootCtime?: boolean;
   stat?: (file: string) => fs.Stats;
 } = {}): TreeInspection {
   const result: TreeInspection = { newestMs: 0, entries: 0, hold: null };
@@ -349,7 +351,7 @@ export function inspectTree(directory: string, options: {
       if (++result.entries > (options.limit ?? TREE_INSPECTION_ENTRY_LIMIT)) return { ...result, hold: "entry-limit" };
       if (own.dev !== root.dev) return { ...result, hold: "mount-boundary" };
       result.newestMs = Math.max(result.newestMs, own.mtimeMs,
-        own.isDirectory() || own.isFile() && own.nlink === 1 ? own.ctimeMs : 0);
+        !(options.ignoreRootCtime && current === directory) && (own.isDirectory() || own.isFile() && own.nlink === 1) ? own.ctimeMs : 0);
       if (result.newestMs > (options.threshold ?? Infinity)) return result;
       if (!own.isDirectory()) continue;
       const names = fs.readdirSync(current);
@@ -410,7 +412,15 @@ export async function finishTreeTrash(journal: string, held: (trash: string) => 
   if (!fs.existsSync(row.trash)) { fs.unlinkSync(journal); return false; }
   const stat = fs.lstatSync(row.trash);
   if (!stat.isDirectory() || stat.dev !== fs.statSync(path.dirname(row.trash)).dev || `${stat.dev}:${stat.ino}` !== row.identity || stat.uid !== row.uid || (process.getuid && stat.uid !== process.getuid())
-    || !row.snapshot || !matchesSnapshot(row.trash, row.snapshot) || held(row.trash) || validate && !validate(row.trash) || mountPointsUnder(row.trash).length) return false;
+    || !row.snapshot || !matchesSnapshot(row.trash, row.snapshot) || mountPointsUnder(row.trash).length) return false;
+  // held/validate are caller supplied and may scan or mutate the tree. Run
+  // them first, then prove the exact journaled tree again at the delete edge.
+  if (held(row.trash) || validate && !validate(row.trash)) return false;
+  const final = fs.lstatSync(row.trash);
+  if (!final.isDirectory() || final.dev !== fs.statSync(path.dirname(row.trash)).dev
+    || `${final.dev}:${final.ino}` !== row.identity || final.uid !== row.uid
+    || (process.getuid && final.uid !== process.getuid()) || !matchesSnapshot(row.trash, row.snapshot)
+    || mountPointsUnder(row.trash).length) return false;
   await (remove ?? (target => fs.promises.rm(target, { recursive: true, force: true })))(row.trash);
   fs.unlinkSync(journal);
   return true;
@@ -538,9 +548,9 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     held: [],
     errors: [],
   };
-  const inspect = (reachable: string, root: TempSweepRoot, candidate: string) => {
+  const inspect = (reachable: string, root: TempSweepRoot, candidate: string, afterQuarantine = false) => {
     try { return (options.inspect ?? inspectTree)(reachable, { threshold: (options.now?.() ?? Date.now()) - options.maxAgeMs,
-      mounts: (options.mountPoints ?? mountPointsUnder)(candidate, root.via) }); }
+      mounts: (options.mountPoints ?? mountPointsUnder)(candidate, root.via), ignoreRootCtime: afterQuarantine }); }
     catch { return { newestMs: 0, entries: 0, hold: "unreadable-tree" as const }; }
   };
   const conversationHolds = (candidate: string, via = "") => (options.conversationCwds?.() ?? []).some(entry =>
@@ -557,7 +567,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     try { fs.lstatSync(path.join(directory, ".delegatus-keep")); return true; } catch { return false; }
   };
   const trashPolicyHolds = (root: TempSweepRoot, trash: string, original: string) => {
-    const inspection = inspect(trash, root, original);
+    const inspection = inspect(trash, root, original, true);
     const protectedTrees = [...readWorktrees(), ...accounted].map(entry => path.resolve(entry));
     return !!pinned(trash) || !!inspection.hold || (options.now?.() ?? Date.now()) - inspection.newestMs < options.maxAgeMs
       || protectedTrees.some(entry => inside(entry, original) || inside(original, entry));

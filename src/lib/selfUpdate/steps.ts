@@ -65,20 +65,22 @@ export function releaseBuilt(dir: string, sha: string): boolean {
 }
 
 /** Restore only missing tracked paths left by an interrupted removal. */
-export async function prepareExistingRelease(dir: string): Promise<string | null> {
-  const status = await runGit(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], dir);
+export async function prepareExistingRelease(dir: string, git: typeof runGit = runGit): Promise<string | null> {
+  const status = await git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], dir);
   if (status.code !== 0) return `cannot inspect existing release contents: ${status.stderr || status.stdout}`;
   const classified = classifyStatus(status.stdout, true);
   const onlyMissingTracked = classified.changed.length > 0 && status.stdout.split("\0").filter(Boolean).every(row => /^( D|D ) /.test(row) || row.startsWith("!! "));
   if (classified.changed.length && (!onlyMissingTracked || existsSync(join(dir, BUILT_MARKER)))) return "Existing release has local changes; checkout was refused to preserve them";
   if (classified.ignored.some(entry => !disposableIgnoredPath(dir, entry))) return "Existing release has ignored contents that cannot be proven generated; checkout was refused";
   if (!classified.changed.length) return null;
-  const missing = await runGit(["ls-files", "--deleted", "-z"], dir);
+  const missing = await git(["ls-files", "--deleted", "-z"], dir);
   const paths = missing.stdout.split("\0").filter(Boolean);
   if (missing.code !== 0 || !paths.length) return "Existing release has changes that cannot be proven to come from interrupted removal";
-  const restored = await runGit(["checkout", "--", ...paths], dir);
+  // checkout-index without --force restores absent paths while leaving a
+  // writer's file intact if it appeared after ls-files --deleted.
+  const restored = await git(["checkout-index", "--", ...paths], dir);
   if (restored.code !== 0) return `cannot restore missing release files: ${restored.stderr || restored.stdout}`;
-  const checked = await runGit(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], dir);
+  const checked = await git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], dir);
   if (checked.code !== 0) return "Existing release status could not be checked after deletion recovery";
   const after = classifyStatus(checked.stdout, true);
   if (after.changed.length || after.ignored.some(entry => !disposableIgnoredPath(dir, entry))) return "Existing release still has local changes after deletion recovery; checkout was refused";

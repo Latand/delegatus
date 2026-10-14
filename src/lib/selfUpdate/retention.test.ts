@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { retainReleases, type RetentionInputs, type RetentionPorts } from "./retention";
-import { scanProcesses, type ProcessScan } from "@/lib/tempSweep";
+import { removeTreeViaTrash, scanProcesses, type ProcessScan } from "@/lib/tempSweep";
 import type { LauncherRecord } from "./launcher";
 import { runGit } from "./git";
 
@@ -51,7 +51,8 @@ function fixture(count = 8) {
     throw new Error(`unexpected Git command: ${args.join(" ")}`);
   };
   const inputs: RetentionInputs = {};
-  const ports: RetentionPorts = { git, scan: () => EMPTY, mountPoints: () => [], now: () => now, env: {}, reportFile: path.join(root, "state/retention.json") };
+  const ports: RetentionPorts = { git, scan: () => EMPTY, mountPoints: () => [], now: () => now, env: {},
+    lockHead: () => () => {}, reportFile: path.join(root, "state/retention.json") };
   return { root, dirs, shas, record, inputs, ports, commands, locked, now, run: () => retainReleases(record, inputs, ports) };
 }
 const exists = fs.existsSync;
@@ -141,6 +142,48 @@ test("cache reclamation removes only .next/cache/webpack", async () => {
   const dir = h.dirs[0]!;
   expect(exists(path.join(dir, ".next/cache/webpack"))).toBeFalse();
   for (const file of [".next/BUILD_ID", ".next/server/app.js", ".next/cache/fetch-cache/runtime", ".next/cache/images/runtime", "node_modules/dep/index.js", "dist/server.js"]) expect(exists(path.join(dir, file))).toBeTrue();
+});
+
+test("webpack cache reclamation preserves a dirty nested Git checkout", async () => {
+  const h = fixture(); const cache = path.join(h.dirs[0]!, ".next/cache/webpack/operator-project");
+  fs.mkdirSync(cache, { recursive: true });
+  const git = (args: string[]) => {
+    const result = spawnSync("git", args, { cwd: cache, encoding: "utf8" });
+    expect(result.status).toBe(0);
+    return result.stdout;
+  };
+  git(["init", "-q"]);
+  fs.writeFileSync(path.join(cache, "source.txt"), "committed source\n");
+  git(["add", "source.txt"]);
+  git(["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-qm", "source"]);
+  fs.writeFileSync(path.join(cache, "source.txt"), "unique operator edits\n");
+  fs.writeFileSync(path.join(cache, "untracked.txt"), "unique operator file\n");
+  await h.run();
+  expect(fs.readFileSync(path.join(cache, "source.txt"), "utf8")).toBe("unique operator edits\n");
+  expect(fs.readFileSync(path.join(cache, "untracked.txt"), "utf8")).toBe("unique operator file\n");
+});
+
+test("webpack cache replay preserves a nested Git checkout from an older trash journal", async () => {
+  const h = fixture(); const cache = path.join(h.dirs[0]!, ".next/cache/webpack");
+  const nested = path.join(cache, "operator-project"); fs.mkdirSync(nested, { recursive: true });
+  const git = (args: string[]) => {
+    const result = spawnSync("git", args, { cwd: nested, encoding: "utf8" });
+    expect(result.status).toBe(0);
+    return result.stdout;
+  };
+  git(["init", "-q"]); fs.writeFileSync(path.join(nested, "source.txt"), "committed source\n");
+  git(["add", "source.txt"]);
+  git(["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-qm", "source"]);
+  fs.writeFileSync(path.join(nested, "source.txt"), "unique edits\n");
+  fs.writeFileSync(path.join(nested, "untracked.txt"), "unique file\n");
+  const journal = path.join(path.dirname(h.ports.reportFile!), "cache-trash-legacy.json");
+  await expect(removeTreeViaTrash(cache, { journal, held: () => false, remove: async () => { throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
+  const trash = JSON.parse(fs.readFileSync(journal, "utf8")).trash as string;
+  const report = await h.run();
+  expect(fs.existsSync(trash)).toBeTrue();
+  expect(fs.readFileSync(path.join(trash, "operator-project/source.txt"), "utf8")).toBe("unique edits\n");
+  expect(fs.readFileSync(path.join(trash, "operator-project/untracked.txt"), "utf8")).toBe("unique file\n");
+  expect(report.errors).toEqual([]);
 });
 
 test.each(["missing", "mismatch"])("a release with a %s ready marker keeps its build cache", async kind => {
@@ -254,6 +297,45 @@ test("a late release edit is refused by Git's final removal guard", async () => 
   expect(changed).toBeTrue(); expect(fs.existsSync(h.candidate)).toBeTrue();
   expect(fs.readFileSync(path.join(h.candidate, "source.txt"), "utf8")).toBe("late operator edit\n");
   expect(report.removed.some(row => row.dir === h.candidate)).toBeFalse();
+});
+
+test("an unpublished commit created during the last ref query protects its release", async () => {
+  const h = realReleaseFixture(); h.ports.lockHead = undefined;
+  const run = h.ports.git!; let committed = false;
+  h.ports.git = async (args, cwd) => {
+    const result = await run(args, cwd);
+    if (!committed && args[0] === "for-each-ref" && args[2] === h.git(["rev-parse", "HEAD"], h.candidate)) {
+      committed = true;
+      fs.writeFileSync(path.join(h.candidate, "late-commit.txt"), "unique commit\n");
+      h.git(["add", "late-commit.txt"], h.candidate);
+      h.git(["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-qm", "late local commit"], h.candidate);
+    }
+    return result;
+  };
+  const report = await h.run();
+  expect(committed).toBeTrue(); expect(fs.existsSync(h.candidate)).toBeTrue();
+  expect(fs.readFileSync(path.join(h.candidate, "late-commit.txt"), "utf8")).toBe("unique commit\n");
+  expect(report.removed.some(row => row.dir === h.candidate)).toBeFalse();
+});
+
+test.each(["active", "rollback", "process", "mount"] as const)("late %s protection acquired during the final ref check keeps the release", async kind => {
+  const h = fixture(4); h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
+  const target = h.dirs[1]!; const sha = h.shas[1]!; const run = h.ports.git!; let acquired = false; let refChecks = 0; let mounted = false;
+  h.ports.mountPoints = directory => mounted && directory === target ? [path.join(target, "mounted")] : [];
+  h.ports.git = async (args, cwd) => {
+    const result = await run(args, cwd);
+    if (args[0] === "for-each-ref" && args[2] === sha && ++refChecks === 2) {
+      acquired = true;
+      if (kind === "active") fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: target }));
+      if (kind === "rollback") h.inputs.rollbackPointers = [JSON.stringify({ dir: target })];
+      if (kind === "process") h.ports.scan = () => ({ ...EMPTY, processes: [{ pid: 42, namespace: EMPTY.ownNamespace, stamped: false, paths: [target] }] });
+      if (kind === "mount") mounted = true;
+    }
+    return result;
+  };
+  const report = await h.run();
+  expect(acquired).toBeTrue(); expect(fs.existsSync(target)).toBeTrue();
+  expect(report.removed.some(row => row.dir === target)).toBeFalse();
 });
 
 test("a clean disposable release still expires", async () => {
