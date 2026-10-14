@@ -1,4 +1,4 @@
-import { MAX_TTS_TEXT_LENGTH } from "@/lib/tts";
+import { MAX_TTS_TEXT_LENGTH, isPcmTtsBackend } from "@/lib/tts";
 
 /**
  * One synthesis unit of a spoken message (issue #1022). A chunk is an exact
@@ -102,7 +102,7 @@ function splitOnWhitespace(source: string, start: number, end: number, limit: nu
  * short answers keep the single-request behaviour they have always had.
  */
 export function chunkSpeech(source: string, policy?: { backend: string; language?: string }): SpeechChunk[] {
-  if (policy?.backend === "soniox" || policy?.backend === "fishaudio") return sonioxChunks(source, policy.language);
+  if (isPcmTtsBackend(policy?.backend)) return sonioxChunks(source, policy?.language);
   const whole = trimmedRange(source, 0, source.length);
   if (!whole) return [];
   if (whole.end - whole.start <= MAX_CHUNK_CHARS) {

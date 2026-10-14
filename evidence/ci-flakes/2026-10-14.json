@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-14",
+  "baseCommit": "3050c102786bf47c461bf0eb614286563760478e",
+  "platform": "linux",
+  "bun": "1.4.0",
+  "campaigns": [
+    {
+      "testFile": "src/lib/accounts/claudeLogin.test.ts",
+      "filter": "short foreign holder",
+      "stimulus": "Foreign holder on busy CPU 0 at nice 19; caller on CPU 1",
+      "base": {
+        "runs": 50,
+        "failedRuns": [
+          5,
+          12,
+          36,
+          48
+        ]
+      },
+      "fixed": {
+        "runs": 50,
+        "failedRuns": []
+      }
+    },
+    {
+      "testFile": "src/lib/testing/fixtureProcess.test.ts",
+      "filter": "keeps an observed exit terminal",
+      "stimulus": "Controlled zombie and reaping readings against base and fixed fixture helper",
+      "base": {
+        "runs": 50,
+        "failedRuns": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50
+        ]
+      },
+      "fixed": {
+        "runs": 50,
+        "failedRuns": []
+      }
+    },
+    {
+      "testFile": "src/lib/runtime/codexAppServerHost.injectCli.test.ts",
+      "filter": "real Codex succession",
+      "stimulus": "Rust Codex 0.154.0 executable, caller and busy worker on CPU 0",
+      "base": {
+        "runs": 50,
+        "failedRuns": []
+      },
+      "fixed": {
+        "runs": 50,
+        "failedRuns": []
+      }
+    }
+  ],
+  "additionalChecks": {
+    "claudeDeferredStress": {
+      "runs": 50,
+      "failures": 0
+    },
+    "claudeLoginTests": 46,
+    "fixtureProcessTests": 10,
+    "nativeCodexFullFile": {
+      "0.154.0": 2,
+      "0.159.0": 2
+    },
+    "typecheck": "pass",
+    "realClockAdmissionCap": "pass"
+  },
+  "verifiedSourceSha256": {
+    "src/lib/accounts/claudeLogin.test.ts": "5e2bc218436bcc39379b640182b4df360796215ca65f160b885a268ef8def840",
+    "src/lib/testing/fixtureProcess.ts": "bf1323d0b8141cb0a45684d9102d9dec20a332daf5afe30a7526e68748fb0e9b",
+    "src/lib/testing/fixtureProcess.test.ts": "464d3064c6ea74017898d6e0c64d9c1dddced3780bfea764a8de8306f713835c"
+  }
+}
