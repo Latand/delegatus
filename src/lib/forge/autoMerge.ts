@@ -127,8 +127,40 @@ export { lanePullRequest };
 /* ── Reading GitHub ─────────────────────────────────────────────────────── */
 
 export { rollupChecks } from "./checkRollup";
-export type { CheckVerdict, ReadCheck, PullRequestView } from "./checkRollup";
-import { rollupChecks, type PullRequestView } from "./checkRollup";
+export type { CheckVerdict, ReadCheck } from "./checkRollup";
+import { rollupChecks, type PullRequestView as CheckView } from "./checkRollup";
+
+type PullRequestReview = { reviewer: string | null; isBot: boolean; state: string };
+export type PullRequestView = CheckView & { reviews?: PullRequestReview[] };
+
+/** The paginated list-reviews endpoint returns chronological reviews. `--jq`
+ * emits one compact JSON record per review, including across page boundaries;
+ * this works on older gh versions too and keeps review bodies out of stdout.
+ * An unreadable history is a read failure, not evidence of no requests. */
+function parseReviews(raw: string): PullRequestReview[] {
+  return raw.split("\n").filter((line) => line.trim()).map((line) => {
+    const entry: unknown = JSON.parse(line);
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("gh returned an invalid review");
+    const review = entry as { reviewer?: unknown; isBot?: unknown; state?: unknown };
+    if (typeof review.state !== "string" || !["CHANGES_REQUESTED", "APPROVED", "DISMISSED", "COMMENTED", "PENDING"].includes(review.state)) throw new Error("gh returned an invalid review state");
+    const reviewer = typeof review.reviewer === "string" && review.reviewer ? review.reviewer.toLowerCase() : null;
+    return { reviewer, isBot: review.isBot === true || reviewer?.endsWith("[bot]") === true, state: review.state };
+  });
+}
+
+function changesRequested(view: PullRequestView): boolean {
+  const latest = new Map<string, PullRequestReview>();
+  for (const [index, review] of (view.reviews ?? []).entries()) {
+    // A comment or a pending re-review does not withdraw a submitted verdict.
+    if (review.state === "COMMENTED" || review.state === "PENDING") continue;
+    // An unavailable author cannot prove that another review cleared theirs.
+    latest.set(review.reviewer ?? `unknown:${index}`, review);
+  }
+  const requests = [...latest.values()].filter((review) => review.state === "CHANGES_REQUESTED");
+  if (requests.some((review) => !review.isBot)) return true;
+  // Respect the aggregate unless the history proves the requests are all bots.
+  return view.reviewDecision === "CHANGES_REQUESTED" && !requests.some((review) => review.isBot);
+}
 
 export function parsePullRequestView(raw: string): PullRequestView | null {
   let parsed: unknown;
@@ -313,6 +345,7 @@ type Step =
 export function decideMerge(merge: PipelineMerge, view: PullRequestView, required: readonly string[], now: number): Step {
   if (view.state === "MERGED") return { kind: "merged", by: merge.state === "merging" ? "auto-merge" : "outside" };
   if (view.state === "CLOSED") return { kind: "block", reason: MERGE_REASONS.closed };
+  if (changesRequested(view)) return { kind: "block", reason: MERGE_REASONS.changesRequested };
   if (view.isDraft || view.mergeStateStatus === "DRAFT") return { kind: "block", reason: MERGE_REASONS.draft };
   const tip = merge.chain.at(-1) ?? null;
   if (view.headRefOid !== tip) return { kind: "block", reason: MERGE_REASONS.headChanged };
@@ -353,7 +386,7 @@ export function decideMerge(merge: PipelineMerge, view: PullRequestView, require
   // UNSTABLE is mergeable once required contexts pass and reported failures are ruled out above.
   if ((view.mergeStateStatus === "CLEAN" || view.mergeStateStatus === "HAS_HOOKS" || view.mergeStateStatus === "UNSTABLE") && view.mergeable === "MERGEABLE") return { kind: "merge" };
   if (view.mergeStateStatus === "BLOCKED") {
-    const review = view.reviewDecision === "REVIEW_REQUIRED" || view.reviewDecision === "CHANGES_REQUESTED";
+    const review = view.reviewDecision === "REVIEW_REQUIRED";
     return { kind: "block", reason: review ? MERGE_REASONS.reviewRequired : MERGE_REASONS.protection };
   }
   /* UNKNOWN, a null or UNKNOWN `mergeable`: GitHub is still
@@ -435,7 +468,10 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts): Promise<void> {
     /* A head outside the chain is admitted only as the commit of our own
        update; anything else stays outside, and decideMerge blocks on it. */
     if (view.state === "OPEN" && !merge.chain.includes(view.headRefOid)) await admitUpdateHead(merge, view.headRefOid, ports);
-    if (view.state === "OPEN") required = await requiredContexts(merge.repository, view.baseRefName || "main", ports);
+    if (view.state === "OPEN") {
+      view.reviews = parseReviews(await ports.run(["api", `repos/${merge.repository}/pulls/${merge.prNumber}/reviews?per_page=100`, "--paginate", "--jq", ".[] | {reviewer: .user.login, isBot: (.user.type == \"Bot\"), state} | @json"]));
+      required = await requiredContexts(merge.repository, view.baseRefName || "main", ports);
+    }
     decision = decideMerge(merge, view, required, now);
     if (decision.kind === "block" && decision.reason === MERGE_REASONS.conflict && ports.startRefresh
       && refreshAdmission(read, ports.loadPipelines(), ports.setting(read.project))) {

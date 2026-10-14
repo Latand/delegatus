@@ -16,6 +16,7 @@ export const MERGE_REASONS = {
   mainMoving: "main keeps moving",
   unreachable: "GitHub CLI not signed in or unreachable",
   settingOff: "the project's merge setting was turned off",
+  changesRequested: "a reviewer requested changes",
   reviewRequired: "branch protection wants an approving review",
   protection: "branch protection wants something else (GitHub says BLOCKED)",
 } as const;

@@ -2724,6 +2724,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "pipelineBlock.mergeReason.mainMoving": "main постійно рухається",
   "pipelineBlock.mergeReason.unreachable": "GitHub CLI не авторизований або недоступний",
   "pipelineBlock.mergeReason.settingOff": "налаштування мерджу проєкту вимкнено",
+  "pipelineBlock.mergeReason.changesRequested": "ревʼюер запросив зміни",
   "pipelineBlock.mergeReason.reviewRequired": "захист гілки вимагає схвального ревʼю",
   "pipelineBlock.mergeReason.protection": "захист гілки вимагає чогось іншого",
   "pipelineBlock.mergeReason.check": "перевірка {name} провалилась",
