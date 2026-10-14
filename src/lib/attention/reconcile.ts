@@ -3,6 +3,7 @@ import type { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import type { Pipeline, PipelineAttemptState } from "@/lib/pipelines/types";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
+import type { BoardTask } from "@/lib/tasks/types";
 
 import type { SystemAttentionClear } from "./dismissals";
 import type { ConversationReasonKind } from "./dismissalTypes";
@@ -29,6 +30,8 @@ export interface ReconcileFacts {
       epoch ms, by canonical id; absent when none is known. */
   operatorWroteAt: ReadonlyMap<string, number>;
   pipeline(id: string): Pipeline | null;
+  /** Absent when the task source could not be read. */
+  tasks?: readonly BoardTask[];
 }
 
 type OrchestratorSeatFile = NonNullable<ReturnType<typeof readOrchestratorSeatFileOrNull>>;
@@ -86,6 +89,20 @@ export function attentionSystemClears(files: readonly FileEntry[], now: number, 
     const canonical = conversationId ? facts.canonicalConversationId(conversationId) : null;
     const base = { conversationId, path: file.path, reason: reason.kind, raisedAt: reason.raisedAt,
       title: reason.report?.body?.split("\n", 1)[0] || cleanTitle(file.title ?? "", 90), project: file.project };
+    if (reason.kind === "launch") {
+      const launchId = file.path.slice("spawn:".length);
+      const sameLaunch = (assignment: BoardTask["assignments"][number]) => assignment.launchId
+        ? assignment.launchId === launchId
+        : assignment.path === file.path || Boolean(canonical && assignment.conversationId && facts.canonicalConversationId(assignment.conversationId) === canonical);
+      const task = facts.tasks?.find(task => task.assignments.some(sameLaunch));
+      const relaunched = task?.assignments.some(assignment => !sameLaunch(assignment)
+        && Boolean(assignment.launchId || assignment.conversationId || assignment.path)
+        && Date.parse(assignment.at) > reason.raisedAt * 1000);
+      if (task?.status === "done" || relaunched) {
+        clears.push({ ...base, reasonId: reason.id, rule: task?.status === "done" ? "launch-task-done" : "launch-relaunched" });
+        continue;
+      }
+    }
     /* The seat was handed on and its conversation ended: nothing it asked can
        be answered there, and it can ask nothing newer, so the clear covers
        every reason it raised. */

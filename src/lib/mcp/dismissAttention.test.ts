@@ -248,6 +248,24 @@ test("a failed launch absent from the scanner resolves its project from the rece
   expect(readAttentionDismissals().records).toMatchObject([{ path, reasonId: `${path}:launch-failed`, note: "A later launch succeeded" }]);
 });
 
+test("an unresolved conversation refusal names launch placeholders and cannot invite a retry", async () => {
+  const service = serviceAs(ROOT);
+  const args = { clientRequestId: "unknown-launch", target: { kind: "conversation", conversationId: "conversation_missing", reasonId: "spawn:launch_missing:launch-failed" } };
+  const result = await service.callTool("dismiss_attention", args);
+  expect(result).toMatchObject({ ok: false, code: "CONVERSATION_NOT_FOUND", retryable: false });
+  expect((result as { error: string }).error).toContain("spawn:<launchId>");
+  expect((result as { error: string }).error).toContain("spawn:launch_missing");
+  expect(await service.callTool("dismiss_attention", args)).toMatchObject({ ok: false, retryable: false, replayed: true });
+  expect(readAttentionDismissals().records).toEqual([]);
+});
+
+test.each(["spawn:launch_missing", "/t/missing.jsonl"])("an unresolved path %s is refused with usable target forms", async (path) => {
+  const result = await serviceAs(ROOT).callTool("dismiss_attention", { clientRequestId: "unknown-path", target: { kind: "conversation", path } });
+  expect(result).toMatchObject({ ok: false, code: "CONVERSATION_NOT_FOUND", retryable: false });
+  expect((result as { error: string }).error).toContain("spawn:<launchId>");
+  expect(readAttentionDismissals().records).toEqual([]);
+});
+
 test("a failed launch's projected target belongs to its explicit project when the cwd names another project", async () => {
   const { AgentRegistry } = await import("@/lib/agent/registry");
   const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
@@ -281,6 +299,14 @@ test("a failed launch's projected target belongs to its explicit project when th
   expect(writes).toBe(0);
   expect(readAttentionDismissals().records).toEqual([]);
   const owner = serviceAs(MANAGER, state, new MemoryMcpReceiptStore(), overrides);
+  const idTarget = { kind: "conversation", conversationId: begun.receipt.conversationId, reasonId: `spawn:${begun.receipt.launchId}:launch-failed` };
+  expect(await serviceAs(OTHER_SEAT, state, new MemoryMcpReceiptStore(), overrides).callTool("dismiss_attention", { clientRequestId: "launch-foreign-id", target: idTarget })).toMatchObject({ ok: false, details: { code: "DISMISS_NOT_PERMITTED" } });
+  expect(writes).toBe(0);
+  expect(await owner.callTool("dismiss_attention", { clientRequestId: "launch-owner-id", target: idTarget })).toMatchObject({ ok: true });
+  expect(readAttentionDismissals().records).toMatchObject([{ path: `spawn:${begun.receipt.launchId}`, reasonId: idTarget.reasonId }]);
+  expect(await owner.callTool("dismiss_attention", { clientRequestId: "launch-owner-id-undo", target: idTarget, undo: true })).toMatchObject({ ok: true });
+  expect(readAttentionDismissals().records).toEqual([]);
+  writes = 0;
   expect(await owner.callTool("dismiss_attention", { clientRequestId: "launch-owner-seat", target })).toMatchObject({ ok: true });
   expect(writes).toBe(1);
   expect(readAttentionDismissals().records).toMatchObject([{ path: `spawn:${begun.receipt.launchId}`, by: { kind: "manager", conversationId: SEAT } }]);

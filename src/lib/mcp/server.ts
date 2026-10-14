@@ -2331,7 +2331,7 @@ export type McpRecoveryOutcome = "accepted" | "in-flight" | "settled" | "not-exe
 /** What a caller may do next, stated on the answer rather than implied by
     `retryable`. `original-key-lookup` is the ONLY permitted action on an
     unknown or open outcome: never a new key, never an automatic resend. */
-export type McpRecoveryNextAction = "original-key-lookup" | "follow-disposition" | "new-request-permitted";
+export type McpRecoveryNextAction = "original-key-lookup" | "follow-disposition" | "new-request-permitted" | "correct-request";
 
 export interface McpRecoveryEvidence {
   outcome: McpRecoveryOutcome;
@@ -3055,18 +3055,23 @@ export function createMcpToolService(
               : evidence;
             return answerFromEvidence(uncertain, false);
           }
+          // Only an explicit retry policy on a typed, proven pre-dispatch
+          // refusal can classify it. Unknown failures retain their retry path.
+          const namedRefusal = error instanceof McpToolRefusal
+            && typeof refusal.code === "string" && typeof refusal.retryable === "boolean";
+          const deterministic = namedRefusal && refusal.retryable === false;
           const details: McpToolPayload = {
             ...refusal,
             outcome: terminalRefusal ? "settled" : "not-executed",
             evidence: "dispatch-refused",
-            nextAction: terminalRefusal ? "follow-disposition" : "new-request-permitted",
+            nextAction: terminalRefusal ? "follow-disposition" : deterministic ? "correct-request" : "new-request-permitted",
           };
           settled = failure(
             typedTool,
             requestId,
-            terminalRefusal && typeof refusal.code === "string" ? refusal.code : "tool_failed",
+            (terminalRefusal || namedRefusal) && typeof refusal.code === "string" ? refusal.code : "tool_failed",
             error instanceof Error ? error.message : String(error),
-            !terminalRefusal,
+            !terminalRefusal && !deterministic,
             false,
             details,
           );
@@ -3176,7 +3181,8 @@ export function createMcpToolService(
              server's cause and whether the same call can succeed later. */
           const namedRefusal = error instanceof McpToolRefusal && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
             && (error instanceof McpUnadmittedRefusal || typedTool === "issue_report" || error.details.code === "cross_project_refused"
-              || ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel"].includes(typedTool))
+              || ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel"].includes(typedTool)
+              || error.details.code === "CONVERSATION_NOT_FOUND" && error.details.retryable === false)
             ? { code: error.details.code, retryable: error.details.retryable } : null;
           unadmitted = error instanceof McpUnadmittedRefusal;
           // Tools without a downstream recovery reader still preserve an

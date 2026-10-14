@@ -1,0 +1,68 @@
+{
+  "readings": [
+    {
+      "lang": "en",
+      "width": 1440,
+      "settlement": "done",
+      "text": "Cleared · Delegatus: the failed launch's task is done",
+      "overflow": 0,
+      "clipped": false
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "settlement": "relaunched",
+      "text": "Cleared · Delegatus: a later assignment replaced the failed launch",
+      "overflow": 0,
+      "clipped": false
+    },
+    {
+      "lang": "en",
+      "width": 1000,
+      "settlement": "done",
+      "text": "Cleared · Delegatus: the failed launch's task is done",
+      "overflow": 0,
+      "clipped": false
+    },
+    {
+      "lang": "en",
+      "width": 1000,
+      "settlement": "relaunched",
+      "text": "Cleared · Delegatus: a later assignment replaced the failed launch",
+      "overflow": 0,
+      "clipped": false
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "settlement": "done",
+      "text": "Знято · Delegatus: задачу невдалого запуску завершено",
+      "overflow": 0,
+      "clipped": false
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "settlement": "relaunched",
+      "text": "Знято · Delegatus: нове призначення замінило невдалий запуск",
+      "overflow": 0,
+      "clipped": false
+    },
+    {
+      "lang": "uk",
+      "width": 1000,
+      "settlement": "done",
+      "text": "Знято · Delegatus: задачу невдалого запуску завершено",
+      "overflow": 0,
+      "clipped": false
+    },
+    {
+      "lang": "uk",
+      "width": 1000,
+      "settlement": "relaunched",
+      "text": "Знято · Delegatus: нове призначення замінило невдалий запуск",
+      "overflow": 0,
+      "clipped": false
+    }
+  ]
+}

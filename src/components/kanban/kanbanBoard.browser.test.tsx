@@ -15510,6 +15510,48 @@ describe("attention auto resolve", () => {
   }, 900_000);
 });
 
+describe("failed launch clearing", () => {
+  browserTest("cleared launch cards show the retained reason in both languages", async () => {
+    const out = path.resolve(".artifacts/attention-launch-clears");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000]) {
+        const opened = await openFixture(browser, `${server.base}?lang=${lang}&scenario=launch-clears&done=1`, { width, height: 900 }, "light", lang, "reduce");
+        try {
+          for (const settlement of ["done", "relaunched"] as const) {
+            const tile = opened.page.locator(card(`t-launch-${settlement}`));
+            await tile.waitFor({ state: "attached" });
+            if (!await tile.isVisible()) {
+              const status = settlement === "done" ? "done" : "assigned";
+              const tab = opened.page.locator(`[data-tab="${status}"]`);
+              if (await tab.isVisible()) await tab.click();
+              else await opened.page.locator(`[data-col-width="${status}"][data-col-width-action="widen"]`).click();
+            }
+            await tile.waitFor();
+            await tile.scrollIntoViewIfNeeded();
+            expect(await tile.locator('[data-chronology-kind="need-cleared"]').count()).toBe(1);
+            const text = await tile.locator('[data-chronology-kind="need-cleared"] .chronology-what').textContent();
+            expect(text).toContain(translate(lang, `needs.clearedRule.launch-${settlement === "done" ? "task-done" : "relaunched"}`));
+            const geometry = await tile.evaluate(element => {
+              const label = element.querySelector<HTMLElement>('[data-chronology-kind="need-cleared"] .chronology-what')!;
+              return { overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth, clipped: label.scrollWidth > label.clientWidth + 1 };
+            });
+            expect(geometry.overflow).toBeLessThanOrEqual(1);
+            expect(geometry.clipped).toBe(false);
+            readings.push({ lang, width, settlement, text, ...geometry });
+            await opened.page.screenshot({ path: path.join(out, `${lang}-${width}-${settlement}.png`) });
+          }
+        } finally { await opened.context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/attention-launch-clears", { recursive: true });
+    fs.writeFileSync("evidence/attention-launch-clears/readings.json", JSON.stringify({ readings }, null, 2) + "\n");
+  }, 180_000);
+});
+
 describe("readable pipeline graph: loops fold into their sources, nodes say what they are, one attempt caption", () => {
   /*
    * docs/design/pipeline-graph-loops.md, over `?scenario=graph-loops`: two fix

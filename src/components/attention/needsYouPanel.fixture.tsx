@@ -40,6 +40,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
+import { setKanbanCardsOpenByDefault } from "@/components/kanban/cardOpenDefault";
 
 const params = new URLSearchParams(location.search);
 const OVERVIEW = params.has("overview");
@@ -348,6 +349,34 @@ if (AUTO) {
   }
 }
 (window as unknown as { __needsYouAutoResolve?: Record<string, string> }).__needsYouAutoResolve = AUTO_IDS;
+
+if (params.get("scenario") === "launch-clears") {
+  setKanbanCardsOpenByDefault(true);
+  files.splice(0); pipelines.splice(0); tasks.splice(0);
+  for (const settlement of ["done", "relaunched"] as const) {
+    const launchId = `launch-${settlement}`;
+    const launchPath = `spawn:${launchId}`;
+    conversation(D, LANG === "en" ? `Failed launch: ${settlement}` : `Невдалий запуск: ${settlement === "done" ? "задачу завершено" : "нове призначення"}`, {
+      path: launchPath, conversationId: `conversation_${launchId}`, spawn: { state: "failed", admittedAt: (now - 300) * 1000, error: "Fixture launch failed" },
+    });
+    task(D, `t-${launchId}`, settlement === "done" ? "done" : "assigned", LANG === "en" ? `Launch ${settlement}` : settlement === "done" ? "Задачу запуску завершено" : "Запуск замінено", {
+      assignments: [{ ...assign(launchPath), launchId, conversationId: `conversation_${launchId}`, at: iso(300), state: "failed" },
+        ...(settlement === "relaunched" ? [{ ...assign("/repo/later.jsonl"), launchId: "launch-later", at: iso(60) }] : [])],
+    });
+  }
+  for (const clear of attentionSystemClears(files, now, { canonicalConversationId: id => id, retiredSeats: new Set(), operatorWroteAt: new Map(), pipeline: () => null, tasks: tasks as unknown as BoardTask[] })) {
+    const entry = files.find(file => file.path === clear.path)!;
+    entry.attentionDismissal = { at: iso(30), by: { kind: "system", rule: clear.rule }, reasonId: clear.reasonId,
+      cleared: { reason: clear.reason, raisedAt: clear.raisedAt, title: clear.title, project: clear.project } };
+    // Render the retained snapshot on a later generation of the same
+    // conversation, after the placeholder stopped raising its launch reason.
+    entry.path = `/repo/${entry.conversationId}.jsonl`;
+    delete entry.spawn;
+    for (const task of tasks as unknown as BoardTask[]) for (const assignment of task.assignments) {
+      if (assignment.conversationId === entry.conversationId) { assignment.path = entry.path; assignment.state = "linked"; }
+    }
+  }
+}
 
 /* The dismissal route, recorded the way the server records it: a
    conversation's reason on its entry, a lane's instant on the lane, a

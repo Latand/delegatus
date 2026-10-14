@@ -2763,6 +2763,27 @@ describe("original-key recovery (#1490)", () => {
     expect(await admitted.store.lookup("send_message:recover-1")).toMatchObject({ stage: "dispatching", result: null });
   });
 
+  test("explicit deterministic refusals preserve their code before dispatch; transient refusals still permit a new request", async () => {
+    for (const retryable of [false, true]) {
+      const harness = recoveryHarness(OWNER, undefined, {
+        bindingImpl: async () => { throw new McpToolRefusal("target unavailable", { code: "target_unavailable", retryable }); },
+      });
+      const expected = { ok: false, code: "target_unavailable", retryable,
+        details: { outcome: "not-executed", nextAction: retryable ? "new-request-permitted" : "correct-request" } };
+      expect(await harness.service.callTool("send_message", SEND)).toMatchObject(expected);
+      expect(await harness.service.callTool("send_message", SEND)).toMatchObject({ ...expected, replayed: true });
+      expect(await harness.service.callTool("send_message", { ...SEND, recoveryOnly: true })).toMatchObject({ ...expected, replayed: true });
+      expect(harness.bindingCalls).toHaveLength(1);
+    }
+    const attempted = recoveryHarness(OWNER, undefined, {
+      bindingImpl: async (_args, context) => {
+        context!.dispatch!.attempted = true;
+        throw new McpToolRefusal("target unavailable", { code: "target_unavailable", retryable: false });
+      },
+    });
+    expect(await attempted.service.callTool("send_message", SEND)).toMatchObject({ ok: false, code: "outcome_unknown", details: { outcome: "unknown", nextAction: "original-key-lookup" } });
+  });
+
   test("a claim whose owner died before dispatch is closed as not-executed; a live owner's claim stays unknown", async () => {
     const store = new MemoryMcpReceiptStore();
     const harness = recoveryHarness(OWNER, store);

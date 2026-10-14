@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import type { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
+import type { BoardTask } from "@/lib/tasks/types";
 
 import { attentionSystemClears, retiredSeatConversations, type ReconcileFacts } from "./reconcile";
 import { reconcileAttentionOnce, type AttentionReconcilePorts } from "./reconcileController";
@@ -133,4 +134,24 @@ test("one pass reads the board, writes what the rules prove and tells the board;
   expect(announced).toBe(0);
   expect(await reconcileAttentionOnce(ports(["conversation_old-seat"]))).toHaveLength(1);
   expect(announced).toBe(1);
+});
+
+test("failed launches clear only when their task is done or a different assignment superseded them", () => {
+  const launch = file("launch", { path: "spawn:launch-a", spawn: { state: "failed", admittedAt: (now - 3600) * 1000 } as FileEntry["spawn"] });
+  const assignment = { launchId: "launch-a", conversationId: launch.conversationId, path: launch.path, at, panePid: null, state: "failed" as const, error: null };
+  const task = { id: "task-a", project: launch.project, status: "assigned", assignments: [assignment] } as unknown as BoardTask;
+  const evaluate = (tasks?: BoardTask[]) => attentionSystemClears([launch], now, facts({ tasks }));
+  expect(evaluate()).toEqual([]);
+  expect(evaluate([task])).toEqual([]);
+  const later = new Date((now - 60) * 1000).toISOString();
+  // Recording the original assignment after admission is no relaunch.
+  expect(evaluate([{ ...task, assignments: [{ ...assignment, at: later }] }])).toEqual([]);
+  expect(evaluate([{ ...task, assignments: [assignment, { ...assignment, launchId: "launch-b", conversationId: "conversation_later", path: "/t/later.jsonl", at }] }])).toEqual([]);
+  expect(evaluate([{ ...task, assignments: [assignment, { ...assignment, launchId: "launch-b", conversationId: "conversation_later", path: "/t/later.jsonl", at: later }] }])).toMatchObject([
+    { path: launch.path, reason: "launch", reasonId: "spawn:launch-a:launch-failed", rule: "launch-relaunched" },
+  ]);
+  expect(evaluate([{ ...task, status: "done" }])).toMatchObject([
+    { path: launch.path, reason: "launch", reasonId: "spawn:launch-a:launch-failed", rule: "launch-task-done" },
+  ]);
+  expect(evaluate([{ ...task, status: "done", assignments: [{ ...assignment, launchId: "unrelated", conversationId: "conversation_other", path: "/t/other.jsonl" }] }])).toEqual([]);
 });
