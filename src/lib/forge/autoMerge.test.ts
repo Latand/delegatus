@@ -75,7 +75,12 @@ type PullRequest = {
   checks: Check[];
   isDraft?: boolean;
   reviewDecision?: string;
+  reviews?: Review[];
+  reviewRead?: string;
 };
+
+type Review = { user: { login: string; type: string }; state: string };
+const review = (state: string, login = "reviewer-a", type = "User"): Review => ({ user: { login, type }, state });
 
 const green = (name: string): Check => ({ name, status: "COMPLETED", conclusion: "SUCCESS" });
 const pending = (name: string): Check => ({ name, status: "IN_PROGRESS", conclusion: "" });
@@ -120,6 +125,13 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
           workflowName: "ci",
         })),
       });
+    }
+    if (args[0] === "api" && /\/pulls\/\d+\/reviews/.test(args[1] ?? "")) {
+      expect(args).toContain("--paginate");
+      expect(args).toContain("--jq");
+      const pr = prs.get(Number(/pulls\/(\d+)/.exec(args[1]!)![1]))!;
+      if (pr.reviewRead === "refused") throw fail("reviews unavailable");
+      return pr.reviewRead ?? (pr.reviews ?? []).map((review) => JSON.stringify({ reviewer: review.user.login, isBot: review.user.type === "Bot", state: review.state })).join("\n");
     }
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)) return JSON.stringify(options.required ?? []);
     if (args[0] === "repo" && args[1] === "view") return JSON.stringify({ squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true });
@@ -212,6 +224,65 @@ const openPr = (number: number, extra: Partial<PullRequest> = {}): PullRequest =
 });
 
 beforeEach(() => resetAutoMergeForTests());
+
+describe("outstanding human reviews (#2866)", () => {
+  test.each(["CLEAN", "HAS_HOOKS", "UNSTABLE", "BLOCKED", "BEHIND", "DIRTY", "UNKNOWN", "DRAFT"])("CHANGES_REQUESTED blocks in %s", async (mergeStateStatus) => {
+    const h = harness({ required: ["ci"], lanes: [lane("L1")], prs: [openPr(11, { mergeStateStatus, reviewDecision: "CHANGES_REQUESTED" })] });
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS);
+    expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: "a reviewer requested changes" });
+    expect(h.writes).toEqual([]);
+  });
+
+  test("an empty reviewDecision still blocks on a human change request", async () => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { reviews: [review("CHANGES_REQUESTED")] })] });
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS);
+    expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: "a reviewer requested changes" });
+    expect(h.writes).toEqual([]);
+  });
+
+  test("a comment or another reviewer's approval does not clear a human change request", async () => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { reviews: [review("CHANGES_REQUESTED"), review("COMMENTED"), review("APPROVED", "reviewer-b")] })] });
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS);
+    expect(h.merge("L1")?.reason).toBe("a reviewer requested changes");
+    expect(h.writes).toEqual([]);
+  });
+
+  test.each(["APPROVED", "DISMISSED"])("the same reviewer's later %s clears the request across review pages", async (state) => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11, {
+      reviews: [review("CHANGES_REQUESTED"), review(state)],
+    })] });
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS);
+    expect(h.merge("L1")?.state).toBe("merged");
+    expect(h.merges()).toHaveLength(1);
+  });
+
+  test.each(["", "CHANGES_REQUESTED"])("bot and agent change requests do not block (decision %s)", async (reviewDecision) => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { reviewDecision,
+      reviews: [review("CHANGES_REQUESTED", "review-agent", "Bot"), review("CHANGES_REQUESTED", "review-agent[bot]")],
+    })] });
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS);
+    expect(h.merge("L1")?.state).toBe("merged");
+  });
+
+  test("COMMENTED and PENDING reviews alone do not block", async () => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { reviews: [review("COMMENTED"), review("PENDING")] })] });
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS);
+    expect(h.merge("L1")?.state).toBe("merged");
+  });
+
+  test.each(["refused", "{}", "[[{}]]"])("an unreadable review history (%s) never authorizes a merge", async (reviewRead) => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { reviewRead })] });
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS);
+    expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.unreachable });
+    expect(h.writes).toEqual([]);
+  });
+
+  test("REVIEW_REQUIRED keeps the branch-protection reason", async () => {
+    const h = harness({ lanes: [lane("L1")], prs: [openPr(11, { mergeStateStatus: "BLOCKED", reviewDecision: "REVIEW_REQUIRED" })] });
+    await h.run(MERGE_SETTLE_MS + MERGE_POLL_MS);
+    expect(h.merge("L1")?.reason).toBe(MERGE_REASONS.reviewRequired);
+  });
+});
 
 describe("merge runner (#2187 §4.3-§4.4)", () => {
   test("a completed writable review queues, merges after green checks, then finishes its task", async () => {

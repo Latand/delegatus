@@ -2772,6 +2772,7 @@ export const en = {
   "pipelineBlock.mergeReason.mainMoving": "main keeps moving",
   "pipelineBlock.mergeReason.unreachable": "GitHub CLI not signed in or unreachable",
   "pipelineBlock.mergeReason.settingOff": "the project's merge setting was turned off",
+  "pipelineBlock.mergeReason.changesRequested": "a reviewer requested changes",
   "pipelineBlock.mergeReason.reviewRequired": "branch protection wants an approving review",
   "pipelineBlock.mergeReason.protection": "branch protection wants something else",
   "pipelineBlock.mergeReason.check": "check {name} failed",

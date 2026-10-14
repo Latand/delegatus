@@ -1002,11 +1002,14 @@ test("a pull request the merge runner holds is left out, and a stopped merge nam
     const held = await gather({ pipelines: [finishedLane({ merge: merge(state, null) } as never)], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
     expect(held.pullRequests).toEqual([]);
   }
-  const input = await gather({ pipelines: [finishedLane({ merge: merge("blocked", "conflict with the base branch") } as never)], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
-  expect(input.pullRequests).toEqual([expect.objectContaining({ number: 1289, mergeBlocked: "conflict with the base branch" })]);
-  const verdict = seatTickDecision(input).verdict;
-  expect(verdict.kind === "wake" && verdict.reasons[0]!.detail)
-    .toBe("pull request #1289 left open by a lane that finished; merge stopped: conflict with the base branch");
+  for (const reason of ["conflict with the base branch", "a reviewer requested changes"]) {
+    const input = await gather({ pipelines: [finishedLane({ merge: merge("blocked", reason) } as never)], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
+    expect(input.pullRequests).toEqual([expect.objectContaining({ number: 1289, mergeBlocked: reason })]);
+    const verdict = seatTickDecision(input).verdict;
+    expect(verdict.kind === "wake" && verdict.reasons[0]!.detail)
+      .toBe(`pull request #1289 left open by a lane that finished; merge stopped: ${reason}`);
+    expect(verdict.kind === "wake" && verdict.items.find((item) => item.kind === "pull-request")?.label).toContain(`merge stopped: ${reason}`);
+  }
 });
 
 /* #2187 §5.3: a finished lane marked as finishing its task, whose move to
