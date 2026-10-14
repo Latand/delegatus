@@ -23,6 +23,7 @@ import {
   previousOrchestratorSeats,
   readOrchestratorSeatFile,
   seatTaskOf,
+  seatTaskLookup,
   rekeyOrchestratorSeatPaths,
   recordOrchestratorSeatAuthCredentialBaseline,
   confirmOrchestratorSeatMaterialization,
@@ -685,6 +686,22 @@ test("a seat task whose notes are empty or blank answers hasNotes false (#1841)"
   ] as unknown as Parameters<typeof seatTaskOf>[0];
   expect(seatTaskOf(tasks, "proj-a", { conversationId: "conversation_1", path: null })).toEqual({ taskId: "none", title: "Seat, no notes", hasNotes: false });
   expect(seatTaskOf(tasks, "proj-a", { conversationId: "conversation_2", path: null })).toEqual({ taskId: "blank", title: "Seat, blank notes", hasNotes: false });
+});
+
+test("batched seat notes preserve first-task ties across path and conversation matches and refresh aliases", () => {
+  const tasks = [
+    { id: "path-first", project: "old-project", text: "Path notes", updatedAt: AT, assignments: [{ path: "/seat.jsonl" }] },
+    { id: "conversation-second", project: "old-project", text: "Conversation notes", updatedAt: AT, assignments: [{ conversationId: "conversation_seat" }] },
+    { id: "foreign", project: "other", text: "Foreign notes", updatedAt: "2027-01-01", assignments: [{ conversationId: "conversation_seat" }] },
+  ] as unknown as Parameters<typeof seatTaskOf>[0];
+  const seat = { conversationId: "conversation_seat", path: "/seat.jsonl" };
+  const before = seatTaskLookup(tasks, "canonical");
+  expect(before(seat)).toBeNull();
+  persistProjectAliases([{ source: "old-project", target: "canonical", displayName: "Canonical" }]);
+  const after = seatTaskLookup(tasks, "canonical");
+  expect(after(seat)?.taskId).toBe("path-first");
+  expect(after({ ...seat, path: null })?.taskId).toBe("conversation-second");
+  expect(before(seat)).toBeNull();
 });
 
 /* A board that spans projects — the Overview —

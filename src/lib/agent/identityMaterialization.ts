@@ -1,5 +1,6 @@
 import type { AgentRegistryEntry, RegistryFile, SpawnReceipt } from "./registry";
 import { sessionKeyId } from "./sessionKey";
+import { registryHasLookupIndex, registryRowsMatching } from "./sqliteRegistryStore";
 
 type IdentityMaterializationSnapshot = Pick<
   RegistryFile,
@@ -32,27 +33,39 @@ export interface IdentityMaterializationFence {
  */
 export function identityMaterializationFence(snapshot?: IdentityMaterializationSnapshot): IdentityMaterializationFence {
   const isStructured = (receipt: IdentityMaterializationReceipt, options: IdentityMaterializationOptions = {}): boolean => {
+    if (receipt.transport !== null) return receipt.transport === "structured";
     const entry = options.entry ?? (receipt.key ? snapshot?.entries[sessionKeyId(receipt.key)] : undefined);
-    return receipt.transport === "structured"
-      || (receipt.transport === null
-        && (options.structured === true
-          || Boolean(entry?.structuredHost)
-          || typeof entry?.structuredHostOperationId === "string"));
+    return options.structured === true
+      || Boolean(entry?.structuredHost)
+      || typeof entry?.structuredHostOperationId === "string";
   };
   const allowsReceipt = (receipt: IdentityMaterializationReceipt, options: IdentityMaterializationOptions = {}): boolean =>
     !isStructured(receipt, options) || receipt.state === "completed";
   const withheldPaths = new Set<string>();
-  if (snapshot) {
+  const withholds = (receipt: IdentityMaterializationReceipt): boolean => Boolean(receipt.artifactPath)
+    && !allowsReceipt(receipt)
+    && !(receipt.purpose === "resume-successor" && receipt.resumeSourcePath === receipt.artifactPath);
+  const indexed = snapshot && registryHasLookupIndex(snapshot);
+  // Plain snapshots retain one collection pass. SQLite views resolve only the
+  // requested paths, so a pipeline tick never materializes archived history.
+  if (snapshot && !indexed) {
     for (const receipt of Object.values(snapshot.receipts)) {
-      if (!receipt.artifactPath || allowsReceipt(receipt)) continue;
-      if (receipt.purpose === "resume-successor" && receipt.resumeSourcePath === receipt.artifactPath) continue;
-      withheldPaths.add(receipt.artifactPath);
+      if (withholds(receipt)) withheldPaths.add(receipt.artifactPath!);
     }
   }
+  const allowedPaths = new Map<string, boolean>();
+  const allowsPath = (artifactPath: string): boolean => {
+    if (!snapshot || !indexed) return !withheldPaths.has(artifactPath);
+    const cached = allowedPaths.get(artifactPath);
+    if (cached !== undefined) return cached;
+    const allowed = !registryRowsMatching(snapshot, "receipts", "artifactPath", artifactPath).some(withholds);
+    allowedPaths.set(artifactPath, allowed);
+    return allowed;
+  };
   return {
     isStructured,
     allowsReceipt,
-    allowsPath: (artifactPath) => !withheldPaths.has(artifactPath),
+    allowsPath,
     pathForConversation: (conversationId) => {
       if (!snapshot) return null;
       const seen = new Set<string>();
@@ -64,7 +77,7 @@ export function identityMaterializationFence(snapshot?: IdentityMaterializationS
         canonicalId = alias;
       }
       const conversation = snapshot.conversations[canonicalId];
-      return conversation?.generations.findLast((generation) => !withheldPaths.has(generation.path))?.path ?? null;
+      return conversation?.generations.findLast((generation) => allowsPath(generation.path))?.path ?? null;
     },
   };
 }

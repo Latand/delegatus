@@ -7,6 +7,8 @@ import { NextRequest } from "next/server";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, failOrchestratorSeatIntent, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { productionIncumbentDependencies } from "./status/incumbent";
 import { GET } from "./route";
+import * as taskStore from "@/lib/tasks/store";
+import { persistProjectAliases } from "@/lib/projects/aliases";
 
 let sandbox = "";
 let previousState: string | undefined;
@@ -67,4 +69,32 @@ test("a later successful designation clears history without asking liveness", as
   completeOrchestratorSeatIntent({ project: "atlas", clientRequestId: "later_designation", conversationId: `conversation_${randomUUID()}`, path: null, now: "2026-10-11T17:12:00.000Z" });
   expect(await read()).toMatchObject({ lastFailure: null });
   expect(liveness).not.toHaveBeenCalled();
+});
+
+test("a seat status poll resolves task projects once for the whole seat history", async () => {
+  const seats = Array.from({ length: 12 }, (_, index) => {
+    const request = `history_${index}`;
+    beginOrchestratorSeatIntent({ project: "atlas", mandate: "Run the board.", clientRequestId: request, mode: "existing", now: AT });
+    const result = completeOrchestratorSeatIntent({ project: "atlas", clientRequestId: request,
+      conversationId: `conversation_history_${index}`, path: null, now: AT });
+    if (result.kind !== "activated") throw new Error("fixture seat did not activate");
+    return result.seat;
+  });
+  expect(persistProjectAliases([{ source: "old-atlas", target: "atlas", displayName: "Atlas" }])).toBe(true);
+  const tasks = Array.from({ length: 240 }, (_, index) => ({
+    id: `task_${index}`, project: index < seats.length ? "old-atlas" : `foreign_${index % 8}`,
+    text: `Notes ${index}`, details: "Kept notes", updatedAt: AT,
+    assignments: [{ conversationId: `conversation_history_${index}`, path: null }],
+  })) as ReturnType<typeof taskStore.loadTasks>;
+  const load = spyOn(taskStore, "loadTasks").mockReturnValue(tasks);
+  const stat = spyOn(fs, "statSync");
+  try {
+    const answer = await read();
+    expect(answer.currentTask?.taskId).toBe("task_11");
+    expect(answer.previous).toHaveLength(11);
+    expect(answer.previous.every((row: { taskId: string | null }) => row.taskId !== null)).toBe(true);
+    const aliasReads = stat.mock.calls.filter(([filename]) => String(filename).endsWith("project-aliases.json")).length;
+    console.info("seat history alias reads", aliasReads);
+    expect(aliasReads).toBeLessThan(80);
+  } finally { stat.mockRestore(); load.mockRestore(); }
 });

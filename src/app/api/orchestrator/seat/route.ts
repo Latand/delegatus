@@ -8,7 +8,7 @@ import { viewerMcpRegistered } from "@/lib/agent/spawnPolicy";
 import { executeOrchestratorSeatRequest, reconcileOrchestratorSeatLaunch } from "@/lib/orchestrator/seatCommand";
 import { deputiesForSeatIn, deputyConversationRefsIn, readDeputyFileOrNull, type OrchestratorDeputy, type RetiredDeputyRef } from "@/lib/orchestrator/deputies";
 import { seatDeputyView, type SeatDeputyView } from "@/lib/orchestrator/deputyView";
-import { allSeatConversationsIn, orchestratorSeatIn, previousOrchestratorSeatsIn, readOrchestratorSeatFileOrNull, seatTaskOf, type OrchestratorSeat, type PreviousOrchestratorSeat, type SeatConversations, type SeatNotesTask } from "@/lib/orchestrator/seats";
+import { allSeatConversationsIn, orchestratorSeatIn, previousOrchestratorSeatsIn, readOrchestratorSeatFileOrNull, seatTaskLookup, type OrchestratorSeat, type PreviousOrchestratorSeat, type SeatConversations, type SeatNotesTask } from "@/lib/orchestrator/seats";
 import { currentSeatFailure, type SeatHostObservation } from "@/lib/orchestrator/seatFailure";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { loadTasks } from "@/lib/tasks/store";
@@ -126,8 +126,9 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
   const seatDeputies = active?.conversationId && deputies
     ? deputiesForSeatIn(deputies, active.conversationId).map(seatDeputyView)
     : [];
+  const taskForSeat = seatTaskLookup(tasks, project);
   const previous: PreviousSeatRow[] = retired.map((seat) => {
-    const task = seatTaskOf(tasks, project, seat);
+    const task = taskForSeat(seat);
     return { ...seat, title: task?.title ?? null, taskId: task?.taskId ?? null, hasNotes: task?.hasNotes ?? false };
   });
   return NextResponse.json({
@@ -139,7 +140,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
     exists: active !== null && (active.path === null || fs.existsSync(active.path)),
     viewerMcpRegistered: viewerMcpRegistered(home, cwd),
     previous,
-    currentTask: active ? seatTaskOf(tasks, project, active) : null,
+    currentTask: active ? taskForSeat(active) : null,
     all: withDeputyRefs(allSeatConversationsIn(record), deputyFile),
     /* docs/design/ghost-seat.md §5: the seat's feed draws each deputy's block
        from these, and the seat head and card point at the live one. */

@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { withAccountMutationLock } from "@/lib/accounts/accountMutation";
 import { statePath } from "@/lib/configDir";
-import { canonicalProject } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasResolver } from "@/lib/projects/aliases";
 import type { IdentityWavePathRekey } from "@/lib/agent/identityWaveMigration";
 import type { BoardTask } from "@/lib/tasks/types";
 
@@ -732,18 +732,40 @@ export function seatTaskOf(
   project: string,
   seat: { conversationId: string | null; path: string | null },
 ): SeatNotesTask | null {
-  const canonical = canonicalOrchestratorProject(project);
-  let best: (typeof tasks)[number] | null = null;
-  for (const task of tasks) {
-    if (task.project !== project && task.project !== canonical && canonicalOrchestratorProject(task.project) !== canonical) continue;
-    const names = task.assignments.some((assignment) =>
-      (seat.conversationId !== null && assignment.conversationId === seat.conversationId)
-      || (seat.path !== null && assignment.path === seat.path));
-    if (names && (!best || task.updatedAt > best.updatedAt)) best = task;
-  }
-  if (!best) return null;
-  const title = best.origin?.refinement === "pending" ? "" : best.text.split(/\r?\n/, 1)[0]?.trim() ?? "";
-  return { taskId: best.id, title: title || null, hasNotes: Boolean(best.details?.trim()) };
+  return seatTaskLookup(tasks, project)(seat);
+}
+
+/** One task/alias pass for the current seat and every retired seat in a poll. */
+export function seatTaskLookup(
+  tasks: readonly Pick<BoardTask, "id" | "project" | "text" | "details" | "updatedAt" | "assignments" | "origin">[],
+  project: string,
+): (seat: { conversationId: string | null; path: string | null }) => SeatNotesTask | null {
+  const resolve = projectAliasResolver();
+  const canonical = resolve(project.trim());
+  type Match = { task: (typeof tasks)[number]; order: number };
+  const byConversation = new Map<string, Match>();
+  const byPath = new Map<string, Match>();
+  const newer = (left: Match | undefined, right: Match | undefined): Match | undefined => {
+    if (!left) return right;
+    if (!right) return left;
+    if (left.task.updatedAt !== right.task.updatedAt) return left.task.updatedAt > right.task.updatedAt ? left : right;
+    return left.order < right.order ? left : right;
+  };
+  tasks.forEach((task, order) => {
+    if (task.project !== project && task.project !== canonical && resolve(task.project.trim()) !== canonical) return;
+    const match = { task, order };
+    for (const assignment of task.assignments) {
+      if (assignment.conversationId != null) byConversation.set(assignment.conversationId, newer(byConversation.get(assignment.conversationId), match)!);
+      if (assignment.path != null) byPath.set(assignment.path, newer(byPath.get(assignment.path), match)!);
+    }
+  });
+  return (seat) => {
+    const best = newer(seat.conversationId === null ? undefined : byConversation.get(seat.conversationId),
+      seat.path === null ? undefined : byPath.get(seat.path))?.task;
+    if (!best) return null;
+    const title = best.origin?.refinement === "pending" ? "" : best.text.split(/\r?\n/, 1)[0]?.trim() ?? "";
+    return { taskId: best.id, title: title || null, hasNotes: Boolean(best.details?.trim()) };
+  };
 }
 
 export type BeginSeatIntentResult =

@@ -60,7 +60,7 @@ const LOOKUP_PATHS: Record<LookupField, string> = { conversationId: "$.conversat
 type KeyedReader = (collection: RowCollection, field: LookupField, value: LookupValue) => string[];
 type ProjectionReader = (collection: RowCollection, projector: RegistryRowProjector<RowCollection, unknown>) => Array<[string, unknown]>;
 interface RegistryFileReaders {
-  keyed: WeakMap<RegistryFile, KeyedReader>;
+  keyed: WeakMap<object, KeyedReader>;
   path: WeakMap<RegistryFile, (path: string) => string[]>;
   entryKey: WeakMap<RegistryFile, (entryKey: string) => string[]>;
   coldKey: WeakMap<RegistryFile, (collection: RowCollection) => ReadonlySet<string> | undefined>;
@@ -216,7 +216,7 @@ class RegistryReaderViews {
 }
 
 /** Indexed selection inside the same lazy transaction, including pending writes. */
-export function registryRowsMatching<C extends RowCollection>(file: RegistryFile, collection: C, field: LookupField, value: LookupValue): RegistryFile[C][string][] {
+export function registryRowsMatching<C extends RowCollection>(file: Pick<RegistryFile, C>, collection: C, field: LookupField, value: LookupValue): RegistryFile[C][string][] {
   const keys = registryKeysMatching(file, collection, field, value);
   const rows = (file[collection] ?? {}) as Record<string, RegistryFile[C][string]>;
   return keys.map(key => rows[key]!).filter(Boolean);
@@ -231,7 +231,12 @@ export function registryLivenessRows(file: RegistryFile): { entries: AgentRegist
   return read ? read() : { entries: Object.values(file.entries ?? {}), receipts: Object.values(file.receipts ?? {}) };
 }
 
-export function registryKeysMatching(file: RegistryFile, collection: RowCollection, field: LookupField, value: LookupValue): string[] {
+/** Whether this view can select rows without expanding the whole collection. */
+export function registryHasLookupIndex(file: object): boolean {
+  return keyedReaders.has(file);
+}
+
+export function registryKeysMatching<C extends RowCollection>(file: Pick<RegistryFile, C>, collection: C, field: LookupField, value: LookupValue): string[] {
   return keyedReaders.get(file)?.(collection, field, value) ?? Object.entries(file[collection] ?? {}).filter(([, row]) => (typeof value === "string" ? [value] : value).includes(lookupValue(row, field) as string)).map(([key]) => key);
 }
 
@@ -1974,11 +1979,17 @@ export class SqliteAgentRegistryStore {
       ?? this.constantReader(deliveryDescriptor.value as RegistryFile["heldDeliveries"]);
     this.coldViewCache = nextCache;
     this.coldGrantCursor = { changeId: coldGrantChangeId,stamp: snapshot.stamp };
+    const pinnedReceipts = this.changesReady ? this.pinnedRowKeys(file, "receipts", coldGrantChangeId, identity) : null;
     keyedReaders.set(file,(collection,field,value) => {
       const values = typeof value === "string" ? [value] : value;
       if (!values.length) return [];
-      return this.db.query<{ row_key: string }, string[]>(`SELECT row_key FROM ${this.recordsSource} WHERE collection=? AND json_extract(value_json,'${LOOKUP_PATHS[field]}') IN (${values.map(() => "?").join(",")}) ORDER BY row_order`)
+      const indexed = () => this.db.query<{ row_key: string }, string[]>(`SELECT row_key FROM ${this.recordsSource} WHERE collection=? AND json_extract(value_json,'${LOOKUP_PATHS[field]}') IN (${values.map(() => "?").join(",")}) ORDER BY row_order`)
         .all(collection,...values).map(row => row.row_key);
+      if (collection === "receipts" && field === "artifactPath") {
+        const holds = (receipt: RegistryFile["receipts"][string]) => values.includes(receipt.artifactPath ?? "");
+        return pinnedReceipts ? pinnedReceipts(indexed, holds) : Object.keys(file.receipts).filter(key => holds(file.receipts[key]!));
+      }
+      return indexed();
     });
     livenessReaders.set(file,() => {
       const projection = this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_liveness_entries'").get();
@@ -2028,7 +2039,7 @@ export class SqliteAgentRegistryStore {
           ELSE COALESCE(json_extract(a.value_json,'$.settledDelivery.deliveredAt')>=?1,0)
             OR EXISTS (SELECT 1 FROM ${this.recordsSource} d WHERE d.collection='heldDeliveries' AND d.row_key=json_extract(a.value_json,'$.deliveryId')
               AND json_extract(d.value_json,'$.deliveredAt')>=?1) END`).all(since).map(row => row.row_key));
-    const pinned = this.pinnedConversationOwners(file,coldGrantChangeId,identity);
+    const pinned = this.pinnedRowKeys(file,"conversations",coldGrantChangeId,identity);
     if (this.changesReady) pathReaders.set(file,path => pinned(
       () => this.db.query<{ conversation_id: string }, [string]>(conversationPathSql(this.recordsSource)).all(path).map(row => row.conversation_id),
       row => row.generations.some(generation => generation.path === path) || row.continuityPaths.includes(path)));
@@ -2044,17 +2055,17 @@ export class SqliteAgentRegistryStore {
       view held across another writer's commit asked them about rows it does
       not hold: a conversation moved to another path afterwards vanished from
       its own view, and a path taken over named an owner the view shows
-      elsewhere. The conversations journalled since the view was taken are the
+      elsewhere. The rows journalled since the view was taken are the
       only ones the indexes can describe differently, so those are answered
       from the view's own rows and the rest from the index. A journal that no
       longer reaches back to the view, or a replaced database, enumerates the
       view. */
-  private pinnedConversationOwners(file: RegistryFile, changeId: number, identity: string | null) {
-    type Conversation = RegistryFile["conversations"][string];
+  private pinnedRowKeys<C extends RowCollection>(file: RegistryFile, collection: C, changeId: number, identity: string | null) {
+    type Row = RegistryFile[C][string];
     let seen = changeId;
     let changed: Set<string> | null = new Set();
     let order: Map<string, number> | undefined;
-    return (indexed: () => string[], holds: (row: Conversation) => boolean): string[] => {
+    return (indexed: () => string[], holds: (row: Row) => boolean): string[] => {
       /* The index is read before the journal: whatever commits between the
          two reads is in the journal, and is then answered from the view. */
       const current = indexed();
@@ -2062,11 +2073,11 @@ export class SqliteAgentRegistryStore {
       if (last !== seen || databaseFileIdentity(this.filename) !== identity) {
         const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq;
         changed = last < changeId || first > changeId + 1 || databaseFileIdentity(this.filename) !== identity ? null
-          : new Set(this.db.query<{ row_key: string }, [number]>(
-            "SELECT DISTINCT row_key FROM registry_changes WHERE seq>? AND collection='conversations'").all(changeId).map(row => row.row_key));
+          : new Set(this.db.query<{ row_key: string }, [number, string]>(
+            "SELECT DISTINCT row_key FROM registry_changes WHERE seq>? AND collection=?").all(changeId, collection).map(row => row.row_key));
         seen = last;
       }
-      const rows = file.conversations;
+      const rows = file[collection] as Record<string, Row>;
       if (!changed) return Object.keys(rows).filter(key => holds(rows[key]!));
       if (!changed.size) return current;
       const owners = current.filter(key => !changed!.has(key));
