@@ -9917,8 +9917,8 @@ describe("short questionnaire rendered evidence", () => {
               if (row.checked) expect(row.markBackground).not.toBe("rgba(0, 0, 0, 0)");
               if (row.checked && state === "open") expect(row.optionsOpacity).toBeLessThan(1);
               else expect(row.optionsOpacity).toBe(1);
-              if (!row.checked) expect(row.label).toBe(lang === "uk" ? "Пропустити" : "Skip");
-              expect(row.reason).toBe(row.checked ? (lang === "uk" ? "Пропущено: вже вирішено або неактуально" : "Skipped: already decided or no longer relevant") : (lang === "uk" ? "Пропустити: вже вирішено або неактуально" : "Skip: already decided or no longer relevant"));
+              if (!row.checked) expect(row.label).toBe(lang === "uk" ? "Вже вирішено" : "Already decided");
+              expect(row.reason).toBe(row.checked ? (lang === "uk" ? "Пропущено: вже вирішено або неактуально" : "Skipped: already decided or no longer relevant") : (lang === "uk" ? "Вже вирішено: пропустити це питання, воно неактуальне" : "Already decided: skip this question, it is no longer relevant"));
             }
             expect(pageErrors).toEqual([]);
             readings.push({ lang, scheme, taskId, state, width: 390, ...reading, pageErrors });

@@ -10,8 +10,8 @@
         "checked": false,
         "disabled": false,
         "height": 36,
-        "label": "Skip",
-        "reason": "Skip: already decided or no longer relevant",
+        "label": "Already decided",
+        "reason": "Already decided: skip this question, it is no longer relevant",
         "optionsOpacity": 1,
         "markBackground": "rgb(248, 245, 240)",
         "insideFieldset": true,
@@ -49,7 +49,7 @@
         "skipped": true
       }
     ],
-    "record": "Answered · 20:55· «Done»: placement and deploydelivered1Where should the «Done» list be pinned? Above «Waiting for you»2When to deploy after the merge? SkippedTelegram: no post recorded yetSend to Telegram again",
+    "record": "Answered · 21:09· «Done»: placement and deploydelivered1Where should the «Done» list be pinned? Above «Waiting for you»2When to deploy after the merge? SkippedTelegram: no post recorded yetSend to Telegram again",
     "pageErrors": []
   },
   {
@@ -63,8 +63,8 @@
         "checked": false,
         "disabled": false,
         "height": 44,
-        "label": "Skip",
-        "reason": "Skip: already decided or no longer relevant",
+        "label": "Already decided",
+        "reason": "Already decided: skip this question, it is no longer relevant",
         "optionsOpacity": 1,
         "markBackground": "rgb(248, 245, 240)",
         "insideFieldset": true,
@@ -102,7 +102,7 @@
         "skipped": true
       }
     ],
-    "record": "Answered · 20:55· «Done»: placement and deploydelivered1Where should the «Done» list be pinned? Above «Waiting for you»2When to deploy after the merge? SkippedTelegram: no post recorded yetSend to Telegram again",
+    "record": "Answered · 21:09· «Done»: placement and deploydelivered1Where should the «Done» list be pinned? Above «Waiting for you»2When to deploy after the merge? SkippedTelegram: no post recorded yetSend to Telegram again",
     "pageErrors": []
   },
   {
@@ -116,8 +116,8 @@
         "checked": false,
         "disabled": false,
         "height": 36,
-        "label": "Skip",
-        "reason": "Skip: already decided or no longer relevant",
+        "label": "Already decided",
+        "reason": "Already decided: skip this question, it is no longer relevant",
         "optionsOpacity": 1,
         "markBackground": "rgb(20, 21, 27)",
         "insideFieldset": true,
@@ -155,7 +155,7 @@
         "skipped": true
       }
     ],
-    "record": "Answered · 20:55· «Done»: placement and deploydelivered1Where should the «Done» list be pinned? Above «Waiting for you»2When to deploy after the merge? SkippedTelegram: no post recorded yetSend to Telegram again",
+    "record": "Answered · 21:09· «Done»: placement and deploydelivered1Where should the «Done» list be pinned? Above «Waiting for you»2When to deploy after the merge? SkippedTelegram: no post recorded yetSend to Telegram again",
     "pageErrors": []
   },
   {
@@ -169,8 +169,8 @@
         "checked": false,
         "disabled": false,
         "height": 44,
-        "label": "Skip",
-        "reason": "Skip: already decided or no longer relevant",
+        "label": "Already decided",
+        "reason": "Already decided: skip this question, it is no longer relevant",
         "optionsOpacity": 1,
         "markBackground": "rgb(20, 21, 27)",
         "insideFieldset": true,
@@ -208,7 +208,7 @@
         "skipped": true
       }
     ],
-    "record": "Answered · 20:55· «Done»: placement and deploydelivered1Where should the «Done» list be pinned? Above «Waiting for you»2When to deploy after the merge? SkippedTelegram: no post recorded yetSend to Telegram again",
+    "record": "Answered · 21:09· «Done»: placement and deploydelivered1Where should the «Done» list be pinned? Above «Waiting for you»2When to deploy after the merge? SkippedTelegram: no post recorded yetSend to Telegram again",
     "pageErrors": []
   },
   {
@@ -222,8 +222,8 @@
         "checked": false,
         "disabled": false,
         "height": 36,
-        "label": "Пропустити",
-        "reason": "Пропустити: вже вирішено або неактуально",
+        "label": "Вже вирішено",
+        "reason": "Вже вирішено: пропустити це питання, воно неактуальне",
         "optionsOpacity": 1,
         "markBackground": "rgb(248, 245, 240)",
         "insideFieldset": true,
@@ -261,7 +261,7 @@
         "skipped": true
       }
     ],
-    "record": "Відповідь · 20:55· «Готово»: місце і деплойдоставлено1Де закріпити список «Готово»? Зверху «Чекають на вас»2Коли деплоїти після мержу? ПропущеноTelegram: публікацію ще не записаноНадіслати в Telegram ще раз",
+    "record": "Відповідь · 21:09· «Готово»: місце і деплойдоставлено1Де закріпити список «Готово»? Зверху «Чекають на вас»2Коли деплоїти після мержу? ПропущеноTelegram: публікацію ще не записаноНадіслати в Telegram ще раз",
     "pageErrors": []
   },
   {
@@ -275,8 +275,8 @@
         "checked": false,
         "disabled": false,
         "height": 44,
-        "label": "Пропустити",
-        "reason": "Пропустити: вже вирішено або неактуально",
+        "label": "Вже вирішено",
+        "reason": "Вже вирішено: пропустити це питання, воно неактуальне",
         "optionsOpacity": 1,
         "markBackground": "rgb(248, 245, 240)",
         "insideFieldset": true,
@@ -314,7 +314,7 @@
         "skipped": true
       }
     ],
-    "record": "Відповідь · 20:55· «Готово»: місце і деплойдоставлено1Де закріпити список «Готово»? Зверху «Чекають на вас»2Коли деплоїти після мержу? ПропущеноTelegram: публікацію ще не записаноНадіслати в Telegram ще раз",
+    "record": "Відповідь · 21:09· «Готово»: місце і деплойдоставлено1Де закріпити список «Готово»? Зверху «Чекають на вас»2Коли деплоїти після мержу? ПропущеноTelegram: публікацію ще не записаноНадіслати в Telegram ще раз",
     "pageErrors": []
   },
   {
@@ -328,8 +328,8 @@
         "checked": false,
         "disabled": false,
         "height": 36,
-        "label": "Пропустити",
-        "reason": "Пропустити: вже вирішено або неактуально",
+        "label": "Вже вирішено",
+        "reason": "Вже вирішено: пропустити це питання, воно неактуальне",
         "optionsOpacity": 1,
         "markBackground": "rgb(20, 21, 27)",
         "insideFieldset": true,
@@ -367,7 +367,7 @@
         "skipped": true
       }
     ],
-    "record": "Відповідь · 20:55· «Готово»: місце і деплойдоставлено1Де закріпити список «Готово»? Зверху «Чекають на вас»2Коли деплоїти після мержу? ПропущеноTelegram: публікацію ще не записаноНадіслати в Telegram ще раз",
+    "record": "Відповідь · 21:09· «Готово»: місце і деплойдоставлено1Де закріпити список «Готово»? Зверху «Чекають на вас»2Коли деплоїти після мержу? ПропущеноTelegram: публікацію ще не записаноНадіслати в Telegram ще раз",
     "pageErrors": []
   },
   {
@@ -381,8 +381,8 @@
         "checked": false,
         "disabled": false,
         "height": 44,
-        "label": "Пропустити",
-        "reason": "Пропустити: вже вирішено або неактуально",
+        "label": "Вже вирішено",
+        "reason": "Вже вирішено: пропустити це питання, воно неактуальне",
         "optionsOpacity": 1,
         "markBackground": "rgb(20, 21, 27)",
         "insideFieldset": true,
@@ -420,7 +420,7 @@
         "skipped": true
       }
     ],
-    "record": "Відповідь · 20:56· «Готово»: місце і деплойдоставлено1Де закріпити список «Готово»? Зверху «Чекають на вас»2Коли деплоїти після мержу? ПропущеноTelegram: публікацію ще не записаноНадіслати в Telegram ще раз",
+    "record": "Відповідь · 21:09· «Готово»: місце і деплойдоставлено1Де закріпити список «Готово»? Зверху «Чекають на вас»2Коли деплоїти після мержу? ПропущеноTelegram: публікацію ще не записаноНадіслати в Telegram ще раз",
     "pageErrors": []
   }
 ]

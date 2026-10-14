@@ -628,9 +628,13 @@ describe("short questionnaire", () => {
     expect(row!.getAttribute("role")).toBe("checkbox");
     expect(row!.tabIndex).toBe(0);
     expect(row!.closest('[role="group"], [role="radiogroup"]')).toBeNull();
-    expect(row!.textContent).toBe("Skip");
-    expect(row!.getAttribute("aria-label")).toBe("Skip: already decided or no longer relevant");
-    expect(row!.title).toBe("Skip: already decided or no longer relevant");
+    expect(row!.textContent).toBe("Already decided");
+    expect(row!.getAttribute("aria-label")).toBe("Already decided: skip this question, it is no longer relevant");
+    expect(row!.title).toBe("Already decided: skip this question, it is no longer relevant");
+    const footerSkip = document.querySelector<HTMLButtonElement>("[data-prototype-skip]");
+    expect(footerSkip).not.toBeNull();
+    expect(footerSkip!.textContent).toBe("Skip");
+    expect(footerSkip!.textContent).not.toBe(row!.textContent);
     await click('[data-prototype-question-skip="scope"]');
     const pressed = document.querySelector<HTMLButtonElement>('[data-prototype-question-skip="scope"]')!;
     expect(pressed.textContent).toBe("Skipped");
