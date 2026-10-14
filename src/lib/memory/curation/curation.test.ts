@@ -22,6 +22,9 @@ import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 import type { RoleMemoryRow } from "../roleTypes";
 import { persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
+import { seatTickWakeCommit, seatTickWakeCommitPlan } from "@/lib/monitor/seatTick";
+import { recoverDeadStructuredConversation } from "@/lib/runtime/structuredRecovery";
+import type { RuntimeHostClient } from "@/lib/runtime/client";
 
 const PROJECT = "curation-fixture";
 const NOW = Date.parse("2026-10-11T00:00:00Z");
@@ -105,6 +108,22 @@ test("a live seat needs a delivered wake within two configured intervals", async
   writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 1, lastWakeAt: at(-2 * interval) });
   expect(await f.controller.launchIfDue(f.tick)).toContain("launched");
   expect(f.bodies).toHaveLength(1);
+});
+test("delayed confirmation keeps the delivery time for curator freshness", async () => {
+  fixture(); const f = hostingFixture();
+  const interval = f.tick.settings.wakeIntervalMs;
+  f.seat(PROJECT, at(-interval - 1));
+  const reachedAt = at(-2 * interval - 1);
+  const commit = seatTickWakeCommitPlan({ kind: "wake", reasons: [{ kind: "interval", detail: "fixture" }], items: [], deferred: 0 } as never,
+    { fingerprint: "fixture", eventsThrough: 0 })!;
+  const delivered = seatTickWakeCommit(emptySeatTickState(), {
+    ...commit,
+  }, NOW, reachedAt);
+  writeSeatTickState(PROJECT, { ...delivered, seatEpoch: 1 });
+  expect(delivered.lastWakeAt).toBe(reachedAt);
+  expect(await f.controller.launchIfDue(f.tick)).toContain("no eligible project");
+  expect(f.bodies).toHaveLength(0);
+  expect(machinePass()).toBeNull();
 });
 test("the machine pass chooses the most recently woken eligible project", async () => {
   fixture("machine"); const f = hostingFixture();
@@ -676,8 +695,8 @@ test("guard binds an early receipt and admits only the machine's live curator co
   fixture(); const p = pass(); const registry = new AgentRegistry(path.join(dir, "registry.json"));
   const snapshot = structuredClone(registry.readOnlySnapshot());
   const id = ["conversation", "curator"].join("_") as `conversation_${string}`;
-  snapshot.conversations[id] = { id, agentRole: "curator", generations: [], continuityPaths: [] } as never;
-  snapshot.receipts.fixture = { conversationId: id, agentRole: "curator", clientAttemptId: p.id, state: "completed", launchId: "fixture", artifactPath: null } as never;
+  snapshot.conversations[id] = { id, agentRole: "curator", projectOwnership: { project: PROJECT }, generations: [], continuityPaths: [] } as never;
+  snapshot.receipts.fixture = { conversationId: id, agentRole: "curator", clientAttemptId: p.id, explicitProject: PROJECT, state: "completed", launchId: "fixture", artifactPath: null } as never;
   expect(curatorCallerOf(id, snapshot).id).toBe(p.id);
   expect(() => curatorCallerOf(null, snapshot)).toThrow(/live curator/);
   snapshot.conversations[id].agentRole = "builder";
@@ -688,6 +707,44 @@ test("guard binds an early receipt and admits only the machine's live curator co
   expect(permitCuratorTool("curate_rules", { action: "apply" })).toHaveProperty("allowed", true);
   expect(permitCuratorTool("role_presets", {})).toHaveProperty("allowed", true);
   expect(permitCuratorTool("role_presets", { overrides: [] })).toHaveProperty("allowed", false);
+});
+test("a curator receipt from another project cannot claim or authorize the pass", () => {
+  fixture(); const p = pass(); const registry = new AgentRegistry(path.join(dir, "registry.json"));
+  const snapshot = structuredClone(registry.readOnlySnapshot());
+  const id = ["conversation", "foreign-curator"].join("_") as `conversation_${string}`;
+  snapshot.conversations[id] = { id, agentRole: "curator", projectOwnership: { project: "foreign-project" }, generations: [], continuityPaths: [] } as never;
+  snapshot.receipts.fixture = { conversationId: id, agentRole: "curator", clientAttemptId: p.id, explicitProject: "foreign-project", state: "completed", launchId: "fixture", artifactPath: null } as never;
+  expect(() => curatorCallerOf(id, snapshot)).toThrow();
+  expect(readPass(p.id)?.conversationId).toBeNull();
+});
+test("ordinary structured recovery cannot continue a curator pass after its seat disappears", async () => {
+  fixture(); const f = hostingFixture(), p = pass(); const registry = f.sources.registry();
+  const sessionId = "curator-recovery-fixture";
+  const artifactPath = path.join(dir, `${sessionId}.jsonl`);
+  fs.writeFileSync(artifactPath, "");
+  const conversation = registry.ensureConversation("codex", artifactPath, "codex-test");
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: dir, accountId: "codex-test", role: "curator" as never,
+    clientAttemptId: p.id, explicitProject: PROJECT, transport: "structured", conversationId: conversation.id,
+    launchProfile: { cwd: dir, project: PROJECT, role: "curator" as never, title: "Role memory curation" } });
+  if (begun.kind !== "created") throw new Error("curator fixture receipt did not materialize");
+  const settled = registry.settleSpawn(begun.receipt.launchId, { key: { engine: "codex", sessionId }, artifactPath, cwd: dir,
+    accountId: "codex-test", launchProfile: begun.receipt.launchProfile, status: "dead", host: null,
+    claimEpoch: 0, claimOwner: null, pendingAction: null });
+  if (settled.kind !== "settled") throw new Error("curator fixture spawn did not settle");
+  const conversationId = conversation.id;
+  registry.conversation = AgentRegistry.prototype.conversation.bind(registry);
+  expect(registry.conversation(conversationId)?.generations.at(-1)?.path).toBe(artifactPath);
+  expect(registry.readOnlySnapshot().entries[`codex:${sessionId}`]?.status).toBe("dead");
+  patchPass(p.id, { state: "running", launchedAt: at(), conversationId, launchId: begun.receipt.launchId });
+  let spawns = 0;
+  await expect(recoverDeadStructuredConversation({ path: artifactPath, conversationId }, {
+    registry: registry as never, client: {} as RuntimeHostClient, transport: () => "structured", park: () => null,
+    resolveAccount: () => ({ engine: "codex", accountId: "codex-test", kind: "managed", home: dir, transcriptRoot: dir, env: { NODE_ENV: "test" } }),
+    spawn: async () => { spawns++; throw new Error("ineligible curator recovery spawned"); },
+  })).rejects.toThrow(/curation pass abandoned/);
+  expect(spawns).toBe(0);
+  expect(readPass(p.id)).toMatchObject({ state: "failed", failure: expect.stringContaining("abandoned") });
+  expect(machinePass()).toBeNull();
 });
 test("stubbed launch, restart reconcile and settle keep no board card", async () => {
   fixture(); let now = NOW, endedTurn = false; const bodies: Record<string, unknown>[] = [], archived: string[] = [];

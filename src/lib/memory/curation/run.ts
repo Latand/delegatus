@@ -2,7 +2,7 @@ import { launchAutonomousConversation, observeSpawnedTurn, type SpawnedTurnObser
 import { archiveConversationPaths } from "@/lib/board/archivePlacement";
 import { applyBoardCommand } from "@/lib/board/command";
 import { boardFor } from "@/lib/board/store";
-import { repoDirForProject, type SeatTickSources } from "@/lib/monitor/seatTickSources";
+import { defaultSeatTickSources, repoDirForProject, type SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { effectiveSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
 import { peekSeatTickState } from "@/lib/monitor/seatTickState";
@@ -14,6 +14,8 @@ import { canonicalProject } from "@/lib/projects/aliases";
 import { roleMemoryEnabled } from "../settings";
 import { curatorBrief } from "./brief";
 import { claimPass, curationStatus, currentPass, machinePass, patchPass, readPass, passIsLive, type CuratorPass } from "./store";
+import { curatorCallerOf } from "./guard";
+import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 
 const LAUNCH_GRACE_MS = 15 * 60_000;
 const TURN_LIMIT_MS = 60 * 60_000;
@@ -71,6 +73,34 @@ async function hostAdmission(project: string, ports: CurationPorts) {
   };
   const held = guard();
   return held ? { held } as const : { held: null, wakeAt: evidence.wakeAt, guard } as const;
+}
+
+/** Admission shared by ordinary message/resume recovery for curator conversations. */
+export async function curatorRecoveryGuard(conversationId: string, sources = defaultSeatTickSources()): Promise<() => void> {
+  const snapshot = sources.registry().readOnlySnapshot();
+  const pass = curatorCallerOf(conversationId, snapshot);
+  const ports: CurationPorts = { sources };
+  const host = await hostAdmission(pass.project, ports);
+  if (host.held !== null) {
+    settle(pass, ports, `abandoned: ${host.held}`);
+    throw new DeliveryAdmissionRefusedError(`curation pass abandoned: ${host.held}`);
+  }
+  const assert = () => {
+    const current = readPass(pass.id);
+    if (!current || !passIsLive(current) || machinePass()?.id !== pass.id || current.project !== pass.project) {
+      throw new DeliveryAdmissionRefusedError("curation pass is no longer live on its admitted host");
+    }
+    const currentHostFailure = host.guard();
+    if (currentHostFailure) {
+      settle(current, ports, `abandoned: ${currentHostFailure}`);
+      throw new DeliveryAdmissionRefusedError(`curation pass abandoned: ${currentHostFailure}`);
+    }
+    const held = admissionHeld(pass.project, ports);
+    if (held) throw new DeliveryAdmissionRefusedError(held);
+    curatorCallerOf(conversationId, sources.registry().readOnlySnapshot());
+  };
+  assert();
+  return assert;
 }
 
 function archive(pass: CuratorPass, sources: SeatTickSources) {
