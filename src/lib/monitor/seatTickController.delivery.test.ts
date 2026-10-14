@@ -1029,11 +1029,20 @@ test("a delivery whose terminal acknowledgement the record never received lands 
   const { fixture, journal, child, operationId, wake } = await strandedManagerWake("landed-by-journal");
   journal.operations.set(operationId, { status: "delivered", reason: null });
   const landed = childRig(fixture, { realWakeState: true, journal, now: fixture.now + 16 * MINUTE });
+  const readWakeState = landed.deps.sources!.wakeState;
+  let actualDeliveryAt: string | null = null;
+  landed.deps.sources!.wakeState = async pending => {
+    const result = await readWakeState(pending);
+    if (typeof result !== "string") actualDeliveryAt = result.evidence?.record?.settledAt ?? null;
+    return result;
+  };
   const record = await runSeatTickCheck(fixture.project, landed.deps);
   expect(landed.journal[0]).toMatchObject({ verdict: "landed", delivery: { clientMessageId: wake.clientMessageId, outcome: "landed" } });
   expect(landed.journal[0]!.detail).toContain("settled delivered on the journal's own verdict");
   expect(fixture.registry.readOnlySnapshot().deliveryOperationOwners[operationId]).toMatchObject({ terminalState: "delivered", terminalDisposition: "delivered" });
-  expect(fixture.row()).toMatchObject({ outstandingWake: null, lastWakeAt: new Date(fixture.now + 16 * MINUTE).toISOString() });
+  expect(actualDeliveryAt).not.toBeNull();
+  expect(fixture.row()).toMatchObject({ outstandingWake: null, lastWakeAt: actualDeliveryAt });
+  expect(actualDeliveryAt).not.toBe(new Date(fixture.now + 16 * MINUTE).toISOString());
   expect(fixture.acknowledged()).toEqual([child.id]);
   /* Credited, so the same check has nothing left to raise. */
   expect(record).toMatchObject({ verdict: "quiet" });

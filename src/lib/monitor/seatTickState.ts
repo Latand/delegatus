@@ -1,4 +1,4 @@
-import { normalizeSeatAutoRotation } from "./seatAutoRotation";
+import { normalizeSeatAutoRotation } from "./seatAutoRotationState";
 import { normalizeSeatHostRecovery } from "./seatHostRecovery";
 import { normalizeSeatAuthCredentialBaseline } from "@/lib/accounts/seatAuthCredentials";
 import { normalizeSeatAuthIncident, normalizeSeatAuthTelegramNotice, normalizeSeatAuthCardNotice } from "./seatAuthIncident";

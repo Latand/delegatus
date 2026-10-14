@@ -604,6 +604,34 @@ maintenance. A pass launches when all of these hold:
    project's last claim. A failed pass counts as a pass, so a broken setup
    retries after 6 hours.
 
+**Admission amendment, 2026-10-14.** Every launch, restart recovery and
+deferred spawn admission also requires the host project's designated seat
+to have an alive host in the shared liveness record and to be present and
+unretired. Its tick settings must be enabled. The tick's existing delivery
+stamp, `lastWakeAt`, must belong to that seat's epoch and designation and
+be within two configured wake intervals. Settings alone grant no admission.
+For shared scopes, choose the eligible project with the newest delivered
+wake, breaking ties by project key. Project-only rules stay in their own
+eligible project. With no eligible host, the tick journal records the reason.
+
+An incumbent whose host becomes ineligible settles as `failed` with an
+`abandoned:` reason. Recovery keeps its original project and never transfers
+it to another seat. Its existing writes and undo history remain. The sweep
+also visits an incumbent's project after its seat and open work disappear.
+
+Admission path inventory, including restart reapers:
+
+| Path | Project that owns the pass | Admission checked |
+| --- | --- | --- |
+| Seat-tick sweep: `reconcileCuration(project)` before gather and `launchCurationIfDue(input)` after wake | The incumbent's recorded project during reconciliation; the selected eligible project for a new machine-scope pass | Designated seat, live host/lifecycle, matching seat epoch and designation, fresh delivered-wake stamp, settings, update drain and deployment state; new shared passes choose newest delivered wake, then project key |
+| Manual `curate_rules` and ordinary structured resume/recovery | The live pass's persisted project, bound through its receipt | Receipt pass id and project binding, then the same seat and wake admission at recovery and delivery |
+| Pinned-account queue reaper (`actuateQueuedPinnedSpawn`) | The project bound to the durable curator receipt and pass | Rebuilt before claiming the queued actuation, after asynchronous account admission, and at the tmux spawn or structured spawn authorization fence; refusal fails the queued receipt and abandons an ineligible incumbent |
+| Staged structured-launch recovery after its continuation closure is lost | The project bound to the original durable curator receipt and pass | Rebuilt before retained-host publication, checked inside publication and again at the original first-message dispatch; refusal stops recovery and abandons the incumbent |
+
+Before conversation role metadata materializes, a queued curator launch uses
+its durable receipt as the role authority. Once a conversation has a role, a
+non-curator role remains a refusal.
+
 Thresholds are named constants beside `ROLE_MEMORY_BOUND`. The operator's
 existing switches cover it: the seat tick's on/off for the project, and the
 kill switch for the installation. The tick sweeps projects with an active
