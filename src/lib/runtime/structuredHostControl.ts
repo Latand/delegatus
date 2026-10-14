@@ -5,6 +5,7 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
+import { linuxProcessGroupId } from "@/lib/processGroup";
 import {
   captureProcessIdentity,
   processIdentityStatus,
@@ -360,19 +361,6 @@ export interface StructuredHostTerminationDependencies {
   sleep?(ms: number): Promise<void>;
   graceMs?: number;
   deadlineMs?: number;
-}
-
-function linuxProcessGroupId(pid: number): number | null {
-  if (procBackend.name !== "linux") return null;
-  try {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-    const close = stat.lastIndexOf(")");
-    if (close < 0) return null;
-    const group = Number(stat.slice(close + 2).trim().split(/\s+/)[2]);
-    return Number.isInteger(group) && group > 0 ? group : null;
-  } catch {
-    return null;
-  }
 }
 
 /**

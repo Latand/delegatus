@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,8 +16,13 @@ const LIFETIME = path.resolve(import.meta.dir, "../../testing/fixtureLifetime.ts
  * leaves the engine's session and process group, as a detached shell does, so
  * only a tree captured while the engine runs can still name it once the engine
  * is gone. Both bind to this runner's identity and exit with it.
+ *
+ * `stream` makes the engine something a Claude stream host can drive: it leads
+ * its own process group as a spawned engine does, keeps its standard streams
+ * piped, and answers the first line it reads with output that is not stream
+ * JSON, which is the stream fault that ends a host on its own.
  */
-export async function orphanWriterTree(options: { engineIgnoresTerm?: boolean; toolIgnoresTerm?: boolean } = {}) {
+export async function orphanWriterTree(options: { engineIgnoresTerm?: boolean; toolIgnoresTerm?: boolean; stream?: boolean } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-orphan-writer-"));
   const written = path.join(directory, "worktree-file.txt");
   fs.writeFileSync(written, "");
@@ -35,10 +40,15 @@ export async function orphanWriterTree(options: { engineIgnoresTerm?: boolean; t
     `const { spawn } = await import("node:child_process");`,
     `const tool = spawn(process.execPath, ["-e", ${JSON.stringify(tool)}], { detached: true, stdio: "ignore" });`,
     "tool.unref();",
-    "process.stdout.write(`${tool.pid}\\n`);",
+    options.stream
+      ? "process.stderr.write(`${tool.pid}\\n`); process.stdin.once('data', () => process.stdout.write('not json\\n'));"
+      : "process.stdout.write(`${tool.pid}\\n`);",
     "setInterval(() => {}, 1000);",
   ].join(" ");
-  const child = spawn(process.execPath, ["-e", engine], { env, stdio: ["ignore", "pipe", "ignore"] });
+  const child = spawn(process.execPath, ["-e", engine], options.stream
+    ? { env, stdio: ["pipe", "pipe", "pipe"], detached: true }
+    : { env, stdio: ["ignore", "pipe", "ignore"] }) as ChildProcessWithoutNullStreams;
+  const report = options.stream ? child.stderr : child.stdout;
   let engineIdentity: ProcessIdentity | null = null;
   let toolIdentity: ProcessIdentity | null = null;
   const stop = async () => {
@@ -54,7 +64,7 @@ export async function orphanWriterTree(options: { engineIgnoresTerm?: boolean; t
     const toolPid = await new Promise<number>((resolve, reject) => {
       let buffered = "";
       const timer = setTimeout(() => reject(new Error("orphan writer fixture did not report its tool within 5000ms")), 5_000);
-      child.stdout!.on("data", (chunk: Buffer) => {
+      report.on("data", (chunk: Buffer) => {
         buffered += chunk.toString("utf8");
         const line = buffered.split("\n")[0];
         if (buffered.includes("\n") && Number(line) > 0) { clearTimeout(timer); resolve(Number(line)); }
@@ -73,6 +83,7 @@ export async function orphanWriterTree(options: { engineIgnoresTerm?: boolean; t
     for (let attempt = 0; attempt < 250 && fs.statSync(written).size === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 20));
     if (fs.statSync(written).size === 0) throw new Error("orphan writer fixture tool never wrote");
     return {
+      child,
       engine: recordedEngine,
       tool: recordedTool,
       engineAlive: () => alive(recordedEngine),

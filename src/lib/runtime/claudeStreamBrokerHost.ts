@@ -15,7 +15,7 @@ import { applyClaudeSpawnPolicy, NATIVE_MULTI_AGENT_TOOLS, viewerMcpTransportFor
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { procBackend } from "@/lib/proc";
-import { signalDetachedProcessGroup, type ProcessSignal } from "@/lib/processGroup";
+import { captureProcessTree, signalDetachedProcessGroup, type ProcessSignal } from "@/lib/processGroup";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { claudeProviderForHome, readClaudeProviderRuntime, UnsafeClaudeHomeError } from "@/lib/accounts/claude";
@@ -274,6 +274,8 @@ export interface ClaudeStreamBrokerHostOptions {
   spawnProcess?: (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams;
   signalProcess?: ProcessSignal;
   processIdentity?: (pid: number) => string | null;
+  /** Reads the processes the child started, before its first stop signal. */
+  captureProcessTree?: (root: number) => ProcessIdentity[];
   readAuthStatus?: () => ClaudeAuthStatus | Promise<ClaudeAuthStatus>;
   readTranscript?: (cwd: string, sessionId: string) => ClaudeTranscriptUser[];
   compactEvidenceTimeoutMs?: number;
@@ -646,6 +648,9 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private readonly onEventCursorRecovery: RuntimeEventCursorRecoveryReporter | undefined;
   private readonly signalProcess: ProcessSignal;
   private readonly processIdentity: (pid: number) => string | null;
+  private readonly captureProcessTree: (root: number) => ProcessIdentity[];
+  private terminationCapture: ((root: number, tree: readonly ProcessIdentity[]) => void) | null = null;
+  private treeCaptured = false;
   private readonly childStartIdentity: string | null;
   private readonly subscribers = new Set<Subscriber>();
   private readonly events: RuntimeEvent[] = [];
@@ -714,6 +719,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.onEventCursorRecovery = options.onEventCursorRecovery;
     this.signalProcess = options.signalProcess ?? process.kill;
     this.processIdentity = options.processIdentity ?? ((pid) => procBackend.processIdentity(pid));
+    this.captureProcessTree = options.captureProcessTree ?? ((root) => captureProcessTree(root));
     this.childStartIdentity = child.pid ? this.processIdentity(child.pid) : null;
     this.releaseCleanup = options.releaseCleanup ?? null;
     this.cursor = options.initialEventCursor ?? 0;
@@ -1205,6 +1211,14 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   setWriterFence(fence: () => boolean): void { this.writerFence = fence; }
+
+  /** Told once, before this host's first stop signal, which processes its
+      child had started (#2790). A tool that left the child's process group
+      outlives the group signal, and once the child exits nothing can name it,
+      so whoever must prove the whole tree gone records it here. */
+  setTerminationCapture(listener: ((root: number, tree: readonly ProcessIdentity[]) => void) | null): void {
+    this.terminationCapture = listener;
+  }
 
   async release(): Promise<void> {
     if (this.released) return;
@@ -1728,18 +1742,35 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.startTermination();
   }
 
+  private releaseFenceHolds(): boolean {
+    const expected = this.releaseFence;
+    if (!expected) return true;
+    const pid = this.child.pid;
+    return Boolean(pid) && expected.startIdentity !== null
+      && pid === expected.pid
+      && this.childStartIdentity === expected.startIdentity
+      && this.processIdentity(pid!) === expected.startIdentity;
+  }
+
   private signalReleaseGroup(signal: NodeJS.Signals): boolean {
     // The memory cell owns fatal OOM cleanup through its unit or verified tree.
     if (this.memoryCell?.fatalMemoryExit) return true;
-    const expected = this.releaseFence;
-    if (expected) {
-      const pid = this.child.pid;
-      if (!pid || expected.startIdentity === null
-        || pid !== expected.pid
-        || this.childStartIdentity !== expected.startIdentity
-        || this.processIdentity(pid) !== expected.startIdentity) return false;
-    }
+    if (!this.releaseFenceHolds()) return false;
     return signalDetachedProcessGroup(this.child, signal, this.signalProcess);
+  }
+
+  /** Hands the child's process tree to the termination listener once, before
+      the first stop effect. The stop goes ahead whatever the listener does:
+      a stream that failed cannot be kept running. */
+  private captureTerminationTree(): void {
+    const listener = this.terminationCapture;
+    const pid = this.child.pid;
+    if (!listener || this.treeCaptured || !pid) return;
+    this.treeCaptured = true;
+    let tree: ProcessIdentity[];
+    try { tree = this.captureProcessTree(pid); } catch { return; }
+    if (tree.length === 0) return;
+    try { listener(pid, tree); } catch { /* the row keeps whatever it recorded */ }
   }
 
   private startTermination(): boolean {
@@ -1753,6 +1784,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       return true;
     }
     if (this.terminationStarted || this.reaped) return true;
+    if (this.releaseFenceHolds()) this.captureTerminationTree();
     try { this.child.stdin.end(); } catch { /* already closed */ }
     if (!this.signalReleaseGroup("SIGTERM")) return false;
     this.terminationStarted = true;

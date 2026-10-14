@@ -1,5 +1,9 @@
+import fs from "node:fs";
+
+import type { ProcessIdentity } from "@/lib/agent/registry";
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 
 export type ProcessSignal = (pid: number, signal: NodeJS.Signals) => void;
 
@@ -111,4 +115,48 @@ export function signalDetachedProcessGroup(
   } catch {
     return false;
   }
+}
+
+/** The process group a Linux pid belongs to, or null off Linux or once it is gone. */
+export function linuxProcessGroupId(pid: number): number | null {
+  if (procBackend.name !== "linux") return null;
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const close = stat.lastIndexOf(")");
+    if (close < 0) return null;
+    const group = Number(stat.slice(close + 2).trim().split(/\s+/)[2]);
+    return Number.isInteger(group) && group > 0 ? group : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every process a running root started, read before anything signals it
+ * (#2790): its descendants by parent, plus the members of the group it leads,
+ * each with the identity it has now. The root itself is left out. A member that
+ * calls setsid leaves the group, and once the root exits it is reparented, so
+ * after the root's first signal neither walk can name it any more. A pid whose
+ * identity cannot be read is left out too: it has already exited, or nothing
+ * could fence a later signal to it.
+ */
+export function captureProcessTree(
+  root: number,
+  source: Pick<ProcessTreeSource, "ppidMap" | "processIdentity"> & { processGroupId?(pid: number): number | null } = procBackend,
+): ProcessIdentity[] {
+  const groupOf = source.processGroupId ?? linuxProcessGroupId;
+  const parents = source.ppidMap();
+  const members = new Set(descendantPids(root, parents));
+  if (groupOf(root) === root) {
+    for (const candidate of parents.keys()) if (groupOf(candidate) === root) members.add(candidate);
+  }
+  members.delete(root);
+  const identities: ProcessIdentity[] = [];
+  for (const pid of members) {
+    const startIdentity = source.processIdentity(pid);
+    if (startIdentity === null) continue;
+    const identity = captureProcessIdentity(pid, undefined, startIdentity);
+    if (identity.bootEpoch) identities.push(identity);
+  }
+  return identities;
 }

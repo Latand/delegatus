@@ -7,6 +7,7 @@ import { procBackend } from "@/lib/proc";
 import { resetWindowsSnapshotForTests } from "@/lib/proc/windows";
 
 import {
+  captureProcessTree,
   processTreeTerminationOrder,
   signalDetachedProcessGroup,
   signalProcessGroup,
@@ -198,4 +199,28 @@ test("a detached child falls back to its own handle when the group signal finds 
   };
   expect(signalDetachedProcessGroup(child, "SIGTERM", () => undefined)).toBe(true);
   expect(killedDirectly).toBe(true);
+});
+
+/* #2790: what a stop must read before its first signal. A tool that called
+   setsid is still a descendant while its parent runs; a member reparented
+   away is still in the group the root leads. Both are named, the root is not,
+   and a pid whose identity cannot be read is left out. */
+test("captureProcessTree names descendants and group members with their identities, never the root", () => {
+  const groups: Record<number, number> = { 100: 100, 101: 100, 102: 102, 103: 100, 104: 100, 200: 200 };
+  const tree = captureProcessTree(100, {
+    ...source([[100, 1], [101, 100], [102, 101], [103, 1], [104, 100], [200, 1]], { 104: null }),
+    processGroupId: (pid) => groups[pid] ?? null,
+  });
+  expect(tree.map((identity) => [identity.pid, identity.startIdentity]).sort()).toEqual([
+    [101, "101:start"], [102, "102:start"], [103, "103:start"],
+  ]);
+  expect(tree.every((identity) => typeof identity.bootEpoch === "string" && identity.bootEpoch.length > 0)).toBe(true);
+});
+
+test("captureProcessTree reads no group when the root leads none", () => {
+  const tree = captureProcessTree(100, {
+    ...source([[100, 1], [101, 100], [103, 1]]),
+    processGroupId: (pid) => (pid === 100 ? 1 : 100),
+  });
+  expect(tree.map((identity) => identity.pid)).toEqual([101]);
 });
