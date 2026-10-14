@@ -158,9 +158,9 @@ jobs:
         id: trusted-tests
         if: github.event_name == 'push'
         working-directory: trusted
-        timeout-minutes: 3
+        timeout-minutes: 12
         continue-on-error: true
-        run: bun test scripts/privacy-*.test.ts
+        run: LLV_OWNED_RUN_TIMEOUT_MS=600000 bun scripts/owned-runner.ts bun test scripts/privacy-*.test.ts
 
       - name: Report trusted privacy self-test failure
         if: steps.trusted-tests.outcome == 'failure'
@@ -201,12 +201,13 @@ jobs:
 
       # Candidate code runs last, after all trusted inspection and cache writes.
       # It receives no credentials and cannot alter a later trusted verdict.
-      # Serial OCR prevents CLI overlap. A 44.90 s local suite at the 1.9
-      # hosted factor needs ceil((44.90 * 1.9) / 0.7 / 10) * 10 = 130 s.
+      # CPU scaling assertions determine bounded work. The owned runner
+      # supplies a generous cancellation guard and waits for cgroup cleanup;
+      # an outer timeout would interrupt its supervisor before cleanup finishes.
       - name: Verify candidate privacy gate behavior within budget
         if: steps.privacy-scope.outputs.run == 'true'
         working-directory: candidate
-        timeout-minutes: 3
+        timeout-minutes: 12
         run: |
           ln -sT ../trusted/node_modules node_modules
-          timeout --kill-after=5s 130s bun test scripts/privacy-*.test.ts
+          LLV_OWNED_RUN_TIMEOUT_MS=600000 bun scripts/owned-runner.ts bun test scripts/privacy-*.test.ts

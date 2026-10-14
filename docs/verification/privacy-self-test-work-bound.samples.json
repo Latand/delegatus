@@ -1,0 +1,2204 @@
+{
+  "schemaVersion": 1,
+  "baseline": "cff9cc6c461a2e6659ea03fdb99e87a1434e4c50",
+  "runtime": "1.3.3",
+  "testFile": "scripts/privacy-publication-gate.test.ts",
+  "stressFilter": "(unclosed block comments|large quoted JSON): all sources stay bounded",
+  "stressComparisons": [
+    {
+      "ownedLoadProcesses": 2,
+      "cpuAffinity": 0,
+      "samplesPerSide": 5,
+      "rows": [
+        {
+          "side": "base",
+          "repetition": 1,
+          "exitCode": 0,
+          "wallSeconds": 52.017
+        },
+        {
+          "side": "head",
+          "repetition": 1,
+          "exitCode": 0,
+          "wallSeconds": 9.11
+        },
+        {
+          "side": "base",
+          "repetition": 2,
+          "exitCode": 0,
+          "wallSeconds": 57.532
+        },
+        {
+          "side": "head",
+          "repetition": 2,
+          "exitCode": 0,
+          "wallSeconds": 9.57
+        },
+        {
+          "side": "base",
+          "repetition": 3,
+          "exitCode": 1,
+          "wallSeconds": 60.727
+        },
+        {
+          "side": "head",
+          "repetition": 3,
+          "exitCode": 0,
+          "wallSeconds": 19.543
+        },
+        {
+          "side": "base",
+          "repetition": 4,
+          "exitCode": 1,
+          "wallSeconds": 61.165
+        },
+        {
+          "side": "head",
+          "repetition": 4,
+          "exitCode": 0,
+          "wallSeconds": 17.263
+        },
+        {
+          "side": "base",
+          "repetition": 5,
+          "exitCode": 1,
+          "wallSeconds": 60.916
+        },
+        {
+          "side": "head",
+          "repetition": 5,
+          "exitCode": 0,
+          "wallSeconds": 17.35
+        }
+      ],
+      "loadSurvivors": 0
+    },
+    {
+      "ownedLoadProcesses": 4,
+      "cpuAffinity": 0,
+      "samplesPerSide": 5,
+      "rows": [
+        {
+          "side": "base",
+          "repetition": 1,
+          "exitCode": 1,
+          "wallSeconds": 61.136,
+          "survivingOwnedProcesses": []
+        },
+        {
+          "side": "head",
+          "repetition": 1,
+          "exitCode": 0,
+          "wallSeconds": 19.982,
+          "survivingOwnedProcesses": []
+        },
+        {
+          "side": "base",
+          "repetition": 2,
+          "exitCode": 1,
+          "wallSeconds": 61.659,
+          "survivingOwnedProcesses": []
+        },
+        {
+          "side": "head",
+          "repetition": 2,
+          "exitCode": 0,
+          "wallSeconds": 22.547,
+          "survivingOwnedProcesses": []
+        },
+        {
+          "side": "base",
+          "repetition": 3,
+          "exitCode": 1,
+          "wallSeconds": 61.313,
+          "survivingOwnedProcesses": []
+        },
+        {
+          "side": "head",
+          "repetition": 3,
+          "exitCode": 0,
+          "wallSeconds": 7.624,
+          "survivingOwnedProcesses": []
+        },
+        {
+          "side": "base",
+          "repetition": 4,
+          "exitCode": 0,
+          "wallSeconds": 43.69,
+          "survivingOwnedProcesses": []
+        },
+        {
+          "side": "head",
+          "repetition": 4,
+          "exitCode": 0,
+          "wallSeconds": 7.137,
+          "survivingOwnedProcesses": []
+        },
+        {
+          "side": "base",
+          "repetition": 5,
+          "exitCode": 0,
+          "wallSeconds": 42.386,
+          "survivingOwnedProcesses": []
+        },
+        {
+          "side": "head",
+          "repetition": 5,
+          "exitCode": 0,
+          "wallSeconds": 7.932,
+          "survivingOwnedProcesses": []
+        }
+      ],
+      "loadSurvivors": 0
+    }
+  ],
+  "ordinaryScalingSamples": [
+    {
+      "case": "unclosed block comments",
+      "source": "committed catalog",
+      "small": [
+        67530,
+        57655,
+        88324
+      ],
+      "large": [
+        352581,
+        431469,
+        440712
+      ],
+      "ratio": 6.3892936472678805
+    },
+    {
+      "case": "unclosed block comments",
+      "source": "compact fingerprint",
+      "small": [
+        829,
+        1330,
+        3279
+      ],
+      "large": [
+        4662,
+        5246,
+        5198
+      ],
+      "ratio": 3.9082706766917292
+    },
+    {
+      "case": "unclosed block comments",
+      "source": "exact fingerprint",
+      "small": [
+        5337,
+        5692,
+        9124
+      ],
+      "large": [
+        11728,
+        12499,
+        11561
+      ],
+      "ratio": 2.060435699226985
+    },
+    {
+      "case": "unclosed block comments",
+      "source": "compact env",
+      "small": [
+        1005,
+        790,
+        1096
+      ],
+      "large": [
+        7644,
+        5145,
+        4649
+      ],
+      "ratio": 5.119402985074627
+    },
+    {
+      "case": "unclosed block comments",
+      "source": "exact env",
+      "small": [
+        707,
+        772,
+        814
+      ],
+      "large": [
+        4694,
+        10982,
+        4862
+      ],
+      "ratio": 6.2979274611398965
+    },
+    {
+      "case": "unclosed block comments",
+      "source": "compact file",
+      "small": [
+        878,
+        702,
+        739
+      ],
+      "large": [
+        4240,
+        8089,
+        5090
+      ],
+      "ratio": 6.887686062246279
+    },
+    {
+      "case": "unclosed block comments",
+      "source": "exact file",
+      "small": [
+        649,
+        667,
+        699
+      ],
+      "large": [
+        7515,
+        8505,
+        5353
+      ],
+      "ratio": 11.266866566716642
+    },
+    {
+      "case": "unclosed block comments",
+      "source": "plain env",
+      "small": [
+        627,
+        660,
+        690
+      ],
+      "large": [
+        6293,
+        9324,
+        7659
+      ],
+      "ratio": 11.604545454545455
+    },
+    {
+      "case": "unclosed block comments",
+      "source": "plain file",
+      "small": [
+        3066,
+        641,
+        735
+      ],
+      "large": [
+        6145,
+        9774,
+        4596
+      ],
+      "ratio": 8.360544217687075
+    },
+    {
+      "case": "unclosed templates",
+      "source": "committed catalog",
+      "small": [
+        2307186,
+        2362853,
+        2361851
+      ],
+      "large": [
+        2986833,
+        3687817,
+        3333269
+      ],
+      "ratio": 1.411295208715537
+    },
+    {
+      "case": "unclosed templates",
+      "source": "compact fingerprint",
+      "small": [
+        1142,
+        2293,
+        879
+      ],
+      "large": [
+        6441,
+        7211,
+        3884
+      ],
+      "ratio": 5.640105078809107
+    },
+    {
+      "case": "unclosed templates",
+      "source": "exact fingerprint",
+      "small": [
+        4903,
+        3500,
+        2559
+      ],
+      "large": [
+        9113,
+        9795,
+        11842
+      ],
+      "ratio": 2.7985714285714285
+    },
+    {
+      "case": "unclosed templates",
+      "source": "compact env",
+      "small": [
+        1435,
+        3313,
+        2180
+      ],
+      "large": [
+        5740,
+        6423,
+        5578
+      ],
+      "ratio": 2.63302752293578
+    },
+    {
+      "case": "unclosed templates",
+      "source": "exact env",
+      "small": [
+        1221,
+        1019,
+        675
+      ],
+      "large": [
+        8328,
+        4535,
+        3968
+      ],
+      "ratio": 4.450441609421001
+    },
+    {
+      "case": "unclosed templates",
+      "source": "compact file",
+      "small": [
+        1092,
+        966,
+        662
+      ],
+      "large": [
+        9666,
+        6073,
+        6184
+      ],
+      "ratio": 6.401656314699793
+    },
+    {
+      "case": "unclosed templates",
+      "source": "exact file",
+      "small": [
+        823,
+        1283,
+        590
+      ],
+      "large": [
+        5623,
+        3205,
+        6420
+      ],
+      "ratio": 6.832320777642771
+    },
+    {
+      "case": "unclosed templates",
+      "source": "plain env",
+      "small": [
+        785,
+        1472,
+        518
+      ],
+      "large": [
+        4265,
+        3019,
+        9679
+      ],
+      "ratio": 5.43312101910828
+    },
+    {
+      "case": "unclosed templates",
+      "source": "plain file",
+      "small": [
+        847,
+        1287,
+        493
+      ],
+      "large": [
+        4428,
+        3065,
+        5939
+      ],
+      "ratio": 5.227863046044864
+    },
+    {
+      "case": "unclosed double quotes",
+      "source": "committed catalog",
+      "small": [
+        6043750,
+        5831797,
+        4753364
+      ],
+      "large": [
+        8690590,
+        6704627,
+        5939195
+      ],
+      "ratio": 1.1496674181217212
+    },
+    {
+      "case": "unclosed double quotes",
+      "source": "compact fingerprint",
+      "small": [
+        2094,
+        1449,
+        1482
+      ],
+      "large": [
+        5707,
+        7123,
+        7464
+      ],
+      "ratio": 4.8063427800269904
+    },
+    {
+      "case": "unclosed double quotes",
+      "source": "exact fingerprint",
+      "small": [
+        3707,
+        4211,
+        3071
+      ],
+      "large": [
+        8899,
+        12100,
+        5701
+      ],
+      "ratio": 2.400593471810089
+    },
+    {
+      "case": "unclosed double quotes",
+      "source": "compact env",
+      "small": [
+        2813,
+        1603,
+        1887
+      ],
+      "large": [
+        6118,
+        5619,
+        4021
+      ],
+      "ratio": 2.977742448330684
+    },
+    {
+      "case": "unclosed double quotes",
+      "source": "exact env",
+      "small": [
+        1200,
+        1530,
+        1608
+      ],
+      "large": [
+        9356,
+        5268,
+        4774
+      ],
+      "ratio": 3.443137254901961
+    },
+    {
+      "case": "unclosed double quotes",
+      "source": "compact file",
+      "small": [
+        745,
+        1487,
+        1668
+      ],
+      "large": [
+        6305,
+        5772,
+        5006
+      ],
+      "ratio": 3.8816408876933424
+    },
+    {
+      "case": "unclosed double quotes",
+      "source": "exact file",
+      "small": [
+        737,
+        1067,
+        728
+      ],
+      "large": [
+        5679,
+        6440,
+        6996
+      ],
+      "ratio": 8.738127544097694
+    },
+    {
+      "case": "unclosed double quotes",
+      "source": "plain env",
+      "small": [
+        639,
+        1851,
+        1065
+      ],
+      "large": [
+        4779,
+        3731,
+        10374
+      ],
+      "ratio": 4.487323943661972
+    },
+    {
+      "case": "unclosed double quotes",
+      "source": "plain file",
+      "small": [
+        661,
+        3690,
+        538
+      ],
+      "large": [
+        4778,
+        3561,
+        5198
+      ],
+      "ratio": 7.228441754916792
+    },
+    {
+      "case": "unclosed single quotes",
+      "source": "committed catalog",
+      "small": [
+        4658982,
+        4585876,
+        5815230
+      ],
+      "large": [
+        5948321,
+        6229284,
+        6799669
+      ],
+      "ratio": 1.3370483079780089
+    },
+    {
+      "case": "unclosed single quotes",
+      "source": "compact fingerprint",
+      "small": [
+        734,
+        1617,
+        1352
+      ],
+      "large": [
+        7451,
+        5434,
+        8038
+      ],
+      "ratio": 5.511094674556213
+    },
+    {
+      "case": "unclosed single quotes",
+      "source": "exact fingerprint",
+      "small": [
+        3023,
+        4000,
+        3014
+      ],
+      "large": [
+        11549,
+        10257,
+        9150
+      ],
+      "ratio": 3.3929870989083692
+    },
+    {
+      "case": "unclosed single quotes",
+      "source": "compact env",
+      "small": [
+        1573,
+        2995,
+        2008
+      ],
+      "large": [
+        7679,
+        7616,
+        4851
+      ],
+      "ratio": 3.7928286852589643
+    },
+    {
+      "case": "unclosed single quotes",
+      "source": "exact env",
+      "small": [
+        615,
+        1691,
+        1558
+      ],
+      "large": [
+        10565,
+        5972,
+        5570
+      ],
+      "ratio": 3.833119383825417
+    },
+    {
+      "case": "unclosed single quotes",
+      "source": "compact file",
+      "small": [
+        469,
+        1524,
+        1866
+      ],
+      "large": [
+        7961,
+        5674,
+        5728
+      ],
+      "ratio": 3.758530183727034
+    },
+    {
+      "case": "unclosed single quotes",
+      "source": "exact file",
+      "small": [
+        464,
+        1450,
+        1741
+      ],
+      "large": [
+        8071,
+        5464,
+        4721
+      ],
+      "ratio": 3.7682758620689656
+    },
+    {
+      "case": "unclosed single quotes",
+      "source": "plain env",
+      "small": [
+        438,
+        3456,
+        1769
+      ],
+      "large": [
+        6578,
+        5769,
+        8144
+      ],
+      "ratio": 3.7184850197851893
+    },
+    {
+      "case": "unclosed single quotes",
+      "source": "plain file",
+      "small": [
+        462,
+        1444,
+        1598
+      ],
+      "large": [
+        7331,
+        7474,
+        6639
+      ],
+      "ratio": 5.076869806094183
+    },
+    {
+      "case": "nested closing delimiters 0",
+      "source": "committed catalog",
+      "small": [
+        91026,
+        96705,
+        75011
+      ],
+      "large": [
+        677456,
+        720967,
+        832844
+      ],
+      "ratio": 7.920451299628677
+    },
+    {
+      "case": "nested closing delimiters 0",
+      "source": "compact fingerprint",
+      "small": [
+        1090,
+        980,
+        1359
+      ],
+      "large": [
+        8973,
+        8566,
+        4732
+      ],
+      "ratio": 7.858715596330275
+    },
+    {
+      "case": "nested closing delimiters 0",
+      "source": "exact fingerprint",
+      "small": [
+        3098,
+        2554,
+        2260
+      ],
+      "large": [
+        9975,
+        12048,
+        9587
+      ],
+      "ratio": 3.905638214565388
+    },
+    {
+      "case": "nested closing delimiters 0",
+      "source": "compact env",
+      "small": [
+        2365,
+        1698,
+        712
+      ],
+      "large": [
+        3995,
+        6276,
+        3778
+      ],
+      "ratio": 2.352767962308598
+    },
+    {
+      "case": "nested closing delimiters 0",
+      "source": "exact env",
+      "small": [
+        1297,
+        520,
+        441
+      ],
+      "large": [
+        5261,
+        5197,
+        3088
+      ],
+      "ratio": 9.99423076923077
+    },
+    {
+      "case": "nested closing delimiters 0",
+      "source": "compact file",
+      "small": [
+        1227,
+        5001,
+        480
+      ],
+      "large": [
+        6411,
+        6733,
+        3755
+      ],
+      "ratio": 5.224938875305623
+    },
+    {
+      "case": "nested closing delimiters 0",
+      "source": "exact file",
+      "small": [
+        585,
+        487,
+        494
+      ],
+      "large": [
+        6876,
+        9372,
+        3738
+      ],
+      "ratio": 13.919028340080972
+    },
+    {
+      "case": "nested closing delimiters 0",
+      "source": "plain env",
+      "small": [
+        467,
+        464,
+        480
+      ],
+      "large": [
+        3890,
+        6996,
+        3822
+      ],
+      "ratio": 8.329764453961456
+    },
+    {
+      "case": "nested closing delimiters 0",
+      "source": "plain file",
+      "small": [
+        469,
+        512,
+        513
+      ],
+      "large": [
+        3722,
+        3727,
+        5014
+      ],
+      "ratio": 7.279296875
+    },
+    {
+      "case": "nested closing delimiters 1",
+      "source": "committed catalog",
+      "small": [
+        82200,
+        89309,
+        94329
+      ],
+      "large": [
+        846002,
+        741386,
+        782666
+      ],
+      "ratio": 8.763573659989476
+    },
+    {
+      "case": "nested closing delimiters 1",
+      "source": "compact fingerprint",
+      "small": [
+        1734,
+        1142,
+        676
+      ],
+      "large": [
+        7205,
+        6992,
+        4255
+      ],
+      "ratio": 6.122591943957969
+    },
+    {
+      "case": "nested closing delimiters 1",
+      "source": "exact fingerprint",
+      "small": [
+        5079,
+        3277,
+        2210
+      ],
+      "large": [
+        12636,
+        9688,
+        8534
+      ],
+      "ratio": 2.956362526701251
+    },
+    {
+      "case": "nested closing delimiters 1",
+      "source": "compact env",
+      "small": [
+        1482,
+        1887,
+        1595
+      ],
+      "large": [
+        6630,
+        6807,
+        4556
+      ],
+      "ratio": 4.156739811912225
+    },
+    {
+      "case": "nested closing delimiters 1",
+      "source": "exact env",
+      "small": [
+        687,
+        1248,
+        366
+      ],
+      "large": [
+        5621,
+        5389,
+        3560
+      ],
+      "ratio": 7.844250363901019
+    },
+    {
+      "case": "nested closing delimiters 1",
+      "source": "compact file",
+      "small": [
+        1469,
+        659,
+        1750
+      ],
+      "large": [
+        6822,
+        6987,
+        3694
+      ],
+      "ratio": 4.6439754935330155
+    },
+    {
+      "case": "nested closing delimiters 1",
+      "source": "exact file",
+      "small": [
+        880,
+        588,
+        383
+      ],
+      "large": [
+        8168,
+        7600,
+        3987
+      ],
+      "ratio": 12.92517006802721
+    },
+    {
+      "case": "nested closing delimiters 1",
+      "source": "plain env",
+      "small": [
+        923,
+        602,
+        488
+      ],
+      "large": [
+        6413,
+        6987,
+        3583
+      ],
+      "ratio": 10.652823920265782
+    },
+    {
+      "case": "nested closing delimiters 1",
+      "source": "plain file",
+      "small": [
+        893,
+        604,
+        438
+      ],
+      "large": [
+        6366,
+        6307,
+        3972
+      ],
+      "ratio": 10.44205298013245
+    },
+    {
+      "case": "nested closing delimiters 2",
+      "source": "committed catalog",
+      "small": [
+        90320,
+        69876,
+        96861
+      ],
+      "large": [
+        621429,
+        688291,
+        684886
+      ],
+      "ratio": 7.582883082373782
+    },
+    {
+      "case": "nested closing delimiters 2",
+      "source": "compact fingerprint",
+      "small": [
+        1124,
+        1006,
+        1366
+      ],
+      "large": [
+        4411,
+        7303,
+        4695
+      ],
+      "ratio": 4.177046263345196
+    },
+    {
+      "case": "nested closing delimiters 2",
+      "source": "exact fingerprint",
+      "small": [
+        2914,
+        3371,
+        4970
+      ],
+      "large": [
+        8244,
+        12041,
+        8227
+      ],
+      "ratio": 2.4455651142094332
+    },
+    {
+      "case": "nested closing delimiters 2",
+      "source": "compact env",
+      "small": [
+        846,
+        594,
+        1596
+      ],
+      "large": [
+        4815,
+        6676,
+        5278
+      ],
+      "ratio": 6.238770685579196
+    },
+    {
+      "case": "nested closing delimiters 2",
+      "source": "exact env",
+      "small": [
+        393,
+        1494,
+        703
+      ],
+      "large": [
+        2784,
+        4864,
+        3261
+      ],
+      "ratio": 4.638691322901849
+    },
+    {
+      "case": "nested closing delimiters 2",
+      "source": "compact file",
+      "small": [
+        841,
+        964,
+        800
+      ],
+      "large": [
+        4546,
+        8248,
+        3782
+      ],
+      "ratio": 5.405469678953627
+    },
+    {
+      "case": "nested closing delimiters 2",
+      "source": "exact file",
+      "small": [
+        432,
+        494,
+        798
+      ],
+      "large": [
+        5489,
+        7177,
+        4294
+      ],
+      "ratio": 11.111336032388664
+    },
+    {
+      "case": "nested closing delimiters 2",
+      "source": "plain env",
+      "small": [
+        444,
+        476,
+        872
+      ],
+      "large": [
+        6318,
+        6540,
+        4446
+      ],
+      "ratio": 13.27310924369748
+    },
+    {
+      "case": "nested closing delimiters 2",
+      "source": "plain file",
+      "small": [
+        442,
+        453,
+        945
+      ],
+      "large": [
+        3286,
+        6922,
+        4635
+      ],
+      "ratio": 10.2317880794702
+    },
+    {
+      "case": "unclosed regex classes",
+      "source": "committed catalog",
+      "small": [
+        46438,
+        67482,
+        56060
+      ],
+      "large": [
+        483111,
+        441272,
+        370516
+      ],
+      "ratio": 7.871423474848377
+    },
+    {
+      "case": "unclosed regex classes",
+      "source": "compact fingerprint",
+      "small": [
+        640,
+        1547,
+        479
+      ],
+      "large": [
+        4145,
+        3959,
+        2306
+      ],
+      "ratio": 6.1859375
+    },
+    {
+      "case": "unclosed regex classes",
+      "source": "exact fingerprint",
+      "small": [
+        7635,
+        6044,
+        2432
+      ],
+      "large": [
+        10547,
+        7824,
+        4884
+      ],
+      "ratio": 1.2945069490403707
+    },
+    {
+      "case": "unclosed regex classes",
+      "source": "compact env",
+      "small": [
+        2578,
+        805,
+        298
+      ],
+      "large": [
+        3524,
+        4568,
+        4949
+      ],
+      "ratio": 5.6745341614906835
+    },
+    {
+      "case": "unclosed regex classes",
+      "source": "exact env",
+      "small": [
+        520,
+        817,
+        275
+      ],
+      "large": [
+        4238,
+        7445,
+        1720
+      ],
+      "ratio": 8.15
+    },
+    {
+      "case": "unclosed regex classes",
+      "source": "compact file",
+      "small": [
+        445,
+        720,
+        1031
+      ],
+      "large": [
+        4073,
+        2846,
+        1651
+      ],
+      "ratio": 3.952777777777778
+    },
+    {
+      "case": "unclosed regex classes",
+      "source": "exact file",
+      "small": [
+        1057,
+        654,
+        272
+      ],
+      "large": [
+        9982,
+        2994,
+        1696
+      ],
+      "ratio": 4.577981651376147
+    },
+    {
+      "case": "unclosed regex classes",
+      "source": "plain env",
+      "small": [
+        343,
+        709,
+        240
+      ],
+      "large": [
+        3386,
+        2749,
+        1743
+      ],
+      "ratio": 8.01457725947522
+    },
+    {
+      "case": "unclosed regex classes",
+      "source": "plain file",
+      "small": [
+        410,
+        621,
+        242
+      ],
+      "large": [
+        3407,
+        2578,
+        1811
+      ],
+      "ratio": 6.287804878048781
+    },
+    {
+      "case": "long identifiers",
+      "source": "committed catalog",
+      "small": [
+        37859,
+        30221,
+        38611
+      ],
+      "large": [
+        224124,
+        159818,
+        173049
+      ],
+      "ratio": 4.570881428458226
+    },
+    {
+      "case": "long identifiers",
+      "source": "compact fingerprint",
+      "small": [
+        2193,
+        655,
+        774
+      ],
+      "large": [
+        4708,
+        6320,
+        5301
+      ],
+      "ratio": 6.848837209302325
+    },
+    {
+      "case": "long identifiers",
+      "source": "exact fingerprint",
+      "small": [
+        2743,
+        3359,
+        2601
+      ],
+      "large": [
+        6030,
+        4519,
+        3700
+      ],
+      "ratio": 1.6474662777980313
+    },
+    {
+      "case": "long identifiers",
+      "source": "compact env",
+      "small": [
+        783,
+        368,
+        629
+      ],
+      "large": [
+        1799,
+        1955,
+        2628
+      ],
+      "ratio": 3.108108108108108
+    },
+    {
+      "case": "long identifiers",
+      "source": "exact env",
+      "small": [
+        995,
+        484,
+        442
+      ],
+      "large": [
+        1924,
+        2181,
+        1917
+      ],
+      "ratio": 3.975206611570248
+    },
+    {
+      "case": "long identifiers",
+      "source": "compact file",
+      "small": [
+        607,
+        654,
+        296
+      ],
+      "large": [
+        1697,
+        1917,
+        2040
+      ],
+      "ratio": 3.158154859967051
+    },
+    {
+      "case": "long identifiers",
+      "source": "exact file",
+      "small": [
+        563,
+        259,
+        278
+      ],
+      "large": [
+        2665,
+        2439,
+        2315
+      ],
+      "ratio": 8.773381294964029
+    },
+    {
+      "case": "long identifiers",
+      "source": "plain env",
+      "small": [
+        845,
+        282,
+        317
+      ],
+      "large": [
+        2014,
+        1990,
+        2025
+      ],
+      "ratio": 6.353312302839116
+    },
+    {
+      "case": "long identifiers",
+      "source": "plain file",
+      "small": [
+        1130,
+        302,
+        318
+      ],
+      "large": [
+        2017,
+        2477,
+        2040
+      ],
+      "ratio": 6.415094339622642
+    },
+    {
+      "case": "repeated declarations",
+      "source": "committed catalog",
+      "small": [
+        106524,
+        56615,
+        77353
+      ],
+      "large": [
+        536959,
+        449564,
+        509064
+      ],
+      "ratio": 6.581050508706838
+    },
+    {
+      "case": "repeated declarations",
+      "source": "compact fingerprint",
+      "small": [
+        1185,
+        540,
+        1713
+      ],
+      "large": [
+        3229,
+        5317,
+        3739
+      ],
+      "ratio": 3.1552742616033753
+    },
+    {
+      "case": "repeated declarations",
+      "source": "exact fingerprint",
+      "small": [
+        6310,
+        3159,
+        4350
+      ],
+      "large": [
+        12828,
+        19723,
+        19875
+      ],
+      "ratio": 4.534022988505747
+    },
+    {
+      "case": "repeated declarations",
+      "source": "compact env",
+      "small": [
+        1922,
+        463,
+        1933
+      ],
+      "large": [
+        2722,
+        2155,
+        4541
+      ],
+      "ratio": 1.4162330905306972
+    },
+    {
+      "case": "repeated declarations",
+      "source": "exact env",
+      "small": [
+        2257,
+        816,
+        881
+      ],
+      "large": [
+        5707,
+        2142,
+        5524
+      ],
+      "ratio": 6.270147559591374
+    },
+    {
+      "case": "repeated declarations",
+      "source": "compact file",
+      "small": [
+        1657,
+        436,
+        720
+      ],
+      "large": [
+        2293,
+        2720,
+        6525
+      ],
+      "ratio": 3.7777777777777777
+    },
+    {
+      "case": "repeated declarations",
+      "source": "exact file",
+      "small": [
+        1689,
+        347,
+        687
+      ],
+      "large": [
+        3750,
+        2809,
+        2237
+      ],
+      "ratio": 4.088791848617176
+    },
+    {
+      "case": "repeated declarations",
+      "source": "plain env",
+      "small": [
+        7994,
+        326,
+        545
+      ],
+      "large": [
+        1700,
+        2647,
+        1653
+      ],
+      "ratio": 3.1192660550458715
+    },
+    {
+      "case": "repeated declarations",
+      "source": "plain file",
+      "small": [
+        753,
+        348,
+        652
+      ],
+      "large": [
+        2572,
+        5886,
+        2213
+      ],
+      "ratio": 3.9447852760736195
+    },
+    {
+      "case": "long template identifiers",
+      "source": "committed catalog",
+      "small": [
+        26166,
+        35553,
+        36904
+      ],
+      "large": [
+        189997,
+        211601,
+        175929
+      ],
+      "ratio": 5.344049728574241
+    },
+    {
+      "case": "long template identifiers",
+      "source": "compact fingerprint",
+      "small": [
+        1724,
+        2401,
+        2692
+      ],
+      "large": [
+        4592,
+        4137,
+        6110
+      ],
+      "ratio": 1.912536443148688
+    },
+    {
+      "case": "long template identifiers",
+      "source": "exact fingerprint",
+      "small": [
+        1787,
+        1636,
+        2846
+      ],
+      "large": [
+        4347,
+        4351,
+        6018
+      ],
+      "ratio": 2.4348069390039173
+    },
+    {
+      "case": "long template identifiers",
+      "source": "compact env",
+      "small": [
+        268,
+        283,
+        2025
+      ],
+      "large": [
+        1491,
+        1348,
+        2066
+      ],
+      "ratio": 5.268551236749117
+    },
+    {
+      "case": "long template identifiers",
+      "source": "exact env",
+      "small": [
+        641,
+        319,
+        369
+      ],
+      "large": [
+        1745,
+        1844,
+        1729
+      ],
+      "ratio": 4.7289972899729
+    },
+    {
+      "case": "long template identifiers",
+      "source": "compact file",
+      "small": [
+        671,
+        305,
+        2312
+      ],
+      "large": [
+        1694,
+        1535,
+        1657
+      ],
+      "ratio": 2.4694485842026825
+    },
+    {
+      "case": "long template identifiers",
+      "source": "exact file",
+      "small": [
+        281,
+        285,
+        411
+      ],
+      "large": [
+        3452,
+        5619,
+        1768
+      ],
+      "ratio": 12.112280701754386
+    },
+    {
+      "case": "long template identifiers",
+      "source": "plain env",
+      "small": [
+        301,
+        277,
+        389
+      ],
+      "large": [
+        3891,
+        2971,
+        3624
+      ],
+      "ratio": 12.039867109634551
+    },
+    {
+      "case": "long template identifiers",
+      "source": "plain file",
+      "small": [
+        325,
+        279,
+        2359
+      ],
+      "large": [
+        1679,
+        2958,
+        1761
+      ],
+      "ratio": 5.418461538461538
+    },
+    {
+      "case": "long prose whitespace",
+      "source": "committed catalog",
+      "small": [
+        406492,
+        312494,
+        276141
+      ],
+      "large": [
+        567115,
+        431292,
+        444488
+      ],
+      "ratio": 1.4223889098670695
+    },
+    {
+      "case": "long prose whitespace",
+      "source": "compact fingerprint",
+      "small": [
+        536,
+        447,
+        602
+      ],
+      "large": [
+        3659,
+        2002,
+        5696
+      ],
+      "ratio": 6.826492537313433
+    },
+    {
+      "case": "long prose whitespace",
+      "source": "exact fingerprint",
+      "small": [
+        3155,
+        1845,
+        2729
+      ],
+      "large": [
+        5731,
+        5677,
+        13542
+      ],
+      "ratio": 2.1000366434591426
+    },
+    {
+      "case": "long prose whitespace",
+      "source": "compact env",
+      "small": [
+        261,
+        293,
+        273
+      ],
+      "large": [
+        2711,
+        1135,
+        3855
+      ],
+      "ratio": 9.93040293040293
+    },
+    {
+      "case": "long prose whitespace",
+      "source": "exact env",
+      "small": [
+        267,
+        439,
+        265
+      ],
+      "large": [
+        5870,
+        1499,
+        6235
+      ],
+      "ratio": 21.98501872659176
+    },
+    {
+      "case": "long prose whitespace",
+      "source": "compact file",
+      "small": [
+        613,
+        350,
+        232
+      ],
+      "large": [
+        3081,
+        1702,
+        7258
+      ],
+      "ratio": 8.802857142857142
+    },
+    {
+      "case": "long prose whitespace",
+      "source": "exact file",
+      "small": [
+        288,
+        285,
+        235
+      ],
+      "large": [
+        4342,
+        2293,
+        6406
+      ],
+      "ratio": 15.235087719298246
+    },
+    {
+      "case": "long prose whitespace",
+      "source": "plain env",
+      "small": [
+        395,
+        304,
+        226
+      ],
+      "large": [
+        3204,
+        1958,
+        6305
+      ],
+      "ratio": 10.539473684210526
+    },
+    {
+      "case": "long prose whitespace",
+      "source": "plain file",
+      "small": [
+        642,
+        304,
+        234
+      ],
+      "large": [
+        3160,
+        2032,
+        7884
+      ],
+      "ratio": 10.394736842105264
+    },
+    {
+      "case": "large unquoted tokens",
+      "source": "committed catalog",
+      "small": [
+        15370,
+        22135,
+        23636
+      ],
+      "large": [
+        187541,
+        167508,
+        132208
+      ],
+      "ratio": 7.567562683532866
+    },
+    {
+      "case": "large unquoted tokens",
+      "source": "compact fingerprint",
+      "small": [
+        1401,
+        1667,
+        715
+      ],
+      "large": [
+        1574,
+        1575,
+        1942
+      ],
+      "ratio": 1.1241970021413277
+    },
+    {
+      "case": "large unquoted tokens",
+      "source": "exact fingerprint",
+      "small": [
+        796,
+        306,
+        448
+      ],
+      "large": [
+        1350,
+        1356,
+        1568
+      ],
+      "ratio": 3.0267857142857144
+    },
+    {
+      "case": "large unquoted tokens",
+      "source": "compact env",
+      "small": [
+        190,
+        210,
+        262
+      ],
+      "large": [
+        1174,
+        1048,
+        1326
+      ],
+      "ratio": 5.59047619047619
+    },
+    {
+      "case": "large unquoted tokens",
+      "source": "exact env",
+      "small": [
+        396,
+        1242,
+        237
+      ],
+      "large": [
+        1168,
+        1219,
+        1235
+      ],
+      "ratio": 3.0782828282828283
+    },
+    {
+      "case": "large unquoted tokens",
+      "source": "compact file",
+      "small": [
+        213,
+        294,
+        319
+      ],
+      "large": [
+        962,
+        998,
+        1183
+      ],
+      "ratio": 3.3945578231292517
+    },
+    {
+      "case": "large unquoted tokens",
+      "source": "exact file",
+      "small": [
+        465,
+        217,
+        211
+      ],
+      "large": [
+        2223,
+        1065,
+        1173
+      ],
+      "ratio": 5.405529953917051
+    },
+    {
+      "case": "large unquoted tokens",
+      "source": "plain env",
+      "small": [
+        150,
+        180,
+        145
+      ],
+      "large": [
+        4119,
+        743,
+        4921
+      ],
+      "ratio": 27.46
+    },
+    {
+      "case": "large unquoted tokens",
+      "source": "plain file",
+      "small": [
+        184,
+        272,
+        192
+      ],
+      "large": [
+        962,
+        1002,
+        1122
+      ],
+      "ratio": 5.21875
+    },
+    {
+      "case": "large chained calls",
+      "source": "committed catalog",
+      "small": [
+        561321,
+        402963,
+        425915
+      ],
+      "large": [
+        3115713,
+        3453748,
+        2927090
+      ],
+      "ratio": 7.315339915241304
+    },
+    {
+      "case": "large chained calls",
+      "source": "compact fingerprint",
+      "small": [
+        5247,
+        4076,
+        7310
+      ],
+      "large": [
+        45139,
+        31063,
+        45008
+      ],
+      "ratio": 8.577854011816276
+    },
+    {
+      "case": "large chained calls",
+      "source": "exact fingerprint",
+      "small": [
+        7299,
+        15332,
+        6990
+      ],
+      "large": [
+        35662,
+        45223,
+        45530
+      ],
+      "ratio": 6.195780243869023
+    },
+    {
+      "case": "large chained calls",
+      "source": "compact env",
+      "small": [
+        7618,
+        9475,
+        6181
+      ],
+      "large": [
+        32172,
+        50814,
+        29701
+      ],
+      "ratio": 4.223155683906537
+    },
+    {
+      "case": "large chained calls",
+      "source": "exact env",
+      "small": [
+        7458,
+        4799,
+        6095
+      ],
+      "large": [
+        34009,
+        28600,
+        28800
+      ],
+      "ratio": 4.725184577522559
+    },
+    {
+      "case": "large chained calls",
+      "source": "compact file",
+      "small": [
+        5059,
+        5528,
+        6117
+      ],
+      "large": [
+        34120,
+        33635,
+        27131
+      ],
+      "ratio": 6.084479015918958
+    },
+    {
+      "case": "large chained calls",
+      "source": "exact file",
+      "small": [
+        5573,
+        5476,
+        6241
+      ],
+      "large": [
+        33930,
+        33266,
+        27842
+      ],
+      "ratio": 5.969136910102279
+    },
+    {
+      "case": "large chained calls",
+      "source": "plain env",
+      "small": [
+        5136,
+        5360,
+        6262
+      ],
+      "large": [
+        32062,
+        26914,
+        32127
+      ],
+      "ratio": 5.981716417910448
+    },
+    {
+      "case": "large chained calls",
+      "source": "plain file",
+      "small": [
+        4400,
+        5024,
+        6284
+      ],
+      "large": [
+        27248,
+        28288,
+        25026
+      ],
+      "ratio": 5.423566878980892
+    },
+    {
+      "case": "large quoted JSON",
+      "source": "committed catalog",
+      "small": [
+        35978,
+        34138,
+        27409
+      ],
+      "large": [
+        212577,
+        242405,
+        292991
+      ],
+      "ratio": 7.100738180326909
+    },
+    {
+      "case": "large quoted JSON",
+      "source": "compact fingerprint",
+      "small": [
+        388,
+        428,
+        1265
+      ],
+      "large": [
+        2031,
+        2250,
+        2260
+      ],
+      "ratio": 5.257009345794392
+    },
+    {
+      "case": "large quoted JSON",
+      "source": "exact fingerprint",
+      "small": [
+        1835,
+        604,
+        1303
+      ],
+      "large": [
+        6592,
+        3749,
+        5978
+      ],
+      "ratio": 4.587874136607828
+    },
+    {
+      "case": "large quoted JSON",
+      "source": "compact env",
+      "small": [
+        921,
+        338,
+        367
+      ],
+      "large": [
+        2042,
+        2017,
+        1849
+      ],
+      "ratio": 5.4959128065395095
+    },
+    {
+      "case": "large quoted JSON",
+      "source": "exact env",
+      "small": [
+        467,
+        298,
+        303
+      ],
+      "large": [
+        2269,
+        1798,
+        1671
+      ],
+      "ratio": 5.933993399339934
+    },
+    {
+      "case": "large quoted JSON",
+      "source": "compact file",
+      "small": [
+        285,
+        283,
+        3089
+      ],
+      "large": [
+        2191,
+        1762,
+        1854
+      ],
+      "ratio": 6.505263157894737
+    },
+    {
+      "case": "large quoted JSON",
+      "source": "exact file",
+      "small": [
+        182,
+        187,
+        175
+      ],
+      "large": [
+        2051,
+        2591,
+        1141
+      ],
+      "ratio": 11.26923076923077
+    },
+    {
+      "case": "large quoted JSON",
+      "source": "plain env",
+      "small": [
+        257,
+        322,
+        229
+      ],
+      "large": [
+        2287,
+        2432,
+        1739
+      ],
+      "ratio": 8.898832684824903
+    },
+    {
+      "case": "large quoted JSON",
+      "source": "plain file",
+      "small": [
+        633,
+        271,
+        216
+      ],
+      "large": [
+        2043,
+        4050,
+        2031
+      ],
+      "ratio": 7.538745387453875
+    }
+  ],
+  "quadraticControl": {
+    "case": "large quoted JSON",
+    "exitCode": 1,
+    "ratio": 43.1,
+    "limit": 32,
+    "guardExpired": false
+  },
+  "cancellationControl": {
+    "case": "unclosed block comments",
+    "childExitCode": 137,
+    "followingCase": "large quoted JSON",
+    "followingPassed": true,
+    "suiteExitCode": 1
+  },
+  "cleanupProbes": {
+    "file": "scripts/owned-runner.integration.test.ts",
+    "modes": [
+      "exit",
+      "deadline"
+    ],
+    "passed": 2
+  }
+}

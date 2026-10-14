@@ -13,7 +13,7 @@ export async function runPrivacyTestProcess(options: {
   stdin?: Uint8Array;
   stderr: "pipe";
   stdout: "pipe";
-}) {
+}, { timeoutMs = 20_000 }: { timeoutMs?: number } = {}) {
   if (active >= capacity) await new Promise<void>((resolve) => waiting.push(resolve));
   else active += 1;
   let child: ReturnType<typeof Bun.spawn> | undefined;
@@ -22,7 +22,7 @@ export async function runPrivacyTestProcess(options: {
     const process = Bun.spawn(options);
     child = process;
     // A stuck child fails independently of the workflow's outer suite cap.
-    timer = setTimeout(() => process.kill("SIGKILL"), 20_000);
+    timer = setTimeout(() => process.kill("SIGKILL"), timeoutMs);
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(process.stdout).arrayBuffer(),
       new Response(process.stderr).arrayBuffer(),
