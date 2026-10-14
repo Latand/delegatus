@@ -8,6 +8,146 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+## [1.13.0] — 2026-10-14
+
+### Added
+- **One worker limit for the whole machine, and a limit per project when
+  you want one.** **Workers per project** under **Settings** in the ⋯ menu
+  sets how many workers each project's orchestrator keeps running at once,
+  from 1 to 64; it starts at 3. The orchestrator's header shows
+  "workers 2 / 5" with the running count from the same counter the header
+  and Settings use, and a click on it gives that project its own limit or
+  resets it to the machine default; on a phone the same row is in the
+  orchestrator sheet. Above the limit the caption turns into a warning. A
+  running orchestrator reads the current value on its next wake, so a
+  change needs no rotation. Agents read and change both levels through
+  `role_presets`, an agent's change needs a reason, and every change is
+  recorded with who made it, from what value and why. The limit guides the
+  orchestrator and refuses no launch. The orchestrator's launch-only
+  **Maximum workers** parameter is retired ([#2784]).
+- **Voice Delegatus remembers earlier calls.** When a call ends, every five
+  minutes of new speech during a long call, and after a restart, Claude
+  Haiku 5.5 on one of your Claude subscription accounts writes a short
+  summary of what you asked, what was done, what was decided and what is
+  still open. A new call starts with up to five summaries from the last
+  seven days. The summaries stay on this install, outside agent memory and
+  transcript search, and the part of a call after a private group-history
+  read is left out. The voice settings list the notes with **Forget** and
+  **Forget all**, and a switch turns remembering off; it is on once Voice
+  Delegatus is on, and the conversation text goes to Claude for the
+  summary. Delegatus keeps at most 50 closed calls from the last 30 days
+  ([#2810]).
+- **A prototype review says whether it reached Telegram, and can be sent
+  again.** Publishing a round now waits for the Telegram post and records
+  it. A round too large for one Telegram message goes as a compact
+  preview with a link to the full review. A failed or unconfirmed post
+  shows its reason on the review, for example that the pairing is paused
+  or that Telegram did not confirm arrival, and it reaches the
+  orchestrator on its next wake. **Send to Telegram again** sits in the
+  review's actions and in the decision form, older rounds included, and
+  agents have `resend_prototype_review_telegram` for the same ([#2809]).
+
+### Changed
+- **The relay holds a busy request for up to two minutes.** When the
+  target is busy, its chat is busy or Delegatus is waiting to update, an
+  answer request is acknowledged and waits within one fixed budget of 120
+  seconds from the request's start, sending the service the `queued` step
+  when the service shows steps. It is answered as soon as room opens. A
+  request still waiting ten seconds before its deadline is declined as
+  busy; member quotas and accounts with no capacity answer at once. The
+  service must accept the longer claim window before it relies on it, and
+  it shows the queued step once it knows that step ([#2822]).
+- **Automatic updates hold new launches for at most ten minutes.** Only
+  turns and stages verified as live keep an update waiting; a host gone or
+  stalled for ten minutes no longer counts, while a long tool or a running
+  check keeps its turn protected. After two minutes without new starts an
+  update applies as soon as the live work finishes. When the hold runs out,
+  launches reopen for ten minutes before the next try, and the Update
+  dialog and `auto_updates` say why and when it retries ([#2815]).
+- **Orchestrator tools find a project by any of its names while scans
+  run.** A project can be named by its key, its display name or its
+  repository's folder name, in any letter case. A name that fits more than
+  one project is refused at once with the candidates, and an unknown one
+  with the closest matches, before anything is sent. Only projects with an
+  orchestrator resolve. A project is no longer recovered from an old
+  worktree path, which could send a request to the wrong orchestrator
+  ([#2821]).
+- **Less memory and fewer freezes on an install with a long history.**
+  - The Viewer releases registry views it no longer needs and closes a
+    database reader that failed to open; in a reproduction over 30,000
+    history rows its peak memory fell from about 1.5 GB to about 600 MB
+    ([#2816]).
+  - The MCP server each agent runs passes its large reads (pipelines,
+    prototypes, activity, transcript search, lifecycle events) to the
+    Viewer and keeps no copy; its peak memory in a replay fell from about
+    380 MB to about 110 MB. Those reads need the Viewer running ([#2814]).
+  - The Overview board reuses what did not change when the list of
+    conversations updates: on a catalog of 194 projects each update took
+    up to half a second of the browser's time and now takes about 30 ms
+    ([#2813]).
+  - Startup no longer re-reads every finished agent and every pipeline's
+    history to recover owners, and skips the identity migration it already
+    finished, so a promoted release is not held past its startup deadline
+    ([#2831], [#2828]).
+
+### Fixed
+- **The Viewer no longer stalls for twenty seconds at startup with many
+  pipelines.** Repeated reads of pipeline evidence blocked the web server
+  while stages resumed, and the page, the board and agent tools waited.
+  Startup now prepares that read once in short slices, and the board's
+  data loads in tens of milliseconds under the same load. The service log
+  names a timer more than 500 ms late (`[viewer loop-gap]`) and a pipelines
+  lock held more than a second (`[state lease-hold]`) ([#2823]).
+- **A damaged old transcript no longer stops new sessions from
+  appearing.** One unreadable line in an unchanged historical transcript
+  made every refresh of the conversation list fail, so new agents and
+  their callers were found late. The damaged lines are kept as unknown and
+  the refresh completes ([#2825]).
+- **The CPU queue cannot be held by a stage nobody runs.** A ticket left
+  behind by a stopped process held the head of the machine's CPU queue for
+  1 h 45 min while the machine was idle. A stage ticket nobody has checked
+  for a minute now lets the next one pass, keeping its place for when it
+  returns, and is removed after a day. A queue that admitted nothing past
+  its bound says so on the card: "CPU queue is stalled · 7th · nothing
+  started for 62 min". A Delegatus run on its own state directory, such as
+  a test or a capture, keeps its own queue ([#2818]).
+- **A message to another project's orchestrator by its name arrives.**
+  Agents addressing a seat by the project's display name were refused with
+  `scan_incomplete` for as long as other agents kept starting. A seat that
+  is designated is now found from its records without waiting for a scan
+  ([#2817]).
+- **Launches and messages no longer wait behind account work.** Signing in,
+  removing an account, binding accounts to projects and switching accounts
+  prepare their files and processes before they take the shared account
+  lock, and a launch, a resume or a send waits for a busy registry outside
+  that lock ([#2819]).
+- **The relay picks up new service features without the owner tools
+  switch.** Delegatus refreshes the service's features every five minutes
+  and after a refusal names an unknown one, and acknowledges a request as
+  soon as it claims it, before it chooses an account or starts an agent.
+  A request could otherwise be dropped as unacknowledged while an agent was
+  starting. A cancelled owner launch that failed and left nothing running
+  is settled after a minute, which frees the target slot it held
+  ([#2811]).
+- **An update is not refused while the agent tool catalog warms up.** The
+  deployment check of a new release waits up to 60 seconds for its first
+  catalog read, so a release with a cold catalog is promoted once the read
+  completes; a catalog that never completes still blocks it ([#2826]).
+
+### Maintainer notes
+- The pre-push hook runs the privacy check and the isolated checks at the
+  same time; both must pass, and a refusal or timeout of either stops the
+  other. Touched tests run on the branch first, up to three files at once,
+  and only failing files are compared with `origin/main`. A small
+  pre-commit lint needs no CPU admission. The runtime gate runs on every
+  pull request as `runtime-gate`, and locally when `Dockerfile`,
+  `src/runtime-host/**` or `bin/**` changes. The engine and seat
+  controller test suites are split into smaller files ([#2806]).
+- `scripts/cpu-admission.ts` keeps using the machine queue from any
+  environment, while an instance on another state directory uses
+  `<state>/cpu-gate/admission.sqlite` unless `LLV_GATE_LOCK_DIR` is set
+  ([#2818]).
+
 ## [1.12.0] — 2026-10-13
 
 ### Added
@@ -3232,7 +3372,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v1.12.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v1.13.0...HEAD
+[1.13.0]: https://github.com/Latand/delegatus/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/Latand/delegatus/compare/v1.11.0...v1.12.0
 [1.11.0]: https://github.com/Latand/delegatus/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/Latand/delegatus/compare/v1.9.0...v1.10.0
@@ -3730,6 +3871,7 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2780]: https://github.com/Latand/delegatus/pull/2780
 [#2782]: https://github.com/Latand/delegatus/pull/2782
 [#2783]: https://github.com/Latand/delegatus/pull/2783
+[#2784]: https://github.com/Latand/delegatus/pull/2784
 [#2785]: https://github.com/Latand/delegatus/pull/2785
 [#2786]: https://github.com/Latand/delegatus/pull/2786
 [#2787]: https://github.com/Latand/delegatus/pull/2787
@@ -3749,4 +3891,22 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2803]: https://github.com/Latand/delegatus/pull/2803
 [#2804]: https://github.com/Latand/delegatus/pull/2804
 [#2805]: https://github.com/Latand/delegatus/pull/2805
+[#2806]: https://github.com/Latand/delegatus/pull/2806
 [#2807]: https://github.com/Latand/delegatus/pull/2807
+[#2809]: https://github.com/Latand/delegatus/pull/2809
+[#2810]: https://github.com/Latand/delegatus/pull/2810
+[#2811]: https://github.com/Latand/delegatus/pull/2811
+[#2813]: https://github.com/Latand/delegatus/pull/2813
+[#2814]: https://github.com/Latand/delegatus/pull/2814
+[#2815]: https://github.com/Latand/delegatus/pull/2815
+[#2816]: https://github.com/Latand/delegatus/pull/2816
+[#2817]: https://github.com/Latand/delegatus/pull/2817
+[#2818]: https://github.com/Latand/delegatus/pull/2818
+[#2819]: https://github.com/Latand/delegatus/pull/2819
+[#2821]: https://github.com/Latand/delegatus/pull/2821
+[#2822]: https://github.com/Latand/delegatus/pull/2822
+[#2823]: https://github.com/Latand/delegatus/pull/2823
+[#2825]: https://github.com/Latand/delegatus/pull/2825
+[#2826]: https://github.com/Latand/delegatus/pull/2826
+[#2828]: https://github.com/Latand/delegatus/pull/2828
+[#2831]: https://github.com/Latand/delegatus/pull/2831

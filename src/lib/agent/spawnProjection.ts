@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { identityAlive, livenessProbe, receiptIsLive, type LivenessProbe } from "./accountLiveness";
 import { readOnlyConversationLookupFromSnapshot, type ConversationLookup, type RegistryFile, type SpawnReceipt } from "./registry";
 import { registryRowProjection, registryRowsMatching, type RegistryRowProjector } from "./sqliteRegistryStore";
 import { projectRootForCwd } from "@/lib/scanner/describe";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
-import type { FileEntry, StructuredSpawnCardState } from "@/lib/types";
+import { HOST_GONE_TURN_OPEN_REASON, type FileEntry, type StructuredSpawnCardState } from "@/lib/types";
 import type { MandateDelivery } from "@/lib/runtime/messageOrigin";
+import { readHostTurnRecord } from "@/lib/runtime/eventStore";
 import { stagedLaunchRecovery } from "@/lib/runtime/stagedRecovery";
 
 const TERMINAL_SPAWN_RECENT_MS = 15 * 60 * 1_000;
@@ -388,13 +390,14 @@ function newestLaunchReceipts(snapshot: RegistryFile, nowMs: number): SpawnRecei
     .map(([key]) => snapshot.receipts[key]!);
 }
 
-function projectedActivity(spawn: StructuredSpawnCardState, createdAt: string, nowMs: number): FileEntry["activity"] {
+function projectedActivity(spawn: StructuredSpawnCardState, createdAt: string, nowMs: number, live: boolean): FileEntry["activity"] {
+  if (live) return "live";
   const terminal = spawn.state === "failed" || spawn.state === "recovered";
   const createdMs = Date.parse(createdAt);
   if (terminal && Number.isFinite(createdMs) && nowMs - createdMs >= TERMINAL_SPAWN_RECENT_MS) return "idle";
   if (spawn.state === "failed") return "stalled";
   if (spawn.state === "recovered") return "recent";
-  return "live";
+  return Number.isFinite(createdMs) && nowMs - createdMs < TERMINAL_SPAWN_RECENT_MS ? "recent" : "idle";
 }
 
 /** A real assistant turn this launch produced, read from the live transcript
@@ -484,6 +487,7 @@ export function projectLaunchConversations(
   nowMs = Date.now(),
   artifactProbe: (pathname: string) => ArtifactProbeResult = readableArtifact,
   mandateFor?: (launchId: string) => MandateDelivery | undefined,
+  probe: LivenessProbe = livenessProbe({ now: () => nowMs }),
 ): LaunchProjection {
   const byPath = new Map(files.map((file) => [file.path, file]));
   const scannedPaths = new Set(byPath.keys());
@@ -528,7 +532,7 @@ export function projectLaunchConversations(
     if (receipt.artifactLifecycle !== "pending") {
       if (!materialized.artifactPresent || !withinAdoptionGrace(receipt, nowMs)) continue;
     }
-    cards.push(spawnCard(snapshot, receipt, spawn, scannedPaths, nowMs));
+    cards.push(spawnCard(snapshot, receipt, spawn, scannedPaths, nowMs, probe));
   }
   return { cards, facts, routes };
 }
@@ -547,7 +551,19 @@ function spawnCard(
   spawn: StructuredSpawnCardState,
   scannedPaths: ReadonlySet<string>,
   nowMs: number,
+  probe: LivenessProbe = livenessProbe({ now: () => nowMs }),
 ): FileEntry {
+  const entry = receipt.key ? snapshot.entries[`${receipt.key.engine}:${receipt.key.sessionId}`] : undefined;
+  const receiptLive = receiptIsLive(snapshot, receipt, probe);
+  const completedTurn = receiptLive && hasConfirmedEndedHostTurn(receipt, entry?.structuredHost, probe);
+  const live = receiptLive && !completedTurn;
+  const terminal = spawn.state === "failed" || spawn.state === "recovered";
+  const recordedHost = entry?.structuredHost?.process ?? entry?.host?.agent ?? entry?.host?.panePid ?? receipt.verifiedHost?.agent;
+  const hostGone = !terminal && !live && !!recordedHost && !identityAlive(recordedHost, probe);
+  /* A host that died over an open turn is the zombie the transcript rows read
+     as killed (#1487); a placeholder has no transcript turn boundary, so the
+     reason carries the host's own turn evidence to the same reading. */
+  const turnOpen = hostGone && hostTurnLeftOpen(receipt, entry?.structuredHost);
   const conversationId = readOnlyConversationLookupFromSnapshot(snapshot)
     .canonicalConversationId(receipt.conversationId);
   /* Pre-admission cards honor the explicit operator project the moment the
@@ -595,9 +611,10 @@ function spawnCard(
     ...(operatorHandoff ? { handoff: true } : {}),
     mtime: Date.parse(receipt.createdAt) / 1000,
     size: 0,
-    activity: projectedActivity(spawn, receipt.createdAt, nowMs),
-    activityReason: `structured_spawn_${spawn.state}`,
-    proc: null,
+    activity: completedTurn ? "idle" : projectedActivity(spawn, receipt.createdAt, nowMs, live),
+    activityReason: turnOpen ? HOST_GONE_TURN_OPEN_REASON
+      : !terminal && !live ? "structured_spawn_inactive" : `structured_spawn_${spawn.state}`,
+    proc: hostGone ? "killed" : null,
     pid: null,
     model: receipt.launchProfile.model,
     launchModel: receipt.launchProfile.model,
@@ -630,4 +647,33 @@ function spawnCard(
     } : {}),
     spawn,
   };
+}
+
+/** The placeholder's host recorded a turn that never ended: the ledger's
+    newest turn has no boundary, or the host still held an active turn that no
+    current ledger boundary closed. */
+function hostTurnLeftOpen(receipt: SpawnReceipt, host: RegistryFile["entries"][string]["structuredHost"]): boolean {
+  if (!receipt.key || !host) return false;
+  const record = readHostTurnRecord(receipt.key.sessionId, { frames: false });
+  if (record.state === "read" && record.turn) {
+    if (record.turn.closed === null) return true;
+    if ((record.lastSeq ?? 0) >= host.eventCursor) return false;
+  }
+  return !!host.activeTurnRef;
+}
+
+/** An alive structured host may remain idle after its turn finishes while a
+    launch receipt waits for transcript publication. Only a complete, current
+    host-ledger boundary can release that placeholder's working projection. */
+function hasConfirmedEndedHostTurn(
+  receipt: SpawnReceipt,
+  host: RegistryFile["entries"][string]["structuredHost"],
+  probe: LivenessProbe,
+): boolean {
+  if (!receipt.key || !host || host.activeTurnRef || !identityAlive(host.process, probe)) return false;
+  const record = readHostTurnRecord(receipt.key.sessionId, { frames: false });
+  return record.state === "read"
+    && record.complete === true
+    && record.turn?.closed?.by === "turn-ended"
+    && (record.lastSeq ?? 0) >= host.eventCursor;
 }

@@ -2451,3 +2451,55 @@ test.each(["before-recovery", "account-lock"] as const)("recovering an unsubmitt
     drain.releaseDrain(drain.drainFile(), "unsubmitted-recovery"); setAgentRegistryForTests(null);
   }
 });
+
+test.each(["absent", "transcript", "live-host", "different-path", "verdict"] as const)("stale working: closed reserved launch sweep respects %s evidence", async (evidence) => {
+  const host = await stageHostChild();
+  if (evidence !== "live-host") await host.end();
+  try {
+    const f = await stagedRecoveryHarness("timeout", { hostProcess: host.process, nativeTranscript: true });
+    productionHostSeams(f);
+    await tickPipelines([], f.h.ports);
+    const receipt = f.registry.readOnlySnapshot().receipts[f.launchId()]!;
+    if (evidence !== "live-host") {
+      const writer = f.registry.readOnlySnapshot().entries[`codex:${receipt.key!.sessionId}`]!;
+      f.registry.setStructuredHostClaimed(receipt.key!, { ...writer.structuredHost!, process: null }, "dead", writer.claimOwner!, writer.claimEpoch, true);
+    }
+    const pipelines = loadPipelines();
+    const pipeline = pipelines[0]!;
+    pipeline.state = "closed";
+    pipeline.cursor = null;
+    pipeline.closedAt = f.h.ports.now();
+    const attempt = pipeline.runs[0]!.attempts[0]!;
+    attempt.state = "needs_decision";
+    attempt.completedAt = f.h.ports.now();
+    attempt.agentPath = evidence === "different-path" ? "/repo/different.jsonl" : receipt.artifactPath;
+    attempt.sessionId = receipt.key!.sessionId;
+    if (evidence === "verdict") attempt.verdict = { status: "pass", findings: [] };
+    savePipelines(pipelines);
+    if (evidence === "transcript") fs.writeFileSync(receipt.artifactPath!, "{}\n");
+    f.h.ports.transcriptPresent = (pathname) => fs.existsSync(pathname);
+    f.advance(58 * 60 * 60_000);
+    const spawning = spyOn(f.h.ports, "spawnAgent");
+    const recovering = spyOn(f.h.ports, "recoverStagedLaunch");
+    let resumes = 0;
+    f.h.ports.resumeSeveredTurn = async () => { resumes++; return false; };
+    await tickPipelines([], f.h.ports);
+    expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe(evidence === "absent" ? "failed" : "path-pending");
+    if (evidence === "absent") {
+      const snapshot = f.registry.readOnlySnapshot();
+      expect(snapshot.receipts[f.launchId()]!.error).toBe("stage launch never started: pipeline closed");
+      expect(snapshot.entries[`codex:${receipt.key!.sessionId}`]!.pendingAction).toBeNull();
+      expect(f.attempt().state).toBe("failed");
+      const { projectLaunchConversations } = await import("@/lib/agent/spawnProjection");
+      expect(projectLaunchConversations([], snapshot, Date.parse(f.h.ports.now())).cards).toEqual([]);
+    }
+    const settled = JSON.stringify(loadPipelines());
+    await tickPipelines([], f.h.ports);
+    expect(JSON.stringify(loadPipelines())).toBe(settled);
+    expect(spawning).not.toHaveBeenCalled();
+    expect(recovering).not.toHaveBeenCalled();
+    expect(resumes).toBe(0);
+    expect(f.starts()).toBe(1);
+    expect(f.messages()).toBe(0);
+  } finally { setAgentRegistryForTests(null); await host.end(); }
+});
