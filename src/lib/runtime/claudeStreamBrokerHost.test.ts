@@ -43,8 +43,10 @@ import {
   claudeHostColumns,
   demoteSkippedStructuredRegistryHosts,
   startClaudeStructuredHost,
+  stopTerminalStructuredOrphan,
   structuredHostsEnabled,
 } from "./registry";
+import { orphanWriterTree } from "./fixtures/orphanWriterTree";
 import { claudeStartupHostOptions, type ClaudeStartupOwner } from "./startup";
 
 /* #1905: the config and state root a spawned agent runs under, plus the `gh`
@@ -2712,6 +2714,168 @@ describe("ClaudeStreamBrokerHost", () => {
       await fixture.stop();
     }
   }, 10_000);
+
+  /* #2790: the orphan's own pid is not the whole writer. A detached shell or
+     tool it started keeps appending in the worktree after the engine exits,
+     and once the engine is gone no parent walk can name it. Every stop that
+     clears the way for a successor must capture that tree before its first
+     signal and confirm each member gone; a survivor stays on the row and
+     refuses the claim, so neither a successor nor a lost identity follows. */
+  async function terminalRowOverWriterTree(
+    sessionId: string,
+    options: { engineIgnoresTerm?: boolean; toolIgnoresTerm?: boolean } = {},
+  ) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-orphan-tree-"));
+    const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+    const tree = await orphanWriterTree(options);
+    const goneViewer = { pid: 2_000_000_119, startIdentity: "gone-viewer" };
+    registry.upsert({
+      key: { engine: "claude", sessionId },
+      artifactPath: `/sessions/${sessionId}.jsonl`,
+      cwd: "/repo",
+      accountId: null,
+      status: "dead",
+      host: null,
+      structuredHost: {
+        kind: "claude-broker",
+        endpoint: `stdio:${tree.engine.pid}`,
+        process: tree.engine,
+        eventCursor: 2,
+        protocolVersion: "2.1.197",
+        writerClaimEpoch: 1,
+        activeTurnRef: null,
+        pendingAttention: [],
+        activeFlags: [],
+      },
+      claimEpoch: 1,
+      claimOwner: `structured-host:${JSON.stringify(goneViewer)}`,
+      pendingAction: null,
+    });
+    const key = { engine: "claude" as const, sessionId };
+    const row = () => registry.snapshot().entries[`claude:${sessionId}`]!;
+    return { registry, tree, key, row, stop: async () => { await tree.stop(); fs.rmSync(directory, { recursive: true, force: true }); } };
+  }
+  /* The tool outlives the ladder: it ignores SIGTERM and the deadline comes
+     before the escalation would. */
+  const incompleteCleanup = { graceMs: 60_000, deadlineMs: 300 };
+  const successor = () => captureProcessIdentity(process.pid);
+
+  for (const engineIgnoresTerm of [false, true]) {
+    test(`a terminal-row orphan stop ends its detached writer before a successor claims the row${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
+      const fixture = await terminalRowOverWriterTree(`orphan-tree-stop-${engineIgnoresTerm}`, { engineIgnoresTerm });
+      try {
+        expect(fixture.registry.claimStructuredHost(fixture.key, successor(), { allowUnhosted: true })).toBeNull();
+        expect(await stopTerminalStructuredOrphan(fixture.registry, fixture.key)).toBe(true);
+        expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: false, tool: false });
+        expect(await fixture.tree.stillWriting()).toBe(false);
+        /* The stopped root stays recorded; only the settled capture leaves. */
+        expect(fixture.row().structuredTerminationSurvivors).toBeUndefined();
+        expect(fixture.row().structuredHost).toMatchObject({ process: fixture.tree.engine, eventCursor: 2 });
+        expect(fixture.registry.claimStructuredHost(fixture.key, successor(), { allowUnhosted: true })).toMatchObject({ claimEpoch: 2 });
+      } finally {
+        await fixture.stop();
+      }
+    }, 15_000);
+  }
+
+  test("a writer that outlives the orphan stop stays captured on the row and refuses every successor claim", async () => {
+    const fixture = await terminalRowOverWriterTree("orphan-tree-incomplete", { toolIgnoresTerm: true });
+    try {
+      expect(await stopTerminalStructuredOrphan(fixture.registry, fixture.key, incompleteCleanup)).toBe(false);
+      expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: false, tool: true });
+      expect(fixture.row().structuredHost?.process).toEqual(fixture.tree.engine);
+      expect(fixture.row().structuredTerminationSurvivors).toContainEqual(fixture.tree.tool);
+      expect(fixture.registry.claimStructuredHost(fixture.key, successor(), { allowUnhosted: true })).toBeNull();
+
+      /* With the engine gone, only the retained capture still names the tool.
+         The next stop ends it from there and then lets the claim through. */
+      expect(await stopTerminalStructuredOrphan(fixture.registry, fixture.key)).toBe(true);
+      expect(fixture.tree.toolAlive()).toBe(false);
+      expect(await fixture.tree.stillWriting()).toBe(false);
+      expect(fixture.row().structuredTerminationSurvivors).toBeUndefined();
+      expect(fixture.registry.claimStructuredHost(fixture.key, successor(), { allowUnhosted: true })).toMatchObject({ claimEpoch: 2 });
+    } finally {
+      await fixture.stop();
+    }
+  }, 15_000);
+
+  function adoptionOptions(fixture: Awaited<ReturnType<typeof terminalRowOverWriterTree>>, resumed: Array<{ engine: boolean; tool: boolean }>) {
+    const ledger = new RecordingDeliveryLedger();
+    const replacement = new FakeClaude(ledger);
+    return () => ({
+      cwd: "/repo",
+      deliveryLedger: ledger,
+      eventStore: new MemoryEventStore(),
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai" as const, subscriptionType: "max" }),
+      readTranscript: () => [],
+      spawnProcess: (command: string, args: string[], options: SpawnOptionsWithoutStdio) => {
+        resumed.push({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() });
+        return fakeSpawn(replacement, {})(command, args, options);
+      },
+    });
+  }
+
+  for (const engineIgnoresTerm of [false, true]) {
+    test(`boot adoption ends an orphan's detached writer before it resumes the session${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
+      const fixture = await terminalRowOverWriterTree(`orphan-tree-adoption-${engineIgnoresTerm}`, { engineIgnoresTerm });
+      const resumed: Array<{ engine: boolean; tool: boolean }> = [];
+      let adopted: Awaited<ReturnType<typeof adoptClaudeRegistryHosts>> = [];
+      try {
+        adopted = await adoptClaudeRegistryHosts(fixture.registry, adoptionOptions(fixture, resumed),
+          { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" });
+        expect(resumed).toEqual([{ engine: false, tool: false }]);
+        expect(adopted).toHaveLength(1);
+        expect(await fixture.tree.stillWriting()).toBe(false);
+      } finally {
+        for (const item of adopted) await item.host.release();
+        await fixture.stop();
+      }
+    }, 15_000);
+  }
+
+  test("boot adoption resumes nothing while an orphan's writer outlives its stop", async () => {
+    const fixture = await terminalRowOverWriterTree("orphan-tree-adoption-incomplete", { toolIgnoresTerm: true });
+    const resumed: Array<{ engine: boolean; tool: boolean }> = [];
+    let adopted: Awaited<ReturnType<typeof adoptClaudeRegistryHosts>> = [];
+    try {
+      adopted = await adoptClaudeRegistryHosts(fixture.registry, adoptionOptions(fixture, resumed),
+        { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" }, () => true, undefined, { orphanStop: incompleteCleanup });
+      expect(adopted).toHaveLength(0);
+      expect(resumed).toEqual([]);
+      expect(fixture.tree.toolAlive()).toBe(true);
+      expect(fixture.row()).toMatchObject({ status: "dead", claimEpoch: 1, structuredHost: { process: fixture.tree.engine } });
+      expect(fixture.row().structuredTerminationSurvivors).toContainEqual(fixture.tree.tool);
+    } finally {
+      for (const item of adopted) await item.host.release();
+      await fixture.stop();
+    }
+  }, 15_000);
+
+  for (const engineIgnoresTerm of [false, true]) {
+    test(`startup demotion ends an orphan's detached writer before it forgets the identity${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
+      const fixture = await terminalRowOverWriterTree(`orphan-tree-demotion-${engineIgnoresTerm}`, { engineIgnoresTerm });
+      try {
+        await demoteSkippedStructuredRegistryHosts(fixture.registry, () => false);
+        expect({ engine: fixture.tree.engineAlive(), tool: fixture.tree.toolAlive() }).toEqual({ engine: false, tool: false });
+        expect(await fixture.tree.stillWriting()).toBe(false);
+        expect(fixture.row()).toMatchObject({ status: "dead", claimOwner: null, structuredHost: { endpoint: "stdio:released", process: null } });
+      } finally {
+        await fixture.stop();
+      }
+    }, 15_000);
+  }
+
+  test("startup demotion keeps the orphan's identity while its writer outlives the stop", async () => {
+    const fixture = await terminalRowOverWriterTree("orphan-tree-demotion-incomplete", { toolIgnoresTerm: true });
+    try {
+      await demoteSkippedStructuredRegistryHosts(fixture.registry, () => false, undefined, incompleteCleanup);
+      expect(fixture.tree.toolAlive()).toBe(true);
+      expect(fixture.row()).toMatchObject({ status: "dead", claimEpoch: 1, structuredHost: { process: fixture.tree.engine } });
+      expect(fixture.row().structuredTerminationSurvivors).toContainEqual(fixture.tree.tool);
+    } finally {
+      await fixture.stop();
+    }
+  }, 15_000);
 
   test("startup demotion reaps a surviving skipped Claude child", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-skipped-orphan-"));

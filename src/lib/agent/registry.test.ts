@@ -4293,6 +4293,34 @@ describe("structured host retirement (issue #1199)", () => {
     });
   }
 
+  /* #2790: an orphan stop lifts its captured tree only when every captured
+     writer is proven gone, and leaves the stopped root recorded so the claim
+     that follows reads the same columns a reaped host leaves. */
+  test("a captured orphan tree settles only once each captured writer is confirmed gone", () => {
+    const root = { pid: 424_310, startIdentity: "424310:engine" };
+    const tool = { pid: 424_311, startIdentity: "424311:tool" };
+    const alive = new Set([root.pid, tool.pid]);
+    const store = registry((owner) => alive.has(owner.pid));
+    store.upsert({ ...hostedEntry(root), status: "dead", claimEpoch: 1 });
+    expect(store.recordStructuredTerminationSurvivors(KEY, root, [root, tool])).toBeTrue();
+    const row = () => store.readOnlySnapshot().entries[`codex:${KEY.sessionId}`]!;
+
+    alive.delete(root.pid);
+    /* The tool was never confirmed, then is confirmed while it still runs. */
+    expect(store.settleStructuredTerminationSurvivors(KEY, root, [root])).toBeFalse();
+    expect(store.settleStructuredTerminationSurvivors(KEY, root, [root, tool])).toBeFalse();
+    expect(row().structuredTerminationSurvivors).toEqual([root, tool]);
+    expect(store.claimStructuredHost(KEY, { pid: 424_312, startIdentity: "424312:successor" }, { allowUnhosted: true })).toBeNull();
+
+    alive.delete(tool.pid);
+    expect(store.settleStructuredTerminationSurvivors(KEY, { pid: 424_399, startIdentity: "424399:other" }, [root, tool])).toBeFalse();
+    expect(store.settleStructuredTerminationSurvivors(KEY, root, [root, tool])).toBeTrue();
+    expect(row().structuredTerminationSurvivors).toBeUndefined();
+    expect(row()).toMatchObject({ status: "dead", claimEpoch: 1, structuredHost: { process: root } });
+    expect(store.claimStructuredHost(KEY, { pid: 424_312, startIdentity: "424312:successor" }, { allowUnhosted: true }))
+      .toMatchObject({ claimEpoch: 2 });
+  });
+
   test("a row that names no process at all is still the caller's to clear", () => {
     const store = registry();
     store.upsert(hostedEntry(null));

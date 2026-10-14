@@ -34,6 +34,7 @@ import { ADMISSION_RETRY_DEADLINE_MS, INITIAL_MESSAGE_TIMEOUT_MS, STALE_STRUCTUR
 import { materializeStructuredTerminal } from "./structuredTerminal";
 import { structuredContentDigest } from "./structuredContent";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import { orphanWriterTree } from "./fixtures/orphanWriterTree";
 import { claimPass, patchPass, readPass } from "@/lib/memory/curation/store";
 import { newRuleId, roleMemoryCollection, roleScope } from "@/lib/memory/roleStore";
 import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
@@ -3472,6 +3473,92 @@ test("a resume over a terminal row stops its live recorded engine process before
   } finally {
     try { orphan.kill("SIGKILL"); } catch { /* already exited */ }
     await Promise.race([orphanExit, Bun.sleep(2_000)]);
+  }
+}, 15_000);
+
+/* #2790: the recorded engine is not the only writer. A detached tool it
+   started keeps appending in the worktree once the engine exits, and nothing
+   can name it after that. The resume ends the whole captured tree before the
+   new host starts; a tool that outlives the stop stays captured on the row,
+   and the resume refuses rather than start beside it. */
+async function resumeOverOrphanWriterTree(
+  label: string,
+  tree: Awaited<ReturnType<typeof orphanWriterTree>>,
+  orphanStop?: { graceMs: number; deadlineMs: number },
+) {
+  const sessionId = crypto.randomUUID();
+  const cwd = path.join(sandbox, `${label}-${sessionId}`);
+  const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
+  fs.mkdirSync(cwd, { recursive: true });
+  fs.writeFileSync(artifactPath, "");
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const launchProfile = emptyLaunchProfile({ cwd, model: "gpt-5.6-luna" });
+  const conversation = registry.ensureConversation("codex", artifactPath, "codex-subscription");
+  const key = { engine: "codex" as const, sessionId };
+  registry.upsert({
+    key, artifactPath, cwd, accountId: "codex-subscription", launchProfile, status: "dead", host: null,
+    structuredHost: {
+      kind: "codex-app-server", endpoint: `stdio:${tree.engine.pid}`, process: tree.engine, eventCursor: 4,
+      protocolVersion: "0.144.1", writerClaimEpoch: 3, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+    },
+    claimEpoch: 3,
+    claimOwner: `structured-host:${JSON.stringify({ pid: 2_000_000_123, startIdentity: "gone-viewer" })}`,
+    pendingAction: null,
+  });
+  const begun = beginLegacySpawnFixture(registry, {
+    engine: "codex", cwd, transport: "structured", accountId: "codex-subscription",
+    conversationId: conversation.id, purpose: "resume-successor", expectedArtifactPath: artifactPath, launchProfile,
+  });
+  if (begun.kind !== "created") throw new Error("resume receipt was unavailable");
+  const atStart: Array<{ engine: boolean; tool: boolean }> = [];
+  try {
+    const outcome = await spawnStructuredConversation({
+      engine: "codex",
+      receipt: begun.receipt,
+      spec: { command: "codex", cwd, windowName: "resume", engine: "codex", transcript: artifactPath, launchProfile },
+      account: { engine: "codex", accountId: "codex-subscription", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+      "prompt": "",
+      registry,
+      client: runtimeClient(journal),
+    }, {
+      ...(orphanStop ? { orphanStop } : {}),
+      startHost: async () => {
+        atStart.push({ engine: tree.engineAlive(), tool: tree.toolAlive() });
+        throw new Error("fixture stops at host start");
+      },
+    }).then(() => null, (error: unknown) => error instanceof Error ? error.message : String(error));
+    return { outcome, atStart, row: registry.readOnlySnapshot().entries[`codex:${sessionId}`] };
+  } finally {
+    journal.close();
+  }
+}
+
+for (const engineIgnoresTerm of [false, true]) {
+  test(`a resume ends a terminal-row orphan's detached writer before the new host starts${engineIgnoresTerm ? " (engine forced down)" : ""}`, async () => {
+    const tree = await orphanWriterTree({ engineIgnoresTerm });
+    try {
+      const resumed = await resumeOverOrphanWriterTree("resume-orphan-tree", tree);
+      expect(resumed.outcome).toBe("fixture stops at host start");
+      expect(resumed.atStart).toEqual([{ engine: false, tool: false }]);
+      expect(await tree.stillWriting()).toBe(false);
+    } finally {
+      await tree.stop();
+    }
+  }, 15_000);
+}
+
+test("a resume starts no host while a terminal-row orphan's writer outlives its stop", async () => {
+  const tree = await orphanWriterTree({ toolIgnoresTerm: true });
+  try {
+    const resumed = await resumeOverOrphanWriterTree("resume-orphan-tree-incomplete", tree, { graceMs: 60_000, deadlineMs: 300 });
+    expect(resumed.outcome).toBe("structured resume host claim is unavailable");
+    expect(resumed.atStart).toEqual([]);
+    expect(tree.toolAlive()).toBe(true);
+    expect(resumed.row?.structuredHost?.process).toEqual(tree.engine);
+    expect(resumed.row?.structuredTerminationSurvivors).toContainEqual(tree.tool);
+  } finally {
+    await tree.stop();
   }
 }, 15_000);
 

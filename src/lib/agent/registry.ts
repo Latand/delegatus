@@ -7518,6 +7518,40 @@ export class AgentRegistry {
     return withdrawn;
   }
 
+  /** Lifts a captured termination tree from its row once every identity it
+      retained is confirmed gone, and changes nothing else: the stopped root
+      stays recorded, proven dead, so a claim that follows reads the columns
+      it would have read had the host been reaped (#2790). Bound to the root
+      the capture named. A retained identity this caller did not confirm, or
+      one that may still run, keeps the whole capture as the replacement fence. */
+  settleStructuredTerminationSurvivors(
+    key: SessionKey,
+    expectedRoot: Readonly<ProcessIdentity>,
+    confirmedSurvivors: readonly ProcessIdentity[],
+    source = "unspecified",
+  ): boolean {
+    const identityKey = (identity: Readonly<ProcessIdentity>) => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`;
+    const settled = this.mutate((file): ProcessIdentity[] | null => {
+      const entry = file.entries[sessionKeyId(key)];
+      const current = entry?.structuredHost?.process ?? null;
+      if (!entry || !current || !sameRecordedProcessIdentity(current, expectedRoot) || this.ownerAlive(current)) return null;
+      const retained = entry.structuredTerminationSurvivors ?? [];
+      const confirmed = new Set(confirmedSurvivors.map(identityKey));
+      if (retained.some(identity => !confirmed.has(identityKey(identity)) || this.ownerAlive(identity))) return null;
+      if (entry.structuredTerminationSurvivors === undefined) return [];
+      delete entry.structuredTerminationSurvivors;
+      entry.updatedAt = now();
+      return clone(retained);
+    });
+    if (settled && settled.length > 0) {
+      journalStructuredTermination(this.filename, {
+        at: now(), event: "settled", source, key: sessionKeyId(key), root: expectedRoot.pid,
+        pids: settled.map(identity => identity.pid),
+      });
+    }
+    return settled !== null;
+  }
+
   /**
    * Ends the publication marker a process-less launch left on its row (#2020).
    *
