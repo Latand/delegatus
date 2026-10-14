@@ -106,7 +106,7 @@ function synthesisRequest(
     return {
       url: "https://api.fish.audio/v1/tts",
       headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json", model: option.model },
-      body: JSON.stringify({ text, format: "pcm", sample_rate: 24000, latency: "balanced", ...(option.voice === "default" ? {} : { reference_id: option.voice }) }),
+      body: JSON.stringify({ text, format: fast ? "pcm" : "mp3", ...(fast ? { sample_rate: 24000 } : {}), latency: "balanced", ...(option.voice === "default" ? {} : { reference_id: option.voice }) }),
       timestamped: false,
     };
   }
@@ -234,7 +234,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   if (backend === "fishaudio" && option.model === "s2.1-pro-free" && option.freeEnded) {
     return NextResponse.json({ error: "Fish Audio's free model ended on 2026-11-30; choose S2.1 Pro (paid)", code: "fishaudio-free-ended" }, { status: 410 });
   }
-  if ((fast && backend !== "soniox" && backend !== "fishaudio") || (backend === "fishaudio" && body.mode !== "pcm")) return NextResponse.json({ error: "speech backend changed; refresh configuration" }, { status: 409 });
+  if ((fast && backend !== "soniox" && backend !== "fishaudio") || (backend === "fishaudio" && body.mode === "soniox-pcm")) return NextResponse.json({ error: "speech backend changed; refresh configuration" }, { status: 409 });
   if (backend === "soniox" && new TextEncoder().encode(text).byteLength > 4800) {
     return NextResponse.json({ error: "text is too long (4800 UTF-8 byte limit)" }, { status: 413 });
   }
@@ -274,7 +274,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
 
   let contentType = upstream.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() ?? "";
-  if (backend === "fishaudio" && (contentType.startsWith("audio/") || contentType === "application/octet-stream")) contentType = "audio/pcm";
+  if (backend === "fishaudio" && fast && (contentType.startsWith("audio/") || contentType === "application/octet-stream")) contentType = "audio/pcm";
   if (request.timestamped) {
     const payload = await readBounded(upstream.body, MAX_AUDIO_BYTES);
     release();

@@ -64,6 +64,9 @@ export function speechLanguage(text: string, fallback: ProseLanguage = "uk"): Pr
   let ru = 0;
   for (const token of stripNonProse(text).split(/\s+/u)) {
     const word = token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+    /* Paths and filename-like tokens describe the text; they are not spoken
+       language evidence. Filter them before either script gets a vote. */
+    if (!word || /[\\/_\d]/u.test(word) || /^[\p{L}\p{N}-]+\.[a-z\d]{1,8}$/iu.test(word)) continue;
     if (/\p{Script=Cyrillic}/u.test(word)) {
       cyrillic += 1;
       const lower = word.toLowerCase();

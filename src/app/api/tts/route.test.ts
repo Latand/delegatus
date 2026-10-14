@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
 
+import { synthesizeChunk } from "@/components/feed/ttsSession";
 import { GET, POST } from "./route";
 
 const originalKey = process.env.OPENAI_API_KEY;
 const originalSonioxKey = process.env.SONIOX_API_KEY;
+const originalFishAudioKey = process.env.FISH_AUDIO_API_KEY;
 const originalBackend = process.env.LLV_TTS_BACKEND;
 const originalConfigHome = process.env.XDG_CONFIG_HOME;
 const originalFetch = globalThis.fetch;
@@ -21,6 +23,7 @@ function setEnv(name: string, value: string | undefined): void {
 afterEach(() => {
   setEnv("OPENAI_API_KEY", originalKey);
   setEnv("SONIOX_API_KEY", originalSonioxKey);
+  setEnv("FISH_AUDIO_API_KEY", originalFishAudioKey);
   setEnv("LLV_TTS_BACKEND", originalBackend);
   setEnv("XDG_CONFIG_HOME", originalConfigHome);
   globalThis.fetch = originalFetch;
@@ -446,8 +449,9 @@ describe("Fish Audio route", () => {
   test("missing key, stale modes and non-audio are clean refusals", async () => {
     const upstream = mock(async () => new Response("provider-fixture", { headers: { "content-type": "application/json" } }));
     globalThis.fetch = upstream as unknown as typeof fetch;
-    for (const mode of [undefined, "soniox-pcm"]) expect((await POST(request(JSON.stringify({ text: "Hello", mode })))).status).toBe(409);
+    expect((await POST(request(JSON.stringify({ text: "Hello", mode: "soniox-pcm" })))).status).toBe(409);
     expect(upstream).not.toHaveBeenCalled();
+    expect((await POST(request(JSON.stringify({ text: "Hello" })))).status).toBe(502);
     const invalid = await POST(pcmRequest());
     expect(invalid.status).toBe(502); safe(invalid, await invalid.text());
     setEnv(names[0]!, undefined);
@@ -523,5 +527,34 @@ describe("/api/tts — message language routing", () => {
     expect(response.status).toBe(200);
     await response.arrayBuffer();
     expect(JSON.parse(String(calls[0]!.body)).language).toBe("en");
+  });
+
+  test.each([
+    ["ru", "A borrowed English chunk", "0c7fd46820854a9e8c4010d911687b7a"],
+    ["en", "A borrowed English chunk", "536d3a5e000945adb7038665781a4aca"],
+  ] as const)("batch transport returns playable Fish MP3 for %s through synthesizeChunk and POST", async (language, text, voice) => {
+    setEnv("FISH_AUDIO_API_KEY", "fish-routing-fixture");
+    setEnv("SONIOX_API_KEY", "soniox-routing-fixture");
+    const upstream: { url: string; init: RequestInit }[] = [];
+    let batchResponse: Response | undefined;
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input) === "/api/tts") {
+        batchResponse = await POST(request(String(init?.body), init?.signal as AbortSignal | undefined));
+        return batchResponse;
+      }
+      upstream.push({ url: String(input), init: init! });
+      return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "audio/mpeg" } });
+    }) as unknown as typeof fetch;
+
+    const result = await synthesizeChunk(text, new AbortController().signal, undefined, language);
+
+    expect(batchResponse?.headers.get("content-type")).toBe("audio/mpeg");
+    expect(new Uint8Array(await result.blob.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+    expect(result.voice).toMatchObject({ id: "fishaudio", model: "s2.1-pro", voice, encoding: "mp3" });
+    expect(upstream).toHaveLength(1);
+    expect(upstream[0]!.url).toBe("https://api.fish.audio/v1/tts");
+    expect(new Headers(upstream[0]!.init.headers).get("model")).toBe("s2.1-pro");
+    expect(JSON.parse(String(upstream[0]!.init.body))).toEqual({ text, format: "mp3", latency: "balanced", reference_id: voice });
+    expect(JSON.stringify([...batchResponse!.headers])).not.toContain("routing-fixture");
   });
 });

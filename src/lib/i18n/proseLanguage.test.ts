@@ -60,6 +60,15 @@ test.each(SPEECH_CASES)("speech language: %p → %p", (text, expected) => {
   expect(speechLanguage(text)).toBe(expected);
 });
 
+test.each([
+  ["Теперь всё готово: docs/перевірки.md docs/інтерфейс.md", "ru"],
+  ["Пушу знову. docs/отчёты/проверки.md", "uk"],
+  ["Codex-панелі вже готові: src/lib/ttsBackend.ts", "uk"],
+] as const)("speech language ignores paths in %p", (text, language) => {
+  expect(speechLanguage(text)).toBe(language);
+  expect(speechLanguage(spokenAnswerText(text))).toBe(language);
+});
+
 test("speech uses the interface fallback for code and identifiers alone", () => {
   expect(speechLanguage("2864, 2868 API CI snake_case camelCase src/lib/x.ts", "en")).toBe("en");
   expect(speechLanguage("", "uk")).toBe("uk");
