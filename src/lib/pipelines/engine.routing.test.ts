@@ -1,6 +1,143 @@
 import { expect, spyOn, test, crypto, spawn, fs, os, path, engineModule, IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail, defaultPipelinePorts, reconcileEmbeddedReviewFlows, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, durableStageTurnEvidence, patchPipeline, closeAndDrain, RUN_STAGES, entry, harness, create, withRuntimeSnapshot, HISTORICAL_VERDICT_MISS, PASS_TEXT, makeStructuredAttempt, pinStageHead, BUDGET_STAGES, movingHeadHarness, driveWithController, stagedRecoveryHarness, activationDrainFixture, reserveActivationOnly, expectPipelineLeaseAbsent, frozenSurvivorStartup, restartCutStage, cutByRestart, idleStageHostFixture, runtimeReleaseOf, SILENT_RUN, attemptThatWorkedOnAfterRestart, stageWhoseStopMovesTheTranscript } from "./engine.fixture";
 import type { Flow, BoardTask, PipelinePorts } from "./engine.fixture";
 
+async function continuationCloseFixture(marker: "actionAt" | "continuationRequestedAt" = "continuationRequestedAt") {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const records = loadPipelines();
+  const attempt = records[0]!.runs[0]!.attempts[0]!;
+  attempt.providerWait = {
+    condition: { kind: "transient", scope: null, resetLabel: null, label: "transient provider error" },
+    text: "provider interrupted", accountId: null, turnTs: Date.parse(h.ports.now()),
+    tries: 1, startedAt: h.ports.now(), resumeAt: h.ports.now(), resetsAt: null,
+    [marker]: h.ports.now(),
+  };
+  savePipelines(records);
+  return { h, pipeline };
+}
+
+test.each(["actionAt", "continuationRequestedAt"] as const)("close persists a paused lane while runtime-host continuation cancellation is unavailable (%s)", async (marker) => {
+  const { h, pipeline } = await continuationCloseFixture(marker);
+  const records = loadPipelines();
+  records[0]!.state = "paused";
+  records[0]!.pausedState = "running";
+  savePipelines(records);
+  let cancellations = 0;
+  let unavailable = true;
+  h.ports.invalidateProviderContinuation = async () => {
+    cancellations++;
+    if (unavailable) throw new Error("runtime host is unavailable");
+    expectPipelineLeaseAbsent();
+  };
+  const request = { action: "close", clientRequestId: "close-provider-outage" } as const;
+  const closed = await patchPipeline(pipeline.id, request, h.ports);
+  const saved = loadPipelines()[0]!;
+  expect({ status: closed.status, state: saved.state, closedAt: saved.closedAt })
+    .toMatchObject({ status: undefined, state: "closed", closedAt: expect.any(String) });
+  expect(cancellations).toBe(0);
+  expect(closed.close).toMatchObject({ status: "pending", pendingContinuations: [{ conversationId: "conversation_stage_1" }] });
+  const closeId = saved.closeTeardown!.id;
+  const closedAt = saved.closedAt;
+  await engineModule.drainStageActivations(h.ports);
+  expect(cancellations).toBe(1);
+  expect(loadPipelines()[0]).toMatchObject({ state: "closed", closedAt,
+    closeTeardown: { id: closeId, phase: "pending" },
+    closeReport: { status: "pending", pending: [],
+      pendingContinuations: [{ detail: expect.stringContaining("runtime host is unavailable") }] },
+  });
+  const report = loadPipelines()[0]!.closeReport!;
+  expect([...report.stopped, ...report.alreadyStopped]).toHaveLength(1);
+  const replay = await patchPipeline(pipeline.id, request, h.ports);
+  expect(replay.pipeline).toMatchObject({ closedAt, closeTeardown: { id: closeId } });
+  expect(cancellations).toBe(1);
+  const acknowledged = await patchPipeline(pipeline.id, { action: "close", acknowledgeHosts: true }, h.ports);
+  expect(acknowledged.close?.status).toBe("pending");
+  expect(acknowledged.close?.pendingContinuations).toHaveLength(1);
+  unavailable = false;
+  // A new ports object drains the durable obligation without the original request.
+  await engineModule.drainStageActivations({ ...h.ports });
+  expect(loadPipelines()[0]).toMatchObject({ state: "closed", closedAt,
+    closeTeardown: { id: closeId, phase: "settled" },
+    closeReport: { status: "settled", pendingContinuations: [] },
+  });
+  expect(cancellations).toBe(2);
+  await patchPipeline(pipeline.id, request, h.ports);
+  await engineModule.drainStageActivations(h.ports);
+  expect(cancellations).toBe(2);
+});
+
+test("a new controller process settles durable continuation cancellation after a close outage", async () => {
+  const { h, pipeline } = await continuationCloseFixture();
+  h.ports.invalidateProviderContinuation = async () => { throw new Error("runtime host is unavailable"); };
+  await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
+  expect(loadPipelines()[0]!.closeReport?.pendingContinuations).toHaveLength(1);
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { drainStageActivations, defaultPipelinePorts } = await import("./src/lib/pipelines/engine.ts");
+    await drainStageActivations({ ...defaultPipelinePorts(), structuredDeliveryPublication: () => "ready",
+      invalidateProviderContinuation: async (id) => { console.log("cancelled:" + id); },
+      stopStageAgent: async () => ({ outcome: "not-running" }), stageHostResident: async () => false,
+      paneAgentAlive: async () => false, worktreePresent: () => false,
+    });
+  `], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+  expect(stdout.trim()).toBe("cancelled:conversation_stage_1");
+  expect(loadPipelines()[0]).toMatchObject({ state: "closed", closeTeardown: { phase: "settled" },
+    closeReport: { status: "settled", pendingContinuations: [] },
+  });
+});
+
+test("close skips a continuation already cancelled by pause when the runtime host goes away", async () => {
+  const { h, pipeline } = await continuationCloseFixture();
+  let cancellations = 0;
+  h.ports.invalidateProviderContinuation = async () => { cancellations++; };
+  const paused = await patchPipeline(pipeline.id, { action: "pause" }, h.ports);
+  expect(paused.pipeline?.state).toBe("paused");
+  expect(cancellations).toBe(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({
+    error: "automatic provider retry cancelled by pause; waiting for operator decision",
+    providerWait: { retryCancelled: true, continuationRequestedAt: expect.any(String) },
+  });
+  h.ports.invalidateProviderContinuation = async () => {
+    cancellations++;
+    throw new Error("runtime host is unavailable");
+  };
+  const closed = await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
+  expect(closed.pipeline?.state).toBe("closed");
+  expect(closed.close?.status).toBe("settled");
+  expect(closed.close?.pendingContinuations?.length ?? 0).toBe(0);
+  expect(cancellations).toBe(1);
+});
+
+test("local provider retry cancellation still owes its runtime-host continuation fence on close", async () => {
+  const { h, pipeline } = await continuationCloseFixture();
+  const records = loadPipelines();
+  records[0]!.runs[0]!.attempts[0]!.providerWait!.retryCancelled = true;
+  records[0]!.runs[0]!.attempts[0]!.error = "automatic provider retry cancelled by operator reply";
+  savePipelines(records);
+  let cancellations = 0;
+  h.ports.invalidateProviderContinuation = async () => { cancellations++; };
+  await closeAndDrain(pipeline.id, { action: "close" }, h.ports);
+  expect(cancellations).toBe(1);
+});
+
+test("pause names the runtime-host cancellation step when it cannot withdraw a continuation", async () => {
+  const { h, pipeline } = await continuationCloseFixture();
+  h.ports.invalidateProviderContinuation = async () => { throw new Error("connection reset"); };
+  const refused = await patchPipeline(pipeline.id, { action: "pause" }, h.ports);
+  expect(refused.status).toBe(503);
+  expect(refused.error).toContain("pause blocked: runtime-host automatic continuation cancellation failed");
+  expect(refused.error).toContain("restore the runtime host and retry pause");
+  expect(refused.error).toContain("connection reset");
+  const saved = loadPipelines()[0]!;
+  expect(saved.state).toBe("running");
+  expect(saved.runs[0]!.attempts[0]!.providerWait?.retryCancelled).toBeUndefined();
+  h.ports.invalidateProviderContinuation = async () => {};
+  expect((await patchPipeline(pipeline.id, { action: "pause" }, h.ports)).pipeline?.state).toBe("paused");
+});
+
 
 test("activation drain preserves uncertain read-write delivery and the staged recovery budget", async () => {
   const f = await stagedRecoveryHarness("uncertain");

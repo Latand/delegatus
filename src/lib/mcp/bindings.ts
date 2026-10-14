@@ -2290,6 +2290,7 @@ function newLegacyReviewFields(result: Pick<PipelineMutationResult, "convertedSt
     exception fills appear when something is in them. */
 function closeReportCounts(report: PipelineCloseReport) {
   const exceptions = {
+    pendingContinuations: report.pendingContinuations?.length ?? 0,
     unconfirmed: report.unconfirmed.length,
     stillRunning: report.stillRunning.length,
     reviewers: report.reviewers.length,
