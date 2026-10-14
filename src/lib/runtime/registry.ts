@@ -133,7 +133,7 @@ interface ObservableStructuredHost {
   release(): Promise<void>;
   setWriterFence(check: () => boolean): void;
   onStateChange(listener: (state: HostState) => void): () => void;
-  setTerminationCapture?(listener: ((root: number, tree: readonly ProcessIdentity[]) => void) | null): void;
+  setTerminationCapture?(listener: ((root: number, tree: readonly ProcessIdentity[]) => boolean) | null): void;
 }
 
 const DEFAULT_TERMINATION_RETRY_MS = 5_000;
@@ -232,14 +232,25 @@ async function bindStructuredHostPersistence(
   const terminationRetryMs = Number.isFinite(options.terminationRetryMs)
     ? Math.max(0, options.terminationRetryMs!)
     : DEFAULT_TERMINATION_RETRY_MS;
+  /* The host signals nothing until this answers true (#2790). A row that
+     still records the host's child takes the tree whoever holds its claim:
+     the capture is what refuses a successor once the child is gone. Only a
+     row that records another process has no place for it, and there the stop
+     goes ahead as it always did. A capture the registry refused answers
+     false, so the child keeps running and keeps its own fence. */
   host.setTerminationCapture?.((rootPid, tree) => {
     const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)];
     const root = entry?.structuredHost?.process ?? null;
-    if (failed || !root?.startIdentity || !root.bootEpoch || root.pid !== rootPid
-      || entry?.claimOwner !== claimOwner || entry.claimEpoch !== writerClaimEpoch) return;
-    /* Another stop already captured this tree and finishes it. */
-    if ((entry.structuredTerminationSurvivors?.length ?? 0) > 0) return;
-    ownCapture = registry.captureStructuredTerminationSurvivors(key, root, tree, HOST_STOP_SOURCE) !== null;
+    if (!entry || !root || root.pid !== rootPid) return true;
+    if (!root.startIdentity || !root.bootEpoch) return false;
+    const prior = (entry.structuredTerminationSurvivors?.length ?? 0) > 0;
+    const capture = registry.captureStructuredTerminationSurvivors(key, root, tree, HOST_STOP_SOURCE);
+    if (!capture) return false;
+    /* Another stop's capture is that stop's to finish, unless this one named
+       a process it had not. */
+    if (!failed && entry.claimOwner === claimOwner && entry.claimEpoch === writerClaimEpoch
+      && (!prior || capture.added.length > 0)) ownCapture = true;
+    return true;
   });
 
   const clearCursorTimer = () => {
@@ -260,7 +271,9 @@ async function bindStructuredHostPersistence(
     clearCursorTimer();
     unsubscribe();
     releaseClaim();
-    void host.release();
+    /* A release that could not record its child's tree sends nothing and
+       says so; the child keeps its own fence, so nothing here awaits it. */
+    void host.release().catch(() => undefined);
   };
   const persistPending = () => {
     const state = pendingState;

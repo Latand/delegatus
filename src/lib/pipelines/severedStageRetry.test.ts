@@ -33,6 +33,9 @@ const { RuntimeJournal } = await import("@/runtime-host/journal");
 const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
 const { dispatchStructuredControl } = await import("@/lib/runtime/structuredControls");
 const { conversationTurnLiveness, LIVENESS_CPU_PROGRESS_WINDOW_MS } = await import("@/lib/runtime/liveness");
+const { ClaudeStreamBrokerHost } = await import("@/lib/runtime/claudeStreamBrokerHost");
+const { bindClaudeHostPersistence, claudeHostColumns } = await import("@/lib/runtime/registry");
+const { orphanWriterTree } = await import("@/lib/runtime/fixtures/orphanWriterTree");
 const { createPipelineFromRequest, defaultPipelinePorts, patchPipeline, stopPipelineStageAgent, tickPipelines } = await import("./engine");
 const { loadPipelines, savePipelines } = await import("./store");
 const { registerPipelineTick } = await import("./controllerSignal");
@@ -625,5 +628,214 @@ test("a descendant's transient scope ending leaves the stage alone, and a lost s
   } finally {
     try { agent.kill("SIGKILL"); } catch { /* gone */ }
     await Promise.race([agent.exited, Bun.sleep(2_000)]);
+  }
+}, 30_000);
+
+/**
+ * #2790, through a real stream host, its real persistence and the pipeline's
+ * own recovery. The engine's stream fails with a tool it started still
+ * writing outside its process group, a tool that ignores SIGTERM. The host
+ * captures the tool onto the row before its first signal and the engine
+ * exits, so the row names a dead engine and a live captured writer. Nothing
+ * may start the replacement attempt in that worktree until the writer is
+ * proven gone: not while the host's own ladder is still in its SIGTERM grace,
+ * and not after a ladder that ended with the writer still running.
+ */
+async function streamFaultStage(persistence: { terminationStop?: { graceMs: number; deadlineMs: number } }) {
+  const directory = fs.mkdtempSync(path.join(isolated, "stream-fault-"));
+  const worktreeDir = path.join(directory, "worktree");
+  fs.mkdirSync(worktreeDir, { recursive: true });
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const tree = await orphanWriterTree({ stream: true, toolIgnoresTerm: true });
+  const viewer = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+  let host: Awaited<ReturnType<typeof ClaudeStreamBrokerHost.adopt>> | null = null;
+  const stop = async () => {
+    await host?.release().catch(() => undefined);
+    await tree.stop();
+  };
+  try {
+    const sessionId = crypto.randomUUID();
+    const memoryEvents = new Map<string, unknown[]>();
+    const deliveries = new Map<string, Array<{ entry: { id: string }; delivered: boolean }>>();
+    host = await ClaudeStreamBrokerHost.adopt(sessionId, {
+      cwd: worktreeDir,
+      deliveryLedger: {
+        load: (id) => structuredClone(deliveries.get(id) ?? []) as never,
+        recordQueued: (id, entry, disposition) => {
+          deliveries.set(id, [...deliveries.get(id) ?? [], { entry: structuredClone(entry), disposition, delivered: false } as never]);
+        },
+        confirmDelivered: () => "accepted",
+      },
+      eventStore: {
+        load: (id) => structuredClone(memoryEvents.get(id) ?? []) as never,
+        append: (id, event) => { memoryEvents.set(id, [...memoryEvents.get(id) ?? [], structuredClone(event)]); },
+      },
+      readTranscript: () => [],
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      shutdownGraceMs: 50,
+      spawnProcess: () => tree.child,
+    });
+    const transcript = path.join(directory, `${sessionId}.jsonl`);
+    fs.writeFileSync(transcript, OPEN_TURN_TRANSCRIPT);
+    const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd: worktreeDir, transport: "structured", accountId: null });
+    if (begun.kind !== "created") throw new Error("spawn receipt was unavailable");
+    const key = { engine: "claude" as const, sessionId };
+    const settled = registry.settleSpawn(begun.receipt.launchId, {
+      key, artifactPath: transcript, cwd: worktreeDir, accountId: null, status: "live", host: null,
+      structuredHost: { ...claudeHostColumns(await host.health(), 1), activeTurnRef: "open-turn" },
+      claimEpoch: 1, claimOwner: viewer, pendingAction: null,
+    });
+    if (settled.kind !== "settled") throw new Error("structured conversation was unavailable");
+    expect(registry.readOnlySnapshot().entries[`claude:${sessionId}`]?.structuredHost?.process).toEqual(tree.engine);
+    setAgentRegistryForTests(registry);
+    await bindClaudeHostPersistence(registry, key, host, viewer, 1, "unhosted", persistence);
+    return {
+      registry, tree, host, key, worktreeDir, transcript, launchId: begun.receipt.launchId,
+      conversationId: settled.conversation.id, row: () => registry.readOnlySnapshot().entries[`claude:${sessionId}`]!, stop,
+    };
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+}
+
+async function runStreamFaultRecovery(
+  stage: Awaited<ReturnType<typeof streamFaultStage>>,
+  termination: { graceMs?: number; deadlineMs?: number } = {},
+) {
+  const spawns: string[] = [];
+  const toolAliveAtReplacement: boolean[] = [];
+  let interrupted: "dead" | null = null;
+  const base = stagePorts({ ...stage, child: { pid: stage.tree.engine.pid, kill: () => {} } } as unknown as ReturnType<typeof severedStage>,
+    spawns) as PipelinePorts & { advanceWallClock(ms: number): void };
+  const ports: PipelinePorts = {
+    ...base,
+    conversationTurnInterrupted: async () => interrupted,
+    restartRecoveryBootStartedAt: () => Date.now() - 60 * 60_000,
+    stopInterruptedStageAgent: undefined,
+    /* The production stop, with no structured control channel in this process. */
+    stopStageAgent: (target, options) => stopPipelineStageAgent(target, { automatic: options?.automatic, termination }),
+    stageHostResident: defaultPipelinePorts().stageHostResident,
+    stageHostTreeStillRunning: defaultPipelinePorts().stageHostTreeStillRunning,
+    cpuPressureHold: () => null,
+    conversationOperatorStopped: async () => false,
+    spawnAgent: async (input, onReserved) => {
+      if (spawns.length > 0) toolAliveAtReplacement.push(stage.tree.toolAlive());
+      return base.spawnAgent(input, onReserved);
+    },
+  };
+  savePipelines([]);
+  const created = await createPipelineFromRequest({
+    task: "Build with a detached tool", spec: "AC1", repoDir: stage.worktreeDir, src: stage.transcript,
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", ["prompt"]: "Build it", next: null }],
+  } as never, ports);
+  if (!created.pipeline) throw new Error(created.error ?? "pipeline creation was unavailable");
+  await tickPipelines([], ports);
+  await tickPipelines([], ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", conversationId: stage.conversationId });
+
+  /* The stream fails; the host captures the tool and its stop ends the engine. */
+  void stage.host.send({ id: "stream-fault-turn", text: "run the build" }).catch(() => undefined);
+  await settles(() => !stage.tree.engineAlive(), "the engine's exit");
+  expect(stage.row().structuredTerminationSurvivors).toContainEqual(stage.tree.tool);
+  expect(stage.tree.toolAlive()).toBe(true);
+  interrupted = "dead";
+  await tickPipelines([], ports);
+  await tickPipelines([], ports);
+  return { spawns, toolAliveAtReplacement, ports };
+}
+
+test("a stream fault's captured writer is ended before the replacement attempt starts, inside the host's SIGTERM grace (#2790)", async () => {
+  const stage = await streamFaultStage({});
+  try {
+    const { spawns, toolAliveAtReplacement } = await runStreamFaultRecovery(stage);
+    expect(toolAliveAtReplacement).toEqual([false]);
+    expect(spawns).toHaveLength(2);
+    expect(stage.tree.toolAlive()).toBe(false);
+    expect(await stage.tree.stillWriting()).toBe(false);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
+  } finally {
+    await stage.stop();
+  }
+}, 30_000);
+
+test("a captured writer that outlives every ladder holds the stage: no replacement starts while it writes (#2790)", async () => {
+  const incomplete = { graceMs: 60_000, deadlineMs: 300 };
+  const stage = await streamFaultStage({ terminationStop: incomplete });
+  try {
+    const { spawns, toolAliveAtReplacement, ports } = await runStreamFaultRecovery(stage, incomplete);
+    expect(toolAliveAtReplacement).toEqual([]);
+    expect(spawns).toHaveLength(1);
+    expect(stage.tree.toolAlive()).toBe(true);
+    expect(await stage.tree.stillWriting()).toBe(true);
+    const held = loadPipelines()[0]!;
+    expect(held.runs[0]!.attempts).toHaveLength(1);
+    expect(held.runs[0]!.attempts[0]!.unresolvedTermination?.survivors).toContainEqual(
+      expect.objectContaining({ pid: stage.tree.tool.pid, startIdentity: stage.tree.tool.startIdentity }));
+    expect(stage.row().structuredTerminationSurvivors).toContainEqual(stage.tree.tool);
+    await tickPipelines([], ports);
+    expect(spawns).toHaveLength(1);
+  } finally {
+    await stage.stop();
+  }
+}, 30_000);
+
+/* #2790: the launch itself is the last fence. A replacement reserved by a
+   path that read the old host as gone (here a stop that answers
+   `not-running`) still finds the process a stop captured from that host's
+   tree on its registry row, and waits for it to be gone before it starts an
+   agent in the same worktree. */
+test("a new attempt does not launch while a process captured from the earlier attempt's host may still run (#2790)", async () => {
+  const stage = severedStage();
+  const captured = Bun.spawn(["sleep", "300"], { stdout: "ignore", stderr: "ignore" });
+  const capturedIdentity = captureProcessIdentity(captured.pid);
+  try {
+    const spawns: string[] = [];
+    let interrupted: "dead" | null = null;
+    const base = stagePorts(stage, spawns) as PipelinePorts & { advanceWallClock(ms: number): void };
+    const ports: PipelinePorts = {
+      ...base,
+      conversationTurnInterrupted: async () => interrupted,
+      restartRecoveryBootStartedAt: () => Date.now() - 60 * 60_000,
+      stopInterruptedStageAgent: undefined,
+      stageHostTreeStillRunning: defaultPipelinePorts().stageHostTreeStillRunning,
+      cpuPressureHold: () => null,
+      conversationOperatorStopped: async () => false,
+    };
+    savePipelines([]);
+    const created = await createPipelineFromRequest({
+      task: "Build after a captured writer", spec: "AC1", repoDir: stage.worktreeDir, src: stage.transcript,
+      stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", ["prompt"]: "Build it", next: null }],
+    } as never, ports);
+    if (!created.pipeline) throw new Error(created.error ?? "pipeline creation was unavailable");
+    await tickPipelines([], ports);
+    await tickPipelines([], ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", conversationId: stage.conversationId });
+
+    /* The host's stop captured a tool, ended the engine and lost its stream. */
+    const rowKey = `claude:${stage.key.sessionId}`;
+    const root = stage.registry.readOnlySnapshot().entries[rowKey]!.structuredHost!.process!;
+    expect(stage.registry.captureStructuredTerminationSurvivors(stage.key, root, [capturedIdentity])).not.toBeNull();
+    stage.child.kill();
+    await settles(() => processIdentityStatus(root) === "dead", "the engine's exit");
+    stage.registry.upsert({ ...stage.registry.readOnlySnapshot().entries[rowKey]!, status: "dead" });
+    interrupted = "dead";
+    await tickPipelines([], ports);
+    await tickPipelines([], ports);
+    await tickPipelines([], ports);
+    const held = loadPipelines()[0]!;
+    expect(spawns).toHaveLength(1);
+    expect(held.runs[0]!.attempts.at(-1)).toMatchObject({ n: 2, state: "pending" });
+    expect(held.stateDetail).toBe(`waiting for an earlier stage agent to stop before a new attempt starts in its worktree: ${stage.conversationId}: process ${captured.pid} captured from its stopped host may still be running`);
+
+    captured.kill("SIGKILL");
+    await captured.exited;
+    await tickPipelines([], ports);
+    expect(spawns).toHaveLength(2);
+    expect(loadPipelines()[0]!.stateDetail ?? "").not.toContain("waiting for an earlier stage agent");
+  } finally {
+    stage.child.kill();
+    try { captured.kill("SIGKILL"); } catch { /* gone */ }
+    await Promise.race([captured.exited, Bun.sleep(2_000)]);
   }
 }, 30_000);

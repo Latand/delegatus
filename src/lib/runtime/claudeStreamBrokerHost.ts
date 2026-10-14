@@ -15,7 +15,7 @@ import { applyClaudeSpawnPolicy, NATIVE_MULTI_AGENT_TOOLS, viewerMcpTransportFor
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { claudeTranscriptPath } from "@/lib/agent/transcript";
 import { procBackend } from "@/lib/proc";
-import { captureProcessTree, signalDetachedProcessGroup, type ProcessSignal } from "@/lib/processGroup";
+import { captureProcessTree, signalDetachedProcessGroup, type ProcessSignal, type ProcessTreeCapture } from "@/lib/processGroup";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { claudeProviderForHome, readClaudeProviderRuntime, UnsafeClaudeHomeError } from "@/lib/accounts/claude";
@@ -275,7 +275,10 @@ export interface ClaudeStreamBrokerHostOptions {
   signalProcess?: ProcessSignal;
   processIdentity?: (pid: number) => string | null;
   /** Reads the processes the child started, before its first stop signal. */
-  captureProcessTree?: (root: number) => ProcessIdentity[];
+  captureProcessTree?: (root: number) => ProcessTreeCapture;
+  /** How long a failed host waits before it reads its child's tree again
+      when the last read could not be recorded whole. */
+  terminationCaptureRetryMs?: number;
   readAuthStatus?: () => ClaudeAuthStatus | Promise<ClaudeAuthStatus>;
   readTranscript?: (cwd: string, sessionId: string) => ClaudeTranscriptUser[];
   compactEvidenceTimeoutMs?: number;
@@ -308,6 +311,10 @@ const CHILD_ENV_ALLOWLIST = [
 ] as const;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_SHUTDOWN_GRACE_MS = 1_000;
+const DEFAULT_TERMINATION_CAPTURE_RETRY_MS = 1_000;
+
+/** Records the tree a stop read, and true only once it is durable (#2790). */
+export type TerminationCaptureListener = (root: number, tree: readonly ProcessIdentity[]) => boolean;
 
 export { claudeHostEndText };
 
@@ -315,6 +322,11 @@ export { claudeHostEndText };
     the process may still be running, so nothing says it was released (#2790). */
 export const CLAUDE_RELEASE_UNCONFIRMED =
   "Claude stream host is stopping and could not confirm that the Claude process stopped";
+
+/** Why a stop sent nothing: the processes the child started could not all be
+    named and recorded, and a signal then could leave one nothing can find. */
+export const CLAUDE_TREE_UNCAPTURED =
+  "Claude child's process tree could not be recorded, so nothing was signalled";
 
 /** The command this control types into the conversation (#1214). */
 export const CLAUDE_COMPACT_COMMAND = "/compact";
@@ -648,9 +660,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private readonly onEventCursorRecovery: RuntimeEventCursorRecoveryReporter | undefined;
   private readonly signalProcess: ProcessSignal;
   private readonly processIdentity: (pid: number) => string | null;
-  private readonly captureProcessTree: (root: number) => ProcessIdentity[];
-  private terminationCapture: ((root: number, tree: readonly ProcessIdentity[]) => void) | null = null;
+  private readonly captureProcessTree: (root: number) => ProcessTreeCapture;
+  private readonly terminationCaptureRetryMs: number;
+  private terminationCapture: TerminationCaptureListener | null = null;
   private treeCaptured = false;
+  private captureRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly childStartIdentity: string | null;
   private readonly subscribers = new Set<Subscriber>();
   private readonly events: RuntimeEvent[] = [];
@@ -720,6 +734,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.signalProcess = options.signalProcess ?? process.kill;
     this.processIdentity = options.processIdentity ?? ((pid) => procBackend.processIdentity(pid));
     this.captureProcessTree = options.captureProcessTree ?? ((root) => captureProcessTree(root));
+    this.terminationCaptureRetryMs = Math.max(0, options.terminationCaptureRetryMs ?? DEFAULT_TERMINATION_CAPTURE_RETRY_MS);
     this.childStartIdentity = child.pid ? this.processIdentity(child.pid) : null;
     this.releaseCleanup = options.releaseCleanup ?? null;
     this.cursor = options.initialEventCursor ?? 0;
@@ -765,6 +780,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       this.memoryCell?.settleExit({ expected: this.releasing || this.released });
       this.noteChildExit(code, signal);
       this.reaped = true;
+      this.clearCaptureRetry();
       if (this.terminationTimer) {
         clearTimeout(this.terminationTimer);
         this.terminationTimer = null;
@@ -1212,11 +1228,12 @@ export class ClaudeStreamBrokerHost implements EngineHost {
 
   setWriterFence(fence: () => boolean): void { this.writerFence = fence; }
 
-  /** Told once, before this host's first stop signal, which processes its
-      child had started (#2790). A tool that left the child's process group
-      outlives the group signal, and once the child exits nothing can name it,
-      so whoever must prove the whole tree gone records it here. */
-  setTerminationCapture(listener: ((root: number, tree: readonly ProcessIdentity[]) => void) | null): void {
+  /** Told, before this host's first stop signal, which processes its child
+      had started (#2790). A tool that left the child's process group outlives
+      the group signal, and once the child exits nothing can name it, so
+      whoever must prove the whole tree gone records it here. No signal is
+      sent until the listener answers that the tree it was told is durable. */
+  setTerminationCapture(listener: TerminationCaptureListener | null): void {
     this.terminationCapture = listener;
   }
 
@@ -1648,6 +1665,13 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       this.releasing = false;
       throw new Error("Claude child identity changed before signalling");
     }
+    /* A tree that could not be recorded whole was not signalled at all: the
+       child still runs, its stream intact, and the release is refused rather
+       than leaving a process nothing could name afterwards. */
+    if (!this.terminationStarted && !this.reaped) {
+      this.releasing = false;
+      throw new Error(CLAUDE_TREE_UNCAPTURED);
+    }
     if (!await this.waitForReap(this.shutdownGraceMs * 2)) {
       if (!this.signalReleaseGroup("SIGKILL") && this.releaseFence) {
         this.releasing = false;
@@ -1759,18 +1783,45 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     return signalDetachedProcessGroup(this.child, signal, this.signalProcess);
   }
 
-  /** Hands the child's process tree to the termination listener once, before
-      the first stop effect. The stop goes ahead whatever the listener does:
-      a stream that failed cannot be kept running. */
-  private captureTerminationTree(): void {
+  /** Hands the child's process tree to the termination listener before the
+      first stop effect, and true once nothing more is owed: no listener, a
+      tree read whole with nothing in it, or a listener that recorded it. A
+      read that names a running pid without its identity, a read that threw,
+      and a listener that refused or threw all answer false, and the stop
+      sends nothing (#2790). */
+  private captureTerminationTree(): boolean {
     const listener = this.terminationCapture;
     const pid = this.child.pid;
-    if (!listener || this.treeCaptured || !pid) return;
+    if (!listener || this.treeCaptured || !pid) return true;
+    let capture: ProcessTreeCapture;
+    try { capture = this.captureProcessTree(pid); } catch { return false; }
+    if (capture.unresolved.length > 0) return false;
+    if (capture.identities.length > 0) {
+      let recorded = false;
+      try { recorded = listener(pid, capture.identities) === true; } catch { recorded = false; }
+      if (!recorded) return false;
+    }
     this.treeCaptured = true;
-    let tree: ProcessIdentity[];
-    try { tree = this.captureProcessTree(pid); } catch { return; }
-    if (tree.length === 0) return;
-    try { listener(pid, tree); } catch { /* the row keeps whatever it recorded */ }
+    return true;
+  }
+
+  /** A failed stream cannot be kept, so its stop is asked again until the
+      tree is recorded. Meanwhile the child keeps running under its recorded
+      identity, which is itself what refuses a successor's claim. */
+  private retryTerminationCapture(): void {
+    if (this.captureRetryTimer || this.reaped || !this.dead) return;
+    this.captureRetryTimer = setTimeout(() => {
+      this.captureRetryTimer = null;
+      if (this.reaped || this.terminationStarted) return;
+      this.startTermination();
+    }, this.terminationCaptureRetryMs);
+    this.captureRetryTimer.unref?.();
+  }
+
+  private clearCaptureRetry(): void {
+    if (!this.captureRetryTimer) return;
+    clearTimeout(this.captureRetryTimer);
+    this.captureRetryTimer = null;
   }
 
   private startTermination(): boolean {
@@ -1784,7 +1835,12 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       return true;
     }
     if (this.terminationStarted || this.reaped) return true;
-    if (this.releaseFenceHolds()) this.captureTerminationTree();
+    /* Nothing is sent, stdin included, until the tree is on record. */
+    if (this.releaseFenceHolds() && !this.captureTerminationTree()) {
+      this.retryTerminationCapture();
+      return true;
+    }
+    this.clearCaptureRetry();
     try { this.child.stdin.end(); } catch { /* already closed */ }
     if (!this.signalReleaseGroup("SIGTERM")) return false;
     this.terminationStarted = true;

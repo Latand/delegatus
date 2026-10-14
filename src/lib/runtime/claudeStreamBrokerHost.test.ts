@@ -24,6 +24,8 @@ import {
   claudeCliAuthStatus,
   claudeHostEndText,
   ClaudeStreamBrokerHost,
+  CLAUDE_TREE_UNCAPTURED,
+  type ClaudeStreamBrokerHostOptions,
   type ClaudeDeliveryConfirmation,
   FileClaudeDeliveryLedger,
   NATIVE_MULTI_AGENT_DENY_FLAG,
@@ -48,6 +50,7 @@ import {
 } from "./registry";
 import { orphanWriterTree } from "./fixtures/orphanWriterTree";
 import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
+import { captureProcessTree } from "@/lib/processGroup";
 import { claudeStartupHostOptions, type ClaudeStartupOwner } from "./startup";
 
 /* #1905: the config and state root a spawned agent runs under, plus the `gh`
@@ -2887,6 +2890,8 @@ describe("ClaudeStreamBrokerHost", () => {
   async function streamHostOverWriterTree(
     treeOptions: { engineIgnoresTerm?: boolean; toolIgnoresTerm?: boolean },
     persistence: { terminationStop?: typeof incompleteCleanup; terminationRetryMs?: number } = {},
+    hostOptions: (tree: Awaited<ReturnType<typeof orphanWriterTree>>) => Partial<ClaudeStreamBrokerHostOptions> = () => ({}),
+    prepareRegistry: (registry: AgentRegistry) => void = () => {},
   ) {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-stream-tree-"));
     const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
@@ -2905,6 +2910,7 @@ describe("ClaudeStreamBrokerHost", () => {
         readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
         shutdownGraceMs: 50,
         spawnProcess: () => tree.child,
+        ...hostOptions(tree),
       });
       const key = { engine: "claude" as const, sessionId: host.identity.sessionId };
       registry.upsert({
@@ -2912,6 +2918,7 @@ describe("ClaudeStreamBrokerHost", () => {
         structuredHost: claudeHostColumns(await host.health(), 1), claimEpoch: 1, claimOwner: viewer, pendingAction: null,
       });
       expect(registry.snapshot().entries[`claude:${key.sessionId}`]?.structuredHost?.process).toEqual(tree.engine);
+      prepareRegistry(registry);
       await bindClaudeHostPersistence(registry, key, host, viewer, 1, "unhosted", persistence);
       const row = () => registry.snapshot().entries[`claude:${key.sessionId}`]!;
       /* Claims the session for a successor the moment the registry allows it
@@ -2991,6 +2998,53 @@ describe("ClaudeStreamBrokerHost", () => {
       await fixture.stop();
     }
   }, 20_000);
+
+  /* #2790: a stop may signal only once the tree it read is on record whole.
+     A tool whose identity could not be read while it runs, a read that
+     threw, and a registry that refused the capture each leave nothing that
+     could name the tool after the engine's exit, so none of them may signal:
+     the engine keeps running under its recorded identity, which is itself
+     the fence, and its tool keeps its evidence. The next read that is
+     recorded whole lets the stop finish and the session go. */
+  for (const failure of ["unreadable identity", "capture throws", "registry refuses"] as const) {
+    test(`a stream fault signals nothing while its tree cannot be recorded whole (${failure})`, async () => {
+      let broken = true;
+      const fixture = await streamHostOverWriterTree({}, { terminationRetryMs: 50 }, (tree) => ({
+        terminationCaptureRetryMs: 50,
+        captureProcessTree: (root: number) => {
+          if (broken && failure === "capture throws") throw new Error("ppid map unavailable");
+          return captureProcessTree(root, {
+            ppidMap: () => procBackend.ppidMap(),
+            processIdentity: (pid) => broken && failure === "unreadable identity" && pid === tree.tool.pid
+              ? null : procBackend.processIdentity(pid),
+          });
+        },
+      }), (registry) => {
+        const capture = registry.captureStructuredTerminationSurvivors.bind(registry);
+        registry.captureStructuredTerminationSurvivors = (...args) =>
+          broken && failure === "registry refuses" ? null : capture(...args);
+      });
+      try {
+        const send = fixture.host.send({ id: `stream-fault-${failure}`, text: "run the build" });
+        void send.catch(() => undefined);
+        await waitForStatus(fixture.host, "dead");
+        expect(await fixture.successorClaim(600)).toBeNull();
+        expect(fixture.tree.engineAlive()).toBe(true);
+        expect(await fixture.tree.stillWriting()).toBe(true);
+        expect(fixture.row().structuredHost?.process).toEqual(fixture.tree.engine);
+        /* A release asked for meanwhile sends nothing either. */
+        await expect(fixture.host.release()).rejects.toThrow(CLAUDE_TREE_UNCAPTURED);
+        expect(fixture.tree.engineAlive()).toBe(true);
+
+        broken = false;
+        expect(await fixture.successorClaim()).toEqual({ toolAlive: false, stillWriting: false });
+        expect(fixture.tree.engineAlive()).toBe(false);
+        expect(fixture.row().structuredTerminationSurvivors).toBeUndefined();
+      } finally {
+        await fixture.stop();
+      }
+    }, 20_000);
+  }
 
   test("startup demotion reaps a surviving skipped Claude child", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-skipped-orphan-"));

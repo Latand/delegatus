@@ -36,7 +36,7 @@ import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/mi
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { effectiveRemaining } from "@/lib/accounts/migration/quotaPolicy";
 import { freshSpecFor } from "@/lib/agent/cli";
-import { agentRegistry, deliveryMayHaveArrived, identityMaterializationFence, REGISTRY_WRITER_BUSY, type DurableMembershipInput, type RegistryFile, type StructuredTerminationCapture, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { agentRegistry, deliveryMayHaveArrived, identityMaterializationFence, REGISTRY_WRITER_BUSY, type AgentRegistryEntry, type DurableMembershipInput, type RegistryFile, type StructuredTerminationCapture, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { registryRowProjection, registryRowsMatching, type RegistryRowProjector } from "@/lib/agent/sqliteRegistryStore";
 import { forEachCooperatively } from "@/lib/cooperative";
 import { transcriptAllowed } from "@/lib/agent/spawnParent";
@@ -70,7 +70,7 @@ import {
   type StructuredHostTerminationDependencies,
 } from "@/lib/runtime/structuredHostControl";
 import { redactBounded } from "@/lib/monitor/redact";
-import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayOwn, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { parseReview, type ReviewFinding } from "@/lib/review";
 import { spawnStructuredConversation, stagedLaunchRecovery, recoverStagedStructuredLaunch, STAGED_RECOVERY_MAX_CHECKS, STAGED_RECOVERY_BUDGET_MS, type StagedLaunchRecovery } from "@/lib/runtime/structuredSpawn";
 import { projectForCwd } from "@/lib/scanner/describe";
@@ -302,7 +302,8 @@ export interface PipelinePorts {
   /** Terminates the host that owns a stage attempt's agent. `not-running` means
       no host was resident, so a close can tell an idle lane from one it stopped. */
   stopStageAgent(target: PipelineStageHostRef, options?: { onlyIfIdle?: true; operationId?: string; automatic?: true;
-    providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef }): Promise<PipelineStageStopResult>;
+    providerRecovery?: import("@/lib/runtime/contracts").RuntimeProviderRecoveryRef;
+    recordedSurvivors?: readonly ProcessIdentity[] }): Promise<PipelineStageStopResult>;
   /** Null means newer working-host evidence withdrew the automatic stop. */
   stopInterruptedStageAgent?(target: PipelineStageHostRef, options?: { allowIdle?: boolean }): Promise<PipelineStageStopResult | null>;
   /** Identity-verified teardown of a stage attempt's tmux pane, for a
@@ -316,6 +317,9 @@ export interface PipelinePorts {
   /** Residency read with no side effects: `false` means the host is
       demonstrably gone. Used to retire an unconfirmed kill without re-killing. */
   stageHostResident(target: PipelineStageHostRef): Promise<boolean>;
+  /** What still runs, with no stream, for any registry row of these
+      conversations, or null when nothing does (#2790). */
+  stageHostTreeStillRunning?(conversationIds: readonly string[]): string | null;
   /** Monotonic milliseconds, kept apart from `now()` so a teardown budget can be
       bounded independently of the ISO timestamps written to the record. */
   monotonicNow(): number;
@@ -844,6 +848,10 @@ export type StageStopProbes = {
   /** Injected into the identity-bound termination a socketless caller falls
       back to (#1501); production uses the real kernel probes and signals. */
   termination?: StructuredHostTerminationDependencies;
+  /** Processes an earlier stop of this attempt could not end, which the
+      attempt keeps as its own record. A row on which only these may still
+      run, its engine gone, is not signalled again (#1501, #2790). */
+  recordedSurvivors?: readonly ProcessIdentity[];
   action?: (request: {
     operationId?: string;
     conversationId: string;
@@ -884,13 +892,44 @@ type StageHostProbe = {
   /** The conversation's current generation: the one registry row a stop may act on. */
   key: SessionKey;
   resident(): boolean;
-  /** The row says the stream is gone while its recorded engine process still
-      runs (#2790): nothing can deliver to it, and only its identity can stop it. */
+  /** Nothing can deliver to what still runs (#2790): the row says the stream
+      is gone while its recorded engine process runs, or the engine is gone
+      and a process a stop captured from its tree may still run. Only their
+      recorded identities can stop them. */
   orphaned(): boolean;
+  /** Whether the engine is gone and every captured process that may still
+      run is one of these. */
+  onlyRecordedSurvivorsRun(recorded: readonly ProcessIdentity[]): boolean;
   /** Durable tmux evidence recorded for this session, if any. It is the only
       thing that can identify a stored pane id as still being this agent's. */
   host(): TmuxHostEvidence | null;
 };
+
+const PRIOR_WRITER_WAIT_PREFIX = "waiting for an earlier stage agent to stop before a new attempt starts in its worktree: ";
+const PRIOR_WRITER_WAIT_MS = 5_000;
+
+/** Whether a process a host stop captured onto this row may still run: alive,
+    or not provably gone (#2790). */
+function capturedTreeMayRun(entry: Pick<AgentRegistryEntry, "structuredTerminationSurvivors">): boolean {
+  return (entry.structuredTerminationSurvivors ?? []).some(identity => processIdentityMayOwn(identity));
+}
+
+/** What still runs for a registry row with no stream to reach it, named for
+    the lane, or null when nothing does (#2790): an engine process under a
+    terminal row, or a process a stop captured from its tree. Either is a
+    writer in the worktree a new attempt would share. */
+export function recordedHostTreeStillRunning(entry: AgentRegistryEntry | undefined | null): string | null {
+  if (!entry) return null;
+  const captured = (entry.structuredTerminationSurvivors ?? []).filter(identity => processIdentityMayOwn(identity));
+  if (captured.length > 0) {
+    return `process${captured.length === 1 ? "" : "es"} ${captured.map(identity => identity.pid).join(", ")} captured from its stopped host may still be running`;
+  }
+  const engine = entry.structuredHost?.process ?? null;
+  if (engine && (entry.status === "dead" || entry.status === "unhosted") && processIdentityMayOwn(engine)) {
+    return `its engine process ${engine.pid} is still running with no stream`;
+  }
+  return null;
+}
 
 async function stageHostProbe(target: PipelineStageHostRef): Promise<StageHostProbe | null> {
   const registry = agentRegistry();
@@ -920,13 +959,26 @@ async function stageHostProbe(target: PipelineStageHostRef): Promise<StageHostPr
       const entry = registry.readOnlySnapshot().entries[sessionKey];
       if (!entry) return false;
       if (structuredHostProcessAlive(entry.structuredHost?.process ?? null)) return true;
+      /* A host stop captures its child's tree before the first signal, and a
+         tool that left the group outlives the engine. Until each captured
+         process is proven gone, the agent is still at work in the worktree. */
+      if (capturedTreeMayRun(entry)) return true;
       if (entry.status === "dead" || entry.status === "unhosted") return false;
       return Boolean(entry.host);
     },
     orphaned: () => {
       const entry = registry.readOnlySnapshot().entries[sessionKey];
-      return Boolean(entry && (entry.status === "dead" || entry.status === "unhosted")
-        && structuredHostProcessAlive(entry.structuredHost?.process ?? null));
+      if (!entry) return false;
+      const engineAlive = structuredHostProcessAlive(entry.structuredHost?.process ?? null);
+      if (engineAlive) return entry.status === "dead" || entry.status === "unhosted";
+      return capturedTreeMayRun(entry);
+    },
+    onlyRecordedSurvivorsRun: (recorded) => {
+      const entry = registry.readOnlySnapshot().entries[sessionKey];
+      if (!entry || entry.host || structuredHostProcessAlive(entry.structuredHost?.process ?? null)) return false;
+      const known = new Set(recorded.map(identity => `${identity.pid}:${identity.startIdentity}`));
+      return (entry.structuredTerminationSurvivors ?? []).filter(identity => processIdentityMayOwn(identity))
+        .every(identity => known.has(`${identity.pid}:${identity.startIdentity}`));
     },
     host: () => registry.readOnlySnapshot().entries[sessionKey]?.host ?? null,
   };
@@ -997,6 +1049,11 @@ export async function stopPipelineStageAgent(
   try {
     const probe = await stageHostProbe(target);
     if (!probe || !probe.resident()) return { outcome: "not-running" };
+    /* What the attempt already holds as unresolved is its caller's to report;
+       nothing else of this host runs to stop. */
+    if (probes.recordedSurvivors?.length && probe.onlyRecordedSurvivorsRun(probes.recordedSurvivors)) {
+      return { outcome: "not-running" };
+    }
     /* A terminal row has no stream for a kill command to travel. Its live
        engine process is ended by its recorded identity instead. */
     if (!probes.onlyIfIdle && probe.orphaned()) {
@@ -1188,8 +1245,14 @@ async function stopStageHostByRecordedIdentity(
   const root = { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch };
   const source = `pipeline-stage-stop ${target.stageId}:${target.attempt}`;
   let capture: StructuredTerminationCapture | null = null;
+  /* Whatever an earlier stop captured from this host's tree is ended with it:
+     once the engine is gone those processes have no parent to be found by,
+     and only their recorded identities reach them (#2790). */
+  const retainedSurvivors = termination.retainedSurvivors
+    ?? registry.readOnlySnapshot().entries[sessionKeyId(probe.key)]?.structuredTerminationSurvivors ?? [];
   const outcome = await terminateStructuredHostTree(ref, {
     ...termination,
+    retainedSurvivors,
     authorize,
     onFirstEffect: () => {
       termination.onFirstEffect?.();
@@ -1557,7 +1620,8 @@ export function defaultPipelinePorts(
     },
     stopStageAgent: (target, options) => options?.onlyIfIdle
       ? retirePipelineStageAgent(target, { providerRecovery: options.providerRecovery })
-      : stopPipelineStageAgent(target, { operationId: options?.operationId, automatic: options?.automatic }),
+      : stopPipelineStageAgent(target, { operationId: options?.operationId, automatic: options?.automatic,
+        ...(options?.recordedSurvivors ? { recordedSurvivors: options.recordedSurvivors } : {}) }),
     stopInterruptedStageAgent: async (target, options) => {
       const probe = await stageHostProbe(target);
       const stamp = () => {
@@ -1612,6 +1676,18 @@ export function defaultPipelinePorts(
       return changed && stopped.outcome === "failed" ? null : stopped;
     },
     stopStagePane: (target) => stopPipelineStagePane(target),
+    stageHostTreeStillRunning: (conversationIds) => {
+      const current = registry.readOnlySnapshot();
+      for (const id of conversationIds) {
+        if (!id.startsWith("conversation_")) continue;
+        const conversation = current.conversations[registry.canonicalConversationId(id as ViewerConversationId)];
+        for (const generation of conversation?.generations ?? []) {
+          const running = recordedHostTreeStillRunning(current.entries[sessionKeyId({ engine: conversation!.engine, sessionId: generation.id })]);
+          if (running) return `${id}: ${running}`;
+        }
+      }
+      return null;
+    },
     stageHostResident: async (target) => {
       try {
         const probe = await stageHostProbe(target);
@@ -6584,6 +6660,24 @@ async function tickRunStage(
       );
       return;
     }
+    /* Two writers never share one worktree (#2790). An earlier attempt whose
+       stream is gone while its engine, or a process a stop captured from its
+       tree, may still run holds this launch until a stop proves it gone; the
+       terminal reap and the interrupted-turn recovery are what end it. */
+    const priorWriter = ports.stageHostTreeStillRunning?.(pipeline.runs.flatMap(run => run.attempts)
+      .filter(candidate => candidate !== attempt && candidate.conversationId)
+      .map(candidate => candidate.conversationId!));
+    if (priorWriter) {
+      const detail = `${PRIOR_WRITER_WAIT_PREFIX}${priorWriter}`;
+      if (pipeline.stateDetail !== detail) {
+        pipeline.stateDetail = detail;
+        persist();
+      }
+      ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
+      ports.scheduleTick?.(PRIOR_WRITER_WAIT_MS);
+      return;
+    }
+    if (pipeline.stateDetail?.startsWith(PRIOR_WRITER_WAIT_PREFIX)) pipeline.stateDetail = null;
     // Consume CPU admission only once the other launch gates allow a start.
     if (holdStageLaunch(pipeline, ports, persist)) return;
     bindAttemptDefinition(stage, attempt, ports);
@@ -11346,7 +11440,10 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
 
 async function stopCloseHost(candidate: StageHostCandidate, close: PipelineCloseReport, ports: PipelinePorts): Promise<void> {
   const { target, turnSettled } = candidate;
-  const result = await ports.stopStageAgent(target);
+  /* What an earlier stop of this attempt could not end stays recorded on it
+     and is not signalled again by a close (#1501). */
+  const recordedSurvivors = candidate.attempt.unresolvedTermination?.survivors;
+  const result = await ports.stopStageAgent(target, recordedSurvivors?.length ? { recordedSurvivors } : undefined);
   if (result.outcome === "unresolved") {
     /* A signal was sent and the authorized tree did not all go. The
        survivors ride the attempt with their identities: from here no

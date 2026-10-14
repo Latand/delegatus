@@ -131,20 +131,34 @@ export function linuxProcessGroupId(pid: number): number | null {
   }
 }
 
+/** What a stop read of a root's tree before its first signal (#2790).
+    `unresolved` names every pid that may still run but whose identity could
+    not be read whole: a stop cannot fence a later signal to it, nor prove it
+    gone, so a capture that names any is incomplete and authorizes nothing. */
+export interface ProcessTreeCapture {
+  identities: ProcessIdentity[];
+  unresolved: number[];
+}
+
 /**
  * Every process a running root started, read before anything signals it
  * (#2790): its descendants by parent, plus the members of the group it leads,
  * each with the identity it has now. The root itself is left out. A member that
  * calls setsid leaves the group, and once the root exits it is reparented, so
  * after the root's first signal neither walk can name it any more. A pid whose
- * identity cannot be read is left out too: it has already exited, or nothing
- * could fence a later signal to it.
+ * identity cannot be read is left out only when it is proven gone; one that
+ * still runs is listed as unresolved, so the capture reads as incomplete.
  */
 export function captureProcessTree(
   root: number,
-  source: Pick<ProcessTreeSource, "ppidMap" | "processIdentity"> & { processGroupId?(pid: number): number | null } = procBackend,
-): ProcessIdentity[] {
+  source: Pick<ProcessTreeSource, "ppidMap" | "processIdentity"> & {
+    processGroupId?(pid: number): number | null;
+    pidAlive?(pid: number): boolean;
+    bootEpoch?(): string | null;
+  } = procBackend,
+): ProcessTreeCapture {
   const groupOf = source.processGroupId ?? linuxProcessGroupId;
+  const alive = source.pidAlive ?? ((pid: number) => procBackend.pidAlive(pid));
   const parents = source.ppidMap();
   const members = new Set(descendantPids(root, parents));
   if (groupOf(root) === root) {
@@ -152,11 +166,18 @@ export function captureProcessTree(
   }
   members.delete(root);
   const identities: ProcessIdentity[] = [];
+  const unresolved: number[] = [];
   for (const pid of members) {
     const startIdentity = source.processIdentity(pid);
-    if (startIdentity === null) continue;
-    const identity = captureProcessIdentity(pid, undefined, startIdentity);
+    if (startIdentity === null) {
+      if (alive(pid)) unresolved.push(pid);
+      continue;
+    }
+    const identity = source.bootEpoch
+      ? { pid, startIdentity, bootEpoch: source.bootEpoch() }
+      : captureProcessIdentity(pid, undefined, startIdentity);
     if (identity.bootEpoch) identities.push(identity);
+    else unresolved.push(pid);
   }
-  return identities;
+  return { identities, unresolved };
 }
