@@ -34,15 +34,19 @@ stage output and more than its summary. Each stage is drawn with a small figure 
 
 Every review round starts a fresh reviewer with read-only access and no
 memory of the builder's conversation, so it reads the whole diff cold. What
-happens when the last round fails depends on the pipeline's exhaustion policy.
-By default (`advance`) the builder fixes those findings once more and the
-pipeline moves on, marking the fix as not re-reviewed. With `stop-after-fix`
-the pipeline waits for you after that fix when it wrote a new head: it stops
-on the fixed head and offers **Accept as is**, and a fix that left the head
-unchanged moves on without asking. With `park` the builder fixes after every
-failed review but the last, one more review follows the final fix, and a
-failure there stops the pipeline for you before any further fix. No policy
-offers an extra review to ask for.
+happens when the last round fails depends on the pipeline's exhaustion
+policy:
+
+- **`advance`** (the default). The builder fixes those findings once more and
+  the pipeline moves on, marking the fix as not re-reviewed.
+- **`stop-after-fix`**. After that fix the pipeline waits for you if the fix
+  wrote a new head: it stops on the fixed head and offers **Accept as is**. A
+  fix that left the head unchanged moves on without asking.
+- **`park`**. The builder fixes after every failed review but the last, and
+  one more review follows the final fix. A failure there stops the pipeline
+  for you before any further fix.
+
+No policy offers an extra review to ask for.
 
 A review budget is fixed when the pipeline is created. Under `advance` and
 `stop-after-fix`, N rounds are N reviews and a fix of the last review's

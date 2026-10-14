@@ -61,26 +61,31 @@ manual answers, such as skip and retry, are in the card's ⋯.
 
 ## A card's ⋯ menu
 
-A card's ⋯ is a compact menu. The four columns stand in one row with the
-current one marked, and four icon actions rename the task, describe it,
-attach a pull request or issue, or hide it; a line under them says what
-hiding leaves running. The three priorities follow in one row. **Appearance**
-(colour and icon) and **More** (the waiting reason, collapse) open in place,
-and **Pipeline actions** opens as a page with a back row. A column's ⋯, a
-conversation's ⋯ and the board's ⋯ follow the same layout, and the board's ⋯
-keeps merging and the orchestrator's switches on pages of their own.
+A card's ⋯ is a compact menu, top to bottom:
+
+- **Columns.** The four columns stand in one row with the current one marked.
+- **Icon actions.** Rename the task, describe it, attach a pull request or
+  issue, or hide it. A line under them says what hiding leaves running.
+- **Priorities.** The three priorities in one row.
+- **Appearance and More.** Colour and icon, then the waiting reason and
+  collapse. Both open in place.
+- **Pipeline actions.** Opens as a page with a back row.
+
+A column's ⋯, a conversation's ⋯ and the board's ⋯ follow the same layout.
+The board's ⋯ keeps merging and the orchestrator's switches on pages of their
+own.
 
 ![A task card's ⋯ menu open in the In progress column: the four columns in a row, icon actions to rename, describe, attach and hide with a line saying one agent keeps working, the three priorities, and the Appearance, Pipeline actions and More rows](../media/readme/card-menu.svg)
 
 ## The board header and the Overview
 
 The Overview board shows what is running across all projects, and when a
-conversation changes it redraws only that project's part, so it stays
-responsive across hundreds of projects. You can also
-add tasks and start agents on them yourself, from **+** in the board's
-header. The header is one row: find with its filter, **+**, the orchestrator
-panel, recent agents under an icon, ⋯ and **Needs you**. Tasks the board does
-not draw are under **Hidden** in ⋯.
+conversation changes it redraws only that project's part.
+
+The header is one row: find with its filter, **+**, the orchestrator panel,
+recent agents under an icon, ⋯ and **Needs you**. Use **+** to add tasks and
+start agents on them yourself. Tasks the board does not draw are under
+**Hidden** in ⋯.
 
 ## The agent window
 
@@ -94,16 +99,17 @@ window.
 ## The sidebar
 
 The left sidebar is one panel. Pinned projects come first, then the rest,
-then an Archive fold, each section with its count. A project takes one row:
-its name, how many items wait on you, how many agents are working and how
-long ago something last happened; "working" counts agents whose turn is
-running right now, the same rule the board uses. Below the list, a compact
-system block gives one line each to free memory and swap, every account with
-what is left of its weekly limit, Copilot and Telegram. **All
-windows** in the block's header adds each account's plan and every window
-with its reset time. When a disk runs low, a "Disk" line shows its free
-space and names what takes the most room, and new lanes wait while it is
-critically low.
+then an Archive fold, each section with its count.
+
+- **A project row.** Its name, how many items wait on you, how many agents
+  are working and how long ago something last happened. "Working" counts
+  agents whose turn is running right now, the same rule the board uses.
+- **The system block.** Below the list, one line each for free memory and
+  swap, every account with what is left of its weekly limit, Copilot and
+  Telegram. **All windows** in its header adds each account's plan and every
+  window with its reset time.
+- **Low disk.** A "Disk" line shows free space and names what takes the most
+  room. New lanes wait while it is critically low.
 
 ## Conversations
 
@@ -115,17 +121,22 @@ On start it reads the transcripts already in `~/.claude`, `~/.codex` and
 Claude Code sessions and their subagents, Codex rollouts and their
 background shell tasks, and Copilot sessions.
 
-Each tool call is a card. An edit shows as a diff, a command shows with its
-output, and an image the agent looked at shows as a thumbnail you can open
-full size. In the preview the wheel zooms about the cursor and a drag pans;
-on a phone two fingers zoom and one pans, and a sideways swipe steps to the
-next picture. A summary line groups the calls ("wrote 1 file · patched 1
-file · ran 1 command"); expand it to see each one. Next to a call's duration, such as
-`352ms · 12.4k`, a number shows how many context tokens its result added, in
-four colour bands from quiet under 1 000 to red from 20 000. New output streams in live, and
-every conversation has its own link. Press `/` to search your messages
-across every project, engine and account, or switch the search to
-everything the agents wrote too.
+Each tool call is a card.
+
+- **Calls.** An edit shows as a diff, a command shows with its output, and an
+  image the agent looked at shows as a thumbnail you can open full size. In
+  the preview the wheel zooms about the cursor and a drag pans; on a phone
+  two fingers zoom and one pans, and a sideways swipe steps to the next
+  picture.
+- **Summary line.** It groups the calls ("wrote 1 file · patched 1 file · ran
+  1 command"); expand it to see each one.
+- **Context cost.** Next to a call's duration, such as `352ms · 12.4k`, a
+  number shows how many context tokens its result added, in four colour bands
+  from quiet under 1 000 to red from 20 000.
+- **Live.** New output streams in live, and every conversation has its own
+  link.
+- **Search.** Press `/` to search your messages across every project, engine
+  and account, or switch the search to everything the agents wrote too.
 
 ![A Claude Code conversation: an edit shown as a diff, a test run with its output, and the answer](../media/readme/conversation.svg)
 
@@ -152,7 +163,6 @@ becomes the conversation.
 - **Switch a running stage.** In the conversation of a running pipeline stage,
   the runtime pill switches the stage itself to another model, effort, speed or
   account.
-- **Layout.** The transcript keeps at least 60% of its column.
 - **While the agent works.** **Stop** stands beside **Send**, and interrupt,
   compact, re-check and **Copy terminal command** are under **More actions**.
 - **Codex context.** In a Codex conversation, the composer's **Context**

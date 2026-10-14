@@ -62,6 +62,8 @@ priorities, **Appearance** (colour and icon), **Pipeline actions** and
 undoes your own moves, edits and hides on the board; Ctrl+Shift+Z redoes
 them.
 
+![A task card's ⋯ menu open in the In progress column: the four columns in a row, icon actions to rename, describe, attach and hide with a line saying one agent keeps working, the three priorities, and the Appearance, Pipeline actions and More rows](../media/readme/card-menu.svg)
+
 The Overview board shows every project. The sidebar's system block shows free
 memory, every account with what is left of its weekly limit, Copilot and
 Telegram.
@@ -144,8 +146,6 @@ use **Pipeline actions** in the card's ⋯:
 - **Accept as is** takes the fixed head when a pipeline waits after its last
   review fix;
 - **Close the pipeline** ends it.
-
-![A task card's ⋯ menu open in the In progress column: the four columns in a row, icon actions to rename, describe, attach and hide with a line saying one agent keeps working, the three priorities, and the Appearance, Pipeline actions and More rows](../media/readme/card-menu.svg)
 
 [Pipelines in depth](pipelines.md) covers the stages, verdicts and review
 budget; [docs/pipelines.md](../pipelines.md) covers stage definitions, verdicts and

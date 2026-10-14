@@ -9,16 +9,22 @@ system block.
 
 ## The bot
 
-Paste a bot token from @BotFather and choose which chats agents
-may post to. Agents post to those chats and read what the bot receives
-through the MCP server. An agent can also send one photo or an album of
-up to ten (JPEG or PNG, each up to 10 MB) with a caption for each image,
-or a report file up to 20 MB (Markdown, text, log, JSON, CSV, HTML, PDF
-or an image). Files are sent only from the **Document folders** set in
-the panel, `handoff/` in your home by default, and a text file holding a
-password or a key is refused. The orchestrator can send its reports to one of these chats.
-When the installation's owner replies to a report there, the reply goes to
-that project's orchestrator.
+Paste a bot token from @BotFather and choose which chats agents may post to.
+Agents post to those chats and read what the bot receives through the MCP
+server.
+
+- **Photos.** One photo or an album of up to ten (JPEG or PNG, each up to
+  10 MB), with a caption for each image.
+- **Report files.** Up to 20 MB (Markdown, text, log, JSON, CSV, HTML, PDF or
+  an image).
+- **Where files come from.** Only from the **Document folders** set in the
+  panel, `handoff/` in your home by default. A text file holding a password or
+  a key is refused.
+- **Reports.** The orchestrator can send its reports to one of these chats.
+  When the installation's owner replies to a report there, the reply goes to
+  that project's orchestrator.
+
+![An orchestrator chat with a task's three-question decision form that shows "Sent to Telegram" and a link to send it to Telegram again](../media/readme/orchestrator.svg)
 
 ## Your own account
 
@@ -83,12 +89,9 @@ When the target, the chat or the install is busy, a question waits instead of
 failing: it is acknowledged, the service sees the `queued` step if it shows
 steps, and it starts once room opens.
 
-The wait has a budget of two minutes from the moment the question was asked,
-and a question still waiting ten seconds before the end of that budget is
-declined as busy. The budget bounds only the wait: an answer that has started
-keeps running under the target's hard cap and may arrive after the two minutes,
-and a service that enforces its own deadline can end it there. Member quotas
-and accounts with no room answer at once.
+A question that waits is not lost. An answer that has already started keeps
+running and may arrive late, and member quotas and accounts with no room answer
+at once. The timings are in the protocol.
 
 The protocol is in [docs/design/relay.md](../design/relay.md).
 
@@ -100,5 +103,3 @@ as a compact preview with a link to the full review. A failed or unconfirmed
 post stays on the review with its reason and reaches the orchestrator on its
 next wake. **Send to Telegram again**, in the review's actions, sends any
 round again, older ones included.
-
-![A project's orchestrator beside a task's three-question decision form that was already sent to Telegram, with a link to send it again](../media/readme/orchestrator.svg)

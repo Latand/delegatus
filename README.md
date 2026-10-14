@@ -5,8 +5,6 @@
   </picture>
 </p>
 
-# Delegatus
-
 **Delegate everything.**
 
 Delegatus lets you hand software work to AI coding agents and get it back
@@ -173,8 +171,8 @@ The board's four columns become tabs you swipe between, and you hold a card to
 move it. Open Delegatus on your phone through your Tailscale network.
 
 <p align="center">
-  <img src="docs/media/readme/phone-board.svg" width="45%" alt="A project's board on a phone: the four status columns as tabs, and In progress showing first the card that waits on your answer, counted on its tab">
-  <img src="docs/media/readme/phone-conversation.svg" width="45%" alt="A conversation on a phone screen, its test run expanded">
+  <img src="docs/media/readme/phone-board.svg" width="280" alt="A project's board on a phone: the four status columns as tabs, and In progress showing first the card that waits on your answer, counted on its tab">
+  <img src="docs/media/readme/phone-conversation.svg" width="280" alt="A conversation on a phone screen, its test run expanded">
 </p>
 
 More: [From your phone](docs/guide/phone.md).

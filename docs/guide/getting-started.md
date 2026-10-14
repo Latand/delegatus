@@ -66,13 +66,12 @@ Delegatus judges whether an agent is alive from file modification times.
 There are five ways to get Delegatus. Most people start with the first or
 the second.
 
-| Path | When it fits | Command | A `delegatus` command stays installed | How it updates |
-| --- | --- | --- | --- | --- |
-| Run the package | Trying it out | `bunx delegatus-cli` | No | The **Update** dialog, or `bunx delegatus-cli@latest` |
-| Keep a command installed | Daily use | `bun add -g delegatus-cli` | Yes | The **Update** dialog, or `bunx delegatus-cli@latest` |
-| Let your coding agent install it | You already work in Claude Code or Codex | The install prompt on the Delegatus website | Yes | As above |
-| Run from a clone | Reading or changing the source | `git clone`, then `bun install`, `bun run build`, `bun bin/cli.mjs` | No | The **Update** dialog, or pull and build again |
-| Docker | A long-running server, or a look at the interface | See below | No | `scripts/rebuild.sh` on the production setup |
+- **Run the package.** For trying it out: `bunx delegatus-cli`.
+- **Keep a command installed.** For daily use: `bun add -g delegatus-cli`.
+- **Let your coding agent install it.** If you already work in Claude Code or
+  Codex: paste the install prompt from the Delegatus website.
+- **Run from a clone.** To read or change the source.
+- **Docker.** For a long-running server, or a look at the interface.
 
 ### Run the package
 
@@ -81,6 +80,7 @@ bunx delegatus-cli
 ```
 
 This downloads and runs the published package without installing a command.
+Update it from the **Update** dialog, or run `bunx delegatus-cli@latest`.
 
 ### Keep a command installed
 
@@ -91,7 +91,8 @@ bun add -g delegatus-cli
 This installs three commands into `~/.bun/bin`: `delegatus`, its short alias
 `dlg`, and `delegatus-mcp`, the MCP server agents use to reach Delegatus.
 `bun add -g` needs no root. Start Delegatus with `delegatus`; `delegatus
---help` lists its options.
+--help` lists its options. The command stays installed. Update it from the
+**Update** dialog, or run `bunx delegatus-cli@latest`.
 
 ### Let your coding agent install it
 
@@ -107,6 +108,8 @@ agent and it does the following, in order:
 5. registers the MCP server for that agent under the name `viewer`, which
    takes effect in the agent's next session;
 6. gives you the link to open.
+
+The command stays installed, and it updates like the installed command.
 
 On native Windows it stops after the first step and asks you to run it inside
 WSL 2. On macOS the Claude desktop app needs the separate Claude Code CLI,
@@ -130,8 +133,9 @@ bun bin/cli.mjs
 
 The command serves the output of the last build, so build again after every
 pull. `bun dev` runs the app with hot reload, and with it you start the
-runtime host yourself. [Updates](operations.md#updates) covers keeping a
-clone current.
+runtime host yourself. No `delegatus` command stays installed. Update from
+the **Update** dialog, or pull and build again; [Updates](operations.md#updates)
+covers keeping a clone current.
 
 ### Docker
 
@@ -156,7 +160,8 @@ getting one), because `docker-compose.yml` is at the top of that checkout.
   and check that port 8898 answers. Agents started there run the `claude`,
   `codex` and `bun` installed on the host, so install them on the host first.
   `docker compose --profile runtime-host stop runtime-host` stops the
-  runtime host and with it the listener on port 8898.
+  runtime host and with it the listener on port 8898. No `delegatus` command
+  stays installed; `scripts/rebuild.sh` updates the production setup.
 
 After the production setup answers on port 8898, continue at [The setup
 guide](#the-setup-guide).
@@ -304,13 +309,11 @@ reason names the `origin/main` it could not fetch.
 Each pipeline stage runs on the engine its role is mapped to. The general
 **Builder** and the **Reviewer** both default to Codex, so an installation
 with only Codex connected can run a build-and-review pipeline made of those
-two roles. Some Builder variants default to Claude Code instead: the
-documentation, frontend and trivial-size rows, and the fix rounds for
-documentation and frontend work. A pipeline that selects one of those, or a
-setup with only Claude Code connected, meets a stage whose engine is not
-connected. That pipeline is refused before any stage starts, with a message
-that a stage's engine is not connected. Before the first pipeline, do one of
-these:
+two roles. Some Builder variants (documentation, frontend, trivial-size rows
+and their fix rounds) default to Claude Code instead. A pipeline that selects
+one of those, or a setup with only Claude Code connected, is refused before
+any stage starts, with a message that a stage's engine is not connected.
+Before the first pipeline, do one of these:
 
 - connect the other engine in the setup guide's **Engines** step;
 - open the sidebar's ⋯ menu → **Settings** → **Roles: engine and model**
@@ -350,22 +353,22 @@ turn on **Merge when the review passes**; see
 
 ## If something does not start
 
-- No agent CLI found. The start output prints the install commands for
+- **No agent CLI found.** The start output prints the install commands for
   Claude Code and Codex. Install one, restart Delegatus, and press **Check
   again** in the setup guide's **Engines** step.
-- An account is signed out. The **Engines** step shows **Installed, signed
+- **An account is signed out.** The **Engines** step shows **Installed, signed
   out**. Sign in there; the orchestrator draft also asks you to sign in
   before it can start.
-- The port is busy. The start output suggests the next port; start again
+- **The port is busy.** The start output suggests the next port; start again
   with `--port` and that number.
-- Only Copilot is installed. Copilot cannot run the orchestrator. Install
+- **Only Copilot is installed.** Copilot cannot run the orchestrator. Install
   Claude Code or Codex as well.
-- "not a git repository", or the pipeline stops while resolving its base.
+- **"not a git repository", or the pipeline stops while resolving its base.**
   The pipeline needs a commit to start from. Follow [Prepare a project for
   pipelines](#prepare-a-project-for-pipelines).
-- The pipeline is refused because an engine is not connected. See [If only
+- **The pipeline is refused because an engine is not connected.** See [If only
   one engine is connected](#if-only-one-engine-is-connected).
-- No pull request, or no merge. Pull requests and merging need a GitHub
+- **No pull request, or no merge.** Pull requests and merging need a GitHub
   `origin` and a signed-in `gh`. Run `gh auth login` and check
   `git remote -v`.
 

@@ -17,11 +17,6 @@ launches and supervises agents. Ctrl-C stops both. Delegatus listens on
 `127.0.0.1` unless you pass `--hostname`, and opens the page in your browser
 when it can. Set `DELEGATUS_DEBUG=1` to print startup diagnostics.
 
-When the web server stalls, its log says what held it: `[viewer loop-gap]`
-names the operations running when a timer fired more than 500 ms late, and
-`[state lease-hold]` names a pipelines lock held for more than a second.
-Both carry operation names and durations, never request bodies or accounts.
-
 Delegatus used to be called Agent Log Viewer. The old `agent-log-viewer`
 command still works and prints a one-line notice.
 
@@ -68,54 +63,27 @@ Of the variables ending in `_API_KEY`, only `ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `ELEVENLABS_API_KEY` and
 `SONIOX_API_KEY` pass on to the agents and commands Delegatus starts.
 
-**`DELEGATUS_AGENT_MEMORY`**
+**Agent memory**
 
-`auto` (default), `scope`, `watchdog`, or `off`. Auto uses systemd user scopes on supported Linux installs and an RSS watchdog in Docker and on macOS.
+- `DELEGATUS_AGENT_MEMORY` — `auto` (default), `scope`, `watchdog`, or `off`. Auto uses systemd user scopes on supported Linux installs and an RSS watchdog in Docker and on macOS.
+- `DELEGATUS_AGENT_MEMORY_MAX` — per-agent ceiling, e.g. `24G`, capped at the shared agent budget. GB means GiB.
+- `DELEGATUS_AGENT_MEMORY_RESERVE` — RAM reserved for the OS and Delegatus, e.g. `24G`; default is 15% rounded up to GiB, at least 4 GiB.
 
-**`DELEGATUS_AGENT_MEMORY_MAX`**
+**Language and diagnostics**
 
-Per-agent ceiling, e.g. `24G`, capped at the shared agent budget. GB means GiB.
+- `DELEGATUS_LANG` — `en` or `uk`: the language of CLI messages.
+- `DELEGATUS_DEBUG` — `1` prints startup diagnostics in the terminal.
+- `VIEWER_PROC_BACKEND` — `linux`, `portable` or `windows`: forces the process-discovery backend.
 
-**`DELEGATUS_AGENT_MEMORY_RESERVE`**
+**Voice**
 
-RAM reserved for the OS and Delegatus, e.g. `24G`; default is 15% rounded up to GiB, at least 4 GiB.
+- `DELEGATUS_TRANSCRIBE_BACKEND` — `local` (default), `chatgpt`, `elevenlabs` or `soniox`: fixes the dictation backend and locks the microphone menu.
+- `DELEGATUS_WHISPER_MODEL`, `DELEGATUS_WHISPER_DEVICE` — faster-whisper model size (default `small`) and device (`cpu`, the default, or `cuda`).
+- `DELEGATUS_TTS_BACKEND` — `openai`, `elevenlabs` or `soniox`: fixes the read-aloud provider.
 
-**`DELEGATUS_LANG`**
+**Cleanup and lifecycle**
 
-`en` or `uk`: the language of CLI messages.
-
-**`DELEGATUS_DEBUG`**
-
-`1` prints startup diagnostics in the terminal.
-
-**`DELEGATUS_TRANSCRIBE_BACKEND`**
-
-`local` (default), `chatgpt`, `elevenlabs` or `soniox`: fixes the dictation backend and locks the microphone menu.
-
-**`DELEGATUS_WHISPER_MODEL`, `DELEGATUS_WHISPER_DEVICE`**
-
-faster-whisper model size (default `small`) and device (`cpu`, the default, or `cuda`).
-
-**`DELEGATUS_TTS_BACKEND`**
-
-`openai`, `elevenlabs` or `soniox`: fixes the read-aloud provider.
-
-**`DELEGATUS_HOST_RETIREMENT_IDLE_HOURS`**
-
-How many hours a hosted agent's transcript must stay quiet before Delegatus may stop its host (default `6`; `0` turns this off). Delegatus never stops a host that is mid-turn, has a pending question or holds an orchestrator seat.
-
-**`DELEGATUS_WORKTREE_SWEEP`**
-
-`0` turns off the hourly removal of merged pipelines' worktrees; `dry-run` only reports what it would remove, in `state/worktree-sweep-report.json`.
-
-**`DELEGATUS_TEMP_SWEEP_MAX_AGE_HOURS`**
-
-Age in hours at which the hourly sweep removes an unused Delegatus temp directory (`llv-*`) (default `24`; `0` turns the sweep off). It looks in `/tmp`, `/var/tmp` and the state's `scratch` directory, and never touches a pipeline worktree. The last sweep is in `state/temp-sweep-report.json`.
-
-**`DELEGATUS_REAPER_ENABLED`**
-
-`1` lets the agent reaper stop leaked agent processes it has verified. Unset, it only lists them at `GET /api/lifecycle/reaper`.
-
-**`VIEWER_PROC_BACKEND`**
-
-`linux`, `portable` or `windows`: forces the process-discovery backend.
+- `DELEGATUS_HOST_RETIREMENT_IDLE_HOURS` — how many hours a hosted agent's transcript must stay quiet before Delegatus may stop its host (default `6`; `0` turns this off). Delegatus never stops a host that is mid-turn, has a pending question or holds an orchestrator seat.
+- `DELEGATUS_WORKTREE_SWEEP` — `0` turns off the hourly removal of merged pipelines' worktrees; `dry-run` only reports what it would remove, in `state/worktree-sweep-report.json`.
+- `DELEGATUS_TEMP_SWEEP_MAX_AGE_HOURS` — age in hours at which the hourly sweep removes an unused Delegatus temp directory (`llv-*`) (default `24`; `0` turns the sweep off). It looks in `/tmp`, `/var/tmp` and the state's `scratch` directory, and never touches a pipeline worktree. The last sweep is in `state/temp-sweep-report.json`.
+- `DELEGATUS_REAPER_ENABLED` — `1` lets the agent reaper stop leaked agent processes it has verified. Unset, it only lists them at `GET /api/lifecycle/reaper`.

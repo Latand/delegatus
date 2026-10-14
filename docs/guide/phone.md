@@ -23,8 +23,8 @@ your screen where it is. [Phone access](#phone-access) explains how to reach
 Delegatus from your phone.
 
 <p align="center">
-  <img src="../media/readme/phone-board.svg" width="45%" alt="A project's board on a phone: the four status columns as tabs, and In progress showing first the card that waits on your answer, counted on its tab">
-  <img src="../media/readme/phone-conversation.svg" width="45%" alt="A conversation on a phone screen, its test run expanded">
+  <img src="../media/readme/phone-board.svg" width="280" alt="A project's board on a phone: the four status columns as tabs, and In progress showing first the card that waits on your answer, counted on its tab">
+  <img src="../media/readme/phone-conversation.svg" width="280" alt="A conversation on a phone screen, its test run expanded">
 </p>
 
 The board on a phone, and a conversation with its test run expanded.
@@ -34,16 +34,18 @@ The board on a phone, and a conversation with its test run expanded.
 Phone access lets you open Delegatus on your phone through your
 [Tailscale](https://tailscale.com) network.
 
-Open the setup guide (the sidebar's ⋯ menu → **Help and learning** →
-**Setup guide**, or the board's ⋯ menu on a phone) and go to **Phone**. If Tailscale is signed in on this
-computer, press **Turn on phone access**. Delegatus publishes itself inside
-your tailnet with `tailscale serve --bg`, protects the page with an access
-key and shows you the link and its QR code. Nothing restarts. Delegatus
-remembers the choice in `~/.config/delegatus/phone-access` and publishes
-again on the next start. **Turn off phone access** removes the mapping and
-forgets the choice. If Tailscale is missing, signed out or has no MagicDNS
-name, the step tells you which one in a sentence with a link, and notices
-when you fix it.
+1. Open the setup guide (the sidebar's ⋯ menu → **Help and learning** →
+   **Setup guide**, or the board's ⋯ menu on a phone) and go to **Phone**.
+2. If Tailscale is signed in on this computer, press **Turn on phone access**.
+   Delegatus publishes itself inside your tailnet with `tailscale serve --bg`
+   and protects the page with an access key. Nothing restarts.
+3. Scan the QR code the step shows, or open the link it prints.
+
+Delegatus remembers the choice in `~/.config/delegatus/phone-access` and
+publishes again on the next start. **Turn off phone access** removes the
+mapping and forgets the choice. If Tailscale is missing, signed out or has
+no MagicDNS name, the step tells you which one in a sentence with a link,
+and notices when you fix it.
 
 To do the same from a terminal:
 
@@ -51,15 +53,18 @@ To do the same from a terminal:
 bunx delegatus-cli --tailscale
 ```
 
-The server stays bound to `127.0.0.1` either way, and Tailscale publishes it
-only inside your tailnet. Delegatus never uses Tailscale Funnel, which
-would expose it to the public internet. The terminal prints the tailnet URL
-with a QR code, and **Open on phone** in the sidebar's ⋯ menu shows the same
-QR code. The
-URL carries a 32-character access key. After your first visit the server
-sets a cookie that lasts 30 days. `--new-token` makes a new key and
-invalidates every older key and cookie. Once phone access is on, every
-browser, including the ones on this computer, needs to open the link once.
+The terminal prints the tailnet URL with a QR code. **Open on phone** in the
+sidebar's ⋯ menu shows the same QR code. What to know about the link:
+
+- **Private.** The server stays bound to `127.0.0.1`, and Tailscale
+  publishes it only inside your tailnet. Delegatus never uses Tailscale
+  Funnel, which would expose it to the public internet.
+- **Keyed.** The URL carries a 32-character access key. After your first
+  visit the server sets a cookie that lasts 30 days.
+- **Revocable.** `--new-token` makes a new key and invalidates every older
+  key and cookie.
+- **For every browser.** Once phone access is on, every browser, including
+  the ones on this computer, needs to open the link once.
 
 Publishing needs Tailscale's operator right. If the button says it is
 missing, run `sudo tailscale set --operator=$USER` once and press the button

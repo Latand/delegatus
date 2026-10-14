@@ -13,12 +13,10 @@ release. Running sessions reconnect and interrupted work resumes.
 
 ### When the launcher needs a restart
 
-A recovery web server re-adopts its installation's launcher. If an older
-launcher needs upgrading, the dialog offers **Restart launcher** for the user
-service that runs it, naming that service, or the exact command for its
-terminal. Packaged installs download a published npm release into the user's
-cache, so global installation permissions are not needed. Docker's runtime-host
-profile uses its deployment coordinator.
+If an older launcher needs upgrading, the Update dialog offers **Restart
+launcher** for the user service that runs it, naming that service, or the exact
+command for its terminal. Packaged installs download a published release into
+the user's cache, so no global installation permissions are needed.
 
 ### Older packaged releases
 
@@ -30,14 +28,11 @@ without one (every version up to 1.9.0) it names the version and asks for
 
 ## Automatic updates
 
-**Automatic updates**, off by default, waits for green checks and a quiet minute.
-On a busy machine it holds new launches while the current work finishes, for
-at most ten minutes; after two minutes without new starts it applies as soon
-as the live turns and stages finish. Only work verified as live counts: a host
-silent for ten minutes stops blocking unless a long tool or a running check
-shows it is still busy. When the hold runs out, launches reopen for ten
-minutes before the next try, and the Update dialog and `auto_updates` show the
-reason and the retry time. Your own activity, low memory and failing checks
+**Automatic updates**, off by default, waits for green checks and a quiet
+moment. On a busy machine it holds new launches while the current work
+finishes, then applies the update. If the work does not finish in time, the
+update waits and tries again later. The Update dialog and `auto_updates` show
+the reason and the retry time. Your own activity, low memory and failing checks
 still block it. A failed automatic apply rolls back and turns the switch off.
 
 Automatic updates are available for a clone or a Docker runtime-host

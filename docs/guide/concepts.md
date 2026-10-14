@@ -101,14 +101,19 @@ fresh reviewer, with no memory of the builder's conversation, on the new
 head.
 
 The review budget is fixed when the pipeline is created: three rounds unless
-its creator chose more, and at most nine. By default N rounds are N reviews
-plus one fix of the last review's findings. After that fix the pipeline moves
-on and marks the fix as not re-reviewed. A pipeline can also be created to wait
-for you after that fix; it then stops on the fixed head and offers **Accept as
-is**, unless the fix left the head unchanged, in which case it moves on. A third
-policy, park, fixes after every failed review but the last, runs N + 1 reviews
-and stops for you when the final one fails. No policy leaves an extra review to
-ask for.
+its creator chose more, and at most nine. What happens after the last failed
+review is the pipeline's policy:
+
+- **`advance`** (the default). N rounds are N reviews plus one fix of the last
+  review's findings. The pipeline then moves on and marks the fix as not
+  re-reviewed.
+- **`stop-after-fix`**. The same count, but after that fix the pipeline stops
+  on the fixed head and offers **Accept as is**. A fix that left the head
+  unchanged moves on.
+- **`park`**. It fixes after every failed review but the last, runs N + 1
+  reviews, and stops for you when the final one fails.
+
+No policy leaves an extra review to ask for.
 
 ## The merge setting
 
@@ -199,23 +204,6 @@ key and a monthly spend cap, or through a Codex subscription.
 ## How they fit together
 
 One request travels through all of these:
-
-```text
-you ── write to ──▶ orchestrator
-                       │ opens a task on the board
-                       │ starts a pipeline, within the worker limit
-                       ▼
-                    pipeline ── stages run as agents on your accounts,
-                       │        each one a conversation
-                       │ review loop spends its budget
-                       ▼
-                    merge setting decides: PR left open, or merged
-                       │
-                       ▼
-orchestrator ── files a report ──▶ Reports log (and Telegram, voice)
-             ── a decision only you can make ──▶ a form under Needs you
-stages ── leave learned rules ──▶ the next agents of their level
-```
 
 1. You write to the orchestrator.
 2. It opens a task on the board and starts a pipeline within the worker
