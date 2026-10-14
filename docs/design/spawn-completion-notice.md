@@ -298,15 +298,22 @@ Where the build differs from the text above, and why:
   `launcherNotice: "unavailable"` unless the route reports
   `transport: "structured"`. The seat tick's skip also requires a structured
   receipt.
-- **A fenced obligation write is deferred.** During a release handoff the
-  runtime host carries no release revision, so the hot-state store refuses
-  its writes (`FileTransactionBusyError`) until the new Viewer activates.
-  `consumeRuntimeEvent` turns that refusal from the notice port into
-  `RuntimeConsumerDeferredError`. The host leaves the event owed, does not
-  count it toward the three-failure quarantine, stops the recovery pass
-  without rejecting it (so boot recovery resolves), and retries every owed
-  event on one timer until the write is admitted. The other consumers keep
-  their existing failure handling.
+- **A fenced write is deferred, on every consumer port.** During a release
+  handoff the runtime host carries no release revision, so the hot-state
+  store refuses its writes (`FileTransactionBusyError`) until the new Viewer
+  activates. `consumeRuntimeEvent` turns that refusal into
+  `RuntimeConsumerDeferredError` on all four ports: flow readiness, workflow
+  stage completion, task delivery and the completion notice. The host leaves
+  the event owed, does not count it toward the three-failure quarantine,
+  stops the recovery pass without rejecting it (so boot recovery resolves),
+  and retries every owed event on one timer until the write is admitted.
+  Until #2867 only the notice port deferred. A flow turn refused at the head
+  of the queue was then counted as a failure: a runtime host restarted inside
+  the fence exited at boot recovery, before its socket listened, and a timed
+  retry that met it first armed no further retry, so the notice behind it
+  waited for unrelated traffic. Any other failure still counts toward the
+  quarantine. A store that stays busy now holds the orchestration queue
+  behind it; the host logs each held event once.
 
 ## Deferred — not currently justified
 
