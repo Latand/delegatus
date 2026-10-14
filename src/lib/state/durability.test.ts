@@ -618,6 +618,38 @@ test("an activation worker launch refusal retains the existing logged startup fa
   } finally { launch.mockRestore(); log.mockRestore(); }
 });
 
+// Windows terminates the process immediately; this fixture delays POSIX SIGTERM.
+test.if(process.platform !== "win32")("activation timeout awaits helper cleanup before stores can open", async () => {
+  const directory = sandbox();
+  const ready = path.join(directory, "ready");
+  const ended = path.join(directory, "ended");
+  const workerPath = path.join(directory, "delayed-exit-worker.ts");
+  fs.writeFileSync(workerPath, `import fs from "node:fs";
+    process.on("SIGTERM", () => setTimeout(() => { fs.writeFileSync(${JSON.stringify(ended)}, "ended"); process.exit(0); }, 30));
+    fs.writeFileSync(${JSON.stringify(ready)}, "ready");
+    process.stdin.resume(); setInterval(() => {}, 1000);
+  `);
+  const helper = await import("@/lib/helperLease");
+  const spawn = helper.spawnLeasedHelper;
+  const launch = spyOn(helper, "spawnLeasedHelper").mockImplementation((name, spec, ...rest) =>
+    spawn(name, { ...spec, command: process.execPath, args: [workerPath] }, ...rest));
+  const schedule = setTimeout;
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation((callback, ms, ...args) => {
+    if (ms !== 15 * 60_000) return schedule(callback, ms, ...args);
+    return schedule(async () => {
+      const deadline = Date.now() + 5000;
+      while (!fs.existsSync(ready) && Date.now() < deadline) await Bun.sleep(1);
+      callback(...args);
+    }, 1);
+  });
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    await checkStateDatabasesBeforeStores(directory);
+    expect(fs.existsSync(ended)).toBe(true);
+    expect(log).toHaveBeenCalledWith("[state durability] activation check failed", expect.stringContaining("was stopped"));
+  } finally { timer.mockRestore(); launch.mockRestore(); log.mockRestore(); }
+}, 20_000);
+
 test("a production store held across a fresh fallback writes into the new database, not the damaged one", () => {
   const directory = sandbox();
   const filename = path.join(directory, "handoff-queue.sqlite");

@@ -918,9 +918,12 @@ async function runDurabilityWorker(
   const input = leasedHelperInput(child);
   const response = await new Promise<BackupWorkerResponse>((resolve, reject) => {
     let output = "";
+    let timedOut = false;
     const timeout = setTimeout(() => {
+      timedOut = true;
       endLeasedHelper(child);
-      reject(new Error(`the backup worker ran past ${BACKUP_WORKER_TIMEOUT_MS} ms and was stopped`));
+      // Activation may open stores next; wait for the guardian to reap the
+      // worker before reporting its timeout, so recovery cannot race imports.
     }, BACKUP_WORKER_TIMEOUT_MS);
     timeout.unref?.();
     child.stdout!.setEncoding("utf8");
@@ -933,6 +936,7 @@ async function runDurabilityWorker(
     child.once("close", (code, signal) => {
       clearTimeout(timeout);
       try {
+        if (timedOut) throw new Error(`the backup worker ran past ${BACKUP_WORKER_TIMEOUT_MS} ms and was stopped`);
         if (code !== 0) throw new Error(`the backup worker exited with ${code ?? signal}`);
         resolve(JSON.parse(output.trim().split("\n").at(-1) ?? "") as BackupWorkerResponse);
       } catch (error) {

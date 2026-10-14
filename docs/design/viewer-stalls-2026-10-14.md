@@ -716,7 +716,12 @@ XDG config/cache, TMPDIR and state roots. Each fixed cause has a red control:
 Additional checks cover draft sorting/replacement/deletion/insertion, foreign
 writer revisions, linked companion atomicity, corruption restoration before
 store opening, five-second busy refusal without moving a healthy database,
-worker launch refusal, and activation-worker owner death. The latter uses the
+worker launch refusal, activation-worker owner death, and retirement during a
+held activation worker. A startup barrier tracks integrity work and structured
+startup; retirement waits for admitted mutations and rejects late completion.
+Release ownership is checked before and after the integrity await, so
+retirement during that check prevents subsequent store imports. A timed-out worker is reaped
+before its refusal returns and store opening can proceed. The owner-death check uses the
 real leased launch path and verifies that its helper descendants end while the
 Viewer's separately started agent remains alive.
 
@@ -729,10 +734,11 @@ Individual isolated runs passed:
 | `src/lib/tasks/revision.test.ts` | 5 |
 | `src/lib/tasks/store.listView.test.ts` | 3 |
 | `src/lib/monitor/seatTickController.test.ts` | 107 |
-| `src/lib/state/durability.test.ts` | 21 |
+| `src/lib/state/durability.test.ts` | 22 |
 | `src/lib/helperLease.test.ts` | 14 |
 | `src/lib/links/taskSync.test.ts` | 17; one existing optional compatibility check skipped |
-| `src/lib/viewerInstrumentation.test.ts` | 4 |
+| `src/lib/viewerInstrumentation.test.ts` | 7 |
+| `src/lib/state/hotStateStores.sqlite.test.ts` | 26 |
 
 A combined exploratory task-test process exposed a module-load state-path
 assumption in `revision.test.ts`; running each file in its own required isolated
