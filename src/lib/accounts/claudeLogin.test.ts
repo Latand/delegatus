@@ -150,12 +150,61 @@ test("ClaudeLoginSupervisor.persist commits a stdout transition behind a short f
   const supervisor = new ClaudeLoginSupervisor(ports(), { load: () => [], save: rows => { saved.push(rows.map(row => row.phase)); } });
   supervisor.start(account.id);
   const holder = await foreignAccountHolder();
+  const realNow = performance.now.bind(performance);
+  const deadline = realNow() + 5_000;
+  // Control admission time independently of the foreign process's scheduler.
+  // The real 25 ms cap is exercised by accountMutation.test.ts. This case
+  // proves a contended synchronous save commits before the stdout call returns.
+  const clock = spyOn(performance, "now").mockImplementation(() => {
+    if (realNow() >= deadline) throw new Error("foreign holder did not release");
+    return 0;
+  });
+  const realWait = Atomics.wait;
+  let waits = 0;
+  const wait = spyOn(Atomics, "wait").mockImplementation((...args) => {
+    if (++waits === 1) {
+      expect(saved.at(-1)).toEqual(["awaiting_browser"]);
+      holder.releaseAfter(0);
+    }
+    return Reflect.apply(realWait, Atomics, args);
+  });
   try {
-    holder.releaseAfter(8);
     child.stdout.emit("data", "Open https://claude.ai/authorize?state=fixture");
+    expect(waits).toBeGreaterThan(0);
     expect(saved.at(-1)).toEqual(["awaiting_code"]);
     expect(signals).toEqual([]);
-  } finally { await holder.close(); }
+  } finally { wait.mockRestore(); clock.mockRestore(); await holder.close(); }
+});
+
+test("ClaudeLoginSupervisor.persist commits a deferred stdout transition after a foreign holder releases", async () => {
+  const account = createManagedClaudeAccount("Held stdout");
+  const saved: string[][] = [];
+  let committed!: () => void;
+  const persisted = new Promise<void>(resolve => { committed = resolve; });
+  const supervisor = new ClaudeLoginSupervisor(ports(), {
+    load: () => [],
+    save: rows => {
+      const phases = rows.map(row => row.phase);
+      saved.push(phases);
+      if (phases[0] === "awaiting_code") committed();
+    },
+  });
+  const operation = supervisor.start(account.id);
+  const holder = await foreignAccountHolder();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // The foreign process cannot release until the synchronous attempt ends.
+    child.stdout.emit("data", "Open https://claude.ai/authorize?state=held");
+    expect(saved.at(-1)).toEqual(["awaiting_browser"]);
+    expect(supervisor.get(operation.operationId)?.phase).toBe("awaiting_code");
+    expect(signals).toEqual([]);
+    holder.releaseAfter(0);
+    await Promise.race([persisted, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("deferred stdout transition did not commit")), 2_000);
+    })]);
+    expect(saved.at(-1)).toEqual(["awaiting_code"]);
+    expect(signals).toEqual([]);
+  } finally { clearTimeout(timer); await holder.close(); }
 });
 
 test("the browser, code, verification, and canceling phases are durable and stdout-only", async () => {

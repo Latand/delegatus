@@ -56,10 +56,24 @@ export async function stopFixtureTree(child: ChildProcess, timeoutMs = 2_000): P
     }
     return processIdentityStatus(root) === "alive";
   });
-  const alive = () => owned.filter(identity => processIdentityStatus(identity) === "alive" && !procBackend.processExited(identity.pid));
+  // Exit evidence is terminal for a recorded identity. Separate kernel reads
+  // can see its zombie start token, then no stat record after reaping; the
+  // latter makes processExited return false and must not revive that member.
+  let remaining = owned;
+  const alive = () => {
+    const running: ProcessIdentity[] = [];
+    remaining = remaining.filter(identity => {
+      const status = processIdentityStatus(identity);
+      if (status === "dead" || procBackend.processExited(identity.pid)) return false;
+      if (status === "alive") running.push(identity);
+      // Missing identity evidence cannot permanently remove a member.
+      return true;
+    });
+    return running;
+  };
   const deadline = Date.now() + timeoutMs;
   for (const signal of ["SIGTERM", "SIGKILL"] as const) {
-    for (const identity of owned) signalFixtureIdentity(identity, signal);
+    for (const identity of remaining) signalFixtureIdentity(identity, signal);
     const until = signal === "SIGTERM" ? Math.min(deadline, Date.now() + 500) : deadline;
     while (alive().length && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
   }

@@ -21,6 +21,49 @@ test("fixture tree cleanup refuses a reused start token before sending any signa
   finally { signal.mockRestore(); probe.mockRestore(); await stopFixtureProcess(child); }
 }, 3_000);
 
+test("fixture tree cleanup rechecks a temporarily unverified member before escalation", async () => {
+  const child = ownFixtureTree(spawn("/bin/sleep", ["30"], { stdio: "ignore" }));
+  const originalIdentity = procBackend.processIdentity.bind(procBackend);
+  const originalKill = process.kill;
+  let termSent = false;
+  let unverified = false;
+  const token = spyOn(procBackend, "processIdentity").mockImplementation(pid => {
+    if (pid === child.pid && termSent && !unverified) { unverified = true; return null; }
+    return originalIdentity(pid);
+  });
+  const send = spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (pid === child.pid && signal === "SIGTERM") { termSent = true; return true; }
+    return originalKill(pid, signal);
+  });
+  try {
+    await stopFixtureTree(child);
+    expect(unverified).toBe(true);
+    expect(send.mock.calls.filter(([pid]) => pid === child.pid)).toEqual([[child.pid!, "SIGTERM"], [child.pid!, "SIGKILL"]]);
+  } finally {
+    send.mockRestore(); token.mockRestore(); await stopFixtureProcess(child);
+  }
+}, 3_000);
+
+test("fixture tree cleanup keeps an observed exit terminal across later kernel reads", async () => {
+  const child = ownFixtureTree(spawn("/bin/sleep", ["30"], { stdio: "ignore" }));
+  const originalExited = procBackend.processExited.bind(procBackend);
+  let reads = 0;
+  // A zombie is visible once; after reaping, the stat read can be absent.
+  // Keep the identity read alive to model the preceding read's stale result.
+  const exited = spyOn(procBackend, "processExited").mockImplementation(pid =>
+    pid === child.pid ? ++reads % 2 === 0 : originalExited(pid));
+  const send = spyOn(process, "kill").mockImplementation(() => true);
+  try {
+    await stopFixtureTree(child);
+    expect(send.mock.calls).toEqual([[child.pid!, "SIGTERM"]]);
+    expect(reads).toBe(2);
+  } finally {
+    send.mockRestore();
+    exited.mockRestore();
+    await stopFixtureProcess(child);
+  }
+}, 3_000);
+
 test("fixture tree cleanup reaps descendants within its bound and preserves a same-argv bystander", async () => {
   const script = "sleep 30 & echo '{\"ready\":true}'; wait";
   const child = ownFixtureTree(spawn("/bin/sh", ["-c", script], { stdio: ["ignore", "pipe", "ignore"], detached: true }));
