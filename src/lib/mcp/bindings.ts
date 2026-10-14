@@ -2828,6 +2828,7 @@ async function entryForPath(
   transcriptPath: string,
   dependencies: Pick<ViewerMcpDomainDependencies, "listFiles" | "completedFileScan" | "targetedFileEntry">,
   context: TargetedConversationOptions = {},
+  knownTranscript = false,
 ): Promise<{ entry: FileEntry; session?: SessionReadResult; tail?: BoundedTranscriptTail; truncated?: true; hint?: string } | undefined> {
   throwIfCallEnded(context);
   const remainingMs = context.deadlineAt === undefined
@@ -2881,7 +2882,7 @@ async function entryForPath(
         ...(context.tailLines === undefined ? {} : { tailLines: context.tailLines }),
       });
       if (!targeted) {
-        if (knownInCompletedCatalog) {
+        if (knownInCompletedCatalog || knownTranscript) {
           throw new McpToolRefusal("the known conversation transcript is temporarily unavailable; retry after its write or replacement finishes", {
             code: "CONVERSATION_READ_UNAVAILABLE",
             retryable: true,
@@ -6682,12 +6683,13 @@ async function focusTargetProject(
   target: FocusTarget,
   explicit: string,
   dependencies: ViewerMcpDomainDependencies,
+  knownTranscript = false,
 ): Promise<string> {
   if (explicit) return explicit;
   if (isGeometricTarget(target)) return target.project;
   switch (target.kind) {
     case "conversation": {
-      const targeted = await entryForPath(target.path, dependencies);
+      const targeted = await entryForPath(target.path, dependencies, {}, knownTranscript);
       if (!targeted) throw new McpToolRefusal("no conversation on the board has that transcript path; use a registered conversationId, a transcript .jsonl path on the board, or spawn:<launchId> from a failed-launch row", { code: "CONVERSATION_NOT_FOUND", retryable: false });
       return targeted.entry.project;
     }
@@ -6954,12 +6956,14 @@ async function dismissThroughService(
   if (!admission.allowed) {
     throw new McpToolRefusal(admission.error, { code: "DISMISS_NOT_PERMITTED", refusedAs: admission.refusedAs });
   }
+  let registryKnownTranscript = false;
   if (target.kind === "conversation" && target.conversationId) {
     const snapshot = dependencies.registrySnapshot();
     const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
     const id = lookup.canonicalConversationId(target.conversationId as `conversation_${string}`);
     const known = lookup.conversation(id);
     const path = known?.generations.at(-1)?.path;
+    registryKnownTranscript = Boolean(path);
     const reasonId = target.reasonId ?? "";
     const reasonLaunchId = reasonId.startsWith("spawn:") && reasonId.endsWith(":launch-failed") ? reasonId.slice(6, -":launch-failed".length) : null;
     const namedReceipt = reasonLaunchId ? snapshot.receipts?.[reasonLaunchId] : null;
@@ -6992,7 +6996,7 @@ async function dismissThroughService(
   } else {
     focus = focusTargetFromArgs(target.kind === "conversation"
       ? { kind: "conversation", ...(target.conversationId ? { conversationId: target.conversationId } : {}), ...(target.path ? { path: target.path } : {}), reasonId: target.reasonId } : target, dependencies);
-    rawProject = await focusTargetProject(focus, "", dependencies);
+    rawProject = await focusTargetProject(focus, "", dependencies, registryKnownTranscript);
   }
   const project = canonicalOrchestratorProject(rawProject);
   const verdict = permitAttentionDismissal(authority, seats, project);

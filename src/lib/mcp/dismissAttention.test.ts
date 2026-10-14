@@ -289,6 +289,57 @@ test("a catalogued transcript that is temporarily empty remains retryable", asyn
   expect(readAttentionDismissals().records).toEqual([]);
 });
 
+test("a registry-known temporarily empty transcript stays retryable when the catalog omits it", async () => {
+  const root = path.join(sandbox, "registry-transcripts");
+  fs.mkdirSync(root);
+  const transcriptPath = path.join(root, "empty.jsonl");
+  fs.writeFileSync(transcriptPath, "");
+  const pathAllowed = (candidate: string) => {
+    try { return fs.realpathSync(candidate).startsWith(fs.realpathSync(root) + path.sep); } catch { return false; }
+  };
+  const targetedDependencies: TargetedConversationDependencies = { roots: [["codex-sessions", root]], pathAllowed };
+  const conversationId = "conversation_registry_known";
+  const service = serviceAs(ROOT, world(), new MemoryMcpReceiptStore(), {
+    completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: [], complete: true } }),
+    registrySnapshot: () => ({ conversations: { [conversationId]: { id: conversationId, generations: [{ path: transcriptPath }], continuityPaths: [] } }, conversationAliases: {}, lineageEdges: {}, memberships: {}, receipts: {} }),
+    targetedFileEntry: (pathname: string, options?: { signal?: AbortSignal; deadlineAt?: number; tailLines?: number }) => targetedConversationAtPath(pathname, options, targetedDependencies),
+  });
+  const result = await service.callTool("dismiss_attention", {
+    clientRequestId: "empty-registry-known-omitted",
+    target: { kind: "conversation", conversationId },
+  });
+  expect(result).toMatchObject({ ok: false, retryable: true, details: { code: "CONVERSATION_READ_UNAVAILABLE", retryable: true } });
+  expect((result as { error: string }).error).toContain("temporarily unavailable");
+  expect(readAttentionDismissals().records).toEqual([]);
+});
+
+test("a registry-known temporarily empty transcript stays retryable when the catalog budget expires", async () => {
+  const root = path.join(sandbox, "registry-transcripts");
+  fs.mkdirSync(root);
+  const transcriptPath = path.join(root, "empty.jsonl");
+  fs.writeFileSync(transcriptPath, "");
+  const pathAllowed = (candidate: string) => {
+    try { return fs.realpathSync(candidate).startsWith(fs.realpathSync(root) + path.sep); } catch { return false; }
+  };
+  const targetedDependencies: TargetedConversationDependencies = { roots: [["codex-sessions", root]], pathAllowed };
+  const conversationId = "conversation_registry_known";
+  const service = serviceAs(ROOT, world(), new MemoryMcpReceiptStore(), {
+    completedFileScan: ({ signal }: { signal?: AbortSignal } = {}) => new Promise((_resolve, reject) => {
+      if (signal?.aborted) reject(signal.reason);
+      else signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }),
+    registrySnapshot: () => ({ conversations: { [conversationId]: { id: conversationId, generations: [{ path: transcriptPath }], continuityPaths: [] } }, conversationAliases: {}, lineageEdges: {}, memberships: {}, receipts: {} }),
+    targetedFileEntry: (pathname: string, options?: { signal?: AbortSignal; deadlineAt?: number; tailLines?: number }) => targetedConversationAtPath(pathname, options, targetedDependencies),
+  });
+  const result = await service.callTool("dismiss_attention", {
+    clientRequestId: "empty-registry-known-budget-expired",
+    target: { kind: "conversation", conversationId },
+  });
+  expect(result).toMatchObject({ ok: false, retryable: true, details: { code: "CONVERSATION_READ_UNAVAILABLE", retryable: true } });
+  expect((result as { error: string }).error).toContain("temporarily unavailable");
+  expect(readAttentionDismissals().records).toEqual([]);
+});
+
 test("a failed launch's projected target belongs to its explicit project when the cwd names another project", async () => {
   const { AgentRegistry } = await import("@/lib/agent/registry");
   const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
