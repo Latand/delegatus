@@ -9,8 +9,6 @@ import { AgentRegistry } from "@/lib/agent/registry";
 import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from "@/lib/agent/registryPerformanceDataset";
 import { hostlessConversations, hostlessConversationEvidence } from "./hostlessRegistryEvidence";
 
-export const typecheckRedProof: string = 1;
-
 function fixture() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hostless-evidence-"));
   const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
