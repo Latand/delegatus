@@ -1069,3 +1069,120 @@ for (const transport of ["tmux", "structured"] as const) test(`queued ${transpor
   } finally { store.close(); fs.rmSync(cwd, { recursive: true, force: true });
     if (saved === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = saved; }
 });
+
+
+test.each((["uncertain", "delivered"] as const).flatMap(phase =>
+  (["absent", "user", "live", "claim", "unknown-claim", "pipeline", "pipeline-alias", "no-entry", "user-no-entry", "young"] as const).map(evidence => [phase, evidence] as const),
+))("a lost %s first message converges without relaunching (%s)", async (phase, evidence) => {
+  const { STAGED_RECOVERY_PREFIX } = await import("./stagedRecovery");
+  const { STAGED_RECOVERY_BUDGET_MS } = await import("./structuredSpawn");
+  const store = registry();
+  const { receipt, key } = stagedStructuredReceipt(store, `lost-${phase}-${evidence}`);
+  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+  const row = raw.receipts[receipt.launchId];
+  const start = Date.parse(row.createdAt);
+  row.admissionOwner = null;
+  row.error = STAGED_RECOVERY_PREFIX + JSON.stringify({ phase, startedAt: start, nextTryAt: start,
+    checks: 1, reason: "no rollout found for thread id", stopped: evidence !== "young" });
+  const host = raw.entries[`codex:${key.sessionId}`];
+  host.claimOwner = null;
+  host.status = evidence === "live" ? "idle" : "dead";
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  host.structuredHost.process = evidence === "live" ? captureProcessIdentity(process.pid) : null;
+  if (evidence === "claim") host.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+  if (evidence === "unknown-claim") host.claimOwner = "unverified-fixture-claim";
+  if (evidence === "user" || evidence === "user-no-entry") fs.writeFileSync(row.artifactPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "Start the work" } }) + "\n");
+  if (evidence === "pipeline") raw.memberships[receipt.conversationId] = [{ kind: "pipeline", containerId: "fixture-lane", stageId: "build", slot: "run", role: "builder" }];
+  if (evidence === "no-entry" || evidence === "user-no-entry") delete raw.entries[`codex:${key.sessionId}`];
+  if (evidence === "pipeline-alias") {
+    const canonical = "conversation_fixture_pipeline_alias";
+    raw.conversationAliases[receipt.conversationId] = canonical;
+    raw.conversations[canonical] = { ...raw.conversations[receipt.conversationId], id: canonical };
+    raw.memberships[canonical] = [{ kind: "pipeline", containerId: "fixture-lane", stageId: "build", slot: "run", role: "builder" }];
+  }
+  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  const restarted = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
+  const runtimeWrites: string[] = [];
+  const client = { ...DEAD_RUNTIME_CLIENT,
+    transitionOperation: async (_id: string, state: string) => { runtimeWrites.push(state); },
+    command: async () => { throw new Error("lost work must never relaunch or resend"); },
+  } as unknown as RuntimeHostClient;
+  const result = await terminalizeStaleStructuredSpawns(restarted, client, { now: () => start + (evidence === "young" ? 1 : STAGED_RECOVERY_BUDGET_MS) });
+  const settled = restarted.snapshot().receipts[receipt.launchId]!;
+  expect([evidence, settled.state]).toEqual([evidence, evidence === "absent" || evidence === "no-entry" ? "failed" : evidence === "user" || evidence === "user-no-entry" ? "completed" : "path-pending"]);
+  if (evidence === "absent" || evidence === "no-entry") {
+    expect(settled.error).toContain("lost before its first turn");
+    expect(settled.error).toContain("no rollout found for thread id");
+    expect(result.terminalized).toEqual([receipt.launchId]);
+    expect(runtimeWrites).toEqual(["failed"]);
+  }
+});
+
+
+test.each(["starting", "unpublished"] as const)("an accepted %s launch lost before its first rollout reports from the stale sweep", async phase => {
+  const { STAGED_RECOVERY_PREFIX } = await import("./stagedRecovery");
+  const { STAGED_RECOVERY_BUDGET_MS } = await import("./structuredSpawn");
+  const { pendingSpawnNotices } = await import("@/lib/spawnNotice/store");
+  const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
+  const store = registry();
+  const receipt = phase === "starting" ? staleStructuredReceipt(store, "lost-starting-sweep")
+    : stagedStructuredReceipt(store, "lost-unpublished-sweep").receipt;
+  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+  const row = raw.receipts[receipt.launchId];
+  row.launcher = { conversationId: "conversation_fixture_launching_seat", notify: true };
+  row.admissionOwner = null;
+  const start = Date.parse(row.createdAt);
+  if (phase === "unpublished") {
+    row.error = STAGED_RECOVERY_PREFIX + JSON.stringify({ phase, startedAt: start, nextTryAt: start,
+      checks: 1, reason: "runtime host disappeared", stopped: true });
+    const host = raw.entries[`codex:${row.key.sessionId}`];
+    host.claimOwner = null;
+    host.status = "dead";
+    host.structuredHost.process = null;
+  }
+  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  const restarted = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
+  const result = await terminalizeStaleStructuredSpawns(restarted, { ...DEAD_RUNTIME_CLIENT,
+    transitionOperation: async () => {},
+  } as unknown as RuntimeHostClient, { now: () => start + STAGED_RECOVERY_BUDGET_MS });
+  expect(result.terminalized).toEqual([receipt.launchId]);
+  expect(restarted.snapshot().receipts[receipt.launchId]!.state).toBe("failed");
+  expect(pendingSpawnNotices().filter(row => row.childConversationId === receipt.conversationId)).toHaveLength(1);
+  expect(queryLifecycleEvents({ conversationId: receipt.conversationId }).events.map(event => event.type)).toEqual(["spawn_failed"]);
+});
+
+test.each(["new-owner", "late-transcript"] as const)("a lost staged launch rechecks %s after the runtime read before failing", async race => {
+  const { STAGED_RECOVERY_PREFIX } = await import("./stagedRecovery");
+  const { STAGED_RECOVERY_BUDGET_MS } = await import("./structuredSpawn");
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const store = registry();
+  const { receipt, key } = stagedStructuredReceipt(store, `lost-race-${race}`);
+  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+  const row = raw.receipts[receipt.launchId];
+  const start = Date.parse(row.createdAt);
+  row.admissionOwner = null;
+  row.error = STAGED_RECOVERY_PREFIX + JSON.stringify({ phase: "uncertain", startedAt: start,
+    nextTryAt: start, checks: 1, reason: "host gone", stopped: true });
+  const host = raw.entries[`codex:${key.sessionId}`];
+  host.claimOwner = null;
+  host.structuredHost.process = null;
+  host.status = "dead";
+  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  const restarted = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
+  const client = { ...DEAD_RUNTIME_CLIENT, operationStatus: async () => {
+    if (race === "late-transcript") fs.writeFileSync(row.artifactPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "Start the work" } }) + "\n");
+    else {
+      const latest = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+      latest.entries[`codex:${key.sessionId}`].claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+      fs.writeFileSync(store.filename, JSON.stringify(latest));
+    }
+    return null;
+  }, transitionOperation: async () => { throw new Error("the stale observation cannot fail the runtime"); } } as unknown as RuntimeHostClient;
+  const result = await terminalizeStaleStructuredSpawns(restarted, client, { now: () => start + STAGED_RECOVERY_BUDGET_MS });
+  expect(result.terminalized).toEqual([]);
+  expect(restarted.snapshot().receipts[receipt.launchId]!.state).toBe("path-pending");
+  if (race === "late-transcript") {
+    await terminalizeStaleStructuredSpawns(restarted, client, { now: () => start + STAGED_RECOVERY_BUDGET_MS });
+    expect(restarted.snapshot().receipts[receipt.launchId]!.state).toBe("completed");
+  }
+});

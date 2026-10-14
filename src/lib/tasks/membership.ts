@@ -8,7 +8,7 @@ import { isoNow } from "./helpers";
 import { withTaskCompletion } from "./completion";
 import { internalConversationKind } from "./internalConversations";
 import { mutateTasks } from "./store";
-import { UNTITLED_TASK_TEXT, type BoardTask, type TaskAssignment, type TaskOrigin } from "./types";
+import { UNTITLED_TASK_TEXT, type BoardTask, type TaskAssignment, type TaskOrigin, type TaskStatus } from "./types";
 
 /**
  * Canonical task membership (#1586, design slice A).
@@ -141,7 +141,7 @@ function upsertLinked(task: BoardTask, identity: MembershipIdentity, now: string
     return { task: { ...task, assignments, updatedAt: now }, changed: true };
   }
   const assignment: TaskAssignment = {
-    ...(identity.launchId ? { launchId: identity.launchId } : {}),
+    ...(identity.launchId ? { launchId: identity.launchId, statusBeforeLink: task.status } : {}),
     ...(identity.clientAttemptId ? { clientAttemptId: identity.clientAttemptId } : {}),
     path: identity.path ?? null,
     ...(identity.conversationId ? { conversationId: identity.conversationId } : {}),
@@ -322,8 +322,9 @@ const LIVE_ASSIGNMENT_STATES: ReadonlySet<TaskAssignment["state"]> = new Set(["d
  * A launch that fails leaves its task where it was (#2170). Admission linked
  * the launch before anything ran, and linking moved an Inbox task to Assigned;
  * nothing ever ran, so the launch's row is marked failed with the launch's own
- * error and a task with nothing else live on it goes back to Inbox — the rule
- * {@link applyAssignmentPatches} already applies to a send. The failed row
+ * error. A task that linking moved from Inbox goes back when nothing else
+ * is live; a task already Assigned keeps its status. Legacy rows without a
+ * recorded status retain the Inbox fallback. The failed row
  * stays on the task, so its card keeps the failed launch and its Retry.
  *
  * Only the row this launch created is touched: a `linked` row naming this
@@ -335,32 +336,42 @@ export function failUnstartedLaunchMembership(
   existing: readonly BoardTask[],
   launch: FailedLaunchIdentity,
   now = isoNow(),
-): { tasks: BoardTask[]; changed: boolean } {
+): { tasks: BoardTask[]; changed: boolean; moves: FailedLaunchTaskMove[] } {
+  const moves: FailedLaunchTaskMove[] = [];
   const launchKey = launch.clientAttemptId ?? launch.launchId;
   let changed = false;
   const tasks = existing.map((task) => {
     if (task.origin?.kind === "launch" && (task.origin.key === launchKey || task.origin.key === launch.launchId)) return task;
     let matched = false;
+    let restoreInbox = false;
     const assignments = task.assignments.map((assignment) => {
       if (assignment.state !== "linked" || assignment.launchId !== launch.launchId) return assignment;
       if (launch.conversationId && assignment.conversationId && assignment.conversationId !== launch.conversationId) return assignment;
       matched = true;
+      restoreInbox ||= assignment.statusBeforeLink === undefined || assignment.statusBeforeLink === "inbox";
       return { ...assignment, state: "failed" as const, error: launch.error?.trim() || "launch failed", at: now };
     });
     if (!matched) return task;
     changed = true;
     const live = assignments.some((assignment) => LIVE_ASSIGNMENT_STATES.has(assignment.state));
-    const status = task.status === "assigned" && !live ? "inbox" as const : task.status;
+    const status = task.status === "assigned" && !live && restoreInbox ? "inbox" as const : task.status;
+    moves.push({ taskId: task.id, from: task.status, to: status });
     return { ...task, status, assignments, updatedAt: now };
   });
-  return { tasks: changed ? tasks : existing.slice(), changed };
+  return { tasks: changed ? tasks : existing.slice(), changed, moves };
+}
+
+export interface FailedLaunchTaskMove {
+  taskId: string;
+  from: TaskStatus;
+  to: TaskStatus;
 }
 
 /** {@link failUnstartedLaunchMembership} against the task store. */
-export function commitFailedLaunchMembership(launch: FailedLaunchIdentity, filePath?: string): boolean {
+export function commitFailedLaunchMembership(launch: FailedLaunchIdentity, filePath?: string): FailedLaunchTaskMove[] {
   return mutateTasks((tasks) => {
     const result = failUnstartedLaunchMembership(tasks, launch);
-    return { tasks: result.changed ? result.tasks : undefined, result: result.changed };
+    return { tasks: result.changed ? result.tasks : undefined, result: result.moves };
   }, filePath);
 }
 

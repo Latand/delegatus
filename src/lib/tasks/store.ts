@@ -132,6 +132,7 @@ export function isTaskAssignment(value: unknown): value is TaskAssignment {
     (assignment.conversationId === undefined || typeof assignment.conversationId === "string" || assignment.conversationId === null) &&
     (typeof assignment.panePid === "number" || assignment.panePid === null) &&
     (assignment.panePid === null || (Number.isInteger(assignment.panePid) && assignment.panePid > 0)) &&
+    (assignment.statusBeforeLink === undefined || isTaskStatus(assignment.statusBeforeLink)) &&
     isAssignmentState(assignment.state) &&
     (typeof assignment.error === "string" || assignment.error === null) &&
     typeof assignment.at === "string"

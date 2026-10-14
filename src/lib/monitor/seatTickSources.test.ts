@@ -2503,3 +2503,28 @@ test("automatic refresh belongs to its seat: parent PR is held and a semantic pa
   expect(input.pullRequests).toEqual([]);
   expect(input.ownLanes).toEqual(expect.arrayContaining([expect.objectContaining({ id: "refresh-one", settled: "needs_decision" })]));
 });
+
+
+test("a retirement signal names undetermined subjects and puts the seat's own launch first", async () => {
+  const ports = sources({ pipelines: [] });
+  const conversations = {
+    fixtureForeign: { id: "fixtureForeign", generations: [{ launchProfile: { title: "Other agent" } }] },
+    fixtureOwn: { id: "fixtureOwn", launcher: { conversationId: CONVERSATION, notify: true }, generations: [{ launchProfile: { title: "Lost builder" } }] },
+  };
+  const baseRegistry = ports.registry();
+  ports.registry = () => ({ ...baseRegistry, conversation: (id: string) => conversations[id as keyof typeof conversations] ?? baseRegistry.conversation(id as `conversation_${string}`),
+    readOnlySnapshot: () => ({ ...baseRegistry.readOnlySnapshot(), conversations }),
+  }) as never;
+  ports.retirementReport = () => ({ failed: [], refused: [
+    { key: "codex:foreign", conversationId: "fixtureForeign", clause: "events-flushed", reason: "ledger unreadable", undetermined: true },
+    { key: "codex:own", conversationId: "fixtureOwn", clause: "turn-settled", reason: "turn unknown", undetermined: true },
+  ] }) as never;
+  const gathered = await gatherSeatTickInput(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString() }, DEFAULT_SEAT_TICK_POLICY, ports);
+  const label = gathered.signals.find(s => s.id === "host-retirement")!.label;
+  expect(label).toContain("Lost builder (fixtureOwn) turn-settled: turn unknown (launched by you)");
+  expect(label).toContain("Other agent (fixtureForeign) events-flushed: ledger unreadable");
+  expect(label.indexOf("Lost builder")).toBeLessThan(label.indexOf("Other agent"));
+  const wake = seatTickDecision(gathered).verdict;
+  expect(wake).toMatchObject({ kind: "wake" });
+  expect(wake.kind === "wake" && wake.items.some(item => item.kind === "signal" && item.id === "host-retirement" && item.label.includes("Lost builder"))).toBe(true);
+});

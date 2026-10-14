@@ -338,6 +338,8 @@ export interface SpawnReceipt {
 }
 
 interface StructuredSpawnFailureOptions {
+  /** A synchronous refusal before acceptance already reached its caller. */
+  announce?: boolean;
   retainRegisteredHost?: boolean;
   startingRecovery?: { now: number; timeoutMs: number };
   /** A recovery observation must still hold inside the failure transaction. */
@@ -5927,7 +5929,7 @@ export class AgentRegistry {
     if (result.kind === "created" || result.kind === "replay") {
       admitReservedLaunch(input, result.receipt, (reason) => {
         if (result.kind !== "created") return;
-        if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason);
+        if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason, { announce: false });
         else this.failSpawn(result.receipt.launchId, reason);
       });
       this.mutate((file) => {
@@ -7215,7 +7217,7 @@ export class AgentRegistry {
     options: StructuredSpawnFailureOptions = {},
   ): StructuredSpawnFailureClaim {
     const claim = this.failStructuredSpawnInFile(launchId, error, options);
-    if (claim.claimed && claim.receipt?.state === "failed") settleFailedLaunch(claim.receipt);
+    if (claim.claimed && claim.receipt?.state === "failed") settleFailedLaunch(claim.receipt, undefined, { announce: options.announce });
     return claim;
   }
 
@@ -7232,7 +7234,7 @@ export class AgentRegistry {
       return { claimed: false, receipt: this.readOnlySnapshot().receipts[launchId] ?? null, cleanup: null };
     }
     const claim = written.value;
-    if (claim.claimed && claim.receipt?.state === "failed") settleFailedLaunch(claim.receipt);
+    if (claim.claimed && claim.receipt?.state === "failed") settleFailedLaunch(claim.receipt, undefined, { announce: options.announce });
     return claim;
   }
 
