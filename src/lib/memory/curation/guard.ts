@@ -12,10 +12,13 @@ type Snapshot = ReturnType<ReturnType<typeof agentRegistry>["readOnlySnapshot"]>
 export function curatorCallerOf(conversationId: string | null, snapshot: Snapshot) {
   if (!roleMemoryEnabled() || !conversationId) throw new RoleMemoryRefusal("CURATE_CALLER", "only the live curator conversation may curate rules");
   const id = readOnlyConversationLookupFromSnapshot(snapshot).canonicalConversationId(conversationId as `conversation_${string}`);
-  if (conversationAgentRole(snapshot, id) !== "curator") throw new RoleMemoryRefusal("CURATE_CALLER", "caller is not a curator");
   let pass = passForConversation(id);
   const receipt = Object.values(snapshot.receipts).find(r => r.conversationId === id && r.agentRole === "curator" && r.clientAttemptId?.startsWith("curate_") && !r.rejection && !["failed", "conflicted"].includes(r.state));
   if (!receipt) throw new RoleMemoryRefusal("CURATE_CALLER", "curator has no admitted pass receipt");
+  const conversationRole = conversationAgentRole(snapshot, id);
+  if (conversationRole !== "curator" && (conversationRole !== null || receipt.agentRole !== "curator")) {
+    throw new RoleMemoryRefusal("CURATE_CALLER", "caller is not a curator");
+  }
   const conversation = snapshot.conversations[id];
   const receiptProject = conversationProjectKey(conversation?.projectOwnership, receipt.launchProfile, { project: receipt.explicitProject });
   const held = readPass(receipt.clientAttemptId!);

@@ -54,6 +54,7 @@ import { publishFilesRevision } from "./filesRevision";
 import { parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "./structuredContent";
 import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 import { STAGED_RECOVERY_PREFIX, stagedLaunchRecovery, type StagedLaunchRecovery } from "./stagedRecovery";
+import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 
 export type SpawnedStructuredHost = EngineHost & {
   identity: { threadId: string; path: string | null } | { sessionId: string };
@@ -787,6 +788,18 @@ export interface StructuredSpawnRecoveryOptions {
   spawnStructuredConversation?: typeof spawnStructuredConversation;
   spawnTmuxAgent?: typeof spawnAgentWithPrompt;
   publishFilesRevision?: typeof publishFilesRevision;
+  /** Recovery-only override for isolated admission fixtures. */
+  curationSources?: SeatTickSources;
+}
+
+async function curatorReceiptAdmission(receipt: SpawnReceipt, registry: AgentRegistry, sources?: SeatTickSources): Promise<() => void> {
+  if (receipt.agentRole !== "curator") return () => {};
+  const [{ curatorRecoveryGuard }, { defaultSeatTickSources }] = await Promise.all([
+    import("@/lib/memory/curation/run"), import("@/lib/monitor/seatTickSources"),
+  ]);
+  return curatorRecoveryGuard(receipt.conversationId, {
+    ...(sources ?? defaultSeatTickSources()), registry: () => registry,
+  });
 }
 
 async function failQueuedPinnedSpawn(
@@ -812,6 +825,13 @@ async function actuateQueuedPinnedSpawn(
   if (!queued || Date.parse(queued.retryAt) > currentTime) return receipt;
   if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
     return failQueuedPinnedSpawn(registry, receipt, "owner relay queued launch authorization revoked");
+  let curatorAuthorize: () => void;
+  try {
+    curatorAuthorize = await curatorReceiptAdmission(receipt, registry, options.curationSources);
+    curatorAuthorize();
+  } catch (error) {
+    return failQueuedPinnedSpawn(registry, receipt, structuredSpawnFailureReason(error));
+  }
   const admissionClaim = receipt.transport === "tmux"
     ? registry.claimTmuxSpawnActuation(receipt.launchId)
     : registry.claimStartingStructuredSpawn(receipt.launchId);
@@ -843,8 +863,12 @@ async function actuateQueuedPinnedSpawn(
       ? { kind: "admissible", basis: "current", stale: false, retryAt: null }
       : await (options.resolvePinnedSpawnAdmission ?? resolvePinnedSpawnAdmission)(receipt.engine, account);
   } catch (error) {
+    try { curatorAuthorize(); }
+    catch (curationError) { error = curationError; }
     return failQueuedPinnedSpawn(registry, admissionClaim.receipt, structuredSpawnFailureReason(error));
   }
+  try { curatorAuthorize(); }
+  catch (error) { return failQueuedPinnedSpawn(registry, admissionClaim.receipt, structuredSpawnFailureReason(error)); }
   if (admission.kind === "retry-at") {
     const nextRetryMs = Date.parse(admission.retryAt);
     if (!Number.isFinite(nextRetryMs) || nextRetryMs <= currentTime) {
@@ -872,6 +896,7 @@ async function actuateQueuedPinnedSpawn(
   let tmuxImagePaths: string[] = [];
   try {
     if (receipt.transport === "tmux") {
+      curatorAuthorize();
       const images = claimedQueue.imageRefs.length
         ? (() => {
             const imageStore = runtimeImageStore();
@@ -908,6 +933,7 @@ async function actuateQueuedPinnedSpawn(
         authorize: () => {
           if (!ownerRelaySpawnAuthorized(receipt.clientAttemptId))
             throw new Error("owner relay queued launch authorization revoked");
+          curatorAuthorize();
         },
       });
     }
@@ -2029,7 +2055,7 @@ export async function recoverStagedStructuredLaunch(
   launchId: string,
   registry: AgentRegistry,
   client: RuntimeHostClient,
-  options: { now?: () => number; eligible?: () => boolean; reap?: Omit<LaunchReapOptions, "spawnStatus" | "failUnreadOperation"> } = {},
+  options: { now?: () => number; eligible?: () => boolean; reap?: Omit<LaunchReapOptions, "spawnStatus" | "failUnreadOperation">; curationSources?: SeatTickSources } = {},
 ): Promise<SpawnReceipt> {
   const inFlight = stagedRecoveryWork.get(launchId);
   if (inFlight) return inFlight;
@@ -2153,9 +2179,21 @@ export async function recoverStagedStructuredLaunch(
       if (!ownsHost || !host || !receipt.key || !receipt.artifactPath) throw new RuntimeHostUnavailableError("staged host is awaiting its original owner", "HOST_BUSY");
       if (continuation && !await continuation.owns()) return read();
       if (!current()) return read();
+      let curatorAuthorize: () => void;
+      try {
+        curatorAuthorize = await curatorReceiptAdmission(receipt, registry, options.curationSources);
+        curatorAuthorize();
+      } catch (error) {
+        return stop(stagedRecoveryFailureReason(error));
+      }
       if (continuation) await continuation.publish();
-      else await publishStructuredDeliveryHost({ key: receipt.key, host: host as SpawnedStructuredHost }, async () => Boolean(current()));
+      else await publishStructuredDeliveryHost({ key: receipt.key, host: host as SpawnedStructuredHost }, async () => {
+        if (!current()) return false;
+        curatorAuthorize();
+        return true;
+      });
       if (!current() || (continuation && !await continuation.owns())) return read();
+      curatorAuthorize();
       if (continuation) {
         // Persist uncertainty immediately before dispatch. A crash at this
         // boundary must never authorize a second first message.
@@ -2174,6 +2212,7 @@ export async function recoverStagedStructuredLaunch(
         const images = parseStructuredImageRefs(effect.images ?? [], 16);
         if (typeof effect.prompt !== "string" || images === null) return stop("original launch payload is invalid");
         if (!current()) return read();
+        curatorAuthorize();
         const origin = spawnMessageOrigin(receipt, registry);
         // Payload lookup and validation cannot publish a message. Keep their
         // failures retryable; uncertainty starts only at the dispatch boundary.
@@ -2181,7 +2220,7 @@ export async function recoverStagedStructuredLaunch(
         if (!persist(recovery)) return read();
         const result = await enqueueStructuredMessage({ path: receipt.artifactPath, conversationId: receipt.conversationId,
           clientMessageId: `spawn_${launchId}`, operationId: `spawn_message_${launchId}`, launchId, text: effect.prompt, imageRefs: images,
-          ...(origin ? { origin } : {}),
+          ...(origin ? { origin } : {}), ...(receipt.agentRole === "curator" ? { admissionGuard: () => curatorAuthorize() } : {}),
         }, { client: () => client, registry: () => registry, enabled: () => true });
         if (!result?.ok) {
           const reason = result?.error ?? "original first-message admission failed";

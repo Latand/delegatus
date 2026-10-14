@@ -708,6 +708,15 @@ test("guard binds an early receipt and admits only the machine's live curator co
   expect(permitCuratorTool("role_presets", {})).toHaveProperty("allowed", true);
   expect(permitCuratorTool("role_presets", { overrides: [] })).toHaveProperty("allowed", false);
 });
+test("the evaluation fixture receipt carries the claimed pass project", () => {
+  fixture(); const p = pass(); const registry = new AgentRegistry(path.join(dir, "evaluation-registry.json"));
+  const snapshot = structuredClone(registry.readOnlySnapshot());
+  const id = ["conversation", "evaluation"].join("_") as `conversation_${string}`;
+  snapshot.conversations[id] = { id, agentRole: "curator", projectOwnership: { project: p.project }, generations: [], continuityPaths: [] } as never;
+  snapshot.receipts.fixture = { conversationId: id, agentRole: "curator", clientAttemptId: p.id, explicitProject: p.project,
+    launchProfile: { project: p.project }, state: "completed", launchId: "fixture", artifactPath: null } as never;
+  expect(curatorCallerOf(id, snapshot).id).toBe(p.id);
+});
 test("a curator receipt from another project cannot claim or authorize the pass", () => {
   fixture(); const p = pass(); const registry = new AgentRegistry(path.join(dir, "registry.json"));
   const snapshot = structuredClone(registry.readOnlySnapshot());
