@@ -634,14 +634,16 @@ test.if(process.platform !== "win32")("activation timeout awaits helper cleanup 
   const launch = spyOn(helper, "spawnLeasedHelper").mockImplementation((name, spec, ...rest) =>
     spawn(name, { ...spec, command: process.execPath, args: [workerPath] }, ...rest));
   const schedule = setTimeout;
-  const timer = spyOn(globalThis, "setTimeout").mockImplementation((callback, ms, ...args) => {
+  const accelerated = Object.assign((...parameters: Parameters<typeof setTimeout>) => {
+    const [callback, ms, ...args] = parameters;
     if (ms !== 15 * 60_000) return schedule(callback, ms, ...args);
     return schedule(async () => {
       const deadline = Date.now() + 5000;
       while (!fs.existsSync(ready) && Date.now() < deadline) await Bun.sleep(1);
       callback(...args);
     }, 1);
-  });
+  }, { __promisify__: schedule.__promisify__ });
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(accelerated);
   const log = spyOn(console, "error").mockImplementation(() => {});
   try {
     await checkStateDatabasesBeforeStores(directory);
