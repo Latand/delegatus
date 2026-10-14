@@ -19,6 +19,21 @@ import { installProcessCleanupHook, PROCESS_CLEANUP_HOOK_PREFIX } from "./proces
 
 type JsonObject = Record<string, unknown>;
 
+function normalizeMcpEnvironmentOverrides(overrides: JsonObject): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [name, value] of Object.entries(overrides)) {
+    if (typeof value === "string" && !name.startsWith("DELEGATUS_")) normalized[name] = value;
+  }
+  // Match bin/envAlias.mjs: the documented prefix wins whenever both forms
+  // are registered, and the child receives only the folded LLV_ spelling.
+  for (const [name, value] of Object.entries(overrides)) {
+    if (typeof value === "string" && name.startsWith("DELEGATUS_") && name.length > "DELEGATUS_".length) {
+      normalized[`LLV_${name.slice("DELEGATUS_".length)}`] = value;
+    }
+  }
+  return normalized;
+}
+
 const MANAGED_HOOK_PREFIX = "LLV_MANAGED_NATIVE_SUBAGENT_DENY=1 ";
 const MANAGED_DIR = ".llv";
 const MANAGED_HOOK = "deny-native-subagents.sh";
@@ -94,12 +109,13 @@ export function viewerMcpServerEnv(source: McpEnvironment = process.env, overrid
   const parentEnvironment = { ...source, ...env };
   const parentOrigin = viewerControlOrigin(parentEnvironment);
   const inheritedToken = viewerControlToken(parentEnvironment, parentOrigin);
-  for (const [name, value] of Object.entries(overrides)) {
-    if (typeof value === "string" && name !== "LLV_TOKEN" && name !== VIEWER_CONTROL_TOKEN_ENV) env[name] = value;
+  const normalizedOverrides = normalizeMcpEnvironmentOverrides(overrides);
+  for (const [name, value] of Object.entries(normalizedOverrides)) {
+    if (name !== "LLV_TOKEN" && name !== VIEWER_CONTROL_TOKEN_ENV) env[name] = value;
   }
   const effective = { ...source, ...env };
   const childOrigin = viewerControlOrigin(effective);
-  const registeredToken = overrides[VIEWER_CONTROL_TOKEN_ENV] ?? overrides.LLV_TOKEN;
+  const registeredToken = normalizedOverrides[VIEWER_CONTROL_TOKEN_ENV] ?? normalizedOverrides.LLV_TOKEN;
   const token = typeof registeredToken === "string"
     ? viewerControlToken({ [VIEWER_CONTROL_TOKEN_ENV]: registeredToken }, childOrigin)
     : childOrigin === parentOrigin ? inheritedToken : null;

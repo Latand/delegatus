@@ -56,9 +56,10 @@ test("Codex registered Viewer endpoint keeps inherited credentials scoped to the
     process.env.XDG_CONFIG_HOME = path.join(root, "config");
     process.env.LLV_STATE_DIR = path.join(root, "state");
     const config = headlessCodexThreadConfig({ config: { mcp_servers: {
-      viewer: { command: "viewer-mcp", env: { LLV_VIEWER_PORT: String(child.port) } },
+      viewer: { command: "viewer-mcp", env: { DELEGATUS_VIEWER_CONTROL_URL: `http://127.0.0.1:${child.port}` } },
     } } }) as { mcp_servers: { viewer: { env: Record<string, string> } } };
-    expect(config.mcp_servers.viewer.env.LLV_VIEWER_PORT).toBe(String(child.port));
+    expect(config.mcp_servers.viewer.env.LLV_VIEWER_CONTROL_URL).toBe(`http://127.0.0.1:${child.port}`);
+    expect(config.mcp_servers.viewer.env).not.toHaveProperty("DELEGATUS_VIEWER_CONTROL_URL");
     expect(config.mcp_servers.viewer.env.LLV_VIEWER_CONTROL_TOKEN).toBeUndefined();
 
     const parentEnv = viewerMcpServerEnv({ ...process.env, LLV_VIEWER_PORT: String(parent.port), LLV_TOKEN: parentKey });
