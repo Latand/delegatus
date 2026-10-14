@@ -201,3 +201,21 @@ test("a stalled owned report reaps its child tree and preserves a same-argv byst
     await stopFixtureTree(child); await stopFixtureTree(bystander);
   }
 }, 3_000);
+
+test("a stalled unregistered report stops its handle and preserves a same-argv bystander", async () => {
+  const child = spawn("/bin/sleep", ["30"], { stdio: ["ignore", "pipe", "pipe"] });
+  const bystander = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
+  const other = captureProcessIdentity(bystander.pid!);
+  const identity = captureProcessIdentity(child.pid!);
+  try {
+    await expect(fixtureReport(child, "unregistered stalled child", [], 100)).rejects.toThrow(
+      "unregistered stalled child did not report within 100ms",
+    );
+    expect(processIdentityStatus(identity)).toBe("dead");
+    expect(processIdentityStatus(other)).toBe("alive");
+    expect(bystander.exitCode).toBeNull();
+  } finally {
+    await stopFixtureProcess(child);
+    await stopFixtureProcess(bystander);
+  }
+}, 3_000);

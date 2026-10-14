@@ -49,7 +49,11 @@ export function stopFixtureTree(child: ChildProcess, timeoutMs = 2_000): Promise
 
 async function stopFixtureTreeOnce(child: ChildProcess, timeoutMs: number): Promise<void> {
   const root = trees.get(child);
-  if (!root || child.exitCode !== null || child.signalCode !== null || processIdentityStatus(root) !== "alive") return;
+  // Some fixtures retain only the ChildProcess handle. They still need the
+  // readiness-deadline cleanup, while registered trees keep descendant-first
+  // cleanup and the shared root signal owner below.
+  if (!root) return stopFixtureProcess(child);
+  if (child.exitCode !== null || child.signalCode !== null || processIdentityStatus(root) !== "alive") return;
   const parents = procBackend.ppidMap();
   // descendantPids includes the root. Keep it in the identity map for ancestry
   // checks, then leave it out of the descendant signal set below.

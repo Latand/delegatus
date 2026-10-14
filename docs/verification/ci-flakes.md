@@ -171,3 +171,21 @@ with the same holder preload. The test preload itself must apply affinity:
 the owned runner creates a new service, which can reset affinity inherited
 from a shell. Avoid `--rerun-each`; repeated global preload teardown introduces
 unrelated missing-ledger errors in this repository.
+
+## Readiness cleanup for handle-only fixtures (2026-10-14)
+
+A follow-up review found that `fixtureReport` supports callers that keep a
+`ChildProcess` handle without registering it with `ownFixtureTree`. When its
+readiness deadline expired, cleanup called `stopFixtureTree`; with no recorded
+tree identity, that path returned and left the child running. The existing
+stage-host lifetime test uses this handle-only pattern. `stopFixtureTree` now
+routes a missing tree identity through the coalesced `stopFixtureProcess`
+operation. Registered trees retain descendant-first cleanup, and the process
+stop owner remains responsible for signaling their root.
+
+The new fixture regression holds an unregistered `/bin/sleep` child and a
+same-argv bystander, forces a readiness timeout, then requires the child to be
+dead while the bystander remains alive. The baseline comparator confirmed the
+test passes on base and fails on the previous head. Under isolated Linux/Bun
+1.4.0 CPU contention, the updated regression passed 50/50; the real stage-host
+lifetime file passed all three cases.
