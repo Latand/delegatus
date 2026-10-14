@@ -107,6 +107,16 @@ export class BoardSelection {
         .all(this.collection).flatMap(row => typeof row.project === "string" ? [row.project] : []);
     } finally { if (!source.database) database.close(); }
   }
+  /** Project directory counts read scalar fields without materializing tasks. */
+  openTaskCounts<T>(source: Source<T>): Array<{ project: string; count: number }> {
+    const Database = sqliteDatabase();
+    const database = source.database ?? new Database(this.filename, { readonly: true });
+    try {
+      return database.query<{ project: string; count: number }, []>(`SELECT json_extract(value_json,'$.project') AS project,
+        SUM(CASE WHEN json_extract(value_json,'$.status') IN ('inbox','assigned','blocked') THEN 1 ELSE 0 END) AS count
+        FROM state_rows WHERE collection='tasks' AND row_key GLOB 't:*' GROUP BY project`).all();
+    } finally { if (!source.database) database.close(); }
+  }
   /** Read only association fields in the authorized project. Large prompts,
    * reports and transcripts never enter reference selection. The forge cache
    * is joined at read time, so a cache refresh needs no registry revision. */

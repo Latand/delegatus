@@ -544,3 +544,17 @@ test("an accepted limit episode still open stays accepted when the Viewer was aw
   await projectDoneItems(ports({ ...state, now: T0 + 12 * DAY }), { force: true });
   expect(keys()).toEqual([]);
 });
+
+
+test("completion repository lookup uses the designated project among retained duplicate identities", async () => {
+  const { productionDoneWorld } = await import("./world");
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  fs.writeFileSync(path.join(sandbox, "project-remotes.json"), JSON.stringify({ schemaVersion: 1, remotes: {
+    "orion-legacy": "github.com/acme/orion", "orion-parent": "github.com/acme/orion",
+  } }));
+  persistProjectAliases([{ source: "orion-old", target: "orion-parent", displayName: "Orion Works" }]);
+  beginOrchestratorSeatIntent({ project: "orion-parent", mandate: "Own this board", clientRequestId: "done-seat", mode: "spawn", promptVersion: null });
+  completeOrchestratorSeatIntent({ project: "orion-parent", clientRequestId: "done-seat", conversationId: "conversation_orion_done", path: null });
+  expect(productionDoneWorld().repositoryProject("ACME/ORION")).toBe("orion-parent");
+});

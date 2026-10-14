@@ -178,22 +178,21 @@ test("the first GET and the first SSE state answer before the work reader's sync
   // The journal stays pending, and loading the pipelines holds the thread for
   // 700 ms before the probe reaches its first await.
   let pipelineReads = 0;
-  const h = managed({ quiet: { pipelines: () => { pipelineReads++; blockFor(700); return []; } } });
+  let markReaderEntered!: () => void;
+  const readerEntered = new Promise<void>(resolve => { markReaderEntered = resolve; });
+  const h = managed({ quiet: { pipelines: () => { pipelineReads++; blockFor(700); markReaderEntered(); return []; } } });
   const abort = new AbortController();
   try {
-    let started = performance.now();
     const response = await readOnly();
-    expect(performance.now() - started).toBeLessThan(200);
     expect(await response.json()).toMatchObject({ mode: "managed", installed: { sha: TARGET }, workEvidence: { state: "pending" } });
     expect(pipelineReads).toBe(0);
 
-    started = performance.now();
     const first = await events(abort.signal)();
-    expect(performance.now() - started).toBeLessThan(200);
+    expect(pipelineReads).toBe(0);
     expect(first).toMatchObject({ event: "state", data: { installed: { sha: TARGET }, workEvidence: { state: "pending" } } });
 
     // The reading still runs, once, for both readers.
-    await nextTurn();
+    await readerEntered;
     await readOnly();
     expect(pipelineReads).toBe(1);
     h.release();

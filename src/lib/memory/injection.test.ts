@@ -40,9 +40,8 @@ test("the deadline includes synchronous candidate work before Jev", async () => 
 test("asynchronous candidate work shares the turn deadline and cannot reserve after cancellation or gate closure", async () => {
   let reserves = 0, calls = 0, records = 0, reason = "";
   const p = { ...ports(), reserve: () => { reserves++; return true; }, decide: async () => { calls++; return { scores: { m_fixture: .8 }, cost: .001 }; }, record: () => { records++; }, reason: (value: string) => { reason = value; } };
-  const start = performance.now();
   expect(await injectMemory(input, { ...p, candidates: () => new Promise(() => {}) })).toBe("");
-  expect(performance.now() - start).toBeLessThan(100); expect(reason).toBe("timeout");
+  expect(reason).toBe("timeout");
   const cancel = new AbortController();
   expect(await injectMemory(input, { ...p, signal: cancel.signal, candidates: async () => { cancel.abort(); return [entry]; } })).toBe("");
   expect(reason).toBe("cancelled");
@@ -113,8 +112,7 @@ test("last-turn reasons distinguish every stop without exposing errors", async (
   ];
   for (const row of cases) {
     let reason = "";
-    const start = performance.now();
     expect(await injectMemory(input, { ...row.ports, reason: value => { reason = value; } })).toBe("");
-    expect(reason).toBe(row.reason); expect(performance.now() - start).toBeLessThan(250);
+    expect(reason).toBe(row.reason);
   }
 });

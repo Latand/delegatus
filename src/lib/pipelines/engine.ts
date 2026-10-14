@@ -1,3 +1,5 @@
+import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
+import { controllerSnapshotPorts, StaleControllerFlowError } from "./controllerSnapshot";
 import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement, runtimeSwitchReconfigureOutcome } from "./runtimeSwitch";
 import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import type { RuntimeSwitchDelivery } from "./runtimeSwitch";
@@ -287,6 +289,7 @@ export interface PipelinePorts {
   cpuPressureHold?(key?: string): CpuPressureHold | null;
   cpuAdmissionReconcile?(admission?: Pick<PipelinePorts, "drainHold" | "structuredDeliveryPublication" | "now">): void;
   cpuAdmissionSuspend?(key: string): void;
+  observeControllerLeaseHold?(heldMs: number): void;
   /** Whether the ticking process can publish a structured host: `ready` now,
       `rebinding` between publications, `unbound` never at all (#1191). */
   structuredDeliveryPublication?(): "ready" | "rebinding" | "unbound";
@@ -430,7 +433,7 @@ export interface PipelinePorts {
       gone. Optional: a harness without deputies leaves lineage as given. */
   deputySeatFor?(conversationId: string): { conversationId: string; path: string | null } | null;
   pipelineAdoptionCandidates(pipelineId: string): PipelineAdoptionCandidate[];
-  createFlow(req: CreateFlowRequest, entries: FileEntry[], preparedGit?: PreparedFlowGit): Promise<{ flow?: Flow; error?: string }>;
+  createFlow(req: CreateFlowRequest, entries: FileEntry[], preparedGit?: PreparedFlowGit, assertAuthorized?: () => void): Promise<{ flow?: Flow; error?: string }>;
   patchFlow(id: string, action: "advance" | "pause" | "resume" | "retry-round", note?: string, actor?: PauseResumeActor | null): { error?: string; status?: number };
   closeFlow(id: string): Promise<{
     flow?: Flow;
@@ -1895,8 +1898,8 @@ export function defaultPipelinePorts(
       return principal ? { conversationId: principal.seatConversationId, path: principal.seatPath } : null;
     },
     pipelineAdoptionCandidates: adoptionCandidates,
-    createFlow: async (request, entries, preparedGit) => {
-      const result = await createFlowFromRequest(request, entries, undefined, preparedGit);
+    createFlow: async (request, entries, preparedGit, assertAuthorized) => {
+      const result = await createFlowFromRequest(request, entries, undefined, preparedGit, assertAuthorized);
       flowSnapshot = null;
       return result;
     },
@@ -7255,7 +7258,12 @@ async function tickReviewStage(
       return;
     }
     attachReviewFlowAttempt(attempt, created.flow);
-    persist();
+    try {
+      persist();
+    } catch (error) {
+      if (error instanceof StateSnapshotChangedError) throw new StaleControllerFlowError(created.flow.id, pipeline.id);
+      throw error;
+    }
     if (created.flow.state === "paused") {
       park(pipeline, `review flow startup paused: ${created.flow.stateDetail ?? "kickoff delivery failed"}`, attempt);
       return;
@@ -9569,6 +9577,61 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
   return changed;
 }
 
+async function drainPendingStaleControllerFlows(ports: PipelinePorts): Promise<void> {
+  const pending = loadPipelines().flatMap(pipeline =>
+    (pipeline.pendingReviewFlowCleanup ?? []).map(flowId => ({ pipelineId: pipeline.id, flowId })));
+  for (const item of pending) {
+    let authorized = false;
+    await withPipelineMutation((pipelines, persist) => {
+      const owner = pipelines.find(pipeline => pipeline.id === item.pipelineId);
+      if (!owner?.pendingReviewFlowCleanup?.includes(item.flowId)) return;
+      const attached = pipelines.some(pipeline =>
+        pipeline.runs.some(run => run.attempts.some(attempt => attempt.flowId === item.flowId)));
+      if (attached) {
+        owner.pendingReviewFlowCleanup = owner.pendingReviewFlowCleanup.filter(flowId => flowId !== item.flowId);
+        if (!owner.pendingReviewFlowCleanup.length) delete owner.pendingReviewFlowCleanup;
+        persist([owner]);
+        return;
+      }
+      authorized = true;
+    });
+    if (!authorized) continue;
+
+    try {
+      const cleanup = await ports.closeFlow(item.flowId);
+      if (cleanup?.error) {
+        console.error("[pipelines] stale review flow cleanup failed", { flowId: item.flowId, error: cleanup.error });
+        ports.scheduleTick?.(1_000);
+        continue;
+      }
+      await withPipelineMutation((pipelines, persist) => {
+        const owner = pipelines.find(pipeline => pipeline.id === item.pipelineId);
+        if (!owner?.pendingReviewFlowCleanup?.includes(item.flowId)) return;
+        owner.pendingReviewFlowCleanup = owner.pendingReviewFlowCleanup.filter(flowId => flowId !== item.flowId);
+        if (!owner.pendingReviewFlowCleanup.length) delete owner.pendingReviewFlowCleanup;
+        persist([owner]);
+      });
+    } catch (cleanupError) {
+      console.error("[pipelines] stale review flow cleanup failed", { flowId: item.flowId, error: String(cleanupError) });
+      ports.scheduleTick?.(1_000);
+    }
+  }
+}
+
+async function settleStaleControllerFlow(error: unknown, ports: PipelinePorts): Promise<void> {
+  if (!(error instanceof StaleControllerFlowError)) return;
+  await withPipelineMutation((pipelines, persist) => {
+    if (pipelines.some(pipeline =>
+      pipeline.runs.some(run => run.attempts.some(attempt => attempt.flowId === error.flowId)))) return;
+    const owner = pipelines.find(pipeline => pipeline.id === error.pipelineId);
+    if (!owner) return;
+    owner.pendingReviewFlowCleanup ??= [];
+    if (!owner.pendingReviewFlowCleanup.includes(error.flowId)) owner.pendingReviewFlowCleanup.push(error.flowId);
+    persist([owner]);
+  });
+  await drainPendingStaleControllerFlows(ports);
+}
+
 export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean }> {
   if (tickStore.__llvPipelineTick) {
     ports.cpuAdmissionReconcile?.(ports);
@@ -9614,22 +9677,23 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         return observed?.fence === reviewIngressFence(pipeline) ? observed.flowGit : null;
       },
     };
-    await withPipelineMutation(async (pipelines, persist) => {
+    await withPipelineControllerMutation(async (pipelines, persist, assertCurrent) => {
       for (const pipeline of pipelines) {
-        // Re-read under the control lease: pause, close and a replaced cursor
-        // withdraw permission before the ordinary activation path reserves it.
+        // Checkpoints revalidate pause, close and cursor changes before the
+        // ordinary activation path durably reserves a start.
         if (pipeline.state !== "running" || pipeline.cursor?.state !== "pending"
           || (publishesRemoteBranch(pipeline) && !pipeline.delivery) || pipelineSurvivorRefusal(pipeline)
           || pipeline.runs.some(run => run.attempts.some(attempt => attempt.activation))) continue;
         if (requiresReviewIngress(pipeline) && (tickStore.__llvCpuIngressReads?.has(cpuStageKey(pipeline))
           || ingressHeads.get(pipeline.id)?.fence !== reviewIngressFence(pipeline))) continue;
-        if (await tickPipeline(pipeline, entries, admissionPorts, () => persist([pipeline]),
+        const lanePorts = controllerSnapshotPorts(admissionPorts, () => assertCurrent(pipeline), pipeline.id);
+        if (await tickPipeline(pipeline, entries, lanePorts, () => persist([pipeline]),
           ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS, new Map())) {
           persist([pipeline]);
           admissionChanged = true;
         }
       }
-    });
+    }, ports.observeControllerLeaseHold);
     dispatchStarts();
   };
   // A commit or publication hook can queue behind one of these starts. Its
@@ -9637,7 +9701,13 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   const admissionWatch = ports.cpuAdmissionReconcile ? setInterval(() => {
     if (admissionWork) return;
     admissionWork = serviceStarts()
-      .catch(error => { console.error("[pipelines] CPU admission polling failed", error); })
+      .catch(async error => {
+        if (error instanceof StateSnapshotChangedError) {
+          followUp = true;
+          await settleStaleControllerFlow(error, ports);
+        }
+        console.error("[pipelines] CPU admission polling failed", error);
+      })
       .finally(() => { admissionWork = null; });
   }, machineCpuPressurePollMs()) : null;
   admissionWatch?.unref();
@@ -9647,6 +9717,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   };
   const recoveryAccountingDeadline = ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS;
   try {
+    await drainPendingStaleControllerFlows(ports);
     ports.cpuAdmissionReconcile?.(ports);
     const requested = loadPipelines().filter((pipeline) => !pipeline.delivery && pipeline.publicationAdmission?.state === "pending");
     const legacy = [...new Map([...requested, ...unclaimedPipelinePublications()].map((pipeline) => [pipeline.id, pipeline])).values()].slice(0, 16);
@@ -9724,9 +9795,10 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       const observed = ingressHeads.get(pipeline.id);
       return observed?.fence === reviewIngressFence(pipeline) ? observed.flowGit : null;
     } };
-    const result = await withPipelineControllerMutation(async (pipelines, persist) => {
+    const result = await withPipelineControllerMutation(async (pipelines, persist, assertCurrent) => {
       let changed = reconcilePipelineFallbackTasks(pipelines, persist) || closedLaunchesChanged;
       await forEachCooperatively(pipelines, async (pipeline) => {
+        const lanePorts = controllerSnapshotPorts(controllerPorts, () => assertCurrent(pipeline), pipeline.id);
         if (publishesRemoteBranch(pipeline) && !pipeline.delivery) return;
         const persistPipeline = () => persist([pipeline]);
         const operation = pipeline.delivery?.operation;
@@ -9771,7 +9843,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         }
         const recoveredLaunch = recoveredLaunches.get(pipeline.id);
         if (recoveredLaunch && stagedRecoveryMatches(pipeline, recoveredLaunch)) {
-          const receipt = controllerPorts.spawnReceipt(recoveredLaunch.launchId);
+          const receipt = lanePorts.spawnReceipt(recoveredLaunch.launchId);
           const recovery = stagedLaunchRecovery(receipt);
           if (receipt?.state === "completed" && receipt.conversationId === recoveredLaunch.conversationId) {
             const attempt = currentAttempt(pipeline, recoveredLaunch.stageId)!;
@@ -9780,7 +9852,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
             pipeline.state = "running";
             setCursorState(pipeline, recoveredLaunch.stageId, "running");
           } else if (recovery) {
-            await waitForStagedLaunch(pipeline, currentStage(pipeline)!, currentAttempt(pipeline, recoveredLaunch.stageId)!, recovery, controllerPorts);
+            await waitForStagedLaunch(pipeline, currentStage(pipeline)!, currentAttempt(pipeline, recoveredLaunch.stageId)!, recovery, lanePorts);
           }
           persistPipeline();
           changed = true;
@@ -9788,14 +9860,14 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         if (pipeline.runs.some((run) => run.attempts.some((attempt) => attempt.activation))) return;
         let pipelineChanged = false;
         for (const run of pipeline.runs) for (const attempt of run.attempts) {
-          pipelineChanged = await settleAbandonedLaunch(pipeline, attempt, controllerPorts) || pipelineChanged;
+          pipelineChanged = await settleAbandonedLaunch(pipeline, attempt, lanePorts) || pipelineChanged;
         }
-        pipelineChanged = reconcilePipelineEmbeddedFlows(pipeline, controllerPorts) || pipelineChanged;
-        pipelineChanged = reconcilePendingPipelineAdoptions(pipeline, controllerPorts) || pipelineChanged;
-        pipelineChanged = await reconcileHistoricalAttempts(pipeline, entries, controllerPorts) || pipelineChanged;
-        pipelineChanged = rebindPipelineAttemptPaths(pipeline, controllerPorts) || pipelineChanged;
+        pipelineChanged = reconcilePipelineEmbeddedFlows(pipeline, lanePorts) || pipelineChanged;
+        pipelineChanged = reconcilePendingPipelineAdoptions(pipeline, lanePorts) || pipelineChanged;
+        pipelineChanged = await reconcileHistoricalAttempts(pipeline, entries, lanePorts) || pipelineChanged;
+        pipelineChanged = rebindPipelineAttemptPaths(pipeline, lanePorts) || pipelineChanged;
         pipelineChanged = reconcileTerminalReviewPending(pipeline) || pipelineChanged;
-        pipelineChanged = reconcileDefaultAdvanceBudgetPark(pipeline, controllerPorts) || pipelineChanged;
+        pipelineChanged = reconcileDefaultAdvanceBudgetPark(pipeline, lanePorts) || pipelineChanged;
         // Evidence above may be synchronized while a stop remains unresolved.
         // Recovery below can advance the cursor, publish a verdict or resume a
         // flow, so it needs the same pipeline-wide admission as ordinary ticks.
@@ -9809,26 +9881,26 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           if (pipeline.state === "needs_decision" && reportedStage?.kind === "run" && reportedAttempt?.report
             && (completedSwitchReport || PROVIDER_NOTIFICATION_CANCELLED_DETAILS.has(reportedAttempt.error ?? "")
               || /stage spawn|verdict|host|rate limited|stage ended before its session|stage agent exited before its session/.test(reportedAttempt.error ?? pipeline.stateDetail ?? ""))) {
-            pipelineChanged = await settleOnRecordedReport(pipeline, reportedStage, reportedAttempt, controllerPorts, persistPipeline) || pipelineChanged;
+            pipelineChanged = await settleOnRecordedReport(pipeline, reportedStage, reportedAttempt, lanePorts, persistPipeline) || pipelineChanged;
           }
-          pipelineChanged = await reconcileExhaustedVerdictRecovery(pipeline, controllerPorts, persistPipeline) || pipelineChanged;
+          pipelineChanged = await reconcileExhaustedVerdictRecovery(pipeline, lanePorts, persistPipeline) || pipelineChanged;
           pipelineChanged = reconcileParkedUsageLimit(pipeline) || pipelineChanged;
-          pipelineChanged = await reconcileParkedProviderRetry(pipeline, controllerPorts, persistPipeline) || pipelineChanged;
-          pipelineChanged = reconcileParkedVerdictMiss(pipeline, controllerPorts) || pipelineChanged;
-          pipelineChanged = await reconcileParkedDelivery(pipeline, controllerPorts) || pipelineChanged;
-          pipelineChanged = await reconcileParkedStructuredSpawn(pipeline, controllerPorts) || pipelineChanged;
-          pipelineChanged = (await reconcileBoundReviewFlow(pipeline, controllerPorts, persistPipeline)) || pipelineChanged;
+          pipelineChanged = await reconcileParkedProviderRetry(pipeline, lanePorts, persistPipeline) || pipelineChanged;
+          pipelineChanged = reconcileParkedVerdictMiss(pipeline, lanePorts) || pipelineChanged;
+          pipelineChanged = await reconcileParkedDelivery(pipeline, lanePorts) || pipelineChanged;
+          pipelineChanged = await reconcileParkedStructuredSpawn(pipeline, lanePorts) || pipelineChanged;
+          pipelineChanged = (await reconcileBoundReviewFlow(pipeline, lanePorts, persistPipeline)) || pipelineChanged;
         }
         if (!pipeline.closeTeardown) {
-          pipelineChanged = await reconcileUnconfirmedHosts(pipeline, controllerPorts) || pipelineChanged;
-          pipelineChanged = await reconcileTerminalStageHosts(pipeline, controllerPorts, pipelines) || pipelineChanged;
+          pipelineChanged = await reconcileUnconfirmedHosts(pipeline, lanePorts) || pipelineChanged;
+          pipelineChanged = await reconcileTerminalStageHosts(pipeline, lanePorts, pipelines) || pipelineChanged;
         }
         if (!TERMINAL_STATES.has(pipeline.state) && pipeline.state !== "paused" && pipeline.state !== "needs_decision"
           && pipeline.state !== "needs_review" && !pipelineSurvivorRefusal(pipeline)) {
           pipelineChanged = await tickPipeline(
             pipeline,
             entries,
-            controllerPorts,
+            lanePorts,
             persistPipeline,
             recoveryAccountingDeadline,
             provisioned,
@@ -9840,7 +9912,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         }
       }, { batchSize: 4, timeBudgetMs: 16 });
       return { pipelines, changed };
-    });
+    }, ports.observeControllerLeaseHold);
     const settledGitIds = new Set<string>();
     result.changed = await settlePendingStageGit(ports, settledGitIds) || result.changed;
     result.changed = await drainRuntimeSwitches(ports) || result.changed;
@@ -9869,6 +9941,11 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     result.changed ||= admissionChanged;
     return result;
   } catch (error) {
+    if (error instanceof StateSnapshotChangedError) {
+      followUp = true;
+      await settleStaleControllerFlow(error, ports);
+      return { pipelines: loadPipelines(), changed: false };
+    }
     /* The store fails closed on malformed state, but this tick runs inside
        the shared reconcile pass — flows, workflows, and the task inbox must
        keep ticking when only the pipelines registry is unreadable. */

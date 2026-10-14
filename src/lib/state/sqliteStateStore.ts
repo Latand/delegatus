@@ -15,6 +15,9 @@ import { FileTransactionBusyError } from "./fileTransaction";
 import { isDiskFullError, noteStateCommit, noteStateDiskFull, StateDiskFullError, stateFreeBytes, STATE_DISK_FULL_FLOOR_BYTES } from "./diskFull";
 
 export const STATE_LEASE_MAX_AGE_MS = 15 * 60_000;
+export class StateSnapshotChangedError extends Error {
+  constructor() { super("controller snapshot changed; reconcile on the next pass"); }
+}
 export class StateLeaseLostError extends FileTransactionBusyError {
   constructor(message: string) {
     super(`${message}: this writer's lease expired or was taken over; nothing was written`);
@@ -1524,6 +1527,55 @@ export class SqliteStateCollection<T> {
     }
   }
 
+  /** Controller I/O runs on a detached snapshot. Each checkpoint takes only
+      the write lease and verifies the rows it will replace. Reservations still
+      become durable at persist(), before their existing actuation paths run. */
+  async reconcileSnapshot<R>(
+    operation: (records: T[], persist: (records?: readonly T[]) => void, assertCurrent: (record: T) => void) => Promise<R> | R,
+    observeHold?: (heldMs: number) => void,
+  ): Promise<R> {
+    assertSqliteWriteAuthority(this.filename);
+    const revision = this.revision();
+    const expected = this.rowRevisions();
+    const session = this.track(this.loadControllerReadonly());
+    if (this.revision() !== revision) throw new StateSnapshotChangedError();
+    const rowRevision = (key: string) => this.readDb.query<{ row_revision: number }, [string, string]>(
+      "SELECT row_revision FROM state_rows WHERE collection = ? AND row_key = ?",
+    ).get(this.options.collection, key)?.row_revision;
+    const assertCurrent = (record: T) => {
+      const key = this.options.key(record);
+      if (rowRevision(key) !== expected.get(key)) throw new StateSnapshotChangedError();
+    };
+    return operation(session.records, records => {
+      // Defer immediately if another writer owns the collection lease.
+      // Previously persisted reservations remain durable across the deferral.
+      let lease: string;
+      try { lease = this.acquireLeaseSync(0); }
+      catch (error) {
+        if (error instanceof FileTransactionBusyError) throw new StateSnapshotChangedError();
+        throw error;
+      }
+      const acquiredAt = durableHolds.get(lease)!.start;
+      const committed: string[] = [];
+      try {
+        this.persistSession(lease, session, context => {
+          if (context.structural) throw new Error("controller snapshots cannot replace the collection");
+          for (const record of context.dirtyRecords) {
+            assertCurrent(record);
+            committed.push(this.options.key(record));
+          }
+        }, records);
+        for (const key of committed) {
+          const current = rowRevision(key);
+          if (current !== undefined) expected.set(key, current);
+        }
+      } finally {
+        this.releaseLeaseSync(lease);
+        observeHold?.(performance.now() - acquiredAt);
+      }
+    }, assertCurrent);
+  }
+
   checkpointMirror(write: (records: readonly T[], revision: number) => void): void {
     const lease = this.acquireLeaseSync();
     try {
@@ -2018,7 +2070,7 @@ export class SqliteStateCollection<T> {
     }
   }
 
-  private acquireLeaseSync(): string {
+  private acquireLeaseSync(waitMs?: number): string {
     const db = connectDatabase(this.filename);
     const ownerToken = crypto.randomUUID();
     const startedAt = performance.now();
@@ -2027,6 +2079,7 @@ export class SqliteStateCollection<T> {
       for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
         attempts = attempt;
         if (this.tryAcquireLease(db, ownerToken)) return ownerToken;
+        if (waitMs === 0) break;
         if ((attempt + 1) % 200 === 0) this.assertDiskHasSpace();
         if (accountMutationHeld()) throw new AccountCommitBusyError("state writer is busy during account commit");
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);

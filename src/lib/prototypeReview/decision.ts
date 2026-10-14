@@ -14,6 +14,7 @@ import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { normalizePrototypeAnswers, recommendedAnswers } from "./questions";
 import type { DecidePrototypeInput, PrototypeDecision, PrototypeDeliveryState, PrototypeReviewRound } from "./types";
 import { prototypeWorld, type PrototypeWorld } from "./world";
+import { prototypeTextLength } from "./textLength";
 
 export type PrototypeDeliveryContext = NextRequest | { kind: "operator-in-process"; authorize: () => void };
 const inProcess = (request: PrototypeDeliveryContext): request is Extract<PrototypeDeliveryContext, { kind: string }> => "kind" in request && request.kind === "operator-in-process";
@@ -22,7 +23,7 @@ const inProcess = (request: PrototypeDeliveryContext): request is Extract<Protot
     decision whose earlier message may already have reached the seat says it
     replaces that one. */
 export function prototypeDecisionText(task: { id: string; text: string } | null, round: PrototypeReviewRound,
-  decision: Pick<PrototypeDecision, "chosen" | "comment" | "answers" | "skipped" | "rejected">, amends?: { at: string }): string {
+  decision: Pick<PrototypeDecision, "chosen" | "comment" | "answers" | "skipped" | "rejected" | "recommendedWithReservation">, amends?: { at: string }): string {
   const amendment = amends ? ` (amended)\nThis replaces the decision of ${amends.at} on the same round.` : "";
   const header = task && round.taskId !== null ? `Prototype review decision${amendment}\nTask: ${task.id} — ${task.text.split("\n")[0]}`
     : `Operator decision${amendment}\nAsked: ${round.title}, ${round.createdAt.slice(11,16)} UTC`;
@@ -33,10 +34,21 @@ export function prototypeDecisionText(task: { id: string; text: string } | null,
   const answers = round.questions.map((q, i) => {
     const answer = decision.answers!.find(a => a.questionId === q.id)!;
     const selected = answer.options.map(index => `   ${String.fromCharCode(97 + index)}) ${q.options[index]!.label}${q.options[index]!.recommended ? " (recommended)" : ""}`);
-    if (answer.other) selected.push("   Other: see the comment");
+    if (answer.other && !answer.customText) selected.push("   Other: see the comment");
+    if (answer.customText) selected.push(`   Owner's custom note:\n${answer.customText}`);
     return `${i + 1}. ${q.text}${q.multiple ? " (several allowed)" : ""}\n${selected.join("\n")}`;
   }).join("\n");
-  return `${header}\nRound: ${round.title}\n\nAnswers:${decision.skipped ? " skipped, use your recommendations." : ""}\n${answers}${decision.rejected ? `\n\n${rejection}` : round.variants.length ? `\n\nChosen: ${chosen || "none"}` : ""}${footer}`;
+  return `${header}\nRound: ${round.title}\n\nAnswers:${decision.recommendedWithReservation ? " recommended with reservation; resolve the owner's open point below." : decision.skipped ? " skipped, use your recommendations." : ""}\n${answers}${decision.rejected ? `\n\n${rejection}` : round.variants.length ? `\n\nChosen: ${chosen || "none"}` : ""}${footer}`;
+}
+
+/** The full owner reply stays on the round even when it exceeds a send envelope. */
+function ownerDeliveryText(text: string, round: PrototypeReviewRound): string {
+  if (Buffer.byteLength(text) <= MAX_STRUCTURED_TEXT_BYTES) return text;
+  const tail = `\n\nOwner text continues. Read read_prototype_review${round.taskId ? ` with ${JSON.stringify({ taskId: round.taskId })}` : " without taskId"} and find round ${round.id} for the complete originalReply and custom answers before acting.`;
+  const bytes = Buffer.from(text);
+  let end = MAX_STRUCTURED_TEXT_BYTES - Buffer.byteLength(tail);
+  while ((bytes[end]! & 0xc0) === 0x80) end--;
+  return bytes.subarray(0, end).toString("utf8") + tail;
 }
 
 export interface PrototypeDeliveryResult { state: PrototypeDeliveryState; operationId?: string }
@@ -139,7 +151,7 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
   return mutatePrototypeRound(taskId,reviewId,(round,task) => {
     if (inProcess(request)) {
       request.authorize();
-      if (!task || runsElsewhere(task) || (!round.decision && prototypeReviewSummary(task.prototypeReviews ?? [])?.waitingReviewId !== round.id)) {
+      if (task && (runsElsewhere(task) || (!round.decision && prototypeReviewSummary(task.prototypeReviews ?? [])?.waitingReviewId !== round.id))) {
         throw new PrototypeError("prototype round is no longer waiting", 409);
       }
     }
@@ -150,33 +162,39 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
       return round.decision.delivery.state !== "sent";
     }
     if (input.reject !== undefined && input.reject !== true) throw new PrototypeError("invalid reject");
+    const ownerReply = input.originalReply !== undefined;
+    if (ownerReply && (typeof input.originalReply !== "string" || prototypeTextLength(input.originalReply) > PROTOTYPE_LIMITS.comment)) throw new PrototypeError("original reply exceeds 20000 characters");
+    if (input.recommendedWithReservation !== undefined && (input.recommendedWithReservation !== true || !ownerReply || input.skip || typeof input.comment !== "string" || !input.comment.trim())) throw new PrototypeError("reservation requires the owner's note and explicit answers");
     if (input.reject && !round.variants.length) throw new PrototypeError("reject: this round has no variants to reject");
     if (input.reject && Array.isArray(input.chosen) && input.chosen.length) throw new PrototypeError("chosen: a rejection chooses no variant");
     if (input.reject && (typeof input.comment !== "string" || !input.comment.trim())) throw new PrototypeError("comment: write or dictate what to redo");
-    if (!Array.isArray(input.chosen) || (!input.chosen.length && !round.questions?.length && !input.reject) || input.chosen.length > 9 || new Set(input.chosen).size !== input.chosen.length
+    if (!Array.isArray(input.chosen) || (!input.chosen.length && !round.questions?.length && !input.reject && !ownerReply) || input.chosen.length > 9 || new Set(input.chosen).size !== input.chosen.length
       || input.chosen.some(n => !round.variants.some(v => v.number === n))) throw new PrototypeError("choose one or more declared variants");
-    if (typeof input.comment !== "string" || input.comment.length > PROTOTYPE_LIMITS.comment) throw new PrototypeError("comment exceeds 20000 characters");
+    if (typeof input.comment !== "string" || prototypeTextLength(input.comment) > PROTOTYPE_LIMITS.comment) throw new PrototypeError("comment exceeds 20000 characters");
     const questionnaire = Boolean(round.questions?.length);
     if (input.skip !== undefined && input.skip !== true) throw new PrototypeError("invalid skip");
     if (questionnaire ? (input.skip === true ? input.answers !== undefined : input.answers === undefined)
       : input.skip !== undefined || input.answers !== undefined) throw new PrototypeError("provide answers or skip for a questionnaire only");
     let answers: PrototypeDecision["answers"];
-    try { if (questionnaire) answers = input.skip ? recommendedAnswers(round.questions!) : normalizePrototypeAnswers(round.questions!, input.answers, input.comment); }
+    try { if (questionnaire) answers = input.skip ? recommendedAnswers(round.questions!) : normalizePrototypeAnswers(round.questions!, input.answers, input.comment, ownerReply); }
     catch (error) { throw new PrototypeError((error as Error).message); }
     const skipped = input.skip ? true : undefined;
     const chosen = [...input.chosen].sort((a,b) => a-b);
     const prior = round.decision;
     if (prior && prior.comment === input.comment && JSON.stringify(prior.chosen) === JSON.stringify(chosen)
-      && JSON.stringify(prior.answers) === JSON.stringify(answers) && prior.skipped === skipped && prior.rejected === input.reject) return false;
+      && JSON.stringify(prior.answers) === JSON.stringify(answers) && prior.skipped === skipped && prior.rejected === input.reject
+      && prior.originalReply === input.originalReply && prior.recommendedWithReservation === input.recommendedWithReservation) return false;
     if (prior && inProcess(request)) throw new PrototypeError("prototype round is already decided", 409);
     /* A record written before revisions existed may have been handed over
        without a mark, unless it never had anyone to go to. */
     const handedOver = prior && (prior.revision === undefined ? prior.delivery.state !== "no-orchestrator" : prior.delivery.dispatchedAt !== undefined);
     const revision = prior ? (prior.revision ?? 1) + 1 : 1;
     const recipient = world.orchestrator(task?.project ?? round.project);
-    const text = prototypeDecisionText(task, round, { chosen, comment: input.comment, answers, skipped, rejected: input.reject }, handedOver ? { at: prior.at } : undefined);
+    const completeText = prototypeDecisionText(task, round, { chosen, comment: input.comment, answers, skipped, rejected: input.reject, recommendedWithReservation: input.recommendedWithReservation }, handedOver ? { at: prior.at } : undefined);
+    const text = ownerReply ? ownerDeliveryText(completeText, round) : completeText;
     if (questionnaire && Buffer.byteLength(text) > MAX_STRUCTURED_TEXT_BYTES) throw new PrototypeError("the answer is too long to send; shorten the comment");
-    round.decision = { chosen, ...(input.reject ? { rejected: true as const } : {}), ...(answers ? { answers } : {}), ...(skipped ? { skipped } : {}), comment: input.comment, at: new Date().toISOString(),
+    round.decision = { chosen, ...(ownerReply ? { originalReply: input.originalReply } : {}), ...(input.recommendedWithReservation ? { recommendedWithReservation: true as const } : {}),
+      ...(input.reject ? { rejected: true as const } : {}), ...(answers ? { answers } : {}), ...(skipped ? { skipped } : {}), comment: input.comment, at: new Date().toISOString(),
       decidedBy: decidedBy(request), revision, delivery: {
         state: recipient ? "pending" : "no-orchestrator", conversationId: recipient, clientMessageId: messageKey(reviewId, revision), text } };
     return true;

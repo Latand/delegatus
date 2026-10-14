@@ -1329,6 +1329,9 @@ export function* transcriptSearchSteps(options: TranscriptSearchOptions): Genera
       let projectScope: ProjectScope | undefined;
       if (options.project) {
         projectScope = resolveProjectScope(options.project, new Set(db.query<{ project: string }, []>("SELECT DISTINCT project FROM transcript_files").all().map((r) => r.project)));
+        if (projectScope.code === "ambiguous_project") {
+          return { items: [], nextCursor: null, total: 0, stats, order: options.order ?? "relevance", projectScope, strongTotal: 0 };
+        }
         options = { ...options, project: projectScope.resolved ?? undefined };
       }
       if (options.order === "relevance") {

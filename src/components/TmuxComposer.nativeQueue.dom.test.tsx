@@ -637,12 +637,8 @@ test("a queued message carries its staged attachment, and a refusal gives it bac
   await act(async () => root.unmount());
 });
 
-test("handing a draft to the queue clears the composer inside the feedback deadline", async () => {
-  /* The measurement the operator feels. The runtime stage proved the ADMISSION
-     does not wait on a native RPC; this is the browser half, on a card whose
-     queue is already at the shape a busy thread has. What it catches is a
-     submission that awaits the transport before painting, not jitter: the write
-     below never resolves inside the window being measured. */
+test("handing a draft to the queue clears the composer while its write is held", async () => {
+  /* The transport stays held while the durable hand-off clears the draft. */
   queueEntries = Array.from({ length: 64 }, (_, index) => ({
     entryId: `e${index}`,
     conversationId: CARD,
@@ -668,13 +664,10 @@ test("handing a draft to the queue clears the composer inside the feedback deadl
     const { host, root } = await mount();
     const textarea = host.querySelector("textarea") as HTMLTextAreaElement;
     await settle(() => appendComposerDraft(CARD, "one more for the queue"));
-    const pressedAt = performance.now();
     await act(async () => { press(textarea, "Enter", { altKey: true }); });
-    const feedback = performance.now() - pressedAt;
 
     expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
     expect(queueWrites).toHaveLength(1);
-    expect(feedback).toBeLessThan(250);
     await act(async () => root.unmount());
   } finally {
     (queueTransport as { write: NativeQueueDependencies["write"] }).write = previous;

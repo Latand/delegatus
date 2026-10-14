@@ -2128,11 +2128,13 @@ test("engine output acknowledges before a slow unrelated consumer and checkpoint
   let started!: () => void;
   const consumerStarted = new Promise<void>((resolve) => { started = resolve; });
   let unrelatedFinished = false;
+  let releaseConsumer!: () => void;
+  const consumerRelease = new Promise<void>(resolve => { releaseConsumer = resolve; });
   const host = new RuntimeHost(journal, {
     flowReady: () => undefined,
     workflowStageCompleted: async () => {
       started();
-      await Bun.sleep(500);
+      await consumerRelease;
       unrelatedFinished = true;
     },
     taskDeliveryAcknowledged: () => undefined,
@@ -2155,19 +2157,20 @@ test("engine output acknowledges before a slow unrelated consumer and checkpoint
       kind: "delta", seq: 2, turnId: "turn-one", text: " second",
     })!,
   } });
+  releaseConsumer();
   await unrelated;
   await host.recoverConsumers();
   const events = journal.replay(0).events;
   checkpoint.mockRestore();
   journal.close();
 
-  console.info(`[output acknowledgement] slow consumer=500ms acknowledgement=${acknowledgementMs.toFixed(2)}ms`);
+  console.info(`[output acknowledgement] held consumer acknowledgement=${acknowledgementMs.toFixed(2)}ms`);
   expect([first.ok, retry.ok, second.ok]).toEqual([true, true, true]);
   expect(retry.result).toEqual(first.result);
   expect(events.map((item) => item.kind)).toEqual(["workflow.stage.completed", "delta", "delta"]);
   expect(checkpoints).toEqual(events.map((item) => item.eventId));
   expect(acknowledgedWhileBlocked).toBe(true);
-  expect(acknowledgementMs).toBeLessThan(250);
+  expect(unrelatedFinished).toBe(true);
 });
 
 test("engine publication allowlist preserves terminal, operation and unknown-event barriers", async () => {

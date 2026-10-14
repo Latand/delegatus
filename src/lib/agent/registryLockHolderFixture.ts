@@ -1,17 +1,22 @@
+import { expect, spyOn } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 import { AgentRegistry, type AgentRegistryStorageOptions } from "./registry";
 
 /*
  * Test fixture for rule (c) of docs/design/delivery-progress-and-drain.md: a
  * separate process holds the registry's SQLite write lock (`BEGIN IMMEDIATE`)
- * while the code under test writes, and a 5 ms heartbeat measures how long the
- * test's own event loop was held. Every database is a private temporary file.
+ * while the code under test writes. A short timer must progress during the
+ * wait, and only the test process releases a successful writer. Every database
+ * is a private temporary file.
  */
 
 export interface RegistryLockHolder {
+  readonly sqliteFilename: string;
   /** Takes the lock until release(), or for `ms`; resolves once it is held. */
   hold(ms?: number): Promise<void>;
   /** Takes the lock for `holdMs`, gives it up for `gapMs`, again and again,
@@ -21,6 +26,8 @@ export interface RegistryLockHolder {
   release(): Promise<void>;
   close(): Promise<void>;
 }
+
+type RegistryLockFixtureOptions = AgentRegistryStorageOptions & { writerClock?: () => number };
 
 const HOLDER_SCRIPT = `
   const { Database } = require("bun:sqlite");
@@ -77,10 +84,17 @@ export function registryLockHolder(sqliteFilename: string): RegistryLockHolder {
     }
   };
   const send = (command: string) => { child.stdin.write(`${command}\n`); child.stdin.flush(); };
+  let commands = Promise.resolve();
+  const serial = (operation: () => Promise<void>) => {
+    const result = commands.then(operation);
+    commands = result.catch(() => {});
+    return result;
+  };
   return {
-    async hold(ms) { send(ms === undefined ? "hold" : `hold ${ms}`); await waitFor("locked"); },
-    async cycle(holdMs, gapMs) { send(`cycle ${holdMs} ${gapMs}`); await waitFor("locked"); },
-    async release() { send("release"); await waitFor("free"); lines.length = 0; },
+    sqliteFilename,
+    hold(ms) { return serial(async () => { send(ms === undefined ? "hold" : `hold ${ms}`); await waitFor("locked"); }); },
+    cycle(holdMs, gapMs) { return serial(async () => { send(`cycle ${holdMs} ${gapMs}`); await waitFor("locked"); }); },
+    release() { return serial(async () => { send("release"); await waitFor("free"); lines.length = 0; }); },
     async close() {
       try { send("exit"); } catch { /* already gone */ }
       await child.exited;
@@ -88,34 +102,143 @@ export function registryLockHolder(sqliteFilename: string): RegistryLockHolder {
   };
 }
 
-/** The longest gap between 5 ms ticks of this process's loop while `operation` runs. */
-export async function longestLoopGap<T>(operation: () => Promise<T> | T): Promise<{ value: T; gapMs: number }> {
-  let last = performance.now();
-  let gapMs = 0;
-  const timer = setInterval(() => {
-    const now = performance.now();
-    gapMs = Math.max(gapMs, now - last);
-    last = now;
-  }, 5);
-  try {
-    const value = await operation();
-    await new Promise((resolve) => setTimeout(resolve, 15));
-    gapMs = Math.max(gapMs, performance.now() - last);
-    return { value, gapMs };
-  } finally {
-    clearInterval(timer);
+/** Synchronous refusal paths must use a single non-waiting SQLite attempt. */
+export function withoutWriterWait<T>(filename: string, operation: () => T, attemptCount = 1): T {
+  const attempts: number[] = [];
+  const exec = Database.prototype.exec;
+  const calls = spyOn(Database.prototype, "exec").mockImplementation(function (this: Database, ...args: Parameters<Database["exec"]>) {
+    if (this.filename === filename && /BEGIN IMMEDIATE/i.test(args[0])) {
+      const timeout = this.query<{ timeout: number }, []>("PRAGMA busy_timeout").get()!.timeout;
+      attempts.push(timeout);
+    }
+    return exec.apply(this, args);
+  });
+  try { return operation(); }
+  finally {
+    calls.mockRestore();
+    expect(attempts, "each expected writer request must use zero busy timeout").toEqual(Array(attemptCount).fill(0));
+  }
+}
+
+/** Captures short-timer progress while an operation is pending; lateness is diagnostic. */
+export function loopProgressProbe() {
+  let finished = false;
+  const samples: Array<{ pending: boolean; latenessMs: number }> = [];
+  const timers: Array<ReturnType<typeof setTimeout>> = [];
+  const releases: Promise<void>[] = [];
+  return {
+    arm(release: () => void | Promise<void> = () => {}) {
+      const at = performance.now();
+      releases.push(new Promise<void>((resolve, reject) => {
+        timers.push(setTimeout(() => {
+          samples.push({ pending: !finished, latenessMs: Math.max(0, performance.now() - at - 5) });
+          Promise.resolve().then(release).then(resolve, reject);
+        }, 5));
+      }));
+    },
+    async run<T>(operation: () => T | Promise<T>, requireSample = true, requirePending = true): Promise<T> {
+      // A synchronous mutation must mark completion before the delayed timer.
+      let result: PromiseSettledResult<T>;
+      try {
+        result = { status: "fulfilled", value: await operation() };
+      } catch (reason) {
+        result = { status: "rejected", reason };
+      } finally {
+        finished = true;
+      }
+      try {
+        await Promise.all(releases);
+        if (requireSample) expect(samples.length, "no contended wait was observed").toBeGreaterThan(0);
+        for (const sample of samples) {
+          if (!requirePending) continue;
+          expect(sample.pending, `wait timer lateness: ${sample.latenessMs.toFixed(1)} ms`).toBe(true);
+        }
+        if (result.status === "rejected") throw result.reason;
+        return result.value;
+      } finally {
+        for (const timer of timers) clearTimeout(timer);
+      }
+    },
+  };
+}
+
+/** Every real writer acquisition must let a short timer run while it waits. */
+export async function whileRegistryWriterHeld<T>(
+  holder: RegistryLockHolder,
+  operation: () => T | Promise<T>,
+  { release = true, alreadyHeld = true }: { release?: boolean; alreadyHeld?: boolean } = {},
+): Promise<{ value: T }> {
+  const hold = holder.hold;
+  const withWriter = SqliteAgentRegistryStore.prototype.withWriter;
+  let observed = 0;
+  const progressFailures: unknown[] = [];
+  let active = alreadyHeld;
+  // Internal fixture holds remain held until the test explicitly releases them.
+  holder.hold = async () => { await hold(); active = true; };
+  const writer = spyOn(SqliteAgentRegistryStore.prototype, "withWriter").mockImplementation((async function (
+    this: SqliteAgentRegistryStore, ...args: Parameters<SqliteAgentRegistryStore["withWriter"]>
+  ) {
+    if (this.filename !== holder.sqliteFilename || !active) return withWriter.apply(this, args);
+    await hold();
+    const probe = loopProgressProbe();
+    probe.arm(release ? async () => { await holder.release(); active = false; } : undefined);
+    observed++;
+    return probe.run(() => withWriter.apply(this, args), true, true).catch(error => {
+      if (/wait timer lateness|no contended wait/.test(String(error))) progressFailures.push(error);
+      throw error;
+    });
+  }) as typeof withWriter);
+  const tryWriter = SqliteAgentRegistryStore.prototype.tryWriter;
+  const probe = loopProgressProbe();
+  let armedTry = false;
+  const immediate = spyOn(SqliteAgentRegistryStore.prototype, "tryWriter").mockImplementation((function (
+    this: SqliteAgentRegistryStore, ...args: Parameters<SqliteAgentRegistryStore["tryWriter"]>
+  ) {
+    if (active && this.filename === holder.sqliteFilename && !armedTry) {
+      armedTry = true;
+      observed++;
+      probe.arm(release ? async () => { await holder.release(); active = false; } : undefined);
+    }
+    return tryWriter.apply(this, args);
+  }) as typeof tryWriter);
+  const timeouts: number[] = [];
+  const exec = Database.prototype.exec;
+  const attempts = spyOn(Database.prototype, "exec").mockImplementation(function (this: Database, ...args: Parameters<Database["exec"]>) {
+    if (active && this.filename === holder.sqliteFilename && /BEGIN IMMEDIATE/i.test(args[0])) {
+      timeouts.push(this.query<{ timeout: number }, []>("PRAGMA busy_timeout").get()!.timeout);
+    }
+    return exec.apply(this, args);
+  });
+  try { return { value: await probe.run(operation, false, true) }; }
+  finally {
+    attempts.mockRestore();
+    immediate.mockRestore();
+    writer.mockRestore();
+    holder.hold = hold;
+    expect(progressFailures, "writer wait blocked the short timer").toEqual([]);
+    expect(observed, "no contended writer acquisition was observed").toBeGreaterThan(0);
+    expect(timeouts.every(timeout => timeout === 0), `contended SQLite busy handlers: ${timeouts.join(", ")}`).toBe(true);
   }
 }
 
 /** A registry in SQLite mode under a private temporary directory. */
 export function sqliteRegistryFixture(
   prefix: string,
-  options: AgentRegistryStorageOptions = {},
+  options: RegistryLockFixtureOptions = {},
 ): { registry: AgentRegistry; root: string; sqliteFilename: string; cleanup: () => void } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
   const filename = path.join(root, "registry.json");
   const sqliteFilename = path.join(root, "registry.sqlite");
-  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename, ...options });
+  let progressClock = 0;
+  const registry = new AgentRegistry(filename, undefined, undefined, {
+    sqliteMode: "sqlite",
+    sqliteFilename,
+    ...options,
+  });
+  if (options.sqliteWriterDeadlineMs !== undefined) {
+    const store = (registry as unknown as { sqliteStore: SqliteAgentRegistryStore }).sqliteStore;
+    (store as unknown as { writerClock: () => number }).writerClock = options.writerClock ?? (() => (progressClock += 5));
+  }
   return { registry, root, sqliteFilename, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 

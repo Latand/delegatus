@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { ownerIndex, ownerRequest, x1Claim, x1Request, x1Results } from "./toolLoop.fixture";
 import { expect, test } from "bun:test";
 import { checkedAnswer, checkedRound, toolCallResultSchema, descriptorSchema, requestSchema } from "./protocol";
+import type { ExternalRelayRequest } from "./protocol";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
 
 test("paired service windows and late claims parse in requests and descriptors", () => {
@@ -193,6 +194,21 @@ test("input string bounds count Unicode code points", () => {
     expect(passes(input("😀".repeat(max)))).toBe(true);
     expect(passes(input("😀".repeat(max + 1)))).toBe(false);
   }
+});
+
+test("a verified owner's addressed prototype reply reaches the parser up to its 20000-character cap", () => {
+  const words = `#proto-20fbd832 ${"🙂".repeat(20_000 - [..."#proto-20fbd832 "].length)}`;
+  const input = { ...contextRequest.input, requester: { ...contextRequest.input.requester!, is_owner: true },
+    conversation: [{ ...contextRequest.input.conversation[0]!, text: words }] };
+  const passes = (change: Partial<ExternalRelayRequest["input"]> = {}) => requestSchema.safeParse({ ...contextRequest, input: { ...input, ...change } }).success;
+  expect(passes()).toBe(true);
+  expect(passes({ conversation: [{ ...input.conversation[0]!, text: words + "я" }] })).toBe(false);
+  expect(passes({ requester: { ...input.requester, is_owner: false } })).toBe(false);
+  expect(passes({ requester: { ...input.requester, is_anonymous_admin: true } })).toBe(false);
+  expect(passes({ respond_to: "another-message" })).toBe(false);
+  expect(passes({ conversation: [{ ...input.conversation[0]!, author: { ...input.conversation[0]!.author, key: "other-owner" } }] })).toBe(false);
+  expect(passes({ conversation: [{ ...input.conversation[0]!, author: { ...input.conversation[0]!.author, self: true } }] })).toBe(false);
+  expect(passes({ conversation: [{ ...input.conversation[0]!, text: "я".repeat(20_000) }] })).toBe(false);
 });
 
 test("a descriptor allows a null or absent icon URL", () => {

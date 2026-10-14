@@ -1,3 +1,4 @@
+import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal } from "@/lib/projects/nameResolution";
 import { releaseStatus } from "@/lib/release/answer";
 import { releaseControlChange } from "@/lib/release/store";
 import { RELEASE_DEFAULTS } from "@/lib/release/settings";
@@ -147,7 +148,7 @@ import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParent
 import { beginSeatDeployment, forgetSeatDeploymentRequest, recoverSeatDeploymentRequests, recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
-import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, readOrchestratorSeatFileOrNull, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
+import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
@@ -4131,110 +4132,13 @@ function orchestratorDispatchRefusal(error: unknown): McpDispatchNotExecutedErro
   return new McpDispatchNotExecutedError(error.message, details);
 }
 
-/** Resolve a member name through aliases and active seats before any claim. */
-async function resolveOrchestratorToolProject(named: string, dependencies: ViewerMcpDomainDependencies, requireActiveSeat = true): Promise<string> {
-  const requested = named.trim();
-  const folded = requested.toLowerCase();
-  const aliases = projectAliasSnapshot({ strict: true });
-  const active = new Set(activeOrchestratorSeats().map((seat) => canonicalOrchestratorProject(seat.project)));
-  const authorizedSeats = dependencies.authorizedSeats?.() ?? [];
-  for (const seat of authorizedSeats) if (seat.project) active.add(canonicalOrchestratorProject(seat.project));
-  const names = new Map<string, Set<string>>();
-  const labels = new Map<string, string>();
-  const index = (name: string, project: string) => {
-    const normalized = name.trim().toLowerCase();
-    if (!normalized) return;
-    const candidates = names.get(normalized) ?? new Set<string>();
-    candidates.add(project);
-    names.set(normalized, candidates);
-  };
-  for (const project of active) {
-    const displayName = projectDisplayName(project, aliases.displayNames[project]);
-    labels.set(project, displayName);
-    index(project, project);
-    index(displayName, project);
+/** Resolve names through the directory shared with voice and transcript search. */
+function resolveOrchestratorToolProject(named: string, dependencies: ViewerMcpDomainDependencies, requireActiveSeat = true): string {
+  try { return resolveNamedProject(named, namedProjectDirectory(dependencies), requireActiveSeat); }
+  catch (error) {
+    if (error instanceof ProjectNameRefusal) throw new McpToolRefusal(error.message, error.details);
+    throw error;
   }
-  for (const [source, target] of Object.entries(aliases.aliases)) {
-    const canonical = canonicalOrchestratorProject(target);
-    index(source, canonical);
-  }
-  for (const [key, displayName] of Object.entries(aliases.displayNames)) {
-    index(key, canonicalOrchestratorProject(key));
-    index(displayName, canonicalOrchestratorProject(key));
-  }
-  for (const key of Object.keys(readOrchestratorSeatFileOrNull()?.seats ?? {})) {
-    const project = canonicalOrchestratorProject(key);
-    index(key, project);
-    index(projectDisplayName(project, aliases.displayNames[key]), project);
-  }
-  for (const seat of authorizedSeats) {
-    if (!seat.project) continue;
-    const project = canonicalOrchestratorProject(seat.project);
-    index(seat.project, project);
-    index(projectDisplayName(project, aliases.displayNames[seat.project]), project);
-  }
-  const callerProject = dependencies.callerProject?.();
-  if (callerProject) {
-    const project = canonicalOrchestratorProject(callerProject);
-    index(callerProject, project);
-    index(projectDisplayName(project, aliases.displayNames[callerProject]), project);
-  }
-  // The completed project catalogue provides each member's repository root.
-  // Reading its basename names the project without examining conversation cwd
-  // history or invoking a catalog scan.
-  const last = dependencies.lastCompletedCatalog?.() ?? null;
-  for (const entry of last?.projectCatalog ?? []) {
-    const project = canonicalOrchestratorProject(entry.project);
-    const displayName = entry.displayName || projectDisplayName(project, aliases.displayNames[project]);
-    labels.set(project, displayName);
-    index(displayName, project);
-    if (entry.projectRoot) index(path.basename(entry.projectRoot), project);
-  }
-  for (const entry of last?.files ?? []) {
-    const project = canonicalOrchestratorProject(entry.project);
-    if (entry.projectName) {
-      labels.set(project, labels.get(project) ?? entry.projectName);
-      index(entry.projectName, project);
-    }
-  }
-
-  const candidates = [...(names.get(folded) ?? [])].sort();
-  const details = { outcome: "not-executed", evidence: "project-resolution", nextAction: "new-request-permitted", retryable: false };
-  if (candidates.length > 1) {
-    throw new McpToolRefusal(`ambiguous project "${requested}": ${candidates.join(", ")}; pass one of these project keys`, {
-      ...details, code: "ambiguous_project", candidates,
-    });
-  }
-  if (candidates.length === 1 && (!requireActiveSeat || active.has(candidates[0]!))) return candidates[0]!;
-  const suggestionProjects = new Set([
-    ...active,
-    ...Object.keys(aliases.displayNames).map((project) => canonicalOrchestratorProject(project)),
-    ...Object.values(aliases.aliases).map((project) => canonicalOrchestratorProject(project)),
-  ]);
-  const closeMatches = [...suggestionProjects].map((project) => ({ project, name: labels.get(project) ?? projectDisplayName(project, aliases.displayNames[project]),
-    distance: projectNameDistance(folded, (labels.get(project) ?? projectDisplayName(project)).toLowerCase()),
-  })).filter((match) => match.distance <= Math.max(2, Math.floor(folded.length / 3)))
-    .sort((a, b) => a.distance - b.distance || a.project.localeCompare(b.project))
-    .slice(0, 5).map(({ project, name }) => ({ project, name }));
-  throw new McpToolRefusal(`no such project "${requested}"; ${closeMatches.length
-    ? `close matches: ${closeMatches.map((match) => `${match.name} (${match.project})`).join(", ")}`
-    : "no close matches; pass a known project key, display name or repository name"}`, {
-    ...details, code: "unknown_project", closeMatches,
-  });
-}
-
-/** Bounded edit distance for suggestions; suggestions never select a target. */
-function projectNameDistance(left: string, right: string): number {
-  if (left.length > 256 || right.length > 256) return Infinity;
-  let row = Array.from({ length: right.length + 1 }, (_, index) => index);
-  for (let i = 0; i < left.length; i += 1) {
-    const next = [i + 1];
-    for (let j = 0; j < right.length; j += 1) {
-      next.push(Math.min(next[j]! + 1, row[j + 1]! + 1, row[j]! + (left[i] === right[j] ? 0 : 1)));
-    }
-    row = next;
-  }
-  return row[right.length]!;
 }
 
 /** Explicit launch names resolve before claims and must still name the cwd. */
@@ -7812,6 +7716,7 @@ export function viewerReadTools(
   controlDependencies: ViewerControlDependencies = productionViewerControlDependencies(),
 ) {
   return {
+    get_orchestrator: (args: McpToolArgs) => getOrchestrator(args, domainDependencies),
     list_tasks: (args: McpToolArgs, context?: McpToolCallContext) => Promise.resolve(listTasks(args, domainDependencies, context)),
     get_task: (args: McpToolArgs, context?: McpToolCallContext) => getTask(args, domainDependencies, context),
     list_pipelines: (args: McpToolArgs, context?: McpToolCallContext) => listPipelines(args, domainDependencies, context),

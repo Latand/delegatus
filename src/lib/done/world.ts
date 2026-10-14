@@ -9,6 +9,7 @@ import { readHistory } from "@/lib/limitsHistoryStore";
 import { loadArchivedPipelines, loadPipelinesForList } from "@/lib/pipelines/store";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { recordedProjectRemotes } from "@/lib/projects/aliases";
+import { namedProjectDirectory, resolveNamedProject, type NamedProjectDirectory } from "@/lib/projects/nameResolution";
 import { readPrototypeReviews } from "@/lib/prototypeReview/read";
 import { ledgerDeployments } from "@/lib/runtime/deploymentLedger";
 import { ALBUM_PAGE_MAX, readTaskAlbum } from "@/lib/taskAlbum/album";
@@ -65,7 +66,7 @@ export function productionDoneWorld(): DoneWorld {
   };
   let pipelines: readonly Pipeline[] | null = null;
   const laneList = () => (pipelines ??= [...quietly(() => loadPipelinesForList(), [] as readonly Pipeline[]), ...archivedPipelines()]);
-  let repositories: Map<string, string> | null = null;
+  let repositories: NamedProjectDirectory | null = null;
   const labels = new Map<string, Map<string, string>>();
   return {
     now: () => Date.now(),
@@ -80,14 +81,22 @@ export function productionDoneWorld(): DoneWorld {
     limits: () => quietly(() => readHistory().series, {}),
     pipelineRepository: (pipeline) => quietly(() => pipelineRepository(pipeline), null),
     repositoryProject(repository) {
-      if (!repositories) {
-        repositories = new Map();
-        for (const [project, remote] of Object.entries(quietly(() => recordedProjectRemotes(), {}))) {
-          const name = githubRepositoryOfRemote(remote);
-          if (name && !repositories.has(name.toLowerCase())) repositories.set(name.toLowerCase(), project);
+      return quietly(() => {
+        if (!repositories) {
+          const remotes = recordedProjectRemotes();
+          repositories = namedProjectDirectory({}, Object.keys(remotes));
+          // This projection receives a full repository identifier from forge
+          // records. Restrict its candidates to that identity vocabulary.
+          repositories.names = new Map();
+          for (const [project, remote] of Object.entries(remotes)) {
+            const name = githubRepositoryOfRemote(remote)?.toLowerCase();
+            if (!name) continue;
+            const candidates = repositories.names.get(name) ?? new Set<string>();
+            candidates.add(repositories.canonical(project)); repositories.names.set(name, candidates);
+          }
         }
-      }
-      return repositories.get(repository.toLowerCase()) ?? null;
+        return resolveNamedProject(repository, repositories);
+      }, null);
     },
     accountLabel(engine, accountId) {
       if (!labels.has(engine)) {
