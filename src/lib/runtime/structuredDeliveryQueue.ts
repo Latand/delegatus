@@ -1844,14 +1844,14 @@ export class StructuredDeliveryQueue {
         await this.terminalizeUnverified(effect.operationId, DELIVERY_FENCED_BY_SETTLEMENT);
         continue;
       }
-      if (effect.kind === "send" && effect.onlyIfIdle && this.port.providerContinuationClosed) {
+      if (effect.kind === "send" && this.port.providerContinuationClosed) {
         const closed = await readEvidence(() => this.port.providerContinuationClosed!(effect.operationId));
         if (!closed.readable) {
           this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: "provider continuation ownership is unavailable" });
           return this.fenceUnavailable();
         }
         if (closed.value) {
-          await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "pipeline closed before provider continuation dispatch" });
+          await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "pipeline closed before continuation dispatch" });
           continue;
         }
       }

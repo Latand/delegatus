@@ -3170,3 +3170,22 @@ test("dispatch authorization is rechecked before a thread-read resend", async ()
   expect(sends).toBe(1);
   expect(statuses).toContain("failed");
 });
+
+test("unreadable pipeline delivery ownership blocks send and host recovery", async () => {
+  let sends = 0;
+  let recoveries = 0;
+  const statuses: string[] = [];
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{ id: "effect:pipeline-owner-unreadable", kind: "runtime.send", eventSeq: 1,
+      payload: { kind: "send", operationId: "pipeline-owner-unreadable", conversationId: "conversation-one", text: "Continue", policy: "queue" } }],
+    status: async () => ({ status: "queued", revision: 1 }),
+    settled: () => false,
+    providerContinuationClosed: () => { throw new Error("pipeline delivery reservation is unavailable"); },
+    transition: async (_id, status) => { statuses.push(status); },
+  }, () => host(async () => { sends++; return { outcome: "turn-started", turnId: "turn-one" }; }),
+  undefined, undefined, async () => { recoveries++; return false; });
+  await queue.drain();
+  expect(sends).toBe(0);
+  expect(recoveries).toBe(0);
+  expect(statuses).toEqual([]);
+});

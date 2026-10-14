@@ -1,5 +1,6 @@
-import { expect, spyOn, test, crypto, spawn, fs, os, path, engineModule, IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail, defaultPipelinePorts, reconcileEmbeddedReviewFlows, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, durableStageTurnEvidence, patchPipeline, closeAndDrain, RUN_STAGES, entry, harness, create, withRuntimeSnapshot, HISTORICAL_VERDICT_MISS, PASS_TEXT, makeStructuredAttempt, pinStageHead, BUDGET_STAGES, movingHeadHarness, driveWithController, stagedRecoveryHarness, activationDrainFixture, reserveActivationOnly, expectPipelineLeaseAbsent, frozenSurvivorStartup, restartCutStage, cutByRestart, idleStageHostFixture, runtimeReleaseOf, SILENT_RUN, attemptThatWorkedOnAfterRestart, stageWhoseStopMovesTheTranscript } from "./engine.fixture";
+import { expect, spyOn, test, crypto, fs, os, path, engineModule, IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail, defaultPipelinePorts, reconcileEmbeddedReviewFlows, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, durableStageTurnEvidence, patchPipeline, closeAndDrain, RUN_STAGES, entry, harness, create, withRuntimeSnapshot, HISTORICAL_VERDICT_MISS, PASS_TEXT, makeStructuredAttempt, pinStageHead, BUDGET_STAGES, movingHeadHarness, driveWithController, stagedRecoveryHarness, activationDrainFixture, reserveActivationOnly, expectPipelineLeaseAbsent, frozenSurvivorStartup, restartCutStage, cutByRestart, idleStageHostFixture, runtimeReleaseOf, SILENT_RUN, attemptThatWorkedOnAfterRestart, stageWhoseStopMovesTheTranscript } from "./engine.fixture";
 import type { Flow, BoardTask, PipelinePorts } from "./engine.fixture";
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
 
 test("activation drain preserves uncertain read-write delivery and the staged recovery budget", async () => {
@@ -2261,7 +2262,7 @@ test.each(["paused", "needs_decision"] as const)("close persists %s provider con
 });
 
 
-test.each(["before-drain", "after-claim"] as const)("a queued provider continuation cannot dispatch after close when the runtime returns (%s, #2829)", async timing => {
+test("a queued provider continuation cannot recover or dispatch after close when the runtime returns (#2829)", async () => {
   const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
   const { StructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryQueue");
   const { RuntimeJournal } = await import("@/runtime-host/journal");
@@ -2280,8 +2281,8 @@ test.each(["before-drain", "after-claim"] as const)("a queued provider continuat
   savePipelines([stored]);
   h.ports.stageHostResident = async () => true;
   h.ports.invalidateProviderContinuation = async () => { throw new Error("runtime host is unavailable"); };
-  const operationId = `stage-provider-${lane.id}-${stored.cursor!.stageId}-1-${turnTs}`;
-  const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, `close-queued-${timing}.sqlite`), { structuredHosts: true });
+  const clientMessageId = `stage-provider-${lane.id}-${stored.cursor!.stageId}-1-${turnTs}`;
+  const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, "close-queued.sqlite"), { structuredHosts: true });
   journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
     conversationId, sessionKey: { engine: "codex", sessionId: "queued-generation" }, hostKind: "codex-app-server",
     host: "hosted", turn: "idle", activeTurnId: null, writerClaim: "fixture:1", attentionIds: [],
@@ -2289,9 +2290,17 @@ test.each(["before-drain", "after-claim"] as const)("a queued provider continuat
   } });
   const session = journal.readSession({ conversationId })!;
   const fence = { revision: session.revision, writerClaim: session.writerClaim! };
-  journal.executeOperation({ kind: "send", conversationId, operationId, idempotencyKey: operationId, text: "Continue",
-    policy: "queue", turnId: null, onlyIfIdle: fence });
-  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `close-queue-registry-${timing}.json`));
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "close-queue-registry.json"));
+  const reservation = registry.holdDelivery(conversationId as ViewerConversationId, "Continue", clientMessageId, "text", [], null,
+    { policy: "queue", turnId: null, onlyIfIdle: fence });
+  const operationId = reservation.command.operationId;
+  expect(operationId).not.toBe(clientMessageId);
+  const retryOperationId = `idle-continuation-retry_${crypto.randomUUID()}`;
+  const retryOwner = registry.recordDirectAdmission({ operationId: retryOperationId, retryOf: operationId })!;
+  const admitted = journal.executeOperation({ ...reservation.command, kind: "send", conversationId, operationId, idempotencyKey: clientMessageId, text: "Continue",
+    contentDigest: crypto.createHash("sha256").update(JSON.stringify({ text: "Continue", images: [] })).digest("hex") });
+  expect(admitted).toMatchObject({ operationId, receipt: { status: "queued" } });
+  expect(journal.effectBatch(100, ["runtime.send"]).map(effect => effect.payload.operationId)).toContain(operationId);
   const client = { snapshot: async () => ({ filesRevision: 0, sessions: [] }), effectBatch: async () => [], append: async () => {} } as unknown as import("@/lib/runtime/client").RuntimeHostClient;
   let sends = 0;
   let recoveries = 0;
@@ -2302,7 +2311,7 @@ test.each(["before-drain", "after-claim"] as const)("a queued provider continuat
     const controller = (process as typeof process & { __llvStructuredDeliveryController: { activeQueue: { port: import("@/lib/runtime/structuredDeliveryQueue").StructuredDeliveryQueuePort } } }).__llvStructuredDeliveryController;
     const production = controller.activeQueue.port;
     expect(production.providerContinuationClosed?.(operationId)).toBe(false);
-    expect(production.providerContinuationClosed?.("operator-message")).toBe(false);
+    expect(() => production.providerContinuationClosed?.("operator-message")).toThrow("pipeline delivery reservation is unavailable");
     const queue = new StructuredDeliveryQueue({
       effects: async () => journal.effectBatch(100, ["runtime.send"]),
       status: async id => journal.operationResult(id)?.receipt ?? null,
@@ -2310,10 +2319,10 @@ test.each(["before-drain", "after-claim"] as const)("a queued provider continuat
       settled: production.settled,
       providerContinuationClosed: production.providerContinuationClosed,
       authorizeDispatch: production.authorizeDispatch,
+      bindDeliveryGeneration: async () => true,
       idleContinuationCurrent: async () => true,
       transition: async (id, status, details, options) => {
         journal.transitionOperation(id, status, details, options);
-        if (timing === "after-claim" && status === "delivering") await patchPipeline(lane.id, { action: "close" }, h.ports);
       },
     }, () => ({
       attach: () => ({ async *[Symbol.asyncIterator]() {} }),
@@ -2323,16 +2332,91 @@ test.each(["before-drain", "after-claim"] as const)("a queued provider continuat
       send: async () => { sends++; return { outcome: "turn-started", turnId: "forbidden-turn" }; },
       interrupt: async () => {}, answer: async () => {}, release: async () => {},
     }), undefined, undefined, async () => { recoveries++; return false; });
-    if (timing === "before-drain") await patchPipeline(lane.id, { action: "close" }, h.ports);
+    await patchPipeline(lane.id, { action: "close" }, h.ports);
     await queue.drain();
     await queue.drain();
+    expect(production.providerContinuationClosed?.(operationId)).toBe(true);
+    expect(production.providerContinuationClosed?.(retryOwner.command.operationId)).toBe(true);
+    for (const key of [
+      `stage-verdict-request-${lane.id}-${stored.cursor!.stageId}-1-1`,
+      `stage-commit-repair-${lane.id}-${stored.cursor!.stageId}-1`,
+      `stage-publication-repair-${lane.id}-${stored.cursor!.stageId}-1`,
+    ]) {
+      const repair = registry.holdDelivery(conversationId as ViewerConversationId, "Repair request", key);
+      expect(repair.command.onlyIfIdle).toBeUndefined();
+      expect(production.providerContinuationClosed?.(repair.command.operationId)).toBe(true);
+    }
     expect(sends).toBe(0);
     expect(recoveries).toBe(0);
-    expect(journal.operationResult(operationId)?.receipt.status).toBe("failed");
     expect(loadPipelines()[0]!.state).toBe("closed");
     expect(h.spawnInputs).toHaveLength(1);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
+  }
+});
+
+test("the final pipeline dispatch check observes a close after the delivery claim (#2829)", async () => {
+  const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
+  const { StructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryQueue");
+  const h = harness();
+  const lane = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const stored = loadPipelines()[0]!;
+  const conversationId = stored.runs[0]!.attempts[0]!.conversationId!;
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "close-final-dispatch-registry.json"));
+  const client = { snapshot: async () => ({ filesRevision: 0, sessions: [] }), effectBatch: async () => [], append: async () => {} } as unknown as import("@/lib/runtime/client").RuntimeHostClient;
+  const clientMessageId = `stage-verdict-request-${lane.id}-${stored.cursor!.stageId}-1-1`;
+  const reservation = registry.holdDelivery(conversationId as ViewerConversationId, "Request the stage verdict", clientMessageId);
+  const operationId = reservation.command.operationId;
+  const content = { text: "Request the stage verdict", images: [] };
+  const contentDigest = crypto.createHash("sha256").update(JSON.stringify(content)).digest("hex");
+  const command = { ...reservation.command, kind: "send" as const, conversationId, operationId,
+    idempotencyKey: clientMessageId, text: content.text, content, contentDigest, policy: "queue" as const, turnId: null, eventSeq: 1 };
+  let sends = 0;
+  let recoveries = 0;
+  let closedAtClaim = false;
+  let receipt: { status: string; revision: number } = { status: "queued", revision: 1 };
+  try {
+    await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true, watchdogIntervalMs: 0,
+      settlementSweepMs: 0, hostlessSettleIntervalMs: 0 });
+    const controller = (process as typeof process & { __llvStructuredDeliveryController: { activeQueue: { port: import("@/lib/runtime/structuredDeliveryQueue").StructuredDeliveryQueuePort } } }).__llvStructuredDeliveryController;
+    const production = controller.activeQueue.port;
+    expect(reservation.command.onlyIfIdle).toBeUndefined();
+    const queue = new StructuredDeliveryQueue({
+      effects: async () => [{ id: "effect:final-dispatch", kind: "runtime.send" as const, eventSeq: 1, payload: command }],
+      status: async () => receipt,
+      hostClaim: () => "fixture:1",
+      settled: () => false,
+      providerContinuationClosed: production.providerContinuationClosed,
+      authorizeDispatch: production.authorizeDispatch,
+      bindDeliveryGeneration: async () => true,
+      transition: async (...transitionArgs) => {
+        const status = transitionArgs[1];
+        receipt = { status, revision: receipt.revision + 1 };
+        if (status === "delivering") {
+          closedAtClaim = true;
+          await patchPipeline(lane.id, { action: "close" }, h.ports);
+        }
+      },
+    }, () => ({
+      attach: () => ({ async *[Symbol.asyncIterator]() {} }),
+      health: async () => ({ status: "idle", sessionKey: "queued-generation", endpoint: "fixture", pid: 1,
+        processStartIdentity: "fixture", eventCursor: 0, protocolVersion: "fixture", activeTurnRef: null,
+        pendingAttention: [], activeFlags: [], account: null }),
+      send: async () => { sends++; return { outcome: "turn-started", turnId: "forbidden-turn" }; },
+      interrupt: async () => {}, answer: async () => {}, release: async () => {},
+    }), undefined, undefined, async () => { recoveries++; return false; });
+    expect(production.providerContinuationClosed?.(operationId)).toBe(false);
+    await queue.drain();
+    expect(closedAtClaim).toBe(true);
+    expect(production.providerContinuationClosed?.(operationId)).toBe(true);
+    expect(sends).toBe(0);
+    expect(recoveries).toBe(0);
+    expect(receipt.status).toBe("failed");
+    expect(h.spawnInputs).toHaveLength(1);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
   }
 });

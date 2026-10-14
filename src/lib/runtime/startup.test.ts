@@ -5246,7 +5246,7 @@ test.each(["settled", "deferred"] as const)("startup skips a newly %s host under
   }
 });
 
-test.each(["dead", "live"] as const)("settled archived Codex handoff with a %s entry completes its first startup pass", async (status) => {
+test.each(["dead", "live"] as const)("closed archived pipeline with a pending handoff does not adopt its %s entry", async (status) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-settled-handoff-"));
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = directory;
@@ -5300,9 +5300,9 @@ test.each(["dead", "live"] as const)("settled archived Codex handoff with a %s e
     expect(failures).toEqual([]);
     expect(retries).toBe(0);
     expect(structuredStartupStatus()?.state).toBe("ready");
-    expect(launched).toEqual([sessionId, healthyId]);
+    expect(launched).toEqual([healthyId]);
     await adoptStructuredHostsAtStartup(dependencies);
-    expect(launched).toHaveLength(2);
+    expect(launched).toHaveLength(1);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close(); registry.close();

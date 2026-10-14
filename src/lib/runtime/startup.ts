@@ -1616,6 +1616,7 @@ const SETTLED_STAGE_ATTEMPT_STATES = new Set(["passed", "failed", "needs_decisio
 interface PipelineStartupEvidence {
   settled: ReadonlySet<string>;
   deferred: ReadonlySet<string>;
+  closed?: ReadonlySet<string>;
 }
 
 /** Pipeline attempts and frozen close hosts determine whether startup may create another writer.
@@ -1624,6 +1625,7 @@ interface PipelineStartupEvidence {
 async function pipelineStartupEvidence(registry: AgentRegistry, available = true): Promise<PipelineStartupEvidence> {
   const settled = new Set<string>();
   const deferred = new Set<string>();
+  const closed = new Set<string>();
   let pipelines;
   let preservedIds: Set<string>;
   try {
@@ -1652,6 +1654,30 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
     const evidence = [...attempts, ...(pipeline.closeTeardown?.hosts ?? []).map((host) => host.evidence)];
     const blocked = evidence.some((host) => host.unresolvedTermination?.survivors
       .some((identity) => processIdentityStatus(identity) !== "dead"));
+    if (pipeline.closedAt || pipeline.state === "closed") {
+      for (const [id, entries] of Object.entries(memberships)) {
+        if (entries.some((entry) => entry.kind === "pipeline" && entry.containerId === pipeline.id)) {
+          closed.add(registry.canonicalConversationId(id as ViewerConversationId));
+          if (blocked) deferred.add(registry.canonicalConversationId(id as ViewerConversationId));
+        }
+      }
+      for (const attempt of attempts) {
+        if (attempt.conversationId?.startsWith("conversation_")) {
+          const id = registry.canonicalConversationId(attempt.conversationId as ViewerConversationId);
+          closed.add(id);
+          if (SETTLED_STAGE_ATTEMPT_STATES.has(attempt.state)) settled.add(id);
+          if (blocked) deferred.add(id);
+        }
+      }
+      for (const host of pipeline.closeTeardown?.hosts ?? []) {
+        const conversationId = host.target.conversationId;
+        if (conversationId?.startsWith("conversation_")) {
+          closed.add(registry.canonicalConversationId(conversationId as ViewerConversationId));
+          if (blocked) deferred.add(registry.canonicalConversationId(conversationId as ViewerConversationId));
+        }
+      }
+      continue;
+    }
     // Reviewer synchronization can move survivors off the current attempt
     // into frozen close custody. Either record fences every pipeline writer.
     // Memberships also retain conversations absent from an older attempt row.
@@ -1673,7 +1699,7 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
       }
     }
   }
-  return { settled, deferred };
+  return { settled, deferred, closed };
 }
 
 export interface StructuredStartupDependencies {
@@ -1951,6 +1977,20 @@ async function adoptStructuredHostsPass(
   const readEvidence = () => (dependencies.pipelineEvidence ?? pipelineStartupEvidence)(registry);
   let pipelineEvidence = await admitState(async (available) =>
     available ? readEvidence() : pipelineStartupEvidence(registry, false));
+  const closedHostKeys = new Set<string>();
+  const rememberClosedPipelineHosts = (evidence: PipelineStartupEvidence): void => {
+    if (!evidence.closed?.size) return;
+    const snapshot = registry.readOnlySnapshot();
+    for (const conversation of Object.values(snapshot.conversations)) {
+      if (!evidence.closed.has(resolveConversationAlias(snapshot, conversation.id))) continue;
+      for (const generation of conversation.generations) {
+        closedHostKeys.add(sessionKeyId({ engine: conversation.engine, sessionId: generation.id }));
+      }
+    }
+  };
+  rememberClosedPipelineHosts(pipelineEvidence);
+  const pipelineRecoveryFence = (evidence: PipelineStartupEvidence): ReadonlySet<string> =>
+    new Set([...(evidence.deferred ?? []), ...(evidence.closed ?? [])]);
   {
     assertActive();
     const deferralSnapshot = registry.readOnlySnapshot();
@@ -1979,6 +2019,7 @@ async function adoptStructuredHostsPass(
       registry.readOnlySnapshot(),
       retainedRecoveryHostKeys(),
     );
+    nextAdoptedHosts = nextAdoptedHosts.filter((item) => !closedHostKeys.has(sessionKeyId(item.key)));
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     /* Off the loop (rule c); refused, it is skipped this pass and the next
        startup pass runs it. */
@@ -1994,6 +2035,7 @@ async function adoptStructuredHostsPass(
       || interruptionHostKeys.has(sessionKeyId(entry.key))
       || (resumeDeferred !== null && !resumeDeferred.has(sessionKeyId(entry.key)))
       || deferredHostKeys.has(sessionKeyId(entry.key))
+      || closedHostKeys.has(sessionKeyId(entry.key))
       || evidenceMoved(entry));
     const signals = await structuredStartupSignals(
       registry,
@@ -2002,6 +2044,8 @@ async function adoptStructuredHostsPass(
     );
     pipelineEvidence = await admitState(async (available) =>
       available ? readEvidence() : pipelineStartupEvidence(registry, false), "reading startup signals");
+    rememberClosedPipelineHosts(pipelineEvidence);
+    nextAdoptedHosts = nextAdoptedHosts.filter((item) => !closedHostKeys.has(sessionKeyId(item.key)));
     /* Only a continuation not yet admitted forces its row's adoption. One the
        queue holds is pending work of its own, which makes the row eligible for
        as long as it stays unsettled. */
@@ -2034,6 +2078,7 @@ async function adoptStructuredHostsPass(
       return (!resumeDeferred || resumeDeferred.has(sessionKeyId(entry.key)))
         && !retainedHostKeys.has(sessionKeyId(entry.key))
         && !skippedHostKeys.has(sessionKeyId(entry.key))
+        && !closedHostKeys.has(sessionKeyId(entry.key))
         /* The stamp is compared before the claim and again on the claimed
            row, where nothing can write the evidence any more. Once the
            re-probe has reached its cap, pending work takes a held row. */
@@ -2072,10 +2117,12 @@ async function adoptStructuredHostsPass(
         // Selection deliberately admits owed work on already-settled stages.
         // Only a new settlement invalidates that selection. A new survivor or
         // unreadable authority always defers it, including owed work.
-        if (id && (evidence.deferred.has(id)
+        if (id && (evidence.closed?.has(id)
+          || evidence.deferred.has(id)
           || (evidence.settled.has(id) && !pipelineEvidence.settled.has(id)))) {
           const key = sessionKeyId(entry.key);
           skippedHostKeys.add(key);
+          if (evidence.closed?.has(id)) closedHostKeys.add(key);
           if (evidence.deferred.has(id)) deferredHostKeys.add(key);
           return null;
         }
@@ -2256,6 +2303,7 @@ async function adoptStructuredHostsPass(
       registry.readOnlySnapshot(),
       retainedRecoveryHostKeys(),
     );
+    nextAdoptedHosts = nextAdoptedHosts.filter((item) => !closedHostKeys.has(sessionKeyId(item.key)));
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     const candidateHostKeys = new Set(nextAdoptedHosts.map((item) => sessionKeyId(item.key)));
     const shouldRetainCandidateOrAdopt: StructuredHostAdoptionFilter = (entry) =>
@@ -2267,6 +2315,7 @@ async function adoptStructuredHostsPass(
          (#1281). Whatever can read the artifact next decides. */
       || (resumeDeferred !== null && !resumeDeferred.has(sessionKeyId(entry.key)))
       || deferredHostKeys.has(sessionKeyId(entry.key))
+      || closedHostKeys.has(sessionKeyId(entry.key))
       || skippedHostKeys.has(sessionKeyId(entry.key))
       || unreadableTranscripts.has(sessionKeyId(entry.key))
       || evidenceMoved(entry)
@@ -2286,7 +2335,13 @@ async function adoptStructuredHostsPass(
         assertActive();
         const evidence = await (available ? readEvidence() : pipelineStartupEvidence(registry, false));
         const conversation = registry.conversationForPath(entry.artifactPath);
-        if (conversation && evidence.deferred.has(registry.canonicalConversationId(conversation.id))) {
+        const conversationId = conversation && registry.canonicalConversationId(conversation.id);
+        if (conversationId && evidence.closed?.has(conversationId)) {
+          closedHostKeys.add(sessionKeyId(entry.key));
+          skippedHostKeys.add(sessionKeyId(entry.key));
+          return;
+        }
+        if (conversationId && evidence.deferred.has(conversationId)) {
           deferredHostKeys.add(sessionKeyId(entry.key));
           skippedHostKeys.add(sessionKeyId(entry.key));
           return;
@@ -2299,6 +2354,10 @@ async function adoptStructuredHostsPass(
         }
         return mutation();
       }, "reconciling structured hosts"));
+    pipelineEvidence = await admitState(async (available) =>
+      available ? readEvidence() : pipelineStartupEvidence(registry, false), "checking pipeline publication fence");
+    rememberClosedPipelineHosts(pipelineEvidence);
+    nextAdoptedHosts = nextAdoptedHosts.filter((item) => !closedHostKeys.has(sessionKeyId(item.key)));
     const publicationSnapshot = registry.readOnlySnapshot();
     orchestratorHostKeys = currentOrchestratorRestartRecoveryHostKeys(
       registry,
@@ -2312,6 +2371,7 @@ async function adoptStructuredHostsPass(
       publicationSnapshot,
       retainedRecoveryHostKeys(),
     );
+    nextAdoptedHosts = nextAdoptedHosts.filter((item) => !closedHostKeys.has(sessionKeyId(item.key)));
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
     const finalShouldAdopt = await structuredStartupAdoptionFilter(
       registry,
@@ -2327,9 +2387,9 @@ async function adoptStructuredHostsPass(
     );
     assertActive();
     const finalHostKeys = new Set(nextAdoptedHosts.map((item) => sessionKeyId(item.key)));
-    const shouldPublish: StructuredHostAdoptionFilter = (entry) =>
-      finalHostKeys.has(sessionKeyId(entry.key))
-      || (!skippedHostKeys.has(sessionKeyId(entry.key)) && finalShouldAdopt(entry));
+    const shouldPublish: StructuredHostAdoptionFilter = (entry) => !closedHostKeys.has(sessionKeyId(entry.key))
+      && (finalHostKeys.has(sessionKeyId(entry.key))
+        || (!skippedHostKeys.has(sessionKeyId(entry.key)) && finalShouldAdopt(entry)));
     const interruptedCodex = interruptedCodexConversations(
       registry,
       shouldPublish,
@@ -2411,7 +2471,9 @@ async function adoptStructuredHostsPass(
        whatever another pipeline's survivor is doing. */
     pipelineEvidence = await admitState(async (available) =>
       available ? readEvidence() : pipelineStartupEvidence(registry, false), "recovering pending spawns");
-    const fencedReceipts = fencedPendingSpawnReceipts(registry, pipelineEvidence.deferred);
+    rememberClosedPipelineHosts(pipelineEvidence);
+    nextAdoptedHosts = nextAdoptedHosts.filter((item) => !closedHostKeys.has(sessionKeyId(item.key)));
+    const fencedReceipts = fencedPendingSpawnReceipts(registry, pipelineRecoveryFence(pipelineEvidence));
     if (client && fencedReceipts.length === 0) {
       await reportProgress("recovering pending spawns");
       await recoverPendingStructuredSpawns(registry, client, { assertActive });

@@ -265,10 +265,17 @@ function hostResolver(
   };
 }
 
-/** Provider send keys name the eight-hex lane id allocated at admission.
- * Read that lane afresh, including archived closes, before dispatch. */
-function providerContinuationClosed(operationId: string): boolean {
-  const match = /^stage-provider-([0-9a-f]{8})-/u.exec(operationId);
+/** Resolve the pipeline's client key from its durable operation reservation,
+ * then read the lane afresh, including archived closes, before dispatch. */
+function providerContinuationClosed(operationId: string, registry: AgentRegistry): boolean {
+  const snapshot = registry.deliverySnapshotForOperation(operationId);
+  const owner = snapshot.deliveryOperationOwners[operationId];
+  const delivery = Object.values(snapshot.heldDeliveries).find((item) => item.command.operationId === operationId);
+  if (!owner && !delivery) throw new Error("pipeline delivery reservation is unavailable");
+  const clientMessageId = owner?.clientMessageId
+    ?? delivery?.clientMessageId;
+  if (!clientMessageId) return false;
+  const match = /^stage-(?:provider|verdict-request|commit-repair|publication-repair)-([0-9a-f]{8})-/u.exec(clientMessageId);
   if (!match) return false;
   const pipeline = findPipelineRecord(match[1]);
   return !pipeline || !!pipeline.closedAt || pipeline.state === "closed" || !!pipeline.activationCloseRequested;
@@ -960,10 +967,10 @@ export async function bindStructuredDeliveryQueue(
         const receipt = operationId.startsWith("spawn_message_") ? snapshot.receipts[operationId.slice("spawn_message_".length)] : null;
         return !ownerRelaySpawnAuthorized(receipt?.clientAttemptId) || sendIsSettled(snapshot, operationId);
       },
-      providerContinuationClosed,
+      providerContinuationClosed: (operationId: string) => providerContinuationClosed(operationId, registry),
       diagnosticError: (...args: unknown[]) => spawnDiagnosticErrorForRegistry(registry, ...args),
       authorizeDispatch: (operationId: string) => {
-        if (providerContinuationClosed(operationId)) throw new StructuredSendRefusedError("pipeline closed before provider continuation dispatch");
+        if (providerContinuationClosed(operationId, registry)) throw new StructuredSendRefusedError("pipeline closed before continuation dispatch");
         if (!operationId.startsWith("spawn_message_")) return;
         const receipt = registry.readOnlySnapshot().receipts[operationId.slice("spawn_message_".length)];
         if (!ownerRelaySpawnAuthorized(receipt?.clientAttemptId))

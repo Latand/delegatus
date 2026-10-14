@@ -1752,6 +1752,7 @@ async function frozenSurvivorStartup(pipelineId: string, terminateSurvivor: () =
     for (let probe = 0; probe < 2; probe++) {
       expect(scheduled).toHaveLength(1);
       scheduled.shift()!();
+      await Bun.sleep(0);
       expect(selected).toEqual([]);
       expect(structuredStartupDeferral()?.nextProbeMs).toBe(2_000 * 2 ** probe);
       expect(registry.readOnlySnapshot().entries).toEqual(before);
@@ -1760,7 +1761,7 @@ async function frozenSurvivorStartup(pipelineId: string, terminateSurvivor: () =
     scheduled.shift()!();
     for (let probe = 0; probe < 400 && structuredStartupDeferral() !== null; probe++) await Bun.sleep(5);
     expect(structuredStartupDeferral()).toBeNull();
-    expect(selected.sort()).toEqual(members.map(({ key }) => `${key.engine}:${key.sessionId}`).sort());
+    expect(selected).toEqual([]);
     expect(scheduled).toEqual([]);
     // Startup observes death without moving or erasing custody evidence.
     expect(loadPipelines().find((pipeline) => pipeline.id === pipelineId)).toEqual(pipelineBefore);
