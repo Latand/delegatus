@@ -1,5 +1,7 @@
 import path from "node:path";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { statePath } from "@/lib/configDir";
+import { FileRuntimeEventStore } from "@/lib/runtime/eventStore";
 import type { FileEntry } from "@/lib/types";
 import { AgentRegistry } from "./registry";
 import { beginLegacySpawnFixture } from "./registryTestFixtures";
@@ -34,9 +36,39 @@ export function staleWorkingFixture(directory: string, now: number, stopped = fa
 
 /** Server-generated response for both existing rendered-evidence drivers. */
 export function staleWorkingResponse(directory: string, now: number) {
-  const { snapshot, receipt, probe, live } = staleWorkingFixture(directory, now);
-  // Keep the dead row inside the board placement horizon so both rows render.
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.sqlite"), undefined, undefined, { sqliteMode: "sqlite" });
+  const begun = registry.beginSpawnRequest({
+    engine: "codex", cwd: "/repo", transport: "structured", accountId: "work",
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", title: "Completed launch", model: "gpt-6.1-sol" }),
+  });
+  if (begun.kind !== "created") throw new Error("fixture launch refused");
+  const sessionId = "idle-completed-session";
+  registry.stageStructuredSpawn(begun.receipt.launchId, {
+    key: { engine: "codex", sessionId }, artifactPath: path.join(directory, "absent.jsonl"), cwd: "/repo",
+    accountId: "work", launchProfile: emptyLaunchProfile({ cwd: "/repo", title: "Completed launch", model: "gpt-6.1-sol" }),
+    status: "idle", host: null,
+    structuredHost: {
+      kind: "codex-app-server", endpoint: "fixture", process: { pid: 4402, startIdentity: "4402:1" },
+      eventCursor: 2, protocolVersion: "test", writerClaimEpoch: 0, activeTurnRef: null,
+      pendingAttention: [], activeFlags: [],
+    },
+    claimEpoch: 0, claimOwner: null, pendingAction: null,
+  });
+  const snapshot = registry.snapshot();
+  const receipt = snapshot.receipts[begun.receipt.launchId]!;
+  snapshot.conversations[receipt.conversationId]!.projectOwnership = {
+    project: "atlas", source: "operator", setAt: receipt.createdAt, operationId: receipt.launchId,
+  };
   receipt.createdAt = new Date(now - 30 * 60_000).toISOString();
+  receipt.error = "structured launch recovery: " + JSON.stringify({
+    phase: "delivered", startedAt: now - 60_000, checks: 1, nextTryAt: now + 60_000, reason: "transcript pending",
+  });
+  const events = new FileRuntimeEventStore(statePath("structured-host-events"));
+  events.append(sessionId, { kind: "turn-started", turnId: "turn-complete", seq: 1 });
+  events.append(sessionId, { kind: "turn-ended", turnId: "turn-complete", status: "completed", seq: 2 });
+  const probe = livenessProbe({ now: () => now, pidAlive: () => true, processIdentity: () => "4402:1" });
+  const live = staleWorkingFixture(directory, now).live;
+  // Keep the quiet row inside the board placement horizon so both rows render.
   const dead = projectLaunchConversations([], snapshot, now, () => false, undefined, probe).cards[0]!;
   const files = [dead, live];
   const at = new Date(now - 60_000).toISOString();

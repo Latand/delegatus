@@ -4,8 +4,8 @@
     "height": 900
   },
   "working": 1,
-  "dead": "Dead launch\nбез руху\n30 хв тому",
-  "live": "Live agent\n21 с тому",
+  "dead": "Completed launch\nбез руху\n30 хв тому",
+  "live": "Live agent\n23 с тому",
   "deadRunningIndicators": 0,
   "pageErrors": [],
   "liveTimers": 1,

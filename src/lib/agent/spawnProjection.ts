@@ -8,6 +8,7 @@ import { projectRootForCwd } from "@/lib/scanner/describe";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 import type { FileEntry, StructuredSpawnCardState } from "@/lib/types";
 import type { MandateDelivery } from "@/lib/runtime/messageOrigin";
+import { readHostTurnRecord } from "@/lib/runtime/eventStore";
 import { stagedLaunchRecovery } from "@/lib/runtime/stagedRecovery";
 
 const TERMINAL_SPAWN_RECENT_MS = 15 * 60 * 1_000;
@@ -552,9 +553,11 @@ function spawnCard(
   nowMs: number,
   probe: LivenessProbe = livenessProbe({ now: () => nowMs }),
 ): FileEntry {
-  const live = receiptIsLive(snapshot, receipt, probe);
-  const terminal = spawn.state === "failed" || spawn.state === "recovered";
   const entry = receipt.key ? snapshot.entries[`${receipt.key.engine}:${receipt.key.sessionId}`] : undefined;
+  const receiptLive = receiptIsLive(snapshot, receipt, probe);
+  const completedTurn = receiptLive && hasConfirmedEndedHostTurn(receipt, entry?.structuredHost, probe);
+  const live = receiptLive && !completedTurn;
+  const terminal = spawn.state === "failed" || spawn.state === "recovered";
   const recordedHost = entry?.structuredHost?.process ?? entry?.host?.agent ?? entry?.host?.panePid ?? receipt.verifiedHost?.agent;
   const hostGone = !terminal && !live && !!recordedHost && !identityAlive(recordedHost, probe);
   const conversationId = readOnlyConversationLookupFromSnapshot(snapshot)
@@ -604,7 +607,7 @@ function spawnCard(
     ...(operatorHandoff ? { handoff: true } : {}),
     mtime: Date.parse(receipt.createdAt) / 1000,
     size: 0,
-    activity: projectedActivity(spawn, receipt.createdAt, nowMs, live),
+    activity: completedTurn ? "idle" : projectedActivity(spawn, receipt.createdAt, nowMs, live),
     activityReason: !terminal && !live ? "structured_spawn_inactive" : `structured_spawn_${spawn.state}`,
     proc: hostGone ? "killed" : null,
     pid: null,
@@ -639,4 +642,20 @@ function spawnCard(
     } : {}),
     spawn,
   };
+}
+
+/** An alive structured host may remain idle after its turn finishes while a
+    launch receipt waits for transcript publication. Only a complete, current
+    host-ledger boundary can release that placeholder's working projection. */
+function hasConfirmedEndedHostTurn(
+  receipt: SpawnReceipt,
+  host: RegistryFile["entries"][string]["structuredHost"],
+  probe: LivenessProbe,
+): boolean {
+  if (!receipt.key || !host || host.activeTurnRef || !identityAlive(host.process, probe)) return false;
+  const record = readHostTurnRecord(receipt.key.sessionId, { frames: false });
+  return record.state === "read"
+    && record.complete === true
+    && record.turn?.closed?.by === "turn-ended"
+    && (record.lastSeq ?? 0) >= host.eventCursor;
 }

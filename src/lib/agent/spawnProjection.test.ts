@@ -6,7 +6,9 @@ import { expect, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { beginLegacySpawnFixture, withLegacySpawnFixtureTitles } from "@/lib/agent/registryTestFixtures";
+import { statePath } from "@/lib/configDir";
 import { activityVerdict } from "@/lib/scanner/activity";
+import { FileRuntimeEventStore } from "@/lib/runtime/eventStore";
 import type { FileEntry } from "@/lib/types";
 
 import { staleWorkingFixture } from "./spawnProjection.fixture";
@@ -1801,6 +1803,56 @@ test("a route-recovered completed receipt stays working while its verified struc
     expect(turnIsRunning(dead)).toBe(false);
     expect(workingSince(dead)).toBeNull();
     expect(workingAgentCount([dead], now / 1000)).toBe(0);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("an idle structured host with a completed event-ledger turn does not keep its launch placeholder working", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-recovered-idle-completed-turn-"));
+  try {
+    const now = Date.now();
+    const registry = legacyRegistry(path.join(directory, "agent-registry.sqlite"), undefined, undefined, { sqliteMode: "sqlite" });
+    const begun = registry.beginSpawnRequest({
+      engine: "codex", cwd: directory, transport: "structured", accountId: "work",
+      launchProfile: emptyLaunchProfile({ cwd: directory, title: "Completed launch" }),
+    });
+    if (begun.kind !== "created") throw new Error("expected structured launch creation");
+    const sessionId = "idle-completed-session";
+    const artifactPath = path.join(directory, "pending-transcript.jsonl");
+    registry.stageStructuredSpawn(begun.receipt.launchId, {
+      key: { engine: "codex", sessionId }, artifactPath, cwd: directory,
+      accountId: "work", launchProfile: emptyLaunchProfile({ cwd: directory, title: "Completed launch" }),
+      status: "idle", host: null,
+      structuredHost: {
+        kind: "codex-app-server", endpoint: "fixture", process: { pid: 71, startIdentity: "71:1" },
+        eventCursor: 2, protocolVersion: "test", writerClaimEpoch: 0, activeTurnRef: null,
+        pendingAttention: [], activeFlags: [],
+      },
+      claimEpoch: 0, claimOwner: null, pendingAction: null,
+    });
+    const snapshot = registry.snapshot();
+    const receipt = snapshot.receipts[begun.receipt.launchId]!;
+    expect(receipt).toMatchObject({ state: "path-pending", artifactLifecycle: "pending" });
+    expect(snapshot.entries["codex:idle-completed-session"]).toMatchObject({
+      status: "idle", structuredHost: { activeTurnRef: null, process: { pid: 71, startIdentity: "71:1" } },
+    });
+    receipt.error = "structured launch recovery: " + JSON.stringify({
+      phase: "delivered", startedAt: now - 1_000, checks: 1, nextTryAt: now + 1_000, reason: "transcript pending",
+    });
+    const events = new FileRuntimeEventStore(statePath("structured-host-events"));
+    events.append(sessionId, { kind: "turn-started", turnId: "turn-complete", seq: 1 });
+    events.append(sessionId, { kind: "turn-ended", turnId: "turn-complete", status: "completed", seq: 2 });
+    const probe = livenessProbe({ now: () => now, pidAlive: () => true, processIdentity: () => "71:1" });
+    expect(receiptIsLive(snapshot, receipt, probe)).toBe(true);
+
+    const file = projectLaunchConversations([], snapshot, now, () => false, undefined, probe).cards[0]!;
+    expect(file.path).toBe(`spawn:${begun.receipt.launchId}`);
+    expect(file.activity).toBe("idle");
+    expect(turnIsRunning(file)).toBe(false);
+    expect(isWorkingAgent(file, now / 1000)).toBe(false);
+    expect(cardStatus(file, now)).toBeNull();
+    expect(workingSince(file)).toBeNull();
+    expect(activityDot(file.activity)).not.toContain("bg-success");
+    expect(workingAgentCount([file], now / 1000)).toBe(0);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
