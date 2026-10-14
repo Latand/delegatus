@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
+import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import { buildPipeline, loadPipelines, savePipelines, withPipelineControllerMutation, withPipelineMutation } from "./store";
 
 const fixtureLane = (id: string) => {
@@ -86,4 +88,43 @@ test("controller checkpoints defer immediately behind an admitted writer", async
     });
   });
   expect(loadPipelines()[0]!.stateDetail).toBeNull();
+});
+
+test("the controller hold observer measures a sub-warning-threshold checkpoint", async () => {
+  savePipelines([fixtureLane("measured-hold")]);
+  const prototype = SqliteStateCollection.prototype as unknown as Record<string, (...args: unknown[]) => unknown>;
+  const original = prototype.persistSession!;
+  const observed: number[] = [];
+  prototype.persistSession = function(this: unknown, ...args: unknown[]) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350);
+    return original.apply(this, args);
+  };
+  try {
+    await withPipelineControllerMutation((rows, persist) => {
+      rows[0]!.stateDetail = "measured checkpoint";
+      persist([rows[0]!]);
+    }, heldMs => observed.push(heldMs));
+  } finally {
+    prototype.persistSession = original;
+  }
+  expect(observed).toHaveLength(1);
+  expect(observed[0]).toBeGreaterThanOrEqual(300);
+  expect(observed[0]).toBeLessThan(1_000);
+});
+
+test("the active loop monitor logger retains operation scopes across a visible gap", () => {
+  const lines: string[] = [];
+  const restore = viewerLoopMonitor.setLogSink(line => lines.push(line));
+  try {
+    viewerLoopMonitor.run("pipelines.controller-mutation", () => {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 550);
+    });
+    viewerLoopMonitor.tick();
+  } finally {
+    restore();
+  }
+  const diagnostic = lines.find(line => line.startsWith("[viewer loop-gap] "));
+  expect(diagnostic).toBeDefined();
+  expect(JSON.parse(diagnostic!.slice("[viewer loop-gap] ".length)).operations)
+    .toContainEqual(expect.objectContaining({ name: "pipelines.controller-mutation" }));
 });

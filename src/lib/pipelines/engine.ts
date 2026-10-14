@@ -289,6 +289,7 @@ export interface PipelinePorts {
   cpuPressureHold?(key?: string): CpuPressureHold | null;
   cpuAdmissionReconcile?(admission?: Pick<PipelinePorts, "drainHold" | "structuredDeliveryPublication" | "now">): void;
   cpuAdmissionSuspend?(key: string): void;
+  observeControllerLeaseHold?(heldMs: number): void;
   /** Whether the ticking process can publish a structured host: `ready` now,
       `rebinding` between publications, `unbound` never at all (#1191). */
   structuredDeliveryPublication?(): "ready" | "rebinding" | "unbound";
@@ -7257,7 +7258,12 @@ async function tickReviewStage(
       return;
     }
     attachReviewFlowAttempt(attempt, created.flow);
-    persist();
+    try {
+      persist();
+    } catch (error) {
+      if (error instanceof StateSnapshotChangedError) throw new StaleControllerFlowError(created.flow.id);
+      throw error;
+    }
     if (created.flow.state === "paused") {
       park(pipeline, `review flow startup paused: ${created.flow.stateDetail ?? "kickoff delivery failed"}`, attempt);
       return;
@@ -9571,6 +9577,19 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
   return changed;
 }
 
+async function settleStaleControllerFlow(error: unknown, ports: PipelinePorts): Promise<void> {
+  if (!(error instanceof StaleControllerFlowError)) return;
+  const alreadyAttached = loadPipelines().some(pipeline =>
+    pipeline.runs.some(run => run.attempts.some(attempt => attempt.flowId === error.flowId)));
+  if (alreadyAttached) return;
+  try {
+    const cleanup = await ports.closeFlow(error.flowId);
+    if (cleanup?.error) console.error("[pipelines] stale review flow cleanup failed", { flowId: error.flowId, error: cleanup.error });
+  } catch (cleanupError) {
+    console.error("[pipelines] stale review flow cleanup failed", { flowId: error.flowId, error: String(cleanupError) });
+  }
+}
+
 export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean }> {
   if (tickStore.__llvPipelineTick) {
     ports.cpuAdmissionReconcile?.(ports);
@@ -9632,7 +9651,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           admissionChanged = true;
         }
       }
-    });
+    }, ports.observeControllerLeaseHold);
     dispatchStarts();
   };
   // A commit or publication hook can queue behind one of these starts. Its
@@ -9640,7 +9659,13 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   const admissionWatch = ports.cpuAdmissionReconcile ? setInterval(() => {
     if (admissionWork) return;
     admissionWork = serviceStarts()
-      .catch(error => { console.error("[pipelines] CPU admission polling failed", error); })
+      .catch(async error => {
+        if (error instanceof StateSnapshotChangedError) {
+          followUp = true;
+          await settleStaleControllerFlow(error, ports);
+        }
+        console.error("[pipelines] CPU admission polling failed", error);
+      })
       .finally(() => { admissionWork = null; });
   }, machineCpuPressurePollMs()) : null;
   admissionWatch?.unref();
@@ -9843,7 +9868,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         }
       }, { batchSize: 4, timeBudgetMs: 16 });
       return { pipelines, changed };
-    });
+    }, ports.observeControllerLeaseHold);
     const settledGitIds = new Set<string>();
     result.changed = await settlePendingStageGit(ports, settledGitIds) || result.changed;
     result.changed = await drainRuntimeSwitches(ports) || result.changed;
@@ -9874,10 +9899,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   } catch (error) {
     if (error instanceof StateSnapshotChangedError) {
       followUp = true;
-      if (error instanceof StaleControllerFlowError) {
-        const cleanup = await ports.closeFlow(error.flowId);
-        if (cleanup?.error) console.error("[pipelines] stale review flow cleanup failed", { flowId: error.flowId, error: cleanup.error });
-      }
+      await settleStaleControllerFlow(error, ports);
       return { pipelines: loadPipelines(), changed: false };
     }
     /* The store fails closed on malformed state, but this tick runs inside

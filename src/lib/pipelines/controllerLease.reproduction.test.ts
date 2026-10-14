@@ -57,9 +57,8 @@ test.skipIf(!process.env.LLV_CONTROLLER_LEASE_SHAPE && process.env.LLV_CONTROLLE
   savePipelines(records.filter((_, i) => shape[i]!.collection === "pipelines"));
   const holds: number[] = [];
   const leaseOperations = new Set<string>();
-  const original = console.warn;
   const logs: string[] = [];
-  console.warn = (...args) => { logs.push(args.map(a => typeof a === "string" ? a : JSON.stringify(a)).join(" ")); original(...args); };
+  const restoreLoopLog = viewerLoopMonitor.setLogSink(line => logs.push(line));
   let last = performance.now();
   let longestGapMs = 0;
   let longestHoldMs = 0;
@@ -89,6 +88,11 @@ test.skipIf(!process.env.LLV_CONTROLLER_LEASE_SHAPE && process.env.LLV_CONTROLLE
     const evidenceOperationScopes = new Set<string>();
     const ports = {
       ...basePorts,
+      observeControllerLeaseHold: (heldMs: number) => {
+        holds.push(heldMs);
+        const operation = viewerLoopMonitor.current();
+        if (operation) leaseOperations.add(operation);
+      },
       durableTurnEvidence: async (...args: Parameters<typeof baseEvidence>) => {
         evidenceReads++;
         const operation = viewerLoopMonitor.current();
@@ -102,12 +106,6 @@ test.skipIf(!process.env.LLV_CONTROLLER_LEASE_SHAPE && process.env.LLV_CONTROLLE
     clearInterval(contend);
     await writer;
     await new Promise(resolve => setTimeout(resolve, 20));
-    // Retain production diagnostics alongside complete checkpoint timings.
-    for (const line of logs) if (line.startsWith("[state lease-hold]")) {
-      const hold = JSON.parse(line.slice("[state lease-hold] ".length)) as { heldMs: number; operation: string };
-      holds.push(hold.heldMs);
-      leaseOperations.add(hold.operation);
-    }
     longestHoldMs = Math.max(0, ...holds);
     const loopOperations = logs.flatMap(line => {
       if (!line.startsWith("[viewer loop-gap] ")) return [];
@@ -126,7 +124,7 @@ test.skipIf(!process.env.LLV_CONTROLLER_LEASE_SHAPE && process.env.LLV_CONTROLLE
     expect(evidenceOperationScopes.has("pipelines.controller-mutation")).toBe(true);
   } finally {
     clearInterval(contend); await writer;
-    clearInterval(poll); viewerLoopMonitor.stop(); console.warn = original; db.close();
+    clearInterval(poll); viewerLoopMonitor.stop(); restoreLoopLog(); db.close();
     if (previousWait === undefined) delete process.env.LLV_PIPELINE_LOCK_WAIT_MS;
     else process.env.LLV_PIPELINE_LOCK_WAIT_MS = previousWait;
   }

@@ -1,5 +1,8 @@
 import { expect, spyOn, test, crypto, fs, os, path, engineModule, IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail, defaultPipelinePorts, reconcileEmbeddedReviewFlows, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, durableStageTurnEvidence, patchPipeline, closeAndDrain, RUN_STAGES, entry, harness, create, withRuntimeSnapshot, HISTORICAL_VERDICT_MISS, PASS_TEXT, makeStructuredAttempt, pinStageHead, BUDGET_STAGES, movingHeadHarness, driveWithController, stagedRecoveryHarness, activationDrainFixture, reserveActivationOnly, expectPipelineLeaseAbsent, frozenSurvivorStartup, restartCutStage, cutByRestart, idleStageHostFixture, runtimeReleaseOf, SILENT_RUN, attemptThatWorkedOnAfterRestart, stageWhoseStopMovesTheTranscript } from "./engine.fixture";
 import type { Flow, BoardTask, PipelinePorts } from "./engine.fixture";
+import { withPipelineMutation } from "./store";
+import { StaleControllerFlowError } from "./controllerSnapshot";
+import { setMachineCpuPressureForTests } from "@/lib/runtime/cpuPressure";
 
 async function continuationCloseFixture(marker: "actionAt" | "continuationRequestedAt" = "continuationRequestedAt") {
   const h = harness();
@@ -62,6 +65,95 @@ test.each(["before-persist", "after-persist"] as const)("closing a lane during r
   expect(h.flows.size).toBeLessThanOrEqual(1);
   expect([...h.flows.values()].every(flow => flow.state === "closed")).toBe(true);
 });
+
+test("a rejected review flow attachment checkpoint keeps custody until the lane can be closed", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports, [
+    { id: "build", kind: "run", prompt: "Build", next: "review" },
+    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "ready for review")], h.ports);
+
+  let releaseWriter!: () => void;
+  let writerEntered!: () => void;
+  const gate = new Promise<void>(resolve => { releaseWriter = resolve; });
+  const entered = new Promise<void>(resolve => { writerEntered = resolve; });
+  let writer: Promise<void> | null = null;
+  const createFlow = h.ports.createFlow;
+  h.ports.createFlow = async (...args) => {
+    const created = await createFlow(...args);
+    writer = withPipelineMutation(async (lanes, persist) => {
+      writerEntered();
+      await gate;
+      const current = lanes.find(lane => lane.id === pipeline.id)!;
+      current.spec = `${current.spec ?? current.task} concurrent edit`;
+      persist([current]);
+    });
+    await entered;
+    return created;
+  };
+
+  const creating = tickPipelines([], h.ports);
+  await entered;
+  await creating;
+  releaseWriter();
+  await writer;
+
+  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  await engineModule.drainStageActivations(h.ports);
+  const lane = loadPipelines()[0]!;
+  expect(closed.pipeline?.state).toBe("closed");
+  expect(lane.spec).toContain("concurrent edit");
+  expect(lane.runs.find(run => run.stageId === "review")!.attempts.at(-1)!.flowId).toBeNull();
+  expect([...h.flows.values()].every(flow => flow.state === "closed")).toBe(true);
+});
+
+test("CPU admission polling closes a flow carried by a stale controller error", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const flow = (await h.ports.createFlow({ implementerPath: "/codex/stage-1.jsonl" } as never, [])).flow!;
+  const lanes = loadPipelines();
+  const lane = lanes.find(item => item.id === pipeline.id)!;
+  lane.runs[0]!.attempts.at(-1)!.historical = true;
+  savePipelines(lanes);
+  const previousPoll = (globalThis as typeof globalThis & { __llvCpuPressurePollMs?: number }).__llvCpuPressurePollMs;
+  setMachineCpuPressureForTests(undefined, 20);
+  let pollCalls = 0;
+  h.ports.cpuAdmissionReconcile = () => {
+    if (++pollCalls > 1) throw new StaleControllerFlowError(flow.id);
+  };
+  try {
+    let releaseEvidence!: () => void, evidenceEntered!: () => void;
+    const evidenceGate = new Promise<void>(resolve => { releaseEvidence = resolve; });
+    const readingEvidence = new Promise<void>(resolve => { evidenceEntered = resolve; });
+    const originalEvidence = h.ports.durableTurnEvidence;
+    h.ports.durableTurnEvidence = async (...args) => {
+      if (args[1] === "/codex/stage-1.jsonl") { evidenceEntered(); await evidenceGate; }
+      return originalEvidence(...args);
+    };
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    const creating = tickPipelines([], h.ports);
+    try {
+      const evidenceObserved = await Promise.race([readingEvidence.then(() => true), Bun.sleep(1_000).then(() => false)]);
+      expect(evidenceObserved).toBe(true);
+      for (let attempt = 0; attempt < 100 && h.flows.get(flow.id)?.state !== "closed"; attempt++) await Bun.sleep(10);
+      expect(pollCalls).toBeGreaterThan(1);
+      expect(h.flows.get(flow.id)?.state).toBe("closed");
+      releaseEvidence();
+      await creating;
+    } finally {
+      releaseEvidence();
+      await creating;
+      errors.mockRestore();
+    }
+  } finally {
+    setMachineCpuPressureForTests(undefined, previousPoll);
+  }
+}, 15_000);
 
 test.each(["actionAt", "continuationRequestedAt"] as const)("close persists a paused lane while runtime-host continuation cancellation is unavailable (%s)", async (marker) => {
   const { h, pipeline } = await continuationCloseFixture(marker);
