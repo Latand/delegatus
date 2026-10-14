@@ -3,7 +3,7 @@ import type { OwnerHistoryRead } from "@/lib/externalRelay/ownerHistory";
 import { READ_TOOL_NAMES, type CompanionBoardReads } from "./boardReads";
 import type { CallRequest, CompanionAdmission, OperatorAttempt } from "./admission";
 import { DELEGATION_REASONS, deliveryFailureReason } from "./delegationOutcome";
-import { liveEndRefusal, requestText, VOICE_ASK_MAX_CHARS } from "./liveGate";
+import { askGist, liveEndRefusal, requestText, VOICE_ASK_MAX_CHARS, VOICE_ASK_ENVELOPE_CHARS } from "./liveGate";
 import { READ_SCHEMAS, validToolValue, type ToolProperty } from "./readSchemas";
 
 export interface CompanionToolContext {
@@ -50,7 +50,7 @@ function spoken(outcome: Awaited<ReturnType<CompanionAdmission["delegate"]>>) {
   if (outcome.state === "awaiting_report") return { status: "awaiting_report", request: outcome.request.handle, sentMinutesAgo: outcome.request.sentMinutesAgo,
     progressReports: outcome.request.progressReports, ...(outcome.report ? { latestReport: outcome.report } : {}),
     speech: `${outcome.request.askedBack ? "Nothing new was sent: the orchestrator asked back about this request and waits for the operator. Relay its question from latestReport in its words; the operator's answer is a new ask."
-      : "Nothing new was sent: the orchestrator already has this question and its answer has not arrived yet. Tell the operator in one short sentence that the answer is on its way. For news now, read orchestrator_messages."} If the operator's latest turn also asked something new, send only that new part as its own short ask with pending_request null.` };
+      : "Nothing new was sent: the orchestrator already has this question and its answer has not arrived yet. Tell the operator in one short sentence that the answer is on its way. For news now, read orchestrator_messages."} If the operator's latest turn also asked something new, send only that new part as its own task with pending_request null.` };
   if (outcome.state === "answered") return { status: "answered", request: outcome.request.handle, ...(outcome.report ? { report: outcome.report } : {}),
     speech: outcome.report ? "Nothing was sent: the orchestrator already answered this. Answer from its report, keeping each fact with its own subject, in its words."
       : "Nothing was sent: the orchestrator already answered this. Read orchestrator_reports for its answer." };
@@ -63,7 +63,7 @@ function spoken(outcome: Awaited<ReturnType<CompanionAdmission["delegate"]>>) {
 }
 
 /** A waiting request as the backend sees it: its handle, its words and how long it has waited. */
-export const waitingRequest = (request: CallRequest) => ({ request: request.handle, ask: request.instruction,
+export const waitingRequest = (request: CallRequest) => ({ request: request.handle, ask: askGist(request.instruction),
   sentMinutesAgo: request.sentMinutesAgo, progressReports: request.progressReports, ...(request.askedBack ? { orchestratorAskedBack: true } : {}) });
 
 const READ_CAPABILITIES: Record<typeof READ_TOOL_NAMES[number], { capability: string; description: string }> = {
@@ -114,17 +114,17 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
       return result.status === "not_found" ? { status: "not_found", speech: "No such report in this call. Read orchestrator_reports for the handles, or say that no report has arrived yet." }
         : { status: "reading", report: result.report, speech: "The report is read to the operator from its own text right after your answer. Say one short sentence that introduces it; never restate, shorten or summarize it." };
     } },
-  { name: "request_orchestrator_delegation", capability: "Send to the orchestrator: sends the operator's request to the project's orchestrator at once; its answer comes back to you as a report.", class: "delegation",
-    description: `Send one short ask to the project's orchestrator when the operator explicitly asks to send work or a question to it, and the board, its messages and its reports cannot answer it. The instruction is the operator's latest request in their own words and language, at most ${VOICE_ASK_MAX_CHARS} characters: never translated, expanded, or bundled with earlier questions. It is delivered at once, with no confirmation. Asking first is the exception and your own judgment: set confirmation_reason to one short sentence only when the action is critical or hard to undo, or when you are unsure you understood the request; then nothing is sent until the operator answers. In every other case pass null. When the ask repeats or rephrases a request whose report has not arrived, pass its handle in pending_request: nothing is sent and the operator hears that the answer is on its way. When one turn repeats a waiting request and also asks something new, pass the repeat with its handle and send the new part as its own ask. Words that match a request already raised in an earlier turn are a repeat and send nothing, unless the operator explicitly asked to send it once more and you set asked_again: then it is sent again, also while its report is pending. Input transcripts are optional context.`,
-    // The schema keeps the old envelope, so an overlong ask reaches the handler and is recomposed rather than failing validation.
+  { name: "request_orchestrator_delegation", capability: "Send to the orchestrator: writes the operator's request as one complete task and sends it to the project's orchestrator at once; its answer comes back to you as a report.", class: "delegation",
+    description: `Send one task to the project's orchestrator when the operator explicitly asks to send work or a question to it, the work is that project's, and the board, its messages and its reports cannot answer it. General knowledge, chit-chat and content the voice can give itself are never sent. Write the instruction yourself, in your own words, as one complete task: what to do and why, the outcome the operator expects, and the context the orchestrator needs from this call's reads and conversation, such as the card, pull request, issue, project or earlier point meant. Never pass the transcript or the operator's raw phrasing as the task; the operator's key phrase may follow word for word on a last line that names it as theirs. Write it in the operator's interface language unless they asked for another, add nothing they did not ask for, and keep it as short as the work allows, at most ${VOICE_ASK_MAX_CHARS} characters. It is delivered at once, with no confirmation. Asking first is the exception and your own judgment: set confirmation_reason to one short sentence only when the action is critical or hard to undo, or when you are unsure you understood the request; then nothing is sent until the operator answers. In every other case pass null. When the ask repeats or rephrases a request whose report has not arrived, pass its handle in pending_request: nothing is sent and the operator hears that the answer is on its way. When one turn repeats a waiting request and also asks something new, pass the repeat with its handle and send the new part as its own ask. Words that match a request already raised in an earlier turn are a repeat and send nothing, unless the operator explicitly asked to send it once more and you set asked_again: then it is sent again, also while its report is pending. Input transcripts are optional context.`,
+    // An overlong task within the envelope reaches the handler for recomposition.
     parameters: schema({ project: { ...READ_SCHEMAS.list_tasks.project, description: "null sends to the project currently in view. A name only when the operator named another project; never guess one." },
-      instruction: { type: "string", minLength: 1, maxLength: 2_000, description: `One short ask, at most ${VOICE_ASK_MAX_CHARS} characters, in the operator's words and language.` },
+      instruction: { type: "string", minLength: 1, maxLength: VOICE_ASK_ENVELOPE_CHARS, description: `One complete task in your own words, in the operator's interface language, at most ${VOICE_ASK_MAX_CHARS} characters.` },
       pending_request: { type: ["string", "null"], maxLength: 16, description: "The handle of a request still waiting for its report that this ask repeats or rephrases; null for a new question or new work." },
       confirmation_reason: { type: ["string", "null"], maxLength: 240, description: "Why the operator should confirm first, in the operator's language; null to send at once." },
       asked_again: { type: ["string", "null"], maxLength: 240, description: "Only when the operator, in their latest turn, explicitly asks to send once more a request you raised earlier in this call (sent or cancelled): one short sentence with what they asked. Otherwise null. Never set it to repeat a request on your own." } }),
     handler: async (context, args) => {
       const instruction = args.instruction as string;
-      if ([...instruction.trim()].length > VOICE_ASK_MAX_CHARS) return { status: "too_long", speech: `Nothing was sent. The ask is longer than ${VOICE_ASK_MAX_CHARS} characters. Recompose it as one short ask in the operator's own words and language, with only their latest request, and call again.` };
+      if ([...instruction.trim()].length > VOICE_ASK_MAX_CHARS) return { status: "too_long", speech: `Nothing was sent. The task is longer than ${VOICE_ASK_MAX_CHARS} characters. Write it again shorter, in your own words, for the operator's latest request alone: what to do and why, the outcome, and only the context the orchestrator needs; then call again.` };
       const project = context.reads.resolveProject(context.project,typeof args.project === "string" ? args.project : undefined);
       const pendingRequest = typeof args.pending_request === "string" && args.pending_request.trim() ? args.pending_request.trim() : undefined;
       const askedAgain = typeof args.asked_again === "string" && !!args.asked_again.trim();

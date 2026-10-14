@@ -3,8 +3,8 @@ import { liveProposalRefusal, requestText, VOICE_ASK_MAX_CHARS } from "./liveGat
 
 const said = (text: string, turn: number) => ({ itemId: `said-${turn}`, text, final: true, turn });
 
-test("one short ask is bounded in Unicode scalars, whatever the script: Cyrillic and emoji count once each, surrounding space not at all", () => {
-  expect(VOICE_ASK_MAX_CHARS).toBe(400);
+test("one complete task is bounded in Unicode scalars, whatever the script: Cyrillic and emoji count once each, surrounding space not at all", () => {
+  expect(VOICE_ASK_MAX_CHARS).toBe(4000);
   for (const unit of ["a", "ї", "🎙"]) {
     expect(liveProposalRefusal(` ${unit.repeat(VOICE_ASK_MAX_CHARS)} `, [said("ask", 1)])).toBeNull();
     expect(liveProposalRefusal(unit.repeat(VOICE_ASK_MAX_CHARS + 1), [said("ask", 1)])).toBe("invalid_instruction");
@@ -12,14 +12,14 @@ test("one short ask is bounded in Unicode scalars, whatever the script: Cyrillic
   expect(liveProposalRefusal("   ", [said("ask", 1)])).toBe("invalid_instruction");
 });
 
-test("a bundle of earlier questions is refused for its length, in English and Ukrainian, and is never sliced into a send", () => {
+test("an overlong task is refused for its length, in English and Ukrainian, and is never sliced into a send", () => {
   const bundles = {
     en: ["What is the state of the voice review?", "Ask again how the review is going and what happened with the deploy.", "Which model should the voice use?"],
     uk: ["Що зараз з ревʼю голосового каналу?", "Спитай ще раз, як там ревʼю, і що з деплоєм.", "Яку модель обрати для голосу?"],
   };
   for (const questions of Object.values(bundles)) {
     for (const question of questions) expect(liveProposalRefusal(question, [said(question, 1)])).toBeNull();
-    const bundle = Array.from({ length: 4 }, () => questions.join(" ")).join(" ");
+    const bundle = Array.from({ length: Math.ceil((VOICE_ASK_MAX_CHARS + 1) / questions.join(" ").length) }, () => questions.join(" ")).join(" ");
     expect([...bundle].length).toBeGreaterThan(VOICE_ASK_MAX_CHARS);
     expect(liveProposalRefusal(bundle, [said(bundle, 1)])).toBe("invalid_instruction");
   }

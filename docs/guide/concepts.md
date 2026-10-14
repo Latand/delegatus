@@ -196,8 +196,12 @@ on in the sidebar's ⋯ menu → **Settings** → **Voice Delegatus** → **Show
 voice**.
 
 It answers questions about the board itself, reads out the orchestrator's new
-reports once, and passes work you ask for to the project's orchestrator as
-your instruction. It asks you first only when the request is critical or it
+reports once, and writes work you ask to send as a complete task for the
+project's orchestrator: the action, purpose, expected outcome and needed
+context, in your interface language unless you ask otherwise. It keeps your
+scope, sends independent tasks separately, and allows up to 4,000 characters
+per task. General questions and content it can provide itself stay with the
+voice. It asks you first only when the request is critical or it
 is unsure what you meant. It talks either through the API with your OpenAI
 key and a monthly spend cap, or through a Codex subscription.
 

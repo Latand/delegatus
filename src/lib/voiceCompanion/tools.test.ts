@@ -1,3 +1,4 @@
+import { VOICE_ASK_MAX_CHARS } from "./liveGate";
 import { fixtureBoardReads } from "./boardReads.fixture";
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -219,7 +220,7 @@ test("before a send, each backend turn sees once what already waits for a report
   const waiting = await call("c3", "turn-2", { instruction: "Що там з ревʼю голосу?", pending_request: "r1" }, undefined, 2) as { status: string; speech: string };
   expect(waiting).toMatchObject({ status: "awaiting_report", request: "r1" });
   expect(waiting.speech).toContain("on its way");
-  expect(waiting.speech).toContain("send only that new part as its own short ask");
+  expect(waiting.speech).toContain("send only that new part as its own task");
   // Shown once per turn: the new part of the same turn goes through, once.
   expect(await call("c4", "turn-2", { instruction: "Як там деплой?", pending_request: null }, undefined, 2)).toMatchObject({ status: "sent" });
   expect(await call("c4", "turn-2", { instruction: "Як там деплой?", pending_request: null }, undefined, 2)).toMatchObject({ status: "sent" });
@@ -229,9 +230,9 @@ test("before a send, each backend turn sees once what already waits for a report
   expect(await call("c6", "turn-4", { instruction: "Надішли ще раз питання про ревʼю голосу", pending_request: "r1", asked_again: "Просить надіслати ще раз." }, undefined, 4)).toMatchObject({ status: "sent" });
   expect(await call("c7", "turn-4", { instruction: "Ще раз про ревʼю голосу", pending_request: "r1", asked_again: "Просить надіслати ще раз." }, undefined, 4)).toMatchObject({ status: "sent" });
   // An overlong bundle is recomposed, never sliced or sent.
-  const bundle = await call("c8", "turn-5", { instruction: "Що з ревʼю голосу, ".repeat(30), pending_request: null }, undefined, 5) as { status: string; speech: string };
+  const bundle = await call("c8", "turn-5", { instruction: "ї".repeat(VOICE_ASK_MAX_CHARS + 1), pending_request: null }, undefined, 5) as { status: string; speech: string };
   expect(bundle).toMatchObject({ status: "too_long" });
-  expect(bundle.speech).toContain("400");
+  expect(bundle.speech).toContain(String(VOICE_ASK_MAX_CHARS));
   expect(sent.map(row => row.split("|")[0])).toEqual(["Що з ревʼю голосу?", "Як там деплой?", "Надішли ще раз питання про ревʼю голосу"]);
   expect(new Set(sent.map(row => row.split("|")[1])).size).toBe(3);
   // The answer arrives; the read returns it whole with its request, and naming that request sends nothing.

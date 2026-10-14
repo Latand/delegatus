@@ -1,3 +1,4 @@
+import { VOICE_ASK_MAX_CHARS } from "./liveGate";
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -655,8 +656,8 @@ for (const [locale, words] of Object.entries(SEQUENCES) as Array<["uk" | "en", t
   expect(await send(words.mixed.repeat, { pendingRequest: "r1" })).toMatchObject({ state: "awaiting_report", request: { handle: "r1" } });
   expect(await send(words.mixed.added)).toEqual({ state: "sent", status: "queued" });
   expect(await send(words.mixed.added)).toEqual({ state: "sent", status: "queued" });
-  // A bundle of earlier questions is not one short ask.
-  expect(await ask([words.first, ...words.again, words.fresh, words.first].join(" ").repeat(2))).toEqual({ state: "refused", code: "invalid_instruction" });
+  // An overlong task is refused without slicing it.
+  expect(await ask("ї".repeat(VOICE_ASK_MAX_CHARS + 1))).toEqual({ state: "refused", code: "invalid_instruction" });
   expect(sent.map(row => row.text)).toEqual([words.first, words.mixed.added]);
   // Progress keeps it waiting; the seat rotating keeps it waiting too.
   reports.push(reportFixture("voice", 1, { class: "status", correlatesDirective: sent[0]!.key, body: "Working on it." }));

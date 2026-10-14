@@ -7,9 +7,15 @@ const words = (rows: readonly OperatorInput[]) => rows.map(row => row.text).join
  * the opening word too: "Release: what changed?" and "release: what changed?" name two targets, so two
  * requests. A capitalization variant or a rephrasing is named by its request handle, never by folding words. */
 export const requestText = (text: string) => text.normalize("NFC").replace(/\s+/gu, " ").trim().replace(/[.!?…]+$/u, "");
-/** One short ask in the operator's words, counted in Unicode scalars. A longer
- * text is a bundle or an expansion; the backend recomposes it, nothing slices it. */
-export const VOICE_ASK_MAX_CHARS = 400;
+/** One composed task, counted in Unicode scalars. Overflow is refused for recomposition. */
+export const VOICE_ASK_MAX_CHARS = 4_000;
+/** Room for an overlong task to reach the handler and receive a useful refusal. */
+export const VOICE_ASK_ENVELOPE_CHARS = 6_000;
+/** A compact reference keeps long tasks from crowding their handles out of backend context. */
+export function askGist(instruction: string): string {
+  const scalars = [...instruction];
+  return scalars.length > 400 ? scalars.slice(0, 400).join("") + "…" : instruction;
+}
 /** A request the session already holds, whatever became of it: the turn it was raised in and its words. */
 export interface EarlierRequest { turn?: number; instruction: string }
 
