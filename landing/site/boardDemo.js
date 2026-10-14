@@ -183,7 +183,7 @@
         ${typedHtml()}
         <span class="d-cr"><span class="d-mic">${ICON.mic}</span><span class="d-send">${ICON.play}</span><span class="d-dd">${ICON.down}</span></span>
       </div>
-      <div class="d-cfoot"><span class="d-model">${ICON.zap}Opus 5.5 · Light${ICON.down}</span><span class="d-cf-r">${ICON.clip}${ICON.more}</span></div>`;
+      <div class="d-cfoot"><span class="d-model">${ICON.zap}Opus 5.5 · ${esc(t("d.tier"))}${ICON.down}</span><span class="d-cf-r">${ICON.clip}${ICON.more}</span></div>`;
   }
 
   /* The phone's composer is one box: the field on top, the tools row inside the
@@ -192,7 +192,7 @@
   function phoneComposerHtml() {
     return `<div class="d-comp d-pcomp">
         ${typedHtml()}
-        <div class="d-ptools"><span class="d-pchip">Opus 5.5 · high${ICON.down}</span><span class="d-pt">${ICON.clip}</span><span class="d-pt d-mic">${ICON.mic}</span><span class="d-grow"></span><span class="d-send">${ICON.play}</span><span class="d-pt d-dd">${ICON.down}</span></div>
+        <div class="d-ptools"><span class="d-pchip">Opus 5.5 · ${esc(t("d.tier").toLowerCase())}${ICON.down}</span><span class="d-pt">${ICON.clip}</span><span class="d-pt d-mic">${ICON.mic}</span><span class="d-grow"></span><span class="d-send">${ICON.play}</span><span class="d-pt d-dd">${ICON.down}</span></div>
       </div>`;
   }
 
@@ -267,7 +267,7 @@
           <span class="d-create">${ICON.bot}${esc(t("d.draft.create"))}</span>
         </section>
         <section class="d-panel">
-          <div class="d-row2"><span class="d-eng">${SPARK}Claude</span><span class="d-mod"><b>Opus 5.5</b> · High</span><span class="d-acct">Main</span><span class="d-ctx">6%<i></i></span></div>
+          <div class="d-row2"><span class="d-eng">${SPARK}Claude</span><span class="d-mod"><b>Opus 5.5</b> · ${esc(t("d.tier"))}</span><span class="d-acct">Main</span><span class="d-ctx">6%<i></i></span></div>
           ${chatHtml()}
           ${composerHtml()}
         </section>

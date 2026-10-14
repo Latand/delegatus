@@ -65,7 +65,7 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
       /* Under the account the conversation runs on, as a managed account keeps them, so every surface names it. */
       path: `/work/.delegatus/accounts/${over.engine ?? "claude"}/main/projects/${over.project ?? PROJECT}/${id}.jsonl`, root: "claude-projects", name: `${id}.jsonl`, project: PROJECT, title,
       engine: "claude", kind: "session", fmt: "claude", parent: null, mtime: now - 40 * MIN, size: 4096, activity: "idle", proc: null, pid: null,
-      model: "claude-opus-5-5", pendingQuestion: null, waitingInput: null, conversationId: `conversation_${id}`, cwd: `/work/${over.project ?? PROJECT}`,
+      model: "claude-opus-5-5", effort: "high", pendingQuestion: null, waitingInput: null, conversationId: `conversation_${id}`, cwd: `/work/${over.project ?? PROJECT}`,
       ...over,
     } as unknown as FileEntry;
     files.push(file);
@@ -82,7 +82,7 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
     authoritativeTurn: { state: "idle", source: "lifecycle", terminalAt: new Date((now - endedAgo) * 1000).toISOString() },
     lastTurn: { startedAt: (now - endedAgo - 300) * 1000, endedAt: (now - endedAgo) * 1000 },
   });
-  const codex = { engine: "codex", fmt: "claude", model: "gpt-6-sol" };
+  const codex = { engine: "codex", fmt: "claude", model: "gpt-6-sol", effort: "xhigh" };
 
   const line = transcriptLine;
   const said = saidLine;
@@ -116,8 +116,8 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
       "Візьмися за відкриту роботу в harbor-api: спершу повтори вебхуків і ротація ключів. Перенесення в новий реєстр чекає на фінансистів.",
     )),
     said(iso(51 * MIN), L(
-      "On it. **Back off webhook retries** has a pipeline (Build, Review, Verify), and **Rotate webhook signing keys** has a builder on it. The ledger task stays in Blocked until finance answers.\n\nI'll report each stage as it lands, and bring you any decision the spec leaves open.",
-      "Беруся. Для **Затримки повторів вебхуків** відкрив пайплайн (Build, Review, Verify), над **Ротацією ключів підпису** вже працює розробник. Задача з реєстром лишається в «Заблоковано», доки фінансисти не дадуть відповідь.\n\nЗвітуватиму про кожен етап і принесу тобі рішення, яких не дає специфікація.",
+      "On it. **Back off webhook retries** has a pipeline (Build, Review, Verify), and **Rotate webhook signing keys** has a builder on it. The ledger task stays in Waiting until finance answers.\n\nI'll report each stage as it lands, and bring you any decision the spec leaves open.",
+      "Беруся. Для **Затримки повторів вебхуків** відкрив пайплайн (Build, Review, Verify), над **Ротацією ключів підпису** вже працює розробник. Задача з реєстром лишається в «Очікують», доки фінансисти не дадуть відповідь.\n\nЗвітуватиму про кожен етап і принесу тобі рішення, яких не дає специфікація.",
     )),
   ];
   if (step >= 2) {
@@ -164,7 +164,7 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
   write(retries, retriesLines);
 
   /* Charges pagination: done this morning. */
-  const charges = add("charges-pagination", L("Charges pagination", "Пагінація платежів"), { ...idle(3 * 60 * MIN), model: "claude-sonnet-5" });
+  const charges = add("charges-pagination", L("Charges pagination", "Пагінація платежів"), { ...idle(3 * 60 * MIN), model: "claude-sonnet-5", effort: "medium" });
   write(charges, [
     asked(iso(4 * 60 * MIN), L("GET /charges returns every row. Add cursor pagination with a default page of 50 and a hard cap of 200.", "GET /charges повертає всі рядки. Додай пагінацію курсором: за замовчуванням 50 на сторінку, жорстка межа 200.")),
     ...tool(iso(3 * 60 * MIN + 200), "Bash", { command: "bun test src/charges", description: L("Run the charges tests", "Запустити тести платежів") }, " 7 pass\n 0 fail\nRan 7 tests across 2 files. [203.00ms]"),
@@ -257,7 +257,7 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
     write(refundsReview, reviewLines);
   }
   if (step >= 4) {
-    refundsVerify = add("refunds-verifier", L("Idempotent refunds · Verify", "Ідемпотентні повернення · Verify"), { ...working(L("Replaying a timed-out refund", "Повторюю повернення після тайм-ауту"), at(4)), model: "claude-sonnet-5" });
+    refundsVerify = add("refunds-verifier", L("Idempotent refunds · Verify", "Ідемпотентні повернення · Verify"), { ...working(L("Replaying a timed-out refund", "Повторюю повернення після тайм-ауту"), at(4)), model: "claude-sonnet-5", effort: "medium" });
     write(refundsVerify, [
       asked(since(4, 25), L("Run the gates and confirm a retried refund is answered from the stored response on a running server.", "Прожени перевірки й підтверди на запущеному сервері, що повторне повернення отримує збережену відповідь.")),
       ...tool(since(4), "Bash", { command: "bun run typecheck && bun test src/refunds" }, " 4 pass\n 0 fail"),
@@ -367,7 +367,7 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
 
   /* ── the orchestrator's report log, newest last here ────────────────── */
   const reports: World["reports"] = [
-    { seq: 101, at: iso(4 * 60 * MIN), class: "status", body: L("Two lanes running: webhook retries in Build, key rotation with its builder. The ledger move stays in Blocked until finance answers.", "Дві задачі в роботі: повтори вебхуків на етапі Build, ротація ключів у розробника. Перенесення реєстру лишається в «Заблоковано», доки не відповідять фінансисти.") },
+    { seq: 101, at: iso(4 * 60 * MIN), class: "status", body: L("Two lanes running: webhook retries in Build, key rotation with its builder. The ledger move stays in Waiting until finance answers.", "Дві задачі в роботі: повтори вебхуків на етапі Build, ротація ключів у розробника. Перенесення реєстру лишається в «Очікують», доки не відповідять фінансисти.") },
     { seq: 102, at: iso(3 * 60 * MIN + 200), class: "review_verdict", body: L("Paginate GET /charges passed review with no findings: pages of 50, the cap of 200 holds, and next_cursor stops on the last page.", "Пагінація GET /charges пройшла рев’ю без зауважень: сторінки по 50, межа 200 тримається, next_cursor зупиняється на останній сторінці.") },
     { seq: 103, at: iso(3 * 60 * MIN), class: "completed", body: L("Paginate GET /charges is done: cursor pages of 50, capped at 200, 7 tests pass. The PR is merged and the task moved to Done.", "Пагінація GET /charges готова: сторінки по 50 з курсором, не більше 200, 7 тестів проходять. PR змерджено, задачу перенесено в «Готово».") },
   ];
