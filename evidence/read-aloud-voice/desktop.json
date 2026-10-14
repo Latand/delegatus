@@ -15,6 +15,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 498.375,
@@ -49,7 +60,7 @@
         ],
         "more": "+6 more — type to narrow",
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "selectedVoiceText": "Delegatus",
         "summaryFits": true,
         "providerVoiceFits": true,
@@ -71,6 +82,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 508.375,
@@ -89,7 +111,7 @@
           }
         ],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -110,9 +132,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -133,9 +166,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -151,14 +195,29 @@
         "left": 950.984375,
         "right": 1250.984375,
         "top": 177,
-        "bottom": 742.3125,
+        "bottom": 742.8125,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": {
+          "textLeft": 990.984375,
+          "buttonLeft": 990.984375,
+          "buttonHeight": 28
+        },
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -179,9 +238,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabsnot set upeleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -196,51 +266,29 @@
       "reading": {
         "left": 950.984375,
         "right": 1250.984375,
-        "top": 148,
-        "bottom": 892.3125,
+        "top": 177,
+        "bottom": 683.5625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
-        "inputHeight": 32,
-        "inputFont": "12px",
-        "rows": [
-          {
-            "top": 499.125,
-            "bottom": 529.125,
-            "height": 30
-          },
-          {
-            "top": 533.125,
-            "bottom": 563.125,
-            "height": 30
-          },
-          {
-            "top": 567.125,
-            "bottom": 597.125,
-            "height": 30
-          },
-          {
-            "top": 601.125,
-            "bottom": 631.125,
-            "height": 30
-          },
-          {
-            "top": 635.125,
-            "bottom": 665.125,
-            "height": 30
-          },
-          {
-            "top": 669.125,
-            "bottom": 699.125,
-            "height": 30
-          }
+        "inputHeight": null,
+        "inputFont": null,
+        "placeholder": null,
+        "placeholderColor": null,
+        "textColor": null,
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
         ],
-        "more": "+6 more — type to narrow",
+        "lockedRows": 1,
+        "retry": null,
+        "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
-        "selectedVoiceText": "Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
-        "selectedVoiceFits": true
+        "selectedVoiceFits": false
       }
     },
     {
@@ -258,6 +306,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 686.5625,
@@ -287,6 +346,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 498.375,
@@ -321,7 +391,7 @@
         ],
         "more": "+6 more — type to narrow",
         "summaryText": "ElevenLabs · eleven_v4_turbo · unknown-voice",
-        "providerVoiceText": "eleven_v4_turbo · unknown-voice",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -336,47 +406,58 @@
       "reading": {
         "left": 950.984375,
         "right": 1250.984375,
-        "top": 23,
-        "bottom": 892.125,
+        "top": 66,
+        "bottom": 891.8125,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
-            "top": 444.9375,
-            "bottom": 528.9375,
+            "top": 444.625,
+            "bottom": 528.625,
             "height": 84
           },
           {
-            "top": 532.9375,
-            "bottom": 562.9375,
+            "top": 532.625,
+            "bottom": 562.625,
             "height": 30
           },
           {
-            "top": 566.9375,
-            "bottom": 596.9375,
+            "top": 566.625,
+            "bottom": 596.625,
             "height": 30
           },
           {
-            "top": 600.9375,
-            "bottom": 630.9375,
+            "top": 600.625,
+            "bottom": 630.625,
             "height": 30
           },
           {
-            "top": 634.9375,
-            "bottom": 664.9375,
+            "top": 634.625,
+            "bottom": 664.625,
             "height": 30
           },
           {
-            "top": 668.9375,
-            "bottom": 698.9375,
+            "top": 668.625,
+            "bottom": 698.625,
             "height": 30
           }
         ],
         "more": "+6 more — type to narrow",
         "summaryText": "ElevenLabs · eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        "providerVoiceText": "eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "providerVoiceText": "eleven_v4_turbo",
         "selectedVoiceText": "NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "summaryFits": true,
         "providerVoiceFits": true,
@@ -414,6 +495,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 339.375,
@@ -448,7 +540,7 @@
         ],
         "more": "+6 more — type to narrow",
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "selectedVoiceText": "Delegatus",
         "summaryFits": true,
         "providerVoiceFits": true,
@@ -470,6 +562,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 352.375,
@@ -488,7 +591,7 @@
           }
         ],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -509,9 +612,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -532,9 +646,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -549,15 +674,30 @@
       "reading": {
         "left": 581,
         "right": 881,
-        "top": 127,
-        "bottom": 692.3125,
+        "top": 126,
+        "bottom": 691.8125,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": {
+          "textLeft": 621,
+          "buttonLeft": 621,
+          "buttonHeight": 28
+        },
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -578,9 +718,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabsnot set upeleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -595,51 +746,29 @@
       "reading": {
         "left": 581,
         "right": 881,
-        "top": 8,
-        "bottom": 692,
+        "top": 129,
+        "bottom": 635.5625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
-        "inputHeight": 32,
-        "inputFont": "12px",
-        "rows": [
-          {
-            "top": 359.125,
-            "bottom": 389.125,
-            "height": 30
-          },
-          {
-            "top": 393.125,
-            "bottom": 423.125,
-            "height": 30
-          },
-          {
-            "top": 427.125,
-            "bottom": 457.125,
-            "height": 30
-          },
-          {
-            "top": 461.125,
-            "bottom": 491.125,
-            "height": 30
-          },
-          {
-            "top": 495.125,
-            "bottom": 525.125,
-            "height": 30
-          },
-          {
-            "top": 529.125,
-            "bottom": 559.125,
-            "height": 30
-          }
+        "inputHeight": null,
+        "inputFont": null,
+        "placeholder": null,
+        "placeholderColor": null,
+        "textColor": null,
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
         ],
-        "more": "+6 more — type to narrow",
+        "lockedRows": 1,
+        "retry": null,
+        "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
-        "selectedVoiceText": "Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
-        "selectedVoiceFits": true
+        "selectedVoiceFits": false
       }
     },
     {
@@ -657,6 +786,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 638.5625,
@@ -686,6 +826,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 376.375,
@@ -720,7 +871,7 @@
         ],
         "more": "+6 more — type to narrow",
         "summaryText": "ElevenLabs · eleven_v4_turbo · unknown-voice",
-        "providerVoiceText": "eleven_v4_turbo · unknown-voice",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -741,41 +892,52 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
-            "top": 394.9375,
-            "bottom": 496.9375,
+            "top": 386.625,
+            "bottom": 488.625,
             "height": 102
           },
           {
-            "top": 500.9375,
-            "bottom": 530.9375,
+            "top": 492.625,
+            "bottom": 522.625,
             "height": 30
           },
           {
-            "top": 534.9375,
-            "bottom": 564.9375,
+            "top": 526.625,
+            "bottom": 556.625,
             "height": 30
           },
           {
-            "top": 568.9375,
-            "bottom": 598.9375,
+            "top": 560.625,
+            "bottom": 590.625,
             "height": 30
           },
           {
-            "top": 602.9375,
-            "bottom": 632.9375,
+            "top": 594.625,
+            "bottom": 624.625,
             "height": 30
           },
           {
-            "top": 636.9375,
-            "bottom": 666.9375,
+            "top": 628.625,
+            "bottom": 658.625,
             "height": 30
           }
         ],
         "more": "+6 more — type to narrow",
         "summaryText": "ElevenLabs · eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        "providerVoiceText": "eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "providerVoiceText": "eleven_v4_turbo",
         "selectedVoiceText": "NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "summaryFits": true,
         "providerVoiceFits": true,
@@ -813,6 +975,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 498.375,
@@ -847,7 +1020,7 @@
         ],
         "more": "+6 more — type to narrow",
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "selectedVoiceText": "Delegatus",
         "summaryFits": true,
         "providerVoiceFits": true,
@@ -869,6 +1042,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 508.375,
@@ -887,7 +1071,7 @@
           }
         ],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -908,9 +1092,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -931,9 +1126,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -949,14 +1155,29 @@
         "left": 950.984375,
         "right": 1250.984375,
         "top": 177,
-        "bottom": 742.3125,
+        "bottom": 742.8125,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": {
+          "textLeft": 990.984375,
+          "buttonLeft": 990.984375,
+          "buttonHeight": 28
+        },
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -977,9 +1198,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabsnot set upeleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -994,51 +1226,29 @@
       "reading": {
         "left": 950.984375,
         "right": 1250.984375,
-        "top": 148,
-        "bottom": 892.3125,
+        "top": 177,
+        "bottom": 683.5625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
-        "inputHeight": 32,
-        "inputFont": "12px",
-        "rows": [
-          {
-            "top": 499.125,
-            "bottom": 529.125,
-            "height": 30
-          },
-          {
-            "top": 533.125,
-            "bottom": 563.125,
-            "height": 30
-          },
-          {
-            "top": 567.125,
-            "bottom": 597.125,
-            "height": 30
-          },
-          {
-            "top": 601.125,
-            "bottom": 631.125,
-            "height": 30
-          },
-          {
-            "top": 635.125,
-            "bottom": 665.125,
-            "height": 30
-          },
-          {
-            "top": 669.125,
-            "bottom": 699.125,
-            "height": 30
-          }
+        "inputHeight": null,
+        "inputFont": null,
+        "placeholder": null,
+        "placeholderColor": null,
+        "textColor": null,
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
         ],
-        "more": "+6 more — type to narrow",
+        "lockedRows": 1,
+        "retry": null,
+        "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
-        "selectedVoiceText": "Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
-        "selectedVoiceFits": true
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1056,6 +1266,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 686.5625,
@@ -1085,6 +1306,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 498.375,
@@ -1119,7 +1351,7 @@
         ],
         "more": "+6 more — type to narrow",
         "summaryText": "ElevenLabs · eleven_v4_turbo · unknown-voice",
-        "providerVoiceText": "eleven_v4_turbo · unknown-voice",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -1134,47 +1366,58 @@
       "reading": {
         "left": 950.984375,
         "right": 1250.984375,
-        "top": 23,
-        "bottom": 892.125,
+        "top": 66,
+        "bottom": 891.8125,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
-            "top": 444.9375,
-            "bottom": 528.9375,
+            "top": 444.625,
+            "bottom": 528.625,
             "height": 84
           },
           {
-            "top": 532.9375,
-            "bottom": 562.9375,
+            "top": 532.625,
+            "bottom": 562.625,
             "height": 30
           },
           {
-            "top": 566.9375,
-            "bottom": 596.9375,
+            "top": 566.625,
+            "bottom": 596.625,
             "height": 30
           },
           {
-            "top": 600.9375,
-            "bottom": 630.9375,
+            "top": 600.625,
+            "bottom": 630.625,
             "height": 30
           },
           {
-            "top": 634.9375,
-            "bottom": 664.9375,
+            "top": 634.625,
+            "bottom": 664.625,
             "height": 30
           },
           {
-            "top": 668.9375,
-            "bottom": 698.9375,
+            "top": 668.625,
+            "bottom": 698.625,
             "height": 30
           }
         ],
         "more": "+6 more — type to narrow",
         "summaryText": "ElevenLabs · eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        "providerVoiceText": "eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "providerVoiceText": "eleven_v4_turbo",
         "selectedVoiceText": "NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "summaryFits": true,
         "providerVoiceFits": true,
@@ -1212,6 +1455,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 339.375,
@@ -1246,7 +1500,7 @@
         ],
         "more": "+6 more — type to narrow",
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "selectedVoiceText": "Delegatus",
         "summaryFits": true,
         "providerVoiceFits": true,
@@ -1268,6 +1522,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 352.375,
@@ -1286,7 +1551,7 @@
           }
         ],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -1307,9 +1572,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -1330,9 +1606,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -1347,15 +1634,30 @@
       "reading": {
         "left": 581,
         "right": 881,
-        "top": 127,
-        "bottom": 692.3125,
+        "top": 126,
+        "bottom": 691.8125,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": {
+          "textLeft": 621,
+          "buttonLeft": 621,
+          "buttonHeight": 28
+        },
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -1376,9 +1678,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabsnot set upeleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -1393,51 +1706,29 @@
       "reading": {
         "left": 581,
         "right": 881,
-        "top": 8,
-        "bottom": 692,
+        "top": 129,
+        "bottom": 635.5625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
-        "inputHeight": 32,
-        "inputFont": "12px",
-        "rows": [
-          {
-            "top": 359.125,
-            "bottom": 389.125,
-            "height": 30
-          },
-          {
-            "top": 393.125,
-            "bottom": 423.125,
-            "height": 30
-          },
-          {
-            "top": 427.125,
-            "bottom": 457.125,
-            "height": 30
-          },
-          {
-            "top": 461.125,
-            "bottom": 491.125,
-            "height": 30
-          },
-          {
-            "top": 495.125,
-            "bottom": 525.125,
-            "height": 30
-          },
-          {
-            "top": 529.125,
-            "bottom": 559.125,
-            "height": 30
-          }
+        "inputHeight": null,
+        "inputFont": null,
+        "placeholder": null,
+        "placeholderColor": null,
+        "textColor": null,
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
         ],
-        "more": "+6 more — type to narrow",
+        "lockedRows": 1,
+        "retry": null,
+        "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
-        "selectedVoiceText": "Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
-        "selectedVoiceFits": true
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1455,6 +1746,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 638.5625,
@@ -1484,6 +1786,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 376.375,
@@ -1518,7 +1831,7 @@
         ],
         "more": "+6 more — type to narrow",
         "summaryText": "ElevenLabs · eleven_v4_turbo · unknown-voice",
-        "providerVoiceText": "eleven_v4_turbo · unknown-voice",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -1539,41 +1852,52 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Voice name or id",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAInot set upgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxnot set uptts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
-            "top": 394.9375,
-            "bottom": 496.9375,
+            "top": 386.625,
+            "bottom": 488.625,
             "height": 102
           },
           {
-            "top": 500.9375,
-            "bottom": 530.9375,
+            "top": 492.625,
+            "bottom": 522.625,
             "height": 30
           },
           {
-            "top": 534.9375,
-            "bottom": 564.9375,
+            "top": 526.625,
+            "bottom": 556.625,
             "height": 30
           },
           {
-            "top": 568.9375,
-            "bottom": 598.9375,
+            "top": 560.625,
+            "bottom": 590.625,
             "height": 30
           },
           {
-            "top": 602.9375,
-            "bottom": 632.9375,
+            "top": 594.625,
+            "bottom": 624.625,
             "height": 30
           },
           {
-            "top": 636.9375,
-            "bottom": 666.9375,
+            "top": 628.625,
+            "bottom": 658.625,
             "height": 30
           }
         ],
         "more": "+6 more — type to narrow",
         "summaryText": "ElevenLabs · eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        "providerVoiceText": "eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "providerVoiceText": "eleven_v4_turbo",
         "selectedVoiceText": "NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "summaryFits": true,
         "providerVoiceFits": true,
@@ -1611,6 +1935,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 492.125,
@@ -1645,7 +1980,7 @@
         ],
         "more": "ще +6 — уточніть пошук",
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "selectedVoiceText": "Delegatus",
         "summaryFits": true,
         "providerVoiceFits": true,
@@ -1667,6 +2002,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 546.125,
@@ -1685,7 +2031,7 @@
           }
         ],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -1706,9 +2052,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -1729,9 +2086,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -1747,14 +2115,29 @@
         "left": 950.984375,
         "right": 1250.984375,
         "top": 177,
-        "bottom": 814.0625,
+        "bottom": 798.0625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": {
+          "textLeft": 990.984375,
+          "buttonLeft": 990.984375,
+          "buttonHeight": 28
+        },
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -1775,9 +2158,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabsне налаштованоeleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -1792,51 +2186,29 @@
       "reading": {
         "left": 950.984375,
         "right": 1250.984375,
-        "top": 77,
-        "bottom": 892.3125,
+        "top": 177,
+        "bottom": 754.5625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
-        "inputHeight": 32,
-        "inputFont": "12px",
-        "rows": [
-          {
-            "top": 492.625,
-            "bottom": 522.625,
-            "height": 30
-          },
-          {
-            "top": 526.625,
-            "bottom": 556.625,
-            "height": 30
-          },
-          {
-            "top": 560.625,
-            "bottom": 590.625,
-            "height": 30
-          },
-          {
-            "top": 594.625,
-            "bottom": 624.625,
-            "height": 30
-          },
-          {
-            "top": 628.625,
-            "bottom": 658.625,
-            "height": 30
-          },
-          {
-            "top": 662.625,
-            "bottom": 692.625,
-            "height": 30
-          }
+        "inputHeight": null,
+        "inputFont": null,
+        "placeholder": null,
+        "placeholderColor": null,
+        "textColor": null,
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
         ],
-        "more": "ще +6 — уточніть пошук",
+        "lockedRows": 1,
+        "retry": null,
+        "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
-        "selectedVoiceText": "Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
-        "selectedVoiceFits": true
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1854,6 +2226,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 741.8125,
@@ -1883,6 +2266,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 492.125,
@@ -1917,7 +2311,7 @@
         ],
         "more": "ще +6 — уточніть пошук",
         "summaryText": "ElevenLabs · eleven_v4_turbo · unknown-voice",
-        "providerVoiceText": "eleven_v4_turbo · unknown-voice",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -1932,47 +2326,58 @@
       "reading": {
         "left": 950.984375,
         "right": 1250.984375,
-        "top": 8,
-        "bottom": 892,
+        "top": 11,
+        "bottom": 892.0625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
-            "top": 494.4375,
-            "bottom": 578.4375,
+            "top": 438.375,
+            "bottom": 522.375,
             "height": 84
           },
           {
-            "top": 582.4375,
-            "bottom": 612.4375,
+            "top": 526.375,
+            "bottom": 556.375,
             "height": 30
           },
           {
-            "top": 616.4375,
-            "bottom": 646.4375,
+            "top": 560.375,
+            "bottom": 590.375,
             "height": 30
           },
           {
-            "top": 650.4375,
-            "bottom": 680.4375,
+            "top": 594.375,
+            "bottom": 624.375,
             "height": 30
           },
           {
-            "top": 684.4375,
-            "bottom": 714.4375,
+            "top": 628.375,
+            "bottom": 658.375,
             "height": 30
           },
           {
-            "top": 718.4375,
-            "bottom": 748.4375,
+            "top": 662.375,
+            "bottom": 692.375,
             "height": 30
           }
         ],
         "more": "ще +6 — уточніть пошук",
         "summaryText": "ElevenLabs · eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        "providerVoiceText": "eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "providerVoiceText": "eleven_v4_turbo",
         "selectedVoiceText": "NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "summaryFits": true,
         "providerVoiceFits": true,
@@ -2010,6 +2415,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 403.875,
@@ -2044,7 +2460,7 @@
         ],
         "more": "ще +6 — уточніть пошук",
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "selectedVoiceText": "Delegatus",
         "summaryFits": true,
         "providerVoiceFits": true,
@@ -2066,6 +2482,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 403.875,
@@ -2084,7 +2511,7 @@
           }
         ],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -2105,9 +2532,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -2128,9 +2566,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -2145,15 +2594,30 @@
       "reading": {
         "left": 581,
         "right": 881,
-        "top": 55,
+        "top": 71,
         "bottom": 692.0625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": {
+          "textLeft": 621,
+          "buttonLeft": 621,
+          "buttonHeight": 28
+        },
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -2174,9 +2638,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabsне налаштованоeleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -2191,51 +2666,29 @@
       "reading": {
         "left": 581,
         "right": 881,
-        "top": 8,
-        "bottom": 692,
+        "top": 114,
+        "bottom": 691.5625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
-        "inputHeight": 32,
-        "inputFont": "12px",
-        "rows": [
-          {
-            "top": 439.375,
-            "bottom": 469.375,
-            "height": 30
-          },
-          {
-            "top": 473.375,
-            "bottom": 503.375,
-            "height": 30
-          },
-          {
-            "top": 507.375,
-            "bottom": 537.375,
-            "height": 30
-          },
-          {
-            "top": 541.375,
-            "bottom": 571.375,
-            "height": 30
-          },
-          {
-            "top": 575.375,
-            "bottom": 605.375,
-            "height": 30
-          },
-          {
-            "top": 609.375,
-            "bottom": 639.375,
-            "height": 30
-          }
+        "inputHeight": null,
+        "inputFont": null,
+        "placeholder": null,
+        "placeholderColor": null,
+        "textColor": null,
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
         ],
-        "more": "ще +6 — уточніть пошук",
+        "lockedRows": 1,
+        "retry": null,
+        "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
-        "selectedVoiceText": "Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
-        "selectedVoiceFits": true
+        "selectedVoiceFits": false
       }
     },
     {
@@ -2253,6 +2706,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 650.8125,
@@ -2282,6 +2746,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 440.875,
@@ -2316,7 +2791,7 @@
         ],
         "more": "ще +6 — уточніть пошук",
         "summaryText": "ElevenLabs · eleven_v4_turbo · unknown-voice",
-        "providerVoiceText": "eleven_v4_turbo · unknown-voice",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -2337,41 +2812,52 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(108, 108, 121)",
+        "textColor": "rgb(28, 28, 34)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
-            "top": 413.4375,
-            "bottom": 497.4375,
+            "top": 413.125,
+            "bottom": 497.125,
             "height": 84
           },
           {
-            "top": 501.4375,
-            "bottom": 531.4375,
+            "top": 501.125,
+            "bottom": 531.125,
             "height": 30
           },
           {
-            "top": 535.4375,
-            "bottom": 565.4375,
+            "top": 535.125,
+            "bottom": 565.125,
             "height": 30
           },
           {
-            "top": 569.4375,
-            "bottom": 599.4375,
+            "top": 569.125,
+            "bottom": 599.125,
             "height": 30
           },
           {
-            "top": 603.4375,
-            "bottom": 633.4375,
+            "top": 603.125,
+            "bottom": 633.125,
             "height": 30
           },
           {
-            "top": 637.4375,
-            "bottom": 667.4375,
+            "top": 637.125,
+            "bottom": 667.125,
             "height": 30
           }
         ],
         "more": "ще +6 — уточніть пошук",
         "summaryText": "ElevenLabs · eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        "providerVoiceText": "eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "providerVoiceText": "eleven_v4_turbo",
         "selectedVoiceText": "NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "summaryFits": true,
         "providerVoiceFits": true,
@@ -2409,6 +2895,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 492.125,
@@ -2443,7 +2940,7 @@
         ],
         "more": "ще +6 — уточніть пошук",
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "selectedVoiceText": "Delegatus",
         "summaryFits": true,
         "providerVoiceFits": true,
@@ -2465,6 +2962,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 546.125,
@@ -2483,7 +2991,7 @@
           }
         ],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -2504,9 +3012,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -2527,9 +3046,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -2545,14 +3075,29 @@
         "left": 950.984375,
         "right": 1250.984375,
         "top": 177,
-        "bottom": 814.0625,
+        "bottom": 798.0625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": {
+          "textLeft": 990.984375,
+          "buttonLeft": 990.984375,
+          "buttonHeight": 28
+        },
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -2573,9 +3118,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabsне налаштованоeleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -2590,51 +3146,29 @@
       "reading": {
         "left": 950.984375,
         "right": 1250.984375,
-        "top": 77,
-        "bottom": 892.3125,
+        "top": 177,
+        "bottom": 754.5625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
-        "inputHeight": 32,
-        "inputFont": "12px",
-        "rows": [
-          {
-            "top": 492.625,
-            "bottom": 522.625,
-            "height": 30
-          },
-          {
-            "top": 526.625,
-            "bottom": 556.625,
-            "height": 30
-          },
-          {
-            "top": 560.625,
-            "bottom": 590.625,
-            "height": 30
-          },
-          {
-            "top": 594.625,
-            "bottom": 624.625,
-            "height": 30
-          },
-          {
-            "top": 628.625,
-            "bottom": 658.625,
-            "height": 30
-          },
-          {
-            "top": 662.625,
-            "bottom": 692.625,
-            "height": 30
-          }
+        "inputHeight": null,
+        "inputFont": null,
+        "placeholder": null,
+        "placeholderColor": null,
+        "textColor": null,
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
         ],
-        "more": "ще +6 — уточніть пошук",
+        "lockedRows": 1,
+        "retry": null,
+        "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
-        "selectedVoiceText": "Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
-        "selectedVoiceFits": true
+        "selectedVoiceFits": false
       }
     },
     {
@@ -2652,6 +3186,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 741.8125,
@@ -2681,6 +3226,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 492.125,
@@ -2715,7 +3271,7 @@
         ],
         "more": "ще +6 — уточніть пошук",
         "summaryText": "ElevenLabs · eleven_v4_turbo · unknown-voice",
-        "providerVoiceText": "eleven_v4_turbo · unknown-voice",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -2730,47 +3286,58 @@
       "reading": {
         "left": 950.984375,
         "right": 1250.984375,
-        "top": 8,
-        "bottom": 892,
+        "top": 11,
+        "bottom": 892.0625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
-            "top": 494.4375,
-            "bottom": 578.4375,
+            "top": 438.375,
+            "bottom": 522.375,
             "height": 84
           },
           {
-            "top": 582.4375,
-            "bottom": 612.4375,
+            "top": 526.375,
+            "bottom": 556.375,
             "height": 30
           },
           {
-            "top": 616.4375,
-            "bottom": 646.4375,
+            "top": 560.375,
+            "bottom": 590.375,
             "height": 30
           },
           {
-            "top": 650.4375,
-            "bottom": 680.4375,
+            "top": 594.375,
+            "bottom": 624.375,
             "height": 30
           },
           {
-            "top": 684.4375,
-            "bottom": 714.4375,
+            "top": 628.375,
+            "bottom": 658.375,
             "height": 30
           },
           {
-            "top": 718.4375,
-            "bottom": 748.4375,
+            "top": 662.375,
+            "bottom": 692.375,
             "height": 30
           }
         ],
         "more": "ще +6 — уточніть пошук",
         "summaryText": "ElevenLabs · eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        "providerVoiceText": "eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "providerVoiceText": "eleven_v4_turbo",
         "selectedVoiceText": "NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "summaryFits": true,
         "providerVoiceFits": true,
@@ -2808,6 +3375,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 403.875,
@@ -2842,7 +3420,7 @@
         ],
         "more": "ще +6 — уточніть пошук",
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "selectedVoiceText": "Delegatus",
         "summaryFits": true,
         "providerVoiceFits": true,
@@ -2864,6 +3442,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 403.875,
@@ -2882,7 +3471,7 @@
           }
         ],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -2903,9 +3492,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -2926,9 +3526,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -2943,15 +3554,30 @@
       "reading": {
         "left": 581,
         "right": 881,
-        "top": 55,
+        "top": 71,
         "bottom": 692.0625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": {
+          "textLeft": 621,
+          "buttonLeft": 621,
+          "buttonHeight": 28
+        },
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -2972,9 +3598,20 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabsне налаштованоeleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
-        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -2989,51 +3626,29 @@
       "reading": {
         "left": 581,
         "right": 881,
-        "top": 8,
-        "bottom": 692,
+        "top": 114,
+        "bottom": 691.5625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
-        "inputHeight": 32,
-        "inputFont": "12px",
-        "rows": [
-          {
-            "top": 439.375,
-            "bottom": 469.375,
-            "height": 30
-          },
-          {
-            "top": 473.375,
-            "bottom": 503.375,
-            "height": 30
-          },
-          {
-            "top": 507.375,
-            "bottom": 537.375,
-            "height": 30
-          },
-          {
-            "top": 541.375,
-            "bottom": 571.375,
-            "height": 30
-          },
-          {
-            "top": 575.375,
-            "bottom": 605.375,
-            "height": 30
-          },
-          {
-            "top": 609.375,
-            "bottom": 639.375,
-            "height": 30
-          }
+        "inputHeight": null,
+        "inputFont": null,
+        "placeholder": null,
+        "placeholderColor": null,
+        "textColor": null,
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
         ],
-        "more": "ще +6 — уточніть пошук",
+        "lockedRows": 1,
+        "retry": null,
+        "rows": [],
         "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
-        "providerVoiceText": "eleven_v4_turbo · Delegatus",
-        "selectedVoiceText": "Delegatus",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
-        "selectedVoiceFits": true
+        "selectedVoiceFits": false
       }
     },
     {
@@ -3051,6 +3666,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 650.8125,
@@ -3080,6 +3706,17 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
             "top": 440.875,
@@ -3114,7 +3751,7 @@
         ],
         "more": "ще +6 — уточніть пошук",
         "summaryText": "ElevenLabs · eleven_v4_turbo · unknown-voice",
-        "providerVoiceText": "eleven_v4_turbo · unknown-voice",
+        "providerVoiceText": "eleven_v4_turbo",
         "summaryFits": true,
         "providerVoiceFits": true,
         "selectedVoiceFits": false
@@ -3135,41 +3772,52 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
+        "placeholder": "Назва або id голосу",
+        "placeholderColor": "rgb(139, 139, 152)",
+        "textColor": "rgb(232, 232, 236)",
+        "providerRows": [
+          "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
+          "ElevenLabseleven_v4_turbo",
+          "Sonioxне налаштованоtts-rt-v2 · Adrian",
+          "Fish Audio"
+        ],
+        "lockedRows": 0,
+        "retry": null,
         "rows": [
           {
-            "top": 413.4375,
-            "bottom": 497.4375,
+            "top": 413.125,
+            "bottom": 497.125,
             "height": 84
           },
           {
-            "top": 501.4375,
-            "bottom": 531.4375,
+            "top": 501.125,
+            "bottom": 531.125,
             "height": 30
           },
           {
-            "top": 535.4375,
-            "bottom": 565.4375,
+            "top": 535.125,
+            "bottom": 565.125,
             "height": 30
           },
           {
-            "top": 569.4375,
-            "bottom": 599.4375,
+            "top": 569.125,
+            "bottom": 599.125,
             "height": 30
           },
           {
-            "top": 603.4375,
-            "bottom": 633.4375,
+            "top": 603.125,
+            "bottom": 633.125,
             "height": 30
           },
           {
-            "top": 637.4375,
-            "bottom": 667.4375,
+            "top": 637.125,
+            "bottom": 667.125,
             "height": 30
           }
         ],
         "more": "ще +6 — уточніть пошук",
         "summaryText": "ElevenLabs · eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        "providerVoiceText": "eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "providerVoiceText": "eleven_v4_turbo",
         "selectedVoiceText": "NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         "summaryFits": true,
         "providerVoiceFits": true,

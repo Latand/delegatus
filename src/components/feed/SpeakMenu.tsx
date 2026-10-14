@@ -277,9 +277,20 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
     })();
     return () => controller.abort();
   }, [option.id, option.model, option.voice, option.available, retry]);
-  const voiceName = (candidate: BackendOption) => {
+  const resolvedVoiceName = (candidate: BackendOption) => {
     const list = candidate.id === option.id ? voices : voiceLists.get(`${candidate.id}/${candidate.model}/${candidate.voice}`);
-    return list?.selected.name ?? candidate.voice;
+    return list?.selected.name ?? null;
+  };
+  const voiceName = (candidate: BackendOption) => resolvedVoiceName(candidate) ?? candidate.voice;
+  /* The active provider's voice is the checked row of its Voice group below
+     and the summary line above, so its row carries the model alone. OpenAI and
+     Soniox name their voices themselves (alloy, Adrian); an ElevenLabs voice is
+     an opaque id until a cached list resolves it, so an inactive row shows the
+     model alone until then. */
+  const providerSubline = (candidate: BackendOption, active: boolean) => {
+    if (active) return candidate.model;
+    const name = candidate.id === "elevenlabs" ? resolvedVoiceName(candidate) : candidate.voice;
+    return name ? `${candidate.model} · ${name}` : candidate.model;
   };
   const filtered = (voices?.voices ?? []).filter((voice) => `${voice.name} ${voice.id}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const typed = query.trim();
@@ -415,7 +426,7 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
                       <span className="rounded-full bg-warning-soft px-1.5 py-px text-[9.5px] font-bold text-warning">{t("tts.noKey")}</span>
                     ) : null}
                   </span>
-                  {candidate.id === "fishaudio" ? null : <span data-tts-provider-voice className="block break-words text-[10.5px] leading-snug text-muted">{`${candidate.model} · ${voiceName(candidate)}`}</span>}
+                  {candidate.id === "fishaudio" ? null : <span data-tts-provider-voice className="block break-words text-[10.5px] leading-snug text-muted">{providerSubline(candidate, active)}</span>}
                 </span>
               </button>
               {candidate.id === "fishaudio" ? (
@@ -433,18 +444,19 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
               ) : null}
               {active ? <div role="group" data-tts-voice-group aria-label={t("tts.voiceGroup")} className="ml-5 min-w-0 space-y-1 border-l border-border py-1 pl-1">
                 <div className="px-2 text-[11px] font-semibold text-secondary">{t("tts.voiceGroup")}</div>
-                <input aria-label={t("tts.voiceInput")} autoComplete="off" spellCheck={false} value={query} maxLength={128}
+                {option.voiceLockedByEnv ? null : <input aria-label={t("tts.voiceInput")} placeholder={t("tts.voiceInput")} autoComplete="off" spellCheck={false} value={query} maxLength={128}
                   disabled={saving !== null || option.voiceLockedByEnv}
                   onInput={(event) => setQuery(event.currentTarget.value)}
                   onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing && typed) { event.preventDefault(); void pickVoice(filtered.length === 1 ? filtered[0]!.id : typed); } }}
-                  className={`w-full min-w-0 rounded-control border border-border bg-card px-2 text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 disabled:opacity-60 ${isMobile ? "min-h-11 text-[16px]" : "h-8 text-[12px]"}`} />
+                  className={`w-full min-w-0 rounded-control border border-border bg-card px-2 text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 placeholder:text-muted disabled:opacity-60 ${isMobile ? "min-h-11 text-[16px]" : "h-8 text-[12px]"}`} />}
                 {option.voiceLockedByEnv ? <div className="break-words px-2 text-[10.5px] text-muted">{t("tts.voiceLocked", { variable: `LLV_TTS_${option.id.toUpperCase()}_VOICE` })}</div> : null}
                 {option.available && option.id === "openai" ? <div className="px-2 text-[10.5px] text-muted">{t("tts.voiceTypeOnly")}</div> : null}
                 {loading ? <div className="flex items-center gap-1 px-2 text-[11px] text-muted"><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />{t("tts.voicesLoading")}</div> : null}
-                {listError ? <div role="alert" className="break-words px-2 text-[11px] text-danger">{t("tts.voicesFailed", { provider: providerName, message: listError })}<button type="button" onClick={() => { setVoices(null); setListError(null); setLoading(true); setRetry((n) => n + 1); }} className="min-h-11 px-2 underline">{t("tts.voicesRetry")}</button></div> : null}
+                {listError ? <div role="alert" className="break-words px-2 text-[11px] text-danger">{t("tts.voicesFailed", { provider: providerName, message: listError })}<button type="button" onClick={() => { setVoices(null); setListError(null); setLoading(true); setRetry((n) => n + 1); }} className={`flex w-fit items-center text-left underline ${isMobile ? "min-h-11" : "min-h-7"}`}>{t("tts.voicesRetry")}</button></div> : null}
                 {voices?.selected.known === false ? <div role="alert" className="break-words px-2 text-[11px] text-danger">{t("tts.voiceNotFound", { provider: providerName, voice: option.voice })}</div> : null}
-                {filtered.slice(0, 6).map(voiceRow)}
-                {filtered.length > 6 || voices?.truncated ? <div data-tts-voice-more className="px-2 text-[10.5px] text-muted">{t("tts.voiceMore", { count: Math.max(0, filtered.length - 6) })}</div> : null}
+                {option.voiceLockedByEnv ? <div data-tts-voice-locked className="flex min-w-0 items-center gap-2 break-words px-2 text-[12px] text-primary"><Check className="h-3.5 w-3.5 shrink-0" aria-hidden /><span className="min-w-0 flex-1 break-words">{voiceName(option)}</span></div> : null}
+                {option.voiceLockedByEnv ? null : filtered.slice(0, 6).map(voiceRow)}
+                {!option.voiceLockedByEnv && (filtered.length > 6 || voices?.truncated) ? <div data-tts-voice-more className="px-2 text-[10.5px] text-muted">{t("tts.voiceMore", { count: Math.max(0, filtered.length - 6) })}</div> : null}
                 {useTyped ? <><button type="button" data-tts-typed disabled={saving !== null || option.voiceLockedByEnv} onClick={() => void pickVoice(typed)} className="min-h-11 w-full break-words rounded-control px-2 py-1.5 text-left text-[12px] text-primary hover:bg-canvas disabled:opacity-60">{t("tts.voiceUseTyped", { voice: typed })}</button>{voices ? <div className="px-2 text-[10.5px] text-muted">{t("tts.voiceNotListed")}</div> : null}</> : null}
               </div> : null}
             </Fragment>

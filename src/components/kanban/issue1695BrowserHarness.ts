@@ -1058,29 +1058,40 @@ export async function captureReadAloudVoiceMenu(browser: Browser, mobile: boolea
           const group = menu.locator("[data-tts-voice-group]"); const input = group.locator("input");
           if (state === "loading") await group.getByText(locale === "en" ? "Loading voices…" : "Завантаження голосів…", { exact: true }).waitFor();
           else if (state === "failed") await group.getByRole("alert").waitFor();
+          else if (state === "locked") await group.locator("[data-tts-voice-locked]").waitFor();
           else if (state !== "unconfigured") await group.locator("[data-tts-voice]").first().waitFor();
           if (state === "filtered") await input.fill("Narrator 1");
           if (state === "typed-unlisted") await input.fill("typed-voice-id");
           await group.scrollIntoViewIfNeeded();
           if (["typed-unlisted", "selected-unknown", "failed"].includes(state)) await group.locator(state === "typed-unlisted" ? "[data-tts-typed]" : "[role=alert]").scrollIntoViewIfNeeded();
           const reading = await menu.evaluate((node) => {
-            const box = node.getBoundingClientRect(); const input = node.querySelector("input")!;
+            const box = node.getBoundingClientRect(); const input = node.querySelector("input");
             const rows = [...node.querySelectorAll("[data-tts-voice]")].map((row) => { const r = row.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: r.height }; });
             const summary = node.querySelector<HTMLElement>("[data-tts-summary]");
             const providerVoice = node.querySelector<HTMLElement>('[data-tts-provider][aria-checked="true"] [data-tts-provider-voice]');
             const selectedVoice = node.querySelector<HTMLElement>('[data-tts-voice][aria-checked="true"] span.min-w-0.flex-1');
             const textFits = (element: HTMLElement | null) => element ? element.scrollWidth <= element.clientWidth + 1 : false;
-            return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, background: getComputedStyle(node).backgroundColor, sideways: node.scrollWidth > node.clientWidth, inputHeight: input.getBoundingClientRect().height, inputFont: getComputedStyle(input).fontSize, rows, more: node.querySelector("[data-tts-voice-more]")?.textContent, summaryText: summary?.textContent, providerVoiceText: providerVoice?.textContent, selectedVoiceText: selectedVoice?.textContent, summaryFits: textFits(summary), providerVoiceFits: textFits(providerVoice), selectedVoiceFits: textFits(selectedVoice) };
+            return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, background: getComputedStyle(node).backgroundColor, sideways: node.scrollWidth > node.clientWidth, inputHeight: input?.getBoundingClientRect().height ?? null, inputFont: input ? getComputedStyle(input).fontSize : null, placeholder: input?.placeholder ?? null, placeholderColor: input ? getComputedStyle(input, "::placeholder").color : null, textColor: input ? getComputedStyle(input).color : null, providerRows: [...node.querySelectorAll("[data-tts-provider]")].map((row) => row.textContent ?? ""), lockedRows: node.querySelectorAll("[data-tts-voice-locked]").length, retry: (() => { const retry = [...node.querySelectorAll<HTMLElement>("[role=alert] button")][0]; const alert = retry?.closest("[role=alert]"); if (!retry || !alert) return null; const range = document.createRange(); range.selectNodeContents(alert.firstChild!); return { textLeft: range.getBoundingClientRect().left, buttonLeft: retry.getBoundingClientRect().left, buttonHeight: retry.getBoundingClientRect().height }; })(), rows, more: node.querySelector("[data-tts-voice-more]")?.textContent, summaryText: summary?.textContent, providerVoiceText: providerVoice?.textContent, selectedVoiceText: selectedVoice?.textContent, summaryFits: textFits(summary), providerVoiceFits: textFits(providerVoice), selectedVoiceFits: textFits(selectedVoice) };
           });
           expect(reading.left).toBeGreaterThanOrEqual(0); expect(reading.right).toBeLessThanOrEqual(width); expect(reading.top).toBeGreaterThanOrEqual(0); expect(reading.bottom).toBeLessThanOrEqual(height);
           expect(reading.sideways).toBe(false); expect(reading.background).not.toBe("rgba(0, 0, 0, 0)"); expect(reading.rows.length).toBeLessThanOrEqual(6);
           for (const row of reading.rows) { expect(row.top).toBeGreaterThanOrEqual(reading.top); expect(row.bottom).toBeLessThanOrEqual(reading.bottom); }
           for (let i = 1; i < reading.rows.length; i++) expect(reading.rows[i]!.top).toBeGreaterThanOrEqual(reading.rows[i - 1]!.bottom);
-          if (mobile) { expect(reading.inputHeight).toBeGreaterThanOrEqual(44); expect(reading.inputFont).toBe("16px"); for (const row of reading.rows) expect(row.height).toBeGreaterThanOrEqual(44); }
+          if (state !== "locked") {
+            expect(reading.placeholder).toBe(locale === "en" ? "Voice name or id" : "Назва або id голосу");
+            expect(reading.placeholderColor).not.toBe(reading.textColor);
+          }
+          if (state === "failed") {
+            expect(reading.retry).not.toBeNull();
+            expect(Math.abs(reading.retry!.buttonLeft - reading.retry!.textLeft)).toBeLessThanOrEqual(1);
+            if (mobile) expect(reading.retry!.buttonHeight).toBeGreaterThanOrEqual(44); else expect(reading.retry!.buttonHeight).toBeLessThan(36);
+          }
+          if (state === "locked") { expect(reading.inputHeight).toBeNull(); expect(reading.rows.length).toBe(0); expect(reading.more).toBeUndefined(); expect(reading.lockedRows).toBe(1); expect(await menu.textContent()).not.toMatch(/type to narrow|уточніть пошук/); }
+          if (state !== "locked" && mobile) { expect(reading.inputHeight).toBeGreaterThanOrEqual(44); expect(reading.inputFont).toBe("16px"); for (const row of reading.rows) expect(row.height).toBeGreaterThanOrEqual(44); }
           if (state === "loaded") expect(reading.more).toContain("6");
           if (state === "long-selected-name") {
             expect(reading.summaryText).toContain(longVoiceName);
-            expect(reading.providerVoiceText).toContain(longVoiceName);
+            expect(reading.providerVoiceText).not.toContain(longVoiceName);
             expect(reading.selectedVoiceText).toContain(longVoiceName);
             expect(reading.summaryFits).toBe(true);
             expect(reading.providerVoiceFits).toBe(true);
@@ -1095,8 +1106,9 @@ export async function captureReadAloudVoiceMenu(browser: Browser, mobile: boolea
             controlsReachable = { provider: providerReachable, voiceInput: voiceInputReachable };
           }
           if (state === "unconfigured") expect(listCalls).toBe(beforeCalls);
-          if (state === "locked") expect(await input.isDisabled()).toBe(true);
-          if (state === "fish-jarvis") expect(await menu.textContent()).toContain("s2.1-pro · Jarvis");
+          if (state === "locked") expect(await input.count()).toBe(0);
+          if (state === "fish-jarvis") { expect(await menu.textContent()).toContain("s2.1-pro · Jarvis"); expect(reading.providerRows.join(" ")).not.toContain("voice-0"); }
+          if (state === "loaded") expect(reading.providerRows.join(" ")).not.toContain("Delegatus ·");
           if (state === "selected-unknown") expect(await group.getByRole("alert").textContent()).toContain("unknown-voice");
           await page.screenshot({ path: path.join(out, `${prefix}.png`) });
           await menu.screenshot({ path: path.join(out, `${prefix}-detail.png`) });

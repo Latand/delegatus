@@ -1170,7 +1170,8 @@ describe("per-provider voice menu", () => {
     state = value; current.options[1]!.voice = `state-${value}`;
     const view = await mount("Voice state"); const menu = await openMenu(view);
     expect(menu.textContent).toContain(value === "loading" ? "Loading voices" : value === "failed" ? "voices_read" : "has no voice");
-    expect(menu.querySelector("input")).not.toBeNull();
+    expect(menu.querySelector("input")!.placeholder).toBe("Voice name or id");
+    expect(menu.querySelector("[data-tts-provider][aria-checked=true] [data-tts-provider-voice]")!.textContent).toBe("eleven_v4_turbo");
     if (value === "failed") {
       state = "loaded";
       const retry = [...menu.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Retry")!;
@@ -1183,7 +1184,7 @@ describe("per-provider voice menu", () => {
     const view = await mount("Unconfigured voice"); let menu = await openMenu(view);
     expect(lists).toBe(0); expect(menu.querySelectorAll("[data-tts-voice]").length).toBe(0); expect(menu.textContent).toContain("/keys/elevenlabs");
     await pressEscape(); current.options[1]!.voiceLockedByEnv = true; menu = await openMenu(view);
-    expect(menu.querySelector<HTMLInputElement>("input")!.disabled).toBe(true); expect(menu.textContent).toContain("LLV_TTS_ELEVENLABS_VOICE");
+    expect(menu.querySelector("input")).toBeNull(); expect(menu.querySelectorAll("[data-tts-voice]").length).toBe(0); expect(menu.querySelector("[data-tts-voice-locked]")).not.toBeNull(); expect(menu.textContent).not.toContain("type to narrow"); expect(menu.textContent).toContain("LLV_TTS_ELEVENLABS_VOICE");
     await pressEscape(); current.backend = "openai"; menu = await openMenu(view);
     expect(menu.textContent).toContain("OpenAI has no voice list"); expect(lists).toBe(0);
     flushSync(() => view.root.unmount());
