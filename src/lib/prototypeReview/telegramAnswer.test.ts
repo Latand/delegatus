@@ -129,6 +129,25 @@ test("a recommendation continuation that resembles a variant stays owner text", 
   expect(parsePrototypeAnswer(round, `${prototypeCopyLine(round, 2)}`).input!.chosen).toEqual([2]);
 });
 
+test.each([" · Відповіді рекомендовані", "\nВідповіді рекомендовані"])("an Other answer before the recommendation marker stays recorded verbatim (%s)", separator => {
+  const round = telegramRound();
+  const text = `${prototypeReference(round)} · Відповіді 1a 2a 3+${separator}`;
+  const parsed = parsePrototypeAnswer(round, text);
+  expect(parsed).toHaveProperty("input");
+  expect(parsed.input).toMatchObject({
+    originalReply: text,
+    chosen: [],
+    comment: "3+",
+    recommendedWithReservation: true,
+    answers: [
+      { questionId: "place", options: [0] },
+      { questionId: "scope", options: [0] },
+      { questionId: "timing", options: [0], other: true },
+    ],
+  });
+  expect(parsed.input!.skip).toBeUndefined();
+});
+
 test("numbered custom answer boundaries after punctuation keep each question attribution", () => {
   const round = telegramRound();
   const custom = `${prototypeReference(round)} · 1: Мій гайд;2: Реальна телега;3: Перший ролик`;

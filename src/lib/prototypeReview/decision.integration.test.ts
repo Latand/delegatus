@@ -234,7 +234,7 @@ test("the exact owner reservation is saved, acknowledged and delivered to the as
   expect((await read()).rounds.find(r => r.id === round.id)!.decision!.recommendedWithReservation).toBe(true);
 });
 
-test.each(["custom", "numbered-reservation", "numbered-custom", "continuation-control", "long", "long-unicode"])("owner %s replies survive decision normalization, reload and production delivery", async kind => {
+test.each(["custom", "numbered-reservation", "numbered-custom", "continuation-control", "other-before-recommendation", "other-line-before-recommendation", "long", "long-unicode"])("owner %s replies survive decision normalization, reload and production delivery", async kind => {
   const published = await publishPOST(new NextRequest("http://localhost/api/prototype-reviews", { method: "POST", headers: { host: "localhost" }, body: JSON.stringify({
     clientRequestId: `owner-${kind}`, taskId: "task-prototype", title: "Owner words", questions }) }), world);
   expect(published.status).toBe(200);
@@ -245,6 +245,8 @@ test.each(["custom", "numbered-reservation", "numbered-custom", "continuation-co
     : kind === "numbered-reservation" ? `${copy}, але 2: Беремо реальний інтерфейс телеги.`
     : kind === "numbered-custom" ? `${prototypeReference(round)} · 1: Мій гайд;2: Реальна телега;3: Перший ролик`
     : kind === "continuation-control" ? `${copy}\nВаріант 2`
+    : kind === "other-before-recommendation" ? `${prototypeReference(round)} · Відповіді 1a 2a 3+ · Відповіді рекомендовані`
+    : kind === "other-line-before-recommendation" ? `${prototypeReference(round)} · Відповіді 1a 2a 3+\nВідповіді рекомендовані`
     : kind === "long-unicode" ? `${copy} · ${"🙂".repeat(20_000 - [...copy].length - 3)}`
     : `${copy}, ${"я".repeat(20_000 - copy.length - 2)}`;
   const match = parsePrototypeAnswer(round, words);
@@ -277,6 +279,18 @@ test.each(["custom", "numbered-reservation", "numbered-custom", "continuation-co
     expect((result.answer as ExternalRelayAnswer).text).toContain("Варіант 2");
     expect(runtime.delivered.at(-1)!.text).toContain("recommended with reservation; resolve the owner's open point below.");
     expect(runtime.delivered.at(-1)!.text).toContain("Варіант 2");
+  }
+  if (kind === "other-before-recommendation" || kind === "other-line-before-recommendation") {
+    expect(saved.comment).toBe("3+");
+    expect(saved.answers).toEqual([
+      { questionId: "place", options: [0] },
+      { questionId: "scope", options: [0] },
+      { questionId: "timing", options: [0], other: true },
+    ]);
+    expect(saved.recommendedWithReservation).toBe(true);
+    expect((result.answer as ExternalRelayAnswer).text).toContain("3+");
+    expect(runtime.delivered.at(-1)!.text).toContain("recommended with reservation; resolve the owner's open point below.");
+    expect(runtime.delivered.at(-1)!.text).toContain("3+");
   }
   if (kind === "long") {
     expect([...words]).toHaveLength(20_000);

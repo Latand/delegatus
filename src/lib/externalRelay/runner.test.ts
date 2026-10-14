@@ -156,6 +156,40 @@ test.each(["enabled", "disabled", "long-reservation"])("prototype owner control 
   } finally { accountManager.resolveHeadlessSpawn = previous; await server.close(); }
 });
 
+test("the claimed relay records an Other token before a recommendation marker", async () => {
+  const round = telegramRound(); saveTasks([telegramTask([round])]);
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const text = `${prototypeReference(round)} · Відповіді 1a 2a 3+ · Відповіді рекомендовані`;
+  const request = { ...contextRequest, request_id: "prototype-other-before-recommendation", answer: { ...contextRequest.answer, max_chars: 4000 }, input: {
+    ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
+    conversation: contextRequest.input.conversation.map(m => ({ ...m, text })) } };
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { command: "/missing-prototype-cli" });
+    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", reply_to: "m1" } });
+    if (result?.outcome === "answered") {
+      expect(result.answer.text).toContain("рекомендовані з застереженням");
+      expect(result.answer.text).toContain("3+");
+    }
+    expect(completions).toHaveLength(1);
+    expect(loadTasks()[0]!.prototypeReviews![0]!.decision).toMatchObject({
+      originalReply: text,
+      comment: "3+",
+      recommendedWithReservation: true,
+      answers: [
+        { questionId: "place", options: [0] },
+        { questionId: "scope", options: [0] },
+        { questionId: "timing", options: [0], other: true },
+      ],
+    });
+  } finally { await server.close(); }
+});
+
 for (const scenario of ["references", "lease-lost", "revoked", "disabled"] as const) test(`prototype ${scenario} refuses before recording or spawning`, async () => {
   const round = telegramRound(); saveTasks([telegramTask([round])]);
   const paired = relay("https://unused.invalid/v1"); paired.targets[0]!.ownerTier = scenario !== "disabled";

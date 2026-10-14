@@ -43,6 +43,7 @@ export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string):
   const chosen = new Set<number>();
   const selected = new Map<string, PrototypeAnswer>();
   const notes: string[] = [];
+  const otherTokens: string[] = [];
   let recommended = false;
   let reservation: string | undefined;
   let notesBeforeRecommendation = 0;
@@ -73,13 +74,20 @@ export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string):
       if (!q || selected.has(q.id) || new Set(options).size !== options.length || options.some(i => i >= q.options.length)
         || (!q.multiple && options.length > 1)) return token;
       selected.set(q.id, { questionId: q.id, options, ...(letters.includes("+") ? { other: true as const } : {}) });
+      if (letters.includes("+")) otherTokens.push(token);
       return "";
     });
     if (words.trim()) notes.push(words.trim());
   }
   const comment = reservation?.trim() && notes.length > notesBeforeRecommendation
-    ? [...notes.slice(0, notesBeforeRecommendation), reservation].join("\n") : notes.join("\n");
-  const answers = questions.map(q => selected.get(q.id) ?? (recommended ? recommendedAnswers([q])[0]! : { questionId: q.id, options: [], other: true as const }));
+    ? [...notes.slice(0, notesBeforeRecommendation), reservation].join("\n")
+    : notes.join("\n") || (recommended ? otherTokens.join(" ") : "");
+  const answers = questions.map(q => {
+    const answer = selected.get(q.id);
+    if (answer) return recommended && answer.other && !answer.options.length
+      ? { ...answer, options: recommendedAnswers([q])[0]!.options } : answer;
+    return recommended ? recommendedAnswers([q])[0]! : { questionId: q.id, options: [], other: true as const };
+  });
   for (const note of notes) {
     const numbered = [...note.matchAll(/(?<![\p{L}\p{N}_])([1-7])\s*[:.)—–-]\s*/gu)];
     const named = questions.filter(q => note.toLowerCase().includes(q.text.toLowerCase()));
