@@ -444,3 +444,8 @@ test("Viewer crash signals fail the launcher while operator stops are clean", as
   expect(viewerExitStatus(2, null)).toBe(2);
   expect(viewerExitStatus(null, null)).toBe(1);
 });
+
+test("launcher forwards Fish Audio credentials", () => {
+  const name = ["FISH", "AUDIO", "API", "KEY"].join("_");
+  expect(withoutUnsupportedApiCredentials({ [name]: "provider-fixture" })).toEqual({ [name]: "provider-fixture" });
+});

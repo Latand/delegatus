@@ -6915,6 +6915,12 @@ describe("a new conversation's first message is a normal row on the phone", () =
 });
 
 describe("fast TTS header", () => {
+  browserTest("Fish Audio read-aloud menu models in both locales and free, paid and ended states", async () => {
+    const { captureFishAudioMenu } = await import("@/components/kanban/issue1695BrowserHarness");
+    const browser = await launchChromium();
+    try { await captureFishAudioMenu(browser, true); } finally { await browser.close(); }
+  }, 180_000);
+
   browserTest("phone header renders idle, loading and playing and shares row Stop", async () => {
     const { captureFastTtsHeaders } = await import("@/components/kanban/issue1695BrowserHarness");
     const browser = await launchChromium();

@@ -1,255 +1,221 @@
 # The orchestrator
 
-Every project in Delegatus can designate one agent as its
-**orchestrator**. You tell it what you want shipped, in a dock beside the
-board; it opens a lane per issue, spawns the implementer, runs a fresh reviewer
-each round, merges on APPROVE, and reports back. It works through Delegatus's
-own HTTP API and MCP tools, so everything it starts is a card you can open,
-read, interrupt or take over.
+Every project in Delegatus can designate one agent as its **orchestrator**.
+You tell it what you want shipped, in the orchestrator panel above the board;
+it opens a task for each piece of work, runs each as a pipeline, merges
+according to the project's merge setting, and reports back. It works through
+Delegatus's own HTTP API and MCP tools, so everything it starts is a card you
+can open, read, interrupt or take over.
 
-![The orchestrator dock beside its project board](media/orchestrator-dock.png)
+![A project's orchestrator: its chat with you, its worker count against the limit, and beside it a task's three-question decision form waiting for your answer, already sent to Telegram with a link to send it again](media/readme/orchestrator.svg)
 
-This page walks the whole flow on a fresh install, in the three steps an
-operator actually performs: open a project and press **Orchestrator**, tell it
-what to ship, and go to the board when an agent needs a decision.
+This page is the technical contract of the seat: designation, the mandate and
+its versions, how work runs, rotation and where each surface lives. The
+operator's walk-through (creating the orchestrator, the tick panel, reports,
+the worker limit) is [The orchestrator in depth](guide/orchestrator.md) in the
+guide.
 
 ## Before you start
 
-1. **Run Delegatus.** `bunx delegatus-cli` serves it on `127.0.0.1:8898`
-   and supervises the structured runtime host that agents launch through — see
-   [Run](../README.md#run). Neither Docker nor tmux is required for this flow.
-2. **Register the Delegatus MCP server** (under the key `viewer`) for the engine that will hold the seat:
-   `scripts/install-mcp.sh` from a clone, or the one-line `claude mcp add
-   viewer …` / `[mcp_servers.viewer]` snippets in
-   [Connect an orchestrator through MCP](../README.md#connect-an-orchestrator-through-mcp).
-   The create draft reports what it found — `viewer MCP: registered ✓`, or the
-   exact command to run when it finds none. An orchestrator without that
-   registration can still talk to you; it cannot drive the board.
+1. **Run Delegatus.** `bunx delegatus-cli` serves it on `127.0.0.1:8898` and
+   supervises the structured runtime host that agents launch through; see
+   [Getting started](guide/getting-started.md). Neither Docker nor tmux is
+   required for this flow.
+2. **The Delegatus MCP server needs no step.** Every agent Delegatus launches,
+   the orchestrator included, gets the `viewer` server on its own when its
+   account registers none (`src/lib/agent/spawnPolicy.ts`). Registration is
+   only for your own Claude Code or Codex sessions; see
+   [The MCP server](guide/mcp.md).
 3. **Open the project you want driven.** A project is a repository Delegatus
    has seen an agent working in, or one you add with **Create project**. The
-   orchestrator spawns its lanes as git worktrees of that checkout.
+   orchestrator runs its pipelines as git worktrees of that checkout.
 
-## 1. Open a project and press Orchestrator
+## Designation and the mandate
 
-Select the project in the left rail, then press **Orchestrator** in the project
-header. The dock opens between the rail and the board and stays that project's
-own surface: drag its right edge to resize it, and both the width and the
-open/closed state are remembered per project. A phone reaches the same seat
-through the orchestrator row pinned in the conversation list.
+Select the project in the left sidebar and press **Orchestrator** in the
+project header. The button shows or hides the orchestrator panel. The panel
+sits above the columns by default; its dock control (**Dock at the side** or
+**Dock at the top**) moves it. The height is kept on this device and the width
+per project. A phone reaches the same seat through the **Orchestrator** card
+on the phone board.
 
-Until a project has an orchestrator, the dock shows the create draft — and the
-draft is already filled in:
+Until a project has an orchestrator, the panel shows the create draft, already
+filled in:
 
 - **The mandate is written for you.** It is the versioned default in
   `src/lib/orchestrator/prompt.ts`, delivered as the first message of the new
-  conversation: the conveyor rules (issue → lane → implementer → review →
-  merge bar → deploy → cleanup), the pipeline stage contract, the two report
-  channels, when it may move your screen, and the deploy protocol. You never
-  type "you are an orchestrator" anywhere. The text is editable and the summary
-  line says which mandate you are on — the built-in version, or your own rules.
-  Read the draft's own warning before confirming: under the default mandate it
-  deploys on its own unless you edit that out.
-- **Engine, model, effort and account** are the same launch controls the
-  board's **Create → Agent** draft uses. The draft opens on Claude Opus at low
-  effort; change any of it before you confirm.
-- **Confirm** designates the seat and delivers the mandate exactly once. The
-  designation is recorded before anything is spawned, so a lost reply or a
-  reloaded page converges on the one orchestrator; no second seat is created.
+  conversation: how work runs as a pipeline on its task, the stage contract,
+  the merge bar, the report channels, when the seat may move your screen and
+  how it asks you for decisions. The text is editable and the summary line says
+  which mandate you are on, the built-in version or your own rules. Version 16
+  removed the deploy protocol from the default, and delivery strips it from
+  stored copies; the seat deploys only when you ask, through `spawn_agent`.
+- **Engine, model, effort and account** open on the orchestrator role's own
+  default from the role registry (`src/lib/roles/defaults.ts`). Change any of
+  it before you create the seat. Which model each role uses is decided there,
+  shown under **Roles: engine and model** in **Settings** and read with the
+  `role_presets` tool; the mandate carries the current table, rendered at
+  delivery.
+- **Create the orchestrator** designates the seat and delivers the mandate
+  exactly once. The designation is recorded before anything is spawned, so a
+  lost reply or a reloaded page converges on the one orchestrator; no second
+  seat is created.
 
 One seat per project. It is durable state on the machine, so every window you
 open that project in finds the same orchestrator.
 
-## 2. Tell it what to ship
-
-A fresh seat greets you and stops:
+A fresh seat greets you in two lines and stops:
 
 ```
 Ready in <project>.
-Tell me what to ship — I open lanes, spawn implementers and reviewers, and
-bring each PR to ready; merges follow this project's merge setting. Nothing
-starts until you ask.
+Tell me what you want done here. I'll turn it into tasks on the board, have
+agents build and review it, keep it moving and report back. New work starts
+when you ask; I'll suggest what could come next.
 ```
 
-Then you talk to it in the dock's composer the way you would message a
-colleague: *"take issues 12 and 14"*, *"fix the flaky test in the scanner"*,
-*"review PR 30"*. Plain requests are enough; the operating rules are already in
-its mandate.
+## How the seat runs work
 
-What it does with work you accept:
+Every piece of accepted work is a pipeline on its board task: the seat finds
+or creates the task, composes the stages from the role table and calls
+`create_pipeline` with the task ids. A pipeline has up to eight stages. A
+review is a read-only reviewer stage whose fail edge leads to a fix stage that
+returns to the reviewer, so every round is a fresh reviewer; verdicts are
+`pass`, `fail` and `needs_decision`, reported through `stage_report`. The
+contract is in [docs/pipelines.md](pipelines.md) and the review rounds in
+[docs/review-loop.md](review-loop.md). The seat keeps no more workers running
+than the worker limit.
 
-- **One lane per issue** — a worktree and a branch, one owner per file across
-  active lanes, an implementer agent spawned into it with a real task title.
-- **A fresh reviewer every round** over the whole diff, findings relayed back
-  to the implementer automatically, verdicts as
-  `VERDICT: APPROVE | REQUEST_CHANGES`. This is the same machinery the **Flow**
-  chip starts by hand — see [docs/review-loop.md](review-loop.md) for the round
-  protocol and the presets.
-- **A pipeline** when the work wants declared stages: two to four stages in one
-  dedicated worktree, each ending in a structured JSON verdict, each transition
-  declared through `next` — see [docs/pipelines.md](pipelines.md).
-- **The merge bar**: a PR is ready on an APPROVE verdict (or a completed
-  lane) with green gates — `tsc` and the tests. The project's **Merge when the
-  review passes** setting, in the board's ⋯ menu, decides who merges it. Off
-  (the default), the orchestrator reports "PR ready" and merges only when you
-  ask. On, Delegatus merges completed lanes itself once their checks are
-  settled green, and the orchestrator leaves those alone and acts on a merge
-  that stopped. A red gate holds the merge either way. When two or more ready
-  PRs are authorized to merge, send one `merger` lane their `N@reviewedHead`
-  pairs, using a one-stage run pipeline or `spawn_agent`. Exclude every PR whose
-  live `merge.state` Delegatus holds. The merger lands clean patches as one
-  batch; `needs-review` sends a conflict resolution to an independent review
-  lane (including `git show --remerge-diff`) before a later batch, and `culprit`
-  returns to its lane as a finding. See [the merger procedure](merge-batch.md).
-  A recorded lane merge wakes the project's designated orchestrator, including
-  when the lane's completion was already announced or another conversation
-  launched it. The wake names the lane, PR number and merged head. Standing
-  instructions can name what to do on that merge, including starting a release.
-  Delivery announces each merge once; an undelivered wake leaves it owed.
-  Several merges share one wake within the item bound, with the remainder owed
-  for later wakes. Merges obey the project's wake interval and expire at the
-  backlog bound; an idle seat is woken within that interval plus one check
-  interval after the merge is recorded.
-- **A lane that finishes its task**: the orchestrator marks the lane whose PR
-  delivers the whole task, and that task moves to Done when the lane completes
-  (setting off) or its PR merges (on), once every other started lane on the
-  task has ended.
-- **Task cards and reports** kept current as state changes.
+**The merge bar.** A pull request is ready when the reviews passed its final
+head or the budget's last fix passed, the required checks are green and its
+body is read. The project's **Merge when the review passes** setting, on the
+**Merging and syncing** page of the board's ⋯ menu, decides who merges it. Off
+(the default), the seat reports "PR ready" and merges only when you ask. On,
+Delegatus merges completed lanes itself once their checks are settled green;
+the seat leaves those alone and acts on a merge that stopped. A red check holds
+the merge either way. When two or more ready pull requests are authorized to
+merge, the seat sends one `merger` stage their `N@reviewedHead` pairs and
+excludes every pull request whose live `merge.state` Delegatus holds. The
+merger lands clean patches as one batch; `needs-review` sends a conflict
+resolution to an independent review before a later batch, and `culprit` returns
+to its lane as a finding. See [the merger procedure](merge-batch.md).
 
-Everything it starts shows up on the project board as cards, descending from
-the orchestrator's own card, so the board answers "what is running right now"
-without anyone being asked. Watch it there, or leave and let the orchestrator
-work.
+**Merge wakes.** A recorded lane merge wakes the project's designated
+orchestrator, including when the lane's completion was already announced or
+another conversation launched it. The wake names the lane, the pull request
+number and the merged head. Standing instructions can name what to do on that
+merge, including starting a release. Delivery announces each merge once; an
+undelivered wake leaves it owed. Several merges share one wake within the item
+bound, with the remainder owed for later wakes. Merges obey the project's wake
+interval and expire at the backlog bound; an idle seat is woken within that
+interval plus one check interval after the merge is recorded. Merged lanes
+reach the seat as journal events (`src/lib/monitor/seatTickSources.ts`).
 
-## 3. Go to the board when something needs a decision
+**A pipeline that finishes its task.** The seat marks the pipeline whose pull
+request delivers the whole task, and that task moves to Done when the pipeline
+completes (setting off) or its pull request merges (on), once every other
+started pipeline on the task has ended.
 
-The point of the seat is that you stop watching. Four surfaces bring you back,
-and all four name the same decision, from the same queue:
+Everything the seat starts shows up on the project board as task cards, so the
+board answers "what is running right now" without asking anyone.
 
-- **The dock badge.** The orchestrator's own badge reads `live`, `quiet`,
-  `finished` or `host gone` — and `needs you` whenever the attention queue
-  counts a wait on this seat, which outranks every other word.
-- **A toast**, titled with the decision itself: the question's own header, a
-  plan to approve, a permission prompt, a rate-limit wall, or an interrupted
-  agent. Opening it lands you on the card.
-- **The attention island** in the corner: how many agents are waiting, `N` /
-  `Shift-N` to step through them, `F` to show only what waits on you.
-- **The card**, where a blocked `AskUserQuestion` renders as a question with
-  clickable options and the answer is delivered back into the agent.
+## When a decision needs you
 
-An orchestrator that cannot proceed escalates the same way. When it files a
-`blocked` or `question` report, that report enters the attention queue as a
-hard block on its own conversation — the badge, the toast and the island all
-show it, so a manager waiting on you looks exactly like an agent waiting on
-you. The report ages out on its own if it stops mattering.
+Four surfaces name the same decision from one queue: the **Needs you** control
+in the board header (the count of what waits, opening the panel by project), a
+toast titled with the decision itself, the panel's own badge, and the card or
+the **Decisions** tab, where a blocked question renders with clickable options
+and the answer is delivered back to the agent. `N` and `Shift+N` walk the
+project on screen and `F` toggles the **Needs you** filter. A decision form
+from the seat shows in **Decisions**.
 
-Answer in the dock, and the orchestrator picks the work back up.
+When the seat files a `blocked` or `question` report, the report enters
+**Needs you** as a hard block on its own conversation, so a manager waiting on
+you looks exactly like an agent waiting on you. The report ages out after two
+hours if it stops mattering (`src/lib/attention/needsYouRead.ts`).
 
-## Rotation, when the seat fills up
+## Rotation
 
-The row above the conversation says **who** holds the seat: engine badge,
-model, effort, account, and its context reading — a percentage of the model's
-window when the seat's launch profile names one, the token count when it does
-not. Past the rotation threshold — half the model's window — the dock
-recommends rotating and carries the server's own reasons verbatim. Two
-recorded compactions, a transcript past 8 MB, and a host that is gone each add
-a reason of their own.
+The panel head says who holds the seat: engine badge, model, effort, account
+and its context reading, a percentage of the model's window when the seat's
+launch profile names one and the token count when it does not. At the rotation
+threshold (half the window, `src/lib/orchestrator/contextPolicy.ts`) the panel
+recommends rotating and carries the server's own reasons. Only that context
+reading and a gone host add a reason; the recommendation itself changes
+nothing (`src/lib/orchestrator/health.ts`).
 
-Press **Rotate**, and the draft opens prefilled with the incumbent's own
-parameters. The mandate box starts from the current built-in default when the
-incumbent's mandate is based on an older version, and the summary line says
-so — **Keep the incumbent's mandate** carries its text forward instead. A seat
-already on the current version, or on your own rules, keeps its text. The seat
-row flags a stale seat the same way (`mandate v3, default v13`), and
-`rotate_orchestrator` defaults identically, with `keepIncumbentMandate: true`
-as the explicit carry-forward. The successor receives the mandate plus a
-handoff the server composes: the predecessor's identity and exact `conversation_messages` call,
-the project's open board tasks, your notes, and one compact **Rotation history**
-section standing in for every earlier handoff — so a seat that has rotated a
-dozen times costs exactly what a fresh one costs. The predecessor keeps its
-conversation, its card and ordinary Delegatus access; only its manager authority
-moves. Both cards stay linked, and the successor's header links back.
+Two things rotate a seat without you. **Auto-rotation** in the seat tick panel,
+off by default and set between 50 and 90 percent, hands over to a fresh seat at
+the next idle point once the context reaches the percentage
+(`src/lib/monitor/seatAutoRotation.ts`). An expired login moves the seat to
+another allowed account, or pauses its wakes when none has room
+(`src/lib/monitor/seatAuthRecovery.ts`).
 
-Nothing rotates by itself. Crossing the threshold changes what the dock says
-and nothing else.
+**Rotate** in the panel head is one way to rotate by hand. The draft opens
+prefilled with the incumbent's own parameters. The mandate box starts from the
+current built-in default when the incumbent's mandate is based on an older
+version, and the summary line says so; **Keep the incumbent's mandate** carries
+its text forward instead. A seat already on the current version, or on your own
+rules, keeps its text. The seat row flags a stale seat as "mandate vN, default
+vM", and `rotate_orchestrator` defaults identically, with
+`keepIncumbentMandate: true` as the explicit carry-forward.
 
-The dock button is one way in; `rotate_orchestrator` is another. It performs
-the same rotation from any session — including the seat rotating itself, when
-you say so from a phone and the dock is out of reach — because the tool and
+The successor receives the mandate plus a handoff the server composes: the
+predecessor's identity and exact `conversation_messages` call, the project's
+open board tasks, your notes, and one compact **Rotation history** section
+standing in for every earlier handoff, so a seat that has rotated a dozen times
+costs what a fresh one costs. The predecessor keeps its conversation, its card
+and ordinary Delegatus access; only its manager authority moves. Both cards
+stay linked, and the successor's header links back. The mandate lands in the
+feed as a single folded **Mandate** card with the delivery's line count, and a
+rotation handoff as its second section.
+
+`rotate_orchestrator` performs the same rotation from any session, including
+the seat rotating itself when you say so from a phone, because the tool and
 `POST /api/orchestrator/rotate` share one authority contract: whatever actor
 reaches one reaches the other. What replaces a prohibition is a name. Every
-rotation records who triggered it — operator or agent, the triggering
-conversation, and the seat epoch it held — on the successor's designation and
-on the predecessor's revocation, so the lineage `get_orchestrator` reports
-carries both which seat replaced which and on whose word. Retrying the same
-idempotency key replays that record verbatim, so the name it answers with is
-always the one the rotation was recorded under, whoever sends the retry.
-
-The mandate itself lands in the feed as a single folded **Mandate** card with
-the delivery's line count, and a rotation handoff as its second section — so an
-8 KB first message stays one row you can open when you want it.
+rotation records who triggered it (operator or agent, the triggering
+conversation and the seat epoch it held) on the successor's designation and on
+the predecessor's revocation, so the lineage `get_orchestrator` reports carries
+both which seat replaced which and on whose word. Retrying the same idempotency
+key replays that record verbatim, so the name it answers with is always the one
+the rotation was recorded under, whoever sends the retry.
 
 ## What lives where
 
 | Surface | Where | What it is for |
 | --- | --- | --- |
-| Orchestrator dock | Left of the board, per project | The seat's conversation: who holds it, its context wear, Rotate, and the composer you talk to it in. |
-| Board | The project's canvas | Every conversation as a card: the orchestrator, its implementers, each round's reviewer, background tasks. Arrows follow lineage. |
-| Pipelines | Groups on the same board, with a control hub | A declared chain of stages in one worktree — pause, resume, retry a stage, skip, close ([docs/pipelines.md](pipelines.md)). |
-| Review flows | The **Flow** chip and the verdict deck | Implement → review rounds over a conversation, by hand or driven by the orchestrator ([docs/review-loop.md](review-loop.md)). |
-| Tasks | Task cards on the board and the readiness strip | What is planned, running, on review, blocked or done; a task can spawn its own agent. |
-| Attention | The corner island, toasts, the dock badge | One queue of everything waiting on you, across every project. |
-| Telegram | The left rail's footer row | Connect an account and receive its daily report; independent of the orchestrator's own channels. |
-| Phone | The pinned orchestrator row and the focus view | The same seat, the same composer, the same attention queue. |
+| Orchestrator panel | Above the board by default, or at the side, per project | The seat's conversation: who holds it, its context reading, **Rotate**, the **Decisions** tab, the **Reports** log and the composer you talk to it in. |
+| Board | The project's canvas | Four columns of task cards, with the agents and pipelines working each one. |
+| Pipelines | A row on the task card | A declared chain of stages in one worktree, opened as the stage graph; skip, retry and close are in the card's ⋯ ([docs/pipelines.md](pipelines.md)). |
+| Needs you | The board header, toasts and the panel's badge | One queue of everything waiting on you, across every project. |
+| Telegram | The sidebar's system block | Connect a bot or your own account; independent of the orchestrator's own channels ([Telegram](guide/telegram.md)). |
+| Phone | The **Orchestrator** card on the phone board | The same seat, the same composer, the same queue ([From your phone](guide/phone.md)). |
+
+Review flows, the older way to run implement and review rounds by hand, are
+retired; [docs/review-loop.md](review-loop.md#retired-review-flows) says what
+remains.
 
 ## Which model does which job
 
-The seat is one agent; the agents it spawns are picked per job. The role
-registry ships the presets the conveyor uses, and the mandate tells the seat to
-spawn "per the role table":
-
-| Job | Engine and model | Effort | Where it comes from |
-| --- | --- | --- | --- |
-| The orchestrator seat | Claude Opus | high | `Orchestrator` role preset (the dock's own create draft opens at low) |
-| Data-bar work: the runtime, flows, agents, the scanner | Codex GPT-5.6-Sol | xhigh | operator routing |
-| UI work | Claude Opus | high | operator routing |
-| Design and critique | Claude Fable | high | operator routing |
-| Simple, fully specified tasks | Codex GPT-5.6-Luna | xhigh | operator routing |
-| Review, every round | Codex GPT-5.6-Sol | xhigh | `Reviewer` role preset |
-| Verification, prod audits | Codex GPT-5.6-Sol | high / xhigh | `Verifier`, `Prod-auditor` presets |
-| Default builder | Codex GPT-5.6-Sol | medium | `Builder` role preset |
-| Cleanups and deploys | Codex GPT-5.6-Terra | low / medium | `Cleaner`, `Deployer` presets |
-
-**Data-bar work** names the subsystems where a wrong answer corrupts state
-that outlives the run — the runtime, the flow and agent layers, the scanner.
-Those lanes hold their merge until a review round comes back with no findings
-at all, so they get the strongest model at the highest effort; the hard
-diagnostic bugs are routed the same way. This repository keeps its own merge
-bars in `.claude/skills/delegatus-conveyor/SKILL.md`.
-
-The presets live in `src/lib/roles/defaults.ts`; a pipeline stage or a flow
-role reference resolves through them, and an explicit `engine`/`model`/`effort`
-on the stage overrides the preset. Every launch surface offers the same scale
-— `low`, `medium`, `high`, `xhigh`, plus `max` and `ultra` where the model has
-them.
-
-## When you do not need this
-
-Three tasks a week does not need an orchestrator. Spawn one agent for one task
-from **Create → Agent** and talk to it directly: read its transcript, answer
-its blocked questions, start a review loop when a change deserves one. The
-create draft says as much on its own face.
-
-The seat starts paying off when several things run at once while you are
-somewhere else — when you would otherwise be the one remembering which lane
-needs a reviewer, which PR is green, and which agent has been sitting on a
-question for twenty minutes.
+The seat is one agent; the agents it spawns are picked per job, by role. The
+role registry decides the engine, model and effort of each role, and the
+mandate tells the seat to spawn "per the role table". The registry's table is
+the single source: read it under **Roles: engine and model**, with
+`role_presets`, or in `src/lib/roles/defaults.ts`, and the table rendered into
+the mandate at delivery is the one the seat follows. A pipeline stage or a role
+reference resolves through the registry, and an explicit `engine`, `model` or
+`effort` on the stage overrides it. Every launch surface offers the same effort
+scale: `low`, `medium`, `high`, `xhigh`, plus `max` and `ultra` where the model
+has them.
 
 ## Where to read more
 
-- [README](../README.md) — install, the MCP server, the CLI options, security.
-- [docs/review-loop.md](review-loop.md) — rounds, presets, the HTTP API,
-  troubleshooting.
-- [docs/pipelines.md](pipelines.md) — stage contracts, verdicts, worktrees,
+- [The orchestrator in depth](guide/orchestrator.md): the operator's
+  walk-through.
+- [README](../README.md): install and the picture tour.
+- [docs/review-loop.md](review-loop.md): how a review round runs in a
+  pipeline.
+- [docs/pipelines.md](pipelines.md): stage contracts, verdicts, worktrees,
   recovery.
-- [docs/media/README.md](media/README.md) — how every screenshot on this page
-  is regenerated from the synthetic demo fixture.
+- [docs/media/readme/provenance.json](media/readme/provenance.json): where the
+  pictures on this page come from.

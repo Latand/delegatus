@@ -22,6 +22,8 @@ you, how many agents are working and how long ago something last happened.
 The board shows every task in a project and what it is waiting for. A task is
 the record of one piece of work; its card is how the board draws it.
 
+![Three columns of a project's board: a task in Inbox; In progress with its working agents, a running pipeline's stages and a card that needs your answer, counted in the column's head; Waiting with a card that names what it waits for](../media/readme/board.svg)
+
 The board has four columns: **Inbox**, **In progress**, **Waiting** and
 **Done**. On each card:
 
@@ -71,6 +73,8 @@ review and verify. It has up to eight stages and works in its own git
 worktree and branch, so your own checkout is left alone. Some messages call a
 pipeline a "lane".
 
+![A pipeline opened from its task: Build, Review and Verify stages, with Review's loop back to Build folded under it, and the builder's and the reviewer's conversations side by side](../media/readme/pipeline.svg)
+
 Each stage has a role, such as builder, reviewer, verifier, architect or
 visual critic. The role sets the engine, model and effort the stage runs on,
 and whether it may change the repository. Which engine and model each role
@@ -97,11 +101,19 @@ fresh reviewer, with no memory of the builder's conversation, on the new
 head.
 
 The review budget is fixed when the pipeline is created: three rounds unless
-its creator chose more, and at most nine. N rounds are N reviews plus one fix
-of the last review's findings. After that fix the pipeline moves on and marks
-the fix as not re-reviewed. A pipeline can also be created to wait for you
-after that fix; it then stops on the fixed head and offers **Accept as is**.
-The budget is spent either way, so there is no extra review to ask for.
+its creator chose more, and at most nine. What happens after the last failed
+review is the pipeline's policy:
+
+- **`advance`** (the default). N rounds are N reviews plus one fix of the last
+  review's findings. The pipeline then moves on and marks the fix as not
+  re-reviewed.
+- **`stop-after-fix`**. The same count, but after that fix the pipeline stops
+  on the fixed head and offers **Accept as is**. A fix that left the head
+  unchanged moves on.
+- **`park`**. It fixes after every failed review but the last, runs N + 1
+  reviews, and stops for you when the final one fails.
+
+No policy leaves an extra review to ask for.
 
 ## The merge setting
 
@@ -162,9 +174,8 @@ verification stages read none and leave none. **Learned rules** in the
 board's ⋯ menu shows a project's rules and lets you remove one.
 
 Shared memory is a separate feature: it lets Claude and Codex agents look up
-what either engine remembered. The README's
-[Agents and accounts](../../README.md#agents-and-accounts) section explains
-it.
+what either engine remembered. [Learned rules and shared memory](memory.md)
+explains both.
 
 ## Reports
 
@@ -193,23 +204,6 @@ key and a monthly spend cap, or through a Codex subscription.
 ## How they fit together
 
 One request travels through all of these:
-
-```text
-you ── write to ──▶ orchestrator
-                       │ opens a task on the board
-                       │ starts a pipeline, within the worker limit
-                       ▼
-                    pipeline ── stages run as agents on your accounts,
-                       │        each one a conversation
-                       │ review loop spends its budget
-                       ▼
-                    merge setting decides: PR left open, or merged
-                       │
-                       ▼
-orchestrator ── files a report ──▶ Reports log (and Telegram, voice)
-             ── a decision only you can make ──▶ a form under Needs you
-stages ── leave learned rules ──▶ the next agents of their level
-```
 
 1. You write to the orchestrator.
 2. It opens a task on the board and starts a pipeline within the worker

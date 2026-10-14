@@ -4,6 +4,11 @@ Status: design for the guide's structure and its first four pages. Written
 against `main` at `f5a767e4` (2026-10-14). Every `file:line` below was read at
 that commit. This stage wrote only this file; it changed no product source.
 
+Update: the pages planned in section 2 were written by the README
+restructure, which moved the README's feature detail into the guide
+(`docs/design/readme-restructure.md`). This outline records the plan as it was
+written; the guide's own contents list is the current index.
+
 ## 0. Originating requirement
 
 The install owner, 2026-10-14 05:01Z, in Ukrainian, sent through the verified
@@ -195,15 +200,15 @@ busy port. Rests on `src/lib/i18n/en.ts` (`pipelineBlock.mergeReason.*`,
 
 The guide's README lists these under "Elsewhere in the repository", each with
 one line, because they already teach the operator and a guide page would only
-copy them: the README's [Read any agent as a chat](../../README.md#read-any-agent-as-a-chat),
-[Telegram](../../README.md#telegram), [Team](../../README.md#team),
-[Linked installs](../../README.md#linked-installs),
-[External relay](../../README.md#external-relay),
-[MCP server for agents](../../README.md#mcp-server-for-agents),
-[Configuration](../../README.md#configuration),
-[Platform support](../../README.md#platform-support),
-[Security](../../README.md#security) and
-[What leaves your machine](../../README.md#what-leaves-your-machine); and the
+copy them: the README's [Read any agent as a chat](interface.md#conversations),
+[Telegram](telegram.md), [Team](team.md#team),
+[Linked installs](team.md#linked-installs),
+[External relay](telegram.md#external-relay),
+[MCP server for agents](mcp.md),
+[Configuration](configuration.md),
+[Platform support](getting-started.md#platforms),
+[Security](security-and-privacy.md#security) and
+[What leaves your machine](security-and-privacy.md#what-leaves-your-machine); and the
 technical documents `docs/docker.md`, `docs/RELEASING.md`,
 `docs/pipelines.md`, `docs/merge-batch.md`, `docs/orchestrator.md`,
 `docs/transcription.md`, `docs/privacy-publication.md` and
