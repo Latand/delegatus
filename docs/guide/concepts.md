@@ -97,11 +97,14 @@ fresh reviewer, with no memory of the builder's conversation, on the new
 head.
 
 The review budget is fixed when the pipeline is created: three rounds unless
-its creator chose more, and at most nine. N rounds are N reviews plus one fix
-of the last review's findings. After that fix the pipeline moves on and marks
-the fix as not re-reviewed. A pipeline can also be created to wait for you
-after that fix; it then stops on the fixed head and offers **Accept as is**.
-The budget is spent either way, so there is no extra review to ask for.
+its creator chose more, and at most nine. By default N rounds are N reviews
+plus one fix of the last review's findings. After that fix the pipeline moves
+on and marks the fix as not re-reviewed. A pipeline can also be created to wait
+for you after that fix; it then stops on the fixed head and offers **Accept as
+is**, unless the fix left the head unchanged, in which case it moves on. A third
+policy, park, fixes after every failed review but the last, runs N + 1 reviews
+and stops for you when the final one fails. No policy leaves an extra review to
+ask for.
 
 ## The merge setting
 

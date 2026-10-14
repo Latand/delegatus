@@ -31,22 +31,32 @@ operator's view of a review is in [Pipelines in depth](guide/pipelines.md).
 
 The number of rounds is fixed when the pipeline is created, on the reviewer's
 `onFail` edge as `maxRounds`: three unless chosen, and at most nine
-(`src/lib/reviewHistory/limits.ts`, `src/lib/pipelines/limits.ts`). N rounds
-are N reviews and one fix of the last review's findings. Nothing adds a round
-afterwards: `continue-review` and the **One more round** action are always
-refused (`src/components/kanban/stagesModel.ts`), so a budget that was too small
-needs a new pipeline.
+(`src/lib/reviewHistory/limits.ts`, `src/lib/pipelines/limits.ts`). What the
+number buys depends on `onExhausted` below: under `advance` and
+`stop-after-fix` N rounds are N reviews and N fixes, the last fix repairing the
+final review's findings; under `park` N rounds are N fixes and N + 1 reviews.
+Nothing adds a round afterwards: `continue-review` and the **One more round**
+action are always refused (`src/components/kanban/stagesModel.ts`), so a budget
+that was too small needs a new pipeline.
 
 ## When the budget is spent
 
-The edge's `onExhausted` decides (`src/lib/pipelines/types.ts`):
+The edge's `onExhausted` decides (`src/lib/pipelines/types.ts`). With
+`maxRounds: 2` and a reviewer that fails every time:
 
-- `advance`, the default: the last review's findings go to the fix stage once
-  more, and when that fix passes the pipeline follows the reviewer's own pass
-  edge without a re-review, marking the fix as not re-reviewed.
-- `stop-after-fix`: the same, then the pipeline waits in `needs_review` on the
-  fixed head until you press **Accept as is**.
-- `park`: the pipeline stops before the fix and waits for you.
+- `advance`, the default: two reviews, and the last review's findings go to
+  the fix stage once more. When that fix passes the pipeline follows the
+  reviewer's own pass edge without a re-review, marking the fix as not
+  re-reviewed.
+- `stop-after-fix`: two reviews and the same last fix. If that fix wrote a new
+  head, nobody reviewed it, and the pipeline waits in `needs_review` on that
+  head until you press **Accept as is**. If the fix left the head unchanged
+  there is nothing unreviewed to accept: the pipeline follows the reviewer's
+  pass edge and completes (or moves on) without your acceptance, exactly as
+  under `advance`.
+- `park`: the second fix is followed by a third review. If it fails too, the
+  pipeline parks in `needs_decision` at the reviewer before any further fix
+  and waits for you. A third review that passes follows the pass edge.
 
 ## Defining one
 
@@ -73,8 +83,13 @@ A two-stage loop beside the build stage, from the example in
 }
 ```
 
-A `review-loop` stage in a new pipeline is converted at creation into this pair
-(`src/lib/pipelines/legacyReviewDefinition.ts`).
+A legacy `review-loop` stage in a new pipeline is converted at creation into
+this pair (`src/lib/pipelines/legacyReviewDefinition.ts`) only when the
+conversion is provably safe: one read-write stage passes into it, its limit is a
+finite number from 1 to 9 and the fix stage fits within the eight-stage limit.
+Otherwise the stage is kept as written and the pipeline record carries
+`legacyReview` with the refusal codes (for example `stage-count` for a full
+eight-stage plan), so compose the pair yourself.
 
 ## Troubleshooting
 
