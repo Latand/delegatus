@@ -143,7 +143,8 @@ export function resolveNamedProject(named: string, directory: NamedProjectDirect
   const namedCandidates = [...(directory.names.get(folded) ?? [])];
   const identityCollision = identity.length > 0 && namedCandidates.some(project => !identity.includes(project));
   const seatedNames = namedCandidates.filter(project => directory.active.has(project));
-  if (identity.length === 1 && (!identityCollision || (seatedNames.length === 1 && seatedNames[0] === identity[0]))) return identity[0]!;
+  if (identity.length === 1 && (!requireActiveSeat || directory.active.has(identity[0]!))
+    && (!identityCollision || (seatedNames.length === 1 && seatedNames[0] === identity[0]))) return identity[0]!;
   if (identity.length > 1 || identityCollision) {
     const candidates = [...new Set([...identity, ...namedCandidates])].sort();
     const candidateNames = candidates.map(project => ({ project, name: directory.labels.get(project) ?? project }));
