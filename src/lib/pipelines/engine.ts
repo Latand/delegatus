@@ -126,7 +126,7 @@ import { pipelineStageRuntimeProfile, pipelineStageSandbox, type PipelineStageRu
 import { pipelineValidationError, type PipelineValidationViolation } from "./validation";
 import { firstRunsElsewhere, TASK_RUNS_ELSEWHERE } from "@/lib/links/linked";
 import { pipelineHostHasLiveWork } from "./hostRetirement";
-import { pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesAsync, selectControllerPipelines, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
+import { pipelineArtifactsDir, pipelineRevision, assignPipelineDelivery, createPipelineWithDelivery, deliveryJournal, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, unclaimedPipelinePublications, withDeliveryMutationAsync, buildPipeline, findPipelineRecord, isEffectiveRole, loadPipelines, loadPipelinesAsync, selectControllerPipelines, controllerPipelineRowOrder, pipelineGraphError, pipelineIdentity, pipelineTaskLinkError, PipelineStoreError, withPipelineControllerMutation, withPipelineMutation } from "./store";
 import { admitQueuedPipelineCreations, queuePipelineCreation } from "./creationQueue";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
@@ -7481,16 +7481,17 @@ async function provisionPipelineOutsideLease(pipeline: Pipeline, exec: Provision
  * The provisioning pre-pass: every lane waiting on a base, fetched and
  * provisioned before the controller takes the lease (#1799).
  *
- * The registry read is the lease-free projection read, so a pass that finds
- * nothing to provision — every pass but the one after a create — costs one
- * cached read and no subprocess at all.
+ * The indexed read takes no write lease. A pass with no provisioning work
+ * reads no pipeline payloads and starts no subprocess.
  */
-async function provisionPendingPipelines(ports: PipelinePorts): Promise<Map<string, PipelineProvisionOutcome>> {
+async function provisionPendingPipelines(ports: PipelinePorts, throughOrder: number, admitted: readonly Pipeline[]): Promise<Map<string, PipelineProvisionOutcome>> {
   const outcomes = new Map<string, PipelineProvisionOutcome>();
   let pending: Pipeline[];
   try {
     const nowMs = unixMs(ports.now());
-    pending = (await selectControllerPipelines("provisioning")).filter((pipeline) =>
+    pending = [...new Map([...(await selectControllerPipelines("provisioning", throughOrder)),
+      ...admitted.flatMap(row => { const current = findPipelineRecord(row.id); return current ? [current] : []; })]
+      .map(row => [row.id, row])).values()].filter((pipeline) =>
       pipeline.state === "provisioning" && !pipeline.hiddenAt && !pipeline.closedAt
       && (!publishesRemoteBranch(pipeline) || pipeline.delivery)
       /* A lane waiting out a transient failure keeps its backoff: its own
@@ -9717,6 +9718,10 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   };
   const recoveryAccountingDeadline = ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS;
   try {
+    // A create arriving during this pass waits for its own provisioning pass.
+    // Queued handover creations admitted below remain part of this pass.
+    const provisioningThrough = controllerPipelineRowOrder();
+    let admittedCreations: Pipeline[] = [];
     await drainPendingStaleControllerFlows(ports);
     await ports.cpuAdmissionReconcile?.(ports);
     const requested = (await selectControllerPipelines("admission")).filter((pipeline) => !pipeline.delivery && pipeline.publicationAdmission?.state === "pending");
@@ -9726,14 +9731,15 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     /* Creates the store refused during a handover (#1835), stored before
        provisioning so they provision on this same pass. */
     try {
-      if ((await admitQueuedPipelineCreations()).length) followUp = true;
+      admittedCreations = await admitQueuedPipelineCreations();
+      if (admittedCreations.length) followUp = true;
     } catch (error) {
       console.error("[pipelines] queued pipeline creations could not be admitted", error);
     }
     /* Before the lease, never under it (#1799). */
     await settlePendingRemoteActions(ports);
     await settlePendingStageProvenance(ports);
-    const provisioned = await provisionPendingPipelines(ports);
+    const provisioned = await provisionPendingPipelines(ports, provisioningThrough, admittedCreations);
     const stageBranchProtections = new Map<string, StageBranchProtection>();
     await Promise.all((await selectControllerPipelines("hosts")).map(async (pipeline) => {
       const attempt = pipeline.runs.find((run) => run.stageId === pipeline.cursor?.stageId)?.attempts.at(-1);

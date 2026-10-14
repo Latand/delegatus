@@ -1061,11 +1061,20 @@ export class SqliteStateCollection<T> {
     return mapCooperatively(this.loadReadonly(), record => this.options.clone(record), { batchSize: 4, timeBudgetMs: 16 });
   }
 
+  /** The indexed maximum records this pass's provisioning boundary without
+      reading payloads or constructing a collection census. */
+  pipelineControllerRowOrder(): number {
+    if (this.options.collection !== "pipelines") throw new Error("pipeline selection requires the pipeline collection");
+    return this.readDb.query<{ last: number }, []>(
+      "SELECT COALESCE(MAX(row_order), -1) AS last FROM state_rows WHERE collection = 'pipelines'",
+    ).get()!.last;
+  }
+
   /** A candidate projection reads only indexed work, preserving collection
       order. A private read transaction pins flags and payloads together while
       peer writers commit; decoding and per-caller copies yield between batches.
       Actuation still belongs to the caller's existing admission fences. */
-  async pipelineControllerSelection(kind: PipelineControllerSelection): Promise<T[]> {
+  async pipelineControllerSelection(kind: PipelineControllerSelection, throughOrder = Number.MAX_SAFE_INTEGER): Promise<T[]> {
     if (this.options.collection !== "pipelines") throw new Error("pipeline selection requires the pipeline collection");
     const db = connectReadonlyDatabase(this.filename);
     try {
@@ -1074,12 +1083,12 @@ export class SqliteStateCollection<T> {
       let order = -1, key = "";
       for (;;) {
         const rows = withViewerOperation("pipelines.controller-select", () => db.query<
-          Pick<CollectionRow, "row_key" | "row_order" | "value_json">, [string, number, number, string, number]>(`
+          Pick<CollectionRow, "row_key" | "row_order" | "value_json">, [string, number, number, string, number, number]>(`
           SELECT w.row_key, w.row_order, r.value_json FROM pipeline_controller_work w
           JOIN state_rows r ON r.collection = 'pipelines' AND r.row_key = w.row_key
-          WHERE w.kind = ? AND w.row_order >= ? AND (w.row_order > ? OR w.row_key > ?)
+          WHERE w.kind = ? AND w.row_order >= ? AND (w.row_order > ? OR w.row_key > ?) AND w.row_order <= ?
           ORDER BY w.row_order, w.row_key LIMIT ?
-        `).all(kind, order, order, key, 16));
+        `).all(kind, order, order, key, throughOrder, 16));
         await mapCooperatively(rows, row => {
           const decoded = withViewerOperation("pipelines.controller-decode", () => this.decodeRow(row.value_json));
           if (decoded) records.push(this.options.clone(decoded));

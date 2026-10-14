@@ -1050,8 +1050,12 @@ export async function loadPipelinesAsync(): Promise<Pipeline[]> {
   return pipelineStore().snapshotAsync();
 }
 
-export async function selectControllerPipelines(kind: import("@/lib/state/pipelineControllerIndex").PipelineControllerSelection): Promise<Pipeline[]> {
-  return pipelineStore().pipelineControllerSelection(kind);
+export function controllerPipelineRowOrder(): number {
+  return pipelineStore().pipelineControllerRowOrder();
+}
+
+export async function selectControllerPipelines(kind: import("@/lib/state/pipelineControllerIndex").PipelineControllerSelection, throughOrder?: number): Promise<Pipeline[]> {
+  return pipelineStore().pipelineControllerSelection(kind, throughOrder);
 }
 
 type PreparedPipelineEvidence = { pipelines: Pipeline[]; issues: RegistryRecordIssue[]; signature: string };

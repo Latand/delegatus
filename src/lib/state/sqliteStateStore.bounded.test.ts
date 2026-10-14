@@ -89,6 +89,14 @@ test("controller candidate indexes backfill retained rows and follow peer writes
     };
     expect(await store.pipelineControllerSelection("remote")).toEqual([other]);
     expect(await store.pipelineControllerSelection("remote")).toEqual([]);
+    const throughOrder = store.pipelineControllerRowOrder();
+    const fresh = { ...other, key: "fresh-provisioning", state: "provisioning" };
+    peer.boundedPatch(2, tx => {
+      tx.put(fresh);
+      tx.put({ ...other, state: "provisioning" });
+    });
+    expect((await store.pipelineControllerSelection("provisioning", throughOrder)).map(row => row.key)).toEqual([other.key]);
+    expect((await store.pipelineControllerSelection("provisioning")).map(row => row.key)).toEqual([other.key, fresh.key]);
     db.close();
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
