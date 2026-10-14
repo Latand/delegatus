@@ -1,7 +1,7 @@
 # Bounded cleanup: temp and worktree sweeps keep fresh trees, self-update releases stay bounded
 
 Issues: #2889 (temp and merged-worktree cleanup), #2886 (self-update release
-storage). Design only; no product source changes in this stage.
+storage). Implementation policy and protected-case coverage.
 
 ## Originating requirement
 
@@ -151,8 +151,8 @@ For every recursive `fs.rm` (D1, D3, the cache reclamation in §6.4):
 
 1. Re-run the final guards.
 2. `rename(candidate, <same parent>/<trash name>)`, an atomic same-directory
-   rename. Trash names: `llv-sweep-trash-<uuid>` in temp roots,
-   `.delegatus-trash-<name>-<uuid>` inside a worktree or release.
+   rename. Trash names: `.delegatus-trash-<name>-<uuid>` beside the original
+   directory in temp roots, worktrees and releases.
 3. Re-scan processes (§3.4) for a holder of the trash path: a cwd or open
    descriptor follows the inode, so a process that entered the tree between
    the last check and the rename now shows the trash path. If one does,
@@ -277,9 +277,10 @@ It changes in four places:
    inside the worktree root, which Git ignores like the original rebuildable
    directory; the next sweep finishes it under the same identity checks).
 4. **Interrupted removal is recorded and resumed narrowly.** Before
-   `git worktree remove`, append `{path, root, head, preservation, at}` to
-   `state/worktree-sweep-removals.ndjson` (durable write); after success,
-   append `{path, done: true}`. At sweep start, an open intent whose checkout is
+   `git worktree remove`, durably write `{path, root, head, preservation, at}`
+   to `state/worktree-sweep-removals/<path-sha256>.json`; after success,
+   remove that intent. Each path has one atomic record, so completed removals
+   leave no growing journal. At sweep start, an open intent whose checkout is
    still listed is resumed only when HEAD still equals the recorded `head`,
    `git status` reports nothing but deletions of tracked files, every live guard
    passes and no mount point is under it. Resumption runs
