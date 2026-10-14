@@ -457,6 +457,15 @@ async function requestViewerControl(
   throw new Error(`Viewer control did not reconnect after ${attempts} attempt${attempts === 1 ? "" : "s"} (${lastFailure})`);
 }
 
+function controlFailureMessage(status: number, error: unknown): string {
+  const message = text(error) || `Viewer control request failed with status ${status}`;
+  if ((status === 401 || status === 403)
+    && !viewerControlToken(process.env, viewerControlOrigin(process.env))) {
+    return `${message}; no control credential is available. Configure LLV_VIEWER_CONTROL_TOKEN for the intended LLV_VIEWER_CONTROL_URL, or start Delegatus with LLV_TOKEN and reconnect its MCP server.`;
+  }
+  return message;
+}
+
 async function getViewerControl(
   pathname: string,
   context: McpToolCallContext = {},
@@ -484,7 +493,7 @@ async function getViewerControl(
     ? parsed as Record<string, unknown>
     : {};
   if (!response.ok) {
-    const error = text(result.error) || `Viewer control request failed with status ${response.status}`;
+    const error = controlFailureMessage(response.status, result.error);
     const requestHealth = runtimeHostRequestHealth(result.runtimeHostRequests);
     throw new McpToolRefusal(error, {
       error,
@@ -532,7 +541,7 @@ async function postViewerControl(
     ? parsed as Record<string, unknown>
     : {};
   if (result.error || (!response.ok && result.state !== "busy")) {
-    const message = text(result.error) || `Viewer control request failed with status ${response.status}`;
+    const message = controlFailureMessage(response.status, result.error);
     /* #1131: a refusal that names an ACCEPTED send is not just prose. The send
        began actuating and nothing could confirm it, so the caller needs the id
        it was accepted under — `message_receipt` answers what became of it — and
@@ -674,7 +683,7 @@ async function dispatchViewerControl(
     throw new McpDispatchUncertainError(`Viewer control returned a malformed response with status ${response.status}; the request may have been received`);
   }
   if (result.error || (!response.ok && result.state !== "busy")) {
-    const message = text(result.error) || `Viewer control request failed with status ${response.status}`;
+    const message = controlFailureMessage(response.status, result.error);
     const operationId = text(result.operationId);
     const launchId = text(result.launchId);
     if (operationId || launchId) {

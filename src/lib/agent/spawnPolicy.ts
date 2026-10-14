@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { installMemoryHook } from "@/lib/memory/hook";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 
+import { viewerControlOrigin, viewerControlToken, VIEWER_CONTROL_TOKEN_ENV } from "@/lib/mcp/controlEndpoint";
 import { statePath } from "@/lib/configDir";
 import { readViewerGatewayConfig, VIEWER_GATEWAY_FILE } from "@/runtime-host/deploymentProxy";
 import { stableMcpRuntimeRoot } from "@/runtime-host/mcpRuntimeRelease";
@@ -73,7 +74,7 @@ export interface ViewerMcpServerEntry {
  * link pointed at the real Viewer while everything else the agent runs stays
  * in its sandbox.
  */
-export function viewerMcpServerEnv(source: McpEnvironment = process.env): Record<string, string> {
+export function viewerMcpServerEnv(source: McpEnvironment = process.env, overrides: JsonObject = {}): Record<string, string> {
   const configRoot = source.XDG_CONFIG_HOME?.trim() || path.join(os.homedir(), ".config");
   const env: Record<string, string> = {
     XDG_CONFIG_HOME: configRoot,
@@ -84,10 +85,18 @@ export function viewerMcpServerEnv(source: McpEnvironment = process.env): Record
      it would otherwise launch the server without an interpreter to find. Where
      the table is additive — Claude's `.mcp.json` is — these are the values the
      server would have inherited anyway. */
-  for (const name of ["PATH", "HOME", "LLV_VIEWER_DEPLOY_TARGET", "LLV_VIEWER_PORT"] as const) {
+  for (const name of ["PATH", "HOME", "LLV_VIEWER_DEPLOY_TARGET", "LLV_VIEWER_PORT", "LLV_VIEWER_CONTROL_URL"] as const) {
     const value = source[name]?.trim();
     if (value) env[name] = value;
   }
+  // Resolve before the agent sandbox replaces config roots. The existing
+  // resolver admits ambient keys only for this installation's own endpoint.
+  for (const [name, value] of Object.entries(overrides)) {
+    if (typeof value === "string") env[name] = value;
+  }
+  const effective = { ...source, ...env };
+  const token = viewerControlToken(effective, viewerControlOrigin(effective));
+  if (token) env[VIEWER_CONTROL_TOKEN_ENV] = token;
   return env;
 }
 
@@ -338,7 +347,7 @@ function claudeMcpServers(
        itself. A value already written into the definition wins: an operator
        who pinned a state dir there meant it. */
     const pinned = name === "viewer"
-      ? { ...definition, env: { ...viewerMcpServerEnv(), ...record(definition.env) } }
+      ? { ...definition, env: viewerMcpServerEnv(process.env, record(definition.env) ?? {}) }
       : definition;
     return [[name, pinned]];
   }));
