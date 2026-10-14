@@ -1,5 +1,39 @@
 import { expect, test, harness, create, loadPipelines, savePipelines, tickPipelines } from "./engine.fixture";
-import { withPipelineMutation } from "./store";
+import { pipelineIdentity, withPipelineMutation } from "./store";
+import { spyOn } from "bun:test";
+import { SqliteStateCollection } from "@/lib/state/sqliteStateStore";
+
+test("a tick with retained attempt history materializes settled lanes only for its returned snapshot", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const active = loadPipelines()[0]!;
+  const retained = Array.from({ length: 1_000 }, (_, n) => {
+    const lane = structuredClone(active);
+    lane.id = `retained-${n}`;
+    Object.assign(lane, pipelineIdentity(lane.id, lane.task, lane.repoDir));
+    lane.state = "closed";
+    lane.closedAt = "2026-10-14T00:00:00.000Z";
+    lane.cursor = null;
+    lane.delivery = undefined;
+    lane.publication = "internal";
+    lane.runs.forEach(run => { if (run.attempts.length) run.attempts = Array.from({ length: 16 }, (_, i) => ({ ...run.attempts[0]!, n: i + 1,
+      launchId: null, state: "failed", verdict: { status: "fail", findings: [] }, completedAt: lane.closedAt })); });
+    return lane;
+  });
+  savePipelines([active, ...retained]);
+  const before = loadPipelines();
+  const snapshots = spyOn(SqliteStateCollection.prototype, "snapshot");
+  const calls = [...h.calls];
+  let result: Awaited<ReturnType<typeof tickPipelines>>;
+  try {
+    result = await tickPipelines([], h.ports);
+    expect(snapshots.mock.calls.length).toBeLessThanOrEqual(2);
+  } finally { snapshots.mockRestore(); }
+  expect(result!.pipelines.filter(lane => lane.id.startsWith("retained-"))).toEqual(before.slice(1));
+  expect(h.calls).toEqual(calls);
+});
 
 test("a controller evidence reply cannot overwrite a concurrent lane edit or trigger recovery", async () => {
   const h = harness();

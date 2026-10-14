@@ -197,6 +197,8 @@ test("a due busy wait survives a restarted controller race with one fresh host c
     process.env.LLV_STATE_DIR = ${JSON.stringify(state)};
     const fs = await import("node:fs");
     const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(enginePath)});
+    const { registerPipelineTick } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerSignal.ts"))});
+    registerPipelineTick(async () => {});
     const ports = defaultPipelinePorts();
     // This child models admission and a fake spawn, just like the parent harness.
     ports.engineReadiness = () => "connected";

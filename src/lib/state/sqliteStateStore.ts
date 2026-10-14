@@ -1,6 +1,7 @@
 import { AccountCommitBusyError, accountMutationHeld } from "@/lib/accounts/accountMutationContext";
 import crypto from "node:crypto";
-import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
+import { viewerLoopMonitor, withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { forEachCooperatively, mapCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { recordBlockingWait } from "@/lib/blockingWaits";
 import fs from "node:fs";
 import path from "node:path";
@@ -10,7 +11,8 @@ import type { Database as BunDatabase, SQLQueryBindings } from "bun:sqlite";
 import { procBackend } from "@/lib/proc";
 
 import { rememberRecordBytes } from "./registryRecords";
-import { openCurrentDatabase } from "./currentDatabase";
+import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
+import { databaseFileIdentity, openCurrentDatabase } from "./currentDatabase";
 import { FileTransactionBusyError } from "./fileTransaction";
 import { isDiskFullError, noteStateCommit, noteStateDiskFull, StateDiskFullError, stateFreeBytes, STATE_DISK_FULL_FLOOR_BYTES } from "./diskFull";
 
@@ -155,6 +157,9 @@ export interface SqliteStateCollectionOptions<T> {
   key(record: T): string;
   decode(value: unknown): T | null;
   clone(record: T): T;
+  /** Controllers may cache decoded rows across turns; every mutable nested
+      field in a detached controller copy must be independent of that cache. */
+  cloneController?(record: T): T;
   controllerActive?(record: T): boolean;
   validate?(record: T): void;
   strictDecode?: boolean;
@@ -164,6 +169,8 @@ export interface SqliteStateCollectionOptions<T> {
   decodeError?(error: unknown): Error;
   onDecodeError?(error: unknown): void;
   onIncrementalReadSnapshot?(revision: number): void;
+  /** Authority outside SQLite that affects decoding (for example project aliases). */
+  decodeAuthority?(): unknown;
 }
 
 type CollectionRow = {
@@ -203,7 +210,7 @@ interface CollectionCache<T> {
 
 interface TrackedRoot<T> {
   originalKey: string;
-  persistedJson: string;
+  persistedJson: string | null;
   value: T;
 }
 
@@ -212,6 +219,7 @@ interface MutationSession<T> {
   rawRecords: T[];
   materialized: Map<number, TrackedRoot<T>>;
   structural: boolean;
+  explicitOnly: boolean;
 }
 
 export interface StateMutationContext<T> {
@@ -439,6 +447,7 @@ function openRawDatabase(filename: string): Database {
         if (!collectionColumns.some((column) => column.name === "change_floor")) {
           db.exec("ALTER TABLE state_collections ADD COLUMN change_floor INTEGER NOT NULL DEFAULT 0");
         }
+        installPipelineControllerIndex(db, path.dirname(filename));
         db.exec("COMMIT");
         secureDatabaseFiles(filename);
         return db;
@@ -989,6 +998,9 @@ export class SqliteStateCollection<T> {
   private readonly readDb: Database;
   private cache: CollectionCache<T> | null = null;
   private revisionCache: { signature: string; revision: number } | null = null;
+  private controllerCache = new Map<string, { revision: number; value: T | null }>();
+  private controllerAuthority: unknown;
+  private controllerIdentity: string | null = null;
 
   constructor(readonly filename: string, private readonly options: SqliteStateCollectionOptions<T>) {
     this.readDb = openDatabase(filename);
@@ -1019,6 +1031,67 @@ export class SqliteStateCollection<T> {
 
   snapshot(): T[] {
     return this.loadReadonly().map((record) => this.options.clone(record));
+  }
+
+  async snapshotAsync(): Promise<T[]> {
+    const revision = this.revision();
+    const identity = databaseFileIdentity(this.filename);
+    const meta = this.collectionMeta()!;
+    if (!this.cache || this.cache.revision > revision || this.cache.revision < meta.change_floor) {
+      const records = new Map<string, CachedRecord<T>>();
+      let order = -1, key = "";
+      for (;;) {
+        const rows = withViewerOperation("pipelines.controller-read", () => this.readDb.query<CollectionRow,
+          [string, number, number, string, number]>(`
+          SELECT row_key, value_json, row_order, row_revision, controller_active FROM state_rows
+          WHERE collection = ? AND row_order >= ? AND (row_order > ? OR row_key > ?)
+          ORDER BY row_order, row_key LIMIT ?
+        `).all(this.options.collection, order, order, key, 16));
+        await mapCooperatively(rows, row => {
+          const value = withViewerOperation("pipelines.controller-decode", () => this.decodeRow(row.value_json));
+          if (value !== null) records.set(row.row_key, { value, valueJson: row.value_json, rowRevision: row.row_revision, order: row.row_order });
+          order = row.row_order; key = row.row_key;
+        }, { batchSize: 4, timeBudgetMs: 16 });
+        if (rows.length < 16) break;
+        await yieldToRuntime();
+      }
+      if (this.revision() !== revision || databaseFileIdentity(this.filename) !== identity) throw new StateSnapshotChangedError();
+      this.rememberCache(revision, records);
+    }
+    return mapCooperatively(this.loadReadonly(), record => this.options.clone(record), { batchSize: 4, timeBudgetMs: 16 });
+  }
+
+  /** A candidate projection reads only indexed work, preserving collection
+      order. A private read transaction pins flags and payloads together while
+      peer writers commit; decoding and per-caller copies yield between batches.
+      Actuation still belongs to the caller's existing admission fences. */
+  async pipelineControllerSelection(kind: PipelineControllerSelection): Promise<T[]> {
+    if (this.options.collection !== "pipelines") throw new Error("pipeline selection requires the pipeline collection");
+    const db = connectReadonlyDatabase(this.filename);
+    try {
+      db.exec("BEGIN");
+      const records: T[] = [];
+      let order = -1, key = "";
+      for (;;) {
+        const rows = withViewerOperation("pipelines.controller-select", () => db.query<
+          Pick<CollectionRow, "row_key" | "row_order" | "value_json">, [string, number, number, string, number]>(`
+          SELECT w.row_key, w.row_order, r.value_json FROM pipeline_controller_work w
+          JOIN state_rows r ON r.collection = 'pipelines' AND r.row_key = w.row_key
+          WHERE w.kind = ? AND w.row_order >= ? AND (w.row_order > ? OR w.row_key > ?)
+          ORDER BY w.row_order, w.row_key LIMIT ?
+        `).all(kind, order, order, key, 16));
+        await mapCooperatively(rows, row => {
+          const decoded = withViewerOperation("pipelines.controller-decode", () => this.decodeRow(row.value_json));
+          if (decoded) records.push(this.options.clone(decoded));
+          order = row.row_order; key = row.row_key;
+        }, { batchSize: 4, timeBudgetMs: 16 });
+        if (rows.length < 16) break;
+        await yieldToRuntime();
+      }
+      db.exec("COMMIT");
+      return records;
+    } catch (error) { rollbackQuietly(db); throw error; }
+    finally { db.close(); }
   }
 
   snapshotForController(): T[] {
@@ -1529,22 +1602,31 @@ export class SqliteStateCollection<T> {
 
   /** Controller I/O runs on a detached snapshot. Each checkpoint takes only
       the write lease and verifies the rows it will replace. Reservations still
-      become durable at persist(), before their existing actuation paths run. */
+      become durable at persist(), before their existing actuation paths run.
+      Explicit-only callers omit comparison baselines and must name every row
+      they checkpoint. Ordinary callers retain implicit dirty-row checkpoints. */
   async reconcileSnapshot<R>(
     operation: (records: T[], persist: (records?: readonly T[]) => void, assertCurrent: (record: T) => void) => Promise<R> | R,
     observeHold?: (heldMs: number) => void,
+    explicitOnly = false,
   ): Promise<R> {
     assertSqliteWriteAuthority(this.filename);
     const revision = this.revision();
-    const expected = this.rowRevisions();
-    const session = this.track(this.loadControllerReadonly());
+    const identity = databaseFileIdentity(this.filename);
+    const expected = new Map<string, number>();
+    const session = this.track(await this.prepareControllerSnapshot(expected), explicitOnly, true);
+    // A synchronous callback may filter all selected rows before its first
+    // await. Finish their independent copies in bounded slices beforehand.
+    await forEachCooperatively(session.records, () => undefined, { batchSize: 4, timeBudgetMs: 16 });
     if (this.revision() !== revision) throw new StateSnapshotChangedError();
+    if (databaseFileIdentity(this.filename) !== identity) throw new StateSnapshotChangedError();
     const rowRevision = (key: string) => this.readDb.query<{ row_revision: number }, [string, string]>(
       "SELECT row_revision FROM state_rows WHERE collection = ? AND row_key = ?",
     ).get(this.options.collection, key)?.row_revision;
     const assertCurrent = (record: T) => {
       const key = this.options.key(record);
-      if (rowRevision(key) !== expected.get(key)) throw new StateSnapshotChangedError();
+      if (!expected.has(key) || databaseFileIdentity(this.filename) !== identity
+        || rowRevision(key) !== expected.get(key)) throw new StateSnapshotChangedError();
     };
     return operation(session.records, records => {
       // Defer immediately if another writer owns the collection lease.
@@ -1558,13 +1640,13 @@ export class SqliteStateCollection<T> {
       const acquiredAt = durableHolds.get(lease)!.start;
       const committed: string[] = [];
       try {
-        this.persistSession(lease, session, context => {
+        withViewerOperation("pipelines.controller-checkpoint", () => this.persistSession(lease, session, context => {
           if (context.structural) throw new Error("controller snapshots cannot replace the collection");
           for (const record of context.dirtyRecords) {
             assertCurrent(record);
             committed.push(this.options.key(record));
           }
-        }, records);
+        }, records));
         for (const key of committed) {
           const current = rowRevision(key);
           if (current !== undefined) expected.set(key, current);
@@ -1660,6 +1742,58 @@ export class SqliteStateCollection<T> {
     });
   }
 
+  /** Indexed pages contain only selected headers. Unchanged history keeps its
+      decoded value; payload reads and decoding yield without holding a lease
+      or a read transaction. The outer revision check refuses a mixed snapshot. */
+  private async prepareControllerSnapshot(expected: Map<string, number>): Promise<readonly T[]> {
+    const identity = databaseFileIdentity(this.filename);
+    const authority = this.options.decodeAuthority?.();
+    if (identity !== this.controllerIdentity || authority !== this.controllerAuthority) this.controllerCache.clear();
+    this.controllerIdentity = identity;
+    this.controllerAuthority = authority;
+    const cache = new Map<string, { revision: number; value: T | null }>();
+    const records: T[] = [];
+    let order = -1, key = "";
+    for (;;) {
+      const rows = withViewerOperation("pipelines.controller-read", () => this.readDb.query<
+        Pick<CollectionRow, "row_key" | "row_order" | "row_revision">, [string, number, number, string, number]>(`
+        SELECT row_key, row_order, row_revision FROM state_rows
+        WHERE collection = ? AND controller_active = 1 AND row_order >= ?
+          AND (row_order > ? OR row_key > ?)
+        ORDER BY row_order, row_key LIMIT ?
+      `).all(this.options.collection, order, order, key, 16));
+      if (!rows.length) break;
+      let sliceStarted = performance.now();
+      for (let index = 0; index < rows.length; index++) {
+        const row = rows[index]!;
+        let held = this.controllerCache.get(row.row_key);
+        if (!held || held.revision !== row.row_revision) {
+          const payload = withViewerOperation("pipelines.controller-read", () => this.readDb.query<
+            Pick<CollectionRow, "value_json" | "row_revision">, [string, string]>(`
+            SELECT value_json, row_revision FROM state_rows WHERE collection = ? AND row_key = ?
+          `).get(this.options.collection, row.row_key));
+          if (!payload || payload.row_revision !== row.row_revision) throw new StateSnapshotChangedError();
+          held = { revision: row.row_revision,
+            value: withViewerOperation("pipelines.controller-decode", () => this.decodeRow(payload.value_json)) };
+        }
+        cache.set(row.row_key, held);
+        if (held.value !== null) { records.push(held.value); expected.set(row.row_key, row.row_revision); }
+        order = row.row_order; key = row.row_key;
+        if (index + 1 < rows.length && performance.now() - sliceStarted >= 16) {
+          await yieldToRuntime(); sliceStarted = performance.now();
+        }
+      }
+      if (rows.length < 16) break;
+      await yieldToRuntime();
+    }
+    // Drop rows that left the controller set; never retain inactive history.
+    if (databaseFileIdentity(this.filename) !== identity || this.options.decodeAuthority?.() !== authority) {
+      throw new StateSnapshotChangedError();
+    }
+    this.controllerCache = cache;
+    return records;
+  }
+
   private loadFull(revision: number): readonly T[] {
     const records = new Map<string, CachedRecord<T>>();
     for (const row of this.readDb.query<CollectionRow, [string]>(`
@@ -1706,10 +1840,10 @@ export class SqliteStateCollection<T> {
     this.revisionCache = null;
   }
 
-  private track(records: readonly T[]): MutationSession<T> {
+  private track(records: readonly T[], explicitOnly = false, controller = false): MutationSession<T> {
     const materialized = new Map<number, TrackedRoot<T>>();
     const tracked = [...records];
-    const session: MutationSession<T> = { records: [], rawRecords: tracked, materialized, structural: false };
+    const session: MutationSession<T> = { records: [], rawRecords: tracked, materialized, structural: false, explicitOnly };
     const indexOf = (property: string | symbol): number | null => {
       if (typeof property !== "string" || !/^(?:0|[1-9][0-9]*)$/.test(property)) return null;
       const index = Number(property);
@@ -1720,13 +1854,18 @@ export class SqliteStateCollection<T> {
         const index = indexOf(property);
         if (index === null || index >= target.length) return Reflect.get(target, property, receiver);
         if (!materialized.has(index)) {
-          const cloned = this.options.clone(target[index]!);
-          target[index] = cloned;
-          materialized.set(index, {
-            originalKey: this.options.key(cloned),
-            persistedJson: JSON.stringify(cloned),
-            value: cloned,
-          });
+          const materialize = () => {
+            const clone = controller ? this.options.cloneController ?? this.options.clone : this.options.clone;
+            const cloned = clone(target[index]!);
+            target[index] = cloned;
+            materialized.set(index, {
+              originalKey: this.options.key(cloned),
+              persistedJson: explicitOnly ? null : JSON.stringify(cloned),
+              value: cloned,
+            });
+          };
+          if (controller) withViewerOperation("pipelines.controller-materialize", materialize);
+          else materialize();
         }
         return target[index];
       },
@@ -1758,6 +1897,7 @@ export class SqliteStateCollection<T> {
     beforePersist?: (context: StateMutationContext<T>) => void,
     explicitRecords?: readonly T[],
   ): void {
+    if (session.explicitOnly && !explicitRecords) throw new Error("explicit controller checkpoints require records");
     if (explicitRecords) {
       if (explicitRecords.length === 0) return;
       beforePersist?.({ records: session.records, dirtyRecords: explicitRecords, structural: false });
@@ -1767,7 +1907,7 @@ export class SqliteStateCollection<T> {
         const currentKey = this.options.key(tracked.value);
         if (explicitKeys.has(currentKey)) {
           tracked.originalKey = currentKey;
-          tracked.persistedJson = JSON.stringify(tracked.value);
+          tracked.persistedJson = session.explicitOnly ? null : JSON.stringify(tracked.value);
         }
       }
       return;

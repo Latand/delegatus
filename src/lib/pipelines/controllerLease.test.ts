@@ -12,6 +12,16 @@ const fixtureLane = (id: string) => {
   return lane;
 };
 
+test("an uncheckpointed nested controller edit cannot alter the next snapshot", async () => {
+  savePipelines([fixtureLane("pristine-controller")]);
+  await withPipelineControllerMutation(rows => {
+    rows[0]!.stages[0]!.effectiveRole.model = "gpt-controller-edit";
+  });
+  await withPipelineControllerMutation(rows => {
+    expect(rows[0]!.stages[0]!.effectiveRole.model).toBeNull();
+  });
+});
+
 test("a writer can change a lane while controller evidence is pending", async () => {
   const lane = fixtureLane("lease-race");
   savePipelines([lane]);

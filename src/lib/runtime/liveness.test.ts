@@ -11,6 +11,7 @@ import {
   LIVENESS_CPU_PROGRESS_WINDOW_MS,
   LIVENESS_OBSERVATION_WINDOW_MS,
   observeHostCpuProgress,
+  outstandingDeliverySince,
   processLaunchedAt,
   readHostProcessEvidence,
   readTranscriptEvidence,
@@ -26,6 +27,56 @@ import type { StableTailRead } from "@/lib/scanner/activity";
 
 const NOW = Date.parse("2026-08-29T04:02:00.000Z");
 const MINUTE = 60_000;
+
+test("delivery liveness reads only its conversation and agrees with the complete reservation ledger", async () => {
+  const { AgentRegistry, normalizeRegistry } = await import("@/lib/agent/registry");
+  const { SqliteAgentRegistryStore } = await import("@/lib/agent/sqliteRegistryStore");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "liveness-index-"));
+  const seed = new AgentRegistry(path.join(directory, "seed.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = seed.ensureConversation("codex", "/sessions/liveness-index.jsonl", "default");
+  const template = seed.holdDelivery(conversation.id, "fixture", "fixture");
+  const initial = seed.snapshot();
+  seed.close();
+  for (let n = 0; n < 2_000; n++) {
+    const id = `history-${n}`;
+    initial.heldDeliveries[id] = { ...template, id, conversationId: `conversation_history-${n}`,
+      state: "delivered", createdAt: new Date(NOW - n * MINUTE).toISOString() };
+  }
+  const states = ["held", "assigned", "delivery-uncertain", "delivered", "failed"] as const;
+  states.forEach((state, n) => {
+    const id = `selected-${n}`;
+    initial.heldDeliveries[id] = { ...template, id, state, createdAt: new Date(NOW - (n + 1) * MINUTE).toISOString() };
+  });
+  initial.heldDeliveries["invalid-clock"] = { ...template, id: "invalid-clock", createdAt: "invalid" };
+  let reads = 0;
+  const store = new SqliteAgentRegistryStore(path.join(directory, "registry.sqlite"), {
+    initialSnapshot: initial, normalize: normalizeRegistry,
+    onRowPayloadRead: (collection, count) => { if (collection === "heldDeliveries") reads += count; },
+  });
+  try {
+    store.archiveInactive(4_096);
+    const snapshot = store.readOnlySnapshot().file;
+    reads = 0;
+    expect(outstandingDeliverySince(snapshot, conversation.id)).toBe(NOW - 3 * MINUTE);
+    expect(reads).toBeLessThanOrEqual(10);
+    const oracle = (id: string) => {
+      const clocks = Object.values(initial.heldDeliveries).filter(row => row.conversationId === id
+        && ["held", "assigned", "delivery-uncertain"].includes(row.state))
+        .map(row => Date.parse(row.createdAt)).filter(Number.isFinite);
+      return clocks.length ? Math.min(...clocks) : null;
+    };
+    for (const id of new Set(["conversation_absent", ...Object.values(initial.heldDeliveries).map(row => row.conversationId)])) {
+      expect(outstandingDeliverySince(snapshot, id)).toBe(oracle(id));
+      expect(outstandingDeliverySince(initial, id)).toBe(oracle(id));
+    }
+    store.mutate(file => {
+      file.heldDeliveries["selected-2"]!.state = "delivered";
+      file.heldDeliveries["fresh"] = { ...template, id: "fresh", createdAt: new Date(NOW - 4 * MINUTE).toISOString() };
+      expect(outstandingDeliverySince(file, conversation.id)).toBe(NOW - 4 * MINUTE);
+    }, false);
+    expect(outstandingDeliverySince(store.readOnlySnapshot().file, conversation.id)).toBe(NOW - 4 * MINUTE);
+  } finally { store.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
 
 function evidence(overrides: {
   transcriptTail?: Partial<TurnLivenessEvidence["transcriptTail"]>;

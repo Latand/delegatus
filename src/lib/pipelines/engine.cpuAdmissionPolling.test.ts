@@ -168,7 +168,7 @@ test("pipeline admission retries a transient reconciliation refusal during a blo
   let refuse = false;
   h.ports.cpuAdmissionReconcile = () => {
     if (refuse) { refuse = false; throw new Error("temporary queue read failure"); }
-    reconcile();
+    return reconcile();
   };
   const errors = spyOn(console, "error").mockImplementation(() => {});
   const pending = engine.tickPipelines([], h.ports);
@@ -236,7 +236,7 @@ test.each(["memory", "controller", "provider"] as const)("a future %s retry susp
     else if (kind === "controller") attempt.controllerWait = wait;
     else attempt.providerWait = { condition: { kind: "usage_limit", scope: "usage", resetLabel: null, label: "limit" }, text: "waiting", accountId: null, turnTs: 0, tries: 0, startedAt: wait.startedAt, resumeAt: future, resetsAt: null };
     savePipelines(rows);
-    h.ports.cpuAdmissionReconcile?.(h.ports);
+    await h.ports.cpuAdmissionReconcile?.(h.ports);
     const key = h.db.query<{ key: string; seq: number }, [string]>("SELECT key, seq FROM tickets WHERE key LIKE ?").get(`%:${second.id}:%`)!;
     expect(h.db.query("SELECT key FROM suspended WHERE key = ?").get(key.key)).not.toBeNull();
     h.age();
