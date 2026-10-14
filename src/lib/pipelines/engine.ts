@@ -7,6 +7,7 @@ import type { PipelineRuntimeSwitch } from "./types";
 import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
+import { claudeHostEndText } from "@/lib/runtime/hostEndCause";
 import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, machineCpuPressurePollMs, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
 import { instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
 import { stateDir } from "@/lib/configDir";
@@ -337,11 +338,15 @@ export interface PipelinePorts {
   conversationHostUnavailableSince?(conversationId: string): Promise<string | null | undefined>;
   /** Whether the process the registry records as this conversation's host is
       running right now and is still that process: `alive` only when the pid
-      exists and its start identity matches the recorded one, `gone` when the
-      row is dead or the pid is absent or now somebody else's, `unknown` when
-      nothing recorded or observed can tell. Turn liveness answers a different
-      question: a host whose first message never landed has no turn at all. */
+      exists and its start identity matches the recorded one, whatever the
+      row's status says (#2790), `gone` when the row is dead or the pid is
+      absent or now somebody else's, `unknown` when nothing recorded or
+      observed can tell. Turn liveness answers a different question: a host
+      whose first message never landed has no turn at all. */
   conversationHostProcess?(conversationId: string): Promise<{ state: "alive" | "gone" | "unknown"; pid: number | null }>;
+  /** How the conversation's recorded host ended, in one clause, when the host
+      recorded it (#2790). Null for a running host and for one that recorded none. */
+  conversationHostEnded?(conversationId: string): string | null;
   /** The newest turn a Viewer release or restart cut for this conversation, as
       its interruption obligation records it (#1835). Null when none was
       recorded, which is the answer for every conversation no deploy cut. */
@@ -879,6 +884,9 @@ type StageHostProbe = {
   /** The conversation's current generation: the one registry row a stop may act on. */
   key: SessionKey;
   resident(): boolean;
+  /** The row says the stream is gone while its recorded engine process still
+      runs (#2790): nothing can deliver to it, and only its identity can stop it. */
+  orphaned(): boolean;
   /** Durable tmux evidence recorded for this session, if any. It is the only
       thing that can identify a stored pane id as still being this agent's. */
   host(): TmuxHostEvidence | null;
@@ -902,11 +910,23 @@ async function stageHostProbe(target: PipelineStageHostRef): Promise<StageHostPr
     transcriptPath: generation.path,
     key: { engine: conversation.engine, sessionId: generation.id },
     /* Re-read every call: the registry read cache invalidates on the file
-       signature, so a teardown written by the host process is visible here. */
+       signature, so a teardown written by the host process is visible here.
+       The row's status describes the stream; the recorded process is the
+       agent. A host publishes `dead` before it reaps its child, and a Viewer
+       generation that ends in between leaves the agent writing under a
+       terminal row. Reading that row as "not running" let a replacement start
+       beside it (#2790). */
     resident: () => {
       const entry = registry.readOnlySnapshot().entries[sessionKey];
-      if (!entry || entry.status === "dead" || entry.status === "unhosted") return false;
-      return structuredHostProcessAlive(entry.structuredHost?.process ?? null) || Boolean(entry.host);
+      if (!entry) return false;
+      if (structuredHostProcessAlive(entry.structuredHost?.process ?? null)) return true;
+      if (entry.status === "dead" || entry.status === "unhosted") return false;
+      return Boolean(entry.host);
+    },
+    orphaned: () => {
+      const entry = registry.readOnlySnapshot().entries[sessionKey];
+      return Boolean(entry && (entry.status === "dead" || entry.status === "unhosted")
+        && structuredHostProcessAlive(entry.structuredHost?.process ?? null));
     },
     host: () => registry.readOnlySnapshot().entries[sessionKey]?.host ?? null,
   };
@@ -977,6 +997,11 @@ export async function stopPipelineStageAgent(
   try {
     const probe = await stageHostProbe(target);
     if (!probe || !probe.resident()) return { outcome: "not-running" };
+    /* A terminal row has no stream for a kill command to travel. Its live
+       engine process is ended by its recorded identity instead. */
+    if (!probes.onlyIfIdle && probe.orphaned()) {
+      return await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {});
+    }
     const { conversationId, transcriptPath, resident } = probe;
 
     const applyAction = probes.action ?? (async (request) => {
@@ -1047,6 +1072,9 @@ export async function retirePipelineStageAgent(
   try {
     const probe = await stageHostProbe(target);
     if (!probe || !probe.resident()) return { outcome: "not-running" };
+    /* No idle evidence can come from a host whose stream is gone. Its stage is
+       settled, so the orphan behind the terminal row is ended by identity. */
+    if (probe.orphaned()) return await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {});
     const client = probes.client === undefined ? runtimeHostClient() : probes.client;
     if (!client) return { outcome: "deferred" };
     const session = await client.readSession?.({ conversationId: probe.conversationId });
@@ -1694,11 +1722,25 @@ export function defaultPipelinePorts(
       if (!entry) return { state: "unknown", pid: null };
       const host = readHostProcessEvidence(entry.structuredHost?.process ?? null, dependencies.liveness);
       const pid = host.expected?.pid ?? null;
+      const proven = Boolean(host.expected && host.present && host.observedIdentity !== null
+        && host.expected.startIdentity !== null && host.observedIdentity === host.expected.startIdentity);
+      /* The process is asked before the row: a terminal row can stand over a
+         live engine process (#2790). */
+      if (proven) return { state: "alive", pid };
       if (entry.status === "dead" || entry.status === "unhosted") return { state: "gone", pid };
       if (!host.expected) return { state: "unknown", pid };
       if (!host.present) return { state: "gone", pid };
       if (host.observedIdentity === null || host.expected.startIdentity === null) return { state: "unknown", pid };
       return { state: host.observedIdentity === host.expected.startIdentity ? "alive" : "gone", pid };
+    },
+    conversationHostEnded: (conversationId) => {
+      if (!conversationId.startsWith("conversation_")) return null;
+      const current = snapshot();
+      const conversation = current.conversations[conversationId as ViewerConversationId];
+      const generation = conversation?.generations.at(-1);
+      if (conversation?.engine !== "claude" || !generation) return null;
+      const ended = current.entries[sessionKeyId({ engine: "claude", sessionId: generation.id })]?.structuredHost?.ended;
+      return ended ? claudeHostEndText(ended) : null;
     },
     conversationInterruption: (conversationId) => {
       const cut = newestCut(conversationId);
@@ -5207,6 +5249,8 @@ async function replaceInterruptedStageAttempt(
     ...(promptBoundary === undefined ? {} : { promptBoundary }), ...(endedEarlier ? { stopped: endedEarlier } : {}) };
   persist();
   if (restartCutHoldsStageRecovery(attempt, ports)) return true;
+  /* Read before the stop: ending the host retires the row that recorded it. */
+  const hostEnded = attempt.conversationId ? ports.conversationHostEnded?.(attempt.conversationId) ?? null : null;
   const stopped = await stopAutomaticInterruptedStageAttempt(stage, attempt, ports, true);
   /* A withdrawn stop did nothing, so it leaves no reservation behind either;
      whatever the transcript holds by now is read by the ordinary paths. */
@@ -5285,7 +5329,11 @@ async function replaceInterruptedStageAttempt(
   const cause: PipelineStageInterruptionCause = restarted ? "restart"
     : ended && ended.kind !== "dead" ? "engine-stop" : "host-lost";
   if (restartCutHoldsStageRecovery(attempt, ports)) return true;
-  startReplacementAttempt(pipeline, stage, attempt, cause, { bootId, requestedAt, lastRecordAt }, latest, ports);
+  /* A lost host whose agent this recovery had to stop was an orphan: its
+     stream was gone while its process kept running (#2790). */
+  const orphanStopped = cause === "host-lost" && ended?.kind === "dead";
+  startReplacementAttempt(pipeline, stage, attempt, cause, { bootId, requestedAt, lastRecordAt }, latest, ports,
+    { hostEnded, orphanStopped });
   persist();
   return true;
 }
@@ -5314,10 +5362,13 @@ function startReplacementAttempt(
   recovery: { bootId: string; requestedAt: string; lastRecordAt: number | null },
   durable: StageTurnEvidence | null | undefined,
   ports: PipelinePorts,
+  lost: { hostEnded?: string | null; orphanStopped?: boolean } = {},
 ): void {
   attempt.state = "failed";
   attempt.completedAt = ports.now();
-  attempt.error = `${INTERRUPTION_WORDS[cause].error}; replaced by a fresh stage attempt`;
+  const why = cause === "host-lost" && lost.hostEnded ? ` (${lost.hostEnded})` : "";
+  const orphan = lost.orphanStopped ? "; its agent process was still running and Delegatus stopped it by its recorded identity" : "";
+  attempt.error = `${INTERRUPTION_WORDS[cause].error}${why}${orphan}; replaced by a fresh stage attempt`;
   attempt.restartRecovery ??= { ...recovery };
   const replacement = newAttempt(pipeline, stage);
   if (!runFor(pipeline, stage.id) || !replacement) {
@@ -5334,7 +5385,7 @@ function startReplacementAttempt(
   attempt.restartRecovery.replacementAttempt = replacement.n;
   setCursorState(pipeline, stage.id, "pending");
   pipeline.state = "running";
-  pipeline.stateDetail = `stage attempt ${attempt.n} ${INTERRUPTION_WORDS[cause].detail}; fresh attempt ${replacement.n} is starting`;
+  pipeline.stateDetail = `stage attempt ${attempt.n} ${INTERRUPTION_WORDS[cause].detail}${why}${orphan}; fresh attempt ${replacement.n} is starting`;
 }
 
 /**
@@ -12442,11 +12493,16 @@ export async function patchPipeline(
         const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt);
         /* The same rule the automatic recovery reads: an idle host whose
            transcript is still growing is an agent at work, never a stall. */
+        /* Two refusals, said apart (#2790): one waits on a message still on
+           its way to the attempt, the other on evidence that its agent has
+           stopped working. */
+        if (ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
+          return { error: "the running attempt has a pending delivery; retry once that delivery settles", status: 409 };
+        }
         if (!interrupted || durable?.turn !== "busy" || durable.launchOnly
           || (interrupted === "idle" && !idleTurnSilent(durable, ports))
-          || deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)
-          || ports.conversationDeliveryOutstanding?.(attempt.conversationId)) {
-          return { error: "the running attempt is not confirmed stalled or has a pending delivery", status: 409 };
+          || deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)) {
+          return { error: "the running attempt is not confirmed stalled", status: 409 };
         }
         const stopped = await stopAutomaticInterruptedStageAttempt(stage, attempt, ports, true);
         if (stopped === null) return { error: "the stage host resumed work before its stalled retry", status: 409 };

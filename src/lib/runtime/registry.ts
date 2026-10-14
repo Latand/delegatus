@@ -78,6 +78,7 @@ export function claudeHostColumns(state: HostState, writerClaimEpoch: number): S
     ...(state.pendingToolUses?.length ? { pendingToolUses: state.pendingToolUses } : {}),
     ...(state.providerRetry ? { providerRetry: state.providerRetry } : {}),
     ...(state.memory ? { memory: state.memory } : {}),
+    ...(state.ended ? { ended: state.ended } : {}),
     activeFlags: state.activeFlags,
   };
 }
@@ -457,6 +458,18 @@ async function terminateVerifiedStructuredOrphan(
 ): Promise<boolean> {
   if (claimOwnerBlocksOrphanReap(claimOwner)) return false;
   return terminateVerifiedProcess(processIdentity);
+}
+
+/** Stops the engine process a terminal row still records, once no live
+    writer claim owns that row, so a claim refused over it can be asked again
+    (#2790). The row says its stream is gone: nothing can deliver to that
+    process, and a successor started beside it would be a second writer in
+    its worktree. True only when the process is proven gone. */
+export async function stopTerminalStructuredOrphan(registry: AgentRegistry, key: SessionKey): Promise<boolean> {
+  const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+  const orphan = entry?.structuredHost?.process ?? null;
+  if (!entry || !orphan || (entry.status !== "dead" && entry.status !== "unhosted")) return false;
+  return terminateVerifiedStructuredOrphan(orphan, entry.claimOwner ?? null);
 }
 
 /**

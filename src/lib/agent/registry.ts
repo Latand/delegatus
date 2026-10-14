@@ -1,4 +1,5 @@
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
+import { normalizeHostEndCause, type HostEndCause } from "@/lib/runtime/hostEndCause";
 import { recordBlockingWait, withWaitCorrelation, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
 import crypto from "node:crypto";
 import { parseRuntimeIdleKillFence } from "@/lib/runtime/commands";
@@ -133,6 +134,8 @@ export interface TmuxHostEvidence {
 
 export interface StructuredHostColumns {
   memory?: HostMemoryState;
+  /** Why the recorded host ended (#2790); kept with the terminal row. */
+  ended?: HostEndCause;
   kind: "codex-app-server" | "claude-broker" | "copilot-acp";
   endpoint: string;
   process: ProcessIdentity | null;
@@ -2157,6 +2160,7 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
       ? { pendingToolUses: normalizePendingToolUses(host.pendingToolUses) }
       : {}),
     ...(normalizeHostMemory(host.memory) ? { memory: normalizeHostMemory(host.memory)! } : {}),
+    ...(normalizeHostEndCause(host.ended) ? { ended: normalizeHostEndCause(host.ended)! } : {}),
     ...(normalizeProviderRetry(host.providerRetry) ? { providerRetry: normalizeProviderRetry(host.providerRetry) } : {}),
     ...(Number.isSafeInteger(host.releaseHandoffClaimEpoch) && (host.releaseHandoffClaimEpoch ?? -1) >= 0
       ? { releaseHandoffClaimEpoch: host.releaseHandoffClaimEpoch }
@@ -7742,7 +7746,6 @@ export class AgentRegistry {
           claimEpoch: 0, claimOwner: null, pendingAction: "resume" as const, updatedAt: now() }
         : null);
       if (!entry) return null;
-      const terminal = entry.status === "unhosted" || entry.status === "dead";
       // A dead-host cleanup clears these columns. Resume setup must publish
       // its writer claim before starting the replacement host, under this lock.
       const structuredHost = entry.structuredHost
@@ -7754,12 +7757,15 @@ export class AgentRegistry {
          mutation loads rows lazily rather than from an assembled snapshot, so
          the origin decision is applied to this one row here (#739). */
       reboundEntryMcpGrant(file, key, this.mcpGrantPolicy, entryGrantAttestors(file, key));
-      /* A terminal status permits adoption of an orphaned wrapper while the
-         claim owner remains the writer fence. A host can publish `dead` before
-         its late reap releases that claim, and its live writer must finish
-         before a successor advances the epoch. */
+      /* A recorded engine process that may still run owns the session,
+         whatever the row's status says. A host publishes `dead` when its
+         stream fails and reaps the child later, and a Viewer generation that
+         ends in between leaves a terminal row over a live engine still
+         writing in its worktree. Granting the claim then starts a second
+         engine beside it (#2790). Callers that may stop the orphan do so by
+         its recorded identity and claim again once it is proven gone. */
       const liveHost = structuredHost.process;
-      if (!terminal && liveHost && this.ownerAlive(liveHost)) return null;
+      if (liveHost && this.ownerAlive(liveHost)) return null;
       const requestedOwner = structuredClaimOwner(owner);
       if (entry.claimOwner) {
         const priorOwner = structuredClaimIdentity(entry.claimOwner);

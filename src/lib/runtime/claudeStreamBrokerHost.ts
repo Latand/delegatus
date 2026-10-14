@@ -1,4 +1,5 @@
 import { memoryField, memoryKillText } from "./agentMemoryState";
+import { CLAUDE_CHILD_EXITED, claudeHostEndText, HOST_END_REASON_MAX_CHARS, type HostEndCause } from "./hostEndCause";
 import type { AgentMemoryCell } from "./agentMemory";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
@@ -305,6 +306,13 @@ const CHILD_ENV_ALLOWLIST = [
 ] as const;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_SHUTDOWN_GRACE_MS = 1_000;
+
+export { claudeHostEndText };
+
+/** What pending work is told when a release cannot prove its child ended:
+    the process may still be running, so nothing says it was released (#2790). */
+export const CLAUDE_RELEASE_UNCONFIRMED =
+  "Claude stream host is stopping and could not confirm that the Claude process stopped";
 
 /** The command this control types into the conversation (#1214). */
 export const CLAUDE_COMPACT_COMMAND = "/compact";
@@ -678,6 +686,9 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private releaseCleanup: (() => void) | null;
   private terminationTimer: ReturnType<typeof setTimeout> | null = null;
   private terminationStarted = false;
+  /** Why this host ended; the first cause recorded wins (#2790). */
+  private endCause: HostEndCause | null = null;
+  private exitNoted = false;
   private releaseFence: Readonly<ProcessIdentity> | null = null;
   private readonly reapedPromise: Promise<void>;
   private resolveReaped!: () => void;
@@ -733,12 +744,20 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     });
     child.on("error", (error) => this.fail(new Error(`Claude child failed: ${safeError(error)}`)));
     // Exit arrives before inherited pipes close; reap OOM survivors immediately.
-    child.on("exit", () => {
+    child.on("exit", (code, signal) => {
       const kill = this.memoryCell?.settleExit({ expected: this.releasing || this.released });
-      if (kill?.fatal && !this.releasing && !this.released) this.fail(new Error(memoryKillText(kill)));
+      if (kill?.fatal && !this.releasing && !this.released) {
+        const reason = memoryKillText(kill);
+        this.recordEnd("memory-kill", reason, code, signal);
+        this.noteChildExit(code, signal);
+        this.fail(new Error(reason));
+        return;
+      }
+      this.noteChildExit(code, signal);
     });
-    child.on("close", () => {
+    child.on("close", (code, signal) => {
       this.memoryCell?.settleExit({ expected: this.releasing || this.released });
+      this.noteChildExit(code, signal);
       this.reaped = true;
       if (this.terminationTimer) {
         clearTimeout(this.terminationTimer);
@@ -747,7 +766,13 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       this.resolveReaped();
       if (this.releasing) this.finishRelease();
       else if (this.dead) this.notifyStateListeners();
-      else if (!this.releasing && !this.released) this.fail(new Error(this.memoryCell?.launchFailure() ?? "Claude child exited"));
+      else if (!this.releasing && !this.released) {
+        const launchFailure = this.memoryCell?.launchFailure() ?? null;
+        if (launchFailure && this.endCause?.kind === "child-exit" && this.endCause.reason === CLAUDE_CHILD_EXITED) {
+          this.endCause = { ...this.endCause, reason: boundedEndReason(launchFailure) };
+        }
+        this.fail(new Error(this.endCause ? claudeHostEndText(this.endCause) : CLAUDE_CHILD_EXITED));
+      }
     });
   }
 
@@ -1238,9 +1263,38 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       ...this.pendingToolUses(),
       providerRetry: this.activeTurnId ? this.providerRetry : null,
       ...memoryField(this.memoryCell),
+      ...(this.endCause ? { ended: { ...this.endCause } } : {}),
       activeFlags: [...this.launchFlags],
       account: this.account,
     };
+  }
+
+  /** Records the first cause of this host's end. */
+  private recordEnd(kind: HostEndCause["kind"], reason: string, code: number | null, signal: NodeJS.Signals | null): void {
+    if (this.endCause) return;
+    this.endCause = {
+      kind,
+      reason: boundedEndReason(reason),
+      code: code ?? null,
+      signal: signal ?? null,
+      signalledByHost: this.terminationStarted,
+      at: new Date().toISOString(),
+    };
+  }
+
+  /** The child's own exit status, from whichever of `exit` and `close`
+      reports it first. It completes a cause recorded before the child ended;
+      an exit during a release Delegatus asked for records none. */
+  private noteChildExit(code: number | null, signal: NodeJS.Signals | null): void {
+    if (this.exitNoted) return;
+    this.exitNoted = true;
+    if (!this.endCause) {
+      if (!this.releasing && !this.released) this.recordEnd("child-exit", CLAUDE_CHILD_EXITED, code, signal);
+      return;
+    }
+    if (this.endCause.code === null && this.endCause.signal === null) {
+      this.endCause = { ...this.endCause, code: code ?? null, signal: signal ?? null, signalledByHost: this.terminationStarted };
+    }
   }
 
   private pendingToolUses(): Pick<HostState, "pendingToolUses"> {
@@ -1573,7 +1627,9 @@ export class ClaudeStreamBrokerHost implements EngineHost {
 
   private async releaseAndReap(): Promise<void> {
     this.releasing = true;
-    this.rejectPending(new Error("Claude stream host released"));
+    /* Pending work hears "released" only from `finishRelease`, once the child
+       is reaped. A stop that cannot prove the child ended says so instead, so
+       no receipt reads "released" beside a process still writing (#2790). */
     if (!this.startTermination() && this.releaseFence) {
       this.releasing = false;
       throw new Error("Claude child identity changed before signalling");
@@ -1592,7 +1648,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         const leaderExited = this.child.pid === undefined
           || (this.child.exitCode ?? null) !== null
           || (this.child.signalCode ?? null) !== null;
-        if (!leaderExited) throw new Error("Claude child could not be reaped");
+        if (!leaderExited) {
+          this.rejectPending(new Error(CLAUDE_RELEASE_UNCONFIRMED));
+          throw new Error("Claude child could not be reaped");
+        }
         for (const stream of [this.child.stdin, this.child.stdout, this.child.stderr]) {
           try { stream?.destroy(); } catch { /* pipe already closed */ }
         }
@@ -1613,6 +1672,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.releasing = false;
     this.activeTurnId = null;
     this.attentions.clear();
+    this.rejectPending(new Error("Claude stream host released"));
     this.emit({ kind: "session-status", status: "unhosted" });
     if (this.ledgerFailed) this.notifyStateListeners();
     this.closeSubscribers();
@@ -1637,6 +1697,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
 
   private fail(error: Error): void {
     if (this.dead || this.released) return;
+    this.recordEnd("host-fault", error.message, null, null);
     this.dead = true;
     this.activeTurnId = null;
     this.attentions.clear();
@@ -1656,6 +1717,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       this.notifyStateListeners();
       return;
     }
+    this.recordEnd("host-fault", error.message, null, null);
     this.ledgerFailed = true;
     this.dead = true;
     this.activeTurnId = null;
@@ -1737,4 +1799,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     const state = this.currentState();
     for (const listener of this.stateListeners) listener(state);
   }
+}
+
+function boundedEndReason(reason: string): string {
+  return Array.from(safeError(reason)).slice(0, HOST_END_REASON_MAX_CHARS).join("");
 }

@@ -1,4 +1,5 @@
 import type { HostMemoryState } from "./agentMemory";
+import type { HostEndCause } from "./hostEndCause";
 import type { NativeQueueHost } from "./nativeQueueExecutor";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 
@@ -108,6 +109,8 @@ export type RuntimeEvent =
 
 export interface HostState {
   memory?: HostMemoryState;
+  /** Why the host ended; absent while it runs and for hosts that record none. */
+  ended?: HostEndCause;
   status: "active" | "attention" | "idle" | "unhosted" | "dead";
   sessionKey: string;
   endpoint: string;

@@ -1333,7 +1333,10 @@ test.each(["codex", "claude"] as const)("%s stale-live recovery converges regist
   expect(host.sent).toEqual([]);
 });
 
-test("a resume successor claims a released row whose recorded host process is still alive", async () => {
+/* #925 kept a released row with a live recorded process from wedging every
+   resume. Since #2790 the resume first stops that process by its recorded
+   identity, so the successor never runs beside it. */
+test("a resume successor stops the live process a released row still records, then claims the row", async () => {
   const sessionId = crypto.randomUUID();
   const cwd = path.join(sandbox, `released-live-successor-${sessionId}`);
   const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
@@ -1345,7 +1348,13 @@ test("a resume successor claims a released row whose recorded host process is st
   const launchProfile = emptyLaunchProfile({ cwd });
   const conversation = registry.ensureConversation("codex", artifactPath, "codex-subscription");
   const key = { engine: "codex" as const, sessionId };
-  const releasedProcess = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
+  const released = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  const releasedExit = new Promise<void>((resolve) => { released.once("exit", () => resolve()); });
+  let releasedProcess = captureProcessIdentity(released.pid!);
+  for (let attempt = 0; attempt < 100 && !releasedProcess.startIdentity; attempt += 1) {
+    await Bun.sleep(2);
+    releasedProcess = captureProcessIdentity(released.pid!);
+  }
   registry.upsert({
     key,
     artifactPath,
@@ -1419,8 +1428,11 @@ test("a resume successor claims a released row whose recorded host process is st
       claimEpoch: 5,
       structuredHost: { process: successorProcess, eventCursor: 0, writerClaimEpoch: 5 },
     });
+    expect(procBackend.processIdentity(releasedProcess.pid)).not.toBe(releasedProcess.startIdentity);
   } finally {
     journal.close();
+    try { released.kill("SIGKILL"); } catch { /* already exited */ }
+    await Promise.race([releasedExit, Bun.sleep(2_000)]);
   }
 });
 
@@ -3393,6 +3405,75 @@ test("a stale finalize cannot project the newer structured owner dead", async ()
   });
   journal.close();
 });
+
+/* #2790: a host publishes `dead` when its stream fails and reaps its child
+   later; a Viewer generation that ends in between leaves the row terminal over
+   an engine process still writing in its worktree, under a claim owner that
+   is gone. Resuming that conversation must stop the recorded process before
+   it starts the new one, never run both. */
+test("a resume over a terminal row stops its live recorded engine process before the new host starts", async () => {
+  const sessionId = crypto.randomUUID();
+  const cwd = path.join(sandbox, `resume-terminal-orphan-${sessionId}`);
+  const artifactPath = path.join(cwd, `${sessionId}.jsonl`);
+  fs.mkdirSync(cwd, { recursive: true });
+  fs.writeFileSync(artifactPath, "");
+  const orphan = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  const orphanExit = new Promise<void>((resolve) => { orphan.once("exit", () => resolve()); });
+  try {
+    let identity: ProcessIdentity | null = null;
+    for (let attempt = 0; attempt < 100 && !identity?.startIdentity; attempt += 1) {
+      identity = orphan.pid ? captureProcessIdentity(orphan.pid) : null;
+      if (!identity?.startIdentity) await Bun.sleep(2);
+    }
+    if (!identity?.startIdentity || !identity.bootEpoch) throw new Error("orphan test process identity is unavailable");
+    const recorded = identity;
+    const orphanAlive = () => procBackend.processIdentity(recorded.pid) === recorded.startIdentity;
+    const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+    const client = runtimeClient(journal);
+    const launchProfile = emptyLaunchProfile({ cwd, model: "gpt-5.6-luna" });
+    const conversation = registry.ensureConversation("codex", artifactPath, "codex-subscription");
+    const key = { engine: "codex" as const, sessionId };
+    registry.upsert({
+      key, artifactPath, cwd, accountId: "codex-subscription", launchProfile, status: "dead", host: null,
+      structuredHost: {
+        kind: "codex-app-server", endpoint: `stdio:${recorded.pid}`, process: recorded, eventCursor: 4,
+        protocolVersion: "0.144.1", writerClaimEpoch: 3, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+      },
+      claimEpoch: 3,
+      claimOwner: `structured-host:${JSON.stringify({ pid: 2_000_000_121, startIdentity: "gone-viewer" })}`,
+      pendingAction: null,
+    });
+    const begun = beginLegacySpawnFixture(registry, {
+      engine: "codex", cwd, transport: "structured", accountId: "codex-subscription",
+      conversationId: conversation.id, purpose: "resume-successor", expectedArtifactPath: artifactPath, launchProfile,
+    });
+    if (begun.kind !== "created") throw new Error("resume receipt was unavailable");
+    const orphanAliveAtStart: boolean[] = [];
+
+    await expect(spawnStructuredConversation({
+      engine: "codex",
+      receipt: begun.receipt,
+      spec: { command: "codex", cwd, windowName: "resume", engine: "codex", transcript: artifactPath, launchProfile },
+      account: { engine: "codex", accountId: "codex-subscription", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+      "prompt": "",
+      registry,
+      client,
+    }, {
+      startHost: async () => {
+        orphanAliveAtStart.push(orphanAlive());
+        throw new Error("fixture stops at host start");
+      },
+    })).rejects.toThrow("fixture stops at host start");
+
+    expect(orphanAliveAtStart).toEqual([false]);
+    expect(orphanAlive()).toBe(false);
+    journal.close();
+  } finally {
+    try { orphan.kill("SIGKILL"); } catch { /* already exited */ }
+    await Promise.race([orphanExit, Bun.sleep(2_000)]);
+  }
+}, 15_000);
 
 test("a resume claim loser leaves the winning writer projection and ownership intact", async () => {
   const sessionId = crypto.randomUUID();

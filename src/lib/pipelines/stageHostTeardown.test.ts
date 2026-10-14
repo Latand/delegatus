@@ -43,7 +43,7 @@ type Registry = InstanceType<typeof AgentRegistry>;
 
 /** Seats a structured conversation whose host process is this test process, so
     the liveness probe reports a resident host without spawning anything. */
-function hostedConversation(options: { status?: "live" | "dead"; hosted?: boolean; pane?: TmuxHostEvidence | null } = {}): {
+function hostedConversation(options: { status?: "live" | "dead"; hosted?: boolean; pane?: TmuxHostEvidence | null; process?: { pid: number; startIdentity: string | null } } = {}): {
   registry: Registry;
   conversationId: string;
   launchId: string;
@@ -65,7 +65,7 @@ function hostedConversation(options: { status?: "live" | "dead"; hosted?: boolea
     structuredHost: options.hosted === false ? null : {
       kind: "codex-app-server",
       endpoint: "fake:stdio",
-      process: { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) },
+      process: options.process ?? { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) },
       eventCursor: 1,
       protocolVersion: "fake-v1",
       writerClaimEpoch: 1,
@@ -224,8 +224,25 @@ test("a queued kill whose operation terminally failed leaves the host still runn
 });
 
 test("a stage whose host is already gone reports not-running without dispatching a kill (#670)", async () => {
-  const dead = hostedConversation({ status: "dead" });
+  /* Gone means the recorded process is gone too: a pid no machine hands out. */
+  const dead = hostedConversation({ status: "dead", process: { pid: 2_000_000_123, startIdentity: "exited-host" } });
   expect(await defaultPipelinePorts().stopStageAgent(target(dead.conversationId))).toEqual({ outcome: "not-running" });
+
+  /* A dead row over a process that still runs is an orphan, never "not running"
+     (#2790). It has no stream for a kill command, so none is dispatched; the
+     recorded-identity stop refuses here because this attempt names no launch. */
+  const orphan = hostedConversation({ status: "dead" });
+  expect(await defaultPipelinePorts().stopStageAgent(target(orphan.conversationId))).toMatchObject({
+    outcome: "failed",
+    error: expect.stringContaining("nothing was signalled"),
+  });
+  /* Retirement takes the same route: no idle evidence can come from a host
+     whose stream is gone. */
+  const { retirePipelineStageAgent } = await import("./engine");
+  expect(await retirePipelineStageAgent(target(orphan.conversationId))).toMatchObject({
+    outcome: "failed",
+    error: expect.stringContaining("nothing was signalled"),
+  });
 
   const unhosted = hostedConversation({ hosted: false });
   expect(await defaultPipelinePorts().stopStageAgent(target(unhosted.conversationId))).toEqual({ outcome: "not-running" });

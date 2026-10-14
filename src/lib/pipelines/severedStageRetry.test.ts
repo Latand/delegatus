@@ -28,6 +28,7 @@ for (const [name, value] of Object.entries(isolatedEnvironment)) {
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
 const { procBackend } = await import("@/lib/proc");
+const { captureProcessIdentity, processIdentityStatus } = await import("@/lib/processIdentity");
 const { RuntimeJournal } = await import("@/runtime-host/journal");
 const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
 const { dispatchStructuredControl } = await import("@/lib/runtime/structuredControls");
@@ -500,3 +501,129 @@ test.each(["busy", "terminal"] as const)(
     expect(spawns).toHaveLength(1);
   },
 );
+
+/**
+ * #2790, end to end through the pipeline's own recovery. The stage's agent is
+ * a real process. While its turn is open, one of its descendants moves into a
+ * transient user scope of its own (`systemd-run --user --scope`, the wrapper
+ * the incident's build steps ran under; `setsid` where no user manager runs)
+ * and that scope ends. Nothing may treat that as the agent going away. Then
+ * the stream is lost while the agent keeps running: the row turns `dead` with
+ * the agent's identity still recorded, as a host publishes it before its reap.
+ * The recovery must end that process by its recorded identity before it
+ * starts the replacement, so two writers never share the worktree.
+ */
+test("a descendant's transient scope ending leaves the stage alone, and a lost stream stops the live agent before its replacement (#2790)", async () => {
+  const directory = fs.mkdtempSync(path.join(isolated, "scope-descendant-"));
+  const worktreeDir = path.join(directory, "worktree");
+  fs.mkdirSync(worktreeDir, { recursive: true });
+  const descendantFile = path.join(directory, "descendant.pid");
+  const scoped = Bun.spawnSync(["systemd-run", "--user", "--scope", "--quiet", "--collect", "--", "true"],
+    { stdout: "ignore", stderr: "ignore", timeout: 5_000 }).exitCode === 0;
+  const wrapper = scoped ? "systemd-run --user --scope --quiet --collect --" : "setsid";
+  const agent = Bun.spawn(["bash", "-c",
+    `${wrapper} sleep 1 & d=$!; echo "$d" > "$1"; wait "$d"; echo ended > "$1.ended"; exec sleep 300`,
+    "agent", descendantFile], { stdout: "ignore", stderr: "ignore" });
+  const agentIdentity = captureProcessIdentity(agent.pid);
+  const agentAlive = () => processIdentityStatus(agentIdentity) === "alive";
+  const cgroupOf = (pid: number) => { try { return fs.readFileSync(`/proc/${pid}/cgroup`, "utf8"); } catch { return null; } };
+  try {
+    if (!agentIdentity.startIdentity || !agentIdentity.bootEpoch) throw new Error("the agent stand-in has no complete identity");
+    const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const sessionId = crypto.randomUUID();
+    const transcript = path.join(directory, `${sessionId}.jsonl`);
+    fs.writeFileSync(transcript, OPEN_TURN_TRANSCRIPT);
+    const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd: worktreeDir, transport: "structured", accountId: null });
+    if (begun.kind !== "created") throw new Error("spawn receipt was unavailable");
+    const key = { engine: "claude" as const, sessionId };
+    /* The Viewer generation that hosted the stream; a pid no machine hands out. */
+    const goneViewer = { pid: 2_000_000_119, startIdentity: "gone-viewer" };
+    const columns = {
+      kind: "claude-broker" as const,
+      endpoint: `stdio:${agent.pid}`,
+      process: agentIdentity,
+      eventCursor: 0,
+      protocolVersion: "test",
+      writerClaimEpoch: 1,
+      activeTurnRef: "open-turn",
+      pendingAttention: [],
+      activeFlags: [],
+    };
+    const settled = registry.settleSpawn(begun.receipt.launchId, {
+      key, artifactPath: transcript, cwd: worktreeDir, accountId: null, status: "live", host: null,
+      structuredHost: columns, claimEpoch: 1, claimOwner: `structured-host:${JSON.stringify(goneViewer)}`, pendingAction: null,
+    });
+    if (settled.kind !== "settled") throw new Error("structured conversation was unavailable");
+    setAgentRegistryForTests(registry);
+    const stage = {
+      registry, worktreeDir, transcript, launchId: begun.receipt.launchId, key,
+      conversationId: settled.conversation.id, child: { pid: agent.pid, kill: () => {} },
+    };
+    const spawns: string[] = [];
+    const agentAliveAtReplacement: boolean[] = [];
+    let interrupted: "dead" | null = null;
+    const base = stagePorts(stage as ReturnType<typeof severedStage>, spawns) as PipelinePorts & { advanceWallClock(ms: number): void };
+    const ports: PipelinePorts = {
+      ...base,
+      /* The runtime's reading of the host: running until the stream is lost. */
+      conversationTurnInterrupted: async () => interrupted,
+      restartRecoveryBootStartedAt: () => Date.now() - 60 * 60_000,
+      stopInterruptedStageAgent: undefined,
+      /* The production stop, with no structured control channel in this process. */
+      stopStageAgent: (target, options) => stopPipelineStageAgent(target, { automatic: options?.automatic }),
+      stageHostResident: defaultPipelinePorts().stageHostResident,
+      /* The machine's own CPU pressure decides nothing in this case. */
+      cpuPressureHold: () => null,
+      /* No runtime host answers in this process; the operator asked for no stop. */
+      conversationOperatorStopped: async () => false,
+      spawnAgent: async (input, onReserved) => {
+        if (spawns.length > 0) agentAliveAtReplacement.push(agentAlive());
+        return base.spawnAgent(input, onReserved);
+      },
+    };
+
+    savePipelines([]);
+    const created = await createPipelineFromRequest({
+      task: "Build behind a scope-wrapped step", spec: "AC1", repoDir: worktreeDir, src: transcript,
+      stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", ["prompt"]: "Build it", next: null }],
+    } as never, ports);
+    if (!created.pipeline) throw new Error(created.error ?? "pipeline creation was unavailable");
+    await tickPipelines([], ports);
+    await tickPipelines([], ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", conversationId: stage.conversationId });
+
+    /* 1. The descendant runs in a scope of its own, and that scope ends. */
+    await settles(() => fs.existsSync(descendantFile), "the descendant's start");
+    const descendant = Number(fs.readFileSync(descendantFile, "utf8").trim());
+    if (scoped) {
+      await settles(() => cgroupOf(descendant) !== cgroupOf(agent.pid) || !fs.existsSync(`/proc/${descendant}`), "the descendant's move");
+    }
+    for (let attempt = 0; attempt < 100 && !fs.existsSync(`${descendantFile}.ended`); attempt += 1) await Bun.sleep(30);
+    expect(fs.existsSync(`${descendantFile}.ended`)).toBe(true);
+    await Bun.sleep(1_100);
+    await tickPipelines([], ports);
+    expect(agentAlive()).toBe(true);
+    expect(registry.readOnlySnapshot().entries[`claude:${sessionId}`]).toMatchObject({ status: "live", structuredHost: { process: agentIdentity } });
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running" });
+
+    /* 2. The stream is lost; the agent is not. */
+    registry.upsert({ ...registry.readOnlySnapshot().entries[`claude:${sessionId}`]!, status: "dead" });
+    interrupted = "dead";
+    expect(await ports.stageHostResident({ stageId: "build", attempt: 1, launchId: stage.launchId,
+      conversationId: stage.conversationId, agentPath: transcript, paneId: null })).toBe(true);
+    expect(await defaultPipelinePorts().conversationHostProcess!(stage.conversationId)).toMatchObject({ state: "alive", pid: agent.pid });
+    await tickPipelines([], ports);
+    await tickPipelines([], ports);
+
+    expect(agentAlive()).toBe(false);
+    expect(agentAliveAtReplacement).toEqual([false]);
+    const replaced = loadPipelines()[0]!;
+    expect(replaced.runs[0]!.attempts).toHaveLength(2);
+    expect(replaced.runs[0]!.attempts[0]!.error).toBe(
+      "stage host was lost while its turn was open; its agent process was still running and Delegatus stopped it by its recorded identity; replaced by a fresh stage attempt");
+  } finally {
+    try { agent.kill("SIGKILL"); } catch { /* gone */ }
+    await Promise.race([agent.exited, Bun.sleep(2_000)]);
+  }
+}, 30_000);

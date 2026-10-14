@@ -22,6 +22,7 @@ import { TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "./telegramConnectorEnv";
 
 import {
   claudeCliAuthStatus,
+  claudeHostEndText,
   ClaudeStreamBrokerHost,
   type ClaudeDeliveryConfirmation,
   FileClaudeDeliveryLedger,
@@ -39,6 +40,7 @@ import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES } from "./runtimeImageStore";
 import {
   adoptClaudeRegistryHosts,
   bindClaudeHostPersistence,
+  claudeHostColumns,
   demoteSkippedStructuredRegistryHosts,
   startClaudeStructuredHost,
   structuredHostsEnabled,
@@ -2604,6 +2606,113 @@ describe("ClaudeStreamBrokerHost", () => {
     await adopted[0]!.host.release();
   }, 10_000);
 
+  /* #2790: the host publishes `dead` when its stream fails and reaps the child
+     about a second later. A Viewer generation that ends inside that window
+     leaves a terminal row whose recorded engine process is still running in
+     the worktree, and whose claim owner is gone. Startup must stop that
+     process by its recorded identity before anything resumes the session or
+     forgets the identity: a successor engine beside it is two writers. */
+  async function terminalRowOverLiveOrphan(status: "dead" | "unhosted", sessionId: string) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-terminal-orphan-"));
+    const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+    const orphan = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    const orphanExit = new Promise<void>((resolve) => { orphan.once("exit", () => resolve()); });
+    let startIdentity: string | null = null;
+    for (let attempt = 0; attempt < 100 && !startIdentity; attempt += 1) {
+      startIdentity = orphan.pid ? procBackend.processIdentity(orphan.pid) : null;
+      if (!startIdentity) await Bun.sleep(2);
+    }
+    const stop = async () => {
+      if (orphan.pid && procBackend.processIdentity(orphan.pid) === startIdentity) {
+        try { orphan.kill("SIGKILL"); } catch { /* already exited */ }
+      }
+      await Promise.race([orphanExit, Bun.sleep(2_000)]);
+    };
+    if (!orphan.pid || !startIdentity) {
+      await stop();
+      throw new Error("orphan test process identity is unavailable");
+    }
+    const orphanIdentity = captureProcessIdentity(orphan.pid, undefined, startIdentity);
+    /* A Viewer generation that no longer runs: a pid no machine hands out. */
+    const goneViewer = { pid: 2_000_000_117, startIdentity: "gone-viewer" };
+    registry.upsert({
+      key: { engine: "claude", sessionId },
+      artifactPath: `/sessions/${sessionId}.jsonl`,
+      cwd: "/repo",
+      accountId: null,
+      status,
+      host: null,
+      structuredHost: {
+        kind: "claude-broker",
+        endpoint: `stdio:${orphan.pid}`,
+        process: orphanIdentity,
+        eventCursor: 2,
+        protocolVersion: "2.1.197",
+        writerClaimEpoch: 1,
+        activeTurnRef: null,
+        pendingAttention: [],
+        activeFlags: [],
+      },
+      claimEpoch: 1,
+      claimOwner: `structured-host:${JSON.stringify(goneViewer)}`,
+      pendingAction: null,
+    });
+    const orphanAlive = () => procBackend.processIdentity(orphan.pid!) === startIdentity;
+    return { registry, orphanIdentity, orphanAlive, stop };
+  }
+
+  for (const status of ["dead", "unhosted"] as const) {
+    test(`boot adoption stops a live engine process under a ${status} row before it resumes the session`, async () => {
+      const sessionId = `terminal-orphan-adoption-${status}`;
+      const fixture = await terminalRowOverLiveOrphan(status, sessionId);
+      const ledger = new RecordingDeliveryLedger();
+      const replacement = new FakeClaude(ledger);
+      const orphanAliveAtResume: boolean[] = [];
+      let adopted: Awaited<ReturnType<typeof adoptClaudeRegistryHosts>> = [];
+      try {
+        adopted = await adoptClaudeRegistryHosts(
+          fixture.registry,
+          () => ({
+            cwd: "/repo",
+            deliveryLedger: ledger,
+            eventStore: new MemoryEventStore(),
+            readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+            readTranscript: () => [],
+            spawnProcess: (command: string, args: string[], options: SpawnOptionsWithoutStdio) => {
+              orphanAliveAtResume.push(fixture.orphanAlive());
+              return fakeSpawn(replacement, {})(command, args, options);
+            },
+          }),
+          { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" },
+        );
+        expect(orphanAliveAtResume).toEqual([false]);
+        expect(adopted).toHaveLength(1);
+        expect(fixture.orphanAlive()).toBe(false);
+      } finally {
+        await fixture.stop();
+        for (const item of adopted) await item.host.release();
+      }
+    }, 10_000);
+  }
+
+  test("startup demotion stops a live engine process under a dead row before it forgets the identity", async () => {
+    const sessionId = "terminal-orphan-demotion";
+    const fixture = await terminalRowOverLiveOrphan("dead", sessionId);
+    try {
+      await demoteSkippedStructuredRegistryHosts(fixture.registry, () => false);
+      /* A row that no longer names the process can never stop it again, so
+         the identity may be dropped only once that process is gone. */
+      expect(fixture.orphanAlive()).toBe(false);
+      expect(fixture.registry.snapshot().entries[`claude:${sessionId}`]).toMatchObject({
+        status: "dead",
+        claimOwner: null,
+        structuredHost: { endpoint: "stdio:released", process: null },
+      });
+    } finally {
+      await fixture.stop();
+    }
+  }, 10_000);
+
   test("startup demotion reaps a surviving skipped Claude child", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-skipped-orphan-"));
     const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
@@ -3094,6 +3203,147 @@ test("delayed replay echo during provider retry preserves unrelated Claude work 
     expect((await host.health()).status).toBe("dead");
     expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
   } finally { await host.release(); memory.dispose(); }
+});
+
+/* #2790. A heavy build step started from the agent's shell inside its own
+   transient user scope (`systemd-run --user --scope`) runs beside the agent's
+   scope under the same slice, and its scope ends when the step does. Nothing
+   in the host reads cgroups, scopes or the descendant's process after launch,
+   so neither the move nor the end can make the host look lost. These cases
+   pin that, and keep the agent's own memcg OOM a separate, named death. */
+async function openTurnHost(memoryCell?: ReturnType<typeof fakeAgentMemory>["cell"]) {
+  const ledger = new RecordingDeliveryLedger();
+  const child = new FakeClaude(ledger);
+  const sessionId = crypto.randomUUID();
+  const host = await ClaudeStreamBrokerHost.adopt(sessionId, {
+    cwd: "/repo", deliveryLedger: ledger, eventStore: new MemoryEventStore(), readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    shutdownGraceMs: 5,
+    ...(memoryCell ? { memoryCell } : {}),
+    spawnProcess: fakeSpawn(child, {}),
+  });
+  const send = host.send({ id: "scope-turn", text: "run the heavy build" });
+  child.emitJson({ type: "user", isReplay: true, session_id: sessionId, uuid: "scope-turn-echo",
+    message: { role: "user", content: [{ type: "text", text: "run the heavy build" }] } });
+  expect(await send).toMatchObject({ outcome: "turn-started" });
+  expect((await host.health()).status).toBe("active");
+  return { host, child };
+}
+
+test("a descendant's own transient scope ending mid-turn leaves the Claude host, its stream and its memory record alone (#2790)", async () => {
+  const memory = fakeAgentMemory();
+  const { host, child } = await openTurnHost(memory.cell);
+  const states: HostState[] = [];
+  host.onStateChange((state) => states.push(state));
+  try {
+    const build = memory.sibling("run-r0build.scope");
+    /* The step peaks in its own scope, which may even OOM-kill inside it, and
+       then the scope ends. */
+    build.kill();
+    build.end();
+    /* The incident's host was reported lost about a second later. */
+    await Bun.sleep(1_200);
+    const health = await host.health();
+    expect(health).toMatchObject({ status: "active", pid: child.pid });
+    expect(health.memory).toMatchObject({ kills: 0, lastKill: null });
+    expect(health.ended).toBeUndefined();
+    expect(child.signals).toEqual([]);
+    expect(states.map((state) => state.status)).not.toContain("dead");
+    expect(states.map((state) => state.status)).not.toContain("unhosted");
+
+    /* The agent's own scope reaching its cap is still a memory kill, named as one. */
+    memory.kill();
+    child.emit("exit", null, "SIGKILL");
+    expect(await host.health()).toMatchObject({
+      status: "dead",
+      memory: { lastKill: { limit: "agent", fatal: true } },
+      ended: { kind: "memory-kill", reason: "killed: out of memory (limit 15 GB)", signal: "SIGKILL", signalledByHost: false },
+    });
+    child.emit("close", null, "SIGKILL");
+    expect((await host.health()).ended).toMatchObject({ kind: "memory-kill" });
+  } finally { await host.release(); memory.dispose(); }
+});
+
+test("a sibling scope's OOM is never charged to an agent that then exits on its own (#2790)", async () => {
+  const memory = fakeAgentMemory();
+  const { host, child } = await openTurnHost(memory.cell);
+  try {
+    memory.sibling("run-r1test.scope").kill();
+    Object.assign(child, { exitCode: 0 });
+    child.emit("exit", 0, null);
+    child.emit("close", 0, null);
+    const health = await host.health();
+    expect(health.status).toBe("dead");
+    expect(health.memory?.lastKill ?? null).toBeNull();
+    expect(health.ended).toMatchObject({ kind: "child-exit", code: 0, signal: null, signalledByHost: false });
+    expect(claudeHostEndText(health.ended!)).toBe("Claude child exited with code 0");
+  } finally { await host.release(); memory.dispose(); }
+});
+
+test("a Claude host records why it ended, persists it on its row, and names it to pending work (#2790)", async () => {
+  const cases = [
+    { name: "own exit", end: (child: FakeClaude) => { child.emit("exit", 1, null); child.emit("close", 1, null); },
+      ended: { kind: "child-exit", code: 1, signal: null, signalledByHost: false }, text: "Claude child exited with code 1",
+      rejection: "Claude child exited with code 1" },
+    { name: "foreign signal", end: (child: FakeClaude) => { child.emit("exit", null, "SIGKILL"); child.emit("close", null, "SIGKILL"); },
+      ended: { kind: "child-exit", code: null, signal: "SIGKILL", signalledByHost: false },
+      text: "Claude child exited on SIGKILL, which Delegatus did not send",
+      rejection: "Claude child exited on SIGKILL, which Delegatus did not send" },
+    { name: "stream fault", end: (child: FakeClaude) => { child.stdout.write("not json\n"); },
+      ended: { kind: "host-fault", reason: "Claude emitted malformed stream JSON", signalledByHost: true },
+      text: "Delegatus stopped Claude: Claude emitted malformed stream JSON", rejection: "Claude emitted malformed stream JSON" },
+  ] as const;
+  for (const item of cases) {
+    const { host, child } = await openTurnHost();
+    const pending = host.send({ id: `pending-${item.name}`, text: "queued behind the turn" });
+    const rejection = pending.then(() => null, (error: Error) => error.message);
+    item.end(child);
+    await Bun.sleep(20);
+    const health = await host.health();
+    expect(health.status).toBe("dead");
+    expect(health.ended).toMatchObject(item.ended);
+    expect(claudeHostEndText(health.ended!)).toBe(item.text);
+    expect(await rejection).toContain(item.rejection);
+
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-ended-row-"));
+    try {
+      const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+      const key = { engine: "claude" as const, sessionId: host.identity.sessionId };
+      registry.upsert({ key, artifactPath: `/sessions/${key.sessionId}.jsonl`, cwd: "/repo", accountId: null,
+        status: "dead", host: null, structuredHost: claudeHostColumns(health, 1), claimEpoch: 1, claimOwner: null, pendingAction: null });
+      const reopened = new AgentRegistry(registry.filename, undefined, undefined, { sqliteMode: "off" });
+      expect(reopened.readOnlySnapshot().entries[`claude:${key.sessionId}`]?.structuredHost?.ended).toMatchObject(item.ended);
+    } finally {
+      await host.release();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a release that cannot confirm the Claude process stopped never tells pending work it was released (#2790)", async () => {
+  const ledger = new RecordingDeliveryLedger();
+  const child = new FakeClaude(ledger, true, true);
+  const sessionId = crypto.randomUUID();
+  const host = await ClaudeStreamBrokerHost.adopt(sessionId, {
+    cwd: "/repo", deliveryLedger: ledger, eventStore: new MemoryEventStore(), readTranscript: () => [],
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    shutdownGraceMs: 2, spawnProcess: fakeSpawn(child, {}),
+  });
+  const states: HostState[] = [];
+  host.onStateChange((state) => states.push(state));
+  const pending = host.send({ id: "unanswered", text: "an instruction the stream never confirms" });
+  const rejection = pending.then(() => null, (error: Error) => error.message);
+  await expect(host.release()).rejects.toThrow("Claude child could not be reaped");
+  const reason = await rejection;
+  expect(reason).not.toContain("released");
+  expect(reason).toContain("could not confirm that the Claude process stopped");
+  expect((await host.health()).status).not.toBe("unhosted");
+  expect(states.map((state) => state.status)).not.toContain("unhosted");
+
+  /* Once the process is gone, the release completes and says so. */
+  child.emit("close", 0, "SIGKILL");
+  await Bun.sleep(0);
+  expect(await host.health()).toMatchObject({ status: "unhosted", pid: null });
 });
 
 test("production memory wrapping preserves the provider-home revision guard before spawn", async () => {
