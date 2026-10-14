@@ -5728,6 +5728,23 @@ export class AgentRegistry {
       ["starting","pane-bound","host-verified","prompt-delivered","path-pending"])));
   }
 
+  /** Failed receipts remain available for idempotent reporting recovery. */
+  failedSpawnReceipts(): SpawnReceipt[] {
+    return this.readKeyed(file => registryRowsMatching(file, "receipts", "state", "failed")
+      .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+      .map(clone));
+  }
+
+  private reportFailedLaunch(receipt: SpawnReceipt, options: { announce?: boolean } = {}): void {
+    const launcherId = receipt.launcher?.conversationId;
+    const file = this.readOnlySnapshot();
+    const canonical = launcherId ? resolveConversationAlias(file, launcherId) : null;
+    const launcherProject = canonical
+      ? file.memberships[canonical]?.find(membership => membership.kind === "orchestrator")?.containerId
+      : undefined;
+    settleFailedLaunch(receipt, undefined, { ...options, launcherProject });
+  }
+
   terminalizeAbandonedSpawnEntries(options: { now: number; timeoutMs: number; limit: number }): string[] {
     return this.mutate(file => {
       const terminalized: string[] = [];
@@ -7035,7 +7052,7 @@ export class AgentRegistry {
 
   failSpawn(launchId: string, error: string): boolean {
     const failed = this.failSpawnInFile(launchId, error);
-    if (failed.receipt) settleFailedLaunch(failed.receipt);
+    if (failed.receipt) this.reportFailedLaunch(failed.receipt);
     return failed.result;
   }
 
@@ -7051,7 +7068,7 @@ export class AgentRegistry {
     const written = await this.whenWriterHeld({ label: "spawn.fail", operationId: `spawn_message_${launchId}` },
       () => this.failSpawnInFile(launchId, error));
     if (!written.acquired) return false;
-    if (written.value.receipt) settleFailedLaunch(written.value.receipt);
+    if (written.value.receipt) this.reportFailedLaunch(written.value.receipt);
     return written.value.result;
   }
 
@@ -7062,7 +7079,7 @@ export class AgentRegistry {
     const written = this.deliveryWriteNow({ label: "spawn.fail", operationId: `spawn_message_${launchId}` },
       () => this.failSpawnInFile(launchId, error));
     if (!written.acquired) return false;
-    if (written.value.receipt) settleFailedLaunch(written.value.receipt);
+    if (written.value.receipt) this.reportFailedLaunch(written.value.receipt);
     return written.value.result;
   }
 
@@ -7138,7 +7155,7 @@ export class AgentRegistry {
         },
       }));
     if (!written.acquired) return false;
-    if (written.value.claimed && written.value.receipt) settleFailedLaunch(written.value.receipt);
+    if (written.value.claimed && written.value.receipt) this.reportFailedLaunch(written.value.receipt);
     return written.value.claimed;
   }
 
@@ -7217,7 +7234,7 @@ export class AgentRegistry {
     options: StructuredSpawnFailureOptions = {},
   ): StructuredSpawnFailureClaim {
     const claim = this.failStructuredSpawnInFile(launchId, error, options);
-    if (claim.claimed && claim.receipt?.state === "failed") settleFailedLaunch(claim.receipt, undefined, { announce: options.announce });
+    if (claim.claimed && claim.receipt?.state === "failed") this.reportFailedLaunch(claim.receipt, { announce: options.announce });
     return claim;
   }
 
@@ -7234,7 +7251,7 @@ export class AgentRegistry {
       return { claimed: false, receipt: this.readOnlySnapshot().receipts[launchId] ?? null, cleanup: null };
     }
     const claim = written.value;
-    if (claim.claimed && claim.receipt?.state === "failed") settleFailedLaunch(claim.receipt, undefined, { announce: options.announce });
+    if (claim.claimed && claim.receipt?.state === "failed") this.reportFailedLaunch(claim.receipt, { announce: options.announce });
     return claim;
   }
 

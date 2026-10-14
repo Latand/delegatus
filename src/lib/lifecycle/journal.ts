@@ -273,6 +273,13 @@ export function appendLifecycleEvents(inputs: LifecycleEventInput[]): { appended
   });
 }
 
+/** Whether an idempotency key has already been appended or retired. */
+export function hasLifecycleEventKey(key: string): boolean {
+  const id = lifecycleEventId(key);
+  const file = readJournalFile();
+  return file.events.some(event => event.id === id) || file.retired.includes(id);
+}
+
 /** Queryable by project, pipeline, conversation and cursor, as #686 requires. */
 export function queryLifecycleEvents(query: LifecycleEventQuery = {}): LifecycleEventPage {
   const file = readJournalFile();

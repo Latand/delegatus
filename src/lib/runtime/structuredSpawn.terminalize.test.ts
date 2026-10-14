@@ -1151,7 +1151,7 @@ test.each(["starting", "unpublished"] as const)("an accepted %s launch lost befo
   expect(queryLifecycleEvents({ conversationId: receipt.conversationId }).events.map(event => event.type)).toEqual(["spawn_failed"]);
 });
 
-test.each(["new-owner", "late-transcript"] as const)("a lost staged launch rechecks %s after the runtime read before failing", async race => {
+test.each(["new-owner", "late-transcript", "survivor"] as const)("a lost staged launch rechecks %s after the runtime read before failing", async race => {
   const { STAGED_RECOVERY_PREFIX } = await import("./stagedRecovery");
   const { STAGED_RECOVERY_BUDGET_MS } = await import("./structuredSpawn");
   const { captureProcessIdentity } = await import("@/lib/processIdentity");
@@ -1173,7 +1173,8 @@ test.each(["new-owner", "late-transcript"] as const)("a lost staged launch reche
     if (race === "late-transcript") fs.writeFileSync(row.artifactPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "Start the work" } }) + "\n");
     else {
       const latest = JSON.parse(fs.readFileSync(store.filename, "utf8"));
-      latest.entries[`codex:${key.sessionId}`].claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
+      if (race === "survivor") latest.entries[`codex:${key.sessionId}`].structuredTerminationSurvivors = [captureProcessIdentity(process.pid)];
+      else latest.entries[`codex:${key.sessionId}`].claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
       fs.writeFileSync(store.filename, JSON.stringify(latest));
     }
     return null;
@@ -1185,4 +1186,37 @@ test.each(["new-owner", "late-transcript"] as const)("a lost staged launch reche
     await terminalizeStaleStructuredSpawns(restarted, client, { now: () => start + STAGED_RECOVERY_BUDGET_MS });
     expect(restarted.snapshot().receipts[receipt.launchId]!.state).toBe("completed");
   }
+});
+
+test.each(["uncertain", "delivered"] as const)("a staged %s launch stays non-retryable while a retained descendant may live, then fails after cleanup", async phase => {
+  const { STAGED_RECOVERY_PREFIX } = await import("./stagedRecovery");
+  const { STAGED_RECOVERY_BUDGET_MS } = await import("./structuredSpawn");
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const { spawnResponseForReceipt } = await import("@/lib/agent/spawnResponse");
+  const store = registry();
+  const { receipt, key } = stagedStructuredReceipt(store, `survivor-${phase}`);
+  const raw = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+  const row = raw.receipts[receipt.launchId];
+  const start = Date.parse(row.createdAt);
+  row.admissionOwner = null;
+  row.error = STAGED_RECOVERY_PREFIX + JSON.stringify({ phase, startedAt: start, nextTryAt: start,
+    checks: 1, reason: "no rollout found for thread id", stopped: true });
+  const entry = raw.entries[`codex:${key.sessionId}`];
+  entry.claimOwner = null;
+  entry.status = "dead";
+  entry.structuredHost.process = null;
+  entry.structuredTerminationSurvivors = [captureProcessIdentity(process.pid)];
+  fs.writeFileSync(store.filename, JSON.stringify(raw));
+  const restarted = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
+  const client = { ...DEAD_RUNTIME_CLIENT, transitionOperation: async () => {} } as unknown as RuntimeHostClient;
+  await terminalizeStaleStructuredSpawns(restarted, client, { now: () => start + STAGED_RECOVERY_BUDGET_MS });
+  const held = restarted.snapshot().receipts[receipt.launchId]!;
+  expect(held.state).toBe("path-pending");
+  expect(spawnResponseForReceipt(held).retrySafe).toBe(false);
+
+  const cleaned = JSON.parse(fs.readFileSync(store.filename, "utf8"));
+  delete cleaned.entries[`codex:${key.sessionId}`].structuredTerminationSurvivors;
+  fs.writeFileSync(store.filename, JSON.stringify(cleaned));
+  await terminalizeStaleStructuredSpawns(restarted, client, { now: () => start + STAGED_RECOVERY_BUDGET_MS });
+  expect(restarted.snapshot().receipts[receipt.launchId]!.state).toBe("failed");
 });

@@ -406,3 +406,54 @@ test.each(["refusal", "rejection", "resume", "materialized", "root", "self"] as 
   expect(queryLifecycleEvents({ conversationId: begun.receipt.conversationId }).events).toEqual([]);
   expect(pendingSpawnNotices().filter(row => row.childConversationId === begun.receipt.conversationId)).toEqual([]);
 });
+
+test.each(["journal", "notice"] as const)("a failed receipt repairs its refused %s report after a reaper restart", async refused => {
+  const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
+  const { pendingSpawnNotices } = await import("@/lib/spawnNotice/store");
+  const { settleFailedLaunch } = await import("./launchMembership");
+  const registry = registryAt(`report-retry-${refused}`);
+  saveTasks([task(`report-${refused}`, "Recover the report")]);
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: stateDir, explicitProject: "child-project",
+    transport: "structured", clientAttemptId: `report_retry_${refused}`, taskIds: [`report-${refused}`],
+    launcher: { conversationId: "conversation_fixture_launcher", notify: true },
+    launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Recover the report" }) });
+  if (begun.kind !== "created") throw new Error("expected launch");
+  registry.rememberMembership("conversation_fixture_launcher", { kind: "orchestrator", containerId: "launcher-project",
+    role: "orchestrator", slot: "seat", stageId: null, stageOrder: null, round: null, parentConversationId: null });
+  registry.failStructuredSpawn(begun.receipt.launchId, "host vanished", { announce: false });
+  const failOnce = () => { throw new Error("temporary transaction refusal"); };
+  settleFailedLaunch(registry.snapshot().receipts[begun.receipt.launchId]!, undefined, {
+    launcherProject: "launcher-project",
+    ...(refused === "journal" ? { appendLifecycleEvents: failOnce } : { recordSpawnNoticeObligation: failOnce }),
+  });
+
+  const restarted = registryAt(`report-retry-${refused}`);
+  await terminalizeStaleStructuredSpawns(restarted, null);
+  const events = queryLifecycleEvents({ conversationId: begun.receipt.conversationId }).events;
+  const notices = pendingSpawnNotices().filter(row => row.childConversationId === begun.receipt.conversationId);
+  expect(events).toHaveLength(1);
+  expect(events[0]).toMatchObject({ type: "spawn_failed", project: "launcher-project" });
+  expect(notices).toHaveLength(1);
+  expect(notices[0]).toMatchObject({ launcherConversationId: "conversation_fixture_launcher", outcome: "lost",
+    lost: { tasks: [{ taskId: `report-${refused}`, from: "inbox", to: "inbox" }] } });
+  expect(restarted.snapshot().receipts[begun.receipt.launchId]!.state).toBe("failed");
+});
+
+test("a failed child in another project writes its wake event into the launching seat's project", async () => {
+  const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
+  const { settleFailedLaunch } = await import("./launchMembership");
+  const registry = registryAt("cross-project-report");
+  saveTasks([task("cross-project-task", "Work in another project")]);
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: stateDir, explicitProject: "child-project",
+    transport: "structured", clientAttemptId: "cross_project_report", taskIds: ["cross-project-task"],
+    launcher: { conversationId: "conversation_fixture_launcher", notify: true },
+    launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Cross project launch" }) });
+  if (begun.kind !== "created") throw new Error("expected launch");
+  registry.rememberMembership("conversation_fixture_launcher", { kind: "orchestrator", containerId: "launcher-project",
+    role: "orchestrator", slot: "seat", stageId: null, stageOrder: null, round: null, parentConversationId: null });
+  registry.failStructuredSpawn(begun.receipt.launchId, "host vanished", { announce: false });
+  settleFailedLaunch(registry.snapshot().receipts[begun.receipt.launchId]!, undefined, { launcherProject: "launcher-project" });
+  expect(queryLifecycleEvents({ project: "launcher-project", conversationId: begun.receipt.conversationId, type: "spawn_failed" }).events)
+    .toEqual([expect.objectContaining({ conversationId: begun.receipt.conversationId })]);
+  expect(queryLifecycleEvents({ project: "child-project", conversationId: begun.receipt.conversationId, type: "spawn_failed" }).events).toEqual([]);
+});

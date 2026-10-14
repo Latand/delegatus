@@ -273,10 +273,16 @@ export interface FailedLaunchReceipt {
 export function settleFailedLaunch(
   receipt: FailedLaunchReceipt,
   commit: (launch: FailedLaunchIdentity) => FailedLaunchTaskMove[] = commitFailedLaunchMembership,
-  options: { announce?: boolean } = {},
+  options: {
+    announce?: boolean;
+    launcherProject?: string | null;
+    appendLifecycleEvents?: typeof appendLifecycleEvents;
+    recordSpawnNoticeObligation?: typeof recordSpawnNoticeObligation;
+  } = {},
 ): boolean {
   if (receipt.purpose !== "launch" || receipt.artifactLifecycle !== "pending") return false;
   let moves: FailedLaunchTaskMove[] = [];
+  let taskCommitAvailable = true;
   try {
     moves = commit({
       launchId: receipt.launchId,
@@ -285,7 +291,24 @@ export function settleFailedLaunch(
       error: receipt.error,
     });
   } catch (error) {
+    taskCommitAvailable = false;
     console.warn(`[tasks] failed launch ${receipt.launchId} left its task unsettled: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (moves.length === 0 && taskCommitAvailable) {
+    /* A report retry runs after the task transaction may already have
+       committed. Rebuild its task list from the failed assignment rows so a
+       notice refused on the first pass still names the work it affected. */
+    try {
+      moves = loadTasks().flatMap(task => task.assignments.some(assignment =>
+        assignment.launchId === receipt.launchId
+          && assignment.state === "failed"
+          && (!assignment.conversationId || assignment.conversationId === receipt.conversationId)
+          && assignment.error === (receipt.error?.trim() || "launch failed"))
+        ? [{ taskId: task.id, from: task.assignments.find(assignment => assignment.launchId === receipt.launchId)?.statusBeforeLink ?? task.status, to: task.status }]
+        : []);
+    } catch (error) {
+      console.warn(`[tasks] failed launch ${receipt.launchId} task report lookup failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   const launcher = receipt.launcher;
   if (options.announce !== false && !receipt.rejection && launcher && launcher.conversationId !== receipt.conversationId) {
@@ -293,9 +316,9 @@ export function settleFailedLaunch(
     const title = receipt.launchProfile?.title?.trim() || "spawned agent";
     const reason = receipt.error?.trim() || "launch failed";
     try {
-      const project = receipt.explicitProject || productionLaunchMembershipPorts.projectForCwd(receipt.cwd ?? "")
+      const project = options.launcherProject || receipt.explicitProject || productionLaunchMembershipPorts.projectForCwd(receipt.cwd ?? "")
         || loadTasks().find(task => task.assignments.some(row => row.launchId === receipt.launchId))?.project;
-      appendLifecycleEvents([{ key: `spawn:${receipt.launchId}:failed`, type: "spawn_failed", at,
+      (options.appendLifecycleEvents ?? appendLifecycleEvents)([{ key: `spawn:${receipt.launchId}:failed`, type: "spawn_failed", at,
         project: project ? canonicalProject(project) : null, conversationId: receipt.conversationId, role: receipt.agentRole,
         summary: `${operatorSafeSummary(title, 45)}: ${operatorSafeSummary(reason, 70)}; agent ${receipt.conversationId}; launch ${receipt.launchId}; launcher ${launcher.conversationId}; ${moves.map(task => `task ${task.taskId}: ${task.from} → ${task.to}`).join("; ")}`,
       }]);
@@ -303,7 +326,7 @@ export function settleFailedLaunch(
       console.warn(`[spawn] failed launch ${receipt.launchId} lifecycle report failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     try {
-      recordSpawnNoticeObligation({ childConversationId: receipt.conversationId, turnId: `launch:${receipt.launchId}`,
+      (options.recordSpawnNoticeObligation ?? recordSpawnNoticeObligation)({ childConversationId: receipt.conversationId, turnId: `launch:${receipt.launchId}`,
         launcherConversationId: launcher.conversationId, outcome: "lost", startedAt: receipt.createdAt ?? null, endedAt: at,
         lost: { launchId: receipt.launchId, title, reason, tasks: moves },
       });

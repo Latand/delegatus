@@ -34,7 +34,9 @@ import { signalProcessGroup } from "@/lib/processGroup";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 import { buildImagePayload, deleteInboxImages, spawnAgentWithPrompt } from "@/lib/tmux";
-import { admitRecoveredLaunch } from "@/lib/tasks/launchMembership";
+import { admitRecoveredLaunch, settleFailedLaunch } from "@/lib/tasks/launchMembership";
+import { hasLifecycleEventKey } from "@/lib/lifecycle/journal";
+import { readSpawnNoticeTurn } from "@/lib/spawnNotice/store";
 import { hardenedRedact } from "@/lib/view/compactText";
 
 import { ClaudeStreamBrokerHost, type ClaudeStreamBrokerHostOptions } from "./claudeStreamBrokerHost";
@@ -1003,6 +1005,34 @@ export async function terminalizeStaleStructuredSpawns(
   const timeoutMs = options.timeoutMs ?? STALE_STRUCTURED_SPAWN_TIMEOUT_MS;
   const actuationCap = options.actuationCap ?? STALE_STRUCTURED_SPAWN_ACTUATION_CAP;
   const reconcile = options.reconcile ?? reconcileStructuredSpawnReplay;
+  const recoverySnapshot = registry.readOnlySnapshot();
+  /* A terminal receipt can outlive a refused notice or lifecycle append. Re-run
+     these idempotent obligations on the ordinary bounded reaper so a restart
+     or transient store lock cannot erase the launcher's report. */
+  let reportRepairs = 0;
+  for (const receipt of registry.failedSpawnReceipts()) {
+    if (reportRepairs >= actuationCap) break;
+    if (receipt.purpose !== "launch" || receipt.artifactLifecycle !== "pending" || receipt.rejection
+      || !receipt.launcher || receipt.launcher.conversationId === receipt.conversationId) continue;
+    let lifecyclePending: boolean;
+    let noticePending: boolean;
+    try {
+      lifecyclePending = !hasLifecycleEventKey(`spawn:${receipt.launchId}:failed`);
+      noticePending = !readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`);
+    } catch (error) {
+      spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] failed launch report lookup refused", {
+        launchId: receipt.launchId,
+        error,
+      });
+      continue;
+    }
+    if (!lifecyclePending && !noticePending) continue;
+    reportRepairs += 1;
+    options.assertActive?.();
+    settleFailedLaunch(receipt, undefined, {
+      launcherProject: launcherProjectFromRegistry(recoverySnapshot, receipt.launcher?.conversationId),
+    });
+  }
   await registry.deliveryWrite({ label: "spawn.orphan-hygiene" },() =>
     registry.terminalizeAbandonedSpawnEntries({ now: now(),timeoutMs,limit: actuationCap }));
   const snapshot = registry.readOnlySnapshot();
@@ -1096,6 +1126,13 @@ export async function terminalizeStaleStructuredSpawns(
     }
   }
   return { examined, terminalized, recovered };
+}
+
+function launcherProjectFromRegistry(file: RegistryFile, conversationId: ViewerConversationId | undefined): string | undefined {
+  if (!conversationId) return undefined;
+  const canonical = resolveConversationAlias(file, conversationId);
+  const seat = (file.memberships[canonical] ?? []).find((membership) => membership.kind === "orchestrator");
+  return seat?.containerId;
 }
 
 export interface StructuredSpawnInput {
@@ -2015,6 +2052,7 @@ function lostStagedLaunch(
     const owner = structuredClaimIdentity(entry.claimOwner);
     if (!owner || processIdentityStatus(owner) !== "dead") return false;
   }
+  if (entry?.structuredTerminationSurvivors?.some(identity => processIdentityStatus(identity) !== "dead")) return false;
   return true;
 }
 
