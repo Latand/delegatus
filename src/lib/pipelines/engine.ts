@@ -7261,7 +7261,7 @@ async function tickReviewStage(
     try {
       persist();
     } catch (error) {
-      if (error instanceof StateSnapshotChangedError) throw new StaleControllerFlowError(created.flow.id);
+      if (error instanceof StateSnapshotChangedError) throw new StaleControllerFlowError(created.flow.id, pipeline.id);
       throw error;
     }
     if (created.flow.state === "paused") {
@@ -9577,17 +9577,59 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
   return changed;
 }
 
+async function drainPendingStaleControllerFlows(ports: PipelinePorts): Promise<void> {
+  const pending = loadPipelines().flatMap(pipeline =>
+    (pipeline.pendingReviewFlowCleanup ?? []).map(flowId => ({ pipelineId: pipeline.id, flowId })));
+  for (const item of pending) {
+    let authorized = false;
+    await withPipelineMutation((pipelines, persist) => {
+      const owner = pipelines.find(pipeline => pipeline.id === item.pipelineId);
+      if (!owner?.pendingReviewFlowCleanup?.includes(item.flowId)) return;
+      const attached = pipelines.some(pipeline =>
+        pipeline.runs.some(run => run.attempts.some(attempt => attempt.flowId === item.flowId)));
+      if (attached) {
+        owner.pendingReviewFlowCleanup = owner.pendingReviewFlowCleanup.filter(flowId => flowId !== item.flowId);
+        if (!owner.pendingReviewFlowCleanup.length) delete owner.pendingReviewFlowCleanup;
+        persist([owner]);
+        return;
+      }
+      authorized = true;
+    });
+    if (!authorized) continue;
+
+    try {
+      const cleanup = await ports.closeFlow(item.flowId);
+      if (cleanup?.error) {
+        console.error("[pipelines] stale review flow cleanup failed", { flowId: item.flowId, error: cleanup.error });
+        ports.scheduleTick?.(1_000);
+        continue;
+      }
+      await withPipelineMutation((pipelines, persist) => {
+        const owner = pipelines.find(pipeline => pipeline.id === item.pipelineId);
+        if (!owner?.pendingReviewFlowCleanup?.includes(item.flowId)) return;
+        owner.pendingReviewFlowCleanup = owner.pendingReviewFlowCleanup.filter(flowId => flowId !== item.flowId);
+        if (!owner.pendingReviewFlowCleanup.length) delete owner.pendingReviewFlowCleanup;
+        persist([owner]);
+      });
+    } catch (cleanupError) {
+      console.error("[pipelines] stale review flow cleanup failed", { flowId: item.flowId, error: String(cleanupError) });
+      ports.scheduleTick?.(1_000);
+    }
+  }
+}
+
 async function settleStaleControllerFlow(error: unknown, ports: PipelinePorts): Promise<void> {
   if (!(error instanceof StaleControllerFlowError)) return;
-  const alreadyAttached = loadPipelines().some(pipeline =>
-    pipeline.runs.some(run => run.attempts.some(attempt => attempt.flowId === error.flowId)));
-  if (alreadyAttached) return;
-  try {
-    const cleanup = await ports.closeFlow(error.flowId);
-    if (cleanup?.error) console.error("[pipelines] stale review flow cleanup failed", { flowId: error.flowId, error: cleanup.error });
-  } catch (cleanupError) {
-    console.error("[pipelines] stale review flow cleanup failed", { flowId: error.flowId, error: String(cleanupError) });
-  }
+  await withPipelineMutation((pipelines, persist) => {
+    if (pipelines.some(pipeline =>
+      pipeline.runs.some(run => run.attempts.some(attempt => attempt.flowId === error.flowId)))) return;
+    const owner = pipelines.find(pipeline => pipeline.id === error.pipelineId);
+    if (!owner) return;
+    owner.pendingReviewFlowCleanup ??= [];
+    if (!owner.pendingReviewFlowCleanup.includes(error.flowId)) owner.pendingReviewFlowCleanup.push(error.flowId);
+    persist([owner]);
+  });
+  await drainPendingStaleControllerFlows(ports);
 }
 
 export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0): Promise<{ pipelines: Pipeline[]; changed: boolean }> {
@@ -9644,7 +9686,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           || pipeline.runs.some(run => run.attempts.some(attempt => attempt.activation))) continue;
         if (requiresReviewIngress(pipeline) && (tickStore.__llvCpuIngressReads?.has(cpuStageKey(pipeline))
           || ingressHeads.get(pipeline.id)?.fence !== reviewIngressFence(pipeline))) continue;
-        const lanePorts = controllerSnapshotPorts(admissionPorts, () => assertCurrent(pipeline));
+        const lanePorts = controllerSnapshotPorts(admissionPorts, () => assertCurrent(pipeline), pipeline.id);
         if (await tickPipeline(pipeline, entries, lanePorts, () => persist([pipeline]),
           ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS, new Map())) {
           persist([pipeline]);
@@ -9675,6 +9717,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   };
   const recoveryAccountingDeadline = ports.monotonicNow() + VERDICT_RECOVERY_ACCOUNTING_BUDGET_MS;
   try {
+    await drainPendingStaleControllerFlows(ports);
     ports.cpuAdmissionReconcile?.(ports);
     const requested = loadPipelines().filter((pipeline) => !pipeline.delivery && pipeline.publicationAdmission?.state === "pending");
     const legacy = [...new Map([...requested, ...unclaimedPipelinePublications()].map((pipeline) => [pipeline.id, pipeline])).values()].slice(0, 16);
@@ -9755,7 +9798,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     const result = await withPipelineControllerMutation(async (pipelines, persist, assertCurrent) => {
       let changed = reconcilePipelineFallbackTasks(pipelines, persist) || closedLaunchesChanged;
       await forEachCooperatively(pipelines, async (pipeline) => {
-        const lanePorts = controllerSnapshotPorts(controllerPorts, () => assertCurrent(pipeline));
+        const lanePorts = controllerSnapshotPorts(controllerPorts, () => assertCurrent(pipeline), pipeline.id);
         if (publishesRemoteBranch(pipeline) && !pipeline.delivery) return;
         const persistPipeline = () => persist([pipeline]);
         const operation = pipeline.delivery?.operation;

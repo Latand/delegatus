@@ -2,7 +2,7 @@ import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 
 /** Carries custody of a flow created just as its lane revision changed. */
 export class StaleControllerFlowError extends StateSnapshotChangedError {
-  constructor(readonly flowId: string) {
+  constructor(readonly flowId: string, readonly pipelineId: string) {
     super();
     this.name = "StaleControllerFlowError";
   }
@@ -12,7 +12,7 @@ export class StaleControllerFlowError extends StateSnapshotChangedError {
     A concurrent pause, close or report withdraws this snapshot's authority
     before the controller can act on its evidence. Ports retain their own
     reservation and actuation fences across work they perform internally. */
-export function controllerSnapshotPorts<T extends object>(ports: T, assertCurrent: () => void): T {
+export function controllerSnapshotPorts<T extends object>(ports: T, assertCurrent: () => void, pipelineId: string): T {
   return new Proxy(ports, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver);
@@ -32,7 +32,7 @@ export function controllerSnapshotPorts<T extends object>(ports: T, assertCurren
               const flowId = property === "createFlow" && value && typeof value === "object"
                 ? (value as { flow?: { id?: unknown } }).flow?.id
                 : undefined;
-              if (typeof flowId === "string") throw new StaleControllerFlowError(flowId);
+              if (typeof flowId === "string") throw new StaleControllerFlowError(flowId, pipelineId);
               throw error;
             }
             return value;

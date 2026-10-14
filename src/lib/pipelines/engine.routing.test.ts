@@ -66,6 +66,83 @@ test.each(["before-persist", "after-persist"] as const)("closing a lane during r
   expect([...h.flows.values()].every(flow => flow.state === "closed")).toBe(true);
 });
 
+test.each(["refusal", "exception"] as const)("stale review flow cleanup keeps durable custody after a close %s", async (failure) => {
+  const h = harness();
+  const pipeline = await create(h.ports, [
+    { id: "build", kind: "run", prompt: "Build", next: "review" },
+    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "ready for review")], h.ports);
+
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const createFlow = h.ports.createFlow;
+  h.ports.createFlow = async (...args) => {
+    const created = await createFlow(...args);
+    entered();
+    await gate;
+    return created;
+  };
+  const closeFlow = h.ports.closeFlow;
+  let closeCalls = 0;
+  h.ports.closeFlow = async (flowId) => {
+    if (++closeCalls === 1) {
+      if (failure === "exception") throw new Error("flow store busy");
+      return { error: "flow store busy" };
+    }
+    return closeFlow(flowId);
+  };
+
+  const creating = tickPipelines([], h.ports);
+  await started;
+  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  expect(closed.pipeline?.state).toBe("closed");
+  release();
+  await creating;
+
+  const flowId = [...h.flows.keys()][0]!;
+  expect(h.flows.get(flowId)?.state).toBe("waiting_ready");
+  expect(loadPipelines()[0]!.runs.find(run => run.stageId === "review")!.attempts.at(-1)!.flowId).toBeNull();
+  expect(loadPipelines()[0]!.pendingReviewFlowCleanup).toContain(flowId);
+
+  await withPipelineMutation((lanes, persist) => {
+    const current = lanes.find(lane => lane.id === pipeline.id)!;
+    current.spec = "newer operator edit";
+    persist([current]);
+  });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+
+  expect(closeCalls).toBeGreaterThanOrEqual(2);
+  expect(h.flows.get(flowId)?.state).toBe("closed");
+  expect(loadPipelines()[0]!.spec).toBe("newer operator edit");
+  expect(loadPipelines()[0]!.pendingReviewFlowCleanup ?? []).toEqual([]);
+});
+
+test("stale review flow cleanup rechecks ownership before retrying", async () => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const flow = (await h.ports.createFlow({ implementerPath: "/codex/stage-1.jsonl" } as never, [])).flow!;
+  const lanes = loadPipelines();
+  const owner = lanes.find(lane => lane.id === pipeline.id)!;
+  owner.runs[0]!.attempts.at(-1)!.flowId = flow.id;
+  owner.pendingReviewFlowCleanup = [flow.id];
+  savePipelines(lanes);
+  const closeFlow = spyOn(h.ports, "closeFlow");
+
+  await tickPipelines([], h.ports);
+
+  expect(closeFlow).not.toHaveBeenCalled();
+  expect(h.flows.get(flow.id)?.state).toBe("waiting_ready");
+  expect(loadPipelines()[0]!.pendingReviewFlowCleanup).toBeUndefined();
+});
+
 test("a rejected review flow attachment checkpoint keeps custody until the lane can be closed", async () => {
   const h = harness();
   const pipeline = await create(h.ports, [
@@ -97,9 +174,9 @@ test("a rejected review flow attachment checkpoint keeps custody until the lane 
 
   const creating = tickPipelines([], h.ports);
   await entered;
-  await creating;
   releaseWriter();
   await writer;
+  await creating;
 
   const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
   await engineModule.drainStageActivations(h.ports);
@@ -124,7 +201,7 @@ test("CPU admission polling closes a flow carried by a stale controller error", 
   setMachineCpuPressureForTests(undefined, 20);
   let pollCalls = 0;
   h.ports.cpuAdmissionReconcile = () => {
-    if (++pollCalls > 1) throw new StaleControllerFlowError(flow.id);
+    if (++pollCalls > 1) throw new StaleControllerFlowError(flow.id, pipeline.id);
   };
   try {
     let releaseEvidence!: () => void, evidenceEntered!: () => void;
