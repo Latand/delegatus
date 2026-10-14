@@ -4,6 +4,8 @@ import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
 
 const trees = new WeakMap<ChildProcess, ProcessIdentity>();
+const treeStops = new WeakMap<ChildProcess, Promise<void>>();
+const processStops = new WeakMap<ChildProcess, Promise<void>>();
 
 /** Record the original root before the caller can await readiness. */
 export function ownFixtureTree<T extends ChildProcess>(child: T): T {
@@ -36,10 +38,21 @@ export async function stopFixtureIdentity(identity: ProcessIdentity, timeoutMs =
  * every recorded member before each signal, including escalation after exit.
  * The runner's cgroup owns forks missed by this bounded local cleanup.
  */
-export async function stopFixtureTree(child: ChildProcess, timeoutMs = 2_000): Promise<void> {
+export function stopFixtureTree(child: ChildProcess, timeoutMs = 2_000): Promise<void> {
+  const existing = treeStops.get(child);
+  if (existing) return existing;
+  const stopping = Promise.resolve().then(() => stopFixtureTreeOnce(child, timeoutMs));
+  const tracked = stopping.finally(() => { if (treeStops.get(child) === tracked) treeStops.delete(child); });
+  treeStops.set(child, tracked);
+  return tracked;
+}
+
+async function stopFixtureTreeOnce(child: ChildProcess, timeoutMs: number): Promise<void> {
   const root = trees.get(child);
   if (!root || child.exitCode !== null || child.signalCode !== null || processIdentityStatus(root) !== "alive") return;
   const parents = procBackend.ppidMap();
+  // descendantPids includes the root. Keep it in the identity map for ancestry
+  // checks, then leave it out of the descendant signal set below.
   const members = descendantPids(root.pid, parents).reverse().map(pid => captureProcessIdentity(pid));
   if (processIdentityStatus(root) !== "alive") return;
   // Revalidate each ancestry edge after the snapshot. A recycled intermediate
@@ -59,7 +72,8 @@ export async function stopFixtureTree(child: ChildProcess, timeoutMs = 2_000): P
   // Exit evidence is terminal for a recorded identity. Separate kernel reads
   // can see its zombie start token, then no stat record after reaping; the
   // latter makes processExited return false and must not revive that member.
-  let remaining = owned;
+  // stopFixtureProcess is the sole root signal owner after descendants end.
+  let remaining = owned.filter(identity => identity.pid !== root.pid);
   const alive = () => {
     const running: ProcessIdentity[] = [];
     remaining = remaining.filter(identity => {
@@ -110,21 +124,65 @@ export async function fixtureReport<Report>(child: ChildProcess, name: string, r
     });
   } catch (error) {
     await stopFixtureTree(child);
-    await stopFixtureProcess(child);
     throw error;
   } finally { clearTimeout(timer); }
 }
 
-/** ChildProcess.kill targets its original handle, and refuses after exit. */
-export async function stopFixtureProcess(child: ChildProcess, termMs = 500, timeoutMs = 2_000): Promise<void> {
+/** Coalesce a tree stop and any direct handle cleanup into one root owner. */
+export function stopFixtureProcess(child: ChildProcess, termMs = 500, timeoutMs = 2_000): Promise<void> {
+  const existing = processStops.get(child);
+  if (existing) return existing;
+  const stopping = Promise.resolve().then(() => stopFixtureProcessOnce(child, termMs, timeoutMs));
+  const tracked = stopping.finally(() => { if (processStops.get(child) === tracked) processStops.delete(child); });
+  processStops.set(child, tracked);
+  return tracked;
+}
+
+/** Stop only the recorded process identity. A zombie or vanished original
+ * process is terminal even while Node has not delivered its ChildProcess exit
+ * event; that event can lag behind tree cleanup under CPU contention.
+ */
+async function stopFixtureProcessOnce(child: ChildProcess, termMs: number, timeoutMs: number): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
-  const exited = new Promise<void>(resolve => child.once("exit", () => resolve()));
-  child.kill("SIGTERM");
-  const forced = setTimeout(() => child.kill("SIGKILL"), termMs);
-  let deadline: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([exited, new Promise<never>((_, reject) => {
-      deadline = setTimeout(() => reject(new Error(`owned fixture ${child.pid} survived TERM and KILL`)), timeoutMs);
-    })]);
-  } finally { clearTimeout(forced); clearTimeout(deadline); }
+  if (child.pid === undefined) return;
+  const identity = trees.get(child) ?? captureProcessIdentity(child.pid);
+  let terminalObserved = false;
+  const kernelTerminal = () => {
+    if (terminalObserved) return true;
+    const status = processIdentityStatus(identity);
+    terminalObserved = status === "dead" || (status === "alive" && procBackend.processExited(identity.pid));
+    return terminalObserved;
+  };
+  const handleExited = () => child.exitCode !== null || child.signalCode !== null;
+  const waitForHandle = async (durationMs: number): Promise<boolean> => {
+    const deadline = Date.now() + durationMs;
+    while (Date.now() < deadline) {
+      if (handleExited() || processIdentityStatus(identity) === "dead") return true;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    return handleExited() || processIdentityStatus(identity) === "dead";
+  };
+  const waitAfterKernelExit = async () => {
+    if (!await waitForHandle(timeoutMs)) throw new Error(`owned fixture ${child.pid} exited without a handle notification`);
+  };
+  if (handleExited()) return;
+  if (kernelTerminal()) return waitAfterKernelExit();
+  signalFixtureProcess(identity, "SIGTERM");
+  if (handleExited()) return;
+  if (kernelTerminal()) return waitAfterKernelExit();
+  if (await waitForHandle(termMs)) return;
+  if (kernelTerminal()) return waitAfterKernelExit();
+  signalFixtureProcess(identity, "SIGKILL");
+  if (await waitForHandle(timeoutMs)) return;
+  if (kernelTerminal()) return waitAfterKernelExit();
+  throw new Error(`owned fixture ${child.pid} survived TERM and KILL`);
+}
+
+/** The process handle owns the root; matching its recorded identity is the
+ * signal guard. A separate zombie read here would race the terminal check.
+ */
+function signalFixtureProcess(identity: ProcessIdentity, signal: NodeJS.Signals): boolean {
+  if (processIdentityStatus(identity) !== "alive") return false;
+  try { process.kill(identity.pid, signal); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; return false; }
 }

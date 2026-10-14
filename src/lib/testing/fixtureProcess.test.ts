@@ -12,6 +12,42 @@ test("fixture tree cleanup never signals an exited root's old group", async () =
   finally { signal.mockRestore(); }
 }, 3_000);
 
+test("tree and direct fixture cleanup share one root-stop owner", async () => {
+  const child = ownFixtureTree(spawn("/bin/sleep", ["30"], { stdio: "ignore" }));
+  const root = captureProcessIdentity(child.pid!);
+  const originalKill = process.kill;
+  const signals: NodeJS.Signals[] = [];
+  const send = spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (pid === child.pid) signals.push(signal as NodeJS.Signals);
+    return originalKill(pid, signal);
+  });
+  try {
+    await Promise.all([stopFixtureTree(child), stopFixtureProcess(child)]);
+    expect(signals).toEqual(["SIGTERM"]);
+    expect(processIdentityStatus(root)).toBe("dead");
+  } finally { send.mockRestore(); await stopFixtureTree(child); }
+}, 3_000);
+
+test("tree cleanup accepts terminal kernel evidence before the root handle exit event", async () => {
+  const child = ownFixtureTree(spawn("/bin/sleep", ["30"], { stdio: "ignore" }));
+  const originalExited = procBackend.processExited.bind(procBackend);
+  const originalKill = process.kill;
+  let termSent = false;
+  const exited = spyOn(procBackend, "processExited").mockImplementation(pid =>
+    pid === child.pid && termSent ? true : originalExited(pid));
+  const send = spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (pid === child.pid && signal === "SIGTERM") termSent = true;
+    return originalKill(pid, signal);
+  });
+  try {
+    await stopFixtureTree(child);
+    expect(send.mock.calls.filter(([pid]) => pid === child.pid)).toEqual([[child.pid!, "SIGTERM"]]);
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+  } finally {
+    send.mockRestore(); exited.mockRestore(); await stopFixtureTree(child);
+  }
+}, 3_000);
+
 test("fixture tree cleanup refuses a reused start token before sending any signal", async () => {
   const child = ownFixtureTree(spawn("/bin/sleep", ["30"], { stdio: "ignore" }));
   const original = procBackend.processIdentity.bind(procBackend);
@@ -52,7 +88,8 @@ test("fixture tree cleanup keeps an observed exit terminal across later kernel r
   // Keep the identity read alive to model the preceding read's stale result.
   const exited = spyOn(procBackend, "processExited").mockImplementation(pid =>
     pid === child.pid ? ++reads % 2 === 0 : originalExited(pid));
-  const send = spyOn(process, "kill").mockImplementation(() => true);
+  const originalKill = process.kill;
+  const send = spyOn(process, "kill").mockImplementation((pid, signal) => originalKill(pid, signal));
   try {
     await stopFixtureTree(child);
     expect(send.mock.calls).toEqual([[child.pid!, "SIGTERM"]]);

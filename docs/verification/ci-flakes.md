@@ -43,6 +43,24 @@ separate regression requires escalation once their identity is verified again. T
 observed exit cannot trigger another signal or another liveness read. The
 native restart test keeps all full/restricted sandbox and approval assertions.
 
+A follow-up native campaign exposed a second race in the same fixture. The
+`descendantPids` snapshot includes its root, so `stopFixtureTree` signalled the
+root while stopping members, then delegated root cleanup to
+`stopFixtureProcess`. Under CPU contention, the root's handle exit notification
+could lag behind those two cleanup paths and `stopFixtureProcess` reported
+`owned fixture <pid> survived TERM and KILL`. An independent paired campaign
+recorded 2/50 such head failures (samples 42 and 45); two later 50-run base
+campaigns recorded none. The earlier premature tree-survivor error remained a
+base-only symptom.
+
+The follow-up fix retains the root identity in the ancestry proof and excludes
+it from descendant signals. One coalesced `stopFixtureProcess` operation owns
+the root, signals only its captured identity, treats kernel exit evidence as
+terminal, and waits for the child handle notification when it is still pending.
+Tree and direct cleanup calls share the same in-flight owner. Focused tests pin
+both the one-signal invariant and terminal-evidence path; the existing PID
+reuse, escalation, and descendant-survivor assertions remain.
+
 ## Measured failure rates
 
 Base is `3050c102786bf47c461bf0eb614286563760478e`. Each sample uses a fresh
@@ -62,6 +80,16 @@ Claude base failures were samples 5, 12, 36 and 48. All had the original
 did not reproduce the rare race on base; the controlled helper campaign supplies
 the failing reproduction. Native Codex attempt 1 failed and attempt 2 passed
 on the same CI head. These are observed rates for the specified stimuli.
+
+After the root-owner follow-up, fresh isolated N=50 campaigns on the fixed head
+recorded 0 failures for the native Codex succession, Claude synchronous holder,
+Claude deferred holder, and controlled terminal-exit cleanup cases. The paired
+native/deferred run used the real Codex 0.154.0 binary, a CPU-0 load worker, a
+CPU-1 deferred caller, and its CPU-0 nice-19 foreign holder. Full per-sample logs
+were retained; each invocation ran through `scripts/gate-slot.sh` with fresh
+HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR. Scope-survivor hook errors
+observed in earlier paired runs occurred on both revisions and were tracked
+separately from the root-handle finding.
 
 The native checks exercise credential-free **Codex app-server processes**, with
 both server generations and both access policies. The executable is the same
