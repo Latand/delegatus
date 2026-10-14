@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { redactSecrets } from "@/lib/review";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { MAX_TTS_TEXT_LENGTH } from "@/lib/tts";
-import { activeTtsOption, readFishAudioApiKey, readOpenAiApiKey, resolveTtsBackend, ttsBackendInfo, type TtsBackend, type TtsBackendOption } from "@/lib/ttsBackend";
+import { ttsOptionFor, readFishAudioApiKey, readOpenAiApiKey, ttsBackendInfo, type TtsBackend, type TtsBackendOption } from "@/lib/ttsBackend";
 import { readElevenLabsApiKey, readSonioxApiKey } from "@/lib/transcribeBackend";
 
 export const runtime = "nodejs";
@@ -198,24 +198,12 @@ function alignmentOf(value: unknown): { characters: string[]; starts: number[]; 
 
 export async function GET(): Promise<NextResponse<{ available: boolean }>> {
   const info = ttsBackendInfo();
-  return NextResponse.json({ available: info.options.find((option) => option.id === info.backend)?.available === true });
+  return NextResponse.json({ available: info.byLanguage ? Object.values(info.routes).every((option) => option.available) : info.options.find((option) => option.id === info.backend)?.available === true });
 }
 
 export async function POST(req: NextRequest): Promise<Response> {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
-
-  const backend = resolveTtsBackend();
-  const option = activeTtsOption();
-  const apiKey =
-    backend === "openai" ? readOpenAiApiKey() : backend === "soniox" ? readSonioxApiKey() : backend === "fishaudio" ? readFishAudioApiKey() : readElevenLabsApiKey();
-  if (!apiKey) {
-    return NextResponse.json({ error: "text-to-speech is unavailable", keyPath: option.keyPath }, { status: 503 });
-  }
-
-  if (backend === "fishaudio" && option.model === "s2.1-pro-free" && option.freeEnded) {
-    return NextResponse.json({ error: "Fish Audio's free model ended on 2026-11-30; choose S2.1 Pro (paid)", code: "fishaudio-free-ended" }, { status: 410 });
-  }
 
   let parsed: unknown;
   try {
@@ -226,10 +214,9 @@ export async function POST(req: NextRequest): Promise<Response> {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return NextResponse.json({ error: "expected a JSON object" }, { status: 400 });
   }
-  const body = parsed as { text?: unknown; mode?: unknown };
+  const body = parsed as { text?: unknown; mode?: unknown; language?: unknown };
   if (body.mode !== undefined && body.mode !== "soniox-pcm" && body.mode !== "pcm") return NextResponse.json({ error: "invalid speech mode" }, { status: 400 });
   const fast = body.mode === "soniox-pcm" || body.mode === "pcm";
-  if ((fast && backend !== "soniox" && backend !== "fishaudio") || (backend === "fishaudio" && body.mode !== "pcm")) return NextResponse.json({ error: "speech backend changed; refresh configuration" }, { status: 409 });
   if (typeof body.text !== "string" || !body.text.trim()) {
     return NextResponse.json({ error: "text must be a non-empty string" }, { status: 400 });
   }
@@ -237,6 +224,17 @@ export async function POST(req: NextRequest): Promise<Response> {
     return NextResponse.json({ error: `text is too long (${MAX_TTS_TEXT_LENGTH} character limit)` }, { status: 413 });
   }
   const text = redactSecrets(body.text.trim());
+  if (body.language !== undefined && body.language !== "uk" && body.language !== "ru" && body.language !== "en") return NextResponse.json({ error: "invalid speech language" }, { status: 400 });
+  const option = ttsOptionFor(body.language, text);
+  const backend = option.id;
+  const keyReaders: Record<TtsBackend, () => string | null> = { openai: readOpenAiApiKey, elevenlabs: readElevenLabsApiKey, soniox: readSonioxApiKey, fishaudio: readFishAudioApiKey };
+  const getKey = keyReaders[backend];
+  const apiKey = getKey();
+  if (!apiKey) return NextResponse.json({ error: "text-to-speech is unavailable", keyPath: option.keyPath }, { status: 503 });
+  if (backend === "fishaudio" && option.model === "s2.1-pro-free" && option.freeEnded) {
+    return NextResponse.json({ error: "Fish Audio's free model ended on 2026-11-30; choose S2.1 Pro (paid)", code: "fishaudio-free-ended" }, { status: 410 });
+  }
+  if ((fast && backend !== "soniox" && backend !== "fishaudio") || (backend === "fishaudio" && body.mode !== "pcm")) return NextResponse.json({ error: "speech backend changed; refresh configuration" }, { status: 409 });
   if (backend === "soniox" && new TextEncoder().encode(text).byteLength > 4800) {
     return NextResponse.json({ error: "text is too long (4800 UTF-8 byte limit)" }, { status: 413 });
   }

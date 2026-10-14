@@ -2146,6 +2146,7 @@ export const en = {
   "tts.replayFree": "Replay aloud (free)",
   "tts.triggerTitle": "{action} · right-click: voice & billing",
   "tts.stop": "Stop reading aloud",
+  "tts.byLanguage": "By message language",
   "tts.menuTitle": "Voice & billing",
   "tts.menuLocked": "Locked by the LLV_TTS_BACKEND environment variable",
   "tts.nextPaid": "Next click: paid synthesis of this answer",

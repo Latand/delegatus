@@ -456,3 +456,72 @@ describe("Fish Audio route", () => {
     expect((await missing.json()).keyPath).toMatch(/fishaudio-api-key$/);
   });
 });
+
+describe("/api/tts — message language routing", () => {
+  const names = ["FISH_AUDIO_API_KEY", "LLV_TTS_ROUTE_UK", "LLV_TTS_ROUTE_RU", "LLV_TTS_ROUTE_EN", "LLV_TTS_SONIOX_LANGUAGE"];
+  const saved = names.map((name) => process.env[name]);
+  beforeEach(() => {
+    names.forEach((name) => setEnv(name, undefined));
+    setEnv("FISH_AUDIO_API_KEY", "fish-routing-fixture");
+    setEnv("SONIOX_API_KEY", "soniox-routing-fixture");
+    delete process.env.LLV_TTS_BACKEND;
+    process.env.XDG_CONFIG_HOME = "/nonexistent/tts-language-routing";
+  });
+  afterEach(() => names.forEach((name, index) => setEnv(name, saved[index])));
+
+  test.each([
+    ["ru", "Готово, все проверки зелёные.", "0c7fd46820854a9e8c4010d911687b7a"],
+    ["en", "All checks passed and the release is ready.", "536d3a5e000945adb7038665781a4aca"],
+    [undefined, "Теперь все проверки зелёные.", "0c7fd46820854a9e8c4010d911687b7a"],
+  ] as const)("%p uses paid Fish with the message voice", async (language, text, voice) => {
+    const calls: [string, RequestInit][] = [];
+    globalThis.fetch = mock(async (url: string, init: RequestInit) => {
+      calls.push([url, init]);
+      return new Response(new Uint8Array([1, 2]), { headers: { "content-type": "application/octet-stream" } });
+    }) as unknown as typeof fetch;
+    const response = await POST(request(JSON.stringify({ text, language, mode: "pcm" })));
+    expect(response.status).toBe(200);
+    await response.arrayBuffer();
+    const [url, init] = calls[0]!;
+    expect(url).toBe("https://api.fish.audio/v1/tts");
+    expect(new Headers(init.headers).get("model")).toBe("s2.1-pro");
+    expect(JSON.parse(String(init.body))).toEqual({ text, format: "pcm", sample_rate: 24000, latency: "balanced", reference_id: voice });
+    expect(response.headers.get("x-tts-voice")).toBe(voice);
+    expect(response.headers.get("x-tts-model")).toBe("s2.1-pro");
+    expect(JSON.stringify([...response.headers])).not.toContain("routing-fixture");
+  });
+
+  test("Ukrainian uses Soniox uk on the PCM path and auto availability checks every route", async () => {
+    let payload: unknown;
+    globalThis.fetch = mock(async (url: string, init: RequestInit) => {
+      expect(url).toBe("https://tts-rt.soniox.com/tts");
+      payload = JSON.parse(String(init.body));
+      return new Response(new Uint8Array([1, 2]), { headers: { "content-type": "audio/pcm" } });
+    }) as unknown as typeof fetch;
+    expect(await (await GET()).json()).toEqual({ available: true });
+    const response = await POST(request(JSON.stringify({ text: "Усі перевірки зелені.", language: "uk", mode: "pcm" })));
+    expect(response.status).toBe(200);
+    await response.arrayBuffer();
+    expect(payload).toEqual({ model: "tts-rt-v2", voice: "Adrian", language: "uk", audio_format: "pcm_s16le", sample_rate: 24000, text: "Усі перевірки зелені." });
+    expect(response.headers.get("x-tts-language")).toBe("uk");
+  });
+
+  test("invalid languages refuse before fetch; fixed Soniox keeps its configured language", async () => {
+    const calls: RequestInit[] = [];
+    globalThis.fetch = mock(async (_url: string, init: RequestInit) => {
+      calls.push(init);
+      return new Response(new Uint8Array([1, 2]), { headers: { "content-type": "audio/pcm" } });
+    }) as unknown as typeof fetch;
+    for (const language of ["be", null, 2, {}]) {
+      const response = await POST(request(JSON.stringify({ text: "Hello", language, mode: "pcm" })));
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "invalid speech language" });
+    }
+    expect(calls).toHaveLength(0);
+    process.env.LLV_TTS_BACKEND = "soniox";
+    const response = await POST(request(JSON.stringify({ text: "Усі перевірки зелені.", language: "uk", mode: "pcm" })));
+    expect(response.status).toBe(200);
+    await response.arrayBuffer();
+    expect(JSON.parse(String(calls[0]!.body)).language).toBe("en");
+  });
+});

@@ -52,6 +52,32 @@ export function proseLanguage(text: string | null | undefined): ProseLanguage | 
   return null;
 }
 
+const UK_SPEECH_WORDS = new Set(["й", "з", "із", "зі", "що", "щоб", "як", "але", "або", "вже", "тепер", "зараз", "якщо", "лише", "також", "немає"]);
+const RU_SPEECH_WORDS = new Set(["и", "с", "со", "что", "чтобы", "как", "но", "или", "уже", "теперь", "сейчас", "если", "только", "тоже", "нет"]);
+
+/** Message-level speech choice. Ignore code-shaped tokens and allow borrowed
+ * English terms in Cyrillic prose. Unmarked Cyrillic ties use Ukrainian. */
+export function speechLanguage(text: string, fallback: ProseLanguage = "uk"): ProseLanguage {
+  let cyrillic = 0;
+  let latin = 0;
+  let uk = 0;
+  let ru = 0;
+  for (const token of stripNonProse(text).split(/\s+/u)) {
+    const word = token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+    if (/\p{Script=Cyrillic}/u.test(word)) {
+      cyrillic += 1;
+      const lower = word.toLowerCase();
+      if (/[іїєґ]/u.test(lower) || /\p{Script=Cyrillic}['ʼ’]\p{Script=Cyrillic}/u.test(lower) || UK_SPEECH_WORDS.has(lower)) uk += 1;
+      else if (/[ыэъё]/u.test(lower) || RU_SPEECH_WORDS.has(lower)) ru += 1;
+    } else if (/^\p{Script=Latin}+(?:['’-]\p{Script=Latin}+)*$/u.test(word)
+      && !(word.length >= 2 && word === word.toUpperCase())
+      && !/\p{Ll}\p{Lu}/u.test(word)) latin += 1;
+  }
+  if (!cyrillic && !latin) return fallback;
+  if (cyrillic && 2 * cyrillic >= latin) return ru > uk ? "ru" : "uk";
+  return "en";
+}
+
 const LANGUAGE_NAMES: Record<ProseLanguage, string> = { en: "English", uk: "Ukrainian", ru: "Russian" };
 
 export function languageName(language: ProseLanguage): string {

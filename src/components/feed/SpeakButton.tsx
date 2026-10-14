@@ -5,12 +5,13 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncE
 
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { translate, useLocale } from "@/lib/i18n";
-import { fishAudioFreeDate, fishAudioFreeEnded, ttsProviderName, type FishAudioModel } from "@/lib/fishAudio";
+import { fishAudioFreeDate, fishAudioFreeEnded, ttsProviderName } from "@/lib/fishAudio";
+import { speechLanguage } from "@/lib/i18n/proseLanguage";
 import { MAX_TTS_MESSAGE_LENGTH } from "@/lib/tts";
 import { wordSpanAt } from "@/lib/ttsAlignment";
 import { chunkSpeech } from "@/lib/ttsChunks";
 
-import { SpeakAlert, SpeakMenu, type BackendId, type BackendInfo } from "./SpeakMenu";
+import { SpeakAlert, SpeakMenu, type BackendSelection, type BackendInfo } from "./SpeakMenu";
 import { createKaraoke, karaokeRoots, type Karaoke } from "./ttsKaraoke";
 import {
   chunksCached,
@@ -131,6 +132,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
   const speechError = header ? (snapshot?.errorFrom?.header ? snapshot.error : null) : rowError;
   const text = header ? snapshot?.target?.text ?? "" : suppliedText;
   const { locale, t } = useLocale();
+  const language = useMemo(() => speechLanguage(text, locale === "en" ? "en" : "uk"), [text, locale]);
   const isMobile = useIsMobile();
   const [info, setInfo] = useState<BackendInfo | null>(backendInfo);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -149,7 +151,8 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
   };
   const frozenText = useRef("");
   const frozenId = useRef<string | null>(null);
-  const chunks = useMemo(() => chunkSpeech(text, info?.backend === "soniox" || info?.backend === "fishaudio" ? { backend: info.backend, language: info.options.find((o) => o.id === info.backend)?.language } : undefined), [text, info]);
+  const selectedOption = info?.byLanguage && info.routes?.[language] ? info.routes[language] : info?.options.find((option) => option.id === info.backend);
+  const chunks = useMemo(() => chunkSpeech(text, selectedOption?.id === "soniox" || selectedOption?.id === "fishaudio" ? { backend: selectedOption.id, language: selectedOption.language ?? language } : undefined), [text, selectedOption, language]);
   const generation = useRef(0);
   const mounted = useRef(true);
   const ownedStop = useRef<(() => void) | null>(null);
@@ -193,7 +196,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
 
   if (!info) return header ? <span className="inline-flex shrink-0"><button type="button" data-tts-header disabled aria-label={t("tts.readVisible")} title={error ?? t("tts.loadingConfig")} className={`inline-flex shrink-0 items-center justify-center rounded-md text-muted opacity-40 ${isMobile ? "h-11 w-11" : "h-6 w-6"}`}><Volume2 className={isMobile ? "h-5 w-5" : "h-3.5 w-3.5"} aria-hidden /></button></span> : null;
   if (!text && !header && phase === "idle") return null;
-  const option = info.options.find((candidate) => candidate.id === info.backend);
+  const option = selectedOption;
   if (!option) return null;
   const fast = option.id === "soniox" || option.id === "fishaudio";
   const freeModel = option.id === "fishaudio" && option.model === "s2.1-pro-free";
@@ -331,8 +334,8 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
         stop(false);
       },
     };
-    const session = context ? new PcmSession({ ...callbacks, voice: requestedVoice, context }) : new TtsSession({
-      ...callbacks, key: (chunkText, voice) => voiceKey(voice ?? option, chunkText), synthesize: synthesizeChunk, elements,
+    const session = context ? new PcmSession({ ...callbacks, voice: requestedVoice, context, language }) : new TtsSession({
+      ...callbacks, key: (chunkText, voice) => voiceKey(voice ?? option, chunkText), synthesize: (chunkText, signal) => synthesizeChunk(chunkText, signal, undefined, language), elements,
     });
 
     if (speech) { speech.claimStop(stop); speech.update({ error: null, errorFrom: null }); }
@@ -422,13 +425,13 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
       .catch(() => { if (mounted.current) setError(t("tts.configError")); });
   };
 
-  const pickBackend = async (backend: BackendId, model?: FishAudioModel): Promise<boolean> => {
-    if (info.lockedByEnv && (model === undefined || backend !== info.backend)) return false;
+  const pickBackend = async (selection: BackendSelection): Promise<boolean> => {
+    if (info.lockedByEnv && ("byLanguage" in selection || selection.model === undefined || selection.backend !== info.backend)) return false;
     try {
       const response = await fetch("/api/tts/backend", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ backend, ...(model ? { model } : {}) }),
+        body: JSON.stringify(selection),
       });
       if (!response.ok) return false;
       const value = (await response.json()) as BackendInfo;
@@ -473,6 +476,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
           anchorRef={triggerRef}
           info={info}
           option={option}
+          language={language}
           chars={text.length}
           notice={error ?? speechError}
           freeReplay={freeReplay}

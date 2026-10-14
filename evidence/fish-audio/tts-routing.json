@@ -1,0 +1,91 @@
+{
+  "date": "2026-10-14T20:33:14.236Z",
+  "instance": "isolated production Viewer",
+  "rows": [
+    {
+      "language": "ru",
+      "text": "Готово: лейн смержен, все проверки зелёные, деплой на прод прошёл без ошибок.",
+      "headersMs": 749.7625670000002,
+      "firstAudioMs": 749.8705210000003,
+      "totalMs": 1957.593233,
+      "bytes": 262894,
+      "durationSeconds": 5.476958333333333,
+      "headers": {
+        "x-tts-backend": "fishaudio",
+        "x-tts-channels": "1",
+        "x-tts-encoding": "pcm_s16le",
+        "x-tts-language": "",
+        "x-tts-model": "s2.1-pro",
+        "x-tts-sample-rate": "24000",
+        "x-tts-voice": "0c7fd46820854a9e8c4010d911687b7a"
+      },
+      "pcm": "ru.pcm",
+      "mp3": "ru.mp3"
+    },
+    {
+      "language": "en",
+      "text": "The pipeline finished: all checks passed and the release is live on production.",
+      "headersMs": 320.05003899999974,
+      "firstAudioMs": 320.08687699999973,
+      "totalMs": 1278.6885780000002,
+      "bytes": 227228,
+      "durationSeconds": 4.7339166666666666,
+      "headers": {
+        "x-tts-backend": "fishaudio",
+        "x-tts-channels": "1",
+        "x-tts-encoding": "pcm_s16le",
+        "x-tts-language": "",
+        "x-tts-model": "s2.1-pro",
+        "x-tts-sample-rate": "24000",
+        "x-tts-voice": "536d3a5e000945adb7038665781a4aca"
+      },
+      "pcm": "en.pcm",
+      "mp3": "en.mp3"
+    },
+    {
+      "language": "uk",
+      "text": "Готово: лінію змерджено, усі перевірки зелені, деплой на прод пройшов без помилок.",
+      "headersMs": 536.6667820000002,
+      "firstAudioMs": 536.714978,
+      "totalMs": 4939.085075000001,
+      "bytes": 286720,
+      "durationSeconds": 5.973333333333334,
+      "headers": {
+        "x-tts-backend": "soniox",
+        "x-tts-channels": "1",
+        "x-tts-encoding": "pcm_s16le",
+        "x-tts-language": "uk",
+        "x-tts-model": "tts-rt-v2",
+        "x-tts-sample-rate": "24000",
+        "x-tts-voice": "Adrian"
+      },
+      "pcm": "uk.pcm",
+      "mp3": "uk.mp3"
+    }
+  ],
+  "sampleRoot": "$HOME/Pictures/delegatus-review/tts-routing/",
+  "catalogVerification": [
+    {
+      "id": "0c7fd46820854a9e8c4010d911687b7a",
+      "title": "Джарвис 2.0",
+      "languages": [
+        "uk",
+        "ru",
+        "bg"
+      ],
+      "description": "Голосов ИИ ассистент из фильма Железный человек",
+      "source": null,
+      "catalog_url": "https://api.fish.audio/model/0c7fd46820854a9e8c4010d911687b7a"
+    },
+    {
+      "id": "536d3a5e000945adb7038665781a4aca",
+      "title": "Ethan",
+      "languages": [
+        "en"
+      ],
+      "description": "A curious explainer. ",
+      "source": "voice_design",
+      "catalog_url": "https://api.fish.audio/model/536d3a5e000945adb7038665781a4aca"
+    }
+  ]
+}

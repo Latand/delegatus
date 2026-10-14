@@ -1808,6 +1808,422 @@
         "overflowWrap": "break-word",
         "sideways": false
       }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "light",
+      "state": "language",
+      "geometry": {
+        "left": 957.984375,
+        "right": 1243.984375,
+        "top": 374.75,
+        "bottom": 452.0625,
+        "height": 77.3125,
+        "menu": {
+          "left": 950.984375,
+          "right": 1250.984375,
+          "top": 177,
+          "bottom": 710.375
+        },
+        "lines": [
+          {
+            "text": "Ukrainian — Soniox · Adrian",
+            "left": 987.984375,
+            "right": 1235.984375,
+            "top": 400.75,
+            "bottom": 415.1875
+          },
+          {
+            "text": "Russian — Fish Audio · Джарвис 2.0",
+            "left": 987.984375,
+            "right": 1235.984375,
+            "top": 415.1875,
+            "bottom": 429.625
+          },
+          {
+            "text": "English — Fish Audio · Ethan",
+            "left": 987.984375,
+            "right": 1235.984375,
+            "top": 429.625,
+            "bottom": 444.0625
+          }
+        ],
+        "sideways": false
+      },
+      "selections": [
+        {
+          "backend": "fishaudio"
+        },
+        {
+          "byLanguage": true
+        }
+      ]
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "light",
+      "state": "language",
+      "geometry": {
+        "left": 588,
+        "right": 874,
+        "top": 326.75,
+        "bottom": 404.0625,
+        "height": 77.3125,
+        "menu": {
+          "left": 581,
+          "right": 881,
+          "top": 129,
+          "bottom": 662.375
+        },
+        "lines": [
+          {
+            "text": "Ukrainian — Soniox · Adrian",
+            "left": 618,
+            "right": 866,
+            "top": 352.75,
+            "bottom": 367.1875
+          },
+          {
+            "text": "Russian — Fish Audio · Джарвис 2.0",
+            "left": 618,
+            "right": 866,
+            "top": 367.1875,
+            "bottom": 381.625
+          },
+          {
+            "text": "English — Fish Audio · Ethan",
+            "left": 618,
+            "right": 866,
+            "top": 381.625,
+            "bottom": 396.0625
+          }
+        ],
+        "sideways": false
+      },
+      "selections": [
+        {
+          "backend": "fishaudio"
+        },
+        {
+          "byLanguage": true
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "language",
+      "geometry": {
+        "left": 957.984375,
+        "right": 1243.984375,
+        "top": 374.75,
+        "bottom": 452.0625,
+        "height": 77.3125,
+        "menu": {
+          "left": 950.984375,
+          "right": 1250.984375,
+          "top": 177,
+          "bottom": 710.375
+        },
+        "lines": [
+          {
+            "text": "Ukrainian — Soniox · Adrian",
+            "left": 987.984375,
+            "right": 1235.984375,
+            "top": 400.75,
+            "bottom": 415.1875
+          },
+          {
+            "text": "Russian — Fish Audio · Джарвис 2.0",
+            "left": 987.984375,
+            "right": 1235.984375,
+            "top": 415.1875,
+            "bottom": 429.625
+          },
+          {
+            "text": "English — Fish Audio · Ethan",
+            "left": 987.984375,
+            "right": 1235.984375,
+            "top": 429.625,
+            "bottom": 444.0625
+          }
+        ],
+        "sideways": false
+      },
+      "selections": [
+        {
+          "backend": "fishaudio"
+        },
+        {
+          "byLanguage": true
+        }
+      ]
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "language",
+      "geometry": {
+        "left": 588,
+        "right": 874,
+        "top": 326.75,
+        "bottom": 404.0625,
+        "height": 77.3125,
+        "menu": {
+          "left": 581,
+          "right": 881,
+          "top": 129,
+          "bottom": 662.375
+        },
+        "lines": [
+          {
+            "text": "Ukrainian — Soniox · Adrian",
+            "left": 618,
+            "right": 866,
+            "top": 352.75,
+            "bottom": 367.1875
+          },
+          {
+            "text": "Russian — Fish Audio · Джарвис 2.0",
+            "left": 618,
+            "right": 866,
+            "top": 367.1875,
+            "bottom": 381.625
+          },
+          {
+            "text": "English — Fish Audio · Ethan",
+            "left": 618,
+            "right": 866,
+            "top": 381.625,
+            "bottom": 396.0625
+          }
+        ],
+        "sideways": false
+      },
+      "selections": [
+        {
+          "backend": "fishaudio"
+        },
+        {
+          "byLanguage": true
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "language",
+      "geometry": {
+        "left": 957.984375,
+        "right": 1243.984375,
+        "top": 423.5,
+        "bottom": 500.8125,
+        "height": 77.3125,
+        "menu": {
+          "left": 950.984375,
+          "right": 1250.984375,
+          "top": 177,
+          "bottom": 765.625
+        },
+        "lines": [
+          {
+            "text": "Українська — Soniox · Adrian",
+            "left": 987.984375,
+            "right": 1235.984375,
+            "top": 449.5,
+            "bottom": 463.9375
+          },
+          {
+            "text": "Російська — Fish Audio · Джарвис 2.0",
+            "left": 987.984375,
+            "right": 1235.984375,
+            "top": 463.9375,
+            "bottom": 478.375
+          },
+          {
+            "text": "Англійська — Fish Audio · Ethan",
+            "left": 987.984375,
+            "right": 1235.984375,
+            "top": 478.375,
+            "bottom": 492.8125
+          }
+        ],
+        "sideways": false
+      },
+      "selections": [
+        {
+          "backend": "fishaudio"
+        },
+        {
+          "byLanguage": true
+        }
+      ]
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "language",
+      "geometry": {
+        "left": 588,
+        "right": 874,
+        "top": 349.5,
+        "bottom": 426.8125,
+        "height": 77.3125,
+        "menu": {
+          "left": 581,
+          "right": 881,
+          "top": 103,
+          "bottom": 691.625
+        },
+        "lines": [
+          {
+            "text": "Українська — Soniox · Adrian",
+            "left": 618,
+            "right": 866,
+            "top": 375.5,
+            "bottom": 389.9375
+          },
+          {
+            "text": "Російська — Fish Audio · Джарвис 2.0",
+            "left": 618,
+            "right": 866,
+            "top": 389.9375,
+            "bottom": 404.375
+          },
+          {
+            "text": "Англійська — Fish Audio · Ethan",
+            "left": 618,
+            "right": 866,
+            "top": 404.375,
+            "bottom": 418.8125
+          }
+        ],
+        "sideways": false
+      },
+      "selections": [
+        {
+          "backend": "fishaudio"
+        },
+        {
+          "byLanguage": true
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "language",
+      "geometry": {
+        "left": 957.984375,
+        "right": 1243.984375,
+        "top": 423.5,
+        "bottom": 500.8125,
+        "height": 77.3125,
+        "menu": {
+          "left": 950.984375,
+          "right": 1250.984375,
+          "top": 177,
+          "bottom": 765.625
+        },
+        "lines": [
+          {
+            "text": "Українська — Soniox · Adrian",
+            "left": 987.984375,
+            "right": 1235.984375,
+            "top": 449.5,
+            "bottom": 463.9375
+          },
+          {
+            "text": "Російська — Fish Audio · Джарвис 2.0",
+            "left": 987.984375,
+            "right": 1235.984375,
+            "top": 463.9375,
+            "bottom": 478.375
+          },
+          {
+            "text": "Англійська — Fish Audio · Ethan",
+            "left": 987.984375,
+            "right": 1235.984375,
+            "top": 478.375,
+            "bottom": 492.8125
+          }
+        ],
+        "sideways": false
+      },
+      "selections": [
+        {
+          "backend": "fishaudio"
+        },
+        {
+          "byLanguage": true
+        }
+      ]
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "language",
+      "geometry": {
+        "left": 588,
+        "right": 874,
+        "top": 349.5,
+        "bottom": 426.8125,
+        "height": 77.3125,
+        "menu": {
+          "left": 581,
+          "right": 881,
+          "top": 103,
+          "bottom": 691.625
+        },
+        "lines": [
+          {
+            "text": "Українська — Soniox · Adrian",
+            "left": 618,
+            "right": 866,
+            "top": 375.5,
+            "bottom": 389.9375
+          },
+          {
+            "text": "Російська — Fish Audio · Джарвис 2.0",
+            "left": 618,
+            "right": 866,
+            "top": 389.9375,
+            "bottom": 404.375
+          },
+          {
+            "text": "Англійська — Fish Audio · Ethan",
+            "left": 618,
+            "right": 866,
+            "top": 404.375,
+            "bottom": 418.8125
+          }
+        ],
+        "sideways": false
+      },
+      "selections": [
+        {
+          "backend": "fishaudio"
+        },
+        {
+          "byLanguage": true
+        }
+      ]
     }
   ]
 }

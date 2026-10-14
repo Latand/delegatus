@@ -1,5 +1,7 @@
 "use client";
 
+import type { ProseLanguage } from "@/lib/i18n/proseLanguage";
+
 import { MAX_TTS_MESSAGE_LENGTH } from "@/lib/tts";
 import { charTimesFor, timeForChar, charForTime, type CharTimes, type ProviderAlignment } from "@/lib/ttsAlignment";
 import { MIN_CHUNK_CHARS, type SpeechChunk } from "@/lib/ttsChunks";
@@ -210,12 +212,13 @@ export async function synthesizeChunk(
   text: string,
   signal: AbortSignal,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  language?: ProseLanguage,
 ): Promise<SynthesizedSpeech> {
   for (let attempt = 0; ; attempt += 1) {
     const response = await fetch("/api/tts", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, language }),
       signal,
     });
     if (response.status === 429 && attempt < RETRY_ON_BUSY) {

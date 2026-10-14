@@ -1,5 +1,6 @@
 "use client";
 
+import type { ProseLanguage } from "@/lib/i18n/proseLanguage";
 import type { SpeechChunk } from "@/lib/ttsChunks";
 import { announceCacheChange, billedVoice, TtsRequestError, voiceKey, type VoiceKey } from "./ttsSession";
 
@@ -50,9 +51,9 @@ export function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
 
 /** The real client request path. Retry only pre-body refusals; a failed stream
  * is terminal because replaying it could repeat speech already rendered. */
-export async function requestPcm(text: string, signal: AbortSignal): Promise<{ body: ReadableStream<Uint8Array>; voice: VoiceKey }> {
+export async function requestPcm(text: string, signal: AbortSignal, language?: ProseLanguage): Promise<{ body: ReadableStream<Uint8Array>; voice: VoiceKey }> {
   for (let attempt = 0; ; attempt++) {
-    const response = await fetch("/api/tts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, mode: "pcm" }), signal });
+    const response = await fetch("/api/tts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, mode: "pcm", language }), signal });
     if (response.status === 429 && attempt < 3) {
       await response.body?.cancel();
       const raw = response.headers.get("retry-after");
@@ -79,6 +80,7 @@ interface PendingChunk { blocks: Float32Array[]; complete: boolean; samples: num
 interface Span { node: AudioBufferSourceNode; chunk: number; start: number; end: number; sample: number; }
 export interface PcmSessionOptions {
   chunks: SpeechChunk[];
+  language?: ProseLanguage;
   voice: VoiceKey;
   context: AudioContext;
   onPhase: (phase: "loading" | "playing") => void;
@@ -180,7 +182,7 @@ export class PcmSession {
     const cancel = () => { void reader?.cancel().catch(() => undefined); };
     abort.signal.addEventListener("abort", cancel, { once: true });
     try {
-      const response = await requestPcm(this.options.chunks[index]!.text, abort.signal);
+      const response = await requestPcm(this.options.chunks[index]!.text, abort.signal, this.options.language);
       if (!alive()) { await response.body.cancel(); return; }
       this.options.onVoice(response.voice);
       this.options.voice = response.voice;

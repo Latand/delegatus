@@ -2092,6 +2092,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "tts.replayFree": "Повторити вголос (безкоштовно)",
   "tts.triggerTitle": "{action} · правий клік: голос і оплата",
   "tts.stop": "Зупинити озвучення",
+  "tts.byLanguage": "За мовою повідомлення",
   "tts.menuTitle": "Голос і оплата",
   "tts.menuLocked": "Заблоковано змінною середовища LLV_TTS_BACKEND",
   "tts.nextPaid": "Наступний клік: платне озвучення цієї відповіді",

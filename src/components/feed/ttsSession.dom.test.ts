@@ -637,3 +637,22 @@ test("a stale legacy player retains the Fish Audio expiry code", async () => {
   try { await synthesizeChunk("Hello", new AbortController().signal); throw new Error("expected refusal"); }
   catch (error) { expect(error).toBeInstanceOf(TtsRequestError); expect((error as TtsRequestError).code).toBe("fishaudio-free-ended"); }
 });
+
+test("both synthesis transports carry the frozen message language", async () => {
+  const { requestPcm } = await import("./ttsPcmSession");
+  const bodies: unknown[] = [];
+  globalThis.fetch = mock(async (_url: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)); bodies.push(body);
+    return new Response(new Uint8Array([1, 2]), { headers: body.mode === "pcm" ? {
+      "content-type": "audio/pcm", "x-tts-backend": "fishaudio", "x-tts-model": "s2.1-pro",
+      "x-tts-voice": "voice-fixture", "x-tts-encoding": "pcm_s16le", "x-tts-sample-rate": "24000", "x-tts-channels": "1",
+    } : { "content-type": "audio/mpeg" } });
+  }) as unknown as typeof fetch;
+  const pcm = await requestPcm("A borrowed English chunk", new AbortController().signal, "ru");
+  await new Response(pcm.body).arrayBuffer();
+  await synthesizeChunk("A borrowed English chunk", new AbortController().signal, undefined, "uk");
+  expect(bodies).toEqual([
+    { text: "A borrowed English chunk", mode: "pcm", language: "ru" },
+    { text: "A borrowed English chunk", language: "uk" },
+  ]);
+});

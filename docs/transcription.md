@@ -236,8 +236,8 @@ mode hands the browser only the temporary key, never the account key.
 
 ## Read-aloud (text-to-speech)
 
-The speaker button on an assistant answer reads it out. Its provider is chosen
-the same way, one selector over:
+The speaker button on an assistant answer reads it out. It supports routing by
+message language and a fixed provider. Fixed provider selection uses:
 
 1. **Environment variable `LLV_TTS_BACKEND`** — accepts `openai`, `elevenlabs`,
    `soniox`, or `fishaudio`. When set it wins and locks the in-app picker.
@@ -253,7 +253,48 @@ echo 'YOUR_SONIOX_KEY' > ~/.config/delegatus/soniox-api-key
 echo soniox > ~/.config/delegatus/tts-backend
 ```
 
-The server posts the answer text to `https://tts-rt.soniox.com/tts` (model
+Read-aloud chooses a route once for the whole message when language routing is
+on: Ukrainian uses Soniox with language `uk`; Russian uses Fish Audio S2.1 Pro
+with Джарвис 2.0; English uses Fish Audio S2.1 Pro with Ethan. The existing
+menu's **By message language** row lists all three voices. Clicking a provider
+or a Fish model switches to a fixed provider; selecting the language row
+restores routing. `LLV_TTS_BACKEND` locks fixed mode.
+
+Each route is one config line, `provider [model|-] [voice|-]`. A missing token
+or `-` inherits that provider's setting. Set `LLV_TTS_ROUTE_UK`,
+`LLV_TTS_ROUTE_RU`, or `LLV_TTS_ROUTE_EN` (also accepted with the `DELEGATUS_`
+prefix), or write `tts-route-uk`, `tts-route-ru`, or `tts-route-en` in the config
+folder. Valid environment values override files; invalid values are ignored.
+The defaults are:
+
+| Language | Route |
+| --- | --- |
+| Ukrainian | `soniox` (current model and voice, initially `tts-rt-v2` / `Adrian`; language `uk`) |
+| Russian | `fishaudio s2.1-pro 0c7fd46820854a9e8c4010d911687b7a` |
+| English | `fishaudio s2.1-pro 536d3a5e000945adb7038665781a4aca` |
+
+The catalog's [Джарвис 2.0](https://fish.audio/m/0c7fd46820854a9e8c4010d911687b7a/)
+and [Ethan](https://fish.audio/m/536d3a5e000945adb7038665781a4aca/) titles were
+confirmed with Fish's `GET /model/{id}` on 2026-10-14. Ethan is the configurable
+English default until another voice is chosen. Route values take precedence
+over fixed Fish model/voice settings. Unknown Fish models are refused by the
+route parser to avoid unexpected billing.
+
+`tts-by-language` stores `on` or `off`. With no saved mode, routing turns on
+when every configured route's provider has a key; an installation with only an
+OpenAI key keeps its fixed provider. No extra keys are needed: routes read the
+same provider key files and environment variables as fixed mode.
+
+Language detection ignores code blocks, inline code, links, Latin paths and identifiers,
+and all-caps acronyms. It counts prose words, favors Cyrillic when its word
+count is at least half the Latin count, then uses distinctive letters and a
+small set of function words to distinguish Ukrainian and Russian. Unmarked
+Cyrillic ties use Ukrainian; a short Russian sentence without distinguishing
+words may therefore use Soniox. Every chunk carries the language selected for
+the full message. Older clients without a language field are detected from the
+chunk on the server.
+
+In fixed Soniox mode, the server posts the answer text to `https://tts-rt.soniox.com/tts` (model
 `tts-rt-v2`, voice `Adrian`, language `en`, mp3) and streams the audio straight
 back to the browser; the key never leaves the server. Model, voice and language
 follow the same per-provider override pattern as the other backends —

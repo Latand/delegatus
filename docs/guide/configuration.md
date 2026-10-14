@@ -79,7 +79,8 @@ Of the variables ending in `_API_KEY`, only `ANTHROPIC_API_KEY`,
 
 - `DELEGATUS_TRANSCRIBE_BACKEND` — `local` (default), `chatgpt`, `elevenlabs` or `soniox`: fixes the dictation backend and locks the microphone menu.
 - `DELEGATUS_WHISPER_MODEL`, `DELEGATUS_WHISPER_DEVICE` — faster-whisper model size (default `small`) and device (`cpu`, the default, or `cuda`).
-- `DELEGATUS_TTS_BACKEND` — `openai`, `elevenlabs` or `soniox`: fixes the read-aloud provider.
+- Read-aloud’s **By message language** menu row uses Ukrainian → Soniox, Russian → Fish Audio / Джарвис 2.0, English → Fish Audio / Ethan. Configure `tts-route-uk|ru|en` or `DELEGATUS_TTS_ROUTE_UK|RU|EN` as `provider [model|-] [voice|-]`; a provider click saves fixed mode in `tts-by-language`.
+- `DELEGATUS_TTS_BACKEND` — `openai`, `elevenlabs`, `soniox` or `fishaudio`: fixes the read-aloud provider.
 
 **Cleanup and lifecycle**
 

@@ -44,3 +44,18 @@ test("environment locks refuse writes, allowing model changes when only Fish Aud
 test("cross-origin selection is refused", async () => {
   expect((await POST(request({ backend: "fishaudio" }, "https://other.example.test"))).status).toBe(403);
 });
+
+test("the language radio enables routing and a provider pick restores fixed mode", async () => {
+  const enabled = await POST(request({ byLanguage: true }));
+  expect(enabled.status).toBe(200);
+  expect((await enabled.json()).byLanguage).toBe(true);
+  expect(fs.readFileSync(configFilePath("tts-by-language"), "utf8").trim()).toBe("on");
+  expect((await POST(request({ backend: "soniox" }))).status).toBe(200);
+  expect((await (await GET()).json()).byLanguage).toBe(false);
+  expect(fs.readFileSync(configFilePath("tts-by-language"), "utf8").trim()).toBe("off");
+});
+test("the environment backend lock refuses the language radio", async () => {
+  process.env.LLV_TTS_BACKEND = "fishaudio";
+  expect((await POST(request({ byLanguage: true }))).status).toBe(409);
+  expect(fs.existsSync(configFilePath("tts-by-language"))).toBe(false);
+});

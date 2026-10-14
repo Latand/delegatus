@@ -23,3 +23,9 @@ const TTS_PROVIDER_NAMES: Record<string, string> = { openai: "OpenAI", elevenlab
 export function ttsProviderName(id: string): string {
   return TTS_PROVIDER_NAMES[id] ?? id;
 }
+
+/** Public catalog titles, confirmed with GET /model/{id}; display only. */
+export const FISH_AUDIO_VOICE_NAMES: Readonly<Record<string, string>> = {
+  "0c7fd46820854a9e8c4010d911687b7a": "Джарвис 2.0",
+  "536d3a5e000945adb7038665781a4aca": "Ethan",
+};

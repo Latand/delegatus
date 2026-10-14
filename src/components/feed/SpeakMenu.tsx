@@ -8,6 +8,7 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useOverlayEscape } from "@/hooks/useOverlayEscape";
 import { useLocale } from "@/lib/i18n";
 import { FISH_AUDIO_MODELS, fishAudioFreeDate, fishAudioFreeEnded, ttsProviderName, type FishAudioModel } from "@/lib/fishAudio";
+import type { ProseLanguage } from "@/lib/i18n/proseLanguage";
 import { MAX_TTS_MESSAGE_LENGTH } from "@/lib/tts";
 
 import { subscribeTtsCache } from "./ttsSession";
@@ -22,6 +23,7 @@ export interface BackendOption {
   model: string;
   voice: string;
   cap: number;
+  voiceName?: string;
   language?: string;
   modelLockedByEnv?: boolean;
   freeUntil?: string;
@@ -32,7 +34,11 @@ export interface BackendInfo {
   backend: BackendId;
   lockedByEnv: boolean;
   options: BackendOption[];
+  byLanguage?: boolean;
+  routes?: Record<ProseLanguage, BackendOption>;
 }
+
+export type BackendSelection = { byLanguage: true } | { backend: BackendId; model?: FishAudioModel };
 
 const MARGIN = 8;
 const MENU_WIDTH = 300;
@@ -212,6 +218,7 @@ export interface SpeakMenuProps {
   anchorRef: RefObject<HTMLButtonElement | null>;
   info: BackendInfo;
   option: BackendOption;
+  language?: ProseLanguage;
   /** Characters this message would bill — the whole answer, never a slice. */
   chars: number;
   /** A refusal or failure raised while this menu is open — the alert popover
@@ -225,7 +232,7 @@ export interface SpeakMenuProps {
       stop, and costs nothing either way. */
   active: boolean;
   tooLong: boolean;
-  onPick: (backend: BackendId, model?: FishAudioModel) => Promise<boolean>;
+  onPick: (selection: BackendSelection) => Promise<boolean>;
   onClose: (restoreFocus?: boolean) => void;
 }
 
@@ -239,7 +246,7 @@ export interface SpeakMenuProps {
  * `absolute` popover was clipped by the message it belonged to and painted
  * under the next message in the feed.
  */
-export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, active, tooLong, onPick, onClose }: SpeakMenuProps) {
+export function SpeakMenu({ anchorRef, info, option, language, chars, notice, freeReplay, active, tooLong, onPick, onClose }: SpeakMenuProps) {
   const { t, locale } = useLocale();
   const date = fishAudioFreeDate(locale);
   const freeModel = option.id === "fishaudio" && option.model === "s2.1-pro-free";
@@ -249,7 +256,7 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
   const isMobile = useIsMobile();
   const rootRef = useRef<HTMLDivElement>(null);
   const { style } = useAnchoredBox(anchorRef, rootRef);
-  const [saving, setSaving] = useState<BackendId | null>(null);
+  const [saving, setSaving] = useState<BackendId | "language" | null>(null);
   const [error, setError] = useState<string | null>(null);
   /* Only a re-render trigger: the cost line is answered by the tts cache, and
      an open menu has to stop advertising a free replay the moment the chunks
@@ -282,13 +289,26 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
   }, []);
 
   const pick = async (backend: BackendId, model?: FishAudioModel) => {
-    if (saving || (info.lockedByEnv && (model === undefined || backend !== info.backend)) || (model && info.options.find((candidate) => candidate.id === backend)?.modelLockedByEnv) || (backend === info.backend && (model === undefined || model === option.model))) return;
+    if (saving || (info.lockedByEnv && (model === undefined || backend !== info.backend)) || (model && info.options.find((candidate) => candidate.id === backend)?.modelLockedByEnv) || (!info.byLanguage && backend === info.backend && (model === undefined || model === info.options.find((candidate) => candidate.id === backend)?.model))) return;
     setSaving(backend);
     setError(null);
-    const ok = await onPick(backend, model);
+    const ok = await onPick({ backend, ...(model ? { model } : {}) });
     setSaving(null);
     if (ok) onClose(true);
     else setError(t("tts.saveFailed"));
+  };
+
+  const pickLanguage = async () => {
+    if (saving || info.lockedByEnv || info.byLanguage) return;
+    setSaving("language"); setError(null);
+    const ok = await onPick({ byLanguage: true });
+    setSaving(null);
+    if (ok) onClose(true); else setError(t("tts.saveFailed"));
+  };
+  const displayNames = new Intl.DisplayNames([locale], { type: "language" });
+  const languageLabel = (code: ProseLanguage) => {
+    const name = displayNames.of(code) ?? code;
+    return name[0]!.toLocaleUpperCase(locale) + name.slice(1);
   };
 
   if (typeof document === "undefined") return null;
@@ -311,7 +331,7 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
       <div className={`px-2 text-[11.5px] font-semibold ${active ? "text-secondary" : freeReplay() ? "text-success" : "text-primary"}`}>
         {active ? t("tts.nextStop") : freeReplay() ? t("tts.nextFree") : freeModel ? t(freeEnded ? "tts.fishFreeEnded" : "tts.nextFreeModel", { date, action: t("tts.fishChoosePaidMenu") }) : t("tts.nextPaid")}
       </div>
-      <div className="px-2 pt-1 text-[10.5px] text-muted">{providerName} · {option.model} · {option.voice}{option.language ? ` · ${option.language}` : ""}</div>
+      <div className="px-2 pt-1 text-[10.5px] text-muted">{info.byLanguage && language ? `${languageLabel(language)} · ` : ""}{providerName} · {option.model} · {option.voiceName ?? option.voice}{!info.byLanguage && option.language ? ` · ${option.language}` : ""}</div>
       <div className="px-2 text-[10.5px] text-muted">{t("tts.characters", { count: chars.toLocaleString() })}</div>
       {freeEnded ? null : <div className="px-2 pt-1 text-[10.5px] text-primary">{option.id === "fishaudio" ? t(freeModel ? "tts.billingFree" : "tts.billingBytes", { date }) : t("tts.billing", { provider: providerName })}</div>}
       <div className="px-2 text-[10.5px] text-primary">{t("tts.disclosure")}</div>
@@ -328,8 +348,20 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
       ) : null}
       {info.lockedByEnv ? <div className="px-2 pb-1 text-[10.5px] text-danger">{t("tts.menuLocked")}</div> : null}
       <div className="mt-1 border-t border-border pt-1">
+        {info.routes ? <button type="button" role="menuitemradio" data-tts-by-language aria-checked={Boolean(info.byLanguage)}
+          disabled={info.lockedByEnv || saving !== null} onClick={() => void pickLanguage()}
+          className={`flex min-h-11 w-full items-start gap-2 rounded-[9px] px-2 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${info.byLanguage ? "bg-accent/10" : "hover:bg-canvas"}`}>
+          <span className="mt-[3px] flex h-3.5 w-3.5 shrink-0 items-center justify-center">{saving === "language" ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" aria-hidden /> : info.byLanguage ? <Check className="h-3.5 w-3.5 text-accent" aria-hidden /> : <span aria-hidden className="h-2 w-2 rounded-full bg-muted" />}</span>
+          <span className="min-w-0 flex-1 break-words">
+            <span className="block text-[12px] font-semibold text-primary">{t("tts.byLanguage")}</span>
+            {(["uk", "ru", "en"] as const).map((code) => {
+              const route = info.routes![code];
+              return <span key={code} data-tts-language-route={code} className="block text-[10.5px] leading-snug text-muted">{languageLabel(code)} — {ttsProviderName(route.id)} · {route.voiceName ?? route.voice}{!route.available ? <span className="ml-1 rounded-full bg-warning-soft px-1.5 py-px text-[9.5px] font-bold text-warning">{t("tts.noKey")}</span> : null}</span>;
+            })}
+          </span>
+        </button> : null}
         {info.options.map((candidate) => {
-          const active = candidate.id === info.backend;
+          const active = !info.byLanguage && candidate.id === info.backend;
           return (
             <Fragment key={candidate.id}>
               <button
@@ -368,10 +400,10 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
               {candidate.id === "fishaudio" ? (
                 <div role="group" aria-label={t("tts.fishModelGroup")} className="ml-5">
                   {FISH_AUDIO_MODELS.map((model) => (
-                    <button key={model} type="button" role="menuitemradio" aria-checked={info.backend === "fishaudio" && candidate.model === model}
+                    <button key={model} type="button" role="menuitemradio" aria-checked={!info.byLanguage && info.backend === "fishaudio" && candidate.model === model}
                       disabled={saving !== null || candidate.modelLockedByEnv || (info.lockedByEnv && info.backend !== "fishaudio")}
                       onClick={() => void pick("fishaudio", model)}
-                      className={`block min-h-11 w-full rounded-[9px] px-2 py-2 text-left text-[11.5px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${info.backend === "fishaudio" && candidate.model === model ? "bg-accent/10" : "hover:bg-canvas"} ${model === "s2.1-pro-free" && (candidate.freeEnded || fishAudioFreeEnded()) ? "text-danger" : "text-primary"}`}>
+                      className={`block min-h-11 w-full rounded-[9px] px-2 py-2 text-left text-[11.5px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${!info.byLanguage && info.backend === "fishaudio" && candidate.model === model ? "bg-accent/10" : "hover:bg-canvas"} ${model === "s2.1-pro-free" && (candidate.freeEnded || fishAudioFreeEnded()) ? "text-danger" : "text-primary"}`}>
                       {t(model === "s2.1-pro" ? "tts.fishModelPaid" : (candidate.freeEnded || fishAudioFreeEnded()) ? "tts.fishModelFreeEnded" : "tts.fishModelFree", { date })}
                     </button>
                   ))}

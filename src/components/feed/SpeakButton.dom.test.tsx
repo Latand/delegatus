@@ -1122,3 +1122,52 @@ test.each(["header", "row"])("a refusal raised from the %s shows one alert, not 
   }
 });
 });
+
+test.each(["ru", "uk"] as const)("language mode selects the %s PCM route and keeps the provider override", async (language) => {
+  const originalContext = globalThis.AudioContext;
+  const priorRaf = globalThis.requestAnimationFrame, priorCancel = globalThis.cancelAnimationFrame;
+  globalThis.requestAnimationFrame = (callback) => setTimeout(() => callback(0), 16) as unknown as number;
+  globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+  globalThis.AudioContext = class {
+    state = "running";
+    async resume() {}
+    async close() {}
+  } as unknown as typeof AudioContext;
+  const fish = { id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro", voice: "0c7fd46820854a9e8c4010d911687b7a", voiceName: "Джарвис 2.0", cap: 4000 };
+  const uk = { id: "soniox", available: true, keyPath: "$CONFIG/soniox-api-key", model: "tts-rt-v2", voice: "Adrian", language: "uk", cap: 4000 };
+  let current = { ...backendInfo, backend: "fishaudio", byLanguage: true, options: [...backendInfo.options, uk, fish], routes: { ru: fish, en: { ...fish, voice: "536d3a5e000945adb7038665781a4aca", voiceName: "Ethan" }, uk } };
+  const selections: unknown[] = [], requests: unknown[] = [];
+  globalThis.fetch = mock(async (input: unknown, init?: RequestInit) => {
+    if (String(input) === "/api/tts/backend") {
+      if (init?.method === "POST") {
+        const body = JSON.parse(String(init.body)); selections.push(body);
+        current = { ...current, byLanguage: body.byLanguage === true, backend: body.backend ?? current.backend };
+      }
+      return Response.json(current);
+    }
+    requests.push(JSON.parse(String(init?.body)));
+    return new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    });
+  }) as unknown as typeof fetch;
+  const text = language === "ru" ? "Теперь все проверки зелёные." : "Усі перевірки зелені.";
+  const view = await mount(text);
+  try {
+    let menu = await openMenu(view);
+    expect(menu.querySelectorAll('[role="menuitemradio"]')).toHaveLength(7);
+    const auto = menu.querySelector<HTMLButtonElement>('[data-tts-by-language]')!;
+    expect(auto.getAttribute("aria-checked")).toBe("true");
+    expect(auto.textContent).toContain("Adrian"); expect(auto.textContent).toContain("Джарвис 2.0"); expect(auto.textContent).toContain("Ethan");
+    await pressEscape(); await speak(view);
+    expect(requests).toEqual([{ text, mode: "pcm", language }]);
+    await speak(view); // stop owned request
+    menu = await openMenu(view);
+    const fishRadio = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')].find((button) => button.textContent === "Fish Audio")!;
+    flushSync(() => fishRadio.click()); await drainUpdates();
+    expect(selections).toEqual([{ backend: "fishaudio" }]);
+    menu = await openMenu(view);
+    flushSync(() => menu.querySelector<HTMLButtonElement>('[data-tts-by-language]')!.click()); await drainUpdates();
+    expect(selections).toEqual([{ backend: "fishaudio" }, { byLanguage: true }]);
+  } finally { flushSync(() => view.root.unmount()); view.host.remove(); globalThis.AudioContext = originalContext; globalThis.requestAnimationFrame = priorRaf; globalThis.cancelAnimationFrame = priorCancel; }
+});

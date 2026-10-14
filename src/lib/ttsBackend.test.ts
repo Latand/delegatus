@@ -156,3 +156,55 @@ describe("Fish Audio configuration", () => {
     expect(fish(Date.parse("2026-12-01T00:00:00Z"))).toMatchObject({ freeEnded: true });
   });
 });
+
+describe("message language routes", () => {
+  const names = ["FISH_AUDIO_API_KEY", "LLV_TTS_ROUTE_UK", "LLV_TTS_ROUTE_RU", "LLV_TTS_ROUTE_EN", "LLV_TTS_SONIOX_MODEL", "LLV_TTS_SONIOX_VOICE", "LLV_TTS_SONIOX_LANGUAGE"];
+  const original = names.map((name) => process.env[name]);
+  afterEach(() => names.forEach((name, index) => setEnv(name, original[index])));
+  function setup() {
+    const dir = configHome();
+    fs.mkdirSync(dir, { recursive: true });
+    names.forEach((name) => setEnv(name, undefined));
+    delete process.env.LLV_TTS_BACKEND;
+    setEnv("FISH_AUDIO_API_KEY", "fish-fixture");
+    setEnv("SONIOX_API_KEY", "soniox-fixture");
+    return dir;
+  }
+  test("both keys enable the default Jarvis, Ethan and Ukrainian Soniox routes", () => {
+    setup();
+    const info = ttsBackendInfo();
+    expect(info.byLanguage).toBe(true);
+    expect(info.routes.ru).toMatchObject({ id: "fishaudio", model: "s2.1-pro", voice: "0c7fd46820854a9e8c4010d911687b7a", voiceName: "Джарвис 2.0" });
+    expect(info.routes.en).toMatchObject({ id: "fishaudio", model: "s2.1-pro", voice: "536d3a5e000945adb7038665781a4aca", voiceName: "Ethan" });
+    expect(info.routes.uk).toMatchObject({ id: "soniox", model: "tts-rt-v2", voice: "Adrian", language: "uk" });
+    expect(JSON.stringify(info)).not.toContain("fish-fixture");
+    expect(JSON.stringify(info)).not.toContain("soniox-fixture");
+  });
+  test("env overrides files, inheritance follows provider settings and invalid routes fall back", () => {
+    const dir = setup();
+    fs.writeFileSync(path.join(dir, "tts-route-en"), "soniox - Maya");
+    setEnv("LLV_TTS_SONIOX_MODEL", "custom-model");
+    expect(ttsBackendInfo().routes.en).toMatchObject({ id: "soniox", model: "custom-model", voice: "Maya", language: "en" });
+    setEnv("LLV_TTS_ROUTE_EN", "openai - nova");
+    expect(ttsBackendInfo().routes.en).toMatchObject({ id: "openai", voice: "nova" });
+    for (const bad of ["typo model voice", "fishaudio unknown-model voice", "fishaudio s2.1-pro voice extra"]) {
+      setEnv("LLV_TTS_ROUTE_RU", bad);
+      expect(ttsBackendInfo().routes.ru.voice).toBe("0c7fd46820854a9e8c4010d911687b7a");
+    }
+    setEnv("LLV_TTS_SONIOX_VOICE", "Maya");
+    setEnv("LLV_TTS_SONIOX_LANGUAGE", "en");
+    expect(ttsBackendInfo().routes.uk).toMatchObject({ voice: "Maya", language: "uk" });
+  });
+  test("mode defaults require all route keys; saved mode and backend env locks take precedence", () => {
+    const dir = setup();
+    setEnv("SONIOX_API_KEY", undefined);
+    expect(ttsBackendInfo().byLanguage).toBe(false);
+    fs.writeFileSync(path.join(dir, "tts-by-language"), "on");
+    expect(ttsBackendInfo().byLanguage).toBe(true);
+    fs.writeFileSync(path.join(dir, "tts-by-language"), "off");
+    expect(ttsBackendInfo().byLanguage).toBe(false);
+    fs.writeFileSync(path.join(dir, "tts-by-language"), "on");
+    process.env.LLV_TTS_BACKEND = "fishaudio";
+    expect(ttsBackendInfo()).toMatchObject({ byLanguage: false, lockedByEnv: true });
+  });
+});

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
+import { spokenAnswerText } from "../tts";
 
-import { languageMismatchWarning, proseLanguage } from "./proseLanguage";
+import { languageMismatchWarning, proseLanguage, speechLanguage } from "./proseLanguage";
 
 /* Shapes seen in the report log (docs/design/orchestrator-reports.md §1.1,
    §1.6): the same seat wrote Russian, Ukrainian and English reports in one day,
@@ -33,4 +34,39 @@ test("the mismatch warning names both languages, and says nothing on a match, an
   expect(languageMismatchWarning("report", english, "en")).toBeNull();
   expect(languageMismatchWarning("report", "deploy ok", "uk")).toBeNull();
   expect(languageMismatchWarning("report", english, null)).toBeNull();
+});
+
+const SPEECH_CASES: readonly [string, "uk" | "ru" | "en"][] = [
+  ["Перевірка pull request завершена: усі 27 тестів пройшли.", "uk"],
+  ["PR #2864 змерджено, CI зелений, deploy на stage пройшов.", "uk"],
+  ["Готово: pipeline, reviewer, merge і deploy.", "uk"],
+  ["Змінив resolveTtsBackend у src/lib/ttsBackend.ts, додав тест для fishaudio і soniox.", "uk"],
+  ["Мы з'ясували причину: м'який перезапуск.", "uk"],
+  ["Пушу знову з тими самими гейтами.", "uk"],
+  ["Готово, задача выполнена, PR смержен, CI зелёный.", "ru"],
+  ["Принял: меню карточки и сайдбар строю по варианту 1.", "ru"],
+  ["Теперь заново сливаю пять PR без #2567.", "ru"],
+  ["I updated resolveTtsBackend in src/lib/ttsBackend.ts and added request tests.", "en"],
+  ["The operator wrote «Лінію змерджено» and the lane passed all checks.", "en"],
+  ["Готово.", "uk"],
+  ["Если всё готово, то теперь можно запускать deploy.", "ru"],
+  ["Codex-панелі вже готові.", "uk"],
+  ["і pipeline reviewer", "uk"],
+  ["і pipeline reviewer merge", "en"],
+];
+
+test.each(SPEECH_CASES)("speech language: %p → %p", (text, expected) => {
+  expect(speechLanguage(text)).toBe(expected);
+  expect(speechLanguage(text)).toBe(expected);
+});
+
+test("speech uses the interface fallback for code and identifiers alone", () => {
+  expect(speechLanguage("2864, 2868 API CI snake_case camelCase src/lib/x.ts", "en")).toBe("en");
+  expect(speechLanguage("", "uk")).toBe("uk");
+});
+
+test("speech detects the cleaned answer around fenced code, inline code and links", () => {
+  const markdown = "Усі перевірки пройшли. `const result = fetch(url)` https://example.test/English\n\n```ts\nconst words = 'a long English program with many words';\n```";
+  expect(speechLanguage(markdown)).toBe("uk");
+  expect(speechLanguage(spokenAnswerText(markdown))).toBe("uk");
 });

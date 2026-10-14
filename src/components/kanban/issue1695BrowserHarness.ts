@@ -884,10 +884,10 @@ export async function capturePrototypeQuestions(page: Page, phone: boolean) {
 export async function captureFishAudioMenu(browser: Browser, mobile: boolean): Promise<void> {
   const { expect } = await import("bun:test");
   const os = await import("node:os");
-  const out = path.join(os.homedir(), "Pictures/delegatus-review/fish-audio");
+  const out = process.env.LLV_TTS_ROUTING_EVIDENCE_DIR || path.join(os.homedir(), "Pictures/delegatus-review/fish-audio");
   fs.mkdirSync(out, { recursive: true });
-  const fish = { id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeUntil: "2026-11-30", freeEnded: false };
-  const speech = { backend: "fishaudio", lockedByEnv: false, options: [
+  const fish: import("@/components/feed/SpeakMenu").BackendOption = { id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeUntil: "2026-11-30", freeEnded: false };
+  const speech: import("@/components/feed/SpeakMenu").BackendInfo = { backend: "fishaudio", lockedByEnv: false, options: [
     { id: "openai", available: false, keyPath: "$CONFIG/openai-api-key", model: "gpt-4o-mini-tts", voice: "alloy", cap: 4000 },
     { id: "elevenlabs", available: false, keyPath: "$CONFIG/elevenlabs-api-key", model: "eleven_multilingual_v2", voice: "default", cap: 4000 },
     { id: "soniox", available: false, keyPath: "$CONFIG/soniox-api-key", model: "tts-rt-v2", voice: "Adrian", cap: 4000 }, fish,
@@ -904,7 +904,9 @@ export async function captureFishAudioMenu(browser: Browser, mobile: boolean): P
         await page.route("**/api/tts/backend", async (route) => {
           if (route.request().method() === "POST") {
             const body = route.request().postDataJSON(); saves.push(body);
-            current.options = current.options.map((option) => option.id === "fishaudio" ? { ...option, model: body.model } : option);
+            current.byLanguage = body.byLanguage === true;
+            if (body.backend) current.backend = body.backend;
+            if (body.model) current.options = current.options.map((option) => option.id === "fishaudio" ? { ...option, model: body.model } : option);
           }
           await route.fulfill({ json: current });
         });
@@ -912,8 +914,9 @@ export async function captureFishAudioMenu(browser: Browser, mobile: boolean): P
           if (route.request().method() !== "POST") { await route.fallback(); return; }
           await route.fulfill({ status: 403, json: { error: "provider refused", code: "fishaudio-free-refused" } });
         });
-        const control = page.locator(mobile ? '[data-mobile-message-actions] [data-tts-trigger]' : '[data-kanban-reader="conversation_export-impl"] [data-tts-header]').last();
+        const control = page.locator(mobile ? '[data-mobile-message-actions] [data-tts-trigger]' : '[data-kanban-reader="conversation_export-impl"] [data-log-feed-scroller] [data-tts-trigger]').last();
         await control.waitFor({ timeout: 20000 });
+        await control.scrollIntoViewIfNeeded();
         // The first navigation may already have read the fixture response; the menu refresh is authoritative.
         await control.click({ button: "right" });
         const menu = page.locator("[data-tts-menu]"); await menu.waitFor();
@@ -988,6 +991,49 @@ export async function captureFishAudioMenu(browser: Browser, mobile: boolean): P
           expect(await alert.count()).toBe(1); expect(await alert.textContent()).toContain("fishaudio-api-key");
           await page.screenshot({ path: path.join(out, `${prefix}-alert-missing.png`) });
         }
+        // The same menu exposes all message routes and the existing provider override.
+        current.byLanguage = true;
+        const routedFish = { ...fish, model: "s2.1-pro", voice: "0c7fd46820854a9e8c4010d911687b7a", voiceName: "Джарвис 2.0" };
+        current.routes = {
+          uk: { id: "soniox", available: true, keyPath: "$CONFIG/soniox-api-key", model: "tts-rt-v2", voice: "Adrian", language: "uk", cap: 4000 },
+          ru: routedFish,
+          en: { ...routedFish, voice: "536d3a5e000945adb7038665781a4aca", voiceName: "Ethan" },
+        };
+        current.options = current.options.map((option) => option.id === "fishaudio" ? routedFish : option.id === "soniox" ? { ...option, available: true } : option);
+        if (await page.locator("[data-tts-menu], [data-tts-alert]").count()) await page.keyboard.press("Escape");
+        await control.click({ button: "right" }); await menu.waitFor();
+        const routing = menu.locator("[data-tts-by-language]");
+        await routing.waitFor();
+        expect(await menu.getByRole("menuitemradio").count()).toBe(7);
+        expect(await routing.getAttribute("aria-checked")).toBe("true");
+        expect(await menu.locator('[aria-checked="true"]').count()).toBe(1);
+        for (const voice of ["Adrian", "Джарвис 2.0", "Ethan"]) expect(await routing.textContent()).toContain(voice);
+        await routing.scrollIntoViewIfNeeded();
+        const routeGeometry = await routing.evaluate((node) => {
+          const box = node.getBoundingClientRect(); const menu = node.closest("[data-tts-menu]")!.getBoundingClientRect();
+          const lines = [...node.querySelectorAll("[data-tts-language-route]")].map((line) => { const rect = line.getBoundingClientRect(); return { text: line.textContent, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }; });
+          return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, height: box.height, menu: { left: menu.left, right: menu.right, top: menu.top, bottom: menu.bottom }, lines, sideways: node.scrollWidth > node.clientWidth };
+        });
+        expect(routeGeometry.sideways).toBe(false);
+        for (const line of routeGeometry.lines) {
+          expect(line.left).toBeGreaterThanOrEqual(routeGeometry.menu.left);
+          expect(line.right).toBeLessThanOrEqual(routeGeometry.menu.right);
+          expect(line.top).toBeGreaterThanOrEqual(routeGeometry.menu.top);
+          expect(line.bottom).toBeLessThanOrEqual(routeGeometry.menu.bottom);
+        }
+        if (mobile) expect(routeGeometry.height).toBeGreaterThanOrEqual(44);
+        await page.screenshot({ path: path.join(out, `${prefix}-language.png`) });
+        const savesBefore = saves.length;
+        await menu.getByRole("menuitemradio").filter({ hasText: /^Fish Audio$/ }).click(); await menu.waitFor({ state: "hidden" });
+        expect(saves[savesBefore]).toEqual({ backend: "fishaudio" });
+        await control.click({ button: "right" }); await menu.waitFor();
+        expect(await routing.getAttribute("aria-checked")).toBe("false");
+        await routing.click(); await menu.waitFor({ state: "hidden" });
+        expect(saves[savesBefore + 1]).toEqual({ byLanguage: true });
+        await control.click({ button: "right" }); await menu.waitFor();
+        expect(await routing.getAttribute("aria-checked")).toBe("true");
+        await page.keyboard.press("Escape");
+        readings.push({ width, height, locale, scheme, state: "language", geometry: routeGeometry, selections: saves.slice(savesBefore) });
         expect(pageErrors).toEqual([]);
       } finally { await context.close(); }
     }
