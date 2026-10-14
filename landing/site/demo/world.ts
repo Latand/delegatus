@@ -1,5 +1,5 @@
 import type { Pipeline } from "@/lib/pipelines/types";
-import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
+import type { BoardTask, TaskHold, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 /*
@@ -209,7 +209,7 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
       ? working(L("Writing the key lookup", "Пишу пошук ключа"), at(2))
       : idle(at(3)));
     const buildLines = [
-      asked(since(2), L(
+      asked(since(2, 25), L(
         "Add idempotency keys to POST /refunds so a retried request never refunds twice. Keep the API shape and cover it with tests.",
         "Додай ключі ідемпотентності до POST /refunds, щоб повторний запит ніколи не повертав гроші двічі. Форму API не змінюй, покрий тестами.",
       )),
@@ -243,7 +243,7 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
       ...codex, ...(reviewing ? working(L("Two requests with one key, at once", "Два запити з одним ключем одночасно"), at(3)) : idle(at(4))),
     });
     const reviewLines = [
-      asked(since(3), L(
+      asked(since(3, 25), L(
         "Review the idempotent refunds change against the acceptance criteria: a repeated key never reaches the provider, a reused key with a different body answers 409, and requests without a key are unchanged.",
         "Перевір зміну з ідемпотентними поверненнями за критеріями: повторний ключ ніколи не доходить до провайдера, той самий ключ з іншим тілом отримує 409, запити без ключа не змінюються.",
       )),
@@ -259,7 +259,7 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
   if (step >= 4) {
     refundsVerify = add("refunds-verifier", L("Idempotent refunds · Verify", "Ідемпотентні повернення · Verify"), { ...working(L("Replaying a timed-out refund", "Повторюю повернення після тайм-ауту"), at(4)), model: "claude-sonnet-5" });
     write(refundsVerify, [
-      asked(since(4), L("Run the gates and confirm a retried refund is answered from the stored response on a running server.", "Прожени перевірки й підтверди на запущеному сервері, що повторне повернення отримує збережену відповідь.")),
+      asked(since(4, 25), L("Run the gates and confirm a retried refund is answered from the stored response on a running server.", "Прожени перевірки й підтверди на запущеному сервері, що повторне повернення отримує збережену відповідь.")),
       ...tool(since(4), "Bash", { command: "bun run typecheck && bun test src/refunds" }, " 4 pass\n 0 fail"),
     ]);
   }
@@ -329,8 +329,9 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
 
   /* ── tasks ──────────────────────────────────────────────────────────── */
   let revision = 1;
-  const task = (id: string, status: TaskStatus, text: string, members: FileEntry[], updatedAgo: number, color: string, icon: string, project = PROJECT): BoardTask => ({
+  const task = (id: string, status: TaskStatus, text: string, members: FileEntry[], updatedAgo: number, color: string, icon: string, project = PROJECT, hold?: Omit<TaskHold, "since" | "by">): BoardTask => ({
     id, project, text, status, placement: "unplaced", board: "shown", color, icon,
+    ...(hold ? { hold: { ...hold, since: ago(updatedAgo), by: "agent" } } : {}),
     assignments: members.map((member) => ({ path: member.path, conversationId: member.conversationId, panePid: null, state: "delivered", error: null, at: ago(updatedAgo), engine: member.engine })),
     createdAt: ago(updatedAgo + 30 * MIN), updatedAt: ago(updatedAgo), revision: `task-v1:00000000-0000-4000-8000-${String(revision++).padStart(12, "0")}`,
   }) as unknown as BoardTask;
@@ -338,13 +339,15 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
     task("t-errors", "inbox", L("Document refund error codes\nOne table in the API reference: code, meaning, whether a retry is safe.", "Описати коди помилок повернень\nОдна таблиця в довіднику API: код, значення, чи безпечно повторювати."), [], 55 * MIN, "pink", "file-text"),
     task("t-keys", "assigned", L("Rotate webhook signing keys\nSign with the new key, accept both for a day, then drop the old one.", "Ротація ключів підпису вебхуків\nПідписувати новим ключем, добу приймати обидва, потім прибрати старий."), [keys], 9 * MIN, "amber", "key-round"),
     task("t-retries", "assigned", L("Back off webhook retries\nExponential backoff with jitter, and a limit on how long a delivery retries.", "Затримка повторів вебхуків\nЕкспоненційна затримка з джитером і межа, як довго доставка повторюється."), [retries], retriesDecided ? at(5) : 20 * MIN, "teal", "repeat"),
-    task("t-ledger", "blocked", L("Move invoices to the new ledger\nWaiting on finance to confirm the rounding rule for partial refunds.", "Перенести рахунки в новий реєстр\nЧекаємо, поки фінансисти підтвердять правило округлення часткових повернень."), [], 5 * 60 * MIN, "amber", "book-open"),
+    task("t-ledger", "blocked", L("Move invoices to the new ledger\nWaiting on finance to confirm the rounding rule for partial refunds.", "Перенести рахунки в новий реєстр\nЧекаємо, поки фінансисти підтвердять правило округлення часткових повернень."), [], 5 * 60 * MIN, "amber", "book-open", PROJECT,
+      { kind: "external", note: L("finance confirms the rounding rule", "фінансисти підтвердять правило округлення") }),
     task("t-charges", "done", L("Paginate GET /charges\nCursor pagination, 50 per page, capped at 200.", "Пагінація GET /charges\nПагінація курсором, 50 на сторінку, не більше 200."), [charges], 3 * 60 * MIN, "lime", "list-ordered"),
     task("t-ratelimit", "inbox", L("Rate-limit refunds per merchant\nAt most 20 a minute; answer 429 with Retry-After.", "Обмежити частоту повернень для мерчанта\nНе більше 20 на хвилину; відповідати 429 з Retry-After."), [], 80 * MIN, "teal", "shield-check"),
     task("t-export", "inbox", L("Export refunds as CSV\nFor the finance team's monthly close.", "Експорт повернень у CSV\nДля щомісячного закриття у фінансистів."), [], 2 * 60 * MIN, "lime", "download"),
     task("t-logs", "assigned", L("Structured request logs\nOne JSON line per request: route, status, duration, request id.", "Структуровані логи запитів\nОдин JSON-рядок на запит: маршрут, статус, тривалість, id запиту."), [logs], 14 * MIN, "slate", "scroll-text"),
-    task("t-receipts", "assigned", L("Email a receipt for each refund\nSent once the provider confirms, in the merchant's language.", "Квитанція на кожне повернення\nНадсилається після підтвердження провайдера, мовою мерчанта."), [receipts], 32 * MIN, "lime", "mail"),
-    task("t-v1", "blocked", L("Retire the v1 charges endpoint\nTwo merchants still call it; waiting on their move to v2.", "Прибрати ендпоінт платежів v1\nДва мерчанти ще його викликають; чекаємо, поки перейдуть на v2."), [], 26 * 60 * MIN, "slate", "archive"),
+    task("t-receipts", "assigned", L("Email a receipt for each refund\nSent once the provider confirms, in the merchant's language.", "Квитанція на кожне повернення\nНадсилається після підтвердження провайдера, мовою мерчанта."), [receipts], 32 * MIN, "lime", "mail", PROJECT, { kind: "pr", ref: "131", note: "" }),
+    task("t-v1", "blocked", L("Retire the v1 charges endpoint\nTwo merchants still call it; waiting on their move to v2.", "Прибрати ендпоінт платежів v1\nДва мерчанти ще його викликають; чекаємо, поки перейдуть на v2."), [], 26 * 60 * MIN, "slate", "archive", PROJECT,
+      { kind: "external", note: L("two merchants move to v2", "двоє мерчантів перейдуть на v2") }),
     task("t-health", "done", L("Report replica lag in /health\nDegraded above 5 s of lag, down above 60 s.", "Затримка репліки в /health\nDegraded понад 5 с затримки, down понад 60 с."), [health], 6 * 60 * MIN, "teal", "activity"),
     task("t-postgres", "done", L("Upgrade to Postgres 17\nEvery migration replayed on a copy first; no downtime.", "Оновлення до Postgres 17\nУсі міграції спершу на копії; без простою."), [postgres], 26 * 60 * MIN, "teal", "database"),
     task("t-timeouts", "done", L("Time out provider calls after 10 s\nA hung provider no longer holds a worker.", "Тайм-аут викликів провайдера 10 с\nЗавислий провайдер більше не тримає воркера."), [timeouts], 30 * 60 * MIN, "coral", "timer"),
@@ -354,7 +357,8 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
     task("t-grid", "assigned", L("Lazy-load the product grid\nImages below the fold load on scroll; measure LCP before and after.", "Ліниве завантаження сітки товарів\nЗображення нижче згину вантажаться під час прокрутки; виміряти LCP до і після."), [otherFile("product-grid").file], 6 * MIN, "teal", "layout-grid", "lumen-web"),
     task("t-cart", "done", L("Fix cart rounding\nKeep money in integer cents and format once.", "Виправити округлення в кошику\nЗберігати гроші в цілих центах і форматувати один раз."), [otherFile("cart-rounding").file], 95 * MIN, "coral", "calculator", "lumen-web"),
     task("t-drafts", "assigned", L("Offline drafts\nQueue edits without signal and sync them in order.", "Офлайн-чернетки\nСтавити правки в чергу без зв’язку й синхронізувати їх по порядку."), [otherFile("offline-drafts").file], 12 * MIN, "lime", "wifi-off", "fieldnotes"),
-    task("t-import", "blocked", L("Speed up the nightly import\nGeocoding is 34 of 38 minutes. Waiting on a choice: cache by address or geocode changed rows only.", "Пришвидшити нічний імпорт\nГеокодування займає 34 з 38 хвилин. Чекає вибору: кешувати за адресою чи геокодувати лише змінені рядки."), [otherFile("import-profile").file], 140 * MIN, "teal", "gauge", "quarry"),
+    task("t-import", "blocked", L("Speed up the nightly import\nGeocoding is 34 of 38 minutes. Waiting on a choice: cache by address or geocode changed rows only.", "Пришвидшити нічний імпорт\nГеокодування займає 34 з 38 хвилин. Чекає вибору: кешувати за адресою чи геокодувати лише змінені рядки."), [otherFile("import-profile").file], 140 * MIN, "teal", "gauge", "quarry",
+      { kind: "operator", note: L("cache by address or geocode changed rows only", "кешувати за адресою чи геокодувати лише змінені рядки") }),
   );
   if (step >= 2) {
     tasks.splice(1, 0, task("t-refunds", "assigned", L("Idempotent refunds\nA retried POST /refunds must never refund twice.", "Ідемпотентні повернення\nПовторний POST /refunds ніколи не повинен повертати гроші двічі."),

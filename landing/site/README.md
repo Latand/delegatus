@@ -84,7 +84,7 @@ position comes back. PNGs go to `/tmp/landing-fullscreen-renders/`.
 | `index.html` | the four sections, the footer band and the install-box template |
 | `styles.css` | the page: type, the product's dark tokens, the frames around the demo |
 | `copy.js` | every visible string of the page and of the hero's demo in English and Ukrainian, and the two install prompts |
-| `boardDemo.js` | the hero's demo: the drawn board, its one timeline, and when it plays |
+| `boardDemo.js` | the hero's demo: the drawn board and phone screens, its one timeline, and when it plays |
 | `mascot.js` | the mascot's three poses (unchanged from A) |
 | `main.js` | language, install boxes, the phone's send-the-link action, the legacy giggle, the release line, and the controller of the live frames |
 | `demo/demo.tsx` | the demo: the real `Viewer`, the answers to its requests, the scripted steps, the views |
@@ -198,18 +198,57 @@ To create its separate read-only token in the Cloudflare dashboard:
 
 ## How the hero's demo works
 
-`boardDemo.js` builds the board once, in the product's dark tokens: the top
-bar, the orchestrator's place, Inbox, In progress and Done, three cards and the
-pointer. It lays the stage out at 1280×384 (on a phone, 360×606: the chat over
-three narrow columns, a fingertip for the pointer) and scales it to the
-column, so positions are read once, in the stage's own pixels. The desktop
-stage is that short so the request being typed, the steps and their caption
-all sit on a 1440×900 first screen under the headline; on a computer the bird
-perches on the install box to leave that room. A card is as tall as its whole
-title, and the three land in Inbox overlapping, each title showing above the
-next, before two of them move on. A card is opaque from its first frame and
-grows from its top edge, and only its title and body fade in, so a card that
-lands never lets the one under it show through.
+`boardDemo.js` builds the board once, in the product's dark tokens, and every
+part of it copies a product component (the table below names the file of each).
+It lays the stage out at 1280×384 and scales it to the column, so positions are
+read once, in the stage's own pixels. On a computer the stage is the board's
+one header row, the seat's pane docked at the side (its creation draft first,
+then its head, chat and composer) and the four columns Inbox, In progress,
+Waiting and Done, with the calm task cards, the model glyphs on the stage chain
+and the orchestrator's wires. On a phone (360×606) it is the product's own phone
+screens: the bar, the seat row, the column tabs and one column of cards, the dock,
+and the chat as a screen of its own that slides in; a fingertip taps the
+seat row, the dock and the tabs. The desktop stage is that short so the request
+being typed, the steps and their caption all sit on a 1440×900 first screen under
+the headline; on a computer the bird perches on the install box to leave that
+room. A card changes face with its work (Inbox: the head; In progress: the state
+line and the stage chain; Done: the merge), so each face is a card of its own
+and the move between columns is a glide with a cross-fade, never a resize: the
+loop does no layout. The orchestrator's costume avatar is not copied: `build.ts`
+writes `dist/brand/role-orchestrator.svg` from `costumeSvg("orchestrator")`, so
+it follows the product on every build.
+
+When the product's look changes, refresh the hero by walking this table: open the
+product file, compare the drawing, fix `boardDemo.js` and `styles.css`.
+
+| Drawn element | Product file it copies |
+| --- | --- |
+| Header row (name, working count, find, +, Orchestrator, history, ⋯, Needs you) | `src/components/ProjectBar.tsx`, `src/components/kanban/KanbanBoard.tsx` |
+| Seat draft («Create the orchestrator for …», Runs on, the cream button) | `src/components/orchestrator/OrchestratorPanel.tsx`, `RunsOnRow.tsx` |
+| Seat head (costume avatar, dot and word, role tab, chips) | `OrchestratorPanel.tsx`, `IncumbentHeader.tsx`, `src/components/brand/RoleAvatar.tsx` |
+| Chat rows, tool rows, «Worked for», the turn line | `src/components/feed/FeedItem.tsx`, `UserMessageRow.tsx`, `cards/ToolCard.tsx` |
+| Composer (placeholder, mic, send, footer row) | `src/components/TmuxComposer.tsx` |
+| Columns, strips, empty boxes, counts | `src/components/kanban/KanbanBoard.tsx`, `kanbanLayout.ts`, `kanbanBoard.css` |
+| Calm card (stripe, state line, chain, ended line) | `KanbanCard.tsx`, `CardStateLine.tsx`, `src/components/pipelines/PipelineBlock.tsx` |
+| Model glyphs and their badges | `src/components/kanban/StageGlyph.tsx`, `modelGlyph.css` |
+| Wires (rounded bends, ports, pulse) | `src/components/kanban/orchestratorWires.ts`, `kanbanBoard.css` (`.oa-*`) |
+| Phone bar, seat row, tabs, empty tab, dock | `src/components/mobile/MobileShell.tsx`, `MobileSeatCard.tsx`, `MobileKanban.tsx`, `MobileBoard.tsx` |
+| Phone chat screen | `src/components/mobile/MobileFocusView.tsx` |
+
+Where the hero departs from the product, on purpose:
+
+- Inbox and Done stay open while empty, with the product's empty-box words. The
+  product shrinks an empty shelf to a 48 px strip and opens it when a card
+  arrives; animating column widths would lay out during the loop.
+- The seat head's third row (Reports, the tick switch, Rotate, Stop host), the
+  draft's intro paragraph and «Its instructions» row, the column jump strip and
+  the phone's «other tabs» chip are left out: the stage has no room for them, and
+  the hero never draws a stand-in.
+- The tool rows say «Створюю задачу:» in Ukrainian. The product prints them in
+  English in both languages (`src/lib/mcp/presentation.ts`); an English line in
+  the Ukrainian hero would read as a landing defect.
+- The Ukrainian words are the product's own (formal «Створіть»), not the
+  landing's «ти».
 
 The flow is one timeline of 24 s. Every element that moves gets one Web
 Animation of that length, on `transform` and `opacity` only, repeating forever,

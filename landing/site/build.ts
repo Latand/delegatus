@@ -17,6 +17,7 @@ import path from "node:path";
 import tailwind from "@tailwindcss/postcss";
 import postcss from "postcss";
 
+import { costumeSvg } from "@/components/brand/roleCostumes";
 import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
 import { ROLE_FRAME_BOOT_SCRIPT } from "@/lib/roleFrames";
 
@@ -91,6 +92,10 @@ for (const file of ["index.html", "styles.css", "copy.js", "boardDemo.js", "masc
   text = text.split("../../public/brand/").join("brand/");
   fs.writeFileSync(path.join(dist, file), text);
 }
+
+/* The orchestrator's costume avatar, which the hero's seat and chat draw. It comes
+   from the product's own drawing, so it follows the product on every build. */
+fs.writeFileSync(path.join(dist, "brand/role-orchestrator.svg"), costumeSvg("orchestrator"));
 
 const size = (file: string) => `${Math.round(fs.statSync(path.join(dist, file)).size / 1024)} KB`;
 console.log(`landing/site/dist: demo.js ${size("demo/demo.js")}, viewer.css ${size("demo/viewer.css")}`);

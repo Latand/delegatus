@@ -584,6 +584,8 @@ async function navigateView(view: string) {
   if (view === "fold") return;
   if (view === "pipeline" || view === "decision") {
     const card = view === "decision" || step < 2 ? "t-retries" : "t-refunds";
+    /* A card is closed by default (#2800): its lane row, and the Stages opener in it, show once it is open. */
+    document.querySelector<HTMLElement>(`.card[data-id="task:${card}"] .icon-btn.fold[aria-expanded="false"]`)?.click();
     await press(() => document.querySelector<HTMLElement>(`.card[data-id="task:${card}"] [data-open-stages]`));
     return;
   }

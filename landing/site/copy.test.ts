@@ -72,7 +72,7 @@ test("every string the page and the hero's demo name exists in both languages", 
     ...[...html.matchAll(/data-i18n(?:-aria)?="([^"]+)"/g)].map((match) => match[1]!),
     ...[...demo.matchAll(/\bt\("([^"]+)"\)/g)].map((match) => match[1]!),
     /* The demo also builds these names from parts. */
-    ...["build", "review", "verify", "col.inbox", "col.progress", "col.done", "t1", "t1d", "t2", "t2d", "t3", "t3d"].map((key) => `d.${key}`),
+    ...["build", "review", "verify", "col.inbox", "col.progress", "col.waiting", "col.done", "t1", "t2", "t3", "sum1", "sum2", ...["inbox", "progress", "done"].flatMap((column) => [`empty.${column}.t`, `empty.${column}.b`])].map((key) => `d.${key}`),
   ];
   expect(named.length).toBeGreaterThan(60);
   for (const key of named) {
