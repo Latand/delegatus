@@ -11,12 +11,15 @@ import { activityVerdict } from "@/lib/scanner/activity";
 import { FileRuntimeEventStore } from "@/lib/runtime/eventStore";
 import type { FileEntry } from "@/lib/types";
 
-import { staleWorkingFixture } from "./spawnProjection.fixture";
+import { staleWorkingFixture, staleWorkingResponse } from "./spawnProjection.fixture";
 import { receiptIsLive, livenessProbe } from "./accountLiveness";
 import { turnIsRunning } from "@/components/turnDuration";
 import { workingSince } from "@/components/workingSince";
 import { isWorkingAgent, workingAgentCount, workingAgentCounts } from "@/components/workingAgents";
-import { mobileRowState } from "@/components/mobile/mobileBoardModel";
+import { mobileRowState, rowStateWord } from "@/components/mobile/mobileBoardModel";
+import { chatState } from "@/components/mobile/mobileChatState";
+import { isSettledLaunchPlaceholder } from "@/components/launchHistoryModel";
+import { translate } from "@/lib/i18n";
 import { cardStatus } from "@/components/cardStatus";
 import { activityDot } from "@/components/utils";
 
@@ -1868,4 +1871,44 @@ test("stale working: an expired unproven launch stays recent until the quiet hor
     expect(cardStatus(file, now)).toBeNull();
     expect(workingSince(file)).toBeNull();
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("stale working: a launch whose host died over an open turn reads killed, a completed one reads done", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stale-dead-turn-"));
+  try {
+    const now = Date.now();
+    const { dead, quiet } = staleWorkingResponse(directory, now);
+    expect(dead.proc).toBe("killed");
+    expect(turnIsRunning(dead)).toBe(false);
+    expect(mobileRowState(dead, now / 1000)).toMatchObject({ key: "killed", dot: "danger" });
+    expect(chatState(dead, { nowMs: now })).toBe("killed");
+    expect(rowStateWord((key) => translate("uk", key), mobileRowState(dead, now / 1000))).toBe("зупинено");
+
+    expect(quiet.proc).toBeNull();
+    const row = mobileRowState(quiet, now / 1000);
+    expect(row).toMatchObject({ key: "done", dot: "neutral" });
+    expect(isSettledLaunchPlaceholder(quiet)).toBe(true);
+    expect(isSettledLaunchPlaceholder(dead)).toBe(true);
+    expect(rowStateWord((key) => translate("uk", key), { ...row, settledLaunch: true })).toBe("готово");
+    expect(rowStateWord((key) => translate("en", key), { ...row, settledLaunch: true })).toBe("done");
+    expect(workingAgentCount([dead, quiet], now / 1000)).toBe(0);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("stale working: a launch whose host died after its turn ended stays settled", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stale-dead-settled-"));
+  try {
+    const { dead, sessions, events, project } = staleWorkingResponse(directory, Date.now());
+    expect(mobileRowState(dead).key).toBe("killed");
+    events.append(sessions.dead, { kind: "turn-ended", turnId: "turn-open", status: "completed", seq: 2 });
+    const settled = project().dead;
+    expect(settled.proc).toBe("killed");
+    expect(mobileRowState(settled)).toMatchObject({ key: "done", dot: "neutral" });
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("stale working: a live launch is never a settled placeholder", () => {
+  expect(isSettledLaunchPlaceholder({ path: "spawn:x", activity: "live", spawn: { state: "binding" } as FileEntry["spawn"] })).toBe(false);
+  expect(isSettledLaunchPlaceholder({ path: "spawn:x", activity: "idle", spawn: { state: "failed" } as FileEntry["spawn"] })).toBe(false);
+  expect(isSettledLaunchPlaceholder({ path: "/repo/a.jsonl", activity: "idle", spawn: { state: "binding" } as FileEntry["spawn"] })).toBe(false);
 });

@@ -3,12 +3,64 @@
     "width": 1440,
     "height": 900
   },
-  "working": 1,
-  "dead": "Completed launch\nбез руху\n30 хв тому",
-  "live": "Live agent\n23 с тому",
-  "deadRunningIndicators": 0,
-  "pageErrors": [],
-  "liveTimers": 1,
-  "deadTimers": 0,
-  "greenDots": 1
+  "uk-light": {
+    "quiet": "Completed launch\nготово\n30 хв тому",
+    "dead": "Dead mid-turn\nзупинено\n30 хв тому",
+    "live": "Live agent\n22 с тому",
+    "quietWindow": {
+      "state": "готово · 30 хв тому",
+      "launchChips": 0,
+      "placeholder": "написати агенту…"
+    },
+    "deadWindow": {
+      "state": "зупинено · 30 хв тому",
+      "launchChips": 0,
+      "placeholder": "написати агенту…"
+    }
+  },
+  "uk-dark": {
+    "quiet": "Completed launch\nготово\n30 хв тому",
+    "dead": "Dead mid-turn\nзупинено\n30 хв тому",
+    "live": "Live agent\n24 с тому",
+    "quietWindow": {
+      "state": "готово · 30 хв тому",
+      "launchChips": 0,
+      "placeholder": "написати агенту…"
+    },
+    "deadWindow": {
+      "state": "зупинено · 30 хв тому",
+      "launchChips": 0,
+      "placeholder": "написати агенту…"
+    }
+  },
+  "en-light": {
+    "quiet": "Completed launch\ndone\n30m ago",
+    "dead": "Dead mid-turn\nstopped\n30m ago",
+    "live": "Live agent\n25s ago",
+    "quietWindow": {
+      "state": "done · 30m ago",
+      "launchChips": 0,
+      "placeholder": "message the agent…"
+    },
+    "deadWindow": {
+      "state": "stopped · 30m ago",
+      "launchChips": 0,
+      "placeholder": "message the agent…"
+    }
+  },
+  "en-dark": {
+    "quiet": "Completed launch\ndone\n30m ago",
+    "dead": "Dead mid-turn\nstopped\n30m ago",
+    "live": "Live agent\n27s ago",
+    "quietWindow": {
+      "state": "done · 30m ago",
+      "launchChips": 0,
+      "placeholder": "message the agent…"
+    },
+    "deadWindow": {
+      "state": "stopped · 30m ago",
+      "launchChips": 0,
+      "placeholder": "message the agent…"
+    }
+  }
 }

@@ -10968,38 +10968,70 @@ describe("delivery confirmation recovery", () => {
 
 describe("stale working status", () => {
   browserTest("stale working: phone task counts only the live neighbor", async () => {
-    const out = path.resolve(".artifacts/stale-working/phone");
-    fs.mkdirSync(out, { recursive: true });
+    const root = path.resolve(".artifacts/stale-working/phone");
+    fs.mkdirSync(root, { recursive: true });
     const directory = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "stale-render-"));
     const response = staleWorkingResponse(directory, Date.now());
-    const server = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx", {
+    const server = await serveEvidenceFixture(root, "src/components/mobile/issue1671Evidence.fixture.tsx", {
       "/api/files": response.body, "/api/tasks": { tasks: response.body.tasks },
     });
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
+    const viewport = { width: 390, height: 844 };
+    const readings: Record<string, unknown> = { viewport };
     try {
-      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stale-working#p=atlas`, { width: 390, height: 844 }, "light", "uk", "reduce", true);
-      try {
-        await page.locator('[data-phone-card="task:stale-working"]').click();
-        const surface = page.locator('[data-phone-task-body]');
-        await surface.waitFor();
-        const dead = surface.locator(`[data-mobile2-path="${response.dead.path}"]`);
-        const live = surface.locator(`[data-mobile2-path="${response.live.path}"]`);
-        await dead.waitFor(); await live.waitFor();
-        expect(await surface.innerText()).toContain("Працюють · 1");
-        expect(await dead.innerText()).not.toContain("працює");
-        expect(await live.innerText()).toContain("працює");
-        expect(await dead.locator('.bg-success, .animate-pulse, [data-card-status="running"]').count()).toBe(0);
-        expect(await surface.locator('[data-mobile2-state="working"]').count()).toBe(1);
-        expect(await live.locator('.bg-success').count()).toBe(1);
-        expect(await live.locator('[data-mobile2-phrase]').innerText()).toMatch(/працює \d+:\d{2}/);
-        expect(await dead.locator('[data-mobile2-phrase]').innerText()).not.toMatch(/\d+:\d{2}/);
-        const readings = { viewport: { width: 390, height: 844 }, working: 1, dead: await dead.innerText(), live: await live.innerText(),
-          deadRunningIndicators: 0, pageErrors };
-        expect(pageErrors).toEqual([]);
-        await page.screenshot({ path: path.join(out, "task.png"), fullPage: true });
-        fs.mkdirSync("evidence/stale-working", { recursive: true });
-        fs.writeFileSync("evidence/stale-working/phone.json", JSON.stringify(readings, null, 2) + "\n");
-      } finally { await context.close(); }
+      for (const [lang, scheme] of [["uk", "light"], ["uk", "dark"], ["en", "light"], ["en", "dark"]] as const) {
+        const out = path.join(root, `${lang}-${scheme}`);
+        fs.mkdirSync(out, { recursive: true });
+        const word = (key: Parameters<typeof translate>[1]) => translate(lang, key);
+        const prefix = (key: Parameters<typeof translate>[1]) => word(key).split("{")[0]!;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stale-working#p=atlas`, viewport, scheme, lang, "reduce", true);
+        try {
+          const openTask = async () => {
+            await page.locator('[data-phone-card="task:stale-working"]').click();
+            await page.locator("[data-phone-task-body]").waitFor();
+          };
+          await openTask();
+          const surface = page.locator("[data-phone-task-body]");
+          const row = (file: { path: string }) => surface.locator(`[data-mobile2-path="${file.path}"]`);
+          const quiet = row(response.quiet), dead = row(response.dead), live = row(response.live);
+          await quiet.waitFor(); await dead.waitFor(); await live.waitFor();
+          expect(await surface.innerText()).toContain(word("kanban.motion.workingN").replace("{count}", "1"));
+          for (const quietRow of [quiet, dead]) {
+            expect(await quietRow.locator(".bg-success, .animate-pulse, [data-card-status=\"running\"]").count()).toBe(0);
+            expect(await quietRow.locator("[data-mobile2-phrase]").innerText()).not.toMatch(/\d+:\d{2}/);
+          }
+          expect(await surface.locator('[data-mobile2-state="working"]').count()).toBe(1);
+          expect(await live.locator(".bg-success").count()).toBe(1);
+          expect(await quiet.getAttribute("data-mobile2-state")).toBe("done");
+          expect(await dead.getAttribute("data-mobile2-state")).toBe("killed");
+          expect(await quiet.locator("[data-mobile2-phrase]").innerText()).toStartWith(prefix("mobile2.board.done"));
+          expect(await dead.locator("[data-mobile2-phrase]").innerText()).toStartWith(prefix("mobile2.board.killedAge"));
+          const reading: Record<string, unknown> = { quiet: await quiet.innerText(), dead: await dead.innerText(), live: await live.innerText() };
+          await page.screenshot({ path: path.join(out, "task.png"), fullPage: true });
+
+          for (const [name, file, state] of [["quiet", response.quiet, "mobile2.chat.stateDone"], ["dead", response.dead, "mobile2.chat.stateKilledAge"]] as const) {
+            await row(file).click();
+            const screen = page.locator('[data-mobile2-screen="chat"]');
+            await screen.waitFor();
+            await page.mouse.move(0, 0);
+            const header = screen.locator("[data-mobile2-chat-state]").first();
+            expect(await header.innerText()).toStartWith(prefix(state));
+            expect(await screen.locator('[data-turn-status="running"], [role="timer"]').count()).toBe(0);
+            expect(await screen.locator("[data-launch-chips], .animate-spin").count()).toBe(0);
+            expect(await screen.innerText()).not.toContain(file.spawn!.launchId.slice(0, 8));
+            const placeholder = await screen.locator("textarea").first().getAttribute("placeholder");
+            expect(placeholder).not.toBe(word("composer.placeholderSpawn"));
+            await page.screenshot({ path: path.join(out, `${name}-chat.png`) });
+            reading[`${name}Chat`] = { state: await header.innerText(), launchChips: 0, placeholder };
+            await page.locator("[data-mobile2-back]").first().click();
+            await surface.waitFor();
+          }
+          expect(pageErrors).toEqual([]);
+          readings[`${lang}-${scheme}`] = reading;
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/stale-working", { recursive: true });
+      fs.writeFileSync("evidence/stale-working/phone.json", JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); fs.rmSync(directory, { recursive: true, force: true }); }
-  }, 120_000);
+  }, 300_000);
 });

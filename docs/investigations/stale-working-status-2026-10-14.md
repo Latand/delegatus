@@ -372,15 +372,37 @@ Both callers now pass their stored status. The desktop rendered assertion failed
 on that untranslated label before the argument correction. Status words and
 layout remain the existing ones.
 
-The existing desktop and phone drivers render a task with one dead placeholder
-and one live transcript at 1440 and 390 pixels. Their registry fixture uses a
-30-minute-old reservation so the quiet row stays inside the board's automatic
-placement horizon; the projection unit regressions reproduce the 58-hour-old
-reservation. The phone shows «готово», a neutral dot and no running duration for
-the dead row. The desktop shows «без руху». Both read «Працюють · 1».
-Readings are in `evidence/stale-working/desktop.json` and
-`evidence/stale-working/phone.json`; frames are under
-`.artifacts/stale-working/`. Each case closes its context and browser.
+The existing desktop and phone drivers render a task with three agents at 1440
+and 390 pixels, in uk and en, light and dark: a launch whose live host completed
+its turn, a launch whose host died over an open turn, and a live transcript.
+Their registry fixture uses a 30-minute-old reservation so the quiet rows stay
+inside the board's automatic placement horizon; the projection unit regressions
+reproduce the 58-hour-old reservation. Both surfaces read «Працюють · 1».
+
+The first visual review found two more defects, both fixed:
+
+- A placeholder whose host died over an open turn read like a finished one.
+  The placeholder has no transcript turn boundary, so `turnLeftOpen` found no
+  open turn and the rows skipped the killed reading. The projection now reads
+  the host's own turn evidence (the ledger's newest turn without a boundary,
+  or an active turn that no current boundary closed) and names it by the
+  `structured_spawn_host_gone_turn_open` reason, which `turnLeftOpen` honours.
+  That row now takes the existing killed reading: a danger dot, «вбито · 30 хв»
+  on the phone and «зупинено» on the desktop. A host that died after its turn
+  ended keeps the quiet reading.
+- The agent window of a launch that is no longer live still showed the
+  spinning «Під'єднання хоста» chip, «Перше повідомлення: очікує», the raw
+  launch id and the «промпт — агент запуститься…» composer placeholder. A
+  placeholder whose receipt is pending while its projection is not live now
+  shows none of them; the composer says «написати агенту…». A failed launch
+  keeps its chips and retry.
+
+For a settled placeholder the desktop tile, the open-agents list and the window
+header now use the phone's word «готово» / "done" instead of «без руху» /
+"idle"; other desktop rows keep their words. Readings are in
+`evidence/stale-working/desktop.json` and `evidence/stale-working/phone.json`;
+frames are under `.artifacts/stale-working/{desktop,phone}/<lang>-<scheme>/`.
+Each case closes its contexts and browser.
 
 
 Verification used the owned gate runner sequentially, with private HOME, XDG,

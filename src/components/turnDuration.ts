@@ -1,5 +1,5 @@
 import { getLocale, translate, type Locale } from "@/lib/i18n";
-import type { FileEntry } from "@/lib/types";
+import { HOST_GONE_TURN_OPEN_REASON, type FileEntry } from "@/lib/types";
 
 /** Humanized run length, at most two units deep, mirroring the codex TUI's
     "Worked for …" line. uk uses с/хв/год with spaces («12 хв 30 с»), en the
@@ -61,6 +61,9 @@ export function turnLeftOpen(file: Pick<FileEntry, "authoritativeTurn" | "lastTu
   if (turn && turn.state !== "unknown") return turn.state === "busy";
   if (file.lastTurn) return file.lastTurn.endedAt === null;
   if (file.activityReason === "jsonl_turn_open" || file.activityReason === "jsonl_turn_stalled") return true;
+  /* A launch placeholder has no transcript turn: its projection names a host
+     that died over an open turn by reason. */
+  if (file.activityReason === HOST_GONE_TURN_OPEN_REASON) return true;
   return file.activity === "stalled";
 }
 

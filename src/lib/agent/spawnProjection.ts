@@ -6,7 +6,7 @@ import { readOnlyConversationLookupFromSnapshot, type ConversationLookup, type R
 import { registryRowProjection, registryRowsMatching, type RegistryRowProjector } from "./sqliteRegistryStore";
 import { projectRootForCwd } from "@/lib/scanner/describe";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
-import type { FileEntry, StructuredSpawnCardState } from "@/lib/types";
+import { HOST_GONE_TURN_OPEN_REASON, type FileEntry, type StructuredSpawnCardState } from "@/lib/types";
 import type { MandateDelivery } from "@/lib/runtime/messageOrigin";
 import { readHostTurnRecord } from "@/lib/runtime/eventStore";
 import { stagedLaunchRecovery } from "@/lib/runtime/stagedRecovery";
@@ -560,6 +560,10 @@ function spawnCard(
   const terminal = spawn.state === "failed" || spawn.state === "recovered";
   const recordedHost = entry?.structuredHost?.process ?? entry?.host?.agent ?? entry?.host?.panePid ?? receipt.verifiedHost?.agent;
   const hostGone = !terminal && !live && !!recordedHost && !identityAlive(recordedHost, probe);
+  /* A host that died over an open turn is the zombie the transcript rows read
+     as killed (#1487); a placeholder has no transcript turn boundary, so the
+     reason carries the host's own turn evidence to the same reading. */
+  const turnOpen = hostGone && hostTurnLeftOpen(receipt, entry?.structuredHost);
   const conversationId = readOnlyConversationLookupFromSnapshot(snapshot)
     .canonicalConversationId(receipt.conversationId);
   /* Pre-admission cards honor the explicit operator project the moment the
@@ -608,7 +612,8 @@ function spawnCard(
     mtime: Date.parse(receipt.createdAt) / 1000,
     size: 0,
     activity: completedTurn ? "idle" : projectedActivity(spawn, receipt.createdAt, nowMs, live),
-    activityReason: !terminal && !live ? "structured_spawn_inactive" : `structured_spawn_${spawn.state}`,
+    activityReason: turnOpen ? HOST_GONE_TURN_OPEN_REASON
+      : !terminal && !live ? "structured_spawn_inactive" : `structured_spawn_${spawn.state}`,
     proc: hostGone ? "killed" : null,
     pid: null,
     model: receipt.launchProfile.model,
@@ -642,6 +647,19 @@ function spawnCard(
     } : {}),
     spawn,
   };
+}
+
+/** The placeholder's host recorded a turn that never ended: the ledger's
+    newest turn has no boundary, or the host still held an active turn that no
+    current ledger boundary closed. */
+function hostTurnLeftOpen(receipt: SpawnReceipt, host: RegistryFile["entries"][string]["structuredHost"]): boolean {
+  if (!receipt.key || !host) return false;
+  const record = readHostTurnRecord(receipt.key.sessionId, { frames: false });
+  if (record.state === "read" && record.turn) {
+    if (record.turn.closed === null) return true;
+    if ((record.lastSeq ?? 0) >= host.eventCursor) return false;
+  }
+  return !!host.activeTurnRef;
 }
 
 /** An alive structured host may remain idle after its turn finishes while a
