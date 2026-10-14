@@ -34,7 +34,7 @@ import { signalProcessGroup } from "@/lib/processGroup";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 import { buildImagePayload, deleteInboxImages, spawnAgentWithPrompt } from "@/lib/tmux";
-import { admitRecoveredLaunch, settleFailedLaunch } from "@/lib/tasks/launchMembership";
+import { admitRecoveredLaunch, failedLaunchTaskSettlementPending, settleFailedLaunch } from "@/lib/tasks/launchMembership";
 import { hasLifecycleEventKey } from "@/lib/lifecycle/journal";
 import { readSpawnNoticeTurn } from "@/lib/spawnNotice/store";
 import { hardenedRedact } from "@/lib/view/compactText";
@@ -1006,31 +1006,45 @@ export async function terminalizeStaleStructuredSpawns(
   const actuationCap = options.actuationCap ?? STALE_STRUCTURED_SPAWN_ACTUATION_CAP;
   const reconcile = options.reconcile ?? reconcileStructuredSpawnReplay;
   const recoverySnapshot = registry.readOnlySnapshot();
-  /* A terminal receipt can outlive a refused notice or lifecycle append. Re-run
-     these idempotent obligations on the ordinary bounded reaper so a restart
-     or transient store lock cannot erase the launcher's report. */
-  let reportRepairs = 0;
+  /* A terminal receipt can outlive a refused task, notice or lifecycle write.
+     Re-run each pending obligation on the bounded reaper so a transient store
+     refusal cannot leave the launcher's report or task assignment unfinished. */
+  let repairs = 0;
   for (const receipt of registry.failedSpawnReceipts()) {
-    if (reportRepairs >= actuationCap) break;
-    if (receipt.purpose !== "launch" || receipt.artifactLifecycle !== "pending" || receipt.rejection
-      || receipt.failureAnnouncementSuppressed
-      || !receipt.launcher || receipt.launcher.conversationId === receipt.conversationId) continue;
-    let lifecyclePending: boolean;
-    let noticePending: boolean;
+    if (repairs >= actuationCap) break;
+    if (receipt.purpose !== "launch" || receipt.artifactLifecycle !== "pending") continue;
+    const reportsEligible = !receipt.rejection && !receipt.failureAnnouncementSuppressed
+      && Boolean(receipt.launcher && receipt.launcher.conversationId !== receipt.conversationId);
+    let taskSettlementPending = false;
+    let lookupFailed = false;
+    let lifecyclePending = false;
+    let noticePending = false;
+    if (reportsEligible) {
+      try {
+        lifecyclePending = !hasLifecycleEventKey(`spawn:${receipt.launchId}:failed`);
+        noticePending = !readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`);
+      } catch (error) {
+        lookupFailed = true;
+        spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] failed launch report lookup refused", {
+          launchId: receipt.launchId,
+          error,
+        });
+      }
+    }
     try {
-      lifecyclePending = !hasLifecycleEventKey(`spawn:${receipt.launchId}:failed`);
-      noticePending = !readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`);
+      taskSettlementPending = failedLaunchTaskSettlementPending(receipt);
     } catch (error) {
-      spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] failed launch report lookup refused", {
+      lookupFailed = true;
+      spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] failed launch task lookup refused", {
         launchId: receipt.launchId,
         error,
       });
-      continue;
     }
-    if (!lifecyclePending && !noticePending) continue;
-    reportRepairs += 1;
+    if (!lookupFailed && !taskSettlementPending && !lifecyclePending && !noticePending) continue;
+    repairs += 1;
     options.assertActive?.();
     settleFailedLaunch(receipt, undefined, {
+      announce: reportsEligible,
       launcherProject: launcherProjectFromRegistry(recoverySnapshot, receipt.launcher?.conversationId),
     });
   }

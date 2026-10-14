@@ -257,6 +257,20 @@ export interface FailedLaunchReceipt {
   createdAt?: string;
 }
 
+/** A failed launch can have durable reports while its task transaction was
+    refused. Keep that task obligation visible to the bounded receipt repair
+    pass until the launch's linked assignment has settled. */
+export function failedLaunchTaskSettlementPending(receipt: FailedLaunchReceipt): boolean {
+  if (receipt.purpose !== "launch" || receipt.artifactLifecycle !== "pending") return false;
+  const launchKey = receipt.clientAttemptId ?? receipt.launchId;
+  return loadTasks().some(task => {
+    if (task.origin?.kind === "launch" && (task.origin.key === launchKey || task.origin.key === receipt.launchId)) return false;
+    return task.assignments.some(assignment => assignment.launchId === receipt.launchId
+      && assignment.state === "linked"
+      && (!assignment.conversationId || assignment.conversationId === receipt.conversationId));
+  });
+}
+
 /**
  * The task side of a launch that failed (#2170): the membership admission
  * committed before anything ran is settled, restoring the task status when

@@ -21,6 +21,7 @@ const { AgentRegistry } = await import("@/lib/agent/registry");
 const { loadTasks, saveTasks, TASKS_FILE } = await import("@/lib/tasks/store");
 const { terminalizeStaleStructuredSpawns } = await import("@/lib/runtime/structuredSpawn");
 const { buildPipeline, savePipelines } = await import("@/lib/pipelines/store");
+const { injectStateWriteFaultForTests } = await import("@/lib/state/sqliteStateStore");
 
 afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -440,6 +441,40 @@ test.each(["journal", "notice"] as const)("a failed receipt repairs its refused 
   expect(notices[0]).toMatchObject({ launcherConversationId: "conversation_fixture_launcher", outcome: "lost",
     lost: { tasks: [{ taskId: `report-${refused}`, from: refused === "journal" ? "assigned" : "inbox", to: "inbox" }] } });
   expect(restarted.snapshot().receipts[begun.receipt.launchId]!.state).toBe("failed");
+});
+
+test("a failed receipt retries its task settlement after lifecycle and notice reports succeed", async () => {
+  const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
+  const { pendingSpawnNotices } = await import("@/lib/spawnNotice/store");
+  saveTasks([task("task-commit-retry", "Recover the failed task transition")]);
+  const registry = registryAt("task-commit-retry");
+  const begun = registry.beginSpawnRequest({ engine: "codex", cwd: stateDir, explicitProject: project,
+    transport: "structured", clientAttemptId: "task_commit_retry", taskIds: ["task-commit-retry"],
+    launcher: { conversationId: "conversation_fixture_launcher", notify: true },
+    launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Recover task settlement" }) });
+  if (begun.kind !== "created") throw new Error("expected launch");
+
+  injectStateWriteFaultForTests({ site: "commit", collection: "tasks", times: 1, error: new Error("temporary tasks commit refusal") });
+  try {
+    registry.failStructuredSpawn(begun.receipt.launchId, "host vanished before first rollout");
+  } finally {
+    injectStateWriteFaultForTests(null);
+  }
+  expect(loadTasks()[0]!.assignments[0]).toMatchObject({ state: "linked", error: null });
+  expect(queryLifecycleEvents({ conversationId: begun.receipt.conversationId }).events).toHaveLength(1);
+  expect(pendingSpawnNotices().filter(row => row.childConversationId === begun.receipt.conversationId)).toHaveLength(1);
+
+  const restarted = registryAt("task-commit-retry");
+  await terminalizeStaleStructuredSpawns(restarted, null);
+  expect(loadTasks()[0]).toMatchObject({
+    status: "inbox",
+    assignments: [expect.objectContaining({ state: "failed", error: "host vanished before first rollout" })],
+  });
+  expect(queryLifecycleEvents({ conversationId: begun.receipt.conversationId }).events).toHaveLength(1);
+  expect(pendingSpawnNotices().filter(row => row.childConversationId === begun.receipt.conversationId)).toHaveLength(1);
+  await terminalizeStaleStructuredSpawns(restarted, null);
+  expect(queryLifecycleEvents({ conversationId: begun.receipt.conversationId }).events).toHaveLength(1);
+  expect(pendingSpawnNotices().filter(row => row.childConversationId === begun.receipt.conversationId)).toHaveLength(1);
 });
 
 test("a failed child in another project writes its wake event into the launching seat's project", async () => {
