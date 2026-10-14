@@ -78,6 +78,42 @@ test("delivery liveness reads only its conversation and agrees with the complete
   } finally { store.close(); fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
+test.each(["delete", "rebind"] as const)("a held delivery snapshot preserves its conversation lookup after a peer %s", async (change) => {
+  const { AgentRegistry, normalizeRegistry } = await import("@/lib/agent/registry");
+  const { SqliteAgentRegistryStore } = await import("@/lib/agent/sqliteRegistryStore");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "liveness-held-delivery-"));
+  const filename = path.join(directory, "registry.sqlite");
+  const seed = new AgentRegistry(path.join(directory, "seed.json"), undefined, undefined, { sqliteMode: "off" });
+  const conversation = seed.ensureConversation("codex", "/sessions/held-delivery.jsonl", "default");
+  const delivery = seed.holdDelivery(conversation.id, "fixture", "fixture");
+  const initial = seed.snapshot();
+  initial.heldDeliveries[delivery.id]!.state = "assigned";
+  seed.close();
+  const options = { initialSnapshot: initial, normalize: normalizeRegistry };
+  const reader = new SqliteAgentRegistryStore(filename, options);
+  const writer = new SqliteAgentRegistryStore(filename, options);
+  try {
+    const held = reader.readOnlySnapshot().file;
+    const expected = Date.parse(delivery.createdAt);
+    expect(outstandingDeliverySince(held, conversation.id)).toBe(expected);
+    expect(Object.values(held.heldDeliveries)
+      .filter(row => row.conversationId === conversation.id && ["held", "assigned", "delivery-uncertain"].includes(row.state))
+      .map(row => Date.parse(row.createdAt)).filter(Number.isFinite).sort((left, right) => left - right)[0] ?? null).toBe(expected);
+
+    writer.mutate(file => {
+      if (change === "delete") delete file.heldDeliveries[delivery.id];
+      else file.heldDeliveries[delivery.id]!.conversationId = "conversation_rebound";
+    }, false);
+
+    expect(outstandingDeliverySince(held, conversation.id)).toBe(expected);
+    expect(outstandingDeliverySince(reader.readOnlySnapshot().file, conversation.id)).toBeNull();
+  } finally {
+    writer.close();
+    reader.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 function evidence(overrides: {
   transcriptTail?: Partial<TurnLivenessEvidence["transcriptTail"]>;
   host?: Partial<TurnLivenessEvidence["host"]>;

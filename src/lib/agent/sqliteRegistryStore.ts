@@ -1980,6 +1980,7 @@ export class SqliteAgentRegistryStore {
     this.coldViewCache = nextCache;
     this.coldGrantCursor = { changeId: coldGrantChangeId,stamp: snapshot.stamp };
     const pinnedReceipts = this.changesReady ? this.pinnedRowKeys(file, "receipts", coldGrantChangeId, identity) : null;
+    const pinnedDeliveries = this.changesReady ? this.pinnedRowKeys(file, "heldDeliveries", coldGrantChangeId, identity) : null;
     keyedReaders.set(file,(collection,field,value) => {
       const values = typeof value === "string" ? [value] : value;
       if (!values.length) return [];
@@ -1988,6 +1989,10 @@ export class SqliteAgentRegistryStore {
       if (collection === "receipts" && field === "artifactPath") {
         const holds = (receipt: RegistryFile["receipts"][string]) => values.includes(receipt.artifactPath ?? "");
         return pinnedReceipts ? pinnedReceipts(indexed, holds) : Object.keys(file.receipts).filter(key => holds(file.receipts[key]!));
+      }
+      if (collection === "heldDeliveries" && field === "conversationId") {
+        const holds = (delivery: RegistryFile["heldDeliveries"][string]) => values.includes(delivery.conversationId);
+        return pinnedDeliveries ? pinnedDeliveries(indexed, holds) : Object.keys(file.heldDeliveries).filter(key => holds(file.heldDeliveries[key]!));
       }
       return indexed();
     });
