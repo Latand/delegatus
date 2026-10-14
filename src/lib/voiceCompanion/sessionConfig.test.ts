@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { BACKEND_INSTRUCTIONS, backendRequest, COMPANION_TOOLS, LIVE_API_VERSION, LIVE_BACKEND_MODEL, LIVE_MODEL, liveSessionConfiguration, PROTOTYPE_BACKEND_RULES, PROTOTYPE_LIVE_RULES } from "./sessionConfig";
 import { z } from "zod";
 import { VOICE_ASK_MAX_CHARS } from "./liveGate";
@@ -131,7 +132,7 @@ test("composed tasks carry project scope, provenance and interface language in b
       expect(instructions).toContain("riddles, poems");
       expect(instructions).toContain("at most one sentence, on a last line that names it as theirs");
       expect(instructions).toContain("when you could not resolve a referent, say so in the task and never guess it");
-      expect(instructions).not.toMatch(/in the operator's words and language|never translate it|send one ask in their words/);
+      expect(instructions).not.toMatch(/in the operator's words and language|never translate it|send one ask in their words|operator's words\/language/);
     }
     expect(liveSessionConfiguration(locale).instructions).toContain("When the backend says a request is not work for the orchestrator, nothing was sent: answer it yourself when you can.");
   }
@@ -142,4 +143,16 @@ test("composed tasks carry project scope, provenance and interface language in b
   expect(send.description).not.toContain("in their own words and language");
   expect(send.parameters.properties.instruction.maxLength).toBe(6000);
   expect(VOICE_ASK_MAX_CHARS).toBe(4000);
+});
+
+test("voice design docs describe the current composition rule and contain no copied-phrasing directive", () => {
+  const docs = [
+    readFileSync(new URL("../../../docs/design/voice-lean-delegation.md", import.meta.url), "utf8"),
+    readFileSync(new URL("../../../docs/design/voice-prototype-review-flow.md", import.meta.url), "utf8"),
+  ];
+  for (const document of docs) {
+    expect(document).toContain("4,000 Unicode scalars");
+    expect(document).toContain("own words");
+    expect(document).not.toMatch(/send one ask in their words|in the operator's words and language|operator's words\/language|never translate it|shared 400-Unicode-scalar limit/i);
+  }
 });

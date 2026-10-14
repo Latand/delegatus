@@ -27,7 +27,7 @@ Delivery also has a code-proven loss window: `admission.ts:479` and `:482` advan
 
 1. **Read before sending.** At `sessionConfig.ts:28`, `:46`, distinguish backend reads from seat sends. Answer capabilities from the registry and status from focused reads/reports. At `liveSession.ts:284`, supply the frozen current turn, relevant structured observations and pending asks, retaining necessary referents and confirmation context. Replace the failure at `:345` with one bounded synthesis response after the fourth tool round, with tools disabled; name any remaining uncertainty.
 
-2. **Bound one ask.** At `tools.ts:72`, `:73`, `gate.ts:163` and `liveGate.ts:17`, enforce a shared 400-Unicode-scalar limit. Reject overflow for concise recomposition; never slice the task. Send one current unanswered question or work item in the operator's words/language. Answer an accompanying status question through reads. Independent work requests get separate bounded asks. Keep correlation trailers server-owned at `admission.ts:289`, `:339`.
+2. **Bound one ask.** The current contract in `tools.ts`, `gate.ts` and `liveGate.ts` permits up to 4,000 Unicode scalars. The voice writes one self-contained task in its own words and the operator's interface language, with the action, expected outcome and resolved context. It never forwards the transcript as the task, and it adds no scope. Overflow is refused for recomposition; the task is never sliced. Answer an accompanying status question through reads. Independent work requests get separate bounded tasks. Keep correlation trailers server-owned at `admission.ts:289`, `:339`.
 
 3. **Retain pending questions.** Extend proposals at `storage.ts:25` with answer state; retain project, operator source, short ask and correlation key. Supply pending references to both models. The existing backend resolves rephrasing to a held reference; `admission.ts:270` validates its session/project and returns `awaiting_report` without sending. Keep normalized-text comparison as a fallback. `asked_again` cannot bypass pending, queued or uncertain delivery. A genuinely new question passes; ambiguity gets one clarification. At `admission.ts:447`, settle only on a correlated answer or proven delivery failure. Progress, unrelated reports, time and confirmation expiry leave it pending. The backend identifies answer coverage from complete report data; admission validates the question/report references. Report class alone cannot establish an answer. Add waiting speech at `delegationOutcome.ts:5`, `tools.ts:36`. Preserve state across restart/project switches/seat succession.
 
@@ -73,9 +73,9 @@ Embedding services, a new workflow/queue framework, larger retrieval budgets, mo
 ## Amendment, 2026-10-14: compose a complete task
 
 The operator asked that Voice Delegatus write the whole task in its own words
-and set its limit to 4,000 characters. This amendment supersedes item 2's
-composition and length rule and the corresponding composition wording in the
-cause table. The earlier text records the design at that date.
+and set its limit to 4,000 characters. This amendment records the accepted
+composition and length rule. Earlier observations below describe the
+then-current implementation and are historical.
 
 Every send is one self-contained task: what to do and why, the expected
 outcome, and the necessary card, PR, issue or earlier point resolved from the

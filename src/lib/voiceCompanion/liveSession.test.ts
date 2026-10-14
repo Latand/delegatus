@@ -1469,6 +1469,61 @@ test("refused provider arguments scrub parameter names as well as values before 
   } finally { await f.service.close(s.sessionId); }
 });
 
+test("4,000-scalar tasks survive literal and Unicode-escaped JSON arguments; decoded overflow is refused", async () => {
+  const prefix = "Перевір задачу. 🙂";
+  const task = prefix + "ї".repeat(4_000 - [...prefix].length);
+  expect([...task]).toHaveLength(4_000);
+  const escaped = [...task].map(char => {
+    const point = char.codePointAt(0)!;
+    if (point <= 0x7f) return char;
+    if (point <= 0xffff) return `\\u${point.toString(16).padStart(4, "0")}`;
+    const value = point - 0x10000;
+    return `\\u${(0xd800 + (value >> 10)).toString(16)}\\u${(0xdc00 + (value & 0x3ff)).toString(16)}`;
+  }).join("");
+
+  for (const [label, argumentsText] of [["literal", JSON.stringify({ instruction: task })], ["escaped", `{"instruction":"${escaped}"}`]] as const) {
+    const f = fixture();
+    f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output")
+      ? backendResponse(`resp_${label}_${index}`, [message("The request was sent.")])
+      : backendResponse(`resp_${label}_${index}`, [{ ...functionCall(`call_${label}`, "request_orchestrator_delegation"), arguments: argumentsText }]);
+    const session = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=0" });
+    try {
+      f.provider.replay(session.providerId, delegationCreated(`delegation_${label}`, 1));
+      await f.service.drain(session.sessionId);
+      expect(f.sends()).toBe(1);
+      const [proposal] = Object.values(f.admission.session(session.sessionId).proposals);
+      expect(proposal.proposal.instruction).toBe(task);
+    } finally { await f.service.close(session.sessionId); }
+  }
+
+  const f = fixture();
+  const overflow = task + "ї";
+  f.provider.responder = calling(functionCall("decoded-overflow", "request_orchestrator_delegation", { instruction: overflow }));
+  const session = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=0" });
+  try {
+    f.provider.replay(session.providerId, delegationCreated("decoded-overflow", 2));
+    await f.service.drain(session.sessionId);
+    expect(f.sends()).toBe(0);
+    const result = JSON.parse(f.provider.requests[1].input.find(item => item.type === "function_call_output")!.output as string);
+    expect(result).toMatchObject({ status: "too_long" });
+    expect(result.speech).toContain("Nothing was sent");
+  } finally { await f.service.close(session.sessionId); }
+});
+
+test("tool argument payloads beyond the independent wire bound produce an explicit refusal", async () => {
+  const f = fixture();
+  f.provider.responder = (_request, index) => backendResponse(`oversized_${index}`, [{
+    ...functionCall("oversized", "request_orchestrator_delegation"), arguments: `{"instruction":"${"ї".repeat(64_001)}"}`,
+  }]);
+  const session = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=0" });
+  try {
+    f.provider.replay(session.providerId, delegationCreated("oversized-wire", 3));
+    await f.service.drain(session.sessionId);
+    expect(f.sends()).toBe(0);
+    expect(spoken(f).map(row => row.content).join(" ")).toContain("Запит не надіслано");
+  } finally { await f.service.close(session.sessionId); }
+});
+
 for (const locale of ["en","uk"] as const) test(`${locale} starting and switched project labels are scrubbed before backend context and echoed speech`, async () => {
   const key = ["Zr9QvB","label","private","0123456789abcdef"].join("-");
   const privatePath = ["","home","fixture-private","label.txt"].join("/");

@@ -17,6 +17,11 @@ import { PRIVATE_RESULT_TOOLS, runCompanionTool } from "./tools";
 import { byteShort } from "./prototypeRead";
 import { backendUsageTokens, backendUsageUsd, BACKEND_RESPONSE_RESERVE_USD, BACKEND_ROUNDS, LIVE_SESSION_LIMIT_MS, LIVE_USD_PER_SECOND, SESSION_START_ROOM_USD, VOICE_SESSION_RESERVE_USD } from "./usage";
 
+// A 4,000-scalar task can occupy up to 48,000 scalars when a provider writes
+// every astral character as a JSON surrogate pair. Leave room for the other
+// bounded tool fields while keeping oversized responses explicit.
+const MAX_BACKEND_TOOL_ARGUMENT_SCALARS = 64_000;
+
 function processAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; }
   catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
@@ -491,8 +496,16 @@ export class CompanionLiveSessions {
           return;
         }
         if (active.ended || active.closePromise) return;
-        const asked = output.filter(item => item.type === "function_call" && typeof item.call_id === "string" && item.call_id.length <= 200
-          && typeof item.name === "string" && typeof item.arguments === "string" && [...item.arguments].length <= 8_000 && !calls.has(item.call_id));
+        const functionCalls = output.filter(item => item.type === "function_call" && typeof item.call_id === "string" && item.call_id.length <= 200
+          && typeof item.name === "string" && typeof item.arguments === "string" && !calls.has(item.call_id));
+        const oversizedCall = functionCalls.find(item => [...(item.arguments as string)].length > MAX_BACKEND_TOOL_ARGUMENT_SCALARS);
+        if (oversizedCall) {
+          this.say(active, delegationId, stored.locale === "uk"
+            ? "Запит не надіслано: аргументи інструмента перевищили допустимий розмір. Сформулюйте коротшу задачу й повторіть запит."
+            : "The request was not sent because the tool arguments exceed the allowed size. Please restate the task more briefly and try again.");
+          return;
+        }
+        const asked = functionCalls;
         if (!asked.length || final) {
           const text = output.filter(item => item.type === "message" && Array.isArray(item.content)).flatMap(item => (item.content as unknown[]).map(jsonObject))
             .filter(part => part?.type === "output_text" && typeof part.text === "string").map(part => part!.text as string).join(" ");
