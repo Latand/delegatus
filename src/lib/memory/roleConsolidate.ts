@@ -114,12 +114,18 @@ const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&
     four characters, which the publication gate ignores too. Pure, so the
     bridge's privacy filter can use it. */
 export function lessonPattern(text: string): RegExp | null {
+  const source = lessonPatternSource(text);
+  return source === null ? null : new RegExp(source, "giu");
+}
+
+/** Build without compiling, so callers can bound batches and reject oversized sources. */
+export function lessonPatternSource(text: string): string | null {
   const normalized = text.normalize("NFKC");
   const words = normalized.match(/[\p{L}\p{N}]+/gu) ?? [];
   if (codePoints(words.join("")) >= LESSON_MATCH_MIN_CHARS) {
-    return new RegExp(`(?<![\\p{L}\\p{N}])${words.map(escapeRegExp).join("[^\\p{L}\\p{N}]+")}(?![\\p{L}\\p{N}])`, "giu");
+    return `(?<![\\p{L}\\p{N}])${words.map(escapeRegExp).join("[^\\p{L}\\p{N}]+")}(?![\\p{L}\\p{N}])`;
   }
   const exact = normalized.trim().replace(/[.!。]+$/u, "").trim();
   if (codePoints(exact) < 4) return null;
-  return new RegExp(`(?<![\\p{L}\\p{N}])${exact.split(/\s+/).map(escapeRegExp).join("\\s+")}(?![\\p{L}\\p{N}])`, "giu");
+  return `(?<![\\p{L}\\p{N}])${exact.split(/\s+/).map(escapeRegExp).join("\\s+")}(?![\\p{L}\\p{N}])`;
 }
