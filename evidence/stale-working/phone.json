@@ -1,0 +1,11 @@
+{
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "working": 1,
+  "dead": "Dead launch\nготово · 30 хв 1 с\n·\ngpt-6.1-sol\n·\nзапущено 30 хв тому",
+  "live": "Live agent\nпрацює 1:01\n·\ngpt-6.1-sol",
+  "deadRunningIndicators": 0,
+  "pageErrors": []
+}

@@ -1,3 +1,4 @@
+import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
@@ -10963,4 +10964,42 @@ describe("delivery confirmation recovery", () => {
       fs.writeFileSync("evidence/delivery-confirmation/phone.json", JSON.stringify({ browser: browser.version(), cases: readings }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 420_000);
+});
+
+describe("stale working status", () => {
+  browserTest("stale working: phone task counts only the live neighbor", async () => {
+    const out = path.resolve(".artifacts/stale-working/phone");
+    fs.mkdirSync(out, { recursive: true });
+    const directory = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "stale-render-"));
+    const response = staleWorkingResponse(directory, Date.now());
+    const server = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx", {
+      "/api/files": response.body, "/api/tasks": { tasks: response.body.tasks },
+    });
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stale-working#p=atlas`, { width: 390, height: 844 }, "light", "uk", "reduce", true);
+      try {
+        await page.locator('[data-phone-card="task:stale-working"]').click();
+        const surface = page.locator('[data-phone-task-body]');
+        await surface.waitFor();
+        const dead = surface.locator(`[data-mobile2-path="${response.dead.path}"]`);
+        const live = surface.locator(`[data-mobile2-path="${response.live.path}"]`);
+        await dead.waitFor(); await live.waitFor();
+        expect(await surface.innerText()).toContain("Працюють · 1");
+        expect(await dead.innerText()).not.toContain("працює");
+        expect(await live.innerText()).toContain("працює");
+        expect(await dead.locator('.bg-success, .animate-pulse, [data-card-status="running"]').count()).toBe(0);
+        expect(await surface.locator('[data-mobile2-state="working"]').count()).toBe(1);
+        expect(await live.locator('.bg-success').count()).toBe(1);
+        expect(await live.locator('[data-mobile2-phrase]').innerText()).toMatch(/працює \d+:\d{2}/);
+        expect(await dead.locator('[data-mobile2-phrase]').innerText()).not.toMatch(/\d+:\d{2}/);
+        const readings = { viewport: { width: 390, height: 844 }, working: 1, dead: await dead.innerText(), live: await live.innerText(),
+          deadRunningIndicators: 0, pageErrors };
+        expect(pageErrors).toEqual([]);
+        await page.screenshot({ path: path.join(out, "task.png"), fullPage: true });
+        fs.mkdirSync("evidence/stale-working", { recursive: true });
+        fs.writeFileSync("evidence/stale-working/phone.json", JSON.stringify(readings, null, 2) + "\n");
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); fs.rmSync(directory, { recursive: true, force: true }); }
+  }, 120_000);
 });

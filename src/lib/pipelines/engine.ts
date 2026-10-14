@@ -9690,10 +9690,11 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     await drainStageActivations(ports);
     const recoveredLaunches = await recoverWaitingStageLaunches(ports);
     // Closed rows are excluded by the controller index. Repair only rows with
-    // an unfinished, pathless launch; after settlement they leave this set.
+    // an unfinished launch; reserved paths still need the absence proof in
+    // neverStartedLaunch. Settled attempts leave this set.
     const closedLaunches = new Set(loadPipelinesForProjection().filter((pipeline) => pipeline.state === "closed"
-      && pipeline.runs.some((run) => run.attempts.some((attempt) => attempt.launchId && !attempt.agentPath
-        && !attempt.sessionId && attempt.state !== "failed" && !attempt.verdict))).map((pipeline) => pipeline.id));
+      && pipeline.runs.some((run) => run.attempts.some((attempt) => attempt.launchId && attempt.state !== "failed" && !attempt.verdict
+        && ["starting", "path-pending"].includes(ports.spawnReceipt(attempt.launchId)?.state ?? "")))).map((pipeline) => pipeline.id));
     let closedLaunchesChanged = false;
     if (closedLaunches.size) await withPipelineMutation((pipelines, persist) => {
       for (const pipeline of pipelines) {

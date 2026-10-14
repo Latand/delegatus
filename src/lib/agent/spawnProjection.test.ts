@@ -9,6 +9,15 @@ import { beginLegacySpawnFixture, withLegacySpawnFixtureTitles } from "@/lib/age
 import { activityVerdict } from "@/lib/scanner/activity";
 import type { FileEntry } from "@/lib/types";
 
+import { staleWorkingFixture } from "./spawnProjection.fixture";
+import { receiptIsLive, livenessProbe } from "./accountLiveness";
+import { turnIsRunning } from "@/components/turnDuration";
+import { workingSince } from "@/components/workingSince";
+import { isWorkingAgent, workingAgentCount, workingAgentCounts } from "@/components/workingAgents";
+import { mobileRowState } from "@/components/mobile/mobileBoardModel";
+import { cardStatus } from "@/components/cardStatus";
+import { activityDot } from "@/components/utils";
+
 import { AgentRegistry } from "./registry";
 import { preallocatedStructuredSpawnCards, projectLaunchConversations } from "./spawnProjection";
 
@@ -1683,4 +1692,82 @@ test("the production placeholder baseline converges by projection alone with a l
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test.each([{ name: "unprobed", stopped: false }, { name: "stopped", stopped: true }])("stale working: a dead $name launch agrees with liveness on every surface", ({ stopped }) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stale-working-"));
+  try {
+    const now = Date.now();
+    const { snapshot, receipt, probe, live } = staleWorkingFixture(directory, now, stopped);
+    expect(receiptIsLive(snapshot, receipt, probe)).toBe(false);
+    const dead = projectLaunchConversations([], snapshot, now, () => false, undefined, probe).cards[0]!;
+    expect(dead.activity).toBe("idle");
+    expect(dead.proc).toBeNull();
+    expect(dead.spawn?.state).toBe("binding");
+    expect(turnIsRunning(dead)).toBe(false);
+    expect(isWorkingAgent(dead, now / 1000)).toBe(false);
+    expect(mobileRowState(dead, now / 1000).key).toBe("done");
+    expect(cardStatus(dead, now)).toBeNull();
+    expect(workingSince(dead)).toBeNull();
+    expect(activityDot(dead.activity)).toBe("bg-strong");
+    expect(workingAgentCount([dead, live], now / 1000)).toBe(1);
+    expect(workingAgentCounts([dead, live], now / 1000).get(live.project)).toBe(1);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test.each(["grace", "host", "admission"] as const)("stale working: a launch with %s evidence stays working", (evidence) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stale-live-"));
+  try {
+    const now = Date.now();
+    const { snapshot, receipt } = staleWorkingFixture(directory, now);
+    if (evidence === "grace") receipt.createdAt = new Date(now - 120_000).toISOString();
+    if (evidence === "host") snapshot.entries["codex:dead-reservation"]!.structuredHost = {
+      kind: "codex-app-server", endpoint: "fixture", process: { pid: 71, startIdentity: "71:1" }, eventCursor: 0,
+      protocolVersion: "test", writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+    };
+    if (evidence === "host") snapshot.entries["codex:dead-reservation"]!.status = "live";
+    if (evidence === "admission") receipt.admissionOwner = { pid: 71, startIdentity: "71:1" };
+    const probe = livenessProbe({ now: () => now, pidAlive: () => true, processIdentity: () => "71:1" });
+    expect(receiptIsLive(snapshot, receipt, probe)).toBe(true);
+    const file = projectLaunchConversations([], snapshot, now, () => false, undefined, probe).cards[0]!;
+    expect(turnIsRunning(file)).toBe(true);
+    expect(isWorkingAgent(file, now / 1000)).toBe(true);
+    expect(cardStatus(file, now)?.kind).toBe("running");
+    expect(workingSince(file)).toBe(Date.parse(receipt.createdAt));
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test.each(["gone", "reused-pid"] as const)("stale working: recorded %s host clears its timer and projects killed", (evidence) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stale-host-"));
+  try {
+    const now = Date.now();
+    const { snapshot, receipt } = staleWorkingFixture(directory, now);
+    snapshot.entries["codex:dead-reservation"]!.structuredHost = {
+      kind: "codex-app-server", endpoint: "fixture", process: { pid: 71, startIdentity: "71:1" }, eventCursor: 0,
+      protocolVersion: "test", writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+    };
+    const probe = livenessProbe({ now: () => now, pidAlive: () => evidence === "reused-pid", processIdentity: () => "71:2" });
+    expect(receiptIsLive(snapshot, receipt, probe)).toBe(false);
+    const file = projectLaunchConversations([], snapshot, now, () => false, undefined, probe).cards[0]!;
+    expect(file.proc).toBe("killed");
+    expect(file.activity).toBe("idle");
+    expect(mobileRowState(file, now / 1000).key).toBe("done");
+    expect(turnIsRunning(file)).toBe(false);
+    expect(workingSince(file)).toBeNull();
+    expect(activityDot(file.activity)).not.toContain("bg-success");
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("stale working: an expired unproven launch stays recent until the quiet horizon", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stale-recent-"));
+  try {
+    const now = Date.now();
+    const { snapshot, receipt, probe } = staleWorkingFixture(directory, now);
+    receipt.createdAt = new Date(now - 6 * 60_000).toISOString();
+    const file = projectLaunchConversations([], snapshot, now, () => false, undefined, probe).cards[0]!;
+    expect(file.activity).toBe("recent");
+    expect(turnIsRunning(file)).toBe(false);
+    expect(cardStatus(file, now)).toBeNull();
+    expect(workingSince(file)).toBeNull();
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

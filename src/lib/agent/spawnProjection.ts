@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { identityAlive, livenessProbe, receiptIsLive, type LivenessProbe } from "./accountLiveness";
 import { readOnlyConversationLookupFromSnapshot, type ConversationLookup, type RegistryFile, type SpawnReceipt } from "./registry";
 import { registryRowProjection, registryRowsMatching, type RegistryRowProjector } from "./sqliteRegistryStore";
 import { projectRootForCwd } from "@/lib/scanner/describe";
@@ -388,13 +389,14 @@ function newestLaunchReceipts(snapshot: RegistryFile, nowMs: number): SpawnRecei
     .map(([key]) => snapshot.receipts[key]!);
 }
 
-function projectedActivity(spawn: StructuredSpawnCardState, createdAt: string, nowMs: number): FileEntry["activity"] {
+function projectedActivity(spawn: StructuredSpawnCardState, createdAt: string, nowMs: number, live: boolean): FileEntry["activity"] {
   const terminal = spawn.state === "failed" || spawn.state === "recovered";
   const createdMs = Date.parse(createdAt);
   if (terminal && Number.isFinite(createdMs) && nowMs - createdMs >= TERMINAL_SPAWN_RECENT_MS) return "idle";
   if (spawn.state === "failed") return "stalled";
   if (spawn.state === "recovered") return "recent";
-  return "live";
+  if (live) return "live";
+  return Number.isFinite(createdMs) && nowMs - createdMs < TERMINAL_SPAWN_RECENT_MS ? "recent" : "idle";
 }
 
 /** A real assistant turn this launch produced, read from the live transcript
@@ -484,6 +486,7 @@ export function projectLaunchConversations(
   nowMs = Date.now(),
   artifactProbe: (pathname: string) => ArtifactProbeResult = readableArtifact,
   mandateFor?: (launchId: string) => MandateDelivery | undefined,
+  probe: LivenessProbe = livenessProbe({ now: () => nowMs }),
 ): LaunchProjection {
   const byPath = new Map(files.map((file) => [file.path, file]));
   const scannedPaths = new Set(byPath.keys());
@@ -528,7 +531,7 @@ export function projectLaunchConversations(
     if (receipt.artifactLifecycle !== "pending") {
       if (!materialized.artifactPresent || !withinAdoptionGrace(receipt, nowMs)) continue;
     }
-    cards.push(spawnCard(snapshot, receipt, spawn, scannedPaths, nowMs));
+    cards.push(spawnCard(snapshot, receipt, spawn, scannedPaths, nowMs, probe));
   }
   return { cards, facts, routes };
 }
@@ -547,7 +550,13 @@ function spawnCard(
   spawn: StructuredSpawnCardState,
   scannedPaths: ReadonlySet<string>,
   nowMs: number,
+  probe: LivenessProbe = livenessProbe({ now: () => nowMs }),
 ): FileEntry {
+  const live = receiptIsLive(snapshot, receipt, probe);
+  const terminal = spawn.state === "failed" || spawn.state === "recovered";
+  const entry = receipt.key ? snapshot.entries[`${receipt.key.engine}:${receipt.key.sessionId}`] : undefined;
+  const recordedHost = entry?.structuredHost?.process ?? entry?.host?.agent ?? entry?.host?.panePid ?? receipt.verifiedHost?.agent;
+  const hostGone = !terminal && !live && !!recordedHost && !identityAlive(recordedHost, probe);
   const conversationId = readOnlyConversationLookupFromSnapshot(snapshot)
     .canonicalConversationId(receipt.conversationId);
   /* Pre-admission cards honor the explicit operator project the moment the
@@ -595,9 +604,9 @@ function spawnCard(
     ...(operatorHandoff ? { handoff: true } : {}),
     mtime: Date.parse(receipt.createdAt) / 1000,
     size: 0,
-    activity: projectedActivity(spawn, receipt.createdAt, nowMs),
-    activityReason: `structured_spawn_${spawn.state}`,
-    proc: null,
+    activity: projectedActivity(spawn, receipt.createdAt, nowMs, live),
+    activityReason: !terminal && !live ? "structured_spawn_inactive" : `structured_spawn_${spawn.state}`,
+    proc: hostGone ? "killed" : null,
     pid: null,
     model: receipt.launchProfile.model,
     launchModel: receipt.launchProfile.model,

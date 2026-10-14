@@ -157,7 +157,7 @@ const MemberTile = memo(function MemberTile({ member, workspace, open, onOpen }:
   const parts = member.stage && place ? stageCardLabelParts(t, member.stage.stage, place) : null;
   const engine = member.file.engine === "claude" || member.file.engine === "codex" ? engineWord(member.file.engine) : null;
   const hint = member.stage && place ? stageLabelTitle(t, member.stage.stage, place, engine) : undefined;
-  const state = rowStateWord(t, member);
+  const state = rowStateWord(t, { key: member.state, activity: member.activity });
   const stateClass = member.needsYou ? "needs" : member.working ? "working" : member.state;
   return (
     <button

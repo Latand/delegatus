@@ -3586,6 +3586,10 @@ const ROLE_MEMORY = new URLSearchParams(location.search).has("rolememory");
 const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
+  // The driver supplies the real server projection for the liveness case.
+  if (new URLSearchParams(location.search).get("scenario") === "stale-working"
+    && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
+
   const method = (init?.method ?? "GET").toUpperCase();
   if (WORKER_SCENE && url.pathname === "/api/operator/settings") {
     return json({ ok: true, locale: { value: new URLSearchParams(location.search).get("lang") ?? "en", source: "chosen", changedAt: iso(0) }, timeZone: null });

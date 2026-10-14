@@ -348,3 +348,47 @@ cards and the «Працюють · N» counts drop to what `agent_activity` rep
   daily (five of the eight were touched at 2026-10-14T04:29Z). Change 2
   clears the action for these eight; whatever rewrites them is not a liveness
   surface.
+
+## Implementation and rendered findings (2026-10-14)
+
+The placeholder projection now asks `receiptIsLive` using an injectable process
+probe. An expired launch with no live evidence becomes recent or idle; a recorded
+host whose process is gone receives the existing killed status. The receipt's
+launch state remains intact until settlement. The closed-lane sweep includes
+reserved paths and session ids for starting/path-pending receipts, retaining all
+absence, delivery and host fences in the existing settlement helper.
+
+The new projection assertions failed first: both retained dead launches read
+live on the original source. The controller regression likewise left the receipt
+path-pending. After the changes, the sweep fails the original receipt and leaves
+the second tick unchanged, without spawning or recovering a stage. Controls
+retain a live host, a present transcript, a different reserved path and an
+accepted verdict. The dead transcript guard still projects killed.
+
+Rendered evidence exposed an additional status-label defect: the desktop tile
+and agent window passed their conversation identity as `rowStateWord`'s status
+key. The dead row printed an untranslated `kanban.memberState.spawn:…` key.
+Both callers now pass their stored status. The desktop rendered assertion failed
+on that untranslated label before the argument correction. Status words and
+layout remain the existing ones.
+
+The existing desktop and phone drivers render a task with one dead placeholder
+and one live transcript at 1440 and 390 pixels. Their registry fixture uses a
+30-minute-old reservation so the quiet row stays inside the board's automatic
+placement horizon; the projection unit regressions reproduce the 58-hour-old
+reservation. The phone shows «готово», a neutral dot and no running duration for
+the dead row. The desktop shows «без руху». Both read «Працюють · 1».
+Readings are in `evidence/stale-working/desktop.json` and
+`evidence/stale-working/phone.json`; frames are under
+`.artifacts/stale-working/`. Each case closes its context and browser.
+
+
+Verification used the owned gate runner sequentially, with private HOME, XDG,
+TMPDIR, state and lock directories and a closed Viewer control port. The six
+focused files passed: spawn projection (47), pipeline recovery (103), transcript
+liveness (9), agent window (6), scan cache (19) and hostless registry evidence (3).
+The two rendered cases passed as well. TypeScript and changed-file lint passed.
+The initial TypeScript run and a clean export of the original main commit both
+reported the same two optional-value matcher errors. Explicit matcher types in
+the scan-cache and hostless-evidence tests retain their runtime assertions and
+allow the current Bun declarations to compile them.

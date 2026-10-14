@@ -1,3 +1,4 @@
+import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { describe, expect } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -30845,4 +30846,54 @@ describe("operator decision forms: rejecting the task's prototype variants", () 
       fs.writeFileSync("evidence/prototype-review/decision-rejection.json", JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); served.stop(); }
   }, 300_000);
+});
+
+describe("stale working status", () => {
+  browserTest("stale working: desktop task counts only the live neighbor", async () => {
+    const out = path.resolve(".artifacts/stale-working/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const directory = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "stale-render-"));
+    const response = staleWorkingResponse(directory, Date.now());
+    const server = await serveEvidenceFixture(out, "src/components/kanban/issue1695Evidence.fixture.tsx", {
+      "/api/files": response.body, "/api/tasks": { tasks: response.body.tasks },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    try {
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stale-working#p=atlas`, VIEWPORT, "light", "uk", "reduce", false);
+      try {
+        const surface = page.locator(card("stale-working"));
+        await surface.waitFor();
+
+        const dead = surface.locator(`[data-member="${response.dead.path}"]`);
+        const live = surface.locator(`[data-member="${response.live.path}"]`);
+        await dead.waitFor(); await live.waitFor();
+        expect(await surface.innerText()).toContain("Працюють · 1");
+        expect(await dead.innerText()).not.toContain("працює");
+        expect(await live.locator('[data-card-status="running"]').count()).toBe(1);
+        expect(await dead.locator('.bg-success, .animate-pulse, [data-card-status="running"]').count()).toBe(0);
+        expect(await surface.locator('[data-card-status="running"]').count()).toBe(1);
+        expect(await dead.locator('.state').innerText()).toContain("без руху");
+        expect(await live.locator('.bg-success').count()).toBe(1);
+        const readings = { viewport: VIEWPORT, working: 1, dead: await dead.innerText(), live: await live.innerText(),
+          deadRunningIndicators: 0, pageErrors };
+        expect(pageErrors).toEqual([]);
+        await surface.screenshot({ path: path.join(out, "task.png") });
+        await live.click();
+        const agentWindow = page.locator("[data-agent-window-frame]");
+        await agentWindow.locator('[data-turn-status="running"] [role="timer"]').waitFor();
+        expect(await agentWindow.locator('[data-turn-status="running"] [role="timer"]').count()).toBe(1);
+        await agentWindow.screenshot({ path: path.join(out, "live-reader.png") });
+        await page.locator('[data-agent-window-scrim]').click({ position: { x: 2, y: 2 } });
+        await dead.click();
+        await agentWindow.waitFor();
+        expect(await agentWindow.locator('[data-turn-status="running"], [role="timer"]').count()).toBe(0);
+        expect(await agentWindow.locator(`[data-open-agent="${response.dead.conversationId}"] [data-open-agent-jump]`).getAttribute("aria-label")).toContain("без руху");
+        await agentWindow.screenshot({ path: path.join(out, "dead-reader.png") });
+        Object.assign(readings, { liveTimers: 1, deadTimers: 0, greenDots: 1 });
+        expect(pageErrors).toEqual([]);
+        fs.mkdirSync("evidence/stale-working", { recursive: true });
+        fs.writeFileSync("evidence/stale-working/desktop.json", JSON.stringify(readings, null, 2) + "\n");
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); fs.rmSync(directory, { recursive: true, force: true }); }
+  }, 120_000);
 });
