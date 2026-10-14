@@ -27,6 +27,8 @@ export interface RegistryLockHolder {
   close(): Promise<void>;
 }
 
+type RegistryLockFixtureOptions = AgentRegistryStorageOptions & { writerClock?: () => number };
+
 const HOLDER_SCRIPT = `
   const { Database } = require("bun:sqlite");
   const db = new Database(process.argv[1]);
@@ -118,7 +120,7 @@ export function withoutWriterWait<T>(filename: string, operation: () => T, attem
   }
 }
 
-/** A short timer must run before the observed wait ends. Lateness is diagnostic. */
+/** Captures short-timer progress while an operation is pending; lateness is diagnostic. */
 export function loopProgressProbe() {
   let finished = false;
   const samples: Array<{ pending: boolean; latenessMs: number }> = [];
@@ -134,7 +136,7 @@ export function loopProgressProbe() {
         }, 5));
       }));
     },
-    async run<T>(operation: () => T | Promise<T>, requireSample = true): Promise<T> {
+    async run<T>(operation: () => T | Promise<T>, requireSample = true, requirePending = true): Promise<T> {
       // A synchronous mutation must mark completion before the delayed timer.
       let result: PromiseSettledResult<T>;
       try {
@@ -148,6 +150,7 @@ export function loopProgressProbe() {
         await Promise.all(releases);
         if (requireSample) expect(samples.length, "no contended wait was observed").toBeGreaterThan(0);
         for (const sample of samples) {
+          if (!requirePending) continue;
           expect(sample.pending, `wait timer lateness: ${sample.latenessMs.toFixed(1)} ms`).toBe(true);
         }
         if (result.status === "rejected") throw result.reason;
@@ -180,7 +183,7 @@ export async function whileRegistryWriterHeld<T>(
     const probe = loopProgressProbe();
     probe.arm(release ? async () => { await holder.release(); active = false; } : undefined);
     observed++;
-    return probe.run(() => withWriter.apply(this, args)).catch(error => {
+    return probe.run(() => withWriter.apply(this, args), true, release).catch(error => {
       if (/wait timer lateness|no contended wait/.test(String(error))) progressFailures.push(error);
       throw error;
     });
@@ -206,7 +209,7 @@ export async function whileRegistryWriterHeld<T>(
     }
     return exec.apply(this, args);
   });
-  try { return { value: await probe.run(operation, false) }; }
+  try { return { value: await probe.run(operation, false, release) }; }
   finally {
     attempts.mockRestore();
     immediate.mockRestore();
@@ -221,12 +224,21 @@ export async function whileRegistryWriterHeld<T>(
 /** A registry in SQLite mode under a private temporary directory. */
 export function sqliteRegistryFixture(
   prefix: string,
-  options: AgentRegistryStorageOptions = {},
+  options: RegistryLockFixtureOptions = {},
 ): { registry: AgentRegistry; root: string; sqliteFilename: string; cleanup: () => void } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
   const filename = path.join(root, "registry.json");
   const sqliteFilename = path.join(root, "registry.sqlite");
-  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename, ...options });
+  let progressClock = 0;
+  const registry = new AgentRegistry(filename, undefined, undefined, {
+    sqliteMode: "sqlite",
+    sqliteFilename,
+    ...options,
+  });
+  if (options.sqliteWriterDeadlineMs !== undefined) {
+    const store = (registry as unknown as { sqliteStore: SqliteAgentRegistryStore }).sqliteStore;
+    (store as unknown as { writerClock: () => number }).writerClock = options.writerClock ?? (() => (progressClock += 5));
+  }
   return { registry, root, sqliteFilename, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 

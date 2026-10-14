@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,6 +26,21 @@ const { agentRegistry } = await import("@/lib/agent/registry");
 const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
 const { taskAcknowledgement } = await import("./listAnswers");
 afterAll(registerPipelineTick(async () => {}));
+
+function abortAndCountSynchronousSleeps(caller: AbortController) {
+  let calls = 0;
+  const sleepSync = Bun.sleepSync.bind(Bun);
+  const sleep = spyOn(Bun, "sleepSync").mockImplementation((milliseconds) => {
+    calls += 1;
+    sleepSync(milliseconds);
+  });
+  try {
+    caller.abort();
+  } finally {
+    sleep.mockRestore();
+  }
+  return calls;
+}
 
 async function protocol(bindings: McpToolBindings) {
   const server = createViewerMcpServer(createMcpToolService(bindings, new MemoryMcpReceiptStore()));
@@ -427,8 +442,9 @@ test("a targeted agent_activity with a slow description answers inside its budge
   const caller = new AbortController();
   const cancelled = bindings.agent_activity({ clientRequestId: "targeted-cancel", transcriptPath: "/fixtures/targeted/cancelled.jsonl" }, { signal: caller.signal });
   await new Promise((resolve) => setTimeout(resolve, 100));
-  caller.abort();
+  const synchronousSleeps = abortAndCountSynchronousSleeps(caller);
   await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+  expect(synchronousSleeps, "cancellation forwarding must not synchronously sleep").toBe(0);
 }, 30_000);
 
 test("cancelling agent_activity after its catalog budget releases the scan it was waiting on", async () => {
@@ -457,8 +473,9 @@ test("cancelling agent_activity after its catalog budget releases the scan it wa
     /* Past the catalog budget, inside the tail read. */
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(scans[0]!.signals[0]!.aborted).toBe(false);
-    caller.abort();
+    const synchronousSleeps = abortAndCountSynchronousSleeps(caller);
     await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+    expect(synchronousSleeps, "cancellation forwarding must not synchronously sleep").toBe(0);
     expect(scans[0]!.signals).toHaveLength(1);
     expect(scans[0]!.signals[0]!.aborted).toBe(true);
 

@@ -12,6 +12,28 @@ test("timer lateness before the observed wait does not refuse loop progress", as
   expect(await probe.run(() => held)).toBe("released");
 });
 
+test("a refused acquisition cutoff follows timer progress, not wall time", async () => {
+  let clock = 0;
+  let delayFirstRead = true;
+  const made = sqliteRegistryFixture("writer-progress-cutoff", {
+    sqliteWriterDeadlineMs: 25,
+    writerClock: () => {
+      if (delayFirstRead) {
+        delayFirstRead = false;
+        Bun.sleepSync(80);
+      }
+      clock += 5;
+      return clock;
+    },
+  });
+  const holder = registryLockHolder(made.sqliteFilename);
+  try {
+    await holder.hold();
+    const { value } = await whileRegistryWriterHeld(holder, () => made.registry.deliveryWrite({ label: "test-cutoff" }, () => "unreachable"), { release: false });
+    expect(value).toEqual({ acquired: false });
+  } finally { await holder.close(); made.registry.close(); made.cleanup(); }
+});
+
 test("a synchronous wait ending before the short timer refuses loop progress", async () => {
   const probe = loopProgressProbe();
   probe.arm();

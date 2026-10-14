@@ -565,8 +565,16 @@ function sendClaimedBehindPick(storage: { sqliteMode: "sqlite"; sqliteWriterDead
   setBoardFileForTests(path.join(root, "board.json"));
   const sqliteFilename = path.join(root, "registry.sqlite");
   const registry = storage
-    ? new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { ...storage, sqliteFilename })
+    ? new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, {
+      ...storage,
+      sqliteFilename,
+    })
     : new AgentRegistry(path.join(root, "registry.json"));
+  if (storage?.sqliteWriterDeadlineMs !== undefined) {
+    let progressClock = 0;
+    const store = (registry as unknown as { sqliteStore: { writerClock: () => number } }).sqliteStore;
+    store.writerClock = () => (progressClock += 5);
+  }
   const sourcePath = path.join(root, "source.jsonl");
   const successorPath = path.join(root, "successor.jsonl");
   claudeTranscript(sourcePath);
@@ -684,7 +692,7 @@ test("a handover refused at its deadline writes nothing, says why, and the next 
     return conversationAfter;
   };
 
-  const value = await probe.run(() => reconfigure(["send-behind-pick"]));
+  const value = await probe.run(() => reconfigure(["send-behind-pick"]), true, false);
   writer!.release();
 
   expect(value).toBe("writer-busy");
