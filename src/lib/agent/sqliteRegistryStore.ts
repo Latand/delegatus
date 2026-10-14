@@ -61,7 +61,7 @@ type KeyedReader = (collection: RowCollection, field: LookupField, value: Lookup
 type ProjectionReader = (collection: RowCollection, projector: RegistryRowProjector<RowCollection, unknown>) => Array<[string, unknown]>;
 interface RegistryFileReaders {
   keyed: WeakMap<object, KeyedReader>;
-  path: WeakMap<RegistryFile, (path: string) => string[]>;
+  path: WeakMap<object, (path: string) => string[]>;
   entryKey: WeakMap<RegistryFile, (entryKey: string) => string[]>;
   coldKey: WeakMap<RegistryFile, (collection: RowCollection) => ReadonlySet<string> | undefined>;
   endedOwner: WeakMap<RegistryFile, (since: string) => string[]>;
@@ -247,11 +247,11 @@ function lookupValue(row: unknown, field: LookupField): unknown {
 
 /** Whether path lookups on this file read the relational path index rather
     than enumerating every conversation, cold history included. */
-export function registryHasPathIndex(file: RegistryFile): boolean {
+export function registryHasPathIndex(file: Pick<RegistryFile, "conversations">): boolean {
   return pathReaders.has(file);
 }
 
-export function registryConversationsForPath(file: RegistryFile, path: string): RegistryFile["conversations"][string][] {
+export function registryConversationsForPath(file: Pick<RegistryFile, "conversations">, path: string): RegistryFile["conversations"][string][] {
   const keys = pathReaders.get(file)?.(path);
   return keys ? keys.map(key => file.conversations[key]!).filter(Boolean) : Object.values(file.conversations).filter(row =>
     row.generations.some(generation => generation.path === path) || row.continuityPaths.includes(path));

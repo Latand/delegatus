@@ -5,7 +5,8 @@ import { statePath } from "@/lib/configDir";
 import { createHash, randomBytes } from "node:crypto";
 
 import { agentRegistry, type RegistryFile } from "@/lib/agent/registry";
-import { canonicalProject } from "@/lib/projects/aliases";
+import { registryConversationsForPath, registryHasPathIndex } from "@/lib/agent/sqliteRegistryStore";
+import { projectAliasResolver } from "@/lib/projects/aliases";
 import { readOrchestratorSeatFileOrNull } from "@/lib/orchestrator/seats";
 import { lastScannedFiles } from "@/lib/scanner/scanCache";
 import { loadTasksForList } from "@/lib/tasks/store";
@@ -40,18 +41,73 @@ type FeedSources = {
   canonical?: (project: string) => string;
   seatRevision?: () => string;
 };
-function rowFor(file: FileEntry, tasks: ReturnType<typeof loadTasksForList>, projects: ReadonlySet<string>,
-  snapshot: FeedSnapshot, byPath: Map<string, RegistryFile["conversations"][string]>,
-  pipelines: readonly Pipeline[], seats: ReadonlyMap<string, string>, canonical: (project: string) => string): AgentRow | null {
+type FeedTask = ReturnType<typeof loadTasksForList>[number];
+type TaskMatch = { task: FeedTask; order: number };
+const firstTask = (left: TaskMatch | undefined, right: TaskMatch | undefined) =>
+  !left ? right : !right || left.order < right.order ? left : right;
+
+/** Preserve tasks.find order for id/path ties and pipeline task bindings. */
+function taskLookup(tasks: readonly FeedTask[]) {
+  const conversations = new Map<string, TaskMatch>();
+  const paths = new Map<string, TaskMatch>();
+  const ids = new Map<string, TaskMatch>();
+  tasks.forEach((task, order) => {
+    const match = { task, order };
+    if (!ids.has(task.id)) ids.set(task.id, match);
+    for (const assignment of task.assignments) {
+      if (typeof assignment.conversationId === "string" && !conversations.has(assignment.conversationId)) conversations.set(assignment.conversationId, match);
+      if (typeof assignment.path === "string" && !paths.has(assignment.path)) paths.set(assignment.path, match);
+    }
+  });
+  const bound = new Map<Pipeline, FeedTask | undefined>();
+  return {
+    assigned: (id: string | undefined, path: string) => firstTask(id === undefined ? undefined : conversations.get(id), paths.get(path))?.task,
+    pipeline: (pipeline: Pipeline) => {
+      if (!bound.has(pipeline)) {
+        let first: TaskMatch | undefined;
+        for (const id of pipeline.taskIds) first = firstTask(first, ids.get(id));
+        bound.set(pipeline, first?.task);
+      }
+      return bound.get(pipeline);
+    },
+  };
+}
+
+/** SQLite selects only requested paths; plain snapshots build one path map.
+    Last owner wins as before, while any owner's newest generation makes a
+    path current for duplicate-transcript selection. */
+function conversationLookup(snapshot: FeedSnapshot) {
+  type Match = { conversation: RegistryFile["conversations"][string] | undefined; current: boolean };
+  const byPath = new Map<string, Match>();
+  const indexed = registryHasPathIndex(snapshot);
+  if (!indexed) for (const conversation of Object.values(snapshot.conversations)) {
+    const current = conversation.generations.at(-1)?.path;
+    for (const path of [...conversation.generations.map(generation => generation.path), ...conversation.continuityPaths ?? []]) {
+      byPath.set(path, { conversation, current: path === current || byPath.get(path)?.current === true });
+    }
+  }
+  return (path: string): Match => {
+    let match = byPath.get(path);
+    if (!match) {
+      const owners = indexed ? registryConversationsForPath(snapshot, path) : [];
+      match = { conversation: owners.at(-1), current: owners.some(owner => owner.generations.at(-1)?.path === path) };
+      byPath.set(path, match);
+    }
+    return match;
+  };
+}
+
+function rowFor(file: FileEntry, tasks: ReturnType<typeof taskLookup>, projects: ReadonlySet<string>,
+  snapshot: FeedSnapshot, conversation: RegistryFile["conversations"][string] | undefined,
+  pipelines: ReadonlyMap<string, Pipeline>, seats: ReadonlyMap<string, string>, canonical: (project: string) => string): AgentRow | null {
   if (!AGENT_ENGINES.has(file.engine)) return null;
-  const conversation = byPath.get(file.path) ?? (file.conversationId ? snapshot.conversations[file.conversationId] : undefined);
   const conversationId = conversation?.id ?? file.conversationId;
   const identity = conversationId ?? file.path;
   if (!identity) return null;
-  const task = tasks.find((item) => item.assignments.some((assignment) => typeof conversationId === "string" && typeof assignment.conversationId === "string" && assignment.conversationId === conversationId || assignment.path === file.path));
+  const task = tasks.assigned(conversationId, file.path);
   const membership = (conversationId ? snapshot.memberships[conversationId] : undefined)?.find((item) => item.kind === "pipeline" && item.containerId && item.stageId);
-  const pipeline = membership ? pipelines.find((item) => item.id === membership.containerId) : null;
-  const boundTask = task ?? (pipeline ? tasks.find((item) => pipeline.taskIds.includes(item.id)) : undefined);
+  const pipeline = membership ? pipelines.get(membership.containerId!) : null;
+  const boundTask = task ?? (pipeline ? tasks.pipeline(pipeline) : undefined);
   const p = canonical(boundTask?.project ?? file.project);
   const seat = !!conversationId && seats.get(p) === conversationId;
   const role = safeId(conversation?.agentRole ?? (conversationId ? snapshot.lineageEdges[conversationId]?.role : undefined));
@@ -136,23 +192,36 @@ export class AgentFeed {
     const snapshot = projects.size > 0 && (files?.length || seatRows.length)
       ? this.registrySources.snapshot?.() ?? agentRegistry().readOnlySnapshot()
       : { conversations: {}, memberships: {}, lineageEdges: {} };
-    const canonical = this.registrySources.canonical ?? canonicalProject;
-    const byPath = new Map<string, RegistryFile["conversations"][string]>();
-    for (const conversation of Object.values(snapshot.conversations)) {
-      for (const generation of conversation.generations) byPath.set(generation.path, conversation);
-      for (const path of conversation.continuityPaths ?? []) byPath.set(path, conversation);
-    }
+    const canonical = this.registrySources.canonical ?? (projects.size ? projectAliasResolver() : (project: string) => project);
+    const resolvePath = conversationLookup(snapshot);
     const seats = new Map<string, string>(seatRows.flatMap(seat => typeof seat.conversationId === "string" ? [[canonical(seat.project), seat.conversationId] as [string, string]] : []));
+    const seatIds = new Set([...seats].filter(([project]) => projects.has(project)).map(([, id]) => id));
+    const seatPaths = new Set<string>();
+    for (const id of seatIds) {
+      const conversation = snapshot.conversations[id];
+      if (conversation) for (const path of [...conversation.generations.map(generation => generation.path), ...conversation.continuityPaths ?? []]) seatPaths.add(path);
+    }
+    const candidates = projects.size ? (files ?? []).filter(file => {
+      if (!AGENT_ENGINES.has(file.engine)) return false;
+      const at = file.lastAgentWorkAt ?? file.mtime * 1000;
+      return !(file.proc !== "running" && Date.now() - at > 86_400_000
+        && !seatIds.has(file.conversationId ?? "") && !seatPaths.has(file.path));
+    }) : [];
+    const taskFor = taskLookup(candidates.length ? tasks : []);
+    const pipelineById = new Map<string, Pipeline>();
+    for (const pipeline of pipelines ?? []) if (!pipelineById.has(pipeline.id)) pipelineById.set(pipeline.id, pipeline);
     const next = new Map<string, AgentRow>();
-    const currentPaths = new Set(Object.values(snapshot.conversations).flatMap(conversation => conversation.generations.at(-1)?.path ?? []));
     const selectedPaths = new Map<string, string>();
-    for (const file of files ?? []) {
-      const row = rowFor(file, tasks, projects, snapshot, byPath, pipelines ?? [], seats, canonical);
+    for (const file of candidates) {
+      const matched = resolvePath(file.path);
+      const conversation = matched.conversation ?? (file.conversationId ? snapshot.conversations[file.conversationId] : undefined);
+      const row = rowFor(file, taskFor, projects, snapshot, conversation, pipelineById, seats, canonical);
       if (row) {
         const previous = next.get(row.k);
         const previousPath = selectedPaths.get(row.k);
-        if (!previous || Number(currentPaths.has(file.path)) > Number(currentPaths.has(previousPath ?? ""))
-          || currentPaths.has(file.path) === currentPaths.has(previousPath ?? "") && row.at > previous.at) {
+        const previousCurrent = previousPath === undefined ? false : resolvePath(previousPath).current;
+        if (!previous || Number(matched.current) > Number(previousCurrent)
+          || matched.current === previousCurrent && row.at > previous.at) {
           next.set(row.k, row); selectedPaths.set(row.k, file.path);
         }
         if (file.proc !== "running" && !row.seat) this.expiresAt = Math.min(this.expiresAt, row.at + 86_400_000);

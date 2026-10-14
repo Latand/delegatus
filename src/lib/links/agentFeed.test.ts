@@ -58,6 +58,70 @@ test("receiver drops a row for a project outside this link", () => {
   expect(remoteAgents(a)).toEqual([]);
 });
 
+test("a peer refresh reads task assignments once across all scanned agents", () => {
+  const count = 240;
+  let assignmentReads = 0;
+  const tasks = Array.from({ length: count }, (_, n) => ({
+    id: `task-${n}`, project: a, chosen: false,
+    get assignments() { assignmentReads++; return [{ path: `/unrelated/${n}.jsonl` }]; },
+  }));
+  const files = Array.from({ length: count }, (_, n) => file(n));
+  const feed = new AgentFeed("assignment-budget", () => files, () => tasks as never, () => [], () => () => false,
+    { snapshot: () => ({ conversations: {}, memberships: {}, lineageEdges: {} }), seats: () => [], canonical: p => p });
+  const page = feed.page(null, projects);
+  expect(page.rows).toHaveLength(50);
+  console.info("peer task assignment reads", assignmentReads);
+  expect(assignmentReads).toBeLessThanOrEqual(count * 2);
+});
+
+test("a peer with no shared projects reads no agent assignments or registry", () => {
+  const tasks = [{ project: a, get assignments(): never[] { throw new Error("unshared task assignments must stay unread"); } }];
+  const feed = new AgentFeed("no-shared-projects", () => [file(1)], () => tasks as never, () => [], () => () => false,
+    { snapshot: () => { throw new Error("unshared registry must stay unread"); }, seats: () => [] });
+  expect(feed.page(null, new Set()).rows).toEqual([]);
+});
+
+test("expired non-seat agents need no task assignments", () => {
+  const old = { ...file(1, a, "done"), lastAgentWorkAt: timestamp - 172_800_000 };
+  const tasks = [{ project: a, get assignments(): never[] { throw new Error("expired agents need no task lookup"); } }];
+  const feed = new AgentFeed("expired", () => [old], () => tasks as never, () => [], () => () => false,
+    { snapshot: () => ({ conversations: {}, memberships: {}, lineageEdges: {} }), seats: () => [] });
+  expect(feed.page(null, projects).rows).toEqual([]);
+});
+
+test("task attribution preserves first task order across id/path ties and pipeline bindings", () => {
+  const first = file(501);
+  const second = file(502);
+  const tasks = [
+    { id: "path-first", project: a, assignments: [{ path: first.path }] },
+    { id: "id-second", project: b, assignments: [{ conversationId: first.conversationId }] },
+    { id: "pipeline-first", project: a, assignments: [] },
+    { id: "pipeline-second", project: b, assignments: [] },
+  ];
+  const pipeline = { id: "pipeline", taskIds: ["pipeline-second", "pipeline-first"], stages: [], runs: [] };
+  const feed = new AgentFeed("task-order", () => [first, second], () => tasks as never, () => [pipeline] as never, () => () => false,
+    { snapshot: () => ({ conversations: {}, lineageEdges: {}, memberships: {
+      [second.conversationId!]: [{ kind: "pipeline", containerId: "pipeline", stageId: "build" }],
+    } }) as never, seats: () => [], canonical: p => p });
+  const rows = feed.page(null, projects).rows as AgentRow[];
+  expect(rows.map(row => row.task).sort()).toEqual(["path-first", "pipeline-first"]);
+  expect(rows.every(row => row.p === a)).toBe(true);
+});
+
+test("last path owner and any owner's current-generation priority survive overlapping paths", () => {
+  const shared = { ...file(601), path: "/shared.jsonl", model: "shared", lastAgentWorkAt: timestamp + 1 };
+  const current = { ...file(602), path: "/current.jsonl", model: "current", lastAgentWorkAt: timestamp };
+  const snapshot = { conversations: {
+    earlier: { id: "earlier", generations: [{ path: shared.path }] },
+    later: { id: "later", generations: [{ path: shared.path }, { path: current.path }] },
+  }, memberships: {}, lineageEdges: {} };
+  const feed = new AgentFeed("overlap", () => [shared, current], () => [], () => [], () => () => false,
+    { snapshot: () => snapshot as never, seats: () => [], canonical: p => p });
+  const rows = feed.page(null, projects).rows as AgentRow[];
+  expect(rows).toHaveLength(1);
+  expect(rows[0]?.m).toBe("shared");
+});
+
 test("supported agent engines publish only neutral bounded summaries", () => {
   const snapshot = (["claude", "codex", "copilot", "openclaw", "shell"] as const).map((engine, index) => ({ ...file(index + 900), engine, model: `model-${engine}` })) as FileEntry[];
   const rows = new AgentFeed("engines", () => snapshot, () => []).page(null, projects).rows as AgentRow[];
