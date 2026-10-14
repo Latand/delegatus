@@ -1,6 +1,6 @@
 import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
-import { loadPipelinesForRetirement } from "@/lib/pipelines/store";
+import { findPipelineRecord, loadPipelinesForRetirement } from "@/lib/pipelines/store";
 import { pipelineHostHasLiveWork, providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
 import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
@@ -263,6 +263,15 @@ function hostResolver(
     if (!conversation || !generation) return null;
     return hosts.get(sessionKeyId({ engine: conversation.engine, sessionId: generation.id })) ?? null;
   };
+}
+
+/** Provider send keys name the eight-hex lane id allocated at admission.
+ * Read that lane afresh, including archived closes, before dispatch. */
+function providerContinuationClosed(operationId: string): boolean {
+  const match = /^stage-provider-([0-9a-f]{8})-/u.exec(operationId);
+  if (!match) return false;
+  const pipeline = findPipelineRecord(match[1]);
+  return !pipeline || !!pipeline.closedAt || pipeline.state === "closed" || !!pipeline.activationCloseRequested;
 }
 
 /**
@@ -951,8 +960,10 @@ export async function bindStructuredDeliveryQueue(
         const receipt = operationId.startsWith("spawn_message_") ? snapshot.receipts[operationId.slice("spawn_message_".length)] : null;
         return !ownerRelaySpawnAuthorized(receipt?.clientAttemptId) || sendIsSettled(snapshot, operationId);
       },
+      providerContinuationClosed,
       diagnosticError: (...args: unknown[]) => spawnDiagnosticErrorForRegistry(registry, ...args),
       authorizeDispatch: (operationId: string) => {
+        if (providerContinuationClosed(operationId)) throw new StructuredSendRefusedError("pipeline closed before provider continuation dispatch");
         if (!operationId.startsWith("spawn_message_")) return;
         const receipt = registry.readOnlySnapshot().receipts[operationId.slice("spawn_message_".length)];
         if (!ownerRelaySpawnAuthorized(receipt?.clientAttemptId))

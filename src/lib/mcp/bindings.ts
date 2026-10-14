@@ -2295,6 +2295,7 @@ function closeReportCounts(report: PipelineCloseReport) {
     reviewers: report.reviewers.length,
     acknowledged: report.acknowledged.length,
     notes: report.notes.length,
+    continuations: report.continuations?.length ?? 0,
     uncommitted: report.worktree?.uncommitted.length ?? 0,
   };
   return {

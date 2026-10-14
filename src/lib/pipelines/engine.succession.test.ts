@@ -1,4 +1,4 @@
-import { expect, test, spawnSync, fs, path, AccountAuthenticationRequiredError, selectProjectAccount, IDLE_TURN_QUIET_MS, defaultPipelinePorts, tickPipelines, AgentRegistry, setAgentRegistryForTests, registerPipelineTick, loadPipelines, savePipelines, pipelineIdentity, pipelineRevision, durableStageTurnEvidence, loadTasks, saveTasks, patchPipeline, ORIGIN_MAIN_SHA, entry, harness, create, withRuntimeSnapshot, forbiddenSleep, PASS_TEXT, pinStageHead, runningStructuredStage, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, providerQuotaRecord, stampPipelinePrompt, BUDGET_STAGES, movingHeadHarness, critiqueRound, buildRound, continueReview, movingHead, seedLegacyTerminalRecheck, driveLegacyTerminalRecheck, HOST_UNAVAILABLE, failedReceipt, stagedRecoveryHarness, recoveryReport, expectProviderParkAt, providerRecoveryHarness } from "./engine.fixture";
+import { expect, test, spawnSync, fs, path, AccountAuthenticationRequiredError, selectProjectAccount, IDLE_TURN_QUIET_MS, defaultPipelinePorts, tickPipelines, AgentRegistry, setAgentRegistryForTests, registerPipelineTick, engineModule, loadPipelines, savePipelines, pipelineIdentity, pipelineRevision, durableStageTurnEvidence, loadTasks, saveTasks, patchPipeline, ORIGIN_MAIN_SHA, entry, harness, create, withRuntimeSnapshot, forbiddenSleep, PASS_TEXT, pinStageHead, runningStructuredStage, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, providerQuotaRecord, stampPipelinePrompt, BUDGET_STAGES, movingHeadHarness, critiqueRound, buildRound, continueReview, movingHead, seedLegacyTerminalRecheck, driveLegacyTerminalRecheck, HOST_UNAVAILABLE, failedReceipt, stagedRecoveryHarness, recoveryReport, expectProviderParkAt, providerRecoveryHarness } from "./engine.fixture";
 import type { PipelinePorts } from "./engine.fixture";
 
 
@@ -1863,6 +1863,10 @@ test.each([
     // A new Viewer reads the pending intent before applying operator control.
     const requestedAt = loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.continuationRequestedAt;
     expect((await patchPipeline(loadPipelines()[0]!.id, { action }, { ...f.h.ports })).error).toBeUndefined();
+    if (action === "close") {
+      f.h.ports.stageHostResident = async () => true;
+      await engineModule.drainStageActivations(f.h.ports);
+    }
     expect(journal.transitionOperation(operationId, "delivering").receipt).toMatchObject({ status: "failed", reason: "idle-continuation-pre-execution-refused" });
     expect(requestedAt).toBeDefined();
   } finally { journal.close(); }

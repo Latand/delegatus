@@ -535,6 +535,9 @@ function isCloseCustody(pipeline: Partial<Pipeline>): boolean {
     && (plan.phase === "settled") === (report.status === "settled")
     && [report.pending, report.stopped, report.alreadyStopped, report.unconfirmed, report.acknowledged, report.stillRunning, report.notes]
       .every((items) => Array.isArray(items) && items.every(host))
+    && (report.continuations === undefined || (Array.isArray(report.continuations) && report.continuations.every(item => host(item)
+      && ["pending", "cancelled", "moot"].includes(item.status) && (item.error === undefined || typeof item.error === "string"))
+      && (report.status !== "settled" || report.continuations.every(item => item.status !== "pending"))))
     && report.unconfirmed.every((item) => isNullableString(item.operationId) && typeof item.detail === "string")
     && report.stillRunning.every((item) => typeof item.error === "string")
     && report.acknowledged.every((item) => typeof item.detail === "string")

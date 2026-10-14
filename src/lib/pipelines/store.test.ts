@@ -995,7 +995,8 @@ test("pending close custody retains publication ownership and stays out of the a
     record.cursor = null;
     record.closedAt = "2026-07-02T00:00:00.000Z";
     record.closeTeardown = { id: "close-obligation", phase: "pending", waitingForActivation: false, acknowledgeHosts: false, flow: null };
-    record.closeReport = { status: "pending", pending: [], stopped: [], alreadyStopped: [], unconfirmed: [], acknowledged: [],
+    record.closeReport = { status: "pending", pending: [], continuations: [{ stageId: "build", attempt: 1,
+      conversationId: "conversation_close", agentPath: null, paneId: null, status: "pending", error: "runtime unavailable" }], stopped: [], alreadyStopped: [], unconfirmed: [], acknowledged: [],
       reviewers: [], stillRunning: [], notes: [], worktree: null };
     persist([record]);
   });
@@ -1003,6 +1004,8 @@ test("pending close custody retains publication ownership and stays out of the a
   expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(0);
   const borrowed = loadPipelines()[0]!;
   borrowed.closeTeardown!.waitingForActivation = true;
+  borrowed.closeReport!.continuations![0]!.status = "moot";
+  expect(loadPipelines()[0]!.closeReport!.continuations).toMatchObject([{ status: "pending", error: "runtime unavailable" }]);
   borrowed.closeReport!.notes.push({ stageId: "build", attempt: 1, conversationId: null, agentPath: null, paneId: null, detail: "borrowed copy" });
   expect(loadPipelines()[0]!.closeTeardown!.waitingForActivation).toBeFalse();
   expect(loadPipelines()[0]!.closeReport!.notes).toEqual([]);
@@ -1010,11 +1013,13 @@ test("pending close custody retains publication ownership and stays out of the a
     const record = pipelines.find((item) => item.id === owner.id)!;
     record.closeTeardown!.phase = "settled";
     record.closeReport!.status = "settled";
+    record.closeReport!.continuations![0]!.status = "cancelled";
+    delete record.closeReport!.continuations![0]!.error;
     persist([record]);
   });
   expect(pipelineDeliveryLookup({ ...deliveryTarget, active: true })).toBeNull();
   expect(await archiveSettledPipelines(Date.parse("2026-08-01T00:00:00Z"))).toBe(1);
-  expect(findPipelineRecord(owner.id)?.closeReport?.status).toBe("settled");
+  expect(findPipelineRecord(owner.id)?.closeReport).toMatchObject({ status: "settled", continuations: [{ status: "cancelled" }] });
 }));
 
 test("startup admission warns with its phase when one hold exceeds 100 ms", async () => isolatedDelivery(async () => {

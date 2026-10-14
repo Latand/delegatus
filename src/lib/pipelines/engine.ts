@@ -11110,7 +11110,7 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
           }
         }
         retainCloseHosts(live, report, plan);
-        if (report.pending.length) {
+        if (report.pending.length || report.continuations?.some(item => item.status === "pending")) {
           report.status = "pending";
           if (plan.phase === "settled") plan.phase = "pending";
         }
@@ -11127,6 +11127,28 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
       });
       const deadline = ports.monotonicNow() + CLOSE_TEARDOWN_BUDGET_MS;
       let processed = 0;
+      for (const target of report.continuations ?? []) {
+        if (target.status !== "pending") continue;
+        if (processed++ > 0 && ports.monotonicNow() >= deadline) break;
+        try {
+          const gone = !(await ports.stageHostResident(target))
+            && (!target.paneId || !(await ports.paneAgentAlive(target.paneId)));
+          if (gone) target.status = "moot";
+          else {
+            if (!ports.invalidateProviderContinuation) throw new Error("provider continuation cancellation is unavailable");
+            await ports.invalidateProviderContinuation(target.conversationId!);
+            target.status = "cancelled";
+          }
+          delete target.error;
+        } catch (error) { target.error = String(error); }
+        await checkpoint();
+      }
+      if (report.continuations?.some(item => item.status === "pending")) {
+        plan.phase = "pending";
+        delete plan.owner;
+        await checkpoint();
+        continue;
+      }
       for (const target of [...report.pending]) {
         if (processed++ > 0 && ports.monotonicNow() >= deadline) break;
         const attempt = runFor(claimed, target.stageId)?.attempts.find((item) => item.n === target.attempt);
@@ -12790,10 +12812,6 @@ export async function patchPipeline(
         persist();
         return { pipeline };
       }
-      if ((attempt?.providerWait?.actionAt || attempt?.providerWait?.continuationRequestedAt) && attempt.conversationId) {
-        try { await ports.invalidateProviderContinuation?.(attempt.conversationId); }
-        catch (error) { return { error: `automatic continuation cancellation failed: ${String(error)}`, status: 503 }; }
-      }
       for (const run of pipeline.runs) for (const item of run.attempts) {
         const pendingSwitch = openRuntimeSwitch(item);
         if (pendingSwitch) { pendingSwitch.phase = "superseded"; pendingSwitch.settledAt = ports.now(); pendingSwitch.outcome = "pipeline closed"; }
@@ -12803,14 +12821,21 @@ export async function patchPipeline(
       // Freeze recorded identities before releasing the collection. A permitted
       // activation appends its original launch only after reconciliation.
       const pending = launchedStageHosts(pipeline).map(({ target }) => target);
-      pipeline.closeReport = { status: "pending", pending, stopped: [], alreadyStopped: [],
+      const continuations: NonNullable<PipelineCloseReport["continuations"]> = [];
+      for (const run of pipeline.runs) for (const item of run.attempts) {
+        if ((item.providerWait?.actionAt || item.providerWait?.continuationRequestedAt) && item.conversationId) {
+          continuations.push({ stageId: run.stageId, attempt: item.n, conversationId: item.conversationId,
+            agentPath: item.agentPath, paneId: item.paneId, launchId: item.launchId, status: "pending" });
+        }
+        cancelProviderStageRetry(pipeline, item, "automatic provider retry cancelled by close");
+      }
+      pipeline.closeReport = { status: "pending", pending, continuations, stopped: [], alreadyStopped: [],
         unconfirmed: [], acknowledged: [], reviewers: [], stillRunning: [], notes: [], worktree: null };
       pipeline.closeTeardown = {
         id: crypto.randomUUID(), phase: "pending", waitingForActivation: activations.length > 0,
         acknowledgeHosts: req.acknowledgeHosts === true,
         flow: attempt?.flowId && stage ? { id: attempt.flowId, stageId: stage.id, attempt: attempt.n } : null,
       };
-      if (attempt) cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by close");
       retainCloseHosts(pipeline);
       if (stage && (!attempt || (pipeline.cursor?.state === "pending" && TERMINAL_ATTEMPT_STATES.has(attempt.state)))) newAttempt(pipeline, stage);
       delete pipeline.activationCloseRequested;

@@ -915,6 +915,8 @@ export type PipelineStageHostRef = {
  * was burning quota; a non-empty `stillRunning` keeps the closed lane visible.
  */
 export type PipelineCloseReport = {
+  /** Optional on close receipts written before continuation custody existed. */
+  continuations?: Array<PipelineStageHostRef & { status: "pending" | "cancelled" | "moot"; error?: string }>;
   /** Recorded hosts still awaiting teardown. */
   pending: PipelineStageHostRef[];
   /** Pending while launch reconciliation, host, flow or worktree work is owed. */

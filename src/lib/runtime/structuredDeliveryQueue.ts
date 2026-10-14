@@ -47,6 +47,8 @@ interface StructuredOperationStatus {
 }
 
 export interface StructuredDeliveryQueuePort {
+  /** Durable lane close wins over a queued provider send before host recovery. */
+  providerContinuationClosed?(operationId: string): boolean;
   /** Re-read the idle revision after claiming an automatic continuation. */
   idleContinuationCurrent?(conversationId: string, fence: import("./contracts").RuntimeIdleKillFence): Promise<boolean>;
   /** Pause durable effects while an automatic release handoff owns admission. */
@@ -1841,6 +1843,17 @@ export class StructuredDeliveryQueue {
       if (settled.value) {
         await this.terminalizeUnverified(effect.operationId, DELIVERY_FENCED_BY_SETTLEMENT);
         continue;
+      }
+      if (effect.kind === "send" && effect.onlyIfIdle && this.port.providerContinuationClosed) {
+        const closed = await readEvidence(() => this.port.providerContinuationClosed!(effect.operationId));
+        if (!closed.readable) {
+          this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: "provider continuation ownership is unavailable" });
+          return this.fenceUnavailable();
+        }
+        if (closed.value) {
+          await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "pipeline closed before provider continuation dispatch" });
+          continue;
+        }
       }
       const host = this.resolveHost(effect.conversationId);
       const heldForUpdate = () => (effect.kind === "send" || effect.kind === "steer") && effect.origin?.kind === "agent"

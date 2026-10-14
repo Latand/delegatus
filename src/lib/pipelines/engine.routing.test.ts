@@ -2179,3 +2179,160 @@ test("an idle host cut by a restart is still called a restart after the stop's o
   expect(lane.runs[0]!.attempts[0]!.error).toBe("interrupted by a Delegatus restart; replaced by a fresh stage attempt");
   expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "restart" });
 });
+
+
+test.each(["paused", "needs_decision"] as const)("close persists %s provider continuation teardown while the runtime host is unavailable (#2829)", async state => {
+  const h = harness();
+  const pipeline = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const stored = loadPipelines()[0]!;
+  const attempt = stored.runs[0]!.attempts[0]!;
+  stored.state = state;
+  attempt.state = state === "paused" ? "running" : "needs_decision";
+  attempt.paneId = null;
+  attempt.providerWait = { condition: { kind: "turn_cut", scope: null, resetLabel: null, label: "cut" },
+    text: "cut", accountId: null, turnTs: 1_000_000, tries: 0, startedAt: h.ports.now(), resumeAt: h.ports.now(),
+    resetsAt: null, ...(state === "paused" ? { actionAt: h.ports.now(), retryCancelled: true } : { continuationRequestedAt: h.ports.now() }) };
+  savePipelines([stored]);
+  let reachable = false;
+  let cancellations = 0;
+  let stops = 0;
+  h.ports.resumeSeveredTurn = async () => { throw new Error("a closed lane requested a continuation"); };
+  h.ports.stageHostResident = async () => state === "paused";
+  h.ports.invalidateProviderContinuation = async () => {
+    cancellations++;
+    if (!reachable) throw new Error("runtime host is unavailable");
+  };
+  h.ports.stopStageAgent = async () => {
+    stops++;
+    if (!reachable) throw new Error("runtime host is unavailable");
+    return { outcome: "stopped" };
+  };
+  const { viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const { MemoryMcpReceiptStore, createMcpToolService } = await import("@/lib/mcp/server");
+  const service = createMcpToolService(viewerMcpBindings(undefined, undefined, {
+    readPipelineRecord: engineModule.getPipeline,
+    patchPipeline: (id: string, request: Parameters<typeof patchPipeline>[1]) => patchPipeline(id, request, h.ports),
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_controller", role: "orchestrator" }),
+  } as never), new MemoryMcpReceiptStore());
+  const closeArgs = { clientRequestId: `close-host-down-${state}`, pipelineId: pipeline.id, action: "close" };
+  const first = await service.callTool("pipeline_action", closeArgs);
+  expect(first).toMatchObject({ ok: true, state: "closed", close: { status: "pending", continuations: 1 } });
+  const replay = await service.callTool("pipeline_action", closeArgs);
+  expect(replay).toMatchObject({ ok: true, replayed: true, closedAt: first.ok ? first.closedAt : undefined });
+  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  expect(closed.error).toBeUndefined();
+  expect(closed.pipeline?.state).toBe("closed");
+  expect(closed.pipeline?.closedAt).toBeString();
+  expect(closed.close?.status).toBe("pending");
+  expect(cancellations).toBe(0);
+  const closeId = closed.pipeline!.closeTeardown!.id;
+  await engineModule.drainStageActivations(h.ports);
+  expect(loadPipelines()[0]!.state).toBe("closed");
+  const report = loadPipelines()[0]!.closeReport!;
+  if (state === "paused") {
+    expect(report.status).toBe("pending");
+    expect(report.pending).toHaveLength(1);
+    expect(report.continuations).toMatchObject([{ status: "pending", error: "Error: runtime host is unavailable" }]);
+    expect(stops).toBe(0);
+  } else {
+    expect(report.continuations).toMatchObject([{ status: "moot" }]);
+    expect(cancellations).toBe(0);
+  }
+  reachable = true;
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.closeReport).toMatchObject({ status: "settled", pending: [],
+    continuations: [{ status: state === "paused" ? "cancelled" : "moot" }] });
+  await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.closeTeardown!.id).toBe(closeId);
+  expect(h.spawnInputs).toHaveLength(1);
+  expect(h.calls.filter(call => call.startsWith("resume:"))).toHaveLength(0);
+  expect(cancellations).toBe(state === "paused" ? 2 : 0);
+  expect(await service.callTool("pipeline_action", closeArgs)).toMatchObject({ ok: true, replayed: true, close: { status: "pending" } });
+  expect(loadPipelines()[0]!.closeReport?.status).toBe("settled");
+  for (const action of ["start", "resume", "retry-stage", "continue-review"] as const) {
+    expect((await patchPipeline(pipeline.id, { action }, h.ports)).error).toBeString();
+  }
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs).toHaveLength(1);
+});
+
+
+test.each(["before-drain", "after-claim"] as const)("a queued provider continuation cannot dispatch after close when the runtime returns (%s, #2829)", async timing => {
+  const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
+  const { StructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryQueue");
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const h = harness();
+  const lane = await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const stored = loadPipelines()[0]!;
+  const attempt = stored.runs[0]!.attempts[0]!;
+  const conversationId = attempt.conversationId!;
+  const turnTs = 1_000_000;
+  attempt.paneId = null;
+  attempt.providerWait = { condition: { kind: "turn_cut", scope: null, resetLabel: null, label: "cut" }, text: "cut",
+    accountId: null, turnTs, tries: 0, startedAt: h.ports.now(), resumeAt: h.ports.now(), resetsAt: null,
+    continuationRequestedAt: h.ports.now() };
+  savePipelines([stored]);
+  h.ports.stageHostResident = async () => true;
+  h.ports.invalidateProviderContinuation = async () => { throw new Error("runtime host is unavailable"); };
+  const operationId = `stage-provider-${lane.id}-${stored.cursor!.stageId}-1-${turnTs}`;
+  const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, `close-queued-${timing}.sqlite`), { structuredHosts: true });
+  journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+    conversationId, sessionKey: { engine: "codex", sessionId: "queued-generation" }, hostKind: "codex-app-server",
+    host: "hosted", turn: "idle", activeTurnId: null, writerClaim: "fixture:1", attentionIds: [],
+    capabilities: { steer: true, structuredAttention: true },
+  } });
+  const session = journal.readSession({ conversationId })!;
+  const fence = { revision: session.revision, writerClaim: session.writerClaim! };
+  journal.executeOperation({ kind: "send", conversationId, operationId, idempotencyKey: operationId, text: "Continue",
+    policy: "queue", turnId: null, onlyIfIdle: fence });
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `close-queue-registry-${timing}.json`));
+  const client = { snapshot: async () => ({ filesRevision: 0, sessions: [] }), effectBatch: async () => [], append: async () => {} } as unknown as import("@/lib/runtime/client").RuntimeHostClient;
+  let sends = 0;
+  let recoveries = 0;
+  try {
+    await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true, watchdogIntervalMs: 0,
+      settlementSweepMs: 0, hostlessSettleIntervalMs: 0 });
+    // Use the production controller's durable and last-dispatch guards.
+    const controller = (process as typeof process & { __llvStructuredDeliveryController: { activeQueue: { port: import("@/lib/runtime/structuredDeliveryQueue").StructuredDeliveryQueuePort } } }).__llvStructuredDeliveryController;
+    const production = controller.activeQueue.port;
+    expect(production.providerContinuationClosed?.(operationId)).toBe(false);
+    expect(production.providerContinuationClosed?.("operator-message")).toBe(false);
+    const queue = new StructuredDeliveryQueue({
+      effects: async () => journal.effectBatch(100, ["runtime.send"]),
+      status: async id => journal.operationResult(id)?.receipt ?? null,
+      hostClaim: () => "fixture:1",
+      settled: production.settled,
+      providerContinuationClosed: production.providerContinuationClosed,
+      authorizeDispatch: production.authorizeDispatch,
+      idleContinuationCurrent: async () => true,
+      transition: async (id, status, details, options) => {
+        journal.transitionOperation(id, status, details, options);
+        if (timing === "after-claim" && status === "delivering") await patchPipeline(lane.id, { action: "close" }, h.ports);
+      },
+    }, () => ({
+      attach: () => ({ async *[Symbol.asyncIterator]() {} }),
+      health: async () => ({ status: "idle", sessionKey: "queued-generation", endpoint: "fixture", pid: 1,
+        processStartIdentity: "fixture", eventCursor: 0, protocolVersion: "fixture", activeTurnRef: null,
+        pendingAttention: [], activeFlags: [], account: null }),
+      send: async () => { sends++; return { outcome: "turn-started", turnId: "forbidden-turn" }; },
+      interrupt: async () => {}, answer: async () => {}, release: async () => {},
+    }), undefined, undefined, async () => { recoveries++; return false; });
+    if (timing === "before-drain") await patchPipeline(lane.id, { action: "close" }, h.ports);
+    await queue.drain();
+    await queue.drain();
+    expect(sends).toBe(0);
+    expect(recoveries).toBe(0);
+    expect(journal.operationResult(operationId)?.receipt.status).toBe("failed");
+    expect(loadPipelines()[0]!.state).toBe("closed");
+    expect(h.spawnInputs).toHaveLength(1);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+  }
+});
