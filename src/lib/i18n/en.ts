@@ -3629,6 +3629,8 @@ export const en = {
   "needs.clearedRule.operator-replied": "Delegatus: you replied in the conversation",
   "needs.clearedRule.resumed": "Delegatus: the agent ran again after the memory kill",
   "needs.clearedRule.stage-settled": "Delegatus: the stage settled and its lane carries the rest",
+  "needs.clearedRule.launch-relaunched": "Delegatus: a later assignment replaced the failed launch",
+  "needs.clearedRule.launch-task-done": "Delegatus: the failed launch's task is done",
   /* What a «Waiting for you» row asks of the operator, in one sentence: what
      to choose or do, and what happens next. */
   "needs.ask.decision": "Answer the orchestrator's question in its conversation; it carries on with your answer.",

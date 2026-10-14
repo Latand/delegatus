@@ -33,6 +33,10 @@ export const ATTENTION_SYSTEM_RULES = [
   /** The stage attempt that asked has settled, and its lane carries what is
       left to decide. */
   "stage-settled",
+  /** A later assignment replaced the failed launch on its task. */
+  "launch-relaunched",
+  /** The task that owned the failed launch finished. */
+  "launch-task-done",
 ] as const;
 export type AttentionSystemRule = typeof ATTENTION_SYSTEM_RULES[number];
 

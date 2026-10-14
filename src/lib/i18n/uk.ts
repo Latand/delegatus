@@ -3564,6 +3564,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "needs.clearedRule.operator-replied": "Delegatus: ви відповіли в розмові",
   "needs.clearedRule.resumed": "Delegatus: агент знову працює після нестачі пам’яті",
   "needs.clearedRule.stage-settled": "Delegatus: етап завершився, решту несе його процес",
+  "needs.clearedRule.launch-relaunched": "Delegatus: нове призначення замінило невдалий запуск",
+  "needs.clearedRule.launch-task-done": "Delegatus: задачу невдалого запуску завершено",
   "needs.ask.decision": "Дайте відповідь на запитання оркестратора в його розмові; він продовжить з вашою відповіддю.",
   "needs.ask.question": "Дайте відповідь на запитання агента в його розмові; він продовжить з вашим вибором.",
   "needs.ask.plan": "Схваліть план агента або попросіть змін у його розмові; роботу він почне лише після схвалення.",
