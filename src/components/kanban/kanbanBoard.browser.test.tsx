@@ -1,3 +1,4 @@
+import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { describe, expect } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -30844,5 +30845,76 @@ describe("operator decision forms: rejecting the task's prototype variants", () 
       }
       fs.writeFileSync("evidence/prototype-review/decision-rejection.json", JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); served.stop(); }
+  }, 300_000);
+});
+
+describe("stale working status", () => {
+  browserTest("stale working: desktop task counts only the live neighbor", async () => {
+    const root = path.resolve(".artifacts/stale-working/desktop");
+    fs.mkdirSync(root, { recursive: true });
+    const directory = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "stale-render-"));
+    const response = staleWorkingResponse(directory, Date.now());
+    const server = await serveEvidenceFixture(root, "src/components/kanban/issue1695Evidence.fixture.tsx", {
+      "/api/files": response.body, "/api/tasks": { tasks: response.body.tasks },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = { viewport: VIEWPORT };
+    try {
+      for (const [lang, scheme] of [["uk", "light"], ["uk", "dark"], ["en", "light"], ["en", "dark"]] as const) {
+        const out = path.join(root, `${lang}-${scheme}`);
+        fs.mkdirSync(out, { recursive: true });
+        const word = (key: Parameters<typeof translate>[1]) => translate(lang, key);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stale-working#p=atlas`, VIEWPORT, scheme, lang, "reduce", false);
+        try {
+          const surface = page.locator(card("stale-working"));
+          await surface.waitFor();
+          const quiet = surface.locator(`[data-member="${response.quiet.path}"]`);
+          const dead = surface.locator(`[data-member="${response.dead.path}"]`);
+          const live = surface.locator(`[data-member="${response.live.path}"]`);
+          await quiet.waitFor(); await dead.waitFor(); await live.waitFor();
+          expect(await surface.innerText()).toContain(word("kanban.motion.workingN").replace("{count}", "1"));
+          for (const row of [quiet, dead]) {
+            expect(await row.innerText()).not.toContain(word("kanban.memberState.working"));
+            expect(await row.locator('.bg-success, .animate-pulse, [data-card-status="running"]').count()).toBe(0);
+          }
+          expect(await surface.locator('[data-card-status="running"]').count()).toBe(1);
+          expect(await live.locator('[data-card-status="running"]').count()).toBe(1);
+          expect(await live.locator(".bg-success").count()).toBe(1);
+          /* The phone's words: «готово» for the launch whose turn ended, the
+             killed reading for the host that died over its open turn. */
+          expect(await quiet.locator(".state").innerText()).toContain(word("kanban.memberState.launchDone"));
+          expect(await dead.locator(".state").innerText()).toContain(word("kanban.memberState.killed"));
+          const reading: Record<string, unknown> = { quiet: await quiet.innerText(), dead: await dead.innerText(), live: await live.innerText() };
+          await surface.screenshot({ path: path.join(out, "task.png") });
+
+          const agentWindow = page.locator("[data-agent-window-frame]");
+          const scrim = page.locator("[data-agent-window-scrim]");
+          await live.click();
+          await agentWindow.locator('[data-turn-status="running"] [role="timer"]').waitFor();
+          expect(await agentWindow.locator('[data-turn-status="running"] [role="timer"]').count()).toBe(1);
+          await agentWindow.screenshot({ path: path.join(out, "live-reader.png") });
+          for (const [name, row, state] of [["quiet", quiet, "kanban.memberState.launchDone"], ["dead", dead, "kanban.memberState.killed"]] as const) {
+            await scrim.click({ position: { x: 2, y: 2 } });
+            await row.click();
+            await agentWindow.waitFor();
+            const header = agentWindow.locator(".ch-state").first();
+            await expect(header.innerText()).resolves.toContain(word(state));
+            /* A launch that is no longer live starts nothing: no pending chips,
+               no spinner, no launch id, no «the agent will start». */
+            expect(await agentWindow.locator('[data-turn-status="running"], [role="timer"]').count()).toBe(0);
+            expect(await agentWindow.locator("[data-launch-chips], .animate-spin").count()).toBe(0);
+            expect(await agentWindow.innerText()).not.toContain(response[name].spawn!.launchId.slice(0, 8));
+            const placeholder = await agentWindow.locator("textarea").first().getAttribute("placeholder");
+            expect(placeholder).not.toBe(word("composer.placeholderSpawn"));
+            await agentWindow.screenshot({ path: path.join(out, `${name}-reader.png`) });
+            reading[`${name}Window`] = { state: await header.innerText(), launchChips: 0, placeholder };
+          }
+          expect(pageErrors).toEqual([]);
+          readings[`${lang}-${scheme}`] = reading;
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/stale-working", { recursive: true });
+      fs.writeFileSync("evidence/stale-working/desktop.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); fs.rmSync(directory, { recursive: true, force: true }); }
   }, 300_000);
 });

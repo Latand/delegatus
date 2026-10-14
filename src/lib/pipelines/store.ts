@@ -1476,8 +1476,8 @@ export function loadPipelinesForList(): readonly Pipeline[] {
     (#1766). The default is the cap the attempt loop in the state store already
     imposed; `LLV_PIPELINE_LOCK_WAIT_MS` bounds it lower, which is what lets a
     test prove the wait cannot hang a request. The wait matters because the
-    lease is held across whole controller passes: a create issued while
-    pipelines provision waits here rather than refusing on contact. */
+    ordinary request mutations serialize their read and write. Controller
+    reconciliation uses short revision-checked checkpoints instead. */
 const DEFAULT_PIPELINE_LOCK_WAIT_MS = 30_000;
 
 export function pipelineLockWaitMs(): number {
@@ -1510,9 +1510,10 @@ export async function withPipelineControllerMutation<T>(
   mutate: (pipelines: Pipeline[], persist: {
     (): void;
     (records: readonly Pipeline[]): void;
-  }) => Promise<T> | T,
+  }, assertCurrent: (pipeline: Pipeline) => void) => Promise<T> | T,
+  observeHold?: (heldMs: number) => void,
 ): Promise<T> {
-  return withViewerOperation("pipelines.controller-mutation", () => pipelineStore().mutate(mutate, undefined, true));
+  return withViewerOperation("pipelines.controller-mutation", () => pipelineStore().reconcileSnapshot(mutate, observeHold));
 }
 
 /** Short startup state admission under the existing cross-process lease.

@@ -268,6 +268,9 @@ test("pressing it opens the orchestrator in the agent window, listed with the ot
 
   const list = agentWindow(host)!.querySelector<HTMLElement>(".aw-list")!;
   expect(segments(list).map((segment) => segment.dataset.openAgent)).toEqual([builder.conversationId, SEAT]);
+  const quiet = segments(list).find((segment) => segment.dataset.openAgent === builder.conversationId)!;
+  expect(quiet.querySelector("[data-open-agent-jump]")?.getAttribute("aria-label")).toContain(translate("en", "kanban.memberState.done"));
+  expect(quiet.textContent).not.toContain("kanban.memberState.conversation_");
   const row = segments(list).find((segment) => segment.dataset.openAgent === SEAT)!;
   expect(row.dataset.role).toBe("orchestrator");
   expect(row.querySelector(".or-name")?.textContent).toBe("Orchestrator");

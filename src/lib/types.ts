@@ -734,6 +734,11 @@ export interface LimitsProvenance {
   throttleAt?: string | null;
 }
 
+/** `activityReason` of a launch placeholder whose recorded host died over a
+    turn it never ended. Every row reads it the way it reads a transcript left
+    open by a dead host: as killed. */
+export const HOST_GONE_TURN_OPEN_REASON = "structured_spawn_host_gone_turn_open";
+
 export const LIMITS_RATE_LIMITED_REASON = "oauth-rate-limited";
 export const LIMITS_REAUTH_REQUIRED_REASON = "oauth-reauthentication-required";
 

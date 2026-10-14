@@ -188,8 +188,11 @@ export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000)
 
 /** The word a state is named by on the reader header, the rail and the tile:
     the dot's own words for an agent whose activity the scan knows («idle»,
-    «waiting on a check»), the row key's word otherwise. */
-export function rowStateWord(t: TFunction, row: { key: string; activity?: MobileRowState["activity"] }): string {
+    «waiting on a check»), the row key's word otherwise. A launch placeholder
+    that settled reads the phone's own finished word («готово»), so both
+    surfaces name the same launch the same way. */
+export function rowStateWord(t: TFunction, row: { key: string; activity?: MobileRowState["activity"]; settledLaunch?: boolean }): string {
+  if (row.key === "done" && row.settledLaunch) return t("kanban.memberState.launchDone");
   if (row.activity === "idle") return t("cardStatus.idle");
   if (row.activity === "checking") return t("cardStatus.checking");
   return t(`kanban.memberState.${row.key as MobileRowStateKey}`);

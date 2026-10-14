@@ -4,6 +4,7 @@ import { registeredHostForPath } from "@/lib/conversation/registeredHost";
 import { resumeEligibility, resumeSpecFor, type AgentEngine } from "@/lib/agent/cli";
 import type { AgentReconfiguration } from "@/lib/agent/reconfigure";
 import { agentRegistry, deliveryMayHaveArrived, REGISTRY_WRITER_BUSY, serviceTierForSpeed, type AgentRegistry, type AgentRegistryEntry, type RegistryConversation, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
 import type { HeldDelivery } from "@/lib/accounts/migration/contracts";
 import { accountManager, ProjectAccountRefusedError, resolveResumeAccountId } from "@/lib/accounts/manager";
 import { AccountProjectBindingsUnreadableError } from "@/lib/accounts/projectBindings";
@@ -522,6 +523,9 @@ export async function resumeConversation(
   } catch (error) {
     return failure(error);
   }
+  if (known?.agentRole === "curator") {
+    return failure("curator recovery is unavailable until its designated seat is admitted", 409);
+  }
   /* Pinned: the resumable transcript may have aged past the scan's recency
      cap — a conversation the operator can still open must stay resumable. */
   const entry = (await (overrides.listFiles ?? listFiles)({ pin: filePath })).find((item) => item.path === filePath);
@@ -812,6 +816,9 @@ export async function deliverConversationMessage(message: ConversationMessage, o
           authorityGuard: message.recoveryAuthorityGuard, origin: message.origin },
         { registry },
       );
+      if (!recovered && conversationAgentRole(registry.readOnlySnapshot(), conversation.id) === "curator") {
+        return failure("curator recovery is unavailable until its designated seat is admitted", 409);
+      }
       if (recovered) {
         const enqueue = overrides.enqueueStructured
           ?? (await import("@/lib/runtime/structuredMessageDelivery")).enqueueStructuredMessage;
@@ -821,7 +828,7 @@ export async function deliverConversationMessage(message: ConversationMessage, o
           clientMessageId: message.clientMessageId,
           // Our admitted successor changes the receipt and host identity. Seat
           // authority still applies when reserving its original-key message.
-          admissionGuard: recovered.spawned ? message.recoveryAuthorityGuard ?? message.admissionGuard : message.admissionGuard,
+          admissionGuard: recovered.admissionGuard ?? (recovered.spawned ? message.recoveryAuthorityGuard ?? message.admissionGuard : message.admissionGuard),
           recoveryAuthorityGuard: message.recoveryAuthorityGuard,
           text,
           hasImages: images.length > 0,

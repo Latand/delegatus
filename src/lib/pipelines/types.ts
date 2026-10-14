@@ -988,6 +988,8 @@ export type PipelineRemoteAction = {
 export type Pipeline = {
   closeTeardown?: PipelineCloseTeardown;
   closeReport?: PipelineCloseReport;
+  /** Flow ids created by a stale controller snapshot and retained until their cleanup succeeds. */
+  pendingReviewFlowCleanup?: string[];
   /** Retained until a close requested during spawn has completed teardown. */
   activationCloseRequested?: boolean;
   /** Viewer publication ownership. Agent tools remain unrestricted. */
