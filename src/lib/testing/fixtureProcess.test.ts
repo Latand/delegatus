@@ -120,6 +120,27 @@ test("fixture tree cleanup reaps descendants within its bound and preserves a sa
   } finally { await stopFixtureTree(child); await stopFixtureTree(bystander); }
 }, 5_000);
 
+test("tree cleanup stops a respawning wrapper before ending its captured child", async () => {
+  const script = "trap '' TERM; while :; do sleep 30 & printf '{\"pid\":%s}\\n' $!; wait; done";
+  const reports: Array<{ pid: number }> = [];
+  const child = ownFixtureTree(spawn("/bin/sh", ["-c", script], { stdio: ["ignore", "pipe", "pipe"], detached: true }));
+  const bystander = ownFixtureTree(spawn("/bin/sh", ["-c", script], { stdio: ["ignore", "pipe", "pipe"], detached: true }));
+  const other = captureProcessIdentity(bystander.pid!);
+  try {
+    const [report] = await Promise.all([
+      fixtureReport(child, "respawning wrapper", reports),
+      fixtureReport(bystander, "respawning bystander", []),
+    ]);
+    const descendant = captureProcessIdentity(report.pid);
+    expect(processIdentityStatus(descendant)).toBe("alive");
+    await stopFixtureTree(child);
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    expect(processIdentityStatus(descendant) !== "alive" || procBackend.processExited(descendant.pid)).toBe(true);
+    expect(reports).toEqual([report]);
+    expect(processIdentityStatus(other)).toBe("alive");
+  } finally { await stopFixtureTree(child); await stopFixtureTree(bystander); }
+}, 5_000);
+
 for (const signal of ["SIGTERM", "SIGKILL"] as const) test(`recorded identity ${signal} refuses a changed boot epoch`, async () => {
   const child = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
   const identity = captureProcessIdentity(child.pid!);

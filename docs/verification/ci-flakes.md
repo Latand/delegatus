@@ -180,8 +180,9 @@ readiness deadline expired, cleanup called `stopFixtureTree`; with no recorded
 tree identity, that path returned and left the child running. The existing
 stage-host lifetime test uses this handle-only pattern. `stopFixtureTree` now
 routes a missing tree identity through the coalesced `stopFixtureProcess`
-operation. Registered trees retain descendant-first cleanup, and the process
-stop owner remains responsible for signaling their root.
+operation. At that revision, registered trees retained descendant-first
+cleanup, and the process stop owner signaled their root afterwards. The
+wrapper regression below changes that order.
 
 The new fixture regression holds an unregistered `/bin/sleep` child and a
 same-argv bystander, forces a readiness timeout, then requires the child to be
@@ -189,3 +190,35 @@ dead while the bystander remains alive. The baseline comparator confirmed the
 test passes on base and fails on the previous head. Under isolated Linux/Bun
 1.4.0 CPU contention, the updated regression passed 50/50; the real stage-host
 lifetime file passed all three cases.
+
+## Respawning wrapper teardown regression (2026-10-15)
+
+After merging current main, `structuredHostControl.test.ts` reproduced the
+merger's failure: all 35 tests passed, then the scope teardown reported an
+owned child still running. A targeted trace identified the persistent wrapper
+fixture. Its captured `sleep` ended during descendant cleanup, and the wrapper
+started another `sleep` before the separate root cleanup finished. Excluding
+the root from the descendant signal ladder had opened that interval.
+
+`stopFixtureTree` now captures and validates the descendant identities, awaits
+the coalesced root stop, then stops those captured descendants. Ending the
+wrapper first prevents its child-exit path from creating a replacement. Each
+descendant keeps its recorded start identity and boot epoch as signal
+authority after reparenting. The existing terminal-exit handling, root signal
+coalescing, escalation and survivor assertion remain in place.
+
+The added fixture regression uses a TERM-resistant shell that replaces an
+exited child and reports each child PID. Before the fix it reported a second
+child and failed the same scope survivor check. With the fix it reports only
+the original child, confirms its exit and preserves a same-argv bystander.
+
+Under Linux and Bun 1.4.0, five consecutive isolated invocations of
+`src/lib/runtime/structuredHostControl.test.ts` passed: 35 tests and 94
+assertions each. The fixture helper file passed all 14 tests; the Claude login
+file passed all 46, including both foreign-holder cases. The real Codex
+app-server file passed both tests on each supported version, 0.154.0 and
+0.159.0, including full and restricted succession after restart. The explicit
+real-clock admission-cap test and all three stage-host lifetime cases passed.
+Every invocation used the owned gate runner and private HOME, config, temp and
+state directories under the system temp root, with the Viewer control URL
+pointing at a closed port. macOS execution belongs to the PR's hosted checks.

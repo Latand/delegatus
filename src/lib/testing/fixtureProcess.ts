@@ -50,8 +50,8 @@ export function stopFixtureTree(child: ChildProcess, timeoutMs = 2_000): Promise
 async function stopFixtureTreeOnce(child: ChildProcess, timeoutMs: number): Promise<void> {
   const root = trees.get(child);
   // Some fixtures retain only the ChildProcess handle. They still need the
-  // readiness-deadline cleanup, while registered trees keep descendant-first
-  // cleanup and the shared root signal owner below.
+  // readiness-deadline cleanup, while registered trees capture descendants
+  // before stopping the root through the shared signal owner below.
   if (!root) return stopFixtureProcess(child);
   if (child.exitCode !== null || child.signalCode !== null || processIdentityStatus(root) !== "alive") return;
   const parents = procBackend.ppidMap();
@@ -73,10 +73,14 @@ async function stopFixtureTreeOnce(child: ChildProcess, timeoutMs: number): Prom
     }
     return processIdentityStatus(root) === "alive";
   });
+  // Stop the wrapper before ending its children. A live wrapper can replace a
+  // child when that child exits, leaving the replacement outside our snapshot.
+  // The captured descendants retain their own signal authority after the
+  // root exits; direct cleanup still shares this one root-stop operation.
+  await stopFixtureProcess(child);
   // Exit evidence is terminal for a recorded identity. Separate kernel reads
   // can see its zombie start token, then no stat record after reaping; the
   // latter makes processExited return false and must not revive that member.
-  // stopFixtureProcess is the sole root signal owner after descendants end.
   let remaining = owned.filter(identity => identity.pid !== root.pid);
   const alive = () => {
     const running: ProcessIdentity[] = [];
@@ -96,7 +100,6 @@ async function stopFixtureTreeOnce(child: ChildProcess, timeoutMs: number): Prom
     while (alive().length && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20));
   }
   if (alive().length) throw new Error("owned fixture tree survived bounded cleanup");
-  await stopFixtureProcess(child);
 }
 
 /** Report readiness only within a deadline. Callers register the child in the
