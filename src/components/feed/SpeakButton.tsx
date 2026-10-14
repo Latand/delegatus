@@ -5,7 +5,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncE
 
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { translate, useLocale } from "@/lib/i18n";
-import { fishAudioFreeDate, fishAudioFreeEnded, type FishAudioModel } from "@/lib/fishAudio";
+import { fishAudioFreeDate, fishAudioFreeEnded, ttsProviderName, type FishAudioModel } from "@/lib/fishAudio";
 import { MAX_TTS_MESSAGE_LENGTH } from "@/lib/tts";
 import { wordSpanAt } from "@/lib/ttsAlignment";
 import { chunkSpeech } from "@/lib/ttsChunks";
@@ -120,8 +120,15 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
   const rowOwns = (now: SpeechSnapshot) => answerId ? now.activeId === answerId : now.activeText === suppliedText;
   const rowMine = useSyncExternalStore(subscribeRow, !header && speech ? () => rowOwns(speech.getSnapshot()) : notMine, notMine);
   const rowPhase = useSyncExternalStore(subscribeRow, !header && speech ? () => { const now = speech.getSnapshot(); return rowOwns(now) ? now.phase : "idle"; } : idlePhase, idlePhase);
-  const rowError = useSyncExternalStore(subscribeRow, !header && speech ? () => speech.getSnapshot().error : noNotice, noNotice);
-  const speechError = header ? snapshot?.error ?? null : rowError;
+  /* Only the control that was clicked shows the shared error: the header, or
+     the row whose answer failed. Reading it unfiltered painted the same alert
+     under every control of the conversation at once. */
+  const rowError = useSyncExternalStore(subscribeRow, !header && speech ? () => {
+    const now = speech.getSnapshot();
+    const from = now.errorFrom;
+    return from && !from.header && (answerId ? from.id === answerId : from.text === suppliedText) ? now.error : null;
+  } : noNotice, noNotice);
+  const speechError = header ? (snapshot?.errorFrom?.header ? snapshot.error : null) : rowError;
   const text = header ? snapshot?.target?.text ?? "" : suppliedText;
   const { locale, t } = useLocale();
   const isMobile = useIsMobile();
@@ -192,6 +199,8 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
   const freeModel = option.id === "fishaudio" && option.model === "s2.1-pro-free";
   const freeEnded = freeModel && (option.freeEnded || fishAudioFreeEnded());
   const freeDate = fishAudioFreeDate(locale);
+  /* A phone has no right button: the menu there opens on a long press. */
+  const choosePaid = t(isMobile ? "tts.fishChoosePaidTouch" : "tts.fishChoosePaidMouse");
   const requestedVoice = fast ? pcmVoice(option) : option;
   const key = voiceKey(requestedVoice, text);
   /* "Replay aloud (free)" has to be TRUE when it is shown, so it takes both: a
@@ -301,13 +310,13 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
         /* The provider's own words when it refused; otherwise the failure is
            the browser's (blocked or dead audio) or the network's. */
         const message = cause instanceof TtsRequestError
-          ? cause.code === "fishaudio-free-ended" ? t("tts.fishFreeEnded", { date: freeDate }) : cause.code === "fishaudio-free-refused" ? t("tts.fishFreeRefused", { status: cause.status }) : cause.provider ?? t("tts.requestError", { status: cause.status })
+          ? cause.code === "fishaudio-free-ended" ? t("tts.fishFreeEnded", { date: freeDate, action: choosePaid }) : cause.code === "fishaudio-free-refused" ? t("tts.fishFreeRefused", { action: choosePaid }) : cause.provider ?? t("tts.requestError", { status: cause.status })
           : cause instanceof TtsPlaybackError
             ? t("tts.playError")
             : t("tts.requestFailed");
         if (alive()) {
           if (mounted.current) { setError(message); setAnnouncement(message); }
-          speech?.update({ error: message });
+          speech?.update({ error: message, errorFrom: { header, id: frozenId.current, text: frozenText.current } });
         }
         stop(false);
       },
@@ -326,7 +335,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
       ...callbacks, key: (chunkText, voice) => voiceKey(voice ?? option, chunkText), synthesize: synthesizeChunk, elements,
     });
 
-    if (speech) { speech.claimStop(stop); speech.update({ error: null }); }
+    if (speech) { speech.claimStop(stop); speech.update({ error: null, errorFrom: null }); }
     ownedStop.current = stop;
     claimActive(stop);
     setPhase("loading");
@@ -370,11 +379,11 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
       return;
     }
     if (!option.available) {
-      refuse(t("tts.missingKey", { provider: option.id, path: option.keyPath }));
+      refuse(t("tts.missingKey", { provider: ttsProviderName(option.id), path: option.keyPath }));
       return;
     }
     if (freeEnded && !freeReplay()) {
-      refuse(t("tts.fishFreeEnded", { date: freeDate }));
+      refuse(t("tts.fishFreeEnded", { date: freeDate, action: choosePaid }));
       return;
     }
     /* The tooltip promising a free replay is only as fresh as the last render,
@@ -444,8 +453,8 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
     : tooLong
       ? t("tts.tooLong", { count: MAX_TTS_MESSAGE_LENGTH.toLocaleString() })
       : !option.available
-        ? t("tts.missingKey", { provider: option.id, path: option.keyPath })
-        : freeEnded && !replayable ? t("tts.fishFreeEnded", { date: freeDate }) : t("tts.triggerTitle", { action: replayable ? t("tts.replayFree") : freeModel ? t("tts.readFreeModel") : t("tts.readPaid") });
+        ? t("tts.missingKey", { provider: ttsProviderName(option.id), path: option.keyPath })
+        : freeEnded && !replayable ? t("tts.fishFreeEnded", { date: freeDate, action: choosePaid }) : t("tts.triggerTitle", { action: replayable ? t("tts.replayFree") : freeModel ? t("tts.readFreeModel") : t("tts.readPaid") });
   const title = header ? `${actionTitle} · ${t("tts.loadedSnapshot")}${text || snapshot?.activeText ? ` · ${(active ? snapshot?.activeText ?? text : text).slice(0, 100)}` : ""}` : actionTitle;
   return (
     <span className="relative inline-flex shrink-0">
@@ -473,7 +482,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
           onClose={closeMenu}
         />
       ) : null}
-      {(error ?? speechError) && !menuOpen ? <SpeakAlert anchorRef={triggerRef} onDismiss={() => { dismissError(); speech?.update({ error: null }); }}>{error ?? speechError}</SpeakAlert> : null}
+      {(error ?? speechError) && !menuOpen ? <SpeakAlert anchorRef={triggerRef} onDismiss={() => { dismissError(); speech?.update({ error: null, errorFrom: null }); }}>{error ?? speechError}</SpeakAlert> : null}
     </span>
   );
 }

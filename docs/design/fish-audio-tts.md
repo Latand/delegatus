@@ -152,7 +152,10 @@ Clicking one of these rows posts `{backend:"fishaudio", model}` as a single requ
 The honesty lines change with the selected model:
 
 - **Free model:** the next-click line says the synthesis is free, and the tooltip says "Read aloud (free model)". The billing line says there is no charge until the date and that Fish Audio may use the text to improve its models (S5).
-- **`s2.1-pro`:** the billing line says the charge is per UTF-8 byte and a Cyrillic letter counts twice.
+- **`s2.1-pro`:** the billing line says the charge goes to the Fish Audio account by text size and that Cyrillic letters cost about twice as much as Latin ones. It names no encoding.
+- **Free model, ended:** the billing line is omitted, so nothing promises a free read. The header line points to the paid row below.
+- **Naming and dates:** the row, the header line and the missing-key hint all say "Fish Audio" (`ttsProviderName`); the key file keeps its `fishaudio-api-key` name. `fishAudioFreeDate` writes the long month and drops a trailing era word such as the Ukrainian "р.", so a sentence that ends on the date has one period.
+- **One mark:** only the chosen model row is tinted; the Fish Audio parent row keeps its check and drops the model id from its subtitle.
 - **Both:** `tts.batchSeekHint` gains a `{provider}` parameter; its text names Soniox today.
 
 ### Errors
@@ -162,8 +165,8 @@ The route echoes no upstream body or header. Its English `error` is kept for log
 | Situation | Route answer | UI |
 | - | - | - |
 | No key | 503 `{error, keyPath}` (existing) | existing `tts.missingKey`, naming `…/fishaudio-api-key` |
-| Free model after 2026-11-30 | 410 `{error, code:"fishaudio-free-ended"}`, with no upstream call | `tts.fishFreeEnded`: "Fish Audio's free model ended on {date}. Right-click and choose S2.1 Pro (paid) to keep reading aloud." The client refuses before requesting when `option.freeEnded`. |
-| Free model, upstream 402/403/404 | the same status with `code:"fishaudio-free-refused"` | `tts.fishFreeRefused`: "Fish Audio refused its free model (HTTP {status}); the free period may be over. Right-click and choose S2.1 Pro (paid)." |
+| Free model after 2026-11-30 | 410 `{error, code:"fishaudio-free-ended"}`, with no upstream call | `tts.fishFreeEnded`: "Fish Audio's free model ended on {date}. {action} to keep reading aloud." `{action}` is "Choose S2.1 Pro (paid) below" inside the open menu, "Right-click and choose S2.1 Pro (paid)" with a mouse and "Press and hold this button, then choose S2.1 Pro (paid)" on a phone. The client refuses before requesting when `option.freeEnded`. |
+| Free model, upstream 402/403/404 | the same status with `code:"fishaudio-free-refused"` | `tts.fishFreeRefused`: "Fish Audio refused its free model; the free period may be over. {action}." The status code stays in the route answer and out of the text. |
 | Any other 400, 401, 402, 403 or 404 | the upstream status, no code | existing `TTS request failed` text |
 | 429 | 429 with `retry-after: 1`, since Fish sends none | `requestPcm` retries up to three times (existing) |
 | 5xx or network failure | 502 (existing) | existing |
@@ -278,7 +281,7 @@ The evidence contains no key and no account identifier.
 - A voice picker or library browser. The voice setting in the environment or a file covers it, and whether the default voice suits uk and ru is unobserved.
 - A `LLV_TTS_FISHAUDIO_FREE_UNTIL` override for another extension. The date has moved three times; updating the constant is a one-line change that ships with the next release, and until then the guard refuses, which costs nothing.
 - `s2-pro`, `s1` (retiring) and `drama-3` (no price observed).
-- A UTF-8 byte count in the menu.
+- A UTF-8 byte count or status code in operator-facing text.
 - Fish Audio for dictation, and Fish key entry in onboarding (VoiceStep lists dictation providers only).
 - Fish's npm SDK. Per S6, the current `fish-audio` 0.1.0 release defaults to the deprecated `s1`; raw `fetch` is enough.
 

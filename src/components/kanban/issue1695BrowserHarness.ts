@@ -877,8 +877,8 @@ export async function captureFishAudioMenu(browser: Browser, mobile: boolean): P
   const server = await serveEvidenceFixture(path.resolve(".artifacts/fish-audio", mobile ? "phone" : "desktop"), mobile ? "src/components/mobile/issue1671Evidence.fixture.tsx" : undefined, { "/api/tts/backend": speech });
   const readings: unknown[] = [];
   try {
-    for (const locale of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const width of mobile ? [320, 390] : [1440]) {
-      const height = width === 320 ? 640 : mobile ? 844 : 900;
+    for (const locale of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const width of mobile ? [320, 390] : [1440, 1000]) {
+      const height = width === 320 ? 640 : mobile ? 844 : width === 1000 ? 700 : 900;
       const { context, page, pageErrors } = await openFixture(browser, `${server.base}?${mobile ? "fast-tts=1&runtime=structured#c=conversation_running" : "scenario=fast-tts#c=conversation_export-impl"}`, { width, height }, scheme, locale, "reduce", mobile);
       try {
         const current = structuredClone(speech);
@@ -889,6 +889,10 @@ export async function captureFishAudioMenu(browser: Browser, mobile: boolean): P
             current.options = current.options.map((option) => option.id === "fishaudio" ? { ...option, model: body.model } : option);
           }
           await route.fulfill({ json: current });
+        });
+        await page.route("**/api/tts", async (route) => {
+          if (route.request().method() !== "POST") { await route.fallback(); return; }
+          await route.fulfill({ status: 403, json: { error: "provider refused", code: "fishaudio-free-refused" } });
         });
         const control = page.locator(mobile ? '[data-mobile-message-actions] [data-tts-trigger]' : '[data-kanban-reader="conversation_export-impl"] [data-tts-header]').last();
         await control.waitFor({ timeout: 20000 });
@@ -912,7 +916,8 @@ export async function captureFishAudioMenu(browser: Browser, mobile: boolean): P
             expect(saves).toEqual([{ backend: "fishaudio", model: "s2.1-pro" }]);
             await control.click({ button: "right" }); await menu.waitFor();
             expect(await models.nth(1).getAttribute("aria-checked")).toBe("true");
-            expect(await menu.textContent()).toContain(locale === "en" ? "UTF-8 byte" : "байт UTF-8");
+            expect(await menu.textContent()).toContain(locale === "en" ? "Cyrillic letters cost about twice" : "вдвічі дорожче");
+            expect(await menu.textContent()).not.toContain("UTF-8");
           }
           if (state === "ended") {
             current.options = current.options.map((option) => option.id === "fishaudio" ? { ...option, model: "s2.1-pro-free", freeEnded: true } : option);
@@ -929,7 +934,39 @@ export async function captureFishAudioMenu(browser: Browser, mobile: boolean): P
           expect(modelBoxes[1]!.bottom).toBeLessThanOrEqual(geometry.bottom);
           if (mobile) for (const box of modelBoxes) { expect(box.height).toBeGreaterThanOrEqual(44); expect(box.width).toBeGreaterThanOrEqual(44); }
           await page.screenshot({ path: path.join(out, `${prefix}-${state}.png`) });
-          readings.push({ width, height, locale, scheme, state, geometry });
+          const text = (await menu.textContent()) ?? "";
+          // The selection is marked on the chosen model row only, the ended state promises no free read, and the provider has one name.
+          expect(text).not.toMatch(/\.\./); expect(text).not.toContain("fishaudio ·");
+          expect(await menu.getByRole("menuitemradio").first().evaluate((node) => node.className.includes("bg-accent/10"))).toBe(false);
+          if (state === "ended") { expect(text).not.toMatch(/No charge|Без оплати/); expect(text).not.toMatch(/Right-click|правою кнопкою/); }
+          const alertFrame = state === "free" ? "alert-refused" : state === "ended" ? "alert-ended" : null;
+          let alertReading: unknown = null;
+          if (alertFrame) {
+            await page.keyboard.press("Escape"); await menu.waitFor({ state: "hidden" });
+            await control.click();
+            const alert = page.locator("[data-tts-alert]"); await alert.first().waitFor({ timeout: 8000 }); await page.waitForTimeout(200);
+            expect(await alert.count()).toBe(1);
+            const words = await alert.evaluate((node) => ({ text: node.textContent ?? "", wordBreak: getComputedStyle(node).wordBreak, overflowWrap: getComputedStyle(node).overflowWrap, sideways: node.scrollWidth > node.clientWidth }));
+            expect(words.wordBreak).not.toBe("break-all"); expect(words.sideways).toBe(false); expect(words.text).not.toMatch(/HTTP|\.\./);
+            expect(words.text).toMatch(mobile ? /Press and hold|Затисніть/ : /Right-click|правою кнопкою/);
+            if (mobile) expect(words.text).not.toMatch(/Right-click|правою кнопкою/);
+            await page.screenshot({ path: path.join(out, `${prefix}-${alertFrame}.png`) });
+            alertReading = words;
+            await page.keyboard.press("Escape"); await alert.waitFor({ state: "detached" });
+            if (state === "free") { await control.click({ button: "right" }); await menu.waitFor(); }
+          }
+          readings.push({ width, height, locale, scheme, state, geometry, alert: alertReading });
+        }
+        if (mobile) {
+          current.options = current.options.map((option) => option.id === "fishaudio" ? { ...option, available: false } : option);
+          const prefix = `phone-${width}-${locale}-${scheme}`;
+          await control.click({ button: "right" }); await menu.waitFor();
+          await page.waitForFunction(() => /Fish Audio API|API-ключ Fish Audio/.test(document.querySelector("[data-tts-menu]")?.textContent ?? ""));
+          await page.keyboard.press("Escape"); await menu.waitFor({ state: "hidden" });
+          await control.click();
+          const alert = page.locator("[data-tts-alert]"); await alert.waitFor({ timeout: 8000 }); await page.waitForTimeout(200);
+          expect(await alert.count()).toBe(1); expect(await alert.textContent()).toContain("fishaudio-api-key");
+          await page.screenshot({ path: path.join(out, `${prefix}-alert-missing.png`) });
         }
         expect(pageErrors).toEqual([]);
       } finally { await context.close(); }

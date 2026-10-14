@@ -465,11 +465,11 @@ test("a message past the ceiling refuses out loud instead of being cut short", a
   /* And it is a popover on the body, not a box inside the message: the feed row
      carries `content-visibility: auto`, whose paint containment clips an inline
      `absolute` alert and lets the next message paint over what survives. A key
-     path still breaks anywhere, the way the removed dialog wrapped it. */
+     path wider than the box still breaks, but words wrap at spaces. */
   expect(alert.parentElement).toBe(document.body as unknown as HTMLElement);
   expect(view.host.contains(alert)).toBe(false);
   expect(alert.className).toContain("fixed");
-  expect(alert.className).toContain("break-all");
+  expect(alert.className).toContain("break-words");
   flushSync(() => { view.root.unmount(); });
   view.host.remove();
 });
@@ -982,7 +982,7 @@ test("menu chooses a persisted model and states free and paid billing", async ()
   try {
     let menu = await openMenu(view);
     expect(menu.textContent).toContain("Fish Audio");
-    expect(menu.textContent).toContain("free until Nov 30, 2026");
+    expect(menu.textContent).toContain("free until November 30, 2026");
     expect(menu.textContent).toContain("Next left click: free synthesis");
     expect(menu.textContent).toContain("may use the text");
     expect(view.button.title).toContain("Read aloud (free model)");
@@ -993,7 +993,8 @@ test("menu chooses a persisted model and states free and paid billing", async ()
     expect(posts).toEqual([{ backend: "fishaudio", model: "s2.1-pro" }]);
     menu = await openMenu(view);
     expect(menu.querySelector('[role="group"] button[aria-checked="true"]')?.textContent).toContain("S2.1 Pro — paid");
-    expect(menu.textContent).toContain("Billed per UTF-8 byte");
+    expect(menu.textContent).toContain("Cyrillic letters cost about twice as much");
+    expect(menu.textContent).not.toContain("UTF-8");
     expect(view.button.title).toContain("Read aloud (paid)");
   } finally { flushSync(() => view.root.unmount()); view.host.remove(); }
 });
@@ -1018,11 +1019,18 @@ test("expired free model refuses in Ukrainian without synthesis", async () => {
   const view = await mount("Привіт світе");
   try {
     const menu = await openMenu(view);
-    expect(menu.textContent).toContain("безкоштовний період закінчився");
+    expect(menu.textContent).toContain("безкоштовний період закінчився 30 листопада 2026");
+    expect(menu.textContent).not.toContain("р.");
+    expect(menu.textContent).not.toContain("..");
+    expect(menu.textContent).not.toContain("Без оплати");
+    expect(menu.textContent).toContain("Оберіть нижче S2.1 Pro (платно)");
+    expect(menu.textContent).not.toContain("правою кнопкою");
     await speak(view);
     expect(posts).toBe(0);
     expect(alertNode()?.textContent).toContain("Безкоштовна модель Fish Audio закінчилася");
     expect(alertNode()?.textContent).toContain("S2.1 Pro (платно)");
+    expect(alertNode()?.textContent).toContain("правою кнопкою");
+    expect(alertNode()?.className).not.toContain("break-all");
   } finally { flushSync(() => view.root.unmount()); view.host.remove(); setLocale("en"); }
 });
 
@@ -1044,11 +1052,68 @@ test("provider refusal explains the paid choice without retrying", async () => {
   try {
     await openMenu(view); await speak(view);
     expect(calls).toBe(1);
-    expect(alertNode()?.textContent).toContain("Fish Audio refused its free model (HTTP 403)");
+    expect(alertNode()?.textContent).toContain("Fish Audio refused its free model;");
+    expect(alertNode()?.textContent).not.toContain("HTTP");
     expect(alertNode()?.textContent).toContain("S2.1 Pro (paid)");
     expect(view.button.dataset.ttsPhase).toBe("idle");
   } finally {
     flushSync(() => view.root.unmount()); view.host.remove();
+    Object.assign(globalThis, { AudioContext: prior.context, requestAnimationFrame: prior.frame, cancelAnimationFrame: prior.cancel });
+  }
+});
+test("the ended free model never promises a charge-free read and names the provider one way", async () => {
+  const info = { backend: "fishaudio", lockedByEnv: false, options: [{ id: "fishaudio", available: false, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeEnded: true }] };
+  globalThis.fetch = mock(async () => Response.json(info)) as unknown as typeof fetch;
+  const view = await mount("Ended copy");
+  try {
+    const menu = await openMenu(view);
+    expect(menu.textContent).not.toContain("No charge");
+    expect(menu.textContent).toContain("Choose S2.1 Pro (paid) below");
+    expect(menu.textContent).not.toContain("Right-click");
+    expect(menu.textContent).not.toContain("fishaudio ·");
+    expect(menu.textContent).toContain("Add the Fish Audio API key at $CONFIG/fishaudio-api-key");
+    expect(menu.textContent).not.toContain("..");
+    const parent = menu.querySelector<HTMLButtonElement>('[role="menuitemradio"]')!;
+    expect(parent.className).not.toContain("bg-accent/10");
+    expect(parent.textContent).not.toContain("s2.1-pro-free");
+  } finally { flushSync(() => view.root.unmount()); view.host.remove(); }
+});
+
+test("a phone refusal says press and hold instead of right-click", async () => {
+  const original = (dom as unknown as { matchMedia: unknown }).matchMedia;
+  (dom as unknown as { matchMedia: unknown }).matchMedia = (query: string) => ({ matches: true, media: String(query), addEventListener() {}, removeEventListener() {} });
+  const info = { backend: "fishaudio", lockedByEnv: false, options: [{ id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeEnded: true }] };
+  globalThis.fetch = mock(async () => Response.json(info)) as unknown as typeof fetch;
+  const view = await mount("Phone refusal");
+  try {
+    await openMenu(view); await speak(view);
+    expect(alertNode()?.textContent).toContain("Press and hold this button");
+    expect(alertNode()?.textContent).not.toContain("Right-click");
+  } finally { flushSync(() => view.root.unmount()); view.host.remove(); (dom as unknown as { matchMedia: unknown }).matchMedia = original; }
+});
+
+test.each(["header", "row"])("a refusal raised from the %s shows one alert, not one per control", async (origin) => {
+  const { conversationSpeech } = await import("./conversationSpeech");
+  const prior = { context: globalThis.AudioContext, frame: globalThis.requestAnimationFrame, cancel: globalThis.cancelAnimationFrame };
+  Object.assign(globalThis, { AudioContext: class { state = "running"; async resume() {} async close() {} }, requestAnimationFrame: () => 1, cancelAnimationFrame: () => undefined });
+  const info = { backend: "fishaudio", lockedByEnv: false, options: [{ id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeEnded: false }] };
+  globalThis.fetch = mock(async (input: unknown) => String(input) === "/api/tts/backend"
+    ? Response.json(info)
+    : Response.json({ error: "provider refused", code: "fishaudio-free-refused" }, { status: 403 })) as unknown as typeof fetch;
+  const scope = `single-alert-${origin}`;
+  const speech = conversationSpeech(scope);
+  speech.select({ id: "a", text: "Refused answer.", roots: () => [] });
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  flushSync(() => root.render(<><SpeakButton scope={scope} header /><SpeakButton scope={scope} text="Refused answer." answerId="a" /><SpeakButton scope={scope} text="Other answer." answerId="b" /></>));
+  await drainUpdates();
+  try {
+    const header = host.querySelector<HTMLButtonElement>("[data-tts-header]")!;
+    header.dispatchEvent(new window.MouseEvent("contextmenu", { bubbles: true })); await drainUpdates(); // fresh authoritative config
+    const clicked = origin === "header" ? header : host.querySelector<HTMLButtonElement>("[data-tts-trigger]:not([data-tts-header])")!;
+    flushSync(() => clicked.click()); await drainUpdates();
+    expect(document.querySelectorAll("[data-tts-alert]")).toHaveLength(1);
+  } finally {
+    speech.stop?.(); flushSync(() => root.unmount()); host.remove();
     Object.assign(globalThis, { AudioContext: prior.context, requestAnimationFrame: prior.frame, cancelAnimationFrame: prior.cancel });
   }
 });
