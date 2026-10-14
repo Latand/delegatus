@@ -1221,12 +1221,15 @@ test("publication blocked, a failed stage and a spent budget each leave a plain 
   };
   const h = harness();
   h.worktree.remote = "";
-  await started(h.ports, [stage("build", null)], "remote-branch");
+  await started(h.ports, [stage("build", null)]);
+  // A remote-branch record stored by an older build before creation refused it.
+  const legacy = current(); legacy.publication = "remote-branch"; savePipelines([legacy]);
   attach();
   await h.report(1, { verdict: "pass", summary: "Checked." });
   await tickPipelines([h.endTurn(1, "Done.")], h.ports);
   await tickPipelines([], h.ports);
-  expect(current().stateDetail).toContain("unavailable");
+  expect(current().state).toBe("needs_decision");
+  expect(current().stateDetail).toContain("set-delivery-remote");
   expect(loadTasks()[0]!.note?.text).toBe(parkedTaskNote("publication blocked", "uk"));
   const f = harness();
   await started(f.ports, [stage("build", null)]);

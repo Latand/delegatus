@@ -75,7 +75,7 @@ export function renderStagePrompt(
     ...(pipeline.delivery?.disposition === "owner" && pipeline.delivery.target.branch !== `refs/heads/${pipeline.branch}`
       ? [`If the worktree is already checked out on its owned delivery branch ${pipeline.delivery.target.branch}, keep that branch checked out and use it for the commits below.`] : []),
     ...(role.access === "read-write"
-      ? [`Commit your changes on ${pipeline.branch} (or its already checked-out owned delivery branch).${pipeline.delivery?.publish === "disabled" ? "" : ` Push this branch${pipeline.delivery?.disposition === "owner" && pipeline.delivery.target.branch !== `refs/heads/${pipeline.branch}` ? ` to the delivery target ${pipeline.delivery.target.branch}` : ""}.`}`]
+      ? [`Commit your changes on ${pipeline.branch} (or its already checked-out owned delivery branch).${pipeline.delivery?.publish === "disabled" ? "" : pipeline.delivery && !pipeline.delivery.target.remote ? " This repository has no delivery remote: keep the commits on this local branch and do not push." : ` Push this branch${pipeline.delivery?.disposition === "owner" && pipeline.delivery.target.branch !== `refs/heads/${pipeline.branch}` ? ` to the delivery target ${pipeline.delivery.target.branch}` : ""}.`}`]
       : []),
   ];
   const roleContext = role.roleId

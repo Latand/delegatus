@@ -1,3 +1,4 @@
+import { pipelinePublishesRemoteBranch, MISSING_DELIVERY_REMOTE, LOCAL_DELIVERY_PUBLISH_REFUSAL } from "./publication";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { controllerSnapshotPorts, StaleControllerFlowError } from "./controllerSnapshot";
 import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement, runtimeSwitchReconfigureOutcome } from "./runtimeSwitch";
@@ -90,7 +91,7 @@ import { BACKGROUND_TASK_WAIT_DETAIL_PREFIX, describeBackgroundTasks, liveBackgr
 import { durableStageTurnEvidence, stageTurnEvidenceCurrent, type StageTurnEvidence } from "./durableEvidence";
 import { FAIL_EDGE_BUDGET_SPENT_DETAIL, advanceFailEdgeBudgetSpent, failEdgeBudgetSpent, failEdgeExhaustion, failEdgeMaxRounds, failEdgeRoundsUsed, terminalReviewBudgetSpent } from "./failEdgeBudget";
 import { describeTransientGitFailure, transientGitFailure, type TransientGitFailure } from "@/lib/git/transientFailure";
-import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, publicationFailureCause, publicationFailurePhase, publicationInterruptionCause, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, verifyPassedHeadIntegration, WORKTREE_INITIALIZATION_HELD } from "./git";
+import { acquirePublicationFileLock, releasePublicationFileLock, commitPipelineStage, currentPipelineBranchHead, currentPipelineRemoteBranchHead, DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, pipelineBaseBranchError, pipelinePublicationFence, pipelinePublicationInFlight, publicationFailureCause, publicationFailurePhase, publicationInterruptionCause, pipelineWorktreeChanges, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, type ProvisionExecPort, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resolvePipelineBase, synchronizePipelineRetryHead, verifyPassedHeadIntegration, WORKTREE_INITIALIZATION_HELD } from "./git";
 import {
   DEFAULT_FAIL_EDGE_ROUNDS,
   MAX_FAIL_EDGE_ROUNDS,
@@ -3432,11 +3433,10 @@ export function reconcileEmbeddedReviewFlows(
   return changed;
 }
 
-/** An owner with a delivery branch must publish before handing off a head.
+/** An owner with a delivery remote must publish before handing off a head.
     Explicit internal lanes remain local; comparison lanes are always local. */
 function publishesRemoteBranch(pipeline: Pick<Pipeline, "publication" | "delivery">): boolean {
-  return pipeline.publication === "remote-branch"
-    || (pipeline.publication === undefined && pipeline.delivery?.disposition === "owner");
+  return pipelinePublishesRemoteBranch(pipeline);
 }
 
 /** Advance along the pass edge, persisting the relay record: the completed
@@ -3948,9 +3948,13 @@ async function retryTerminalStagePublication(
     park(pipeline, attempt.error);
     return;
   }
-  if (published.remote !== "published") {
-    keepPassedStageUnpublished(pipeline, attempt, published.remote === "unreachable"
-      ? published.detail : "the delivery remote is unavailable; configure it to publish this accepted head");
+  if (published.remote === "unavailable") {
+    attempt.error = `publishing the passed stage: ${MISSING_DELIVERY_REMOTE}`;
+    park(pipeline, attempt.error);
+    return;
+  }
+  if (published.remote === "unreachable") {
+    keepPassedStageUnpublished(pipeline, attempt, published.detail);
     return;
   }
   delete attempt.publicationRetry;
@@ -4582,9 +4586,12 @@ async function commitPassedStage(
     return;
   }
   pipeline.publishedCommit = published.remote === "published" ? published.sha : null;
-  if (published.remote !== "published") {
-    keepPassedStageUnpublished(pipeline, attempt, published.remote === "unreachable"
-      ? published.detail : "the delivery remote is unavailable; configure it to publish this accepted head");
+  if (published.remote === "unavailable") {
+    parkStage(`publishing the passed stage: ${MISSING_DELIVERY_REMOTE}`);
+    return;
+  }
+  if (published.remote === "unreachable") {
+    keepPassedStageUnpublished(pipeline, attempt, published.detail);
     return;
   }
   advancePipeline(pipeline, stage, ports, attempt);
@@ -7134,7 +7141,7 @@ async function publishReviewIngressHead(
     return {
       ok: false,
       retryable: false,
-      detail: `review stage requires a published pipeline branch, but this repository has no origin remote to publish ${expected} to`,
+      detail: `review stage requires a published pipeline branch at ${expected}: ${MISSING_DELIVERY_REMOTE}`,
     };
   }
   pipeline.publishedCommit = published.sha;
@@ -9256,10 +9263,11 @@ function applySkippedStage(pipeline: Pipeline, stage: PipelineStage, attempt: Pi
     });
     if (!published.ok) {
       park(pipeline, `publishing the skipped stage: ${published.error}`, attempt);
-    } else if (published.remote !== "published") {
+    } else if (published.remote === "unavailable") {
+      park(pipeline, `publishing the skipped stage: ${MISSING_DELIVERY_REMOTE}`, attempt);
+    } else if (published.remote === "unreachable") {
       setCursorState(pipeline, stage.id, "committing");
-      keepPassedStageUnpublished(pipeline, attempt, published.remote === "unreachable"
-        ? published.detail : "the delivery remote is unavailable; configure it to publish this accepted head");
+      keepPassedStageUnpublished(pipeline, attempt, published.detail);
     } else {
       pipeline.publishedCommit = published.sha;
       advancePipeline(pipeline, stage, ports, attempt);
@@ -9976,7 +9984,7 @@ const STAGE_OUTPUTS_SHAPE = `array of 1–${MAX_STAGE_OUTPUTS} repository-relati
 const STAGE_NEXT_SHAPE = "id of another stage, or null to terminate the pass chain";
 const STAGE_ACCOUNT_SHAPE = "id of an account the pipeline's project allows, or null to let the project's own selection choose";
 const STAGE_ON_FAIL_SHAPE = `null, or {to: <existing stage id>, maxRounds?: 1–${MAX_FAIL_EDGE_ROUNDS}, onExhausted?: "advance" | "stop-after-fix" | "park"} — run stages only`;
-const PIPELINE_PUBLICATION_SHAPE = '"internal" (explicit local-only policy; nothing is pushed while the pipeline runs) | "remote-branch" (publish every accepted revision before the next stage and complete only after the final revision is remote); an owner delivery defaults to remote publication when omitted';
+const PIPELINE_PUBLICATION_SHAPE = '"internal" (explicit local-only policy; nothing is pushed while the pipeline runs) | "remote-branch" (publish every accepted revision before the next stage and complete only after the final revision is remote); omitted: publish when an owner delivery target has a remote, local-only when it has none; remote-branch requires a remote';
 const STAGE_GRAPH_SHAPE = "acyclic next chains over existing stage ids, with every review-loop reachable from a run stage";
 
 /** A validated fail edge in its stored shape; `onExhausted` is kept only when
@@ -10854,17 +10862,19 @@ export async function createPipelineFromRequest(
     || (targetInput.rejectedHead !== undefined && !/^[0-9a-f]{40}$/i.test(targetInput.rejectedHead)))) {
     return { error: "delivery requires a full refs/heads branch, positive PR number and exact rejected head", status: 400 };
   }
-  const originUrl = (await ports.exec("git", ["remote", "get-url", "origin"], repoDir)).stdout.trim();
-  const requestedRemote = targetInput?.remote;
-  if (requestedRemote !== undefined && (typeof requestedRemote !== "string" || !requestedRemote.trim() || requestedRemote.startsWith("-") || /[\r\n\0]/.test(requestedRemote))) return { error: "invalid delivery remote", status: 400 };
-  const alias = (await ports.exec("git", ["remote", "get-url", "--push", requestedRemote ?? "origin"], repoDir));
-  let origin = alias.code === 0 && alias.stdout.trim() ? alias.stdout.trim() : requestedRemote ?? originUrl;
-  // Relative filesystem remotes must keep their meaning in the sibling worktree.
-  if (origin && !/^[a-z][a-z0-9+.-]*:\/\//i.test(origin) && !/^[^/]+:/.test(origin)) origin = path.resolve(repoDir, origin);
-  if (typeof origin !== "string" || origin.startsWith("-") || /[\r\n\0]/.test(origin)) return { error: "invalid delivery remote", status: 400 };
-  const repository = (origin ? projectIdentityFromRemote(origin, repoDir)?.project : localRepositoryProjectId(repoDir)) ?? project;
-  if (normalized.stages.some((stage) => stage.kind === "review-loop") && originUrl
-    && repository !== projectIdentityFromRemote(originUrl, repoDir)?.project) return { error: "review-loop delivery must use the origin repository; create the lane in a checkout of the PR head repository", status: 400 };
+  const resolvedRemote = await resolveDeliveryRemote(repoDir, targetInput?.remote, ports.exec, { allowLiteral: true });
+  if (!resolvedRemote.ok) return { error: resolvedRemote.error, status: resolvedRemote.status };
+  const { remote: origin, repository } = resolvedRemote;
+  if (req.publication === "remote-branch" && !origin) {
+    const message = `remote-branch needs a delivery remote; this repository has no remote ${targetInput?.remote ?? "origin"}`;
+    return { error: message, status: 400, violations: [{ field: "publication", message,
+      expected: "omit publication (local-only lane), or add a remote first" }] };
+  }
+  if (normalized.stages.some((stage) => stage.kind === "review-loop") && origin) {
+    const originRemote = await resolveDeliveryRemote(repoDir, undefined, ports.exec);
+    if (!originRemote.ok) return { error: originRemote.error, status: originRemote.status };
+    if (originRemote.remote && repository !== originRemote.repository) return { error: "review-loop delivery must use the origin repository; create the lane in a checkout of the PR head repository", status: 400 };
+  }
   const target = { repository, remote: origin, branch: targetInput?.branch ?? `refs/heads/${pipeline.branch}`,
     ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(targetInput?.rejectedHead ? { rejectedHead: targetInput.rejectedHead } : {}) };
   pipeline.creationRequest = options.creationRequest;
@@ -11897,9 +11907,52 @@ export async function patchPipeline(
     if (!pipeline) return { error: "pipeline not found", status: 404 };
     return { pipeline, legacyReviewPreview: previewLegacyReview(pipeline, req, ports) };
   }
+  if (req.action === "set-delivery-remote") {
+    const snapshot = findPipelineRecord(id);
+    if (!snapshot) return { error: "pipeline not found", status: 404 };
+    // Git reads stay outside the lease. Admission rechecks the record and
+    // both indexed owner keys under the same transaction as the new claim.
+    const resolved = await resolveDeliveryRemote(snapshot.repoDir, req.remote, ports.exec);
+    if (!resolved.ok) return { error: resolved.error, status: resolved.status };
+    if (!resolved.remote) return { error: `repository has no configured remote ${req.remote ?? "origin"}; add it before set-delivery-remote`, status: 409 };
+    const result = await withDeliveryMutationAsync<PipelinePatchResult>((tx) => {
+      const current = tx.get(id);
+      if (!current) return { error: "pipeline not found", status: 404 };
+      if (current.repoDir !== snapshot.repoDir) return { error: "repository changed while resolving delivery; read the lane again", status: 409 };
+      if (current.state === "closed" || current.state === "completed" || current.closedAt || current.hiddenAt) return { error: "a closed, completed or hidden lane cannot adopt a delivery remote", status: 409 };
+      const delivery = current.delivery;
+      if (!delivery) return { error: "pipeline has no delivery target", status: 409 };
+      if (delivery.target.remote) return { error: "a delivery target with a remote is never redirected", status: 409 };
+      const ownerError = deliveryOwnerError(current, tx.pipelineLookup({ ...delivery.target, active: true }));
+      if (ownerError) return { error: ownerError, status: 409 };
+      if (delivery.operation?.state === "running") return { error: "publisher is still in flight; reconcile before adopting a remote", status: 409 };
+      const attempt = current.cursor ? currentAttempt(current, current.cursor.stageId) : null;
+      if (currentStage(current)?.kind === "review-loop" && attempt?.flowId) return { error: "finish or retry the review stage first", status: 409 };
+      const target = { ...delivery.target, remote: resolved.remote, repository: resolved.repository };
+      const owner = tx.pipelineLookup({ ...target, active: true });
+      if (owner && owner.id !== id) return { error: `delivery target is owned by ${owner.id} at epoch ${owner.delivery?.epoch ?? 0}`, status: 409 };
+      const history = tx.pipelineLookup(target);
+      delivery.target = target;
+      delivery.epoch = Math.max(delivery.epoch, history?.delivery?.epoch ?? 0) + 1;
+      delete delivery.operation;
+      current.publishedCommit = null;
+      deliveryJournal(current, "recovery", "delivery remote adopted from configured repository remote", actor?.kind === "agent" ? actor.conversationId : null);
+      if (current.state === "needs_decision" && passedStagePublicationPark(current, attempt)) {
+        attempt!.state = "passed"; attempt!.error = null;
+        current.state = "running";
+        current.stateDetail = "accepted head verification and publication pending";
+      }
+      tx.put(current);
+      return { pipeline: current };
+    });
+    if (result.pipeline) requestPipelineTick();
+    return result;
+  }
+
   if (req.action === "publish") {
     const pipeline = findPipelineRecord(id);
     if (!pipeline) return { error: "pipeline not found", status: 404 };
+    if (pipeline.delivery && !pipeline.delivery.target.remote) return { error: LOCAL_DELIVERY_PUBLISH_REFUSAL, status: 409 };
     const deliveryError = pipeline.delivery && deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery.target, active: true }));
     if (deliveryError) return { error: deliveryError, status: 409 };
     const accepted = req.acceptedSha ?? pipeline.lastPassedCommit;
@@ -11933,6 +11986,7 @@ export async function patchPipeline(
     return withPipelineMutation((pipelines, persist) => {
       const current = pipelines.find((item) => item.id === id);
       if (!current || current.delivery?.epoch !== pipeline.delivery?.epoch) return { error: "delivery changed before publication admission", status: 409 };
+      if (current.delivery && !current.delivery.target.remote) return { error: LOCAL_DELIVERY_PUBLISH_REFUSAL, status: 409 };
       if (current.state === "closed" || current.closedAt || current.hiddenAt) return { error: "a closed lane cannot publish", status: 409 };
       if (moved && (remoteActionFence(current) !== publicationFence || passedPublicationEvidence(current) !== publicationEvidence)) {
         return { error: "the lane changed during accepted-head verification; read it again", status: 409 };
