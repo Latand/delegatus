@@ -568,7 +568,7 @@ test("legacy account reconfiguration queues a conversation reseat without touchi
 });
 
 for (const refuse of [false, true]) test(`pane reseat writes its profile and migration off-loop and leaves a refused send intact (${refuse})`, async () => {
-  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("./agent/registryLockHolderFixture");
+  const { sqliteRegistryFixture, registryLockHolder, whileRegistryWriterHeld } = await import("./agent/registryLockHolderFixture");
   const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("./blockingWaits");
   const made = sqliteRegistryFixture("llv-pane-reseat", refuse ? { sqliteWriterDeadlineMs: 80 } : {});
   const registry = made.registry;
@@ -590,9 +590,9 @@ for (const refuse of [false, true]) test(`pane reseat writes its profile and mig
       requestMigrationTick: () => {}, attributeAccountChoice: () => null });
   try {
     resetBlockingWaitsForTests(() => {});
-    await holder.hold(600);
-    const { value, gapMs } = await longestLoopGap(switchAccount);
-    expect(gapMs).toBeLessThan(50);
+    await holder.hold();
+    const { value } = await whileRegistryWriterHeld(holder, switchAccount, { release: !refuse });
+
     expect(value).toMatchObject(refuse ? { ok: false, status: 503, code: "REGISTRY_WRITER_BUSY" } : { ok: true, outcome: "pending" });
     expect(registry.snapshot().heldDeliveries[held.id]?.text).toBe(held.text);
     if (refuse) {
@@ -2045,7 +2045,7 @@ test("a legacy send naming a conversation id the registry does not hold reserves
 });
 
 test("a legacy send is recorded from its reservation, dispatching while the pane actuation hangs, and its hold, claim and settle wait off the loop", async () => {
-  const { sqliteRegistryFixture, registryLockHolder, holdBeforeEachWrite, longestLoopGap } = await import("./agent/registryLockHolderFixture");
+  const { sqliteRegistryFixture, registryLockHolder, holdBeforeEachWrite, whileRegistryWriterHeld } = await import("./agent/registryLockHolderFixture");
   const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("./blockingWaits");
   const made = sqliteRegistryFixture("llv-legacy-offloop");
   const holder = registryLockHolder(made.sqliteFilename);
@@ -2059,7 +2059,7 @@ test("a legacy send is recorded from its reservation, dispatching while the pane
     let during: ReturnType<typeof progress.get> = null;
     resetBlockingWaitsForTests(() => {});
     const hook = holdBeforeEachWrite(registry, holder, 120, /lib\/delivery\.ts/);
-    const sending = longestLoopGap(() => deliverConversationMessage({
+    const sending = whileRegistryWriterHeld(holder, () => deliverConversationMessage({
       pid: 1, path: "", conversationId: conversation.id, text: "hang in the pane", images: [], clientMessageId: "legacy-record",
     }, {
       recover: async () => null,
@@ -2070,15 +2070,15 @@ test("a legacy send is recorded from its reservation, dispatching while the pane
         await new Promise<void>((resolve) => { release = resolve; });
       },
       progress,
-    } as never));
+    } as never), { alreadyHeld: false });
     for (let attempt = 0; attempt < 400 && !release; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
     expect(during).toMatchObject({ waitReason: "dispatching", originalKey: "legacy-record", nextWakeAt: null });
     release();
-    const { value: outcome, gapMs } = await sending;
+    const { value: outcome } = await sending;
     hook.restore();
     expect(outcome).toMatchObject({ ok: true });
     expect(hook.unwrapped).toEqual([]);
-    expect(gapMs).toBeLessThan(50);
+
     const operationId = Object.values(registry.snapshot().deliveryOperationOwners).find((owner) => owner.clientMessageId === "legacy-record")!.command.operationId;
     for (const label of ["delivery.admit", "delivery.claim", "delivery.settle"]) {
       expect(blockingWaitDiagnostics().longest.some((sample) => sample.label === label && sample.operationId === operationId)).toBe(true);

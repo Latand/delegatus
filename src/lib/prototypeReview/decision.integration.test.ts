@@ -8,7 +8,12 @@ import { saveTasks, loadTasks, TASKS_FILE } from "@/lib/tasks/store";
 import { setConversationHostDependenciesForTests } from "@/app/api/conversation-host/dependencies";
 import { publishPOST as gatedPublishPOST, reviewGET, reviewPOST } from "./http";
 import { decidePrototype, prototypeDecisionText, prototypeDelivery, prototypeDeliveryResponse, type PrototypeDelivery, type PrototypeDeliveryPorts } from "./decision";
-import { prototypeCopyLine, parsePrototypeAnswer } from "./telegramAnswer";
+import { prototypeCopyLine, parsePrototypeAnswer, prototypeReference } from "./telegramAnswer";
+import { ownerTelegramReply } from "./telegram.fixture";
+import { runPrototypeAnswer } from "@/lib/externalRelay/prototypeAnswer";
+import type { ExternalRelayAnswer } from "@/lib/externalRelay/protocol";
+import { prototypeReviewReplica } from "./model";
+import { isPrototypeReplica } from "./replica";
 import { deliverPrototypeDecision, resetPrototypeDeliveryWorkerForTests, settlePrototypeDeliveriesForTests, sweepPrototypeDeliveries } from "./deliveryWorker";
 import { prototypeWorld, type PrototypeWorld } from "./world";
 import { stateDir } from "@/lib/configDir";
@@ -193,4 +198,111 @@ test("in-process owner decisions use the web text and client key through the pro
   if (decidePrototype(context, task.id, match.input, world)) deliverPrototypeDecision(task.id, id, ports());
   await settlePrototypeDeliveriesForTests();
   expect(runtime.delivered).toHaveLength(before + 1);
+});
+
+test("the exact owner reservation is saved, acknowledged and delivered to the asking seat", async () => {
+  const published = await publishPOST(new NextRequest("http://localhost/api/prototype-reviews", { method: "POST", headers: { host: "localhost" }, body: JSON.stringify({
+    clientRequestId: "owner-reservation", taskId: "task-prototype", title: "Власний гайд: де живе, які відео першими", questions }) }), world);
+  expect(published.status).toBe(200);
+  const publishedId = (await published.json()).reviewId;
+  const tasks = loadTasks();
+  const round = tasks[0]!.prototypeReviews!.find(r => r.id === publishedId)!;
+  round.id = "pr_20fbd832000000000000000000000000";
+  saveTasks(tasks);
+  const before = runtime.delivered.length;
+  const result = await runPrototypeAnswer(parsePrototypeAnswer(round, ownerTelegramReply), "owner-message", () => {}, { world, delivery }).done;
+  expect(result.status).toBe("done");
+  expect((result.answer as ExternalRelayAnswer).text).toContain("рекомендовані з застереженням");
+  const reservation = ", але по тому що показувати в кадрі- є питання. нам ж треба реальний інтерфейс телеги";
+  expect((result.answer as ExternalRelayAnswer).text).toContain(reservation);
+  await settlePrototypeDeliveriesForTests();
+  await until(() => runtime.delivered.length === before + 1);
+  resetLegacyDocumentStoresForTests();
+  const task = loadTasks()[0]!;
+  const decision = task.prototypeReviews!.find(r => r.id === round.id)!.decision!;
+  expect(decision.originalReply).toBe(ownerTelegramReply);
+  expect(decision.comment).toBe(reservation);
+  expect(decision.recommendedWithReservation).toBe(true);
+  expect(decision.skipped).toBeUndefined();
+  expect(decision.answers).toEqual(questions.map(q => ({ questionId: q.id, options: [0] })));
+  expect(decision.delivery.conversationId).toBe(runtime.conversationId);
+  expect(runtime.delivered.at(-1)!.text).toContain("recommended with reservation; resolve the owner's open point below.");
+  expect(runtime.delivered.at(-1)!.text).toContain(reservation);
+  const replica = prototypeReviewReplica(task)!;
+  expect(isPrototypeReplica(replica, task.id, task.project)).toBe(true);
+  expect(replica.rounds.at(-1)!.decision!.originalReply).toBe(ownerTelegramReply);
+  expect((await read()).rounds.find(r => r.id === round.id)!.decision!.recommendedWithReservation).toBe(true);
+});
+
+test.each(["custom", "numbered-reservation", "numbered-custom", "continuation-control", "other-before-recommendation", "other-line-before-recommendation", "long", "long-unicode"])("owner %s replies survive decision normalization, reload and production delivery", async kind => {
+  const published = await publishPOST(new NextRequest("http://localhost/api/prototype-reviews", { method: "POST", headers: { host: "localhost" }, body: JSON.stringify({
+    clientRequestId: `owner-${kind}`, taskId: "task-prototype", title: "Owner words", questions }) }), world);
+  expect(published.status).toBe(200);
+  const id = (await published.json()).reviewId;
+  const round = loadTasks()[0]!.prototypeReviews!.find(r => r.id === id)!;
+  const copy = prototypeCopyLine(round);
+  const words = kind === "custom" ? copy.replace("Відповіді рекомендовані", "1: Власне місце.\n2: Власні поверхні.\n3: Власний час.")
+    : kind === "numbered-reservation" ? `${copy}, але 2: Беремо реальний інтерфейс телеги.`
+    : kind === "numbered-custom" ? `${prototypeReference(round)} · 1: Мій гайд;2: Реальна телега;3: Перший ролик`
+    : kind === "continuation-control" ? `${copy}\nВаріант 2`
+    : kind === "other-before-recommendation" ? `${prototypeReference(round)} · Відповіді 1a 2a 3+ · Відповіді рекомендовані`
+    : kind === "other-line-before-recommendation" ? `${prototypeReference(round)} · Відповіді 1a 2a 3+\nВідповіді рекомендовані`
+    : kind === "long-unicode" ? `${copy} · ${"🙂".repeat(20_000 - [...copy].length - 3)}`
+    : `${copy}, ${"я".repeat(20_000 - copy.length - 2)}`;
+  const match = parsePrototypeAnswer(round, words);
+  expect(match).toHaveProperty("input");
+  const before = runtime.delivered.length;
+  const result = await runPrototypeAnswer(match, "owner-message", () => {}, { world, delivery }).done;
+  expect((result.answer as ExternalRelayAnswer).text).toContain("✅ Записав рішення");
+  expect((result.answer as ExternalRelayAnswer).text).toContain(kind === "custom" || kind === "numbered-custom" ? "власні відповіді" : "рекомендовані з застереженням");
+  await settlePrototypeDeliveriesForTests();
+  await until(() => runtime.delivered.length === before + 1);
+  resetLegacyDocumentStoresForTests();
+  const task = loadTasks()[0]!;
+  const saved = task.prototypeReviews!.find(r => r.id === id)!.decision!;
+  expect(saved.originalReply).toBe(words);
+  expect(saved.answers).toEqual(match.input!.answers);
+  expect(isPrototypeReplica(prototypeReviewReplica(task), task.id, task.project)).toBe(true);
+  expect(runtime.delivered.at(-1)!.text).toBe(saved.delivery.text);
+  if (kind === "numbered-reservation") {
+    expect(saved.answers![1]).toEqual({ questionId: "scope", options: [0], customText: "2: Беремо реальний інтерфейс телеги." });
+    expect(runtime.delivered.at(-1)!.text).toContain("Owner's custom note:\n2: Беремо реальний інтерфейс телеги.");
+  }
+  if (kind === "numbered-custom") {
+    expect(saved.answers!.map(answer => answer.customText)).toEqual(["1: Мій гайд", "2: Реальна телега", "3: Перший ролик"]);
+    expect(runtime.delivered.at(-1)!.text).toContain("Owner's custom note:\n2: Реальна телега");
+  }
+  if (kind === "continuation-control") {
+    expect(saved.comment).toBe("Варіант 2");
+    expect(saved.skipped).toBeUndefined();
+    expect(saved.recommendedWithReservation).toBe(true);
+    expect((result.answer as ExternalRelayAnswer).text).toContain("Варіант 2");
+    expect(runtime.delivered.at(-1)!.text).toContain("recommended with reservation; resolve the owner's open point below.");
+    expect(runtime.delivered.at(-1)!.text).toContain("Варіант 2");
+  }
+  if (kind === "other-before-recommendation" || kind === "other-line-before-recommendation") {
+    expect(saved.comment).toBe("3+");
+    expect(saved.answers).toEqual([
+      { questionId: "place", options: [0] },
+      { questionId: "scope", options: [0] },
+      { questionId: "timing", options: [0], other: true },
+    ]);
+    expect(saved.recommendedWithReservation).toBe(true);
+    expect((result.answer as ExternalRelayAnswer).text).toContain("3+");
+    expect(runtime.delivered.at(-1)!.text).toContain("recommended with reservation; resolve the owner's open point below.");
+    expect(runtime.delivered.at(-1)!.text).toContain("3+");
+  }
+  if (kind === "long") {
+    expect([...words]).toHaveLength(20_000);
+    expect(isPrototypeReplica(prototypeReviewReplica(task), task.id, task.project)).toBe(true);
+    expect(Buffer.byteLength(saved.delivery.text)).toBeLessThanOrEqual(32_000);
+    expect(saved.delivery.text).toContain("Read read_prototype_review");
+    expect(saved.delivery.text).not.toContain("\uFFFD");
+  }
+  if (kind === "long-unicode") {
+    expect([...words]).toHaveLength(20_000);
+    expect(Buffer.byteLength(saved.delivery.text)).toBeLessThanOrEqual(32_000);
+    expect(saved.originalReply).toBe(words);
+    expect(isPrototypeReplica(prototypeReviewReplica(task), task.id, task.project)).toBe(true);
+  }
 });

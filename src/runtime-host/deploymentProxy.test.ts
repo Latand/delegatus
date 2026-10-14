@@ -387,6 +387,7 @@ interface Seen {
 interface GatedViewer {
   port: number;
   seen: Seen[];
+  finishStream: () => void;
   /** Resolves once a streaming response saw its downstream go away. */
   streamClosed: Promise<void>;
   close: () => Promise<void>;
@@ -397,6 +398,7 @@ interface GatedViewer {
 async function gatedViewer(token: string): Promise<GatedViewer> {
   process.env.LLV_TOKEN = token;
   const seen: Seen[] = [];
+  let finishStream = () => {};
   let markStreamClosed = () => undefined as void;
   const streamClosed = new Promise<void>((resolve) => { markStreamClosed = resolve; });
   const server = http.createServer(async (incoming, outgoing) => {
@@ -426,14 +428,14 @@ async function gatedViewer(token: string): Promise<GatedViewer> {
       outgoing.write("data: first\n\n");
       const ticker = setInterval(() => outgoing.write("data: tick\n\n"), 40);
       outgoing.on("close", () => { clearInterval(ticker); markStreamClosed(); });
-      if (incoming.url === "/stream") setTimeout(() => { clearInterval(ticker); outgoing.end("data: last\n\n"); }, 250);
+      if (incoming.url === "/stream") finishStream = () => { clearInterval(ticker); outgoing.end("data: last\n\n"); };
       return;
     }
     outgoing.writeHead(200, { "content-type": "application/json" });
     outgoing.end(JSON.stringify({ path: incoming.url, method: incoming.method }));
   });
   const port = await listen(server);
-  return { port, seen, streamClosed, close: () => close(server) };
+  return { port, seen, finishStream: () => finishStream(), streamClosed, close: () => close(server) };
 }
 
 interface Gateway {
@@ -736,24 +738,26 @@ test("methods, bodies and streamed responses cross the vouched entry unchanged",
     expect(head.status).toBe(200);
     expect(entry.viewer.seen.at(-1)?.method).toBe("HEAD");
 
-    // Each chunk arrives as the Viewer writes it, well before the stream ends.
-    const arrivals = await new Promise<number[]>((resolve, reject) => {
-      const started = Date.now();
-      const stamps: number[] = [];
-      let text = "";
+    // Only the receiving client releases the final chunk.
+    const chunks = await new Promise<string[]>((resolve, reject) => {
+      const received: string[] = [];
+      let released = false;
       http.get({ host: "127.0.0.1", port: entry.localPort, path: "/stream" }, (response) => {
         expect(response.statusCode).toBe(200);
-        response.on("data", (chunk: Buffer) => { stamps.push(Date.now() - started); text += chunk; });
-        response.on("end", () => {
-          expect(text.startsWith("data: first\n\n")).toBe(true);
-          expect(text.endsWith("data: last\n\n")).toBe(true);
-          resolve(stamps);
+        response.on("data", (chunk: Buffer) => {
+          received.push(chunk.toString());
+          if (!released) {
+            expect(received.join("")).toContain("data: first\n\n");
+            expect(received.join("")).not.toContain("data: last\n\n");
+            released = true;
+            entry.viewer.finishStream();
+          }
         });
+        response.on("end", () => resolve(received));
       }).on("error", reject);
     });
-    expect(arrivals.length).toBeGreaterThanOrEqual(2);
-    expect(arrivals[0]).toBeLessThan(150);
-    expect(arrivals.at(-1)! - arrivals[0]).toBeGreaterThanOrEqual(150);
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    expect(chunks.join("").endsWith("data: last\n\n")).toBe(true);
   } finally {
     await entry.close();
   }

@@ -2354,7 +2354,7 @@ test("a terminal retry has its row and record before the retry command, so a los
 });
 
 test("a discard whose registry write is refused answers retryable, keeps the loop responsive, and a repeated discard ends the send discarded once the lock clears", async () => {
-  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const { sqliteRegistryFixture, registryLockHolder, whileRegistryWriterHeld } = await import("@/lib/agent/registryLockHolderFixture");
   const made = sqliteRegistryFixture("llv-discard-refused", { sqliteWriterDeadlineMs: 150 });
   const holder = registryLockHolder(made.sqliteFilename);
   const registry = made.registry;
@@ -2384,12 +2384,12 @@ test("a discard whose registry write is refused answers retryable, keeps the loo
     const discard = () => handleRuntimeDiscard(new NextRequest(`http://127.0.0.1/api/runtime/operations/${operationId}`,
       { method: "DELETE", headers: { host: "127.0.0.1" } }), operationId,
     { enabled: () => true, client: () => client, registry: () => registry, kick: () => {} });
-    const { value: refused, gapMs } = await longestLoopGap(discard);
+    const { value: refused } = await whileRegistryWriterHeld(holder, discard, { release: false, alreadyHeld: false });
     expect(refused.status).toBe(503);
     expect(await refused.json()).toMatchObject({ retryable: true });
-    expect(gapMs).toBeLessThan(50);
+
     expect(registry.snapshot().heldDeliveries[held.id]).toMatchObject({ state: "held" });
-    await Bun.sleep(650);
+    await holder.release();
     const repeated = await discard();
     expect(repeated.status).toBe(200);
     expect(registry.snapshot().deliveryOperationOwners[operationId]).toMatchObject({ terminalState: "failed", terminalReason: "delivery-discarded" });

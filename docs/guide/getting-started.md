@@ -48,21 +48,30 @@ you already use.
   a merge, and a stopped merge names a signed-out `gh` as its reason.
 - Linux or macOS. Linux is the main platform and macOS works. Native
   Windows runs Delegatus with Claude Code only; use WSL 2 for Codex, the MCP
-  server and the rest. [Platform support](../../README.md#platform-support)
-  has the details.
+  server and the rest. [Platforms](#platforms) has the details.
+
+### Platforms
+
+Delegatus is built for Linux and also runs on macOS and Windows.
+
+macOS works through a backend that uses `ps` and `lsof` in place of `/proc`.
+Native Windows runs Delegatus with Claude Code; install Claude with its
+native installer so a `claude.exe` is on `PATH`. Codex, managed accounts,
+local dictation, the MCP server and `--tailscale` are missing there, so run
+under WSL 2 if you need them. Windows also has no open-file scan, so
+Delegatus judges whether an agent is alive from file modification times.
 
 ## Choose how to install
 
 There are five ways to get Delegatus. Most people start with the first or
 the second.
 
-| Path | When it fits | Command | A `delegatus` command stays installed | How it updates |
-| --- | --- | --- | --- | --- |
-| Run the package | Trying it out | `bunx delegatus-cli` | No | The **Update** dialog, or `bunx delegatus-cli@latest` |
-| Keep a command installed | Daily use | `bun add -g delegatus-cli` | Yes | The **Update** dialog, or `bunx delegatus-cli@latest` |
-| Let your coding agent install it | You already work in Claude Code or Codex | The install prompt on the Delegatus website | Yes | As above |
-| Run from a clone | Reading or changing the source | `git clone`, then `bun install`, `bun run build`, `bun bin/cli.mjs` | No | The **Update** dialog, or pull and build again |
-| Docker | A long-running server, or a look at the interface | See below | No | `scripts/rebuild.sh` on the production setup |
+- **Run the package.** For trying it out: `bunx delegatus-cli`.
+- **Keep a command installed.** For daily use: `bun add -g delegatus-cli`.
+- **Let your coding agent install it.** If you already work in Claude Code or
+  Codex: paste the install prompt from the Delegatus website.
+- **Run from a clone.** To read or change the source.
+- **Docker.** For a long-running server, or a look at the interface.
 
 ### Run the package
 
@@ -71,6 +80,7 @@ bunx delegatus-cli
 ```
 
 This downloads and runs the published package without installing a command.
+Update it from the **Update** dialog, or run `bunx delegatus-cli@latest`.
 
 ### Keep a command installed
 
@@ -81,7 +91,8 @@ bun add -g delegatus-cli
 This installs three commands into `~/.bun/bin`: `delegatus`, its short alias
 `dlg`, and `delegatus-mcp`, the MCP server agents use to reach Delegatus.
 `bun add -g` needs no root. Start Delegatus with `delegatus`; `delegatus
---help` lists its options.
+--help` lists its options. The command stays installed. Update it from the
+**Update** dialog, or run `bunx delegatus-cli@latest`.
 
 ### Let your coding agent install it
 
@@ -97,6 +108,8 @@ agent and it does the following, in order:
 5. registers the MCP server for that agent under the name `viewer`, which
    takes effect in the agent's next session;
 6. gives you the link to open.
+
+The command stays installed, and it updates like the installed command.
 
 On native Windows it stops after the first step and asks you to run it inside
 WSL 2. On macOS the Claude desktop app needs the separate Claude Code CLI,
@@ -120,8 +133,9 @@ bun bin/cli.mjs
 
 The command serves the output of the last build, so build again after every
 pull. `bun dev` runs the app with hot reload, and with it you start the
-runtime host yourself. [From a clone](../../README.md#from-a-clone) in the
-README has the rest.
+runtime host yourself. No `delegatus` command stays installed. Update from
+the **Update** dialog, or pull and build again; [Updates](operations.md#updates)
+covers keeping a clone current.
 
 ### Docker
 
@@ -132,8 +146,9 @@ getting one), because `docker-compose.yml` is at the top of that checkout.
 
 - **The test Viewer** shows the interface over your existing transcripts and
   nothing more. It is the web app alone, without a runtime host, so it
-  cannot start an orchestrator, an agent or a pipeline. The README's
-  [Docker](../../README.md#docker) section has its two commands. It opens
+  cannot start an orchestrator, an agent or a pipeline. The
+  [Run the published image](../docker.md#run-the-published-image) section of
+  docs/docker.md has its two commands. It opens
   on `http://127.0.0.1:8901/`, runs in the background, and stops with
   `docker compose --profile test stop viewer-test`.
 - **The production setup** is the Docker installation that runs agents. Its
@@ -145,7 +160,8 @@ getting one), because `docker-compose.yml` is at the top of that checkout.
   and check that port 8898 answers. Agents started there run the `claude`,
   `codex` and `bun` installed on the host, so install them on the host first.
   `docker compose --profile runtime-host stop runtime-host` stops the
-  runtime host and with it the listener on port 8898.
+  runtime host and with it the listener on port 8898. No `delegatus` command
+  stays installed; `scripts/rebuild.sh` updates the production setup.
 
 After the production setup answers on port 8898, continue at [The setup
 guide](#the-setup-guide).
@@ -177,8 +193,8 @@ The first start shows a notice about the anonymous install ping, in the page
 and in the start output. Turn it off in the sidebar's ⋯ menu under
 **Settings** → **Install ping**, or start Delegatus with
 `DELEGATUS_TELEMETRY=0` or `DO_NOT_TRACK=1`.
-[What leaves your machine](../../README.md#what-leaves-your-machine) lists
-what it sends.
+[What leaves your machine](security-and-privacy.md#what-leaves-your-machine)
+lists what it sends.
 
 ## The setup guide
 
@@ -191,8 +207,8 @@ Delegatus**. Its numbered steps are **Engines**, **Project**, **Telegram
    the ones you use. After installing a missing CLI, press **Check again**.
    If you use a service that speaks the Anthropic Messages API, **Add
    compatible provider** under Claude accounts takes its address, token and
-   models; the README's [Quick start](../../README.md#quick-start) has the
-   fields.
+   models; [Compatible providers](accounts-and-roles.md#compatible-providers)
+   has the fields.
 2. **Project** asks for the folder the orchestrator will work on. Pick it from
    **Already on this computer**, which lists the projects Delegatus already
    found here with how many conversations each has, or **Open another
@@ -293,13 +309,11 @@ reason names the `origin/main` it could not fetch.
 Each pipeline stage runs on the engine its role is mapped to. The general
 **Builder** and the **Reviewer** both default to Codex, so an installation
 with only Codex connected can run a build-and-review pipeline made of those
-two roles. Some Builder variants default to Claude Code instead: the
-documentation, frontend and trivial-size rows, and the fix rounds for
-documentation and frontend work. A pipeline that selects one of those, or a
-setup with only Claude Code connected, meets a stage whose engine is not
-connected. That pipeline is refused before any stage starts, with a message
-that a stage's engine is not connected. Before the first pipeline, do one of
-these:
+two roles. Some Builder variants (documentation, frontend, trivial-size rows
+and their fix rounds) default to Claude Code instead. A pipeline that selects
+one of those, or a setup with only Claude Code connected, is refused before
+any stage starts, with a message that a stage's engine is not connected.
+Before the first pipeline, do one of these:
 
 - connect the other engine in the setup guide's **Engines** step;
 - open the sidebar's ⋯ menu → **Settings** → **Roles: engine and model**
@@ -326,6 +340,8 @@ fix or a small feature in one file. Then watch it appear:
 5. The pipeline ends with a pull request open on GitHub, and the orchestrator
    files a report in the **Reports** log beside its chat.
 
+![A pipeline opened from its task: Build, Review and Verify stages, with Review's loop back to Build folded under it, and the builder's and the reviewer's conversations side by side](../media/readme/pipeline.svg)
+
 If the pipeline needs you, **Needs you** counts it and the card's state line
 says why. A question for you waits in the **Decisions** tab beside the
 orchestrator's chat.
@@ -337,33 +353,33 @@ turn on **Merge when the review passes**; see
 
 ## If something does not start
 
-- No agent CLI found. The start output prints the install commands for
+- **No agent CLI found.** The start output prints the install commands for
   Claude Code and Codex. Install one, restart Delegatus, and press **Check
   again** in the setup guide's **Engines** step.
-- An account is signed out. The **Engines** step shows **Installed, signed
+- **An account is signed out.** The **Engines** step shows **Installed, signed
   out**. Sign in there; the orchestrator draft also asks you to sign in
   before it can start.
-- The port is busy. The start output suggests the next port; start again
+- **The port is busy.** The start output suggests the next port; start again
   with `--port` and that number.
-- Only Copilot is installed. Copilot cannot run the orchestrator. Install
+- **Only Copilot is installed.** Copilot cannot run the orchestrator. Install
   Claude Code or Codex as well.
-- "not a git repository", or the pipeline stops while resolving its base.
+- **"not a git repository", or the pipeline stops while resolving its base.**
   The pipeline needs a commit to start from. Follow [Prepare a project for
   pipelines](#prepare-a-project-for-pipelines).
-- The pipeline is refused because an engine is not connected. See [If only
+- **The pipeline is refused because an engine is not connected.** See [If only
   one engine is connected](#if-only-one-engine-is-connected).
-- No pull request, or no merge. Pull requests and merging need a GitHub
+- **No pull request, or no merge.** Pull requests and merging need a GitHub
   `origin` and a signed-in `gh`. Run `gh auth login` and check
   `git remote -v`.
 
-[Configuration](../../README.md#configuration) in the README lists every
-option and environment variable.
+[Configuration](configuration.md) lists every option and environment
+variable.
 
 ## Next
 
 - [Core concepts](concepts.md): what each part is and how they connect.
 - [Everyday workflows](workflows.md): asking for work and steering it.
-- [Phone access](../../README.md#phone-access): opening Delegatus on your
+- [Phone access](phone.md#phone-access): opening Delegatus on your
   phone.
-- [MCP server for agents](../../README.md#mcp-server-for-agents): giving your
+- [The MCP server](mcp.md): giving your
   own Claude Code or Codex sessions the same tools the orchestrator uses.

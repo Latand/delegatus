@@ -1,0 +1,842 @@
+{
+  "contained": [
+    {
+      "layout": "rail-open",
+      "row": "column top, up",
+      "input": "wheel",
+      "from": 687,
+      "to": 687,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-open",
+      "row": "column top, up",
+      "input": "gesture",
+      "from": 687,
+      "to": 687,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-open",
+      "row": "column top, up",
+      "input": "key",
+      "from": 687,
+      "to": 687,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-open",
+      "row": "column end, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 0,
+      "panelFrom": 0,
+      "panelTo": 1738
+    },
+    {
+      "layout": "rail-open",
+      "row": "column end, down",
+      "input": "gesture",
+      "from": 0,
+      "to": 0,
+      "panelFrom": 1738,
+      "panelTo": 1738
+    },
+    {
+      "layout": "rail-open",
+      "row": "conversation end, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 0,
+      "panelFrom": 362,
+      "panelTo": 362
+    },
+    {
+      "layout": "rail-open",
+      "row": "conversation end, down",
+      "input": "gesture",
+      "from": 0,
+      "to": 0,
+      "panelFrom": 362,
+      "panelTo": 362
+    },
+    {
+      "layout": "rail-open",
+      "row": "conversation end, down",
+      "input": "key",
+      "from": 0,
+      "to": 0,
+      "panelFrom": 362,
+      "panelTo": 362
+    },
+    {
+      "layout": "rail-open",
+      "row": "conversation top, up",
+      "input": "wheel",
+      "from": 160,
+      "to": 160,
+      "panelFrom": 362,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-open",
+      "row": "conversation top, up",
+      "input": "gesture",
+      "from": 160,
+      "to": 160,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "column top, up",
+      "input": "wheel",
+      "from": 687,
+      "to": 687,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "column top, up",
+      "input": "gesture",
+      "from": 687,
+      "to": 687,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "column top, up",
+      "input": "key",
+      "from": 687,
+      "to": 687,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "column end, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 0,
+      "panelFrom": 0,
+      "panelTo": 1667
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "column end, down",
+      "input": "gesture",
+      "from": 0,
+      "to": 0,
+      "panelFrom": 1667,
+      "panelTo": 1667
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "conversation end, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 0,
+      "panelFrom": 362,
+      "panelTo": 362
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "conversation end, down",
+      "input": "gesture",
+      "from": 0,
+      "to": 0,
+      "panelFrom": 362,
+      "panelTo": 362
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "conversation end, down",
+      "input": "key",
+      "from": 0,
+      "to": 0,
+      "panelFrom": 362,
+      "panelTo": 362
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "conversation top, up",
+      "input": "wheel",
+      "from": 160,
+      "to": 160,
+      "panelFrom": 362,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "conversation top, up",
+      "input": "gesture",
+      "from": 160,
+      "to": 160,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "tabs",
+      "row": "column top, up",
+      "input": "wheel",
+      "from": 612,
+      "to": 612,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "tabs",
+      "row": "column top, up",
+      "input": "gesture",
+      "from": 612,
+      "to": 612,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "tabs",
+      "row": "column top, up",
+      "input": "key",
+      "from": 612,
+      "to": 612,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "tabs",
+      "row": "column end, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 0,
+      "panelFrom": 0,
+      "panelTo": 1719
+    },
+    {
+      "layout": "tabs",
+      "row": "column end, down",
+      "input": "gesture",
+      "from": 0,
+      "to": 0,
+      "panelFrom": 1719,
+      "panelTo": 1719
+    },
+    {
+      "layout": "tabs",
+      "row": "conversation end, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 0,
+      "panelFrom": 418,
+      "panelTo": 418
+    },
+    {
+      "layout": "tabs",
+      "row": "conversation end, down",
+      "input": "gesture",
+      "from": 0,
+      "to": 0,
+      "panelFrom": 418,
+      "panelTo": 418
+    },
+    {
+      "layout": "tabs",
+      "row": "conversation end, down",
+      "input": "key",
+      "from": 0,
+      "to": 0,
+      "panelFrom": 418,
+      "panelTo": 418
+    },
+    {
+      "layout": "tabs",
+      "row": "conversation top, up",
+      "input": "wheel",
+      "from": 160,
+      "to": 160,
+      "panelFrom": 418,
+      "panelTo": 0
+    },
+    {
+      "layout": "tabs",
+      "row": "conversation top, up",
+      "input": "gesture",
+      "from": 160,
+      "to": 160,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "seat-folded",
+      "row": "column top, up",
+      "input": "wheel",
+      "from": 54,
+      "to": 54,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "seat-folded",
+      "row": "column top, up",
+      "input": "gesture",
+      "from": 54,
+      "to": 54,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "seat-folded",
+      "row": "column top, up",
+      "input": "key",
+      "from": 54,
+      "to": 54,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "seat-folded",
+      "row": "column end, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 0,
+      "panelFrom": 0,
+      "panelTo": 1738
+    },
+    {
+      "layout": "seat-folded",
+      "row": "column end, down",
+      "input": "gesture",
+      "from": 0,
+      "to": 0,
+      "panelFrom": 1738,
+      "panelTo": 1738
+    }
+  ],
+  "uncontained": [
+    {
+      "layout": "rail-open",
+      "row": "column top, up",
+      "input": "wheel",
+      "from": 687,
+      "to": 207,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-open",
+      "row": "column top, up",
+      "input": "gesture",
+      "from": 687,
+      "to": 87,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-open",
+      "row": "column top, up",
+      "input": "key",
+      "from": 687,
+      "to": 0,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-open",
+      "row": "column end, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 687,
+      "panelFrom": 0,
+      "panelTo": 1738
+    },
+    {
+      "layout": "rail-open",
+      "row": "column end, down",
+      "input": "gesture",
+      "from": 0,
+      "to": 600,
+      "panelFrom": 1738,
+      "panelTo": 1738
+    },
+    {
+      "layout": "rail-open",
+      "row": "conversation end, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 687,
+      "panelFrom": 362,
+      "panelTo": 362
+    },
+    {
+      "layout": "rail-open",
+      "row": "conversation end, down",
+      "input": "gesture",
+      "from": 0,
+      "to": 600,
+      "panelFrom": 362,
+      "panelTo": 362
+    },
+    {
+      "layout": "rail-open",
+      "row": "conversation end, down",
+      "input": "key",
+      "from": 0,
+      "to": 687,
+      "panelFrom": 362,
+      "panelTo": 362
+    },
+    {
+      "layout": "rail-open",
+      "row": "conversation top, up",
+      "input": "wheel",
+      "from": 160,
+      "to": 0,
+      "panelFrom": 362,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-open",
+      "row": "conversation top, up",
+      "input": "gesture",
+      "from": 160,
+      "to": 0,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "column top, up",
+      "input": "wheel",
+      "from": 687,
+      "to": 207,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "column top, up",
+      "input": "gesture",
+      "from": 687,
+      "to": 87,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "column top, up",
+      "input": "key",
+      "from": 687,
+      "to": 0,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "column end, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 687,
+      "panelFrom": 0,
+      "panelTo": 1667
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "column end, down",
+      "input": "gesture",
+      "from": 0,
+      "to": 600,
+      "panelFrom": 1667,
+      "panelTo": 1667
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "conversation end, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 687,
+      "panelFrom": 362,
+      "panelTo": 362
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "conversation end, down",
+      "input": "gesture",
+      "from": 0,
+      "to": 600,
+      "panelFrom": 362,
+      "panelTo": 362
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "conversation end, down",
+      "input": "key",
+      "from": 0,
+      "to": 687,
+      "panelFrom": 362,
+      "panelTo": 362
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "conversation top, up",
+      "input": "wheel",
+      "from": 160,
+      "to": 0,
+      "panelFrom": 362,
+      "panelTo": 0
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "conversation top, up",
+      "input": "gesture",
+      "from": 160,
+      "to": 0,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "tabs",
+      "row": "column top, up",
+      "input": "wheel",
+      "from": 612,
+      "to": 132,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "tabs",
+      "row": "column top, up",
+      "input": "gesture",
+      "from": 612,
+      "to": 12,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "tabs",
+      "row": "column top, up",
+      "input": "key",
+      "from": 612,
+      "to": 0,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "tabs",
+      "row": "column end, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 612,
+      "panelFrom": 0,
+      "panelTo": 1719
+    },
+    {
+      "layout": "tabs",
+      "row": "column end, down",
+      "input": "gesture",
+      "from": 0,
+      "to": 600,
+      "panelFrom": 1719,
+      "panelTo": 1719
+    },
+    {
+      "layout": "tabs",
+      "row": "conversation end, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 240,
+      "panelFrom": 418,
+      "panelTo": 418
+    },
+    {
+      "layout": "tabs",
+      "row": "conversation end, down",
+      "input": "gesture",
+      "from": 0,
+      "to": 600,
+      "panelFrom": 418,
+      "panelTo": 418
+    },
+    {
+      "layout": "tabs",
+      "row": "conversation end, down",
+      "input": "key",
+      "from": 0,
+      "to": 612,
+      "panelFrom": 418,
+      "panelTo": 418
+    },
+    {
+      "layout": "tabs",
+      "row": "conversation top, up",
+      "input": "wheel",
+      "from": 160,
+      "to": 0,
+      "panelFrom": 418,
+      "panelTo": 0
+    },
+    {
+      "layout": "tabs",
+      "row": "conversation top, up",
+      "input": "gesture",
+      "from": 160,
+      "to": 0,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "seat-folded",
+      "row": "column top, up",
+      "input": "wheel",
+      "from": 54,
+      "to": 0,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "seat-folded",
+      "row": "column top, up",
+      "input": "gesture",
+      "from": 54,
+      "to": 0,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "seat-folded",
+      "row": "column top, up",
+      "input": "key",
+      "from": 54,
+      "to": 0,
+      "panelFrom": 0,
+      "panelTo": 0
+    },
+    {
+      "layout": "seat-folded",
+      "row": "column end, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 54,
+      "panelFrom": 0,
+      "panelTo": 1738
+    },
+    {
+      "layout": "seat-folded",
+      "row": "column end, down",
+      "input": "gesture",
+      "from": 0,
+      "to": 54,
+      "panelFrom": 1738,
+      "panelTo": 1738
+    }
+  ],
+  "placed": [
+    {
+      "layout": "rail-open",
+      "row": "page scrollbar, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 240
+    },
+    {
+      "layout": "rail-open",
+      "row": "page scrollbar, up",
+      "input": "wheel",
+      "from": 687,
+      "to": 447
+    },
+    {
+      "layout": "rail-open",
+      "row": "column head, up",
+      "input": "wheel",
+      "from": 687,
+      "to": 447
+    },
+    {
+      "layout": "rail-open",
+      "row": "column head, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 240
+    },
+    {
+      "layout": "rail-open",
+      "row": "seat head, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 240
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "page scrollbar, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 240
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "page scrollbar, up",
+      "input": "wheel",
+      "from": 687,
+      "to": 447
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "column head, up",
+      "input": "wheel",
+      "from": 687,
+      "to": 447
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "column head, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 240
+    },
+    {
+      "layout": "rail-hidden",
+      "row": "seat head, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 240
+    },
+    {
+      "layout": "tabs",
+      "row": "page scrollbar, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 240
+    },
+    {
+      "layout": "tabs",
+      "row": "page scrollbar, up",
+      "input": "wheel",
+      "from": 612,
+      "to": 372
+    },
+    {
+      "layout": "tabs",
+      "row": "column head, up",
+      "input": "wheel",
+      "from": 612,
+      "to": 372
+    },
+    {
+      "layout": "tabs",
+      "row": "column head, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 240
+    },
+    {
+      "layout": "tabs",
+      "row": "seat head, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 240
+    },
+    {
+      "layout": "seat-folded",
+      "row": "page scrollbar, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 54
+    },
+    {
+      "layout": "seat-folded",
+      "row": "page scrollbar, up",
+      "input": "wheel",
+      "from": 54,
+      "to": 0
+    },
+    {
+      "layout": "seat-folded",
+      "row": "column head, up",
+      "input": "wheel",
+      "from": 54,
+      "to": 0
+    },
+    {
+      "layout": "seat-folded",
+      "row": "column head, down",
+      "input": "wheel",
+      "from": 0,
+      "to": 54
+    }
+  ],
+  "held": [
+    {
+      "layout": "rail-open",
+      "thumbDrag": {
+        "from": 0,
+        "to": 566,
+        "selected": ""
+      },
+      "sideways": {
+        "scrollLeft": 211,
+        "page": [
+          687,
+          687
+        ]
+      },
+      "focus": {
+        "page": [
+          0,
+          220
+        ]
+      }
+    },
+    {
+      "layout": "rail-hidden",
+      "thumbDrag": {
+        "from": 0,
+        "to": 566,
+        "selected": ""
+      },
+      "focus": {
+        "page": [
+          0,
+          168
+        ]
+      }
+    },
+    {
+      "layout": "tabs",
+      "thumbDrag": {
+        "from": 0,
+        "to": 572,
+        "selected": ""
+      },
+      "focus": {
+        "page": [
+          0,
+          241
+        ]
+      }
+    },
+    {
+      "layout": "seat-side",
+      "pageRoom": 0
+    },
+    {
+      "layout": "rail-open",
+      "touch": {
+        "body": {
+          "row": "column top, finger down",
+          "from": 687,
+          "to": 687
+        },
+        "head": {
+          "row": "column head, finger down",
+          "from": 687,
+          "to": 350
+        }
+      }
+    }
+  ],
+  "failures": []
+}

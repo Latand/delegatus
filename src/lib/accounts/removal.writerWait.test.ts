@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { setAgentRegistryForTests } from "@/lib/agent/registry";
-import { longestLoopGap, registryLockHolder, sqliteRegistryFixture } from "@/lib/agent/registryLockHolderFixture";
+import { withoutWriterWait, registryLockHolder, sqliteRegistryFixture } from "@/lib/agent/registryLockHolderFixture";
 import { blockingWaitDiagnostics, resetBlockingWaitsForTests } from "@/lib/blockingWaits";
 import { drainHeldDeliveries } from "./migration/coordinator";
 import { emptyLaunchProfile } from "./migration/contracts";
@@ -26,6 +26,7 @@ for (const busy of [false, true]) test(`failed account commit restores immediate
   const held = registry.holdDelivery(conversation.id, "accepted before retirement", "retirement-original-key");
   const go = path.join(made.root, "go");
   const ready = path.join(made.root, "ready");
+  const free = path.join(made.root, "free");
   const child = busy ? Bun.spawn([process.execPath, "-e", `
     const { Database } = await import("bun:sqlite");
     const fs = await import("node:fs");
@@ -36,14 +37,17 @@ for (const busy of [false, true]) test(`failed account commit restores immediate
       clearInterval(timer);
       db.exec("BEGIN IMMEDIATE");
       fs.writeFileSync(process.argv[3], "ready");
-      setTimeout(() => { db.exec("ROLLBACK"); db.close(); }, 600);
+      const release = setInterval(() => {
+        if (!fs.existsSync(process.argv[4])) return;
+        clearInterval(release); db.exec("ROLLBACK"); db.close();
+      }, 1);
     }, 1);
-  `, made.sqliteFilename, go, ready], { stdout: "pipe", stderr: "inherit" }) : null;
+  `, made.sqliteFilename, go, ready, free], { stdout: "pipe", stderr: "inherit" }) : null;
   let entry: AccountRemovalJournalEntry | null = null;
   try {
     if (child) expect(new TextDecoder().decode((await child.stdout.getReader().read()).value)).toContain("started");
     resetBlockingWaitsForTests(() => {});
-    const { gapMs } = await longestLoopGap(() => {
+    (busy ? (work: () => void) => withoutWriterWait(made.sqliteFilename, work, 2) : (work: () => void) => work())(() => {
       expect(() => removeManagedAccountIntoArchive({ engine: "claude", accountId, home, homeIsSafe: () => true, unsafeHome: () => new Error("unsafe"),
         rewrites: (from, to) => [{ from, to }], registry: {
           journal: (phase, rewrites) => { entry = phase ? { id: accountId, phase, startedAt: Date.now(), rewrites: rewrites ? [...rewrites] : undefined } : null; },
@@ -61,7 +65,6 @@ for (const busy of [false, true]) test(`failed account commit restores immediate
           },
         } })).toThrow();
     });
-    expect(gapMs).toBeLessThan(50);
     if (!busy) {
       expect(registry.snapshot().heldDeliveries[held.id]?.text).toBe(held.text);
       expect(fs.existsSync(home)).toBe(true);
@@ -73,6 +76,7 @@ for (const busy of [false, true]) test(`failed account commit restores immediate
       expect(entry).toMatchObject({ phase: "retiring" });
       expect(fs.existsSync(home)).toBe(false);
       expect(registry.snapshot().heldDeliveries[held.id]?.command.operationId).toBe(held.command.operationId);
+      fs.writeFileSync(free, "release");
       await child!.exited;
       expect(recoverManagedAccountRemoval({ engine: "claude", accountId, home, entry: entry!, listed: true,
         commitRetired: () => {}, clearJournal: () => { entry = null; } })).toBe("retired");
@@ -108,9 +112,8 @@ for (const retiredInPlace of [false, true]) for (const renamed of [false, true])
     commitRetired: () => {}, clearJournal: () => { cleared = true; } });
   try {
     resetBlockingWaitsForTests(() => {});
-    await holder.hold(600);
-    const { value, gapMs } = await longestLoopGap(recover);
-    expect(gapMs).toBeLessThan(50);
+    await holder.hold();
+    const value = withoutWriterWait(made.sqliteFilename, recover);
     expect(value).toBeNull();
     expect(cleared).toBe(false);
     expect(fs.existsSync(home)).toBe(renamed);
@@ -149,6 +152,7 @@ for (const busy of [false, true]) test(`failed in-place retirement commit restor
   registry.setEngineRouting("claude", accountId);
   const go = path.join(made.root, "go");
   const ready = path.join(made.root, "ready");
+  const free = path.join(made.root, "free");
   const child = busy ? Bun.spawn([process.execPath, "-e", `
     const { Database } = await import("bun:sqlite");
     const fs = await import("node:fs");
@@ -159,14 +163,17 @@ for (const busy of [false, true]) test(`failed in-place retirement commit restor
       clearInterval(timer);
       db.exec("BEGIN IMMEDIATE");
       fs.writeFileSync(process.argv[3], "ready");
-      setTimeout(() => { db.exec("ROLLBACK"); db.close(); }, 600);
+      const release = setInterval(() => {
+        if (!fs.existsSync(process.argv[4])) return;
+        clearInterval(release); db.exec("ROLLBACK"); db.close();
+      }, 1);
     }, 1);
-  `, made.sqliteFilename, go, ready], { stdout: "pipe", stderr: "inherit" }) : null;
+  `, made.sqliteFilename, go, ready, free], { stdout: "pipe", stderr: "inherit" }) : null;
   try {
     if (child) expect(new TextDecoder().decode((await child.stdout.getReader().read()).value)).toContain("started");
     resetBlockingWaitsForTests(() => {});
     let thrown: unknown = null;
-    const { gapMs } = await longestLoopGap(() => {
+    (busy ? (work: () => void) => withoutWriterWait(made.sqliteFilename, work, 2) : (work: () => void) => work())(() => {
       try {
         retireAccountInPlace({ engine: "claude", accountId, fallbackAccountId: "kept", commit: () => {
           if (busy) {
@@ -181,7 +188,6 @@ for (const busy of [false, true]) test(`failed in-place retirement commit restor
         } });
       } catch (error) { thrown = error; }
     });
-    expect(gapMs).toBeLessThan(50);
     if (!busy) {
       expect((thrown as Error).message).toBe("accounts commit denied");
       expect(registry.engineRouting("claude").activeAccountId).toBe(accountId);

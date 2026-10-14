@@ -246,7 +246,7 @@ test("a designated seat stays addressable when membership is ahead of the index"
   expect(posts).toHaveLength(1);
 });
 
-test("a shared name in the last completed catalog refuses immediately", async () => {
+test("a shared name with two designated seats in the last completed catalog refuses immediately", async () => {
   resetFilesRouteCacheForTests();
   setFileCatalogMembershipProbeForTests(async () => "initial");
   setFileScanRunnerForTests(async () => ({
@@ -255,6 +255,7 @@ test("a shared name in the last completed catalog refuses immediately", async ()
   }));
   await completedFileScan();
   designateSeat("homonym-seated-project", "Homonym target", "conversation_33333333-3333-4333-8333-333333333333");
+  designateSeat("homonym-other-project", "Homonym target", "conversation_homonym_other");
   setFileCatalogMembershipProbeForTests(async () => "changed");
   setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: false }));
   const { posts, service } = seatSendHarness();
@@ -275,7 +276,7 @@ test("a known project without an active seat is refused before scan or dispatch"
     project: "Seatless target", text: "Synthetic status", clientRequestId: "seatless-named-send",
   });
   expect(result).toMatchObject({ ok: false, code: "unknown_project", retryable: false });
-  expect("error" in result && result.error).toBe('no such project "Seatless target"; no close matches; pass a known project key, display name or repository name');
+  expect("error" in result && result.error).toBe('no such project "Seatless target"; close matches: Seatless target (seatless-project)');
   expect(posts).toEqual([]);
   expect(scans).toBe(0);
   expect(orchestratorSeatFor("seatless-project").active).toBeNull();

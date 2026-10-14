@@ -23,7 +23,7 @@ export interface PrototypeQuestion {
   multiple?: boolean;
   other?: boolean;
 }
-export interface PrototypeAnswer { questionId: string; options: number[]; other?: true }
+export interface PrototypeAnswer { questionId: string; options: number[]; other?: true; customText?: string }
 export interface PublishPrototypeInput {
   clientRequestId: string;
   taskId?: string;
@@ -59,6 +59,9 @@ export type PrototypeDeliveryState = "pending" | "sent" | "failed" | "uncertain"
     the operator's attention. Never crosses to another installation. */
 export type PrototypeDeliveryPhase = "saved" | "delivering" | "delivered" | "waiting-seat" | "attention";
 export interface PrototypeDecision {
+  /** Telegram owner's words after NFC and Markdown escape normalization. */
+  originalReply?: string;
+  recommendedWithReservation?: true;
   answers?: PrototypeAnswer[];
   skipped?: true;
   rejected?: true;
@@ -174,4 +177,5 @@ export interface OperatorDecisionsRead {
       seat's feed draws where it asked. Null when the project holds no such round. */
   round?: OperatorDecisionView | null;
 }
-export interface DecidePrototypeInput { reviewId: string; chosen: number[]; comment: string; answers?: PrototypeAnswer[]; skip?: true; reject?: true }
+export interface DecidePrototypeInput { reviewId: string; chosen: number[]; comment: string; answers?: PrototypeAnswer[]; skip?: true; reject?: true;
+  originalReply?: string; recommendedWithReservation?: true }

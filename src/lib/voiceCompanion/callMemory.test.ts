@@ -1,8 +1,10 @@
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CallMemory, boundedSummary, memoryBlock, summaryInput, type SummaryInput, type CallSummarizer } from "./callMemory";
+import { CALL_MEMORY_MODEL, summarizeCall, CallMemory, boundedSummary, memoryBlock, summaryInput, type SummaryInput, type CallSummarizer } from "./callMemory";
+import { accountManager } from "@/lib/accounts/manager";
+import { translate } from "@/lib/i18n/core";
 import { summaryText, type CallSummary } from "./callMemoryTypes";
 import { CompanionTranscriptRecords } from "./transcriptRecord";
 import { CompanionStorage } from "./storage";
@@ -21,6 +23,28 @@ beforeEach(() => { const directory = path.join(root,String(++sequence)); process
 afterAll(() => fs.rmSync(root,{ recursive: true, force: true }));
 const answer = { asked: ["Review the build."], done: ["Passed the request on."], decided: ["Keep the current layout."], open: ["Wait for the report."] };
 const result = (value: unknown = answer) => ({ answer: value, durationMs: 25, inputTokens: 1000, outputTokens: 120, model: "fixture-haiku" });
+test("call memory still admits Haiku with its existing effort, ceiling, deadline and copy", async () => {
+  const home = fs.mkdtempSync(path.join(root, "account-"));
+  fs.writeFileSync(path.join(home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "sample", expiresAt: Date.now() + 60_000 } }), { mode: 0o600 });
+  const admission = spyOn(accountManager, "resolveHeadlessSpawn").mockImplementation((_engine, _requested, _excluded, project, model) => {
+    expect(project).toBe("garden"); expect(model).toBe("claude-haiku-5-5");
+    return { kind: "available", account: { engine: "claude", accountId: "sample", kind: "managed", home, transcriptRoot: "sample", env: { NODE_ENV: "test" } } };
+  });
+  const originalFetch = globalThis.fetch;
+  const timeout = spyOn(AbortSignal, "timeout");
+  globalThis.fetch = (async (_, init) => {
+    const body = JSON.parse(init!.body as string);
+    expect(body.model).toBe(CALL_MEMORY_MODEL); expect(body.max_tokens).toBe(2048);
+    expect(body.output_config.effort).toBe("low");
+    return Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(answer) }] });
+  }) as typeof fetch;
+  try {
+    expect((await summarizeCall({ text: "Review the build.", previous: null, through: 0, privateOmitted: false, cut: Infinity, turns: 1 }, "garden")).model).toBe("claude-haiku-5-5");
+    expect(timeout).toHaveBeenCalledWith(20_000);
+    expect(translate("en", "voiceCompanion.memory.provider")).toContain("Claude Haiku");
+    expect(translate("uk", "voiceCompanion.memory.provider")).toContain("Claude Haiku");
+  } finally { globalThis.fetch = originalFetch; admission.mockRestore(); timeout.mockRestore(); }
+});
 function harness(backend: "api" | "codex" = "api", model: CallSummarizer = async () => result(), deadline = 1000) {
   let now = Date.UTC(2026,9,13,10);
   const storage = new CompanionStorage(() => now); storage.updateSettings({ enabled: true, backend });

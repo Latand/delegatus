@@ -644,7 +644,7 @@ test("ambiguous orchestrator display name names candidates and claims nothing", 
   ]);
   const result = await service.callTool("send_message_to_orchestrator", { clientRequestId: "ambiguous-send", project: "Example project", text: "status?" });
   expect(result).toMatchObject({ ok: false, code: "ambiguous_project", details: { outcome: "not-executed", candidates: ["project-a", "project-b"] } });
-  expect(result.error).toContain("project-a, project-b");
+  expect(result.error).toContain("Example project (project-a), Example project (project-b)");
   expect(posts).toEqual([]);
   expect(receipts.lookup("send_message_to_orchestrator:ambiguous-send")).toBeNull();
 });

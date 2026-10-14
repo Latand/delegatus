@@ -13,7 +13,7 @@ import type { ConversationResolution, TranscriptFacts } from "./transcriptExport
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 import { buildRegistryPerformanceDataset, REGISTRY_PERFORMANCE_SHAPE } from "@/lib/agent/registryPerformanceDataset";
 import { recordActivityFromIndexFeed } from "./continuous";
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import type { UserRecord } from "./humanInput";
 
@@ -95,17 +95,19 @@ test("a new transcript at production registry size avoids hydrating unrelated hi
       migrationIntents: 43, workers: 0, transcripts: 0,
     });
     const file = write("new-delivered.jsonl", [codexMeta("2026-09-23T12:00:00Z"), codexUser("2026-09-23T12:00:01Z", "new-input", "unregistered delivered input")]);
-    let expected = performance.now() + 10, maxGapMs = 0;
-    const timer = setInterval(() => { const at = performance.now(); maxGapMs = Math.max(maxGapMs, at - expected); expected = at + 10; }, 10);
+    let snapshots = 0;
+    const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR, "agent-registry.json"), undefined, undefined, {
+      sqliteMode: "sqlite", onSqliteSnapshotLoad: () => { snapshots++; },
+    });
+    setAgentRegistryForTests(registry);
+    snapshots = 0;
     try {
       const result = await recordActivityFromIndexFeed([source(file)], true, Date.now());
-      await new Promise(resolve => setTimeout(resolve, 25));
       expect(result.failures).toEqual([]);
       expect(result.filesHeld).toBe(1);
       expect(result.inputsWritten).toBe(0);
-      console.info(JSON.stringify({ case: "activity-new-transcript", maxGapMs }));
-      expect(maxGapMs).toBeLessThan(200);
-    } finally { clearInterval(timer); }
+      expect(snapshots, "ingest must not hydrate unrelated registry history").toBe(0);
+    } finally { setAgentRegistryForTests(null); registry.close(); }
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
   }

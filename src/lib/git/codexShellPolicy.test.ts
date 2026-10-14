@@ -1,3 +1,4 @@
+import { loopProgressProbe } from "@/lib/agent/registryLockHolderFixture";
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -24,13 +25,11 @@ test("a delayed native policy probe leaves the launcher's event loop responsive"
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-policy-responsive-"));
   try {
     const binary = path.join(root, "fixture-codex");
-    fs.writeFileSync(binary, `#!${process.execPath}\nimport { createInterface } from 'node:readline';\nfor await (const line of createInterface({ input: process.stdin })) {\nconst request = JSON.parse(line); if (!request.id) continue;\nif (request.method === 'initialize') await new Promise(resolve => setTimeout(resolve, 200));\nconsole.log(JSON.stringify({ id: request.id, result: request.method === 'initialize' ? {} : { config: {} } }));\n}\n`, { mode: 0o700 });
-    const start = performance.now();
-    const timer = new Promise<number>((resolve) => setTimeout(() => resolve(performance.now() - start), 20));
-    const probe = Promise.resolve(readCodexShellPolicy(binary, root, { PATH: process.env.PATH, HOME: root, NODE_ENV: "test" }));
-    const elapsed = await timer;
-    await probe;
-    expect(elapsed).toBeLessThan(150);
+    const go = path.join(root, "policy-go");
+    fs.writeFileSync(binary, `#!${process.execPath}\nimport { createInterface } from 'node:readline';\nimport fs from 'node:fs';\nfor await (const line of createInterface({ input: process.stdin })) {\nconst request = JSON.parse(line); if (!request.id) continue;\nif (request.method === 'initialize') while (!fs.existsSync(${JSON.stringify(go)})) await Bun.sleep(1);\nconsole.log(JSON.stringify({ id: request.id, result: request.method === 'initialize' ? {} : { config: {} } }));\n}\n`, { mode: 0o700 });
+    const progress = loopProgressProbe();
+    progress.arm(() => { fs.writeFileSync(go, "release"); });
+    expect(await progress.run(() => readCodexShellPolicy(binary, root, { PATH: process.env.PATH, HOME: root, NODE_ENV: "test" }))).toEqual({});
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 test.skipIf(!nativeBinary).each([false, true])("native Codex config overrides produce safe shell commits (keyed filters: %s)", async (keyedFilters) => {

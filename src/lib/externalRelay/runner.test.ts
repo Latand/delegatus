@@ -28,7 +28,7 @@ import { countMemberAnswers, listAnswerRecords, readAnswerRecord, settleInterrup
 import { startTestRelay, deadlineNegotiatedCapture } from "./testRelay";
 import { saveTasks, loadTasks } from "@/lib/tasks/store";
 import { telegramRound, telegramTask } from "@/lib/prototypeReview/telegram.fixture";
-import { prototypeCopyLine } from "@/lib/prototypeReview/telegramAnswer";
+import { prototypeCopyLine, prototypeReference } from "@/lib/prototypeReview/telegramAnswer";
 import { prototypeDecisionText } from "@/lib/prototypeReview/decision";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runner-test-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -105,7 +105,8 @@ function stub(script: string) {
   fs.chmodSync(file, 0o700);
   return file;
 }
-test.each([true, false])("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing (owner tier %s)", async ownerTier => {
+test.each(["enabled", "disabled", "long-reservation"])("prototype owner control records the web decision without capacity or an agent, and concurrent replay adds nothing (%s)", async kind => {
+  const ownerTier = kind === "enabled";
   const round = telegramRound(); saveTasks([telegramTask([round])]);
   const completions: unknown[] = [];
   const server = await startTestRelay((req, body) => {
@@ -117,8 +118,9 @@ test.each([true, false])("prototype owner control records the web decision witho
   let selections = 0, launches = 0;
   const previous = accountManager.resolveHeadlessSpawn;
   accountManager.resolveHeadlessSpawn = (() => { selections++; return { kind: "exhausted", resetsAt: null }; }) as typeof previous;
-  const text = `${prototypeCopyLine(round, 2)}\nKeep these controls.`;
-  const request = { ...contextRequest, request_id: `prototype-owner-${ownerTier ? "enabled" : "disabled"}`, answer: { ...contextRequest.answer, max_chars: 4000 }, input: {
+  const copy = prototypeCopyLine(round);
+  const text = kind === "long-reservation" ? `${copy}, ${"я".repeat(20_000 - copy.length - 2)}` : `${prototypeCopyLine(round, 2)}\nKeep these controls.`;
+  const request = { ...contextRequest, request_id: `prototype-owner-${kind}`, answer: { ...contextRequest.answer, max_chars: 4000 }, input: {
     ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
     conversation: contextRequest.input.conversation.map(m => ({ ...m, text })) } };
   try {
@@ -130,9 +132,20 @@ test.each([true, false])("prototype owner control records the web decision witho
     if (duplicate !== null) expect(duplicate).toMatchObject({ outcome: "answered" });
     expect(selections).toBe(0); expect(launches).toBe(0); expect(completions).toHaveLength(1);
     const task = loadTasks()[0]!, decision = task.prototypeReviews![0]!.decision!;
-    expect(decision).toMatchObject({ chosen: [2], comment: "Keep these controls.", answers: round.questions!.map(q => ({ questionId: q.id, options: [0] })) });
+    expect(decision).toMatchObject({ chosen: kind === "long-reservation" ? [] : [2], originalReply: text,
+      answers: round.questions!.map(q => ({ questionId: q.id, options: [0] })) });
+    if (kind === "long-reservation") {
+      expect(decision.recommendedWithReservation).toBe(true);
+      expect(decision.comment).toBe(text.slice(copy.length));
+      if (result?.outcome === "answered") expect(result.answer.text).toContain("рекомендовані з застереженням");
+    } else expect(decision.comment).toBe("Keep these controls.");
     expect(decision.delivery.clientMessageId).toBe(`prototype-decision:${round.id}`);
-    expect(decision.delivery.text).toBe(prototypeDecisionText(task, round, decision));
+    if (kind === "long-reservation") {
+      expect(Buffer.byteLength(decision.delivery.text)).toBeLessThanOrEqual(32_000);
+      expect(decision.delivery.text).toContain("recommended with reservation");
+      expect(decision.delivery.text).toContain("Read read_prototype_review");
+      expect(decision.delivery.text).not.toContain("\uFFFD");
+    } else expect(decision.delivery.text).toBe(prototypeDecisionText(task, round, decision));
     expect(readAnswerRecord(paired.id, "target_1", request.request_id)?.profile).toMatchObject({ owner: true, prototype: round.id });
     expect(readRunLedger().runs).toEqual([]);
     const persisted = JSON.stringify(loadTasks());
@@ -143,7 +156,41 @@ test.each([true, false])("prototype owner control records the web decision witho
   } finally { accountManager.resolveHeadlessSpawn = previous; await server.close(); }
 });
 
-for (const scenario of ["invalid", "lease-lost", "revoked", "disabled"] as const) test(`prototype ${scenario} refuses before recording or spawning`, async () => {
+test("the claimed relay records an Other token before a recommendation marker", async () => {
+  const round = telegramRound(); saveTasks([telegramTask([round])]);
+  const completions: unknown[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const text = `${prototypeReference(round)} · Відповіді 1a 2a 3+ · Відповіді рекомендовані`;
+  const request = { ...contextRequest, request_id: "prototype-other-before-recommendation", answer: { ...contextRequest.answer, max_chars: 4000 }, input: {
+    ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
+    conversation: contextRequest.input.conversation.map(m => ({ ...m, text })) } };
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { command: "/missing-prototype-cli" });
+    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", reply_to: "m1" } });
+    if (result?.outcome === "answered") {
+      expect(result.answer.text).toContain("рекомендовані з застереженням");
+      expect(result.answer.text).toContain("3+");
+    }
+    expect(completions).toHaveLength(1);
+    expect(loadTasks()[0]!.prototypeReviews![0]!.decision).toMatchObject({
+      originalReply: text,
+      comment: "3+",
+      recommendedWithReservation: true,
+      answers: [
+        { questionId: "place", options: [0] },
+        { questionId: "scope", options: [0] },
+        { questionId: "timing", options: [0], other: true },
+      ],
+    });
+  } finally { await server.close(); }
+});
+
+for (const scenario of ["references", "lease-lost", "revoked", "disabled"] as const) test(`prototype ${scenario} refuses before recording or spawning`, async () => {
   const round = telegramRound(); saveTasks([telegramTask([round])]);
   const paired = relay("https://unused.invalid/v1"); paired.targets[0]!.ownerTier = scenario !== "disabled";
   const server = await startTestRelay((req) => {
@@ -156,12 +203,12 @@ for (const scenario of ["invalid", "lease-lost", "revoked", "disabled"] as const
   });
   paired.api_base = `${server.origin}/v1`; paired.origin = server.origin;
   updateRelayStore(s => ({ ...s, relays: [paired] }));
-  const text = prototypeCopyLine(round, 2).replace("1a 2a 3a", scenario === "invalid" ? "1f 2a 3a" : "1a 2a 3a");
+  const text = prototypeCopyLine(round, 2) + (scenario === "references" ? `\n${prototypeReference(round)}` : "");
   try {
     const result = await runClaimedRequest(paired, { ...contextRequest, request_id: `prototype-${scenario}`, answer: { ...contextRequest.answer, max_chars: 4000 },
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true }, conversation: contextRequest.input.conversation.map(m => ({ ...m, text })) } },
       undefined, { command: "/missing-prototype-cli" });
-    if (scenario === "invalid") {
+    if (scenario === "references") {
       expect(result).toMatchObject({ outcome: "answered" });
       if (result?.outcome === "answered") expect(result.answer.text).toContain("Не записав:");
     } else if (scenario === "lease-lost") expect(result).toBeNull();
@@ -515,9 +562,17 @@ test("heartbeats continue through silence, newest progress is sent, completion f
 test("a queued step crossing a grid point sends the overdue regular heartbeat immediately", async () => {
   const sends: { at: number; seq: number; label?: string }[] = [];
   let queuedAckAt = 0;
+  let overdueSent = false;
+  const cadenceAfterAck: number[] = [];
+  const schedule = globalThis.setTimeout;
+  const timers = spyOn(globalThis, "setTimeout").mockImplementation(((...args: Parameters<typeof setTimeout>) => {
+    if (queuedAckAt && !overdueSent && new Error().stack?.includes("armCadence")) cadenceAfterAck.push(Number(args[1] ?? 0));
+    return schedule(...args);
+  }) as typeof setTimeout);
   const server = await startTestRelay(async (req, body) => {
     if (req.url?.endsWith("/heartbeat")) {
       const beat = body as { seq: number; progress?: { label?: string } };
+      if (queuedAckAt) overdueSent = true;
       sends.push({ at: Date.now(), seq: beat.seq, label: beat.progress?.label });
       if (beat.progress?.label === "queued") { await Bun.sleep(1500); queuedAckAt = Date.now(); }
       return { body: { status: "ok" } };
@@ -541,9 +596,10 @@ test("a queued step crossing a grid point sends the overdue regular heartbeat im
     expect(result?.outcome).toBe("answered");
     const queued = sends.find(beat => beat.label === "queued")!;
     const following = sends.find(beat => beat.seq > queued.seq)!;
-    expect(following.at - queuedAckAt).toBeLessThan(250);
+    expect(following.seq).toBeGreaterThan(queued.seq);
+    expect(cadenceAfterAck.every(delay => delay === 0)).toBe(true);
     expect(following.at - queued.at).toBeLessThan(1900);
-  } finally { await server.close(); }
+  } finally { timers.mockRestore(); await server.close(); }
 }, 10000);
 test("a full target waits for its slot and a nonzero CLI exit cannot use a written answer", async () => {
   const completions: unknown[] = [];

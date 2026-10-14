@@ -255,6 +255,44 @@ test("project names resolve from the real catalog and ambiguity never widens a v
   replaceConversationCatalog([]);
 });
 
+test("an unknown qualified namesake cannot read tasks or send a voice request to its seat", async () => {
+  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const { CompanionAdmission } = await import("./admission");
+  const { CompanionStorage } = await import("./storage");
+  const { runCompanionTool } = await import("./tools");
+  const at = "2026-10-10T12:00:00.000Z";
+  replaceConversationCatalog(["known-orion", "bound-project"].map(project => ({
+    path: path.join(root, `${project}.jsonl`), root: "claude-projects" as const, name: "fixture", project,
+    projectName: project === "known-orion" ? "Orion" : "Bound project", title: "Fixture", firstPrompt: "", engine: "claude" as const,
+    kind: "session" as const, fmt: "claude" as const, mtime: 0, size: 0,
+  })));
+  saveTasks([{ id: "foreign-orion-task", project: "known-orion", text: "Foreign task content", status: "inbox", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at }]);
+  beginOrchestratorSeatIntent({ project: "known-orion", mandate: "Own this board", clientRequestId: "seat-known-orion", mode: "spawn", promptVersion: null });
+  completeOrchestratorSeatIntent({ project: "known-orion", clientRequestId: "seat-known-orion", conversationId: "conversation_known_orion", path: null });
+  const recipientProjects: string[] = [];
+  const sent: string[] = [];
+  const admission = new CompanionAdmission(new CompanionStorage(), {
+    recipient: project => { recipientProjects.push(project); return { project, conversationId: "conversation_known_orion", seatEpoch: 1, engine: "claude" }; },
+    reports: () => [], send: async ({ text }) => { sent.push(text); return { status: "delivered", operationId: "delivery-known-orion" }; },
+  });
+  const session = admission.create({ project: "bound-project", locale: "en", authority: "live-model" });
+  const reads = new CompanionBoardReads(createCompanionBoardReadPaths());
+  const context = { project: "bound-project", sessionId: session.id, callId: "unknown-qualified", delegationId: "unknown-qualified", admission, reads, endConversation: () => undefined };
+  try {
+    await expect(runCompanionTool(context, "list_tasks", { project: "other-owner/orion", statuses: null, openOnly: null }))
+      .rejects.toThrow("PROJECT_REFUSED");
+    await expect(runCompanionTool(context, "request_orchestrator_delegation", {
+      project: "other-owner/orion", instruction: "Review the foreign task", pending_request: null, confirmation_reason: null, asked_again: null,
+    })).rejects.toThrow("PROJECT_REFUSED");
+    expect(recipientProjects).toEqual([]);
+    expect(sent).toEqual([]);
+  } finally {
+    admission.retire(session.id);
+    replaceConversationCatalog([]);
+  }
+});
+
 
 test("activity pages retain every observed agent and disclose pending evidence without claiming a complete total", async () => {
   const { selectConversationEntries } = await import("@/lib/lifecycle/inventorySelection");
@@ -317,4 +355,77 @@ test("pipeline titles are masked before the shared compact cutoff and newline sp
     expect(JSON.stringify(result)).not.toContain(key.slice(0,6));
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(4000);
   }
+});
+
+
+test("voice reads select the single seated parent when a catalog lookalike shares its everyday name", async () => {
+  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const project = "orion-parent";
+  persistProjectAliases([{ source: "orion-old", target: project, displayName: "Orion Works" }]);
+  beginOrchestratorSeatIntent({ project, mandate: "Own this board", clientRequestId: "orion-seat", mode: "spawn", promptVersion: null });
+  completeOrchestratorSeatIntent({ project, clientRequestId: "orion-seat", conversationId: "conversation_orion", path: null });
+  replaceConversationCatalog([project, "orion-lookalike"].map(key => ({ path: path.join(root, `${key}.jsonl`), root: "claude-projects" as const,
+    name: "fixture", project: key, projectName: "Orion Works", title: "Fixture", firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const, mtime: 0, size: 0 })));
+  const transcript = path.join(root, "orion-seat.jsonl");
+  fs.writeFileSync(transcript, JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Routing checked" }] } }) + "\n");
+  const paths = createCompanionBoardReadPaths({ transcript: {
+    selectedContext: { selectedConversation: () => ({ resolve: id => id === "conversation_orion" ? { conversationId: id, engine: "claude", path: transcript, project } : null, readTail: () => null }), pathAllowed: candidate => candidate === transcript },
+    pinnedTranscript: candidate => { const descriptor = fs.openSync(candidate, "r"); return { descriptor, stat: fs.fstatSync(descriptor), rootName: "claude-projects", root, sameIdentity: () => true }; },
+  } });
+  const reads = new CompanionBoardReads(paths);
+  const at = "2026-10-14T08:00:00Z";
+  saveTasks([{ id: "orion-task", project, text: "Check routing", status: "assigned", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at }]);
+  savePipelines([buildPipeline({ id: "orion-pipeline", project, task: "Check routing", repoDir: root, srcPath: null, srcConversationId: null, now: at, stages: [{ id: "build", kind: "run", prompt: "Build", next: null, effectiveRole: { roleId: null, engine: "claude", model: null, effort: null, access: "read-only", promptScaffold: null } }] })]);
+  try {
+    expect(await reads.call(project, "list_tasks", { project: " oRiOn WoRkS " })).toMatchObject({ total: 1, rows: [{ handle: "orion-task" }] });
+    expect(await reads.call(project, "list_pipelines", { project: "Orion Works" })).toMatchObject({ total: 1 });
+    expect(await reads.call(project, "list_tasks", {})).toMatchObject({ total: 1 });
+    expect(await reads.call(project, "get_orchestrator", { project: "Orion Works" })).toMatchObject({ item: { project, liveSeat: true, conversationId: "conversation_orion" } });
+    expect(await reads.call(project, "orchestrator_messages", { project: "Orion Works" })).toMatchObject({ rows: [{ excerpt: "Routing checked" }] });
+    expect(reads.projects().find(row => row.project === project)).toMatchObject({ displayName: "Orion Works", liveSeat: true, openTaskCount: 1 });
+    const { CompanionAdmission } = await import("./admission");
+    const { CompanionStorage } = await import("./storage");
+    const { runCompanionTool } = await import("./tools");
+    const sent: string[] = [];
+    const admission = new CompanionAdmission(new CompanionStorage(), { recipient: selected => { sent.push(selected); return { project: selected, conversationId: "conversation_orion", seatEpoch: 1, engine: "claude" }; }, reports: () => [], send: async () => ({ status: "delivered", operationId: "orion-send" }) });
+    const session = admission.create({ project, locale: "en", authority: "live-model" });
+    sent.length = 0;
+    expect(await runCompanionTool({ project, sessionId: session.id, callId: "orion-call", delegationId: "orion-turn", admission, reads, endConversation: () => undefined }, "request_orchestrator_delegation", { project: "Orion Works", instruction: "Check the routing", confirmation_reason: null })).toMatchObject({ status: "sent" });
+    expect(sent).toContain(project);
+  } finally { replaceConversationCatalog([]); }
+});
+
+test("an explicit project key collision refuses instead of following a seated project's label", async () => {
+  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  persistProjectAliases([{ source: "a-old", target: "project-a", displayName: "project-b" }]);
+  beginOrchestratorSeatIntent({ project: "project-a", mandate: "Own this board", clientRequestId: "identity-seat", mode: "spawn", promptVersion: null });
+  completeOrchestratorSeatIntent({ project: "project-a", clientRequestId: "identity-seat", conversationId: "conversation_project_a", path: null });
+  const catalog = (project: string, projectName: string) => ({ path: path.join(root, `${project}.jsonl`), root: "claude-projects" as const,
+    name: "fixture", project, projectName, title: "Fixture", firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const, mtime: 0, size: 0 });
+  replaceConversationCatalog([catalog("project-a", "project-b"), catalog("project-b", "Project B")]);
+  const at = "2026-10-14T08:00:00Z";
+  saveTasks(["project-a", "project-b"].map(project => ({ id: `task-${project}`, project, text: project, status: "inbox" as const,
+    placement: "unplaced" as const, assignments: [], createdAt: at, updatedAt: at })));
+  const reads = new CompanionBoardReads(createCompanionBoardReadPaths());
+  try {
+    expect(() => reads.resolveProject("project-b", "project-b")).toThrow("PROJECT_AMBIGUOUS");
+    await expect(reads.call("project-b", "list_tasks", { project: "project-b" })).rejects.toThrow("PROJECT_AMBIGUOUS");
+    const { CompanionAdmission } = await import("./admission");
+    const { CompanionStorage } = await import("./storage");
+    const { runCompanionTool } = await import("./tools");
+    const recipients: string[] = [];
+    const admission = new CompanionAdmission(new CompanionStorage(), { recipient: project => {
+      recipients.push(project);
+      return { project, conversationId: "conversation_project_a", seatEpoch: 1, engine: "claude" };
+    }, reports: () => [], send: async () => ({ status: "delivered", operationId: "identity-send" }) });
+    const session = admission.create({ project: "project-b", locale: "en", authority: "live-model" });
+    await expect(runCompanionTool({ project: "project-b", sessionId: session.id, callId: "identity-call", delegationId: "identity-turn", admission,
+      reads, endConversation: () => undefined }, "request_orchestrator_delegation", { project: "project-b", instruction: "Check project B", confirmation_reason: null }))
+      .rejects.toThrow("PROJECT_AMBIGUOUS");
+    expect(recipients).toEqual([]);
+  } finally { replaceConversationCatalog([]); }
 });

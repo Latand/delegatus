@@ -3,32 +3,56 @@ import { createProfileService } from "./profileService";
 import { sampleAnswer, sampleMemory } from "./profile.fixture";
 import { MemoryProfileError } from "./profile";
 import type { ProfileRow } from "./profileTypes";
-import type { ProfileCaller } from "./profileModel";
+import { MEMORY_PROFILE_MODEL, MEMORY_PROFILE_FALLBACK_MODEL, prepareProfileCaller, type ProfileCaller, type ProfileResult } from "./profileModel";
 
-function harness(call: ProfileCaller = async (_, locale) => sampleAnswer(locale === "uk")) {
+function harness(call: ProfileCaller = async (_, locale) => ({ answer: sampleAnswer(locale === "uk"), model: "haiku" })) {
   const rules = sampleMemory(); const rows = new Map<string, ProfileRow>();
   let preparations = 0;
   const ports = { rules: () => structuredClone(rules), read: (_: string, locale: string) => structuredClone(rows.get(locale) ?? null), write: (row: ProfileRow) => { rows.set(row.locale, structuredClone(row)); }, prepare: async () => { preparations++; return call; }, model: "haiku" };
   return { rules, rows, ports, service: createProfileService(ports), preparations: () => preparations };
 }
 describe("explicit parallel profile generation", () => {
+  test("parallel requests persist their producing models, including an overall fallback", async () => {
+    const requests: string[] = [];
+    const caller = await prepareProfileCaller("garden", {
+      model: MEMORY_PROFILE_MODEL,
+      manager: { resolveHeadlessSpawn: () => ({ kind: "available", account: { engine: "claude", accountId: "sample", kind: "managed", home: "sample", transcriptRoot: "sample", env: { NODE_ENV: "test" } } }) },
+      credentials: () => ({ state: "present", source: "file", document: { claudeAiOauth: { accessToken: "sample", expiresAt: Date.now() + 60_000 } } }),
+      request: async (_, init) => {
+        const body = JSON.parse(init.body as string); requests.push(body.model);
+        if (body.model === MEMORY_PROFILE_MODEL && body.messages[0].content.includes("Memory level: all memory")) return new Response(null, { status: 403 });
+        return Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(sampleAnswer()) }] });
+      },
+    });
+    const h = harness(caller); h.ports.model = MEMORY_PROFILE_MODEL;
+    await h.service.start("garden", "en").done;
+    expect(h.service.read("garden", "en").run!.state).toBe("done");
+    expect(h.rows.get("en")!.parts.find(part => part.scope === "overall")!.model).toBe(MEMORY_PROFILE_FALLBACK_MODEL);
+    expect(h.service.read("garden", "en").overall!.model).toBe(MEMORY_PROFILE_FALLBACK_MODEL);
+    expect(h.service.read("garden", "en").slices.filter(slice => slice.summary).every(slice => slice.summary!.model === MEMORY_PROFILE_MODEL)).toBe(true);
+    expect(requests.filter(model => model === MEMORY_PROFILE_FALLBACK_MODEL)).toHaveLength(1);
+    // A later explicit refresh can upgrade the fallback; completed Opus slices stay cached.
+    requests.length = 0;
+    await h.service.start("garden", "en").done;
+    expect(requests).toEqual([MEMORY_PROFILE_MODEL, MEMORY_PROFILE_FALLBACK_MODEL]);
+  });
   test("reads never generate; all calls start together; duplicate presses join", async () => {
-    const releases = new Map<string, (answer: unknown) => void>();
+    const releases = new Map<string, (answer: ProfileResult) => void>();
     const h = harness(input => new Promise(resolve => releases.set(input.scope, resolve)));
     h.service.read("garden", "en"); expect(h.preparations()).toBe(0);
     const run = h.service.start("garden", "en");
     expect(h.service.start("garden", "en")).toBe(run);
     await Promise.resolve(); expect(releases.size).toBe(5);
-    releases.get("machine")!(sampleAnswer()); await Promise.resolve(); await Promise.resolve();
+    releases.get("machine")!({ answer: sampleAnswer(), model: "haiku" }); await Promise.resolve(); await Promise.resolve();
     expect(run.latest.slices.find(slice => slice.scope === "machine")!.summary).not.toBeNull();
     expect(run.latest.overall).toBeNull(); expect(run.latest.run!.state).toBe("running");
     expect(run.latest.stale).toBe(false);
-    for (const [scope, release] of releases) if (scope !== "machine") release(sampleAnswer());
+    for (const [scope, release] of releases) if (scope !== "machine") release({ answer: sampleAnswer(), model: "haiku" });
     await run.done; expect(run.latest.run!.state).toBe("done");
   });
   test("unchanged refresh is instant and only changed slices regenerate", async () => {
     const scopes: string[] = [];
-    const h = harness(async input => { scopes.push(input.scope); return sampleAnswer(); });
+    const h = harness(async input => { scopes.push(input.scope); return { answer: sampleAnswer(), model: "haiku" }; });
     await h.service.start("garden", "en").done; expect(scopes).toHaveLength(5);
     scopes.length = 0; await h.service.start("garden", "en").done;
     expect(scopes).toHaveLength(0); expect(h.preparations()).toBe(1);
@@ -42,7 +66,7 @@ describe("explicit parallel profile generation", () => {
   });
   test("one locale retry, separate locale caches, no malformed-answer retry", async () => {
     let calls = 0;
-    const h = harness(async (_, locale) => { calls++; return sampleAnswer(calls > 5 && locale === "uk"); });
+    const h = harness(async (_, locale) => { calls++; return { answer: sampleAnswer(calls > 5 && locale === "uk"), model: "haiku" }; });
     await h.service.start("garden", "uk").done; expect(calls).toBe(10);
     expect(h.service.read("garden", "uk").overall).not.toBeNull();
     expect(h.service.read("garden", "en").overall).toBeNull();
@@ -67,7 +91,7 @@ describe("explicit parallel profile generation", () => {
     h.ports.prepare = async () => { throw new MemoryProfileError("account"); };
     await h.service.start("garden", "en").done;
     expect(h.service.read("garden", "en").stale).toBe(true);
-    h.ports.prepare = async () => async () => sampleAnswer();
+    h.ports.prepare = async () => async () => ({ answer: sampleAnswer(), model: h.ports.model });
     await h.service.start("garden", "en").done;
     expect(h.service.read("garden", "en").stale).toBe(false);
   });
@@ -80,14 +104,14 @@ describe("explicit parallel profile generation", () => {
     scope.active.push({ ...scope.active[0]!, id: "six", rule: "Keep preview labels readable." });
     h.ports.prepare = async () => async input => {
       if (input.scope === scope.scope) throw new MemoryProfileError("invalid");
-      return sampleAnswer();
+      return { answer: sampleAnswer(), model: "haiku" };
     };
     await h.service.start("garden", "en").done;
     const view = h.service.read("garden", "en");
     expect(view.overall!.stale).toBe(false);
     expect(view.stale).toBe(true);
     expect(view.changes).toEqual({ added: 1, rewritten: 1, removed: 1 });
-    h.ports.prepare = async () => async () => sampleAnswer();
+    h.ports.prepare = async () => async () => ({ answer: sampleAnswer(), model: h.ports.model });
     await h.service.start("garden", "en").done;
     const refreshed = h.service.read("garden", "en");
     expect(refreshed.stale).toBe(false);

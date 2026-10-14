@@ -175,6 +175,80 @@ function sources(
   };
 }
 
+test.each([120, 240])("liveness fallback bounds archive reads with %i historical rows", async (count) => {
+  let reads = 0;
+  let entryReads = 0;
+  const conversations: RegistryFile["conversations"] = {};
+  const entries: RegistryFile["entries"] = {};
+  for (let index = 0; index < count; index += 1) {
+    const id = `conversation_history_${index}`;
+    const transcript = `/sessions/history-${index}.jsonl`;
+    const conversation = { id, engine: "codex", generations: [{ id: `history-${index}`, path: transcript }] };
+    // The archive compatibility view exposes each row through a getter. Its
+    // real getter stats the database even when the payload is cached.
+    Object.defineProperty(conversations, id, { enumerable: true, get: () => {
+      reads += 1;
+      return conversation;
+    } });
+    const entry = {
+      ...structuredEntry(transcript, 10000 + index),
+      key: { engine: "codex", sessionId: `history-${index}` },
+    };
+    Object.defineProperty(entries, `codex:history-${index}`, { enumerable: true, get: () => {
+      entryReads += 1;
+      return entry;
+    } });
+  }
+  const registry = { entries, conversations } as unknown as RegistryFile;
+  const selected = Array.from({ length: 8 }, (_, index) => fileEntry({
+    path: `/sessions/selected-${index}.jsonl`,
+    conversationId: `conversation_history_${index}`,
+  }));
+  const snapshot = await agentLivenessSnapshot({}, sources({
+    listFiles: async () => selected,
+    registrySnapshot: () => registry,
+    pipelines: () => [],
+    transcriptEvidence: async () => ({ turn: "idle", lastRecordTs: FROZEN_AT }),
+  }));
+
+  expect(snapshot.count).toBe(selected.length);
+  expect(snapshot.conversations.every(row => row.host.state !== "alive")).toBe(true);
+  expect(reads).toBeLessThan(count * 20);
+  expect(entryReads).toBeLessThan(count * 20);
+  console.log(JSON.stringify({ probe: "liveness-archive-fallback", rows: count, conversationReads: reads, entryReads }));
+});
+
+test.each(["generation", "continuity"])("liveness fallback preserves first path owner and aliases through %s", async (kind) => {
+  const current = "/sessions/selected.jsonl";
+  const previous = "/sessions/previous.jsonl";
+  const registry = {
+    entries: { previous: structuredEntry(previous, 4243) },
+    conversations: {
+      conversation_before: { id: "conversation_before", generations: kind === "generation" ? [{ path: previous }] : [],
+        continuityPaths: kind === "continuity" ? [previous] : [] },
+      conversation_other: { id: "conversation_other", generations: [{ path: previous }] },
+      conversation_owner: { id: "conversation_owner", generations: [] },
+    },
+    conversationAliases: { conversation_before: "conversation_owner" },
+  } as unknown as RegistryFile;
+  const shared = sources({
+    listFiles: async () => [fileEntry({ path: current, conversationId: "conversation_owner" })],
+    registrySnapshot: () => registry,
+    pipelines: () => [],
+    describeTranscript: async () => null,
+    transcriptEvidence: async () => ({ turn: "idle", lastRecordTs: FROZEN_AT }),
+    probe: { now: () => NOW, pidAlive: pid => pid === 4243, processIdentity: () => "start-token-of-a-dead-host" },
+  });
+  const first = await agentLivenessSnapshot({}, shared);
+  expect(first.conversations).toMatchObject([{ conversationId: "conversation_owner", host: { state: "alive", pid: 4243 } }]);
+
+  // A later request must build from its own view even if a caller reuses the
+  // object that supplied the earlier snapshot.
+  registry.conversationAliases.conversation_before = "conversation_other";
+  const next = await agentLivenessSnapshot({}, shared);
+  expect(next.conversations[0]!.host.state).not.toBe("alive");
+});
+
 test("a pane-less structured attempt with a dead host and a mid-turn transcript reports as stalled, not the pipeline's running", async () => {
   const dir = sandbox();
   const agentPath = path.join(dir, "session-zombie.jsonl");

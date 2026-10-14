@@ -1,3 +1,4 @@
+import { loopProgressProbe, registryLockHolder, whileRegistryWriterHeld } from "./registryLockHolderFixture";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -58,10 +59,10 @@ test("a writer lock held elsewhere is waited out without holding the event loop,
     const holder = new Database(filename);
     holder.exec("PRAGMA busy_timeout = 0");
     holder.exec("BEGIN IMMEDIATE");
-    setTimeout(() => holder.exec("ROLLBACK"), 300);
-    const startedAt = performance.now();
+    const probe = loopProgressProbe();
+    probe.arm(() => { holder.exec("ROLLBACK"); });
     let lockedOut = false;
-    const { value: write, gapMs } = await longestLoopGap(() => withWaitCorrelation(
+    const write = await probe.run(() => withWaitCorrelation(
       { label: "delivery.outcome", operationId: "operation-wait" },
       () => registry.withWriter(() => {
         /* The lock is this connection's from the acquisition to the commit:
@@ -74,13 +75,12 @@ test("a writer lock held elsewhere is waited out without holding the event loop,
     holder.close();
     expect(lockedOut).toBe(true);
     expect(write.acquired).toBe(true);
-    expect(performance.now() - startedAt).toBeGreaterThanOrEqual(250);
-    expect(gapMs).toBeLessThan(150);
+
     expect(write.acquired && write.value.revision).toBe(before + 1);
     expect(registry.snapshot().file.conversationAliases.conversation_waited).toBeDefined();
     const sample = blockingWaitDiagnostics().longest.find((candidate) => candidate.site === "registry-lock-async");
     expect(sample).toMatchObject({ synchronous: false, label: "delivery.outcome", operationId: "operation-wait" });
-    expect(sample!.durationMs).toBeGreaterThanOrEqual(250);
+    expect(sample!.durationMs).toBeGreaterThan(0);
     expect(blockingWaitDiagnostics().sites["registry-lock"]).toBeUndefined();
     /* The connection is back to ordinary mutations afterwards. */
     expect(registry.mutate((file) => { delete file.conversationAliases.conversation_waited; }, false).revision).toBe(before + 2);
@@ -91,35 +91,21 @@ test("a writer lock held elsewhere is waited out without holding the event loop,
 
 test("a lock another process keeps past the deadline is refused: nothing runs and the synchronous wait is never entered", async () => {
   const { store: registry, filename } = store("async-deadline");
-  /* Another process, as in the incident: nothing in this one could release it
-     while a synchronous acquisition spun. */
-  const child = Bun.spawn([process.execPath, "-e", `
-    const { Database } = require("bun:sqlite");
-    const db = new Database(${JSON.stringify(filename)});
-    db.exec("PRAGMA busy_timeout = 5000");
-    db.exec("BEGIN IMMEDIATE");
-    process.stdout.write("locked\\n");
-    setTimeout(() => { db.exec("ROLLBACK"); db.close(); }, 900);
-  `], { stdout: "pipe", stderr: "inherit" });
+  const holder = registryLockHolder(filename);
   try {
-    const reader = child.stdout.getReader();
-    const { value } = await reader.read();
-    expect(new TextDecoder().decode(value)).toContain("locked");
-    reader.releaseLock();
+    await holder.hold();
     const before = registry.snapshot().revision;
     let ran = false;
-    const startedAt = performance.now();
-    const { value: write, gapMs } = await longestLoopGap(() => registry.withWriter(() => { ran = true; }, { deadlineMs: 200 }));
+    const { value: write } = await whileRegistryWriterHeld(holder, () => registry.withWriter(() => { ran = true; }, { deadlineMs: 200 }), { release: false });
     expect(write.acquired).toBe(false);
     expect(ran).toBe(false);
-    expect(performance.now() - startedAt).toBeLessThan(600);
-    expect(gapMs).toBeLessThan(150);
+
     expect(blockingWaitDiagnostics().sites["registry-lock"]).toBeUndefined();
     expect(blockingWaitDiagnostics().sites["registry-lock-async"]?.count).toBe(1);
-    await child.exited;
+    await holder.release();
     expect(registry.snapshot().revision).toBe(before);
   } finally {
-    await child.exited;
+    await holder.close();
     registry.close();
   }
 });
@@ -133,19 +119,19 @@ test("a writer that commits while the delivery write waits is read by it: both c
     const conversation = Object.keys(registry.snapshot().file.conversations)[0] as `conversation_${string}`;
     holder.exec("PRAGMA busy_timeout = 0");
     holder.exec("BEGIN IMMEDIATE");
-    setTimeout(() => {
+    const probe = loopProgressProbe();
+    probe.arm(() => {
       holder.exec("ROLLBACK");
       /* Takes the lock the moment it is free, ahead of the waiting write. */
       other.mutate((file) => { file.conversationAliases.conversation_other = conversation; }, false);
-    }, 120);
-    const { value: write, gapMs } = await longestLoopGap(() => registry.withWriter(
+    });
+    const write = await probe.run(() => registry.withWriter(
       () => registry.mutate((file) => {
         expect(file.conversationAliases.conversation_other).toBe(conversation);
         file.conversationAliases.conversation_mine = conversation;
       }, false),
     ));
     expect(write.acquired && write.value.revision).toBe(before + 2);
-    expect(gapMs).toBeLessThan(150);
     const aliases = registry.snapshot().file.conversationAliases;
     expect(aliases.conversation_other).toBe(conversation);
     expect(aliases.conversation_mine).toBe(conversation);
@@ -181,11 +167,11 @@ test("the registry's delivery writes wait off the loop in SQLite mode and report
   try {
     holder.exec("PRAGMA busy_timeout = 0");
     holder.exec("BEGIN IMMEDIATE");
-    setTimeout(() => holder.exec("ROLLBACK"), 250);
-    const { value: written, gapMs } = await longestLoopGap(() => registry.recordDeliveryOutcomeForOperationOffLoop(
+    const probe = loopProgressProbe();
+    probe.arm(() => { holder.exec("ROLLBACK"); });
+    const written = await probe.run(() => registry.recordDeliveryOutcomeForOperationOffLoop(
       "conversation_none", "operation-none", "delivered"));
     expect(written).toBe(true);
-    expect(gapMs).toBeLessThan(150);
     const sample = blockingWaitDiagnostics().longest.find((candidate) => candidate.site === "registry-lock-async");
     expect(sample).toMatchObject({ label: "delivery.outcome", operationId: "operation-none" });
     /* A plain send has no retry owner to bind, and needs no lock at all. */

@@ -1,0 +1,4132 @@
+{
+  "workReaderOrderingControl": {
+    "file": "src/lib/selfUpdate/workEvidence.test.ts",
+    "cause": "One event-loop turn does not prove that both reader deferrals have run.",
+    "failedRepetition": 5,
+    "failureLogSha256": "5e0a644d2e37542cc50c21b109679fe5921c6c2704d88ff2131b63cdb35a6b4f",
+    "fixture": "Wait for an explicit reader-entry marker."
+  },
+  "settlementOrderingControl": {
+    "file": "src/lib/runtime/sendSettlement.test.ts",
+    "cause": "The free conversation could settle before the held journal read had entered.",
+    "failedRepetition": 2,
+    "failureLogSha256": "4b64513ff2bd92749265cddb844de5289327bb5d21f90d7cf134cf517c7a250b",
+    "fixture": "The free read awaits the held-read entry marker."
+  },
+  "fixtureChurnControl": {
+    "file": "src/lib/memory/index.test.ts",
+    "cause": "Shared temporary ancestor timestamps can change during a directory identity proof.",
+    "failedRepetition": 10,
+    "functionalBudgetFailureLogSha256": "ce2fc9e2f27bd0770d2ba3a9a9f4c38132520f2745cca136bdf1346a5cdb0c36",
+    "functionalBudgetFixture": "A fixed clock isolates the 1000-worktree ownership and cardinality case; dedicated deadline cases retain real timers.",
+    "redLogSha256": "bdc53b9d38918b3b123ab51dda31a2e98b6e77af90f1057a6c4985d4c0b36ed2",
+    "restoredLogSha256": "02d1e8643ad1ff0a1c479398cb3fbc21b0bdaa97f88ec5dd2dc58f806dc4b375",
+    "wholeFileWithChurn": "62 pass, 0 fail"
+  },
+  "additionalContracts": [
+    {
+      "label": "overdue-heartbeat-blocking-mutation",
+      "exit": 0,
+      "runner": "isolated gate-slot synchronous heartbeat-wait mutation check"
+    },
+    {
+      "label": "Linux explicit ./src/lib/proc/memory.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/lib/proc/memory.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux explicit ./src/lib/proc/portable.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/lib/proc/portable.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux explicit ./src/lib/proc/darwinIdentity.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/lib/proc/darwinIdentity.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux explicit ./src/lib/proc/index.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/lib/proc/index.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux explicit ./src/lib/proc/windowsSnapshot.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/lib/proc/windowsSnapshot.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux explicit ./src/lib/proc/windowsIdentity.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/lib/proc/windowsIdentity.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux explicit ./src/lib/proc/windowsCwd.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/lib/proc/windowsCwd.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux explicit ./src/lib/proc/windows.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/lib/proc/windows.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux explicit ./src/lib/processGroup.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/lib/processGroup.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux explicit ./src/lib/platformHome.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/lib/platformHome.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux explicit ./src/lib/runtime/localEndpoint.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/lib/runtime/localEndpoint.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux explicit ./src/lib/scanner/describe.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/lib/scanner/describe.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux explicit ./src/lib/state/durableJson.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/lib/state/durableJson.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux explicit ./src/runtime-host/socket.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/runtime-host/socket.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux explicit ./src/runtime-host/runtimeHostFence.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/runtime-host/runtimeHostFence.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux explicit ./bin/server-runtime.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./bin/server-runtime.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux explicit ./bin/bind-guard.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./bin/bind-guard.test.ts"
+      ],
+      "exit": 0
+    }
+  ],
+  "loadSegments": [
+    {
+      "elapsedSeconds": 774.5670017169323,
+      "cpuSeconds": {
+        "1": 732.42,
+        "2": 734.77,
+        "3": 740.68,
+        "4": 729.97,
+        "5": 739.94,
+        "6": 727.2,
+        "7": 728.98,
+        "8": 721.8,
+        "9": 736.27,
+        "10": 725.41,
+        "11": 728.81,
+        "12": 724.68,
+        "13": 734.6,
+        "14": 733.22,
+        "15": 741.78,
+        "16": 718.23,
+        "17": 736.21,
+        "18": 743.61,
+        "19": 733.57,
+        "20": 703.91,
+        "21": 721.3,
+        "22": 729.47,
+        "23": 723.9
+      },
+      "aliveThroughSegment": true,
+      "stopped": true
+    },
+    {
+      "elapsedSeconds": 424.7424270370975,
+      "cpuSeconds": {
+        "1": 379.38,
+        "2": 380.02,
+        "3": 386.24,
+        "4": 375.31,
+        "5": 384.95,
+        "6": 383.67,
+        "7": 385.6,
+        "8": 372.6,
+        "9": 377.06,
+        "10": 368.65,
+        "11": 379.21,
+        "12": 373.83,
+        "13": 377.7,
+        "14": 366.8,
+        "15": 367.91,
+        "16": 368.13,
+        "17": 372.66,
+        "18": 373.05,
+        "19": 366.17,
+        "20": 338.69,
+        "21": 349.34,
+        "22": 354.49,
+        "23": 359.25
+      },
+      "aliveThroughSegment": true,
+      "stopped": true
+    },
+    {
+      "elapsedSeconds": 3122.9752204881515,
+      "cpuSeconds": {
+        "1": 2819.09,
+        "2": 2805.23,
+        "3": 2821.74,
+        "4": 2804.12,
+        "5": 2825.0,
+        "6": 2799.02,
+        "7": 2827.61,
+        "8": 2799.61,
+        "9": 2817.01,
+        "10": 2801.03,
+        "11": 2818.16,
+        "12": 2770.69,
+        "13": 2807.11,
+        "14": 2819.71,
+        "15": 2834.25,
+        "16": 2632.24,
+        "17": 2707.85,
+        "18": 2692.82,
+        "19": 2653.58,
+        "20": 2595.7,
+        "21": 2663.91,
+        "22": 2653.37,
+        "23": 2676.75
+      },
+      "aliveThroughSegment": true,
+      "stopped": true
+    },
+    {
+      "elapsedSeconds": 5.804706396069378,
+      "cpuSeconds": {
+        "1": 4.48,
+        "2": 4.77,
+        "3": 4.97,
+        "4": 3.21,
+        "5": 3.55,
+        "6": 4.79,
+        "7": 4.39,
+        "8": 3.47,
+        "9": 2.73,
+        "10": 4.15,
+        "11": 3.45,
+        "12": 3.74,
+        "13": 4.35,
+        "14": 4.58,
+        "15": 4.76,
+        "16": 4.66,
+        "17": 4.42,
+        "18": 4.61,
+        "19": 4.75,
+        "20": 3.05,
+        "21": 4.57,
+        "22": 4.96,
+        "23": 4.06
+      },
+      "aliveThroughSegment": true,
+      "stopped": true
+    },
+    {
+      "elapsedSeconds": 1461.422146180179,
+      "cpuSeconds": {
+        "1": 1229.96,
+        "2": 1154.61,
+        "3": 1176.07,
+        "4": 1111.06,
+        "5": 1142.48,
+        "6": 1170.56,
+        "7": 1125.14,
+        "8": 1142.65,
+        "9": 1153.82,
+        "10": 1129.36,
+        "11": 1100.26,
+        "12": 1115.69,
+        "13": 1104.04,
+        "14": 1109.88,
+        "15": 1150.9,
+        "16": 1135.52,
+        "17": 1088.54,
+        "18": 1112.71,
+        "19": 1093.22,
+        "20": 1086.63,
+        "21": 1109.63,
+        "22": 1103.3,
+        "23": 1092.8
+      },
+      "aliveThroughSegment": true,
+      "stopped": true
+    },
+    {
+      "elapsedSeconds": 1263.4681151849218,
+      "cpuSeconds": {
+        "1": 1045.05,
+        "2": 951.94,
+        "3": 972.86,
+        "4": 970.9,
+        "5": 940.14,
+        "6": 977.2,
+        "7": 962.6,
+        "8": 923.37,
+        "9": 941.79,
+        "10": 925.9,
+        "11": 948.68,
+        "12": 972.43,
+        "13": 1001.95,
+        "14": 946.22,
+        "15": 956.83,
+        "16": 941.95,
+        "17": 925.46,
+        "18": 938.95,
+        "19": 930.48,
+        "20": 941.31,
+        "21": 909.54,
+        "22": 905.65,
+        "23": 929.1
+      },
+      "aliveThroughSegment": true,
+      "stopped": true
+    },
+    {
+      "elapsedSeconds": 493.4155202819966,
+      "cpuSeconds": {
+        "1": 427.44,
+        "2": 380.5,
+        "3": 390.9,
+        "4": 386.9,
+        "5": 403.54,
+        "6": 362.84,
+        "7": 376.93,
+        "8": 369.26,
+        "9": 381.8,
+        "10": 401.57,
+        "11": 394.31,
+        "12": 392.56,
+        "13": 399.08,
+        "14": 385.36,
+        "15": 409.11,
+        "16": 397.76,
+        "17": 395.47,
+        "18": 386.36,
+        "19": 400.39,
+        "20": 357.37,
+        "21": 368.48,
+        "22": 362.28,
+        "23": 364.94
+      },
+      "aliveThroughSegment": true,
+      "stopped": true
+    },
+    {
+      "elapsedSeconds": 59.11981255398132,
+      "cpuSeconds": {
+        "1": 51.34,
+        "2": 52.25,
+        "3": 51.15,
+        "4": 49.11,
+        "5": 51.61,
+        "6": 49.37,
+        "7": 49.49,
+        "8": 52.11,
+        "9": 52.55,
+        "10": 52.12,
+        "11": 52.34,
+        "12": 51.21,
+        "13": 51.97,
+        "14": 52.21,
+        "15": 53.68,
+        "16": 50.64,
+        "17": 47.63,
+        "18": 51.32,
+        "19": 49.98,
+        "20": 47.25,
+        "21": 49.0,
+        "22": 45.06,
+        "23": 49.54
+      },
+      "aliveThroughSegment": true,
+      "stopped": true
+    },
+    {
+      "elapsedSeconds": 261.0421226399485,
+      "cpuSeconds": {
+        "1": 223.57,
+        "2": 212.11,
+        "3": 221.23,
+        "4": 219.93,
+        "5": 221.63,
+        "6": 223.71,
+        "7": 222.08,
+        "8": 219.39,
+        "9": 212.9,
+        "10": 215.49,
+        "11": 220.55,
+        "12": 211.46,
+        "13": 216.13,
+        "14": 207.21,
+        "15": 207.81,
+        "16": 214.75,
+        "17": 207.61,
+        "18": 203.16,
+        "19": 211.35,
+        "20": 206.65,
+        "21": 196.55,
+        "22": 196.86,
+        "23": 198.41
+      },
+      "aliveThroughSegment": true,
+      "stopped": true
+    }
+  ],
+  "description": "Runtime responsiveness assertions check progress and ordering under runner load.",
+  "reference": "#2824",
+  "bun": "1.4.0 (34cbb9a40)",
+  "execution": {
+    "serial": true,
+    "gate": "bash scripts/gate-slot.sh",
+    "privateDirectories": [
+      "HOME",
+      "TMPDIR",
+      "LLV_STATE_DIR",
+      "XDG_CONFIG_HOME",
+      "LLV_GATE_LOCK_DIR"
+    ],
+    "root": "OS temporary directory",
+    "viewerControl": "closed loopback port",
+    "runnerCpu": 0,
+    "loadCpus": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+    ],
+    "loadProcessesAliveThroughCampaign": true,
+    "ownedLoadProcessesStopped": true,
+    "finalSegmentCpuSeconds": {
+      "1": 223.57,
+      "2": 212.11,
+      "3": 221.23,
+      "4": 219.93,
+      "5": 221.63,
+      "6": 223.71,
+      "7": 222.08,
+      "8": 219.39,
+      "9": 212.9,
+      "10": 215.49,
+      "11": 220.55,
+      "12": 211.46,
+      "13": 216.13,
+      "14": 207.21,
+      "15": 207.81,
+      "16": 214.75,
+      "17": 207.61,
+      "18": 203.16,
+      "19": 211.35,
+      "20": 206.65,
+      "21": 196.55,
+      "22": 196.86,
+      "23": 198.41
+    },
+    "campaignNote": "Completed repetitions of unchanged test code were retained across campaign restarts. Revised cases restarted at repetition one."
+  },
+  "wholeFileRuns": 980,
+  "testPasses": 30620,
+  "assertions": 280355,
+  "files": [
+    {
+      "file": "src/app/api/account-migrations/[intentId]/action.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 60,
+      "assertions": 380,
+      "logSha256": [
+        "4172d56f35ff9fa2661785d7894b3a92c81bc42aaf1cc9902c9c5a6b5534d1cb",
+        "e05e3951219542ba9163f02ef66718464ef6e4843e38944e3a46b252419db044",
+        "79ae38fe5bd16a8d10fa7adba93e4df7952a608520f3d1478d1d0e06c497a16c",
+        "b87187da7c10970602e01e4bd560791bf154f73b8c7fd880e54b970b75d1da19",
+        "80176967af1b5b7125211631b22554631399e0e42948943fd0c22c3448f53d7a",
+        "367acc4111b8df8c0fee6b55f14ce18c1e91d8b4ad1fe2220c22db028d454335",
+        "e88cb7542c27a44ce610fe78aff513d975c05175e398dd295f91539bc6515d21",
+        "ecc015be70b7c5efe2a1f5dc120d329669f2be1c4ab089c22b033c52f9edb8d5",
+        "4654ad01f824c5b76299f8253bad1f7e5103d773ce1c21f7739d6d7f1d563c43",
+        "38707a215c210f4d6ceccf7b8dbff32f75ee3523d845c8e84c6e34ffa25a41a6",
+        "e8991d688399bdd5e33cc18d12b98cfba9f5fbba33ff5eba9119354cb5ba819d",
+        "f271544a2419dbf76b07dc89eccd673a236f58503ec7c3fc1afde2a4f25f61d7",
+        "b2db92011781a89cd24b32e5b79059ea9f7eb6359771a37e5580151236457348",
+        "f95785b0f1d6c73cc49dc9b82952ad254f4ba8bae5aef575524893a699b469e7",
+        "fbeaab84bad44fe7efdac9e86e30b8b7e17ea6196583821c903f843c204899b4",
+        "a747de40b03f3263c2c9858e66e9b252878254efe8dd1686f4bb8b0443d0aefa",
+        "617d71ad62ba13ddc8501fb068c3c792772fd9c72ae2f513838e5b73c2727cf2",
+        "544853f44ba94f9a87d8d03ed07267473ab6d42ab807344d7579c9c3a837025a",
+        "d651e4efeba14da9d65bcfd7168438e14307e038fa2aab831b3fdf471c2c3bde",
+        "599e1762e90df0ef6cb6bfe92a49fe3df0370c0d4456d3a8c1f830c1c5a26a9c"
+      ]
+    },
+    {
+      "file": "src/app/api/conversations/[conversationId]/migration/route.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 200,
+      "assertions": 1240,
+      "logSha256": [
+        "7dd91e61c49f57f468b3eb2c303f271b76b72e7bcb60295edf73c87405daa774",
+        "645f09d130999b5c6656937aa8b293a0e4a617d419c823cfc4ec32577dfd0bb4",
+        "ce3745914df23084e98cfca0b7123452f924d31dc1a0f21071d54efb92279a5b",
+        "8f2779b064069a25108797e9700703ae0cbbde88d6109b1113793767c50be0ab",
+        "8493a33fafdc0800b0d4a618ae8d27bce06b869dc948233e8c004ceb24289489",
+        "b73f1c78481a43f55856fb5d8d63be9c366076d486967c3a5f050078956ace14",
+        "b9e0cb5b3619a5e4059f85ed7c44563035269cba01c80d1642f96462fb602f56",
+        "04f5c6634495f923d4f6820dd4dee487c1469a52018754ebc32829291ec70b72",
+        "912d8ce246a47574937ad155e1f86dc6414298279972c8e3aac9a1073b0d1a2c",
+        "9a7d0bc4ef8798e7731651f33c25b5960743b8e87af6d148b4f59173d08d517d",
+        "b5b7629b3bbcfade7743df31a24826d0fdf6265dd1da7db55deb2d4c3060d37d",
+        "5cd63a437abe7ecb19a8f92fb82227e80c035775c9ea6366fef88146e07d737c",
+        "8212b9474a131455a22704352f2d79e06a02e96a22299ecfd16675b7060a60d2",
+        "5dc8bf0b530103bca9d7c4b692ad0985454367255af2f74a77070409b1139958",
+        "636e69013bca313e204496c3874420182b415ed8cd328fdbc45a4a32062ca496",
+        "6586a13a0cb5d06496c16b94e1a8db225adae81c5a30861a92fbd2290fdb2730",
+        "cdfbd5505b1d4b5abf3237e4a9bd85d5d19f2650a04b138f3e577420fd3b8646",
+        "410f163b62a286e166d8d87b4394a01815b5dc368366dec4abbb761f1dccbe3b",
+        "016ec1a2e2995910f2416554aed448577b2513e746ae2b1d7b59f700cf449560",
+        "b872519e46fcd361bb91dcc2443f63f209e954bdb4c9b4f6662aa9e0d55be0a9"
+      ]
+    },
+    {
+      "file": "src/app/api/files/scanCache.real.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 380,
+      "assertions": 2740,
+      "logSha256": [
+        "ca8065ea23d8450d91f317bebaef1a5959c8b04cc9e8dc38819a70873d97938e",
+        "8082b9992970cdc5329b2f7c7a2c5f23b6c30eb934f96e7c1235184df22a5bb6",
+        "7f9c66fff6e1bab7052ee84376e047f0c21f3bb19620f8db15beb091fddd6b08",
+        "e29628163afb54eee9e1d7e308f4865e1d175d02f2076a87359954347f75d6d3",
+        "964d549be5145a8554c846fdbf35b980111dbfc030c15a51a0f01d26038e65eb",
+        "44725a739541c44e528f1f1bce1b1914e6bc341b0ebb4dd25ae063c2329c3fce",
+        "4d6383c67e91b514564027d56415212ecc4098cfcfac652aa1e0e6d4e2c07e57",
+        "018c91e290c9cb22ea4ddb242aa270d09a68ff8280150528a1e67025e32d4fa7",
+        "96ff91b9b0cfef5958948e498cff725431ceff68304041a9fed74028f5e2e556",
+        "66f18eb814a8281f2644fac3b2ea7029553f7278ac039b49d8e170421eb552bb",
+        "f3565b28d37acc9a1bffed004dea11a52dea1953a880e8b5d1bbb0c73442719c",
+        "497056ce4f9db7df17988096b623262321c6e9bb378a3084bf50fd965a2fe6ba",
+        "0f9578f2a260bd8f53a4d88a625d0284303071c286f1003f706ca511d8f57642",
+        "46198600da69498f152a14c2f7804d0d71b98f8b92a1dbf58e2d9ba5eeeab157",
+        "9a78a87729c410e9f725c8302ce0edcfb6bcc997bd0f90978c3f61f04eccab7a",
+        "48b3ec9b478e630ad97e0faa393ca7330a6463e776fb6508bec3f85c3d1bc735",
+        "53ee7f494f5afec86b878b2c6eff1c6d1c2575038fe4ea9ca5720c6f05ffc64c",
+        "96d0520cdd13c956565857994ed050e831f7a4a3c32be58f442001d3c6956c22",
+        "96e7801d8249e35f602d48e3a0ad86959e0daf3a13b1eb5113616852ca9deac3",
+        "ee4e5e50abbcf4497dfe0df9d4ef69d4c4605a853b66cc46ac91270cdbe33d20"
+      ]
+    },
+    {
+      "file": "src/components/NativeQueuePanel.dom.test.tsx",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 680,
+      "assertions": 3380,
+      "logSha256": [
+        "e5ca433a139c46f20d83b54164e9ae7f1e5b99e63566a205e8b51514aec3a96e",
+        "fecaa3b9c6f7bce376563982aee5f227134fa92502c0a1e250b585b0b095aed3",
+        "44c8dc2f84addaf78fccc1f05c42954421a79897924a814b0a99a8bd6a6afc92",
+        "7f66dd1a6cf149bf70035b94bc678ad714583e9778f83bed97cf93805de642fa",
+        "83369ad0b0039eb3c02388da4ccf96a0eea7232dfeb43b89ae2f4c24859c6fda",
+        "97496b24031fb2ef56db7d996e50ec758b0f85f929f4a465665840e0afe18804",
+        "4fd08378c32229605a38a1e761aeda48a73721cbab2021f4971f211f48f87a8a",
+        "a8377ba68790968cfc6eef0d1efc7fc4f016195d1bc9b12f00056cb53a2773e6",
+        "89099eb20a8db9478fc07d81d9b5f142768a771e2b266783862ff79dd79d4c9a",
+        "a4c6f9d71d908579ab12e0dfa268e4f291205f710ee0a6d7681b788541902df0",
+        "51b357563e47ab5245b6b374d8b1d8a49c632e527955765ed7de3f583ab25504",
+        "7c84f7ce8a75a96515fcfd0c10b6999570979bc8f81610d0d7ac89e1a7bcfcf7",
+        "9fbd7dadabafe65b1e207f8a3153fe17ea02da0374b3e5be22e9951ff31b33b2",
+        "4cfb5e08fce523949b05d948612456ee90ba64b618d9ead3ab93193c0e4ad939",
+        "d5035e27c66ba6b666c98d030be379469c5657490ad791bda4b5aad6c93906dd",
+        "6770ff2bb1d55efe9aeee482056c3a24c06527d84c7472ecd6e05c252d54fe08",
+        "ad9bd4c048d33a9ac326ac0ec03405fba7c9be32e3383cc762196349261c2f09",
+        "0c824ef76ebda290bcf21c48a0f8e199d71d36403989e0c762369259a7b92342",
+        "153763cfe3d7768d0f9aa26906e4175726d72981deca057907420cb87af15000",
+        "20c6ff5b670e46ad8830da70cf3a73b18b12a1b321da5ad3d27a3f542c0286da"
+      ]
+    },
+    {
+      "file": "src/components/TmuxComposer.nativeQueue.dom.test.tsx",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 680,
+      "assertions": 3640,
+      "logSha256": [
+        "4cdc434790711bd0467a21d8599bdeff0bed131b0fc696e740f88d390de0bbfe",
+        "a3cb8e996dd40a35701ff4e3365d6c70abc65f0bcfaee5e232721277fcacdf56",
+        "8297a089f0cfb08879df3c7db2caedc0a1fdc7ac41740a12c2ce659f5605ab0a",
+        "0ccc1b2b27087fe3ade9ebe7c1377de3dbd8b45ce937141ff0fd6bc93bba1f66",
+        "5fe8587e89b66084db3206f13dd562e9c7997395bcd55bcbafb88a65e6db3f9c",
+        "e9817ad3bbeba00b195b687336848710485771ea107c92e26414c8191c5ca012",
+        "cbde2d041c2e383284ccceedcb5183b1e24cccffe0047c9be044227bdf7e379a",
+        "83e552f839fd1fd7bce0e3d1561ff875a9e3c8fbd357bd6be4af5a5b868b3832",
+        "158f69c867dacb6c996e9062d478a42fb91f2f03f4ceac5de30bd3911488a615",
+        "a154a98e9752dc812400f110f51ebc9e19fa07c14c4a116872e03e8cf0061246",
+        "b6e6a2783e8fd77d773d5d152d8aac2186152f13337bb96679ccb020c47d8b0b",
+        "c1ca5703efd53ae7768854b706d9ac482fa2c50098ffed7b66c1ee21736c4921",
+        "b63e2a7dcf2183519e92d00ea48be22f696ede1922160866bc526e7396dcfe43",
+        "8792d056f584a44ae4750d9d3cf341fd58e7d16eee1c4dd5982aa11ad682c743",
+        "9c7113daa82e346e8ade31167fc6f8f82b15c1b1df6b1b33973f10ab75895be3",
+        "4c20fcd89256d1aec6ff7ff2b107b37ddbf62183c2aad7a2af271057e08fa5cd",
+        "55cb9bf4009f11c0a5a1f1d6141f3af74cdba22cf10190200b1461fa0dc7cfd2",
+        "61fa668c4c65e3f755725b7f48260cf375a53ef11a7271fbe328b6c8cbd2e879",
+        "75888b3c7e95edbc6f7a82e8001e4a517ef2e7c3c86dbcc60011595fcf96d5e1",
+        "e9d7327c657b1704ebd48394421ce58ad481236fd0fc83e56e86b579f14ef1a5"
+      ]
+    },
+    {
+      "file": "src/instrumentation.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 880,
+      "assertions": 2960,
+      "logSha256": [
+        "621a6c5f07a8e822f0124cb0bbc20e5d0ad33285c83ddd09f88e54f86a369134",
+        "f451a7696d2aed018f8c928f096f5c6c08af7393bafbc2de8c7742eef7b59d75",
+        "c80c4353076ea8dbfb1e69e7022db801bad421ee89eea22de1f53ac0107f040b",
+        "33bb4e137690ccc13c48b5067f9ec8a491e1d769e45cfae2ce2de7e9a3a1ec9e",
+        "e4023a14a57934a14f9dc78c3fae4efde1425cbc5132358f992b8ee3712dc3b4",
+        "8e28e6fb0d508bbec2ddaebd3b47687bb180394fd16adb8d20f1f57a65fafb56",
+        "606588e1c9e0c3e28e60158fcd7d39cfb2ab88058802e31b4057b1b434030e4e",
+        "0939654b1bc7df87e14f37be7e2ab376d72b7b0d5c176fef2d01207bd23e36ba",
+        "da18d6a698f7a17eea8cc426c329ac31e6900b88fb6d0f8034f2f5cf23e477d9",
+        "cc8e3d76c17f40c1330ecc933debeafcac6b00182a7248d2e7307799b3cb99a5",
+        "69f41c8e9cda32b55194f0d2a7ef34ce3572cfabd3e0e966301ea5482e9beb65",
+        "710bd5d165cc6bef5af771744f468d9a7918cb4ef721de79546d54de68477148",
+        "cb0a76d6bdf83f7025d791c2343a89917a2defefa5012bc101ec790b21dd391c",
+        "ccacc87a343767717fb31e84a33bde51cb58fa8040ab00d234818f42a039c638",
+        "228fd4741ff9ee857504a762d624fa6bde59dd79c7830d6a601901306d2cef14",
+        "9d71c68c43439d8cdafc022a44544ca3eb63de49bc618244adb29a8fc57e75f3",
+        "d42e83e1885e31a076dc42eb19176cf78ba1613bf70fd71c11eb693bac0567e9",
+        "8c1bc8698baf15311c92e571dec706788741651f8805f40b942025048cda5621",
+        "2415b5325e204a07ddb2c69ac9f9cda2658ea9260d72b6be43f630b6316477fc",
+        "d7ab7c9489e4194025d5217823619ea0ef827e11f30093836fc37cf45d5c1dcf"
+      ]
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.writer.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 340,
+      "assertions": 1900,
+      "logSha256": [
+        "79b5431bc748407df3030aece7442b26359da558b7c6064411b053a9c4a3a9b1",
+        "b6b2c9722abd9fc00df9cef73853585110d57e2e36ad2aeb5944d83a0cce7faf",
+        "cd41567a573bcc4ead09619c7427f45ea40e023df386f57aad88453d3076b69b",
+        "0b0a837f647e140266d68acd6da686e36152fed0156c4c04161b998518df3bbf",
+        "f02c431133037c0086445e6484430e46f57ae1e00d0338de7915201ae7c13a93",
+        "bcc0927e40c3a13ecab3271ccfadd3aac7e3a2887acbce65eb5a9f6f381a93d0",
+        "b34fdc0e7bd5a479a2c2c0a380e26a247aefbbc90aa18ea128bfcdadaa88e553",
+        "f5ea15abb71d347e4ae62ca2d3821771978ae510e0255270b22539333caeda92",
+        "227f49a884542c89bd06fe3a8550ff64a638bd1f0e7de700a5f18e035fe36b75",
+        "220ab2acc8b9943751ddac3f8733e8f0e311c5b2cc2cafcbb9add32344011f33",
+        "ca333e3950726c28000e588480e78c3c2511d6953d2e32be4f17740c78cba800",
+        "0925f11e4cacc3b2b7e86cdee302605122526643c4361f46134ddfebc3daed6d",
+        "397d040f918597318c5e37ca848d0eab23c0e7371bca851ce999fd70feba35ce",
+        "a9a793f872e7e8dd05db283dc92742ad0642457e8081646006b35d3a596d7497",
+        "8708bf9d6dafa05eccf3594ee9d6e54095c3ab4d9d6e7c247c24b302c145f318",
+        "6e426ad9496d6722b0d5bd8dd7668a2b9d74ffa403854a7f94b7bf449fea2378",
+        "f9a29269b04a443aadf75c6f2fe49c22c6352d27d628b5602808564dba64fbdd",
+        "7225d7d17a645e63121e1e0dac6bb1943fd8daaed357cce2ffd8b7d435e0f33a",
+        "0540dfad0a01f5194053759a7574012da273457772cb963ffe0b32934d7f9e2b",
+        "f121398f24bdaf090248b535b47090d8344413982774a3478692cfc28d2217b4"
+      ]
+    },
+    {
+      "file": "src/lib/accounts/claudeLoginIdentity.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 280,
+      "assertions": 960,
+      "logSha256": [
+        "fff6a324fad3be91d1f035402946d6ea1a34b49bfbe4c2f105ba5a75ef734c30",
+        "bccc2f368342ed6657c9d533a97e477541606df2ec7bced82209a67381e2571c",
+        "5f4f837af9fd8e34e4e3aa2609b4ab4745b5119b1463292b5ed3490e7422dbd5",
+        "053299de2cddca30673945f52b655a879b02f372b6de7806a6f2c31c0ca8ca17",
+        "309f7b89da030f018dc925a49f5f4beb9b601942d92e31e5e546b8c9eb716d8b",
+        "a0065cd12b3407ef4d583a62cf38de3fa751b380a40d86306cb943f8e9186dd5",
+        "ca2eb6cc32660fe589ed7f6c51679875a61b227dad19b0e665365175e6a7bad0",
+        "fb116665cb869a400b5a4302221e712200699e2bed6baa435a472906f7f676bb",
+        "8e5c492401d4ba4e0e92dd309bb8c330c5896f93b04fd86b164f1095549a7ee4",
+        "2e2b73642b513f95b84151b21ecf0c2135c6ad0c3b00fdb5fb4db6f064ba6916",
+        "d2d03e07e617a36a4b438f7f07992f6e3dce04750614a24a79593408218a1bd9",
+        "6c4af8a10707221b0e1bb646e791d138a39b0441038739b8c12eefadcf120ae1",
+        "22b0490956c18a4abf64d9581f2a6b158d3edbd3c6d11714478ef260a74c65f8",
+        "1e8086dc9a5f47d60282103f9d7a81834bfed43f3b70d814b8d948aab3d36d91",
+        "c86dd8101d1015c0fd38cf4dbdf7a8349731967c0bc40c2a9cfb109fe309d18c",
+        "0417481c0466ef2122fdc5a5858bb41fa5e63bbbf90722b8257500c97d9e79e7",
+        "056586035d3fae6ec87d4f703f6bc7259e43c14faf5a5579e4742efd16c75169",
+        "e61354b6633ae9e9c4199cbbf9d9583637dc47c5df7c0f983bf751925b73dc0c",
+        "7d350dcdbc91940e1508510e69b016a55ed65f75fb25e2f55edf06e497d1361c",
+        "13224b1ed06ab83e8d93bbf1532d45f2a565e51eb7f72712f1fa2387e6beb55a"
+      ]
+    },
+    {
+      "file": "src/lib/accounts/codex.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 680,
+      "assertions": 4340,
+      "logSha256": [
+        "2fe24dc80435a51ab9b422142dea04fb4b8dc02d6dfd8201bb8089838e713e23",
+        "4950021a56579eda8b4b0623a5aad5528295c1122f510a03d5e97d8756d4b883",
+        "c8b2a434c90230ff2859ade9a3914891a725894d224bb4bc5a9e3a40b772521e",
+        "3425df92283bea5108103faedb9a318aa789ac03ee23b4e920234ac172250266",
+        "b992c0e171f3791016f518ec140866adc915ee80722d5071b55e8c2c5e4a8022",
+        "b8863911e24b6a06fe1354a8ef1020c45d140d306cd9de613770a53ce368c8d7",
+        "71edcacb506c617bff3d7639f3d379e03c257ec990903c0366fa9a546d39adf9",
+        "df38dfd924518c258976b7db07eaf925539963a3c445813441aba361aebbf57e",
+        "1987448e71242d484ba3ebe27592236d48977ed56f0be28bb5b046e324cc71d8",
+        "25d891815c38eb46a5a90824793ddb1f3e21a18a9d17cf8b99d97c2591694b30",
+        "c845c4767ef5490137306441458bdaed81b26977629d45d91fc5ec8b8017fb40",
+        "699bbaebb68d0f54038cf5a7340072d522911adc288864f9789eeabc3acfafc3",
+        "498d188d33a3634dbdad7cf85b6e45a80594021e9e68e1c94851939e3eb9634c",
+        "347feb29bea6ec44469aea0ebba5169c645de8c191f0f9468049bc17b0f1684a",
+        "bcdb68dae6bfca779a522d6be02ce5bbb076c9ac1c9abf10628da0b9c05f5282",
+        "74b6132ba773127029321cc504d5f84b3ded7fdfd7b63c7edd9a9071077dcc5c",
+        "828e97e8a0b4a989952b00bc6cc707f419d5116f5568544d6ac99d12833774ad",
+        "7e891765a530ad9c83ebb6fe8923ab4cb63e18226ed387981205e5f03ff90b98",
+        "35f004ff84e5c2b77d61b78d8913ccb47b6b716bccc96557e4cf0bbfae2200c0",
+        "1409dcbfc8ab066187efbb39eb08cbc64ebfdc90a72a1acaf11ea131b6bd8c8e"
+      ]
+    },
+    {
+      "file": "src/lib/accounts/migration/controller.routing.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 20,
+      "assertions": 140,
+      "logSha256": [
+        "d6851cf68f21967b28dd0001edf8c41b4c9145766e12013a90767b6ac7098921",
+        "88280bbe62152d7ac334d9b8eebfcd0cd8555e7a38d42f0ebdd520ff684c145d",
+        "3da2e168de6983db4dd930afe4413be421882584b5d074b9539375f5578a6d99",
+        "4386dbd1e09d97e79baaedd942f848f3048693b2695158839f0c1ad4c3cb7119",
+        "85bbe32b003e341134036b83d062a87265084091b506a3e5574e9d766b5e0e1f",
+        "11a7fb838bd9a51fe5b31e2cfbe586a48bb2726e7c8dae61261bba5b14fc3f66",
+        "906ced4b94a6aacb7161525e83e6db8f49afcedfb39ed69ef9b2a9da4008af32",
+        "39537f5b3dee93adb44c44a3eca3de1ca76ca2ee70092e7af36e56f561855258",
+        "27a69bc248a9a9711ef20c7bd5fd3c966966212ce7676581f7617a056904c614",
+        "5d56b53e5c1ccd04af30d87d3501b1d9cd4c04d90811bd98f3a6b532a7ba86dd",
+        "91be2cb83027e3e65e4df8f33dd1a26465e3a1051da1133dda89df0505d8ebfc",
+        "78bfa712f3d671b4451fc5fe3d2810eda9e7bf95ea915e4f3bf0b2139fe10f78",
+        "d9c40b44581c72e7bf99e004c57d45cdabfabf2a8e820651d1abe319996519ca",
+        "265726534e2665034f9e57be19b922440e842a163f27111e15ae0036f093ec55",
+        "42adbee7def6d270ee489b3b79c13d9eaa0e53ed110f7491719270f44fdfa8e3",
+        "3b87517215720f0f510211a3c9c9884e28f6b297c1b954f4b1e616178e3457e4",
+        "cca7f289f42f7bc89c7122206eb5547a8f77ae0dccffa1a344a5dfc550ddfd2a",
+        "61a9ffccc15692db9de4b8e97cd1dc66ec4f87c4d4520c8c6875c9cc216a3a1d",
+        "38233ea5dc7170b9bbc264ec5af20a2bce582a115f643fba33fedb23ae10f4c5",
+        "eae4ee6b969529c60db8de7f76d83ccaefa8cc698e9d38680e352b008c50bf75"
+      ]
+    },
+    {
+      "file": "src/lib/accounts/migration/coordinator.writerWait.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 160,
+      "assertions": 2580,
+      "logSha256": [
+        "3c1de74dc1992e7b6b9a1d0ba59ef1a45e6a31e7a65a51583dc9cb19038c66c0",
+        "0223726cbcd79ae48a91d0af8c215157565cad6b544d152bded0ad10e721513a",
+        "ea1b8f73a4fdf0295d5741fdbab93bd45d0116ec9d3f2b76a62be61b4916ea01",
+        "09a2d4ffab0e1fe938009c7dab23f60e6b9fdbc68f2863922dc820aaa57b54bf",
+        "69027b2e95b623726deb97ae67b02367d69717a18884a4ad05f689c3eeb350f7",
+        "87b62eb2e167d82624f42bdf08f767c0cb3b6101294dcbe3aa424a722182cbd0",
+        "f2e603a778b303397bad3c48521e945d4fbfae8262c11a52fe84e49b4ee0d0db",
+        "a639f9a39b12c076b32f1fc6714a2f0597f1d19ad22a34cee58a69ea401ca762",
+        "4dca23cd834768954f40e4fb5b5290d5b3add3aa8642df569d8781a821b51074",
+        "f9faa3666ecfb9a156643e2746a9215f3cd297460788b8b414cc1ebe5e13f619",
+        "a33295cdcb9027ba3c5d71522011691a84b031d15bd69b665ae70dcef6ac7e7c",
+        "4e22a763c71217c374f93958f4e0bd4a3cdaf94096aa9e2e0810737fe8a98c0e",
+        "e15ef9be9deb89b99f8d9ee36436e400c6d04a98aeb293e0079dd3645a3cb7e2",
+        "6b4451b1be98adc8bdd7f4df24621ecc82b818be111f26d06f22b23923a7cd58",
+        "0e08849f36afa02bea37564d91df0fb0f055aed6580b699dae4237f8c437de50",
+        "3a3208a03d3d125d02b1d77537476229d0888367f2fd6a6d9db6fe31dbef4873",
+        "619a6a7467038a7ea45f46fc05de666dc0526716230c577e8b4e61ea7cf7adcf",
+        "0685cb0d2892c7cfcaeff6498f35ed03a39ad816c1d3d8e93fd79c20f8a81d1f",
+        "8b8dd80d21837f6f8853900e7fb4f102d14beab8cf757a4287eaed5b3bcb32c0",
+        "0158658360d2b5bc4d858263ea5a18fd4f014ff83753eda89567622e288bdbeb"
+      ]
+    },
+    {
+      "file": "src/lib/accounts/removal.writerWait.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 160,
+      "assertions": 1380,
+      "logSha256": [
+        "2b26991f62e4d9beb00ee5cff03a37ebe9863ae04ecf70c0596eb5c8aba783cc",
+        "299f193cb4bc60cfd4e992e4120f98a950f8d67e72c79d0b029f36267de82013",
+        "ebc58a017077e4160c7f58b243e0e1af414e44ca2bcc5d6de7c3044ddeb7f71e",
+        "566741caf8e05333f34f43f9d017525705d5e50c712db6de0c58f39d9cb82ce2",
+        "01df945ecad8a2eedbeee95141041d22e072389ebef950d4296b9d77cb78e30c",
+        "544152b9a48bd2f358790a7b105bc49480b22c6d8a8fd9edb861fc9d71e7cf74",
+        "c4aab4266a94ae9de15e3479c33138d59c5ab1f37c33573d2c9ab05b8589f6b8",
+        "70745404cba8edaf55c33862782999f5533bfad5fa5e07fa3ace9cc71b8876de",
+        "3d5a388c88447d062ca7b21ef5df6423d6d475ffce06740aa6ff0cb695a6ae0d",
+        "3d8d6adb5b52aa6418deb796997da0967f41e1e3be88c0c074b40b7167c634ef",
+        "21b0dacb4da685668fe5fbed9af52501117ce04ac72f214218e4ab9c42260924",
+        "cdff1d35062675eccdc231f9b11ffc3f97ac9ce07749f123141c1dfdb70a0833",
+        "208ec3f3df88b8f9c345911e504fa9e26af7742317adf3e01c77903d31a51944",
+        "81cd34231ce1f67b70ad6f615a4c4d5db6051d40768e102cbcb0a11a9f4732b8",
+        "745e35261711a8df1f1e23534d74027cfc6072eb60b60027f3440d57401d6b15",
+        "2dbe72c41c1a96eab55b36df9c1836b3db75902a50bc55592ec878b6c9497646",
+        "0a04e8809fb57f900fae9ce60fe0bae31af82ad6a4d929d41d1b15e02f7125dd",
+        "72072c820c33dfbdefc2bd4c8d0470930ae6c3afcef09f117de25dbd0138ab18",
+        "b91124dfeaee6401e199dd885efd2d9d074e72d2e0728c6959ee1cf700d10648",
+        "b8580a4afe660c238d0db8736a28f6b0a2d4b56c68f0e06d36590b8dd54665c7"
+      ]
+    },
+    {
+      "file": "src/lib/activity/ingest.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 240,
+      "assertions": 6520,
+      "logSha256": [
+        "676610a920ab8c224cbf8706d2f127d1a9d83e61e6a37401bf5761391807b8a1",
+        "fe903d1f2912e1905ab0bbf73ec2482568db5468ae099ad037d72146632de8d4",
+        "2b4337eaf1adf4f87f63e585235e95e104047312b7ac98eecb40402f6527d6e0",
+        "b6e9272b8457022d5ae7a4fb4a145eb084be95c627e975037631e643e44b1b6e",
+        "56bf9786eccd8350002672190ba68928380b91c8c58fa659e45e354ab933c0a0",
+        "5faf9b78929d7772259ed8d6de4bb8f1f59df031d6b73611bb24162c869d513d",
+        "64778c11495b529c1d4f81d0b37130d576561b97f7fc92970d4e65d705b72aa3",
+        "bf25ff29895ce21cfc9683eca07e4c8c5b51f546883aa3ca731fa7139404148d",
+        "80c58e2380eb48922304817104dda70644a675a68a137d94c6265da2e260f8b2",
+        "1464d91e01e821f0a009f117b9d1d167722ee7e69a4f9819186c6bcc956725ca",
+        "5c55aca76d12160a11c6191ca260ae168c2532ffb35862dfdab6b174101e621f",
+        "3f138cda6916edab1605943126e8bd47687b19aefa08c6a656e322fa26aec59b",
+        "8f8ac202986d6cc96b9152efce678118af1c6591aa7c58ea49440d7dac810849",
+        "556d3189bfe2602637a92c75df1c779e40f342c59241be08b3f242296efbb69b",
+        "19fa9d55173b2889aebf080061a0ba618de84dd91b7c68dab0eb80d1e498a6d5",
+        "92436acb053d2e94891d472ec1a66b12291a1d36226e6ce878a98ff668a331cd",
+        "7d8a8bd976723393b0ac19796d4efe34266b94a03c0b64b8ef936e9684b5b105",
+        "4d802157462cd80ae1d2dbad17a39d674a4ac89a3c03cb4bfa92eb64e537c60a",
+        "e3a27310fc15a1e14678f58be9c19c7d136c3e4ab87e9d1416c5a7b6660c1ab5",
+        "41498a3d325412ee134535c15a6a5c3beb8d711ec4f07faa309be915bd674947"
+      ]
+    },
+    {
+      "file": "src/lib/agent/failedSpawnDelivery.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 180,
+      "assertions": 840,
+      "logSha256": [
+        "59f378b9fc1caeeb823e2e90029c6fdb35af6e40e2f74c9498c02fba252c4420",
+        "2b9bea729a81658f0a617e0174c4616338694c1ac1060aab5947f41e1e64983c",
+        "cd7a2f36ab5743eac4a419ff34146254abf5bc38ff1d8159c1fd4656bbff5507",
+        "0ddb1d6e4eac454905ffa5c74d10bc499a05e1f5418b00b9ef5082c3adf267b0",
+        "f01ca82c148411cd0d72d23e5779d167dfc445c513999623279719e19357533e",
+        "90d848c279b3d9519aaaf02ebda1e9aa2d46968fe398ab04f45485bd39939419",
+        "8bf33f1946995dd377064ae0672cc02b3b53c2a4df9511d64dcb34f0a65fccf6",
+        "226eeb5deba6b9baf7c5c74df36fd90bbf8125785fe1b36fa1f524b828ece8e3",
+        "8a26c7f574f2e6b7fe29658e2525bcc78607e968d06d8099b3ce17c015e8fc02",
+        "9ca016c80f87f3836ad54c141b3cd415904790f8c73c3ab29cc6a0eebf6a8253",
+        "0cc107c1e4d1b87f868c6e727c552f731116901e923bf318f187529704b5fb73",
+        "946f8ab836179875b9f4538cf1e327148747eb1e403908eafb4f285ebab207db",
+        "b3ab6018d1ffaf3eee4a00654d17e9a823051c9c2c38bba0793387dc4010f9c6",
+        "ef66239f999b70ef88e79f73c54d4b19678cbb32469588a226f2c626e79decc3",
+        "b27e3e215b885326d0a6b6db3f3e579ec48b01513451057ffdff8ea83fd1ed79",
+        "f05acc38c049b09110847dcd7130373b17844bea2fcb3dce2cd750d4cf0bc56e",
+        "06413a3e091d0dfd8935ba95b84a7b1de78c080610628397bf560c4784faf1df",
+        "d475706e5816bb3f1332c909973a68632f7176e966163b5f752cd7f1c85a5763",
+        "33a826f1d44fbb88d0fe309d1040b4b64f78895d7a5be7b676f92daddf00c739",
+        "adc4d92eeb6c0daf7f8808754bb03131a3fe41dd185bc56db484f3fb6db190e9"
+      ]
+    },
+    {
+      "file": "src/lib/agent/registry.writerWait.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 120,
+      "assertions": 740,
+      "logSha256": [
+        "bf416df1dafdb7b4df76c0edcd1598b03ce0ee73cc0c3fc2c8744c564b537291",
+        "f51bcad6778c6fe6f420997c2be8567e0947793e171bd3ff0535bb794f00f18c",
+        "13136c5a52866e7a1d4aa6fe99287c4cbc9f62e78e6491fd6fc8a19b52959e5b",
+        "5ee0713cf4d0149727eed342cc0f878f337992b24a76f7403d6f67e2e7015e90",
+        "8baa9191e155236b5207d9a0752a97207e03f0463af27c9dbeeea2efbf6ffb5c",
+        "e9a8bc3591fdd520138206d000e0f3eb3dce3e372f328867deed5a6259364352",
+        "499781009d19fec787eb1cfd929ec7c9daad40d55d89e6a1241dbe6fb2a269a3",
+        "94d8590aef511fab58c4ebf05e5a78615683deef9f2751db226c1f1a52bbdbc2",
+        "0e3747f0039d021d528f0f7f9f6b5c97dbbd491370dc40351f3610856a094593",
+        "2384779780a3ea7b8611c9b48644400c493b67a520ff267fd537c78a81e77242",
+        "3cd5969c85b4f863157a6d077fddc7244d61c3d8dfd4d2c0b056e0f56f2961c3",
+        "6c1b5faf608c409c30485ff87c06b1771ae314afb2fa779216cf884ca7be74b4",
+        "ad0d3e86adb2a5708fd4e5b61edd9972eb68ead5eec90b9880354737a67c6a85",
+        "1063ec770341b9cb67b5d714c91a71ec75d7564406aaaae66793e03ffcdc3356",
+        "0d876ec35d8ea915f83b01ae77331c78aec1f6411a2b88e6230ae1ffeeda3596",
+        "49366a518f1408db77bda7dfc7f705aed9e1713cfaa209864ad9ae126e44d487",
+        "acb68f8fb413da45648fc9f24e13922bc26f2dd60f89ab47a914ab02815bfc05",
+        "d083960ba7342481388b07a4e05327a5e6af68c82f0e38d6386e2407aabaf1fd",
+        "3c7806137c5b72741779f7cd3a70231c93ef30fbfc26b0e311db9985e6ec5150",
+        "f4dfa27c340a8e36e8706a6f76c95199e3bf64d413c23b0a9b48bb8a0a70ce04"
+      ]
+    },
+    {
+      "file": "src/lib/agent/registryLockHolderFixture.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 80,
+      "assertions": 3716,
+      "logSha256": [
+        "2f2cfd6fa7339515aea621f55b4c33be23ee2a7176e61b6a395fc11e7269811d",
+        "45c0ebe3f39e547544cbe91be4e011b1b9fff109a6743f35e132193e3fac1795",
+        "f085c86b9e23935cf0f85ac172e4d05c6a1a20266a4b9c4c387084445f553291",
+        "6885b3a29539bda48312663f5e1047ca823fbbb65807055f3891ddab9532baeb",
+        "9652e80f9c8ad4a7462ccbb933b5b7dab46a56e737b06608bd852a298c595703",
+        "ccf12cb0bd7c9f60eb693a94e618ca13173bc08b10b677bcb1b13e83f171b591",
+        "b337bdf95c6366f435024da815a52aa6e55ff0f0fa2fc0b5553ac38c67e688a6",
+        "ae03fdc3d06e4695e97727d77e0ecb6a1d6f491223e2e40dc275464433fe8c6e",
+        "8c00613bb905adef4ab77df3d1ef4f5bed636aeb85c7650e5876ff5cf812aa1c",
+        "6cd1a8791c277ab2ad488f12033baccbf84a56db52b677a226a186247fb6af7a",
+        "223a7cc90002b6d8f5c4aa3e0b16727c195ccceb0f904ea524225fb3ff1c9266",
+        "6ae2fe6f43dbeb4b6db3e86a1b73c36cab562c5a4c60237338b73844acaff187",
+        "a92cdf811eb2e95a27146deded8deb61eb655817444e47f436201f58b246c400",
+        "3d3ef4d2e51012f5a12ac22fd99b377c8528d15dc80a0836475e390b79c3a237",
+        "00c17de0b82b6e9f0495f3d616917ad8e12fff54b4fccb00dbf27c4a1a21490a",
+        "1c4acf1d44455a04916d3165c5007d95ffbf276ce087b8594ac3e81dfb5cf066",
+        "0dfc7016f86aabc7f5eb10ccd90ee9cd5b028d9a7fb0ce8c8eacfacd7ed3544b",
+        "9707b84b29e4a18189ed70a76532880547229ed5b4e37b8fd2acd5cef45fe8cf",
+        "8dc2851aac8b75f4a830f2ae4ac2aa104e8fea2140eb121c15b0defc58f53de1",
+        "6ac17894535db7a1a18e7b5c7d419225f6b3ce5e53223a969511d27dcbc2bc9d"
+      ]
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.contention.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 280,
+      "assertions": 2080,
+      "logSha256": [
+        "99bccd2f6f1c08e67e0965ce7aa084a2e4e6c6c45c05d6ac60200849dae4e564",
+        "baff62d3bafa726b6b81498c23461ed1d6e44e99ca8c04eb864f0e7ceff471ba",
+        "470937fef5efee85c619460e7cd8940a8e13778cb54f50c6770cd625dbbef25e",
+        "6446dd19562cf507f9f6048ea528ea55da9d8970cfad521a0fdde6a70fce8abe",
+        "303991b0c77c0699ae3417f240f2a7bcc1fc4cdc6206cb0bfe3f7589530bf04e",
+        "38168803423358a6d22c501860e9ae0dd33366bae83b74875c46b9c593916c24",
+        "8a350a08be25b429777e41f28fdf4933e4961eb6ec8d40cd27d12600cc025772",
+        "9870b8a0179459184af2dc66b1b3a071688972ee5b6a35b0aa2b6984ade6b90a",
+        "4c507b114dd1504cacbc0dd356c4a5401e25703b4ed15ecb0e434306903f9aa2",
+        "aa5875fafb5740bd8dafb1556389dbebf98106d6feb16a5bfca0af11fc8b90f1",
+        "7588a5cc3a28c512d7f46ffa1596122bd47ebc47d842baeb9ece5d7efb1b1e1a",
+        "48aa12eb1061ca65a5ea3b90507845ef55f4acf8587787cba71c5c94b51b8a4b",
+        "9147bda191fc33de4140bac426a886b42f573e36070342a65c708445a9c3f2b9",
+        "b9e8360c916be861ceb3fa0a4763b8917935cfc6a6a655db89d40a3a77795ed6",
+        "b039c2a890cbfae24dd010fdcd09262485255a63203db93520a9ddb95ff5ccb7",
+        "5f4c1de08871ef645172ae73fc019a9ee1794e4478afaffa2770dbf24bb9a2da",
+        "e65c485bcbe8e5c8bcd1ea4c12769b7476eae02a2420830e3688924fd42e1ed1",
+        "1e14fe82185a6c58bee181c516bdc4a4dcb0140fc1902df588f3389b71ee5f23",
+        "34a5f0dd2c0964200a181c936323a65d7db95a4dbf3f751aa8d820461f490e3f",
+        "0d0a4fcbc206be8df228e7a9143c2613ce7b73b9d5559273afd4766f1225068b"
+      ]
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 1320,
+      "assertions": 6300,
+      "logSha256": [
+        "c7acf0d46c78cb01cba327b4f984c31b51558e1612a859bfdf81eadff49b336d",
+        "528fa2aefc27f872b6a1b724601f12697a24b5a25f26338370f6678deb1fd0dd",
+        "7f885401b3bc427bd79149aedf588ee31b2dd3df50fb5e9f631fe6abbd3a4be7",
+        "821da3125ac21dbfeb0bf81de73aeb9bc0120a8d2709e1a6f134b27f5ff95302",
+        "e0fa14a6b80ea194f2d24e77aed2c25404216086ea68be771499ecb7b97c58fa",
+        "5e95ecc2e4944a1bb0680fb61e2052dc73ac8db53b0055fe86bbc5a54a97fb33",
+        "e300373667953382b9f51c19b991322ae07c4f5751038980aaec276b5f01dd6c",
+        "1c317e0bb8cdbb841ac225c8238733db6e710e0b86fd486443a488c0d524a3b1",
+        "5e4920038a0ba96e073a3f1d38e0cf764568861392f3ceccd65da8d341c8f023",
+        "0f27c3d89c78177e6c293ec46628727c53d989c8f6bf81fadf6d63fe9953b2f2",
+        "f520950afe1a6370b72492bc403db7abc0e338a988fd50a332a838d536cd820a",
+        "dd27810ca2dff07587a8f6380774321ae10d8d88d167299700ca469779b1278b",
+        "e7e2d6fa10b004947232fc9be5a5725d78b105c5812b7f0a89ae65c760affbdf",
+        "b9954e6c2d49bf9ea517722e8cfb3bc362b98c521c044ed5f160878987005ca2",
+        "d03651476083f8355274f704bdab2341775695921cfed9341f49ae6ad0144e0b",
+        "cba2deedfa0760d7881f37fa6fef23e6b17f40cce7e48ebc7e2e1d439f007571",
+        "bfd61cab79439667dd8f13b8ad968ec2fb8f384b6e3f6113d83f314d78f8a295",
+        "f0c74fd41a27a65b079859777b59868339dcc1357f066464cd650c1d65e15945",
+        "a4b0109c5745395f81a122cc01caa9a56ee716eab2518c9771d1ce487b68a8db",
+        "d5ef88451749dd5f9c515156a1ccaff9f47ddb6514670f968b08140270ee5fe4"
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/runner.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 4440,
+      "assertions": 47367,
+      "logSha256": [
+        "10368bace82672fb883f02f3a8cb4aa99695d7763162a8db07dd30f0e3a6893e",
+        "f27039ef3209b9f1784a10cee2c6e9aaf5faafcaa5c6f75e0ca5456bd03c2a30",
+        "8aa26030360cea0cfd234a85c8467ac22f6961582befeef85f0f700d4933fe07",
+        "fbe68b8ea6aa4094bdb1e4ce54ef03b5cda60bd9839e8f0b25862c66177ee5b3",
+        "74e7b45c5fa244b81971b0f8597bd3d998f651fc974923054579ce4a5be28cc9",
+        "03f6f601453ad7199aec6cb0a71b418c5e39f66335e9ec1d330e09d9bb09bc6f",
+        "ab4019ca86586c894c2d25c38c4cfeade18671d864328b7655001d24d24138e6",
+        "ad6752c7108f64a92bef218042cee93d82b02c25a34d9b4c1e38bdbe5ab91885",
+        "fbe9557c504ac60ad38a2effc85797600668fb588bcbc49b46ad61fd00660dab",
+        "649398801d4aed9caac0cc7ce514a815640bb70a0fc96200e49e8ee9a1dfdf8c",
+        "256824e7f905fcb804b8ae1268988e928463712a421c67b6674c8c13a4715a84",
+        "ed4b30b4d22ca8a9b6a857bd8dd3753b94eabe6bd0bb468940e08bf94ceeed9b",
+        "264a23aa08360ded0b796cb50444cfd61df5d03ed78798706f7d3eb92da5a2e0",
+        "b9377fa9de413a796634e3eaef1b0e8d976fca39a814f9ee45c2f9bf5549e029",
+        "1af572c11485f9c512d1b03f11f3635ce228488129482fcfc15d223c2980eeeb",
+        "dfa4e2136119231d110298923fa69beb13c2dbaa4e2e8545276e7ebf190eef78",
+        "4ca7917b3690bdd30a412f7a957b921d9e75de6c992929d96c226dc15518684c",
+        "3ab055e80ead8b3a14b6ed48beaa954040a644e44f6f7c39cb9b90c30c0c10dc",
+        "ba5de3d71ce9dccff460e5f1f7ce05c71bd04733518eca7653c8ca3df5c8c821",
+        "752d8c70153ac053ff16336f2adf1de2102d7f8b18d18d40bf211e226998330b"
+      ]
+    },
+    {
+      "file": "src/lib/externalRelay/store.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 180,
+      "assertions": 600,
+      "logSha256": [
+        "bca21125a542a0d15f4b82a36e9afb52c4bae32ca60b633a3b816d2b6553e6cd",
+        "f92c179e207ea94b23ff9934e46c0cb9642b93fe392946bab760daee66b4f3de",
+        "a0cc1b3d85f30e95bd24e8bb2952928db272d8875ca8d9fcd7b87f49403cc9ca",
+        "c16c2ed4802f9f72c83cf2be778d93f4ba59a1abd6da1f6aa49ec397b30ffec5",
+        "6d90a599a9ab48cea4e84ade193ba0ea273ebefdf48a5b159fca1beecf3f3a68",
+        "01d810b9f961bcb87fd0ee6806f22833364dd0173142f211aa0d3ff2e5362819",
+        "535496e555f3528216896e52fa3d65919fb5a84c5926687f1dc4f814a786bc6b",
+        "7668c6d6f9e7c51b0a47748cb11a75331ee8dbde812478480cd94fad24bc650a",
+        "311df0e6a6012a935c6bd5b39b83fe9697c00003d88fa5f40b52874dba64e1bd",
+        "bee2ce4ebf7a1c79426f8eb0efe7831e9c7a1208d7a8da2e32e6ae0363e28332",
+        "bc159cc202f11c06bac58954b5674aba73952836dbee9e70196301e294f234f0",
+        "8457284400fa115a925d3d163972be91876b5a83d3204304e35252df33112427",
+        "a39ecd9399cd6795dd9872133e8ce7c8d0d457c90f50f1d8f04f7f4be794f3cc",
+        "ab01a5c43f70bdf5a1032623f1b18aa7a21f3f589eea2d607b8c92d0653724d6",
+        "bf8753f4135145a1d6e5d24a6a48dc60c44387ae52d62359f392be71a465a47b",
+        "2a77c55cc11bb0b515206c2490ed3037c0f78c2bfea6ef34ad7b17fae90c544d",
+        "55006986506cdd88761239f9f792d53dd89652d232d418fcfd8f251c715df171",
+        "c9da81a4c69cf1a85a5e8c01b23353187afbbbb39566eb0d11afbe23446cbd90",
+        "517b29b7ae56388d51c0c741a916c3efb4883832083243b5bf386ba2c3ca80d3",
+        "b61d0984a43c8ffb6ec84df87997ea615b9312a75a499c97eee0c5b5e67f144e"
+      ]
+    },
+    {
+      "file": "src/lib/git/codexShellPolicy.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 40,
+      "assertions": 120,
+      "logSha256": [
+        "fadb5dfd2255ddc9c201244aa7aed3bbdecda2116d857c5184e8c75a306f538e",
+        "7d4525023a79d70b031c3a83c6c0330609e1f993ea155df96e4b7d9c1bf987a6",
+        "eb738206441e5e2e54ffb3c0ab1daccf52268222f21110670ed4dd256b8ca24f",
+        "57d95891e9698cd2bd183b28c3b10cd21e401846431eb9f4b6fc3e2d0b4a27ae",
+        "1ba4c04a123f21f1b5f1c29693666713a958b72109e7334ebdffe9842dee65ae",
+        "f13f736e9680a7d2e772aafdc2eb7ed96e863c4517237a6e49a6cd889c3821ba",
+        "ba83e75830de3cba79b68b0724d7054aa57bb93008ea78a3418edf40262138c2",
+        "592b9c293e80365b49fd09d24161572c4f13539bcfdc94b43adc4ec25c61c284",
+        "7e0c206ff274f86faddef8f8627f24971455520dbde0dc606a0266ff6cef2a39",
+        "8b3ed032bf58badbc0c948311d2894e37f98ced4d31ed108d4170267439b649a",
+        "9ae93a351a7adbe048fc7e39eec3e1baa4771bf887aa86cc73d19e001964b77a",
+        "36ff85da38d40d5d5639d77af099351d0e8912af72c8349105365ee3f790c822",
+        "a000afaff4bfa502486a220423081c0c9e8e8540a8cd0c9eec0d2c6392dc998f",
+        "01b847d9dedf6b87a3763201fdc93f61e928a0d9a962a9ccd615d8948781885f",
+        "f1eb70fb2ac62d0a3ee21a88ba565955d5c6433981c1ff87794a4c1048367f1c",
+        "ef7c93099b10b3778b1dd145c542ade7f912ffe1549dbdfa0d4a423835369135",
+        "3f6036918d0484cc54d784c2fa7c91d6fc8fcb857d72e5eb910f879b28b94f11",
+        "cb8ffd9598b25ca1fc9555648cff1a869540bda72d1d97a4858ea635f4c8fdf6",
+        "ff4b34bf043e2afca5add075bc4b38d65e42746d6247f4b8ce6dba9f7b7aecb4",
+        "f8b16e318922b3b69af177f46f9140ffb0b42aa7c7ca7a7db8a2b053fc72a651"
+      ]
+    },
+    {
+      "file": "src/lib/mcp/callCost.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 320,
+      "assertions": 8000,
+      "logSha256": [
+        "c859c3ae942781e1c9f89e25ecb40e4d98c75b8dbd160fe3771c2f99b7b6017d",
+        "c1d538bf368e6c675c86702ab09254c71a94bdbaeec94e387819c6c132330648",
+        "1bb11aa362c1f2f756de201e934d16e039cc8213cccf0e34f20ec76c4debc72e",
+        "6c637dfc86aa5b32ef69bb47fb3a5d6995f00509748fe533b3ddc224ce2bd74f",
+        "e9494741e87687bf5051d4aeecbe408869941acef1411a2549917bedde9a8e74",
+        "6d20eb30504e0d64c56ecc60361d9dba4c6f2b77ec5e4751dec5a4356fa0a8bc",
+        "85b2e4375209d5a39487d4b75a06f3d3c13d756b45723bad25a7ff35e20d4bb6",
+        "89d9da02b14d677a377b89cda025ac28d8f66c195a5ec3f86c7b4ea664db0412",
+        "8527547716a01ba6670b8215bd6667dc0c000f9590064ccf3b1e469b0147cd19",
+        "879952eb38c87a109193b118ce2c5fad1a8e48f94c8ca452b5d41c42c8540a0d",
+        "9edd2c56c8ddb37b33f4eb37ec9b70c09eebcadb2ca4894d3d85b84bbef1bdfb",
+        "7c771a6962e51e4a2e59fa32b9e851ad082a49cf2f22321b2d577151e4384724",
+        "50c7cabc9832649a9e3043b641bfd56e53c51e4744aebe7a53978170fb94c38a",
+        "d8f4a7cf27ff5fac4aaafc1d90dc5a2321f232009014ab33671e7ebf66810dae",
+        "48a8277e6e4a179aceac3fa9033c36fe47de90534aee02242be5dff256aa706e",
+        "f85502d0b0c544c0fbed025af5b9529a33dfaff458267c7765612a8e459894ab",
+        "a9402372159d800180cb0897dd0ad7f7be251e3103bb91a2026a7b8396eb116f",
+        "4e4f5f4d55c3ba621e8b27685f4c3db6b8f58c33f5c68132e3be8e96a68cceb3",
+        "594edccbb9c7a934ef20e17423a2e00d4da6063629cfb010865723eb36096622",
+        "928013d2ee348854c0273fef6a8f81b4638919be6a9a3b9fbbbcdaf821020a4c"
+      ]
+    },
+    {
+      "file": "src/lib/mcp/readLatency.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 40,
+      "assertions": 220,
+      "logSha256": [
+        "42e3323abee491a6af40136934bfbd21c4cc63eb0d403197b5ac9dbf18d53d09",
+        "a824240a504937aa1c83040f7395e615d26d9b4a78e5f3e22488df5e3c067f34",
+        "b62511360c35b5ca5caea20038019b40aefa8f32817c73bcf6343ada47e3cd92",
+        "63660dd2b4278cb7b06b3d6344bea4f722695f817589eb7750deb1a0095bae3f",
+        "1bcb653ad687e46c98fd879c38003b2346e3e93ff2d0ea58ad87bb8cc35854aa",
+        "732ce0209e7bbc968c6af187266c3464ce087a264d3a7242e03aa0d71740d5fd",
+        "1d5e66c34f2674069aa6754bd26912301b2fd05a9009c2a16403d42a454bd360",
+        "bfbb94e519419c6755d2723304497117a3ff8185960096a5a22cc758ca19195c",
+        "edb62dd73e784780e9da2f0c2ffebd2e8e81b9f8e92ee75289e6bd0a0578f803",
+        "e1f0b331d97217198d1ec278b1dc7ca6f43cbb4077a558ef552cd2ede1319713",
+        "26e281b3728d52021b73f14a9ae2ae24b327cf82d276c9f421f96948ab00aee6",
+        "3ee95d7f3612019b2953e4180b927289eddb93845734c93236953e7032852e37",
+        "ecdd022607e6ddaa222a75354751bfd4eedd52aa6ca473f3bc3b23bf8f08e856",
+        "b44ca4044681ec25a89fdf39877c74081fc85e719da2909f636d9e34da9a28de",
+        "a4300db6d04546e9d6e8800672f24601a12e0a143265d3191397f4fe18c4fa1f",
+        "2c8d75390f5ab16037de0f1ae383aa2f6497fdff837d095ec1f716214083f287",
+        "96ca0d7643b3ea1d41cc4ddbfd2d138d345fcf99eef1e1f569f999911e036742",
+        "818b4c596bde67db7cc80128fc022ac40f9c7f9c2ce3985ef535e01b0c9ba9f2",
+        "afa86d02bbbccea1b564ba145c2683c5478bb18f921b2457c21f6801c4c0ba77",
+        "53c9c6421309c2f4e2d2b0aaf2499a16beb291486a4d4e952a9865b2fa9f7ff6"
+      ]
+    },
+    {
+      "file": "src/lib/memory/index.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 1240,
+      "assertions": 55620,
+      "logSha256": [
+        "22a1e02f48b6e81b97455fad257ccb941fd40eb3f45a5e171183498025af41f0",
+        "b756d42dc84eb590eddab25e72f9cfdf3ea0c0d2dcbccde6acfdd1f37aeb18e5",
+        "b3c2d8b9a3690e057532a816d9c98198e4651f919c5efc9e22726499cd044551",
+        "3b5bfe1a50a3802a916d0dd37900acb006fd1dd75f442de9d4952656efb927fb",
+        "6495c5e05571d6e272b93a5a205449de476cd072973e08f4aa692a04c9d4cfc0",
+        "e2f728656b1ee93096ea3eff473a9cce6e670f8bfa5920cad9ef7b8bff251f6f",
+        "26fc6592a11537c5ad360a27a720e6d0b77036629598f5e115d43449903a229e",
+        "0f2e35b2ce0468f07f521119ea919458626d45e45a38f166e15a6b7a9abb4c0a",
+        "4689f92092b6acac5cefc4fb913463b13714e7c66de867a78bf1d97300f61fd5",
+        "b1765db14c59fa7a46d14481ef69ae2af365e8ab076ecec26736bb3d2d47d391",
+        "d6a05daeb400282749e86edc3e45a5895cafa36013a35925554cccde5d8d05e5",
+        "1b901c2c0d02412a9dfa16a5e1bdddbc2e7a156770c68c22c5b8961cd2aaeb24",
+        "0c54d6763d8c7051520511032a062872d6c4f1203fdb4893bc38d834c958559f",
+        "4fe87225f26af22c15e645d65a1de5f64f03f27b5248c201b7578542d8d8374a",
+        "f8d04864f9a12b172f9f274329720f5456975af22ac61fb4c85982d9178b1258",
+        "3e0b1c7aa990d779684eb7ca5433e55aef5fdda66ec24cde781fcf88e659d66f",
+        "9e45fe5921db7562849864d02aab465e24bd14442e2a302e6984728fa2f1bb41",
+        "9bf23c44e640a0294fc5b2ab685319f5c533ab96d88df9358da403eebd6e5ebf",
+        "ee74628d8b6b5007761737709ae1e20af09470831a7e374d2e8cea5bd26e112b",
+        "97d720abed8dbc457c67431c0288d9151d8ec35fd86c645686fad316597794a3"
+      ]
+    },
+    {
+      "file": "src/lib/memory/injection.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 200,
+      "assertions": 1320,
+      "logSha256": [
+        "fdf9b167fa47375e76a868da649542f3a34ba4dd57107255bf861a3a28a36582",
+        "83cdcafa7155ae40355db8e393aa262d65a5ff6a9e8eb1a636fc601719a8d615",
+        "d014e5cb11b3d41525b0de5dc0d68f1b7adb27efdd57a4e868b15745cb50bff8",
+        "e8715f4dffdc52a6074a2668472d29c52930a8c07cb2af90c3cb57d110c68641",
+        "e4fc160de2d8d012c02b9d6bd177ca3c6e183fca990f6e1ff845b80462cc0ec3",
+        "a018c2c8f5be7111307a8f73bf4f0b667f6847512f32f5d73cb3e7a1a33d5286",
+        "d96d54cbab39cf5545b5284ef0988852eba089b1eb565dd16d69b322261245d4",
+        "7fd264ca2345e13e7ba04f6d8abe0933f4baac13629058b15976322bceb5e49f",
+        "d2347137d2f7041cb2e6e9c442d5eaf8f512bdaf0b9736a5c4dcffad4e707594",
+        "53119ee35504e7fa88ae19f2ddd64f5910811b5181a8a7b6264d19a54dc8b3ce",
+        "afed553f8733c52b7bd743530835024581aa5a2572a4bbb2f8512cf1262fd23d",
+        "701391b45868efafeb5e0bea6a81babb22a1db414acb7435ce5fe410e59de20d",
+        "1037a00948e79a87258f742607befd1a830cac961308cbbe24ef2ffcc8a670fd",
+        "f436f1011160249e6afece6def6c3b36952f1695f36255eab4c8daac16d7f0e9",
+        "abb9b2f6d658b69f8ede30ee7783461e45341627874d42d6c793b25f44a4b2f2",
+        "df7380a6b4747b1770b88862590d5f421df389d2852d37ffd97ef81143315585",
+        "782714367a60a23223b05c630f32448b805833442897b07d09c0015afe8476d0",
+        "ee2782f44784f829220714625a575bd03362ecab9158c956391f48563dc6fe73",
+        "656a73cde0cf5a1f141b639455bad30bcaa92cb74b324a759acb484332e6841e",
+        "becb34a23d07b15283199eaf43dfd1a17c0611c00e886b8c4e7b7c76964f792e"
+      ]
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 2140,
+      "assertions": 20960,
+      "logSha256": [
+        "9479432e023f27438cfeb4702b4128f480ef7dd8eb7e0c7c2ef2038fd80a39aa",
+        "153bdd536b5e1b2dfa62823e70a3ed69b7b32c285a1695d7a107ac436933816a",
+        "d7cd4156ce15a0086966fccc9e63effbe730017f375d6b81aa7b0ff32a91a6ae",
+        "e28cae2eec1b5549c076c8a4a2534851a2421ce177cbc8aa12f735ce2ad43645",
+        "44813c0e0cc9faae63a499937c7342c5a175cfb745a74060b73a135bd8c0a5ad",
+        "955b14ac70de6ce98abfcfc99f2f74e168630d03c8d42c790d84a3c5d43033b6",
+        "683cbb52432078d6880f4ab9612af3fe7accf66e59c5ef6327fc199db67f618a",
+        "68e43904007851ba2c336238deafb082e0dba8f1a78aadc6e257d78ae94f4805",
+        "7e25aa34bbee4fcb9ed4890c82d925e0f06af21d001ff2003ba9a7f773338f70",
+        "08f3ac28676cb4658f895cfa8529726e5547cff916134e572879d7bd2de03bc3",
+        "009b42f899f2a516c60237e820284427ba317ca2bec8aa702de7b131783c75b1",
+        "f550569cfd904e767ea9eac7466a78740a0c34aaf43bf116e780335f85c63e02",
+        "47937ab7e6e5ffdb92e7eed773b766be89468d0c5e58dbd3b558602beb6a09ec",
+        "5be9e4935144f52fb1c917bc104d8b88bcfdcee0f8f8b590b3bccd49d7e01b7a",
+        "f2a1837e013e06e03235752fec6d514adbf28994b993c39ce3253942516c6bf5",
+        "f69bb351cccfbd187d6d414a9a7b4a6de3d95eb899318a6c73381af3fadbb301",
+        "5a2ee406317a78f5147a169496cd5c01f5f4f527f18d2f17ed68327d1bbe3044",
+        "38d50c01e87f77bd6d6cdca6a8c53bd7b7b6b7efeda8835f222920aeaf4f9005",
+        "760e3e80c8a4e7cd5d24c0b17c1f8bfcf36f4b722c57d9a3f41f4d05d6255098",
+        "99d7d29e579fd77d9305c887d356c3ca210508afb904c14764b1df054fdaaf89"
+      ]
+    },
+    {
+      "file": "src/lib/orchestrator/workerCount.registry.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 40,
+      "assertions": 200,
+      "logSha256": [
+        "a9c42749db5c1d7a92ff053996e71bf256f97c4260e7d9ebf9e657e8b1af0633",
+        "951ce3c95b9760ca6b34c3bcd946354912ac35400de0b90af308171f642d6e6e",
+        "a3c49f7920e0b31e3991e1a51328917229492a277bfff9967aadb0b69ccc5762",
+        "cfa19328c55e5fbb98b5fff8f074caa2104a946f1ae0f7f9c151e4333cdac64b",
+        "f34da7ce5e3ca61bc114911026c4bcb3ce7887b8c19311fa24b32a89fc182ca9",
+        "aeb3438125159c822faf2dc04c66c79950b996057ca362266fdd2d4ee1d3497b",
+        "34956b12f807ab6e149a224bf5af26aecd27f1dc3508ed125e73956a98270d92",
+        "71d8e2ac7fed435009d5e4a2d907497668131f2a84e0e382232b812e567ac9d9",
+        "dc45bab3dadb5b2c185549f72631cf4d4c7019e6abe3d07900bd75afe20802bc",
+        "941129804ce5815691ca851d5b771fbd1611256ca8cafe8476ed84390aeec38b",
+        "4ef91591569d6b8119598231aaf8c74c1d32e73168764432a53ccbdc0ba4d0c6",
+        "2a6d425bc15b8f2043c04f682e2964bea6cab128430c7706d93fa9fba201bb20",
+        "c09cf17df37ca864956d102c5e8dde0820041a41c837aeab7bf92c182ec581e3",
+        "d4573af62f75fb0860d077ba00682ca207852d4ec0e15406e8b63d1b55c2116c",
+        "1f6c3487e7ef8c8f5dc9e40257ae8f44eb6238bf8128701077c6aae7bca8c839",
+        "17c25170f4de2ccb5fffeea2b5191ae5e4a16b39dbe7b70e8a4b5db2fc513857",
+        "ce35c53723fd636ae66788da459f1c3a66cf24cd02c48c2933da28c540ddc6c1",
+        "50c1a70053339e0483fd811aa5a512e978b5604b7eb099cad1c8c1d585e4acd4",
+        "7bec16aefddcdd31a0b37dc1f01eecec0647bf3834c91dd4e182b4b65b41f340",
+        "b07294633f5e4db9ba05a0e3c91bf4d0b60f05ae43796150d0dd16f85074a91f"
+      ]
+    },
+    {
+      "file": "src/lib/pipelines/startupResponsiveness.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 200,
+      "assertions": 11160,
+      "logSha256": [
+        "2743669a4b2fba366896b2f3e8b494f9defa5a13fb7695d69289bd8e280b0fd2",
+        "c6f24e789eeb98ed65ffe98be7ed3da3c4580358395e0eb1e2ede50e1fc50e3f",
+        "78e83f83c0246b908603228c125210260d13234a01cbbd5b3acfcd45040d416d",
+        "be71a54171fece2c1969d56aeafaace4a9b221bdc6b8b6ae55c91f8687df5382",
+        "341e43a5df540ba11ae3c2a9f706914083e096eafbf43bfdda048ad4a9f5d3de",
+        "ed38af8b038377925d87c44076c156061071d95fe1e7c3ffc929ffd5a198cb06",
+        "8a5eb4a45f8bcae268290a2af8997a7fe69d53dea540d87c473657d2132c8d20",
+        "ce449c7da1ee2db3387a6eb6dd5c8dab76dd083fdb6e9d2dd99187b054ae6026",
+        "dbeb4741fce691fd61e6b2c6ad227e581530ba14381457e7f7d260e49889e468",
+        "05a859f42e9bc303e9ab28a8a8177e0dc468c45a8f31d070a83a74022a8b02c7",
+        "30bc10e9d8eb884c54360456e6f2129652cc50ebfc660e0db208e56b7d4a9019",
+        "1f4893c5a39cb186346dc36f68f1b51eb8155aeba17e1c4edd4eadd42fa57ac5",
+        "7a53a75317dfca0aa7f5f7e84116318141b989d0640d89edacaa0551451f097d",
+        "f823c235435492183310f02c2e88d87aeff506e28013c7925fde71d971d298a0",
+        "93f4fe5cfc0f3d3dfb7083d3927d70ad75a5b02c39898a9d0d4a450b428dcd58",
+        "51849f7df92bcd04999a2ae549d8d0776d263febcb4f7cef4b9dff7997ccf8b8",
+        "0e5a4a707e7bc3171c9c9bbbfb90c884b34132b4f8665a824bb95fc48c8b996b",
+        "0766c02d1b8218cf9fee46efeb2f1c1ad314be1e824e698c6abdf96310ddad74",
+        "ef380d369dd7a8586dec0b685fd4e9e750f71f4fcd2d439e9495a86aec93aed4",
+        "07e2b615662c5e19901faabff5f3527532bb8e1d1d1c6ee1cab4ad9fbea4358d"
+      ]
+    },
+    {
+      "file": "src/lib/reaperRuntime.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 1180,
+      "assertions": 3800,
+      "logSha256": [
+        "a9c59c7a5885b5a74ad82b34cd8559705691cb15c62844193eddc0412aaa2e05",
+        "c572853c9e1acc3e6b126460024bf50d29b49a6d96f28ed03abc194fa3fbf84d",
+        "1471adaa093ca53eb6ee69d008f0791184c3c8db2142711800170b59b9804ce0",
+        "4a22d6ac2e4703a0872fce8e54a7aeb5e97da819d770ef601640c3baf3bc382b",
+        "4dad51810748d821eb091c97698946c16fe216c7e5e003dba2fe361c923022f3",
+        "b28a9bf87a759e90a0443ff2910f5bf4fdc562cfc45e6e2240c0b667445b6254",
+        "42c8f4645cae3bccc6c7e62147edc594f431b57ee7b4fff7c3d72e97f224dc5b",
+        "339b5c4adfef79b5736e4fc633cbef77b6017fbe27b203aa751e48ad309674a2",
+        "e1a5b3214546d81969a57d682258eb04d4fb821035f9bff0c5741be1b0304e3b",
+        "0333a9c4b9510fbefa6bd8775eeefbdb7ad571b649e0c7be08fb29cc334b1f09",
+        "d202cb6ae0f0630f27bee2dc82bcdf56d0f1472a2c890227096ab7e9639ca233",
+        "0a2de1dd5cb66cbd9e40cc1dae88ce8436770c2f8a81a87db5a59339663e0f2f",
+        "68e051663754f88a14c9899ae9552190fa64d7638beb0392405ff922301e158b",
+        "a82c12dfe45913aa64f634228ae487c3f0c1444f3b853d99a31f5aac917fa3ec",
+        "72ad53d54dc9c6f5dc4e3872230c565a8bcec9f7f737cde930df1d2305a59a19",
+        "107ac0c74c448f12f92115ccaf079079cf51e698511fd7c9c41242ad54e31ea2",
+        "9e02c3baaa85f0b6317ea8836557680a206a9a1f397f44231ca41ecd23a49cdf",
+        "fe5f5cb67c238d928d56edea7213444320e2def906284b1101038cd50401d2dc",
+        "6685720e9b8b5707e88d17c4e35b52a924b957cb75879d295bb73c1df2ba147d",
+        "f15d42fca778859a88315e0da2e66456775a0c552a0d85b70e5cb8bc01adead7"
+      ]
+    },
+    {
+      "file": "src/lib/runtime/deliveryProgress.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 420,
+      "assertions": 2460,
+      "logSha256": [
+        "d7948509a04f067c77207fecfeade673e7bcade0685a5e0689b08f7d917ef2f6",
+        "258fc1f406a2673d42175bd2c61e3dd8b360473bff726b99b80fbfc2025059b8",
+        "ff34c6916b3f94d4a7f0c5a1551ad554a66fc2c9058c340f2a6afaf834bfb142",
+        "640a21824ed55c5b9a1286424bc7f033046655b78714d5c6f3a9975ca15e435b",
+        "a0157445039f285c8d1efb4a0fff28f901732c6487e0fdcf87952d8ca0f154be",
+        "de243fb74cde33afb3324a080fe76bec2775d61560c4d61c63a69b231c331764",
+        "1919e3ec10f23af441b9b2cc5f0100abec428213651047c2b2a4fe9c602cab4f",
+        "55aa12582881f29042383888b00fb8504bd30140b1b491629458e6b632748f23",
+        "19d137288e1e3eac64cad0c94be20b713dc2ea1dd78472ae317178a6b141c00f",
+        "fcf24f47165627d060ecce075a31323abda739088a04ca4636f518cc0ec76766",
+        "0760e099c1a367cf3c31470b76efa5b6354b6c121a05fec99c08ab6b2886564a",
+        "b57faa7a4409b9ba3298774612ea8e1ea859dc9244d4bc0f143cd6be589ee0d0",
+        "6a126df05b0efddf9e7a6ed2409195d3eefca0ce70669c4dd223ab1de2ae302b",
+        "1ce1af18d64094407b17bffc7474dea98223424155b424b322359f9118f66c2d",
+        "ef2529c93ff6e26e4fd94aa7bd2a8bfaaf3c54f00df86aec6c1f9023483d5905",
+        "823644d98692b3f61343588eeb096e1a8273aba6f9e4d34db08395bd3f460785",
+        "6534cd8b19e42c52b48db593b5fe461c98b3527dc508cadf7dc4533a018068de",
+        "ea42edd2c3e7a3635f0646633eccedaa7a24cfbeec2d3b949ee25e829d8d24cf",
+        "d5b14336f471dbaade3b90c159112a7ec97a1a02b5bfa16e42e620c5ab5bd137",
+        "516dc9cbcc45335d7652b37b421e4cca3aed1f4a6cadaa25b0d7718e597bc435"
+      ]
+    },
+    {
+      "file": "src/lib/runtime/hostlessRegistryEvidence.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 60,
+      "assertions": 320,
+      "logSha256": [
+        "034871abe8c6fbb353785575be54641f4543d2dc09e5541a5bb4f13c53c756f7",
+        "ca106c4954d1a4c3909fed3a561d42f10e0ed8111810b0e8966bef21ff06615c",
+        "a859ef476dd9a826a11cbba66381ec7cfe9f72349f76312221fc7d030e173334",
+        "90f3d2d169a56b3c88c4dde51c3fba3cdbd263ed5083806d37fe799376faceb4",
+        "78776437380ff2f126383b540e32195e0f2f2f9393d50143fc19cf825d7d8e5c",
+        "9e4becf7be890e52704aeff6302663eebb1d8bcd9c7d2e86f3e5228fbcaa1f3b",
+        "bda65aa9b680dbbc506932fb0503cc8e8f3646353964d22a0d95326e5edca82e",
+        "78a754fd446ad103042fca5a582f2ec4c087ec2959cead7575a3059465444122",
+        "77471928ccdbad2eecded46fba8a68496e9ec1917ede86a454da13e306325f3f",
+        "ac736cf03f649d751203b6a5fe8ca67570f3746f2664c6adb894eb530d52d5e3",
+        "751298841d89fbcfe221ea3ace0f2bb10e2a6e27a61d20bac016b7e6e1206d90",
+        "56f9ed92ffea979cfb1a54a0ed2ad04774e273631426fbb73c57b49c433a2560",
+        "6c52b5bbb4a473108f5059d457c26a08d68dec75673f0f3fb23bce6a3d2e4ee6",
+        "761a9530ff3e7f0dc972fcc6dacc73aaeacfb8d484643673ab8697f86686b4e7",
+        "e7b62172946e3d3aa5beb6673c69175c9ec26c16a03fb764b927c302f190aac5",
+        "bf0707851c70fd7c850fa91a1b7585d1745d79a76acb23d2ab9b9ea1be5d5899",
+        "27d73dce53fa9812f88a1327ccf07469721d011f6504fe3880a784d2265d6877",
+        "212341687e74cacb971633f33d3fed09c4dc52e66e47d715d9f05a1c8519c531",
+        "780c201c109041801fc83c3e948d4cf8aab73a70daa149cc024657207c7848f3",
+        "4fc0c97a0f52f7a4b61e914a8270483adbbaf2beba48880e80345fd890f43808"
+      ]
+    },
+    {
+      "file": "src/lib/runtime/http.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 1460,
+      "assertions": 9580,
+      "logSha256": [
+        "baeb1375cdd1e0403ccfe6f492be095f14a6fbfeb348fd0f88c6f29b74291a74",
+        "42f77d6a416dbfabd96f744d3cf8fa93fb36399a6cd0e0cd057ce85d5fffde36",
+        "4abd0436f657f0902b84a434addcac9157b1b1d5cf1bcc6106e4565dc3675943",
+        "d5518e21c5f537effc9f61d7b1ea82c346b2c1f4d88451e1d49c3ce3d30273d9",
+        "d78438c7e1013cae030a323d8dd60d81705f55e2deff666b9d9121c004d01eb2",
+        "34e087080c49d8509a825e8547c36584df21c90adf83d78f2adfcce581921662",
+        "df87afd4c970fb6c76c6f6d9a7485ba1357078e09acffac432ea1300b0fbdac2",
+        "9a4a7c06833909ef2e0c59af32ab48ace84edec0ab2c8831fd43895f8b8dd1df",
+        "735320e3e3fa9616d85255119a6198fdec29d8a74e29786a322de3ddc6997f22",
+        "8c6fa287d1e7c7fe633185a55bcec7143bc70f0568b2bf9b04e6cf8868c33c08",
+        "1938d5d648bba255cf77b87451b63d9200e12547bb780569ee0eeff1d51f3c54",
+        "4e881f07a5b263ebdb2a09e9beadf308a9a9c45a262577e0549f06840ecccc6b",
+        "f0cebba6eea82824a8eb348b62a94fef406214e518ef9198e32b64602381b3d0",
+        "9a714cdee1a269f7e2aed1d29b227943aab9e9ee6d3020471bfc66db620f57f2",
+        "4d2d70cd9c17034e739c3536377243b15a69577199b948b2354f47e14e1160a4",
+        "0dea9f76eb5430259668e3eb642df3a75ebe602168db88b09174b95076bc7416",
+        "9f6f104ca431f6174bd40ac3d058e005dd45950f05976321b57f4975440871e3",
+        "543edcfd74fc8221a22ad65123ebc64bda128fa33fc76d2d1daf6a6bc5293414",
+        "66cd549a0178e79a166b6dd271cbeb60f9c533bfb4d75e59dda53910cec99b1a",
+        "7a561f71c77df02ae31b13c3a80fce6245018d9d974f4e2f8e468b4be2603161"
+      ]
+    },
+    {
+      "file": "src/lib/runtime/nativeQueueRuntime.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 1000,
+      "assertions": 5480,
+      "logSha256": [
+        "b9ab5f696ffafcfae91e1ee8dca3349779b37efffbfa3d52a5333efb68b34aac",
+        "ef758e1ebc1c61d576fac8eff2dd27ff751a3f3a84e8f4230083b14bac1a5f19",
+        "def05b4314426295d92a5fc2f2175199b23d84b6d42e4a1063fde038f5ce7d65",
+        "4aac7187905c0554257fdea49dfe00cec6bcfcb5022d1eaaf1a10f540e46ed69",
+        "e4b5d782e23d6cbd07fb9e44b840cd43930dc3522f66d9e7de96304a51809e28",
+        "69191965541454d5069bf4b17e222f8c2e364055f97178c597ea88612b4e5582",
+        "38327115eb314e82a3a21114703c9394960735c47934e0acc83117c0bc08be2e",
+        "4e1b94d40c7313008109b23f3846d320ac3366cc9e838db855e9339ecaac68f8",
+        "111b4222fac94193019340a9ab2593cc83eda2262a90d8f9b5d1935c76c10621",
+        "1c6162033475c50e80e1540bd3c2d84ba011db182526d1359423f8f598d133f2",
+        "e55c030c1ac82c5e45bb7a30619cf04776a1fa9a9e6e477040887a4016aac2a2",
+        "9f92b0cf2bb5ffd35386a6a7308cfb0349052f7508afe32d1e466e116a8db732",
+        "a7b380d75034e4ffa4b43b0b5aac99d8df43669b1066fe14cd09d33d7e382aff",
+        "c07cdcea063d29537bb978a26e0e564286237bc6e7444745cc2c3d22273d0cd2",
+        "1d3c419b70328bd8c1c892f972b529a1dcde1ff8c9044fdd583e48aa90b80d5a",
+        "694584a3f0b78169cb75cadddfee444f25c856133cdf41552bd8542887a2ba31",
+        "c84300e90c4abffb1a68b3b35caf73acca9ceb9e5bbf07d2ef67f1691312a1fc",
+        "1c501e4c6d884b176274b777bb8890ca63163370375b10a4b68d125e39644453",
+        "65c27d9b108020979ad56bf2a705324338b8ba4e5e818de68e4b792aab5efd00",
+        "e550eac43d007f273dcb75d2b8868fcbee1406c8c1dc396ccc5a411bb56d129c"
+      ]
+    },
+    {
+      "file": "src/lib/runtime/sendSettlement.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 1360,
+      "assertions": 11060,
+      "logSha256": [
+        "0d4018616d9c38bb9fbc2d01a55b960d760dca0d56335b9335e6c52fc3de39e9",
+        "5b7d790a5afd1eab9e625601d845ebe13f4eacf43c7f8890ca0994524750c1fc",
+        "fca7f666546aad6ee4ffb6217069989fe74f2309906fa6dda9f15a3276ad4dae",
+        "9ec956994b025721253e154b278e2a69c143ae2d4a8c958e4d5b1610b709165d",
+        "029485a0ffe78dcda06c2963b3e847c56571f8b0322273c620293c0035da9ccf",
+        "64fd58959110fe346749cd2366397e14ba881141bb2181f6dd1142a9b3e474a2",
+        "89b6724faa5a5568d775b0332949fb63e32862e26332551e485f2c7f614e0765",
+        "0016d8ffa2ef316ab2f950893bea80015bb2c41eb7f98ec091d006bab94a5a0e",
+        "3664cbe6a5731ad0accd78fd65882be3dbb9c12be74370d833bc3d73c15c0d58",
+        "0dc64751d6d29efcf55a3c9870a58981bc24d14f4436dbc797b144283f039526",
+        "f6e360d57e35950be08aed939e125e2b8d24d1a41569ba7400f9933007a0ff92",
+        "75a48fbff2f72c19ba2520ca8aa7e527b58f1893171cd012c76efdb3274975ee",
+        "1e9fe5a336e9da1ef89ea126167b16f9ea7af14eab82c338d90bd448c5808955",
+        "af68995328379627fbdb90f58e9af7101ff9c19bb10d4193b73dd8e3760b76d7",
+        "6a2ba3f43fb2f9bd7eeea0d4ddb7e37c935f93bff5461c01b6f6ca940cb2296f",
+        "3d9d1060de87a7e380d05c33aae546b1e35969a1b2a6ac75c0c55230cac83dac",
+        "7da1b6e720fa4a6695793d5a9fed87b25b2d6f51db9dc8ca4fba2d7e2f74ac30",
+        "f93d292ae6ac530e44030168dbb924312ab24e96aa897324224bb8e55a9dcf5b",
+        "087f9b520838a693352539d6924be6ae98a7ee796b402e99d77795f7c2734365",
+        "bf30e417012fbcf1d9bbe8210410005670aef2cdf44dfb066ab65af43a561294"
+      ]
+    },
+    {
+      "file": "src/lib/runtime/structuredAccountSwitch.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 340,
+      "assertions": 2480,
+      "logSha256": [
+        "2af0b91a0af36700cd11363c78551e0730d5d38a7420d9560a756578cb541b16",
+        "f94cc07567c945104ec1ca68f26f8b91a8f6cecad8f77ccc87b3888240fb7b85",
+        "3ad6d9def4f540de704728b87a8ec916851b1d5b8cbf9b08e28c57cbd618d096",
+        "98769a3d49b524a7c298807feced61f714164413af9b07538604b3719fea0c60",
+        "87a00f122dc42812efa35828e382a63b90b5022fe4493fd68f07491825e6ff91",
+        "a9306b2bb248fd69cec88d956a6913e4593d54ea40e9fa11a5c3c05dc449ee13",
+        "21696de39bbc879588ca5de8a366fc8321983cd65a06c977b8617ffd3cb3c3bb",
+        "0e10a9c5a20fc2ea28170a25194009d4b2cd02f6b70744c7771ac7a6d4990e5a",
+        "fd9f5bca2610355361634ab445280eeeb78314c940cd9dd5edd29d122542221b",
+        "fe46625a52cd064e03e24e82059d89b4ca0a7000096c04d189a4b39195a8f78b",
+        "c89a41d6e4f5c31a5138593ffece651aa2a3c048c24bdd0f69d45da2da596d3b",
+        "0e5d02cde9cac0df688b204104d97172b63b1b7627711ff03642aab2280b89c7",
+        "93e504a120e7aedcec055c0b686a765903decd67b84214749ffb8da5a03eed06",
+        "2752329ef707ccfeccd1c5fd9fc0f1d527804b003031079595190c42cf99b5b3",
+        "e921c78391c1de8a6a04af78a92d41458330801dd9db2fadc0b07ce5deb99f2e",
+        "5faf7eb4014f2cf7fa103b6a17d396b9b5ece7f4cb0b667a118867fbfbe5d6bd",
+        "cf3c69fb4abcc5e8a53aac3ff6154f5ec9f7e01f7df55461e2e5ef9c2a318986",
+        "4743454002b29720c50215e0d34693a98454fb3246f6217bd4d95677dbbde77a",
+        "4845ccd0a36f4308e2ca0f8752ca26625f802753d05aaa66009ad2d80e8884bd",
+        "ff3aab2f61793bb2d2434a0c9880881d82fc32c63348fcef43c65f25ecb057b7"
+      ]
+    },
+    {
+      "file": "src/lib/runtime/structuredControls.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 1460,
+      "assertions": 5100,
+      "logSha256": [
+        "0ae8dab329bd062f7268583ab438c2d1bfced36e06997cb92b9fd3c93b37c30f",
+        "01ceb265f00082b5644b384d989f4f12f98ab957213c070b597b94417e1992d1",
+        "85b0dc308fbfde7ab39ed41cba18534b9495b7f9c623e96c8efadbeb67573ffa",
+        "a6ac087139902528a4d2593c5cdabeb8c32024650171e28e28020525a0499a93",
+        "688fd14d68b81dde122fb1a67ed1b636101db4f2c3ca195c01334315253892b8",
+        "017ca614db94272890b14c577d5de524d4fd98bf30b5c4b52c4c7b8ba88661e8",
+        "94afe5b8b623acd56dddd4a0b79cbefd95a1aa4bcccd08caeff96d14f4708d68",
+        "8e113399d0070b146fef202d46cc9d5b25d7b4c514ca0e385fef75b3ccc59d13",
+        "a12081ce1babe3fcf3addb1250019d5b4e1c56ddf066c0e19ad53fb19e3ab66b",
+        "27084f8749e4a9e78bc9575b3ba2655450220ba6f661f4b19a2a265d8d10e013",
+        "95a4fe02a3671b25c4f31041d135c14c884a6825144429e808ba7b387eab8511",
+        "3251e81f56330ec29e2dfb2c36ce9417fe8c33d26c4b94481d20311425b3b3a1",
+        "fa3158e74b5af87a24652ae19c2d6e73d46a25dd47f2afafdfcb9463aec415e4",
+        "5ecf6eda5fbbb427b145cf855de296059fb898c109dde7a965fcea59439e1918",
+        "64f38f5ad0212d2bfb6edd4136d4685440e945ba4cb9a43ac104db2b1bab95eb",
+        "b200ca7254294d15a40ffc6f2299cfaf33151702885192fcbba53c7a1b2b700c",
+        "2f1a5dc981dc344e480ed5e690f83f78fabaa2b83e78ce375546132061a0610d",
+        "b462ab1cd5ae1ea97dd3c65e11a22e525bf0812d46c7e2b69f3ea5a13b5dea32",
+        "17d4a0a80cdc3b4ed952a79ed4beb6cdc593d3ba2ab93c67479882c6fed775d0",
+        "ba0118b7d6680b3478f3504013a1c71c115a42bfd6561dc1f6092b8dda6e0a14"
+      ]
+    },
+    {
+      "file": "src/lib/runtime/structuredDeliveryQueue.progress.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 580,
+      "assertions": 5060,
+      "logSha256": [
+        "d59baa47a0a9df09a6c1b99e6909ca53fbe8e7faa7734fe7e4b5777d7616d14f",
+        "05b026339ac86bb005f81f8e31f72a4285a19e395232a5584b100302b984b219",
+        "c61bf2fa3ae5293bd985f9e0eca0c411d4bf3187f138ab48f101a4d2a4b9e432",
+        "1360911138c945ad39b9f6eeead072b5211c8f4bfb9711dacdda686db1f9c23d",
+        "2dbf834c27e9dc6c888f28a1251ee51e8c1599c0893b12c4e7608cb8ceab330d",
+        "77f0ca505feb6ccee999942abaf30309167dd95760b4d1764b379926a9c81a8a",
+        "cebd57ed307fcf96f2682d6940ab80559f26095ce0c597ee80173287b5645ed0",
+        "b081e0af7dbf3a6af26f49f16f2ed9851a9318dc37bed50365cf7c08d63b525d",
+        "cb62dfdb4519088e7623f083d94ccfd3cc99324117ba002ea0d9fae3969778f7",
+        "8077f1d75b1894c93221222e022b89212bba6db072fe394e4d021a1f6cc69095",
+        "53a221d53cea65d4f25da9cafc593524f39af90c6b4ab2fd2aaf3480e6b3c70a",
+        "792dd1be91619ca70d7ebc37f7ff232abcb6d51fe1cb1ac1b0f80fd9c5668b79",
+        "24200b914ac7823710ea65fd0c35b2ebd4b679f8fca617c083c7b532ff2c13bc",
+        "45c18fc3289fae4f3fb42e73aeb41fdac7d9043b73ea560712bbbabe15124591",
+        "5fd8c26fe4f52b9a6b5b388e44f75ca48b2df5788512bc4447516816afa9d38f",
+        "40e4ceeb4b16e5a2b7727cad3e7a89289fa1cc142ba88b1e6649e1172caeba9e",
+        "e1a94671455604d7136f08c3f447842b18f0111eaf171783be46ffe733ae352c",
+        "72a4bf47a470b930b2f0d42df5408bc07dc61057fb64afd57331d78d2ee559aa",
+        "64028a2bc82e4cfe716a8c5b3ac76266e9acebc21f752545ce8f5c50955bf462",
+        "dabf8ccd3b2a2fc76b4460a77295749256775086e71bdb2df03ee9b799b50a9e"
+      ]
+    },
+    {
+      "file": "src/lib/runtime/structuredDeliveryRebind.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 440,
+      "assertions": 2460,
+      "logSha256": [
+        "e96cf47969ef0c6224d1e24b9dc4970a54cecfd6eeb536fa1c9862bf78caa2db",
+        "cd87c7617ed61a8720cf630c771cb4df10d629519984ce9a1db68c94730458c8",
+        "0857eff8c3bc7d81fed5e9806797aa9dd9be57b127cac3377391405dce1b8bdb",
+        "e32f1c712c9eead52088607c298c90b650aeb491757c3dddb4304f8ea3da05b5",
+        "02542f2d675be4df5b7453d7b35882d951f747eb105ddd0a256d951628b9108d",
+        "3f8e61450eff183a3a6905f44a403028820fad1b7cd8b80ae0e3cedcaf9f530c",
+        "0471ac48cb430ef42b478ceae29635b0b0f383e85a965814e0fa6e871b3f2199",
+        "a10f32f28edf5b8dd1ce0d195606b7ae9df96c30af898ce9649d1b975f7001be",
+        "a127f109568d0923ac47bab840b916969b0fadd1be00cdbd3fad8fd1868a75dc",
+        "af50ffeb04a9e25dab5e795540a447af8c1b92c314b65d7ff6026f1941c7a330",
+        "b3e56fae452dcbd7caa0fcaf7e504b7d5de314f112c4286bd032f0146d41c48a",
+        "b84d0eb585750b3d8a6c14494865edf842c5e2c683d4445a341cef21ec412c4a",
+        "1f7ac2a9e3e0abf886540a13bbd14df472724aa6d011fa9979bd56b1ca40041f",
+        "fa2bdc55cc09794b50452ebc00ca3c37df4c215b7a8660c595d3829430409eb7",
+        "69f96e7d9ae7378fc734524b36ad6b2907e96478022addcc6ae99fc6b5fa0447",
+        "552c11f2da5e49bd95ab3a817416b54067c634a8dd6fe6ee768c8d177e00f514",
+        "e0ef9e3d7b6255971174defef3a9985646d7e523ee197d14c13fe53dd5eabb81",
+        "aa978eee9544df4e74fbb7cadca4eef28a2896a77546ebdc28b42a7f4510321e",
+        "a7c9e5941462d35aab7052c69127315772c785773f7947cb721abd16982236dc",
+        "0fa2b32628eb21a065bdb80ae33e8fc563ae6e0efc6b23bd6a6276b626678858"
+      ]
+    },
+    {
+      "file": "src/lib/runtime/structuredMessageDelivery.keyed.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 20,
+      "assertions": 1560,
+      "logSha256": [
+        "5986954702c39094ca3aed3a1ce1c952db75b15d732675a15618ee2c670f4a71",
+        "c76dc44b7f4e8e3d8e041c5cca5967fad3a85623bbce2063095ff38cce40b216",
+        "ba9184c4d1a1d4b3ee5c9f6a6eeeb181a2f040f134de1743763e34741b3ff889",
+        "223779ce25534b432524bd343c14b1818a29cc515032bc949fd4e17676937276",
+        "22be89b30ea0d086717f2c69c6c702a128ebcfa01f9dc21943ebec9760141977",
+        "5aab39d8f9c796cf473590f4765e774f6fb5c99c1113a82d812535572562d759",
+        "95dddc27d441d7ca086738a2c45f00c05e77848c13a947e708a3488139fa66a6",
+        "0abbe861342f95f21cf5473949eafaa1c5cd09ea4a12478ad198ea080b05584f",
+        "30ae43eeb4d33fd503142db2fbd39afb577247eabe5f0d0c8840b6d24b221695",
+        "9458916170ba7ff299170951cb1bfe93faaca522f9cac8d3047e6cd57a001393",
+        "b487f9663cf725f9ed9eed0dfa95f826d37043b4e713857c89af757331f38a57",
+        "b8d811140b669277f79887239afeacfa81dc19c6bb38e502e93b566d1effc2d6",
+        "86102e7392ec59acb0eb393ac84b5bbed55aae739e341cb5d0637d900952c405",
+        "ee24072f392e2839678ca6c593e5318833f67d00a2804e876b8a91696212fafc",
+        "f53bdd480e9e363f6140ff8d742ece4ea48a9f293299cf84d065da2efcae94e2",
+        "acaeb5903bd7a4c86f373ee050e6d72ec6faa2b49f22fe7942c2035b8cf4a28c",
+        "53c8276b415bd9209a7f30fc64d1058690180fa09b4ef184824504cb9deca182",
+        "8935ea13b78b7fd48f7a7d85f94889304ddd5110285ab5cce5b791f8f1c6f00c",
+        "2745fcfe22dd786b2eac9b623e6a7c4eff2a0067c4790d11ca6da1ce52655ffc",
+        "6c4a2013fbe7b5927f7c2a8a8e42586c3420da96d4b7f97aff3f9be13b070a94"
+      ]
+    },
+    {
+      "file": "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 560,
+      "assertions": 4912,
+      "logSha256": [
+        "576053cf05c736326ca2557a254f0022fbeb7db5184e3d2a40aedb329b1e765d",
+        "881dd8c170aa9ab037510a776ccdab8db3b9dd10721d3b61280cce1d3720a93f",
+        "211e9f21ae156be17a2db2cda9ab841643b421133ed22086a71d1bcb5c6a6845",
+        "b1c6881ea7faf91009aec788f517cddab7099bef595b7f235780f38464dcfb62",
+        "2820b27764a7fc65ef105af5ef9aafd9c198b01956acad176be30502e577712f",
+        "41191ba0e38f026f93fbb4ec885cb463a20f6e2e348e404e18c4a7f36e68cbcf",
+        "b3c63d17cfe4df1aed63df18a3257972d63cfc4b8954266e62e3668ab8924804",
+        "7c54e8d8b6e288c8097ea5fe5f8456f196f25b9ce98ebcfb870e5b0391933869",
+        "9e3dc42f52498fd801e49dff8b9426ef47f229134c9db0f20f9da31b5222a0eb",
+        "73c553a415ba396dacb271fb3bf7a214172e01d5be410ea3eb7b9ec034246818",
+        "5c46dfc237d504154a1e25d707e464131f1dfe7b0f1a6b9693795960c5f376de",
+        "0cbb81086c5242c4d2dbf6c9d1819693ed4d48b9b038f4c17e1f9077c4b41b11",
+        "03547200f4abea78545330d0071d43955dda73f3be4bb10a0e2d6e5ce3b3efda",
+        "68c0c08648ad985d088181a04bf1ac10697adad66ddb91ffc13cc766c8f617d0",
+        "1569f00d3b79976930196ab7baf2d88cb2f3e47bae1f52889ee8470d9ee4cd4e",
+        "28f4e6da8aa9d39987b647dd32a9a0dd8593d828a25c8537ad793acc1e5680d3",
+        "c87b5fb53bd6fb70daf61c41359a35b3b770cf6e5c79671b424338a006e50eb7",
+        "0dc98ef8709ee77152321fc6ccaa11fe58e974529cd3e3a7b533fd433859fc18",
+        "a63c1729321d90e1b6ccbc94497a50e34f9ac89213ebea1110fe88b41c420f17",
+        "c330e9c6f920a496113b6fa4c61284f1de85d6dcbd1aa828b8c958f63aafe9e4"
+      ]
+    },
+    {
+      "file": "src/lib/runtime/structuredReconfigure.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 800,
+      "assertions": 4160,
+      "logSha256": [
+        "d4b656e83c9f70161da8a84ad3c6c2e595657f69734dca9e0785b4a9fdab7d30",
+        "3f2a4eb97f4bb70adafc51d719b81801f2cb997cc5b9816f9d5f516ae6925d2d",
+        "3995efe8da8ee63e17a84a6f8cc9f4cf8ff68bb0c1c429dec083f7bc21824347",
+        "9ac637dbc44a5b6aeace9eb87a9c478917b21393cf786fe803fea0eafecd22af",
+        "51ce42a6ce625412bc84c13d871939a7f1f3ed6b078dc9f84018fdcc5b3e91fd",
+        "96b7c75df53f9c8966f5cc9ccda721499e68b79bce1afd3690c0ec74d821a041",
+        "7cb3728d3145fc5df018acd00e5562e512e2a74266f48b0a4137c4a985b15384",
+        "0c5ed3ac18427648d39cb641e32956898eced68590032d921565e7a5194f370e",
+        "b1067e2860993bf421da2b43ca68205cdd8bad4f424c6e3d7d6308da1a19755e",
+        "99a7d6e062a5f0096bb3c606e996cc3776d591b7a8f65e44e1064e8ed53705c9",
+        "3537cc988dc0e7c5676ff2d27c8e8199d6346c9c0aeb0f0755b97a39019199c2",
+        "15852dbf0399f722e8cdd316ccc67ba5bda0a5f825f62a3bc611b6be76a8d335",
+        "ec31352d9e8fd2ab11739145ec66b71ecb539b79c455528e53831c80b9cbd7cd",
+        "21374cfc91e37556c5c698e44d7e9cb5a0e3b20cac66046331472a8c0e1aafdc",
+        "bd2b80a8e85cc4eecd85da78609468793b1bbbb5efc27c06f093285c524a5973",
+        "a8936f727cd4463b490d47ff76ee1192064f46752285a85e7b9052a59c3b5f0e",
+        "402796309780a4587cfab97a4bd9ea4e48970be40f0adbbf0b21858c8a1188bb",
+        "2f992ce2738af7d92f8c85b71746e51872e9784ce3325b36542ce7dfc1416157",
+        "f44877d4c0cbbb77db418d363a6a4664a03b913a3ae311ef524438cdd15a8e19",
+        "8bbd34b4774c589ef5029241f051addac4553f0656882f280473b1fde577a0e7"
+      ]
+    },
+    {
+      "file": "src/lib/runtime/structuredRecovery.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 540,
+      "assertions": 2860,
+      "logSha256": [
+        "205f57b1f744e2267fdf9c7d8af580d3ac61da89cfbf7b424bf7e487a1a9ab54",
+        "86e20a0f0b0d590cba1c949bf74df112c5a6741cd07e6a2faed80653c74e6be9",
+        "fca80c97ae28590cb7bdcbcad0d02b324989ec52653a6f7da1f742baed839bcc",
+        "fc055251924405bbb60b8deb129cc94a1449902491ff9ef1a74fb1a32f204ed0",
+        "2eb14c48f611cbaf0ff83237fd05a0b0f35ad7aeea259b6f37de970bef514066",
+        "73a0d14152fbf5d5ba8a136d00f0155f90762808ef6f9676e3823dc6e2ab5ccf",
+        "1a7b1ce07f74c9d5a3e78410b0d353bf87a93687e437a818d9555cdc910a2a50",
+        "57789c4a4574d7a27130bd0f540740ccc9ce95e30dd73fb5e537b5f906c71155",
+        "6dac1a33659dc551a348e9f3844fb12625947d180d72091246c7e5dcccdf6639",
+        "7467c886efe513230bbf272f9cc7406969c824a2939348caeb5e2efc9f11a8f0",
+        "b92707ad6e67b0d17295cf7b01def5229b4ea7500bb324df1f08b61ba6585e4c",
+        "6a30f49776e32984483a6b48b8e0c5f26ccec5da07b37967a202e17619095c7d",
+        "ece952b25416ad9a9983d125467cfd45747fae1025dc0596f0a46715139509a0",
+        "6a11aae26d442ccbe0f6de1a411a52a7dde472dfd8582d7dbc1e22713257cb3c",
+        "971f1e6c04dabf2c1885efa2fabcff92c44d3088e58a6b782b5d58de0e80fd8c",
+        "aeb5ac1d2bd99185467a3240f2e6adb40d06d5de7cb449da8be088f132091db5",
+        "8011b97e265e1dad1fc029152f64e990f162f165acf93101b8cf2f2a53eaf47b",
+        "d7be2df6798748696ee3cc928b1264b49334d403e8b109281033b15ff14adf92",
+        "4609a94d23cfc308cb09508ff519070f5ec4262e03ee5fd9041d1896705d9d8d",
+        "9c52239fe518aea100e696decfef5ad3b6e0eed6a26fecb2e4c561d7a1b5fd3f"
+      ]
+    },
+    {
+      "file": "src/lib/search/transcriptSearchWorker.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 240,
+      "assertions": 2720,
+      "logSha256": [
+        "b6fc528458f31c4312beacfdd7c42b3b6f58a9bb38f212552d388aaab7dfa4c4",
+        "41bdb9e4a19865b2a6c2aa58731fde650ab904b3b82f4d816b99f937f983b84a",
+        "3bc928cf808d359cbde80a8a9d87240577bb2e7047cdf7e12334f0baac8fff5d",
+        "5f9b8d0c9f0a285b3037f268ecdfbae23b1c7bbd97776ace036b321aff19753f",
+        "de5c590bb11ef6c46fabb41a66731607ef6e3c2537fff7ee74a954664d574fbf",
+        "14c42c1576c550c2d3b748f43c2b46d5f021a8ca4730f9b823d6d3ad7f4abf9e",
+        "60b9f2ec76135ee150ec11786e5040a9d5826810bf80675c2d20a8675877fc85",
+        "0f59598f51dae0abd818e77c0f9331fb07ffbbfa3e0e4b01bf2b88e3fa0cffc0",
+        "f5a8cd63ea11c085594cc0a0cf228d15f88d5a5a537d2bf872b0ef4ed275e7d1",
+        "52b066faf172628a77dd1d77acb6c0099efd352cbbbcd1978536dc8473a79d27",
+        "c9038554d8573f660b21b8e6f50b3b489cf917d9345bce2103205a5fd0c8276b",
+        "176a08568f594c8d0b0743d80464a25e15509c4059b99ad9a3a8b948c2938fec",
+        "39e539c387f2a13ae1202e8e7e61209a5e7889517389563f2f4ff382d0ad46b0",
+        "c4f11bec94ba8694daa36c8e435d9aced0467089f681fed074e6cdc220226113",
+        "23bdccb50e773e46e65fa7137ea70a5e437a3f382d8fb486c839051743db2683",
+        "c885227ea6bf5522940e15654152c306267b553f70bbc934bfd316053067cf61",
+        "96590b3195238a0fd509a97a9dd13830b15b202b57ba4a644145ca0a40d962fc",
+        "334c2f8626b4fdf73876ea6cf08806823217662d7e1f28a40ba6795f22e287bf",
+        "a253b9da1dde177f9947d7528821b02cf263f122f87c39b59360bb0462a0de59",
+        "e2681ea4f60b71f66f37e99fe79e03aeaa23ace9b23216323b276040770688ef"
+      ]
+    },
+    {
+      "file": "src/lib/selfUpdate/workEvidence.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 420,
+      "assertions": 3340,
+      "logSha256": [
+        "79d0baacd975a58fa48fa8eb06d3bf2e2fed16ea2ac1953b13ae8f5789784b63",
+        "f42f82a3a91fc63af628d372862c3c0e50f1974e3b1c78f47193ec23b645469b",
+        "7488044c6194a45809229e5bab9de56aa64175bb2384165cbc5215a87ee2816e",
+        "27d44c9a065d8e36b7bb0c1fde90221af93229c1569f3b0051a67b6b3323a64a",
+        "eb9ec0520aba0d34cbd24a56ac2ccafa786b98f59b4c8eb27a458058342e32c2",
+        "2df2b3eb650a0ad18a7c7c4bba0fdbf0d80f9a71e1077a6c357a0eb800abfd80",
+        "a6a34db1157c306a7a7136f0fa9e5b7b53791dda430be0a1e2d71f17610309f9",
+        "e7387644985f1317555a87cb79104714326fc9dc7e86faaeef6244146bac4fff",
+        "c6ea7995bf028c3b0d467f1954427506edf8b269517ec3c224e56fc1a551cc6c",
+        "d50d2b9e0b60f3c6bdb449760deceef4fdd26c632a138a77384102452bb97a43",
+        "daad3b65e8d755f9af6db963e3790246d812512c029a989ffd02c067eea4d20b",
+        "bd857c881a7e80dc470eb7e49d447b0f5ba761da2d5590e345c885cff6e51b32",
+        "81f850c52e2e6102e095148c61ae9036e5b5b294ee5ddc1a486b1530dfde3dd2",
+        "4d57b443c74c284490c5cf63841c4d1593cbfcc36d2900d2426054398c33d203",
+        "6a535c9549e03726a6f7aabbfff13589364168c79f7a36ee1d5e2f80ae8e9c02",
+        "b50730aca04f34f83b51e989863c92999800de04f4c81e7d5b499453e088d853",
+        "4af2ecfb0dd2fd6eb1a9b7c9603ed8bef67fb5fc4e2a5faa6b721e9700e9ac53",
+        "9b275907720e71e3316a00373c25205e5956f8ffdc68522a8bd86427ea8a6637",
+        "0f7f431905e313170712f9b0be70c6a16cbcd60221799a54601acbdb6a08746c",
+        "6ca1afdf14dae21689b53c3a2bea69f5ebee5dcf45ea2042ca0761969f360eea"
+      ]
+    },
+    {
+      "file": "src/lib/state/durability.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 360,
+      "assertions": 2200,
+      "logSha256": [
+        "81e94db25a8dd729bba8d5de8f6e68080f13cb1ab6f9b39e8500d1ef4b0cff5b",
+        "183deb0e1897963d396e2bf8109639ad6a240782e3e1a8cae416d0cd8c8963a2",
+        "36017db874934c121d01efb2c6fefd487791a60a2b3552934070845f55eb4d65",
+        "08d732c8716450fbcdda823330fe32ba3bc9dcb9fdf351e5efd812f6d8f6cde6",
+        "839733f16c45b1d986c76d40169258dbb6c0c323c2944c6b2ab52453c860646e",
+        "36c2ecb495ddc2ac3b254fc063b26e31265b595bec881a61e0a95fefa039ab70",
+        "d88c891feee3185e8a156b413b5ea92b8b95a5b5322f0b8eaeb3ba7dff03b46a",
+        "8619a3627c68978077c09a7c7ae46d7830bb39e304efc299617257e5862d1a41",
+        "0297f4f1632bb06a7ab8d8d2d2279c2122566243f5aae4e5713604694b41b983",
+        "93468aa9e26f07c31e6be5d168b2161a3824e75ae5d987672b19ad7459d28b61",
+        "be5c53b4b028f63884f5989e75d812ff252853c7d62f18e0764070faac8ac625",
+        "5b07912cd3a64dfcff6a7af6f41ddf22168212eeddf0aa50d5682423a3598218",
+        "e84c03a108abcd95dc8e1c9a6ed3292fc54ff3f19b9d94b9cf27546477e1f482",
+        "4d28fe6142636e27c22d7edb6166ca65ad221f2d8601a3e983b4a00c28b4c4db",
+        "abfba2b6deb0d321df240968df46f2db5ffe30f437a153f7e938b33bf5fe3aae",
+        "eccfeb6e19538889d7a1d2f20a096759bf536dec6cfb55f6e98ad09217a7b5a3",
+        "c92bac7cf96a80ecc92dd30d7c3f9f825fcd7dcbd837ae5739b9e67d1b87b603",
+        "470bbf28fc823d9e5bbca15db01172f875e4ff4ac647f5f058d79556ccf7775f",
+        "c836a09cef057a445b8c025262b223407e0b205c04de98b548e57953a611f8b5",
+        "a835d257ebea4047fb45b883af44edd8cd6d21dbc53f1b5f79217f9cba758af5"
+      ]
+    },
+    {
+      "file": "src/lib/telegram/launchReadiness.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 420,
+      "assertions": 1220,
+      "logSha256": [
+        "774ee54d18c87650f28f1cc77ccfef14f8afa49328f67050c2f32904d6d27319",
+        "5d68f5869555adebc85432eef44fe413d205efe35bf819cde4a16715f7318f53",
+        "06d679fdfec9624959771e24f1a0906fd1ab2d24ec27bddf27fb28727150da3b",
+        "e1bbc612dabfc8909763094d30dc927166b76a74b8b13557da42c3cae1c592a4",
+        "5cbb1bfea19a5f612ba898a1d0c491aebccf295973095c00e7a5caa6d88b55aa",
+        "df9c227b24b30e712567245dad833f49e64418e727d8d1f198840f2efef74aeb",
+        "3dedc8ffa672658430b5d20b8acee3294af1fd7fcb85b1ffbbf02ef3b82d3fab",
+        "cdb05776d8df12d09ed968aca796e70c1c137c6bd3b88bd329ababbb178e58a7",
+        "bc1191cbbb5a837dbf85c7e7501aca92132cd9428477b80fd6f7c2f6a14bf018",
+        "77c269c316423e35d45597fe0b8ba504f426f0e51625fa5392fca0119fcf3d36",
+        "69d2fd283cd74fccbcdbec934009caef77b27147413cf6e62ac01dd47a1a4d6a",
+        "e190222678fbfabfaabca3fa6aab60b92388854a8494f40571f9fb7c1c984671",
+        "b6772f911273cca7a506d260d049b2f3bd830add5e38f5a6ba39d5e041a4194f",
+        "6cd2a910fba91e63c6633f48cae713b0aadbdcfb0267c2e1a8df860bb31a1a47",
+        "130de4c051d98520f4be9c6f697415823e2702037abb9782de465bb92453685a",
+        "0462d1096bd0abc42d1c92f82e1d37ad24be3c2edb693dfb1e98e6a333ecc965",
+        "3e9d5a085944182b9bd16c113222f8a48a550af84f5001b1ca3088950c56467d",
+        "046306b257e9420bc933a5224d31bbef2a69ee1ab72d0bc5fba31abed29a66da",
+        "5d0d240d930b3fdf1235fdd7269fa627f4fce2b337cd393f085a79adaa769663",
+        "3fc77184f1e7dd163c914be8cbbb0597110555d3f20a649e2a99bcd74473a39b"
+      ]
+    },
+    {
+      "file": "src/runtime-host/deploymentProxy.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 440,
+      "assertions": 2800,
+      "logSha256": [
+        "955893c917ac41747316bbccd784a6df088a805f8b1f3a9b959ffffb52b7a5e1",
+        "29f1fda523b03cbdfe382f06de26a4713132e06339fe7f8e882ba2c7dcb5b89e",
+        "4d9b0fcbd7a772952f0dab383a476c9644fa11f5bb5e7bfb76a314a59f3fb329",
+        "07147421640564a5eaa3fb1fff7e9da23674fca606b1befb138d1424828e935f",
+        "c3bfbf0837d8a47bea20a85d94f3e1c646ba4c64b9e049975f310d9d8ebac9e5",
+        "e5969897696b97bd30b7d619987cf05d8f7dc0766e23d1c4d9474486e8be66ad",
+        "767be15f0c437e6c07b625e02a125a6d20a450480df986c67fa1d3699508b604",
+        "bcba4310b0aec8b34585d25565e02c2611ec14eceafb7d0a88850602c3c02890",
+        "dfdba6da01342a51b157ccd79279396eb9b7dc5bdfd8001a451c801a1fd76546",
+        "f95ad338edb877acc41c188e7c70aabdd05c6bbc0da3ae66c651fbbcb3d76e98",
+        "f827ca2ddfebddc8c5a823be2b2c4db5d5e3964c81dfabd551b98902ede53767",
+        "31c64fa60b891594348ef210a177aeff7b9c5d64281174e92012f3602474dbfe",
+        "7169652806ee7155e0f6a5ecdc9c90a06f75dbb3b72c22a7b76815d87f8ba5b7",
+        "ef031fe291c7853b09b150e12645cb02ef48438c55b9f85daa51cd94c33f6e6c",
+        "cb337125811a72597540866e60faa5ac69e04f2271bd19a92a1472bc8b71a6e9",
+        "ad248f4cd6ed8d78ca564f5c373319485dfe499804b52e4b8142cbb1ca3dbdb7",
+        "bd34113fa3684769ef62491e55c32b2f58ed9ecc4c8a2d43ae6d8987d4afb197",
+        "665fa101c1f09cc81cf4f506f63f10ae29b8cc3a71018fc2c6032b2898672f2f",
+        "52bc8574674041cad70e3aa443b982e678f79db71ffb0e9962b57c2e281be24f",
+        "d9fdac28e1100ce0a120b8b956e6d93f41abd87a92585d5606e558c011a1d1ae"
+      ]
+    },
+    {
+      "file": "src/runtime-host/journal.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 2880,
+      "assertions": 15000,
+      "logSha256": [
+        "2941fb05e0385633fadc8e963f6453beb9eab23180b5b06f505197d99f7a43a7",
+        "f0b5b9f03343176420524daa9ff9339b8cf16b2949fe5365288b0291f784d0af",
+        "77a8e0b316602b1da8ae1a469b9f54f7125a743d4f759b4b998e7c17390d2bc5",
+        "13aec14d382d8c75b74766f45e6bec0f3648cf0294689a89b7306715ce7cb24e",
+        "d20845d05d3627973500a1bfcbc1c26ea34668b908598f5475242dec7b5bf804",
+        "849a59f3bb87e540ba0b239043884be4cefec22c24757fa754494da88461f2c6",
+        "504de1554bd5cf1696e89d58862b02df64da9cb8cc2a30ccf10032a679bfa26b",
+        "b34bbfe992c0ec5d402864f1a571ea9a8e1ee2ae4f31a3f051a0f48a1f9ec1a1",
+        "1e13affd58a8c34ad38371f529962372129e130ba397776c7dbb571892203752",
+        "4791e27b92ef89aa4d6a3558836b6276d6a92703a3a0123f982b9d951e1f18fc",
+        "31f0f37b8d4a6e2863041317ceedb2013e47fa309357772b737be80659c384ab",
+        "0071b474228209ae59168223bc99a1d7e02f1caf321a96f6ba0709d5536a1ef8",
+        "caba1aefb0109303e2439fe12e3b0ed40526c75b62ef87537297f3889ac9e56c",
+        "2315defdc67f67945d5ae95e3c6e30a19222a97728bccae3e05b988a3cca34bb",
+        "148154b8b3922d5e13143485b45745dfdbdf53c289b6cb0c2bb63c44e08a7d28",
+        "0aa62d02c98d1bd31e8f79a7aa7b60b609809f51431405c2a2b82866e2f09b15",
+        "664fa10fbbf69ff43707608ba4e832a0ab7c5c725b1c8337e43da702065ffc5a",
+        "5d50ff452ab346661fd559547554f96901dcbea039ebe35a8459679442e56a8d",
+        "319487be6362fabad9e158676d7eca23f8dda8511bfacd984fc2530c93cea193",
+        "323924f1e620281c0db1490d7d8506690e12716287fe6e1e9b02b2a4f430e383"
+      ]
+    },
+    {
+      "file": "src/lib/accounts/migration/controller.performance.test.ts",
+      "repetitions": 20,
+      "failures": 0,
+      "testPasses": 60,
+      "assertions": 380,
+      "logSha256": [
+        "429520200e5eb68582bf86ca376b3a528c0be8040272e94dfeb29c4ab9533c82",
+        "fc484ffd9bfef2b86e601df6deb0bfbfca5602261192553fbea66a93f17c6419",
+        "83d27199784b184dac3b8050414f33ffd9d665489a0722609275b5db541cc4b1",
+        "1285b083499bd2f63cb158a568b3ce977ec8cdc8737827f107dd7979acd2d938",
+        "ee9088510d5f6db56a0456877358cba5dadb8396f57a70e12e10a911b432bd98",
+        "7b2f306aeaac88693957a4897c5e55d66cf8e4cc6c383c43bfb55cd8742abb04",
+        "a989115649dcf5db8574fbfeaa7c7124d0393212f3c3254175d3cad1c7deb05f",
+        "2356c721fc34166e136dc8c07bca6a30aab5dfc3a6a8f31dedf5a996ad335b54",
+        "573e2a0142b78eea1186f64ea09e612696458cc13b6182d4f3e370e5dd1494a9",
+        "08cede2e21ce225458a6ab4634cea43e09bd8169102e91f39c413a08fbdfecb9",
+        "93f8fd591659d9e6e6b24798df80ffe4072f1e1f81c8599ece298e3fd0226dff",
+        "c447e76fa0ec50186f0eddc0e3f9a731ee37a600cd6bca1cf9666ce9bed1cd75",
+        "3c932a2def622a8994090e2b7f179fe5376a1510bf9c5f5a216ccaf1cb5cdaa6",
+        "bd58bdcb4ef500e22cc3f8a6123507adfc6ea848fe23b469f9bd8875f1958e1f",
+        "a19496b4c3a43ce2d8bac0a048f3bc889a4503ffb6d4250f58708aaba2427245",
+        "c66a155e29de62b6461d482fc1b253db996d4e186e3b5d23b8e2c794c35f1701",
+        "a6e7efcff5956fc9038a14183bd58896b314cb5acb4721cf2b5bd5e98cf667bc",
+        "d024f9bf53ba0164384e65ec879bb3512619c93eb70b1355637f606a177487fc",
+        "8de1a9aac2ca7e718ff8c57ea36b5be305d92777af51f1d6f433ccc4e9a99331",
+        "d00c487f135fbf4eb21eb98fa7a428078b9bdf08553ce5f38eec1774eb507938"
+      ]
+    }
+  ],
+  "mutations": [
+    {
+      "file": "src/app/api/account-migrations/[intentId]/action.test.ts",
+      "test": "a Stop refused",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "7d25b1d610e56e9eba26d418d0d3fbb319693235989ca2811612bc51c5c626b9",
+      "restoredLogSha256": "752d2a2c6d60bc135a71a15b0da23ab84a244388a731ba58ac85d27033a73890",
+      "synchronousMutation": "Bun.sleepSync(probeMs);"
+    },
+    {
+      "file": "src/app/api/conversations/[conversationId]/migration/route.test.ts",
+      "test": "legacy reseat waits",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "32b3fe0e5a7c14427034b95e18d484c1b4a7bad3c0ecc7b034df2e0fe6da0689",
+      "restoredLogSha256": "9db2b14cb8a3adafc80f7fd35ed31a9dbed28290456c8197eaff96464eaa9efa",
+      "synchronousMutation": "Bun.sleepSync(probeMs);"
+    },
+    {
+      "file": "src/components/NativeQueuePanel.dom.test.tsx",
+      "test": "a full queue paints the pending row",
+      "mutationSource": "src/hooks/useNativeQueue.ts",
+      "redExit": 124,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "owned deadline",
+      "redLogSha256": "239bb69961a8b3c73bced450a3a9ea177d0121567e2003f2273cb8466cc4bba8",
+      "restoredLogSha256": "0d86bab45c79bcc0cc4104d7f12878823fc9bdc1f81409320f1f1b95b09db0b1",
+      "synchronousMutation": ""
+    },
+    {
+      "file": "src/components/TmuxComposer.nativeQueue.dom.test.tsx",
+      "test": "handing a draft to the queue clears",
+      "mutationSource": "src/hooks/useNativeQueue.ts",
+      "redExit": 124,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "owned deadline",
+      "redLogSha256": "e6e320212b960add530d4a9b1965bb61221bc4eef32d2f40f206c8114452a463",
+      "restoredLogSha256": "7994e8551e2d4876b5489ee51742a900c4cab9199532ee12f9dfb73793fb95b2",
+      "synchronousMutation": ""
+    },
+    {
+      "file": "src/instrumentation.test.ts",
+      "test": "cold boot enables the controller",
+      "mutationSource": "src/lib/viewerInstrumentation.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "behavioral assertion",
+      "redLogSha256": "6aad052f0a6a8effa67884eac6bb7fdaeb2c5863a1b5707ba0f1a1374d37cf97",
+      "restoredLogSha256": "1c4ee137c53ede8c5ab375fe17991286fdc652b0f7a33e05ececf94ffc3b802a",
+      "synchronousMutation": "else run();"
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.writer.test.ts",
+      "test": "off spawn waits for the JSON",
+      "mutationSource": "src/lib/agent/registry.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "fbe38223fcdc78d75d1b7c01ca4179f620b8504d5adcbcb3bf6b311b39e18bcf",
+      "restoredLogSha256": "d14a860e90539641341514d19b54c23ccdd4bf8d4636ffc5f491207d33deadc0",
+      "synchronousMutation": "Bun.sleepSync(5);"
+    },
+    {
+      "file": "src/lib/accounts/claudeLoginIdentity.test.ts",
+      "test": "on macOS a live pid with an unreadable",
+      "mutationSource": "src/lib/accounts/claudeLogin.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "behavioral assertion",
+      "redLogSha256": "d8366c135383e9324e3656bf1f335d2591788526f0e1dcde1fe64dc164574415",
+      "restoredLogSha256": "4939c22f69b4b0d1624b89e6637c03fde2b972dbdee8908c8d6d0f47c484098d",
+      "synchronousMutation": "if (argv === null && readers.startToken(pid) === null) { sleepThrough(EXEC_POLL_MS); readers.argv(pid); return null; }"
+    },
+    {
+      "file": "src/lib/accounts/codex.test.ts",
+      "test": "a removal that meets a held",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "busy-handler assertion",
+      "redLogSha256": "4f0934ed5b32eb0cd05b4e36b0255b03fec017f5418d0cd0cb575d65cedd915b",
+      "restoredLogSha256": "3cac580e2dd926c1716dc4696c112df55b871c4dfd43c4290b709c2e924cd2ac",
+      "synchronousMutation": "this.db.exec(\"PRAGMA busy_timeout = 100\");"
+    },
+    {
+      "file": "src/lib/accounts/migration/controller.performance.test.ts",
+      "test": "durable inventory reconciliation stays responsive",
+      "mutationSource": "src/lib/cooperative.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "behavioral assertion",
+      "redLogSha256": "dd20d3f5c1b897373da0c83111960ddc502b29b443b8ac2d5f6860955b50d1a6",
+      "restoredLogSha256": "e94b8dea1304bfb8ef74a7f84cd74aa44786158f73978eb802566a7d27b29c15",
+      "synchronousMutation": "Bun.sleepSync(1); return Promise.resolve();"
+    },
+    {
+      "file": "src/lib/accounts/migration/controller.routing.test.ts",
+      "test": "routing sync never queries",
+      "mutationSource": "src/lib/accounts/migration/controller.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "behavioral assertion",
+      "redLogSha256": "1855d33616e2a45a1897c51ed9f147d89e90d9bb16629d53960e4b337c4200c3",
+      "restoredLogSha256": "e39b82afa22cf1985ab5ad7cc9f21a013bd3ce83bdedf8341ab27ca921aaaf77",
+      "synchronousMutation": "(await import(\"../claudeCredentials\")).readClaudeCredentials(\"fixture\" as never);"
+    },
+    {
+      "file": "src/lib/accounts/migration/coordinator.writerWait.test.ts",
+      "test": "drain's claim and settle",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "2f3ae0eefbb037cdb424839f02ac6a06ec1f105881f4dd9e5198edbd28309ed7",
+      "restoredLogSha256": "39e21862253b73a25a62cc35affa4a7f4feb967d5f39f64c3054ba6c00cee4e1",
+      "synchronousMutation": "Bun.sleepSync(probeMs);"
+    },
+    {
+      "file": "src/lib/accounts/removal.writerWait.test.ts",
+      "test": "archive recovery refuses a busy",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "behavioral assertion",
+      "redLogSha256": "83b76e1b90ceaa26b2df2f5c4cc34e15d19eec2204935ac18e295296a6932170",
+      "restoredLogSha256": "3737980dbe4274df6b0806f5627405f2072c83a1361df2cb59303f2370f6c17a",
+      "synchronousMutation": "this.db.exec(\"PRAGMA busy_timeout = 100\");"
+    },
+    {
+      "file": "src/lib/activity/ingest.test.ts",
+      "test": "a new transcript at production",
+      "mutationSource": "src/lib/agent/registry.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "behavioral assertion",
+      "redLogSha256": "58d28f7b4074933f40f091f7be5a74c213b40fc59cdbe4c1e5fc09f0d5d7e928",
+      "restoredLogSha256": "b8f5a89cf3d40d55781562641027c043ebb4d895035e3f7650358fb0eead8c93",
+      "synchronousMutation": "Object.values(this.snapshot().conversations);"
+    },
+    {
+      "file": "src/lib/agent/failedSpawnDelivery.test.ts",
+      "test": "an inline launch failure",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "f0bf5c9d8239addefa1fbd2079be8cb519be1b91a20cc60db78622ed8eb46b62",
+      "restoredLogSha256": "024014a558ee52f89941fc8217c1107cb159a89012670df097b24b51894e7a79",
+      "synchronousMutation": "Bun.sleepSync(probeMs);"
+    },
+    {
+      "file": "src/lib/agent/registry.writerWait.test.ts",
+      "test": "a writer lock held elsewhere",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "31e0327c7fbd250d875c3c246e3742220dd5848d83e304e4af2060ed697d0224",
+      "restoredLogSha256": "67064b742f663f3e1796112963f19f4f89a92284d2355c119fe82d45d55cc188",
+      "synchronousMutation": "Bun.sleepSync(probeMs);"
+    },
+    {
+      "file": "src/lib/agent/registryLockHolderFixture.test.ts",
+      "test": "a held writer is released",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "63c2ae0c46b31d85d38017f245e3a6f34361728d67a32eb762835cd0e3597e82",
+      "restoredLogSha256": "6d6b2c6e9106a3f38a6124a0ec38f5f9681a0341cadd4f8c4bec90512de9cd96",
+      "synchronousMutation": "Bun.sleepSync(probeMs);"
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.contention.test.ts",
+      "test": "seat credential capture leaves neighboring",
+      "mutationSource": "src/lib/orchestrator/seats.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "behavioral assertion",
+      "redLogSha256": "85e23058a8ff892cce74763588d928b473ef6fab8a15c442c071bb1783827f3b",
+      "restoredLogSha256": "0aee0d7497ee1fe424d659498a5b36e01a8457678c1c77f1c94490a97949908e",
+      "synchronousMutation": "const stamp = withAccountMutationLock(() => seatAuthCredentialStamp(engine, accountId, scope));"
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "test": "pane reseat writes",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "6246314194e530eecb651ced1a4bbaf91f026a730bae962bbd72163b793b509a",
+      "restoredLogSha256": "9fd500c1d3eacfa41f98eb9bf10f757e257342f07b0c4430866801958e3d973a",
+      "synchronousMutation": "Bun.sleepSync(probeMs);"
+    },
+    {
+      "file": "src/lib/externalRelay/runner.test.ts",
+      "test": "a queued step crossing a grid point",
+      "mutationSource": "src/lib/externalRelay/runner.ts",
+      "redExit": 124,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "owned deadline",
+      "redLogSha256": "a3db51f0bd92dfee8d7171c8a91b6462f090e76ed86390476305fe3d3dc88584",
+      "restoredLogSha256": "2137cddc25c6149e3acce4ca837389747ac09294e2a281f07d5d0572995fae3f",
+      "synchronousMutation": "let heartbeatDone = false; pendingBeat = beat(false, true); pendingBeat.then(() => { heartbeatDone = true; }); while (!heartbeatDone) Bun.sleepSync(1);\n          } else armCadence();"
+    },
+    {
+      "file": "src/lib/externalRelay/store.test.ts",
+      "test": "store contention yields to short timers",
+      "mutationSource": "src/lib/externalRelay/store.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "5617155a559dc572a11d68166352bdd1ec1663c740712e0ac3830eb1e13cff0b",
+      "restoredLogSha256": "432c4cd6dfc06e2c55255f5523cb26da0f62453476fc4dca703740209349a604",
+      "synchronousMutation": "Bun.sleepSync(Math.min(10, Math.max(0, deadline - Date.now())));"
+    },
+    {
+      "file": "src/lib/git/codexShellPolicy.test.ts",
+      "test": "a delayed native policy probe",
+      "mutationSource": "src/lib/git/codexShellPolicy.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "680a008b5969eaf27ab2b8db585528781f84cb42470b8fa7f2422820104a9fbc",
+      "restoredLogSha256": "ce688862f27ab2b8e3c3a86fae6a706c95218988c2ddbe79fcd4b1cf7c1ee0a2",
+      "synchronousMutation": "Bun.sleepSync(200);"
+    },
+    {
+      "file": "src/lib/mcp/callCost.test.ts",
+      "test": "cancelling agent_activity after its catalog budget",
+      "mutationSource": "src/lib/mcp/bindings.ts",
+      "redExit": 124,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "owned deadline",
+      "redLogSha256": "9e9aafe537f48afef07877528a212171b5c9c2f53d68567c584c13dca24a8e75",
+      "restoredLogSha256": "d6d0b1f07b0e1e5e8d0281e2edccef10b1a695d37fb78bed4ac2d7cb05eb2f38",
+      "synchronousMutation": "throwIfCallEnded(context); if (context.signal) while (!context.signal.aborted) Bun.sleepSync(1);"
+    },
+    {
+      "file": "src/lib/mcp/readLatency.test.ts",
+      "test": "public store reads do not pay",
+      "mutationSource": "src/lib/mcp/bindings.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "behavioral assertion",
+      "redLogSha256": "dbbd760d43e8dcb81ba4986c06a27595aa349703cdf1be6116f07bd65affab26",
+      "restoredLogSha256": "c02955af339d9495dbe0d7aca6e9315fbbe9bb9ed4ec01a54b9b076931ea8243",
+      "synchronousMutation": "permit: (tool, args) => { domainDependencies.attentionAuthority();"
+    },
+    {
+      "file": "src/lib/memory/index.test.ts",
+      "test": "slow git metadata cannot block",
+      "mutationSource": "src/lib/memory/index.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "behavioral assertion",
+      "redLogSha256": "72a7730e9d4ea343c240b5f9bd1d0674310597638ee26bbb5799d038317abbe3",
+      "restoredLogSha256": "aa45bc1bdb89ca824d48a5d71f114bb34475dfdef816fd720bce181a44a3e0ff",
+      "synchronousMutation": "if (options.cwd) fs.readFileSync(path.join(options.cwd, \".git\", \"config\"));"
+    },
+    {
+      "file": "src/lib/memory/injection.test.ts",
+      "test": "injection records only selected entries",
+      "mutationSource": "src/lib/memory/injection.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "behavioral assertion",
+      "redLogSha256": "2ff4954346a47f7b47a83619680db12111aeebed3de312d54492372b67dccc1b",
+      "restoredLogSha256": "af80c0ee6c36b0f44917fc1768113c00a474de67ba81bb0dd554eb93b9054af3",
+      "synchronousMutation": "const deadline = Math.min(ports.deadline ?? Infinity, performance.now() + Math.min(1500, ports.timeoutMs ?? 1500)); Bun.sleepSync(100);"
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.test.ts",
+      "test": "wake's journal settlement",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "654a7b0f2f0340fc4e1057c9140c85309f30647ba9590d736043cf40e847e53c",
+      "restoredLogSha256": "6640d988c5dff495204492544cccf132bdf0c2a85f20c0d936b84da0caff2b18",
+      "synchronousMutation": "Bun.sleepSync(probeMs);"
+    },
+    {
+      "file": "src/lib/orchestrator/workerCount.registry.test.ts",
+      "test": "a large SQLite registry",
+      "mutationSource": "src/lib/orchestrator/workerCount.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "behavioral assertion",
+      "redLogSha256": "1e6c8f83af921cd320893beeadff5f113287ad6787b86fb505ef0eb4a9bc19b4",
+      "restoredLogSha256": "1af24952251a22bd3c267cd75fa6a3f5889fa628c383477452e88a5b9ddfcffa",
+      "synchronousMutation": "Object.values(agentRegistry().snapshot().conversations);"
+    },
+    {
+      "file": "src/lib/pipelines/startupResponsiveness.test.ts",
+      "test": "ready evidence callbacks yield",
+      "mutationSource": "src/lib/state/sqliteStateStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "behavioral assertion",
+      "redLogSha256": "35b3dfe74da0c219095e29310012b4a1c229919b87db2640553d6e3a37498940",
+      "restoredLogSha256": "c397bc10e0bac7698cce39353a2e216d5057d1370cb6f1149f75883b8d80657c",
+      "synchronousMutation": "Bun.sleepSync(1);"
+    },
+    {
+      "file": "src/lib/reaperRuntime.test.ts",
+      "test": "inventory sidecar's hygiene",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "b602c9bc799ccd5af059caeebc810fb5df36a9a58c4838584bd06829cf9c5fb6",
+      "restoredLogSha256": "58a8f6d05e714539f8b4047c161a6c6ca3acb9b2504af29e50d07f95c2801d52",
+      "synchronousMutation": "Bun.sleepSync(probeMs);"
+    },
+    {
+      "file": "src/lib/runtime/deliveryProgress.test.ts",
+      "test": "a busy file keeps",
+      "mutationSource": "src/lib/runtime/deliveryProgress.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "busy-handler assertion",
+      "redLogSha256": "77b3c3d22ddbb1c6c6ebe693b453cac8102fd8081f23a976e0d8ed3de83a5098",
+      "restoredLogSha256": "efdf48658aa108be060d2071b46ca23a1867a8350cfd313277843a0e05163ef2",
+      "synchronousMutation": "PRAGMA busy_timeout = 100; PRAGMA journal_mode = WAL;"
+    },
+    {
+      "file": "src/lib/runtime/http.test.ts",
+      "test": "a discard whose registry write",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "76ce51230b3528d7350d1915188bd0b7b03991a6f1929f06466c4c0e0c68df04",
+      "restoredLogSha256": "d6e74d00b500723bd2fc80083092615d7c5d01aba29ce9ec1a5b60cbe4efae43",
+      "synchronousMutation": "Bun.sleepSync(probeMs);"
+    },
+    {
+      "file": "src/lib/runtime/nativeQueueRuntime.test.ts",
+      "test": "fresh and replayed hand-off writer",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "9d2c7d9ff3bae64005569bd74da482d104c5b514b9bd510f15cb4e93ac30ec7a",
+      "restoredLogSha256": "06e0dfc04c45f42a867bde2cbca36eea3258a18fe3ce216147b72e2f0aa22f06",
+      "synchronousMutation": "Bun.sleepSync(probeMs);"
+    },
+    {
+      "file": "src/lib/runtime/sendSettlement.test.ts",
+      "test": "background settlement waits",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "269153df5f3efa136f830626ceb9b61ceef588bac1c126c349323a87f96e2375",
+      "restoredLogSha256": "e3d95ad5c986ab413b8f5f595c0dbf174de67f82b2a1934ed48d13d9cb7c6252",
+      "synchronousMutation": "Bun.sleepSync(probeMs);"
+    },
+    {
+      "file": "src/lib/runtime/structuredAccountSwitch.test.ts",
+      "test": "switch hands its carried sends",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "d862472a7b40ed1128fa78ec66daa44225951dedc955d940058fa2533b34877a",
+      "restoredLogSha256": "9bf329c612298f1a5342caecd268bb60ca67436fc0d08ac768d200914ecfb313",
+      "synchronousMutation": "Bun.sleepSync(probeMs);"
+    },
+    {
+      "file": "src/lib/runtime/structuredControls.test.ts",
+      "test": "waiting-pick withdrawal through control",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "bb4fc945ab1471d33915ed26841b5a59bbb9c263d940ab121cb95d44343e48b9",
+      "restoredLogSha256": "23ec6d32bd5e11a08209374e9a2e39b6e0f81660cb055c413e1ee9b22819d0ce",
+      "synchronousMutation": "Bun.sleepSync(probeMs);"
+    },
+    {
+      "file": "src/lib/runtime/structuredDeliveryQueue.progress.test.ts",
+      "test": "a lock delay on one conversation",
+      "mutationSource": "src/lib/runtime/structuredDeliveryQueue.ts",
+      "redExit": 124,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "owned deadline",
+      "redLogSha256": "6f4cc9d7438d56e61f2ad4a34b653adccf048a7fe76e3ce0b2e0b1fedce15170",
+      "restoredLogSha256": "d2d88f09e5a879d1c6be93a3e751f52831ea4bc851725ef8f29a94f94324131f",
+      "synchronousMutation": "let done = false; this.port.transition(operationId, status, details, options).then(() => { done = true; }); while (!done) Bun.sleepSync(1);"
+    },
+    {
+      "file": "src/lib/runtime/structuredDeliveryRebind.test.ts",
+      "test": "startup projection waits",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "5143e4ee8c376ed072fd60205d08f875fc84e21bcd0b57306b070d2cd4754d95",
+      "restoredLogSha256": "308dff5b539f06a4b8dc8ef48955aa003052c69fc983ad739572f58cbc6c4bdf",
+      "synchronousMutation": "Bun.sleepSync(probeMs);"
+    },
+    {
+      "file": "src/lib/runtime/structuredMessageDelivery.keyed.test.ts",
+      "test": "HTTP admission stays keyed",
+      "mutationSource": "src/lib/agent/registry.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "behavioral assertion",
+      "redLogSha256": "a7b04f8a7588fee00664a53e0b6dcec60060a5f046f1568bd6d05276b6382be3",
+      "restoredLogSha256": "b2bade8ef5d99a50e816550e819d4b364a98b5b735d031c4e529bdc3707939ea",
+      "synchronousMutation": "Object.values(this.snapshot().conversations);"
+    },
+    {
+      "file": "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
+      "test": "a send admitted while another process",
+      "mutationSource": "src/lib/agent/registry.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "6dbb815e5afb680c2cb2a07ad0a47ecb54b11ea7e35bb6b31b11de6be8b3e9b4",
+      "restoredLogSha256": "cb46b8f64c1192f6997618ab1a565cf367c31a13e85f2537e00279c1d4ec7c13",
+      "synchronousMutation": "Bun.sleepSync(5);"
+    },
+    {
+      "file": "src/lib/runtime/structuredReconfigure.test.ts",
+      "test": "account switch's reseat waits",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "7c4b5c6e06ab9068afb12fc83fb20182ccf07ef9bf29b1f2af7907f294af9cef",
+      "restoredLogSha256": "1d17b92fba96b86a09201f9c806d8983315201320a731de473035501e659b134",
+      "synchronousMutation": "Bun.sleepSync(probeMs);"
+    },
+    {
+      "file": "src/lib/runtime/structuredRecovery.test.ts",
+      "test": "an account authorization lost",
+      "mutationSource": "src/lib/agent/sqliteRegistryStore.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "timer-progress assertion",
+      "redLogSha256": "b4bcbe0e7ab5e166259e9a39c537a4460a55ab792c7805ab0be6e2e3acc09211",
+      "restoredLogSha256": "f5ad368ca1ef3d03bd3fbc23cb69956af84b04be0cf90262fa927248e707f6ac",
+      "synchronousMutation": "Bun.sleepSync(probeMs);"
+    },
+    {
+      "file": "src/lib/search/transcriptSearchWorker.test.ts",
+      "test": "cancelled queued jobs never run",
+      "mutationSource": "src/lib/search/transcriptSearchWorker.ts",
+      "redExit": 124,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "owned deadline",
+      "redLogSha256": "c99f3ad13da526e56775d6a15659a405cfef87fce0a63626f90005358ac2a4a0",
+      "restoredLogSha256": "9bcc8ad8026690c898c50f6c6612a6eee5a87e2f5050141bab209cb373906092",
+      "synchronousMutation": "while (!job.settled) Bun.sleepSync(1);"
+    },
+    {
+      "file": "src/lib/selfUpdate/workEvidence.test.ts",
+      "test": "the first GET and the first SSE",
+      "mutationSource": "src/lib/selfUpdate/workEvidence.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "behavioral assertion",
+      "redLogSha256": "dbdbaa8ee5768f927495757f24fa2cb378503e6bda64ef16e27ecee7998b4185",
+      "restoredLogSha256": "08a77f2d9b2e7c09f85f0ef128c4eba2b8c8c726de5ee72d1e06eb3f66a71a75",
+      "synchronousMutation": "this.running = this.read(snapshot, now);"
+    },
+    {
+      "file": "src/lib/state/durability.test.ts",
+      "test": "a backup pass of a realistic",
+      "mutationSource": "src/lib/state/durability.ts",
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "behavioral assertion",
+      "redLogSha256": "bf5abadd53e46aba490bd109db1c61b7ce9c3b0946e578a6ad87053c542dd07c",
+      "restoredLogSha256": "6aaa702bfa11cf5200e2b4af7080fed4bdfdef1a57835e283c3deb1e4ed09e4b",
+      "synchronousMutation": "return new Map(answerBackupWorkerRequest({ stateDirectory, lastRevisions: [...lastRevisions] }).outcomes);\n  const launch = options.launch ?? stateBackupWorkerLaunch();"
+    },
+    {
+      "file": "src/lib/telegram/launchReadiness.test.ts",
+      "test": "a check that outlives the launch's wait",
+      "mutationSource": "src/lib/telegram/launchReadiness.ts",
+      "redExit": 124,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "owned deadline",
+      "redLogSha256": "147d9c53599840c95718d46a8f03a3ac8725a7bf4870640752f31ac6f14d093c",
+      "restoredLogSha256": "a062c228be5c75c35e62cb857231dbc406b5b58267fea86cd2344154f0e5bdf6",
+      "synchronousMutation": "while (holder.running.size > 0) Bun.sleepSync(1);\n    const outcome = await Promise.race(["
+    },
+    {
+      "file": "src/runtime-host/deploymentProxy.test.ts",
+      "test": "methods, bodies and streamed responses",
+      "mutationSource": "src/runtime-host/deploymentProxy.ts",
+      "redExit": 124,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "owned deadline",
+      "redLogSha256": "3947c471ea8abb20ff5dff3c8c44a7bae79d563d4ebe2a0aa6a96917bf460b97",
+      "restoredLogSha256": "be584d30b7aae15848f8e01dddd988612c1d545c84c1e2692c21816352ac61bd",
+      "synchronousMutation": "while (!upstreamResponse.complete) Bun.sleepSync(1);\n      upstreamResponse.pipe(response);"
+    },
+    {
+      "file": "src/runtime-host/journal.test.ts",
+      "test": "engine output acknowledges before",
+      "mutationSource": "src/runtime-host/host.ts",
+      "redExit": 124,
+      "restoredExit": 0,
+      "sourceRestored": true,
+      "diagnostic": "owned deadline",
+      "redLogSha256": "b3d79209f6b796769d80593bea16b11a3ef558f0050ea3e2c4a1758be6a1dec2",
+      "restoredLogSha256": "c4108a183612937659c917470b3f2ca20dceab799bf5e65773afb5141aacd2a5",
+      "synchronousMutation": "if (durableEnginePublication) { let done = false; consumption.then(() => { done = true; }); while (!done) Bun.sleepSync(1); }\n        if (!durableEnginePublication) await consumption;"
+    }
+  ],
+  "convertedAssertions": [
+    {
+      "file": "src/app/api/account-migrations/[intentId]/action.test.ts",
+      "oldLine": 126,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/app/api/conversations/[conversationId]/migration/route.test.ts",
+      "oldLine": 80,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/app/api/conversations/[conversationId]/migration/route.test.ts",
+      "oldLine": 245,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/app/api/conversations/[conversationId]/migration/route.test.ts",
+      "oldLine": 255,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/components/NativeQueuePanel.dom.test.tsx",
+      "oldLine": 632,
+      "assertion": "expect(feedback).toBeLessThan(250);"
+    },
+    {
+      "file": "src/components/TmuxComposer.nativeQueue.dom.test.tsx",
+      "oldLine": 677,
+      "assertion": "expect(feedback).toBeLessThan(250);"
+    },
+    {
+      "file": "src/instrumentation.test.ts",
+      "oldLine": 641,
+      "assertion": "expect(readinessAt - startedAt).toBeLessThan(100);"
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.contention.fixture.ts",
+      "oldLine": 60,
+      "assertion": "expect(Math.max(...holds)).toBeLessThan(250);"
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.writer.test.ts",
+      "oldLine": 46,
+      "assertion": "expect(gapMs).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.writer.test.ts",
+      "oldLine": 47,
+      "assertion": "expect(Math.max(...leases.holds)).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.writer.test.ts",
+      "oldLine": 112,
+      "assertion": "expect(gapMs).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.writer.test.ts",
+      "oldLine": 113,
+      "assertion": "expect(Math.max(...leases.holds)).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.writer.test.ts",
+      "oldLine": 138,
+      "assertion": "expect(gapMs).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.writer.test.ts",
+      "oldLine": 139,
+      "assertion": "expect(Math.max(...leases.holds)).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.writer.test.ts",
+      "oldLine": 180,
+      "assertion": "expect(Math.max(...leases.holds)).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.writer.test.ts",
+      "oldLine": 196,
+      "assertion": "expect(gapMs).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/accounts/accountMutation.writer.test.ts",
+      "oldLine": 197,
+      "assertion": "expect(Math.max(...leases.holds)).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/accounts/claudeLoginIdentity.test.ts",
+      "oldLine": 256,
+      "assertion": "expect(goneTook).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/accounts/codex.test.ts",
+      "oldLine": 474,
+      "assertion": "expect(performance.now() - startedAt).toBeLessThan(400);"
+    },
+    {
+      "file": "src/lib/accounts/codex.test.ts",
+      "oldLine": 475,
+      "assertion": "expect(gapMs).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/accounts/migration/controller.performance.test.ts",
+      "oldLine": 99,
+      "assertion": "expect(percentile(lags, 0.95)).toBeLessThan(EVENT_LOOP_BUDGET_MS);"
+    },
+    {
+      "file": "src/lib/accounts/migration/controller.performance.test.ts",
+      "oldLine": 100,
+      "assertion": "expect(Math.max(...lags)).toBeLessThan(EVENT_LOOP_BUDGET_MS);"
+    },
+    {
+      "file": "src/lib/accounts/migration/controller.performance.test.ts",
+      "oldLine": 193,
+      "assertion": "expect(percentile(lags, 0.95)).toBeLessThan(EVENT_LOOP_BUDGET_MS);"
+    },
+    {
+      "file": "src/lib/accounts/migration/controller.performance.test.ts",
+      "oldLine": 194,
+      "assertion": "expect(Math.max(...lags)).toBeLessThan(EVENT_LOOP_BUDGET_MS);"
+    },
+    {
+      "file": "src/lib/accounts/migration/controller.performance.test.ts",
+      "oldLine": 246,
+      "assertion": "expect(percentile(lags, 0.95)).toBeLessThan(EVENT_LOOP_BUDGET_MS);"
+    },
+    {
+      "file": "src/lib/accounts/migration/controller.performance.test.ts",
+      "oldLine": 247,
+      "assertion": "expect(Math.max(...lags)).toBeLessThan(EVENT_LOOP_BUDGET_MS);"
+    },
+    {
+      "file": "src/lib/accounts/migration/controller.routing.test.ts",
+      "oldLine": 57,
+      "assertion": "expect(timerDelay).toBeLessThan(250);"
+    },
+    {
+      "file": "src/lib/accounts/migration/controller.routing.test.ts",
+      "oldLine": 61,
+      "assertion": "expect(Math.max(...leases.holds)).toBeLessThan(250);"
+    },
+    {
+      "file": "src/lib/accounts/migration/coordinator.writerWait.test.ts",
+      "oldLine": 179,
+      "assertion": "expect(gapMs).toBeLessThan(HEARTBEAT_BOUND_MS);"
+    },
+    {
+      "file": "src/lib/accounts/migration/coordinator.writerWait.test.ts",
+      "oldLine": 204,
+      "assertion": "expect(gapMs).toBeLessThan(HEARTBEAT_BOUND_MS);"
+    },
+    {
+      "file": "src/lib/accounts/migration/coordinator.writerWait.test.ts",
+      "oldLine": 225,
+      "assertion": "expect(gapMs).toBeLessThan(HEARTBEAT_BOUND_MS);"
+    },
+    {
+      "file": "src/lib/accounts/migration/coordinator.writerWait.test.ts",
+      "oldLine": 249,
+      "assertion": "expect(gapMs).toBeLessThan(HEARTBEAT_BOUND_MS);"
+    },
+    {
+      "file": "src/lib/accounts/migration/coordinator.writerWait.test.ts",
+      "oldLine": 272,
+      "assertion": "expect(gapMs).toBeLessThan(HEARTBEAT_BOUND_MS);"
+    },
+    {
+      "file": "src/lib/accounts/migration/coordinator.writerWait.test.ts",
+      "oldLine": 315,
+      "assertion": "expect(gapMs).toBeLessThan(HEARTBEAT_BOUND_MS);"
+    },
+    {
+      "file": "src/lib/accounts/removal.writerWait.test.ts",
+      "oldLine": 64,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/accounts/removal.writerWait.test.ts",
+      "oldLine": 113,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/accounts/removal.writerWait.test.ts",
+      "oldLine": 184,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/activity/ingest.test.ts",
+      "oldLine": 107,
+      "assertion": "expect(maxGapMs).toBeLessThan(200);"
+    },
+    {
+      "file": "src/lib/agent/failedSpawnDelivery.test.ts",
+      "oldLine": 325,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/agent/registry.writerWait.test.ts",
+      "oldLine": 77,
+      "assertion": "expect(performance.now() - startedAt).toBeGreaterThanOrEqual(250);"
+    },
+    {
+      "file": "src/lib/agent/registry.writerWait.test.ts",
+      "oldLine": 78,
+      "assertion": "expect(gapMs).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/agent/registry.writerWait.test.ts",
+      "oldLine": 83,
+      "assertion": "expect(sample!.durationMs).toBeGreaterThanOrEqual(250);"
+    },
+    {
+      "file": "src/lib/agent/registry.writerWait.test.ts",
+      "oldLine": 115,
+      "assertion": "expect(performance.now() - startedAt).toBeLessThan(600);"
+    },
+    {
+      "file": "src/lib/agent/registry.writerWait.test.ts",
+      "oldLine": 116,
+      "assertion": "expect(gapMs).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/agent/registry.writerWait.test.ts",
+      "oldLine": 148,
+      "assertion": "expect(gapMs).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/agent/registry.writerWait.test.ts",
+      "oldLine": 188,
+      "assertion": "expect(gapMs).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/agent/spawnCommand.contention.test.ts",
+      "oldLine": 218,
+      "assertion": "expect(Math.max(...leases.holds)).toBeLessThan(250);"
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "oldLine": 595,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/delivery.test.ts",
+      "oldLine": 2081,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/externalRelay/runner.test.ts",
+      "oldLine": 542,
+      "assertion": "expect(following.at - queuedAckAt).toBeLessThan(250);"
+    },
+    {
+      "file": "src/lib/externalRelay/store.test.ts",
+      "oldLine": 221,
+      "assertion": "expect(performance.now() - started).toBeGreaterThan(1400);"
+    },
+    {
+      "file": "src/lib/externalRelay/store.test.ts",
+      "oldLine": 223,
+      "assertion": "expect(largest).toBeLessThan(100);"
+    },
+    {
+      "file": "src/lib/git/codexShellPolicy.test.ts",
+      "oldLine": 33,
+      "assertion": "expect(elapsed).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/mcp/callCost.test.ts",
+      "oldLine": 433,
+      "assertion": "expect(performance.now() - abortedAt).toBeLessThan(100);"
+    },
+    {
+      "file": "src/lib/mcp/callCost.test.ts",
+      "oldLine": 465,
+      "assertion": "expect(performance.now() - abortedAt).toBeLessThan(100);"
+    },
+    {
+      "file": "src/lib/mcp/readLatency.test.ts",
+      "oldLine": 38,
+      "assertion": "expect(ms).toBeLessThan(250);"
+    },
+    {
+      "file": "src/lib/memory/index.test.ts",
+      "oldLine": 32,
+      "assertion": "expect(performance.now() - start).toBeLessThan(100);"
+    },
+    {
+      "file": "src/lib/memory/index.test.ts",
+      "oldLine": 170,
+      "assertion": "expect(performance.now() - start).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/memory/index.test.ts",
+      "oldLine": 171,
+      "assertion": "expect(performance.now() - start).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/memory/index.test.ts",
+      "oldLine": 280,
+      "assertion": "expect(performance.now() - start).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/memory/index.test.ts",
+      "oldLine": 415,
+      "assertion": "expect(performance.now() - start).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/memory/index.test.ts",
+      "oldLine": 430,
+      "assertion": "expect(performance.now() - began).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/memory/index.test.ts",
+      "oldLine": 561,
+      "assertion": "expect(performance.now() - start).toBeLessThan(100);"
+    },
+    {
+      "file": "src/lib/memory/injection.test.ts",
+      "oldLine": 45,
+      "assertion": "expect(performance.now() - start).toBeLessThan(100);"
+    },
+    {
+      "file": "src/lib/memory/injection.test.ts",
+      "oldLine": 118,
+      "assertion": "expect(performance.now() - start).toBeLessThan(250);"
+    },
+    {
+      "file": "src/lib/monitor/seatTickController.test.ts",
+      "oldLine": 1145,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/orchestrator/workerCount.registry.test.ts",
+      "oldLine": 45,
+      "assertion": "expect(elapsedMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/pipelines/startupResponsiveness.test.ts",
+      "oldLine": 57,
+      "assertion": "expect(maxGapMs).toBeLessThan(200);"
+    },
+    {
+      "file": "src/lib/pipelines/startupResponsiveness.test.ts",
+      "oldLine": 58,
+      "assertion": "expect(maxHoldMs).toBeLessThan(200);"
+    },
+    {
+      "file": "src/lib/pipelines/startupResponsiveness.test.ts",
+      "oldLine": 163,
+      "assertion": "expect(maxGapMs).toBeLessThan(200);"
+    },
+    {
+      "file": "src/lib/reaperRuntime.test.ts",
+      "oldLine": 2474,
+      "assertion": "expect(refusedGap).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/reaperRuntime.test.ts",
+      "oldLine": 2484,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/runtime/deliveryProgress.test.ts",
+      "oldLine": 446,
+      "assertion": "expect(performance.now() - startedAt).toBeLessThan(100);"
+    },
+    {
+      "file": "src/lib/runtime/http.test.ts",
+      "oldLine": 2390,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/runtime/nativeQueueRuntime.test.ts",
+      "oldLine": 850,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/runtime/sendSettlement.test.ts",
+      "oldLine": 505,
+      "assertion": "expect(performance.now() - startedAt).toBeGreaterThanOrEqual(1_000);"
+    },
+    {
+      "file": "src/lib/runtime/sendSettlement.test.ts",
+      "oldLine": 506,
+      "assertion": "expect(gapMs).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/runtime/sendSettlement.test.ts",
+      "oldLine": 513,
+      "assertion": "expect(wait!.durationMs).toBeGreaterThanOrEqual(1_000);"
+    },
+    {
+      "file": "src/lib/runtime/sendSettlement.test.ts",
+      "oldLine": 534,
+      "assertion": "expect(gapMs).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/runtime/sendSettlement.test.ts",
+      "oldLine": 586,
+      "assertion": "expect(settledAt[free.operationId]).toBeLessThan(100);"
+    },
+    {
+      "file": "src/lib/runtime/structuredAccountSwitch.test.ts",
+      "oldLine": 682,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/runtime/structuredAccountSwitch.test.ts",
+      "oldLine": 706,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/runtime/structuredControls.test.ts",
+      "oldLine": 1369,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/runtime/structuredControls.test.ts",
+      "oldLine": 1577,
+      "assertion": "expect(gapMs).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/runtime/structuredDeliveryQueue.progress.test.ts",
+      "oldLine": 290,
+      "assertion": "expect(performance.now() - started).toBeLessThan(250);"
+    },
+    {
+      "file": "src/lib/runtime/structuredDeliveryQueue.progress.test.ts",
+      "oldLine": 836,
+      "assertion": "expect(performance.now() - started).toBeLessThan(250);"
+    },
+    {
+      "file": "src/lib/runtime/structuredDeliveryRebind.test.ts",
+      "oldLine": 943,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/runtime/structuredMessageDelivery.keyed.test.ts",
+      "oldLine": 122,
+      "assertion": "expect(p95(large)).toBeLessThan(250);"
+    },
+    {
+      "file": "src/lib/runtime/structuredMessageDelivery.keyed.test.ts",
+      "oldLine": 123,
+      "assertion": "expect(p95(admission)).toBeLessThan(250);"
+    },
+    {
+      "file": "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
+      "oldLine": 455,
+      "assertion": "expect(performance.now() - startedAt).toBeGreaterThanOrEqual(300);"
+    },
+    {
+      "file": "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
+      "oldLine": 456,
+      "assertion": "expect(gapMs).toBeLessThan(150);"
+    },
+    {
+      "file": "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
+      "oldLine": 470,
+      "assertion": "expect(Math.max(...waited.map((sample) => sample.durationMs))).toBeGreaterThanOrEqual(300);"
+    },
+    {
+      "file": "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
+      "oldLine": 471,
+      "assertion": "expect(diagnostics.longest.filter((sample) => sample.synchronous && sample.durationMs >= 100)).toEqual([]);"
+    },
+    {
+      "file": "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
+      "oldLine": 571,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/runtime/structuredReconfigure.test.ts",
+      "oldLine": 343,
+      "assertion": "expect(gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/runtime/structuredRecovery.test.ts",
+      "oldLine": 1853,
+      "assertion": "expect(ended.gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/runtime/structuredRecovery.test.ts",
+      "oldLine": 1861,
+      "assertion": "expect(refused.gapMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/search/transcriptSearchWorker.test.ts",
+      "oldLine": 196,
+      "assertion": "expect(performance.now() - start).toBeLessThan(200);"
+    },
+    {
+      "file": "src/lib/selfUpdate/workEvidence.test.ts",
+      "oldLine": 186,
+      "assertion": "expect(performance.now() - started).toBeLessThan(200);"
+    },
+    {
+      "file": "src/lib/selfUpdate/workEvidence.test.ts",
+      "oldLine": 192,
+      "assertion": "expect(performance.now() - started).toBeLessThan(200);"
+    },
+    {
+      "file": "src/lib/state/durability.test.ts",
+      "oldLine": 548,
+      "assertion": "expect(worstDelayMs).toBeLessThan(50);"
+    },
+    {
+      "file": "src/lib/telegram/launchReadiness.test.ts",
+      "oldLine": 310,
+      "assertion": "expect(performance.now() - again).toBeLessThan(30);"
+    },
+    {
+      "file": "src/runtime-host/deploymentProxy.test.ts",
+      "oldLine": 755,
+      "assertion": "expect(arrivals[0]).toBeLessThan(150);"
+    },
+    {
+      "file": "src/runtime-host/deploymentProxy.test.ts",
+      "oldLine": 756,
+      "assertion": "expect(arrivals.at(-1)! - arrivals[0]).toBeGreaterThanOrEqual(150);"
+    },
+    {
+      "file": "src/runtime-host/journal.test.ts",
+      "oldLine": 2170,
+      "assertion": "expect(acknowledgementMs).toBeLessThan(250);"
+    }
+  ],
+  "publicationChecks": [
+    {
+      "label": "types",
+      "command": [
+        "bunx",
+        "tsc",
+        "--noEmit"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "eslint",
+      "command": [
+        "bun",
+        "scripts/eslint-changes.ts",
+        "--base",
+        "origin/main",
+        "./src/app/api/account-migrations/[intentId]/action.test.ts",
+        "./src/app/api/conversations/[conversationId]/migration/route.test.ts",
+        "./src/app/api/files/scanCache.real.test.ts",
+        "./src/components/NativeQueuePanel.dom.test.tsx",
+        "./src/components/TmuxComposer.nativeQueue.dom.test.tsx",
+        "./src/instrumentation.test.ts",
+        "./src/lib/accounts/accountMutation.contention.fixture.ts",
+        "./src/lib/accounts/accountMutation.writer.test.ts",
+        "./src/lib/accounts/claudeLoginIdentity.test.ts",
+        "./src/lib/accounts/codex.test.ts",
+        "./src/lib/accounts/migration/controller.routing.test.ts",
+        "./src/lib/accounts/migration/coordinator.writerWait.test.ts",
+        "./src/lib/accounts/removal.writerWait.test.ts",
+        "./src/lib/activity/ingest.test.ts",
+        "./src/lib/agent/failedSpawnDelivery.test.ts",
+        "./src/lib/agent/registry.writerWait.test.ts",
+        "./src/lib/agent/registryLockHolderFixture.test.ts",
+        "./src/lib/agent/registryLockHolderFixture.ts",
+        "./src/lib/agent/spawnCommand.contention.test.ts",
+        "./src/lib/delivery.test.ts",
+        "./src/lib/externalRelay/runner.test.ts",
+        "./src/lib/externalRelay/store.test.ts",
+        "./src/lib/git/codexShellPolicy.test.ts",
+        "./src/lib/mcp/callCost.test.ts",
+        "./src/lib/mcp/readLatency.test.ts",
+        "./src/lib/memory/index.test.ts",
+        "./src/lib/memory/injection.test.ts",
+        "./src/lib/monitor/seatTickController.test.ts",
+        "./src/lib/orchestrator/workerCount.registry.test.ts",
+        "./src/lib/pipelines/startupResponsiveness.test.ts",
+        "./src/lib/reaperRuntime.test.ts",
+        "./src/lib/runtime/deliveryProgress.test.ts",
+        "./src/lib/runtime/hostlessRegistryEvidence.test.ts",
+        "./src/lib/runtime/http.test.ts",
+        "./src/lib/runtime/nativeQueueRuntime.test.ts",
+        "./src/lib/runtime/sendSettlement.test.ts",
+        "./src/lib/runtime/structuredAccountSwitch.test.ts",
+        "./src/lib/runtime/structuredControls.test.ts",
+        "./src/lib/runtime/structuredDeliveryQueue.progress.test.ts",
+        "./src/lib/runtime/structuredDeliveryRebind.test.ts",
+        "./src/lib/runtime/structuredMessageDelivery.keyed.test.ts",
+        "./src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
+        "./src/lib/runtime/structuredReconfigure.test.ts",
+        "./src/lib/runtime/structuredRecovery.test.ts",
+        "./src/lib/search/transcriptSearchWorker.test.ts",
+        "./src/lib/selfUpdate/workEvidence.test.ts",
+        "./src/lib/state/durability.test.ts",
+        "./src/lib/telegram/launchReadiness.test.ts",
+        "./src/runtime-host/deploymentProxy.test.ts",
+        "./src/runtime-host/journal.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux backend",
+      "command": [
+        "bun",
+        "scripts/verify-platform-backend.ts",
+        "--expect",
+        "linux"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux ./src/lib/proc/memory.test.ts",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./src/lib/proc/memory.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux ./src/lib/proc/portable.test.ts",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./src/lib/proc/portable.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux ./src/lib/proc/darwinIdentity.test.ts",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./src/lib/proc/darwinIdentity.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux ./src/lib/proc/index.test.ts",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./src/lib/proc/index.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux ./src/lib/proc/windowsSnapshot.test.ts",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./src/lib/proc/windowsSnapshot.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux ./src/lib/proc/windowsIdentity.test.ts",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./src/lib/proc/windowsIdentity.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux ./src/lib/proc/windowsCwd.test.ts",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./src/lib/proc/windowsCwd.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux ./src/lib/proc/windows.test.ts",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./src/lib/proc/windows.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux ./src/lib/processGroup.test.ts",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./src/lib/processGroup.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux ./src/lib/platformHome.test.ts",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./src/lib/platformHome.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux ./src/lib/runtime/localEndpoint.test.ts",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./src/lib/runtime/localEndpoint.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux ./src/lib/scanner/describe.test.ts",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./src/lib/scanner/describe.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux ./src/lib/state/durableJson.test.ts",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./src/lib/state/durableJson.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux ./src/runtime-host/socket.test.ts",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./src/runtime-host/socket.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux ./src/runtime-host/runtimeHostFence.test.ts",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./src/runtime-host/runtimeHostFence.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux ./bin/server-runtime.test.ts",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./bin/server-runtime.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Linux ./bin/bind-guard.test.ts",
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "./bin/bind-guard.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "./scripts/bun-runtime-workflow.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./scripts/bun-runtime-workflow.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "./scripts/verify-viewer-runtime.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./scripts/verify-viewer-runtime.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "./src/runtime-host/hostRehearsal.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/runtime-host/hostRehearsal.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "./src/runtime-host/hostRehearsalRun.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/runtime-host/hostRehearsalRun.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "./src/runtime-host/journalStartup.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/runtime-host/journalStartup.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "./src/runtime-host/deploymentProxy.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/runtime-host/deploymentProxy.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "./src/lib/mcp/answerSizes.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "./src/lib/mcp/answerSizes.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Viewer build",
+      "command": [
+        "bun",
+        "run",
+        "build"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "Viewer runtime",
+      "command": [
+        "bun",
+        "scripts/verify-viewer-runtime.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "runtime host",
+      "command": [
+        "bun",
+        "scripts/verify-runtime-host.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "runtime negative controls",
+      "command": [
+        "bun",
+        "scripts/verify-bun-runtime-controls.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "install native 0.154.0",
+      "command": [
+        "npm",
+        "install",
+        "--prefix",
+        "$CHECK_ROOT/native-0.154.0",
+        "--no-save",
+        "--ignore-scripts",
+        "@openai/codex@0.154.0"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.154.0 src/lib/agent/processCleanupPolicy.native.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/agent/processCleanupPolicy.native.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.154.0 src/lib/agent/operatorQuestionPolicy.native.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/agent/operatorQuestionPolicy.native.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.154.0 src/lib/runtime/nativeCodexQueue.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/nativeCodexQueue.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.154.0 src/lib/runtime/codexHistoryReader.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/codexHistoryReader.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.154.0 src/lib/runtime/nativeQueueCompaction.integration.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/nativeQueueCompaction.integration.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.154.0 src/lib/runtime/nativeQueueHost.integration.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/nativeQueueHost.integration.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.154.0 src/lib/runtime/codexSteerDelivery.integration.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/codexSteerDelivery.integration.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.154.0 src/lib/runtime/codexAppServerHost.injectResponses.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/codexAppServerHost.injectResponses.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.154.0 src/lib/runtime/codexAppServerHost.injectCli.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/codexAppServerHost.injectCli.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "install native 0.159.0",
+      "command": [
+        "npm",
+        "install",
+        "--prefix",
+        "$CHECK_ROOT/native-0.159.0",
+        "--no-save",
+        "--ignore-scripts",
+        "@openai/codex@0.159.0"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.159.0 src/lib/agent/processCleanupPolicy.native.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/agent/processCleanupPolicy.native.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.159.0 src/lib/agent/operatorQuestionPolicy.native.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/agent/operatorQuestionPolicy.native.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.159.0 src/lib/runtime/nativeCodexQueue.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/nativeCodexQueue.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.159.0 src/lib/runtime/codexHistoryReader.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/codexHistoryReader.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.159.0 src/lib/runtime/nativeQueueCompaction.integration.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/nativeQueueCompaction.integration.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.159.0 src/lib/runtime/nativeQueueHost.integration.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/nativeQueueHost.integration.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.159.0 src/lib/runtime/codexSteerDelivery.integration.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/codexSteerDelivery.integration.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.159.0 src/lib/runtime/codexAppServerHost.injectResponses.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/codexAppServerHost.injectResponses.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "native 0.159.0 src/lib/runtime/codexAppServerHost.injectCli.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/codexAppServerHost.injectCli.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/nativeQueueRuntime.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/nativeQueueRuntime.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/nativeQueueContent.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/nativeQueueContent.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/runtime-host/nativeQueueJournal.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/runtime-host/nativeQueueJournal.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/runtime-host/nativeQueueCompaction.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/runtime-host/nativeQueueCompaction.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/codexTurnProfile.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/codexTurnProfile.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/codexAppServerHost.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/codexAppServerHost.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/claudeStreamBrokerHost.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/claudeStreamBrokerHost.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/structuredDeliveryQueue.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/structuredDeliveryQueue.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/structuredDeliveryController.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/structuredDeliveryController.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/engineHostEvents.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/engineHostEvents.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/codex.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/codex.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/eventStore.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/eventStore.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/commands.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/commands.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/realtimeControl.selectedContext.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/realtimeControl.selectedContext.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/voiceViewBinding.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/voiceViewBinding.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/voicePersonaRole.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/voicePersonaRole.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/voiceDelivery.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/voiceDelivery.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/voiceStreamChunks.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/voiceStreamChunks.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/codexRealtimeTranscript.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/codexRealtimeTranscript.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/mcp/nativeWorkMetadata.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/mcp/nativeWorkMetadata.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/mcp/voiceUtteranceWiring.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/mcp/voiceUtteranceWiring.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/components/nativeQueueView.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/components/nativeQueueView.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/structuredDelivery.integration.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/structuredDelivery.integration.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/voicePersonaMandate.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/voicePersonaMandate.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/mcp/voiceUtteranceContext.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/mcp/voiceUtteranceContext.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/codexAppServerHost.inject.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/codexAppServerHost.inject.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/structuredDeliveryQueue.inject.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/structuredDeliveryQueue.inject.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/runtime-host/journal.inject.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/runtime-host/journal.inject.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/http.inject.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/http.inject.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/commands.inject.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/commands.inject.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/components/ComposerBar.dom.test.tsx",
+      "command": [
+        "bun",
+        "test",
+        "src/components/ComposerBar.dom.test.tsx"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/components/TmuxComposer.inject.dom.test.tsx",
+      "command": [
+        "bun",
+        "test",
+        "src/components/TmuxComposer.inject.dom.test.tsx"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/components/TmuxComposer.injectReceipts.dom.test.tsx",
+      "command": [
+        "bun",
+        "test",
+        "src/components/TmuxComposer.injectReceipts.dom.test.tsx"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/components/retainedQueueAdmissions.dom.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/components/retainedQueueAdmissions.dom.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/nativeQueueHttp.files.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/nativeQueueHttp.files.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/inboxWriters.integration.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/inboxWriters.integration.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/runtime/composerPayloadRetry.integration.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/composerPayloadRetry.integration.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/inboxFiles.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/inboxFiles.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/components/TmuxComposer.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/components/TmuxComposer.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/components/TmuxComposer.reconciliation.dom.test.tsx",
+      "command": [
+        "bun",
+        "test",
+        "src/components/TmuxComposer.reconciliation.dom.test.tsx"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/components/TmuxComposer.reconciliationExpiry.dom.test.tsx",
+      "command": [
+        "bun",
+        "test",
+        "src/components/TmuxComposer.reconciliationExpiry.dom.test.tsx"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/components/TmuxComposer.pendingImages.dom.test.tsx",
+      "command": [
+        "bun",
+        "test",
+        "src/components/TmuxComposer.pendingImages.dom.test.tsx"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/components/NativeQueuePanel.dom.test.tsx",
+      "command": [
+        "bun",
+        "test",
+        "src/components/NativeQueuePanel.dom.test.tsx"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/components/TmuxComposer.nativeQueue.dom.test.tsx",
+      "command": [
+        "bun",
+        "test",
+        "src/components/TmuxComposer.nativeQueue.dom.test.tsx"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/components/VoiceConversation.dom.test.tsx",
+      "command": [
+        "bun",
+        "test",
+        "src/components/VoiceConversation.dom.test.tsx"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/realtime/voiceCardChain.dom.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/realtime/voiceCardChain.dom.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/realtime/voiceCanonicalTranscript.dom.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/realtime/voiceCanonicalTranscript.dom.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/realtime/codexRealtimeClient.selectedContext.dom.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/realtime/codexRealtimeClient.selectedContext.dom.test.ts"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "shared src/lib/realtime/codexRealtimeClient.transport.dom.test.ts",
+      "command": [
+        "bun",
+        "test",
+        "src/lib/realtime/codexRealtimeClient.transport.dom.test.ts"
+      ],
+      "exit": 0
+    }
+  ],
+  "finalChecks": [
+    {
+      "label": "controller-performance-whole",
+      "exit": 0
+    },
+    {
+      "label": "controller-performance-mutation",
+      "exit": 0
+    },
+    {
+      "label": "loaded-extra",
+      "exit": 0
+    },
+    {
+      "label": "types-final-candidate",
+      "exit": 0
+    },
+    {
+      "label": "eslint-final-candidate",
+      "exit": 0
+    },
+    {
+      "label": "types-aligned",
+      "command": [
+        "bunx",
+        "tsc",
+        "--noEmit"
+      ],
+      "exit": 0
+    },
+    {
+      "label": "eslint-aligned",
+      "command": [
+        "bun",
+        "scripts/eslint-changes.ts",
+        "--base",
+        "origin/main",
+        "src/app/api/account-migrations/[intentId]/action.test.ts",
+        "src/app/api/conversations/[conversationId]/migration/route.test.ts",
+        "src/app/api/files/scanCache.real.test.ts",
+        "src/components/NativeQueuePanel.dom.test.tsx",
+        "src/components/TmuxComposer.nativeQueue.dom.test.tsx",
+        "src/instrumentation.test.ts",
+        "src/lib/accounts/accountMutation.contention.fixture.ts",
+        "src/lib/accounts/accountMutation.writer.test.ts",
+        "src/lib/accounts/claudeLoginIdentity.test.ts",
+        "src/lib/accounts/codex.test.ts",
+        "src/lib/accounts/migration/controller.performance.test.ts",
+        "src/lib/accounts/migration/controller.routing.test.ts",
+        "src/lib/accounts/migration/coordinator.writerWait.test.ts",
+        "src/lib/accounts/removal.writerWait.test.ts",
+        "src/lib/activity/ingest.test.ts",
+        "src/lib/agent/failedSpawnDelivery.test.ts",
+        "src/lib/agent/registry.writerWait.test.ts",
+        "src/lib/agent/registryLockHolderFixture.test.ts",
+        "src/lib/agent/registryLockHolderFixture.ts",
+        "src/lib/agent/spawnCommand.contention.test.ts",
+        "src/lib/delivery.test.ts",
+        "src/lib/externalRelay/runner.test.ts",
+        "src/lib/externalRelay/store.test.ts",
+        "src/lib/git/codexShellPolicy.test.ts",
+        "src/lib/mcp/callCost.test.ts",
+        "src/lib/mcp/readLatency.test.ts",
+        "src/lib/memory/index.test.ts",
+        "src/lib/memory/injection.test.ts",
+        "src/lib/monitor/seatTickController.test.ts",
+        "src/lib/orchestrator/workerCount.registry.test.ts",
+        "src/lib/pipelines/startupResponsiveness.test.ts",
+        "src/lib/reaperRuntime.test.ts",
+        "src/lib/runtime/deliveryProgress.test.ts",
+        "src/lib/runtime/hostlessRegistryEvidence.test.ts",
+        "src/lib/runtime/http.test.ts",
+        "src/lib/runtime/nativeQueueRuntime.test.ts",
+        "src/lib/runtime/sendSettlement.test.ts",
+        "src/lib/runtime/structuredAccountSwitch.test.ts",
+        "src/lib/runtime/structuredControls.test.ts",
+        "src/lib/runtime/structuredDeliveryQueue.progress.test.ts",
+        "src/lib/runtime/structuredDeliveryRebind.test.ts",
+        "src/lib/runtime/structuredMessageDelivery.keyed.test.ts",
+        "src/lib/runtime/structuredMessageDelivery.sqlite.test.ts",
+        "src/lib/runtime/structuredReconfigure.test.ts",
+        "src/lib/runtime/structuredRecovery.test.ts",
+        "src/lib/search/transcriptSearchWorker.test.ts",
+        "src/lib/selfUpdate/workEvidence.test.ts",
+        "src/lib/state/durability.test.ts",
+        "src/lib/telegram/launchReadiness.test.ts",
+        "src/runtime-host/deploymentProxy.test.ts",
+        "src/runtime-host/journal.test.ts"
+      ],
+      "exit": 0
+    }
+  ]
+}

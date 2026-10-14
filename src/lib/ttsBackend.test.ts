@@ -4,7 +4,8 @@ import path from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { isTtsBackend, readOpenAiApiKey, resolveTtsBackend, TTS_BACKENDS, ttsBackendInfo, writeTtsBackend } from "./ttsBackend";
+import { configFilePath } from "./configDir";
+import { isTtsBackend, readFishAudioApiKey, writeFishAudioModel, readOpenAiApiKey, resolveTtsBackend, TTS_BACKENDS, ttsBackendInfo, writeTtsBackend } from "./ttsBackend";
 
 const originalConfigHome = process.env.XDG_CONFIG_HOME;
 const originalBackend = process.env.LLV_TTS_BACKEND;
@@ -62,7 +63,7 @@ describe("soniox as a TTS backend (#1020)", () => {
   }
 
   test("is selectable beside the existing providers, by file and by env lock", () => {
-    expect(TTS_BACKENDS).toEqual(["openai", "elevenlabs", "soniox"]);
+    expect(TTS_BACKENDS).toEqual(["openai", "elevenlabs", "soniox", "fishaudio"]);
     expect(isTtsBackend("soniox")).toBe(true);
 
     configHome();
@@ -109,6 +110,49 @@ describe("soniox as a TTS backend (#1020)", () => {
 
   test("adding it leaves the OpenAI and ElevenLabs options in place", () => {
     configHome();
-    expect(ttsBackendInfo().options.map((option) => option.id)).toEqual(["openai", "elevenlabs", "soniox"]);
+    expect(ttsBackendInfo().options.map((option) => option.id)).toEqual(["openai", "elevenlabs", "soniox", "fishaudio"]);
+  });
+});
+
+
+describe("Fish Audio configuration", () => {
+  const names = ["FISH_AUDIO_API_KEY", "LLV_TTS_FISHAUDIO_MODEL", "LLV_TTS_FISHAUDIO_VOICE"];
+  const original = names.map((name) => process.env[name]);
+  afterEach(() => names.forEach((name, index) => setEnv(name, original[index])));
+  const fish = (now?: number) => ttsBackendInfo(now).options.find((option) => option.id === "fishaudio")!;
+
+  test("file and env selection, key precedence and safe model defaults", () => {
+    configHome();
+    const dir = path.dirname(configFilePath("fishaudio-api-key"));
+    fs.mkdirSync(dir, { recursive: true });
+    names.forEach((name) => setEnv(name, undefined));
+    delete process.env.LLV_TTS_BACKEND;
+    writeTtsBackend("fishaudio");
+    expect(resolveTtsBackend()).toBe("fishaudio");
+    expect(fish()).toMatchObject({ available: false, model: "s2.1-pro-free", voice: "default", keyPath: path.join(dir, "fishaudio-api-key") });
+    fs.writeFileSync(path.join(dir, "fishaudio-api-key"), "file-fixture\n");
+    expect(readFishAudioApiKey()).toBe("file-fixture");
+    setEnv(names[0]!, "env-fixture");
+    expect(readFishAudioApiKey()).toBe("env-fixture");
+    writeFishAudioModel("s2.1-pro");
+    expect(fish()).toMatchObject({ available: true, model: "s2.1-pro", modelLockedByEnv: false });
+    setEnv(names[1]!, "s2.1-pro-free");
+    setEnv(names[2]!, "configured-voice");
+    expect(fish()).toMatchObject({ model: "s2.1-pro-free", modelLockedByEnv: true, voice: "configured-voice" });
+    setEnv(names[1]!, "typo-paid-model");
+    expect(fish().model).toBe("s2.1-pro-free");
+    setEnv(names[1]!, undefined);
+    fs.writeFileSync(path.join(dir, "tts-model-fishaudio"), "typo");
+    expect(fish().model).toBe("s2.1-pro-free");
+    process.env.LLV_TTS_BACKEND = "fishaudio";
+    writeTtsBackend("soniox");
+    expect(ttsBackendInfo()).toMatchObject({ backend: "fishaudio", lockedByEnv: true });
+    expect(JSON.stringify(ttsBackendInfo())).not.toContain("env-fixture");
+  });
+
+  test("free expiry has a fixed UTC boundary even when the paid model is saved", () => {
+    configHome();
+    expect(fish(Date.parse("2026-11-30T23:59:59Z"))).toMatchObject({ freeUntil: "2026-11-30", freeEnded: false });
+    expect(fish(Date.parse("2026-12-01T00:00:00Z"))).toMatchObject({ freeEnded: true });
   });
 });

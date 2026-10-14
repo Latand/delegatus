@@ -1,0 +1,89 @@
+# Configuration: the command, files and environment variables
+
+This page lists the `delegatus` command and its options, where Delegatus keeps
+its data, the interface language and the environment variables. Memory and CPU
+limits for agents are in [Keeping Delegatus running](operations.md#agent-memory-and-cpu).
+
+## The command
+
+`bunx delegatus-cli` runs the package without installing a command. To
+keep a `delegatus` command installed, run
+`bun add -g delegatus-cli`; `dlg` is a short alias for the same command.
+`bun add -g` installs into `~/.bun/bin` and needs no root, while
+`npm install -g` does on most systems.
+
+The command starts two processes: the web app, and the runtime host that
+launches and supervises agents. Ctrl-C stops both. Delegatus listens on
+`127.0.0.1` unless you pass `--hostname`, and opens the page in your browser
+when it can. Set `DELEGATUS_DEBUG=1` to print startup diagnostics.
+
+Delegatus used to be called Agent Log Viewer. The old `agent-log-viewer`
+command still works and prints a one-line notice.
+
+| Option | Description |
+| --- | --- |
+| `-p, --port <n>` | Port for the local server (default `8898`). |
+| `-H, --hostname <h>` | Bind address (default `127.0.0.1`). |
+| `--no-open` | Don't open the browser on start. |
+| `--tailscale` | Serve inside your tailnet for phone access (see [Phone access](phone.md#phone-access)). |
+| `--new-token` | Create a fresh access key and invalidate old cookies. |
+| `--new-operator-token` | Rotate the key that authorizes launching agents. |
+| `-v, --version` / `-h, --help` | Print the version / usage. |
+
+## Files
+
+Delegatus keeps everything in `~/.config/delegatus/`, or under
+`XDG_CONFIG_HOME` when you set it. An install from before the rename keeps
+its data in `~/.config/agent-log-viewer/`, and `~/.config/delegatus` becomes
+a link to it; nothing moves or gets copied.
+
+- `state/`: tasks, pipelines, the agent registry and other state, mostly in
+  SQLite.
+- `accounts/`: the extra Claude, Codex and Copilot accounts you add, each
+  with its own login.
+- `token`, `transcribe-backend`, and API key files such as
+  `elevenlabs-api-key` and `openai-api-key`.
+
+The local dictation environment lives in `~/.cache/delegatus/whisper-venv`
+(`~/.cache/agent-log-viewer/whisper-venv` on an install from before the
+rename).
+
+## Language
+
+The interface speaks English and Ukrainian. Switch it under **Settings** in
+the sidebar's ⋯ menu; the default follows your browser. CLI messages switch to
+Ukrainian with `DELEGATUS_LANG=uk` or a `uk_*` locale.
+
+## Environment variables
+
+All of these are optional. Each `DELEGATUS_` variable also works under its
+older `LLV_` name, and the `DELEGATUS_` one wins when both are set.
+
+Of the variables ending in `_API_KEY`, only `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `ELEVENLABS_API_KEY` and
+`SONIOX_API_KEY` pass on to the agents and commands Delegatus starts.
+
+**Agent memory**
+
+- `DELEGATUS_AGENT_MEMORY` — `auto` (default), `scope`, `watchdog`, or `off`. Auto uses systemd user scopes on supported Linux installs and an RSS watchdog in Docker and on macOS.
+- `DELEGATUS_AGENT_MEMORY_MAX` — per-agent ceiling, e.g. `24G`, capped at the shared agent budget. GB means GiB.
+- `DELEGATUS_AGENT_MEMORY_RESERVE` — RAM reserved for the OS and Delegatus, e.g. `24G`; default is 15% rounded up to GiB, at least 4 GiB.
+
+**Language and diagnostics**
+
+- `DELEGATUS_LANG` — `en` or `uk`: the language of CLI messages.
+- `DELEGATUS_DEBUG` — `1` prints startup diagnostics in the terminal.
+- `VIEWER_PROC_BACKEND` — `linux`, `portable` or `windows`: forces the process-discovery backend.
+
+**Voice**
+
+- `DELEGATUS_TRANSCRIBE_BACKEND` — `local` (default), `chatgpt`, `elevenlabs` or `soniox`: fixes the dictation backend and locks the microphone menu.
+- `DELEGATUS_WHISPER_MODEL`, `DELEGATUS_WHISPER_DEVICE` — faster-whisper model size (default `small`) and device (`cpu`, the default, or `cuda`).
+- `DELEGATUS_TTS_BACKEND` — `openai`, `elevenlabs` or `soniox`: fixes the read-aloud provider.
+
+**Cleanup and lifecycle**
+
+- `DELEGATUS_HOST_RETIREMENT_IDLE_HOURS` — how many hours a hosted agent's transcript must stay quiet before Delegatus may stop its host (default `6`; `0` turns this off). Delegatus never stops a host that is mid-turn, has a pending question or holds an orchestrator seat.
+- `DELEGATUS_WORKTREE_SWEEP` — `0` turns off the hourly removal of merged pipelines' worktrees; `dry-run` only reports what it would remove, in `state/worktree-sweep-report.json`.
+- `DELEGATUS_TEMP_SWEEP_MAX_AGE_HOURS` — age in hours at which the hourly sweep removes an unused Delegatus temp directory (`llv-*`) (default `24`; `0` turns the sweep off). It looks in `/tmp`, `/var/tmp` and the state's `scratch` directory, and never touches a pipeline worktree. The last sweep is in `state/temp-sweep-report.json`.
+- `DELEGATUS_REAPER_ENABLED` — `1` lets the agent reaper stop leaked agent processes it has verified. Unset, it only lists them at `GET /api/lifecycle/reaper`.

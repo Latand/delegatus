@@ -191,9 +191,9 @@ test("cancelled queued jobs never run; cancelling a busy query ends its worker a
   await ready();
   queued.abort();
   expect((await second).name).toBe("AbortError");
-  const start = performance.now();
   await Bun.sleep(10);
-  expect(performance.now() - start).toBeLessThan(200); // the stub holds its own thread
+  expect(fs.readFileSync(path.join(root, "queries"), "utf8")).toBe("active\n");
+  expect(() => process.kill(Number(fs.readFileSync(path.join(root, "ready"), "utf8")), 0)).not.toThrow();
   active.abort();
   expect((await first).name).toBe("AbortError");
   await lane.shutdown();

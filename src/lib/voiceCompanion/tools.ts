@@ -67,6 +67,8 @@ export const waitingRequest = (request: CallRequest) => ({ request: request.hand
   sentMinutesAgo: request.sentMinutesAgo, progressReports: request.progressReports, ...(request.askedBack ? { orchestratorAskedBack: true } : {}) });
 
 const READ_CAPABILITIES: Record<typeof READ_TOOL_NAMES[number], { capability: string; description: string }> = {
+  list_projects: { capability: "Project directory: names, keys, designated seats and open task counts.", description: "Read all known projects to pick one by its everyday name or key. Needs no selected project. Refresh when the operator asks for current names or counts." },
+  get_orchestrator: { capability: "Orchestrator: whether a project has a designated seat and its engine.", description: "Read the project's designated orchestrator. Null project uses the project currently in view." },
   list_tasks: { capability: "Board tasks: the project's tasks by status, newest first.", description: "Read the project's tasks by status, newest first." },
   get_task: { capability: "One task: its note, hold and steps.", description: "Read one project's task with its note, hold and steps. taskId is a handle returned by list_tasks." },
   list_pipelines: { capability: "Pipelines: the project's pipelines by state, newest first.", description: "Read the project's pipelines by state, newest first." },
@@ -86,7 +88,7 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
   ...READ_TOOL_NAMES.map((name): ToolEntry => ({ name, class: "board-read",
     ...READ_CAPABILITIES[name],
     parameters: schema(READ_SCHEMAS[name]),
-    handler: (context, args) => context.read ? context.read(name,args) : context.reads.call(context.reads.resolveProject(context.project, typeof args.project === "string" ? args.project : undefined),name,args),
+    handler: (context, args) => context.read ? context.read(name,args) : context.reads.call(name === "list_projects" ? "" : context.reads.resolveProject(context.project, typeof args.project === "string" ? args.project : undefined),name,args),
   })),
   { name: "relay_owner_history", class: "owner-read", privateResult: true,
     capability: "Telegram groups: the operator's groups where Celestia or a clone is present, and what was written in one of them on a day or over a range.",

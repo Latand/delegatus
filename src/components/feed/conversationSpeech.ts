@@ -9,11 +9,13 @@ export interface SpeechSnapshot {
   activeId: string | null;
   phase: "idle" | "loading" | "playing";
   error: string | null;
+  /** The control whose click raised `error`, so one failure shows one alert instead of one per control that reads the shared snapshot. */
+  errorFrom: { header: boolean; id: string | null; text: string } | null;
 }
 /** Feed lifetime owns playback. Header/row remounts and changes of the visible
  * target cannot splice a new answer into an active read. */
 export class ConversationSpeech {
-  private state: SpeechSnapshot = { target: null, activeText: null, activeId: null, phase: "idle", error: null };
+  private state: SpeechSnapshot = { target: null, activeText: null, activeId: null, phase: "idle", error: null, errorFrom: null };
   private listeners = new Set<() => void>();
   stop: (() => void) | null = null;
   private generation = 0;

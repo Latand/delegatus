@@ -67,7 +67,7 @@ function reseatRequest(conversationId: string, body: Record<string, unknown>): N
 }
 
 for (const refuse of [false, true]) test(`legacy reseat waits off-loop, correlates its migration and preserves a refused send (${refuse})`, async () => {
-  const { registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const { registryLockHolder, whileRegistryWriterHeld } = await import("@/lib/agent/registryLockHolderFixture");
   const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
   const { advanceConversationMigration, drainHeldDeliveries } = await import("@/lib/accounts/migration/coordinator");
   const { registry, id } = seededRegistry(true, "busy", true, refuse ? 80 : 5_000);
@@ -75,9 +75,8 @@ for (const refuse of [false, true]) test(`legacy reseat waits off-loop, correlat
   const held = registry.holdDelivery(id, "accepted before reseat", "reseat-original-key");
   try {
     resetBlockingWaitsForTests(() => {});
-    await holder.hold(600);
-    const { value, gapMs } = await longestLoopGap(() => applyConversationMigration({ conversationId: id, action: "reseat" }, { registry: () => registry }));
-    expect(gapMs).toBeLessThan(50);
+    await holder.hold();
+    const { value } = await whileRegistryWriterHeld(holder, () => applyConversationMigration({ conversationId: id, action: "reseat" }, { registry: () => registry }), { release: !refuse });
     expect(value.status).toBe(refuse ? 503 : 200);
     expect(registry.snapshot().heldDeliveries[held.id]?.text).toBe(held.text);
     if (refuse) {
@@ -227,7 +226,7 @@ test("the operator-facing conversation retry authorizes an unknown Codex fork be
 
 test("cancel, rollback and retry commands refused for the lock change nothing, answer retryably and keep the loop free", async () => {
   /* docs/design/delivery-progress-and-drain.md, C2. */
-  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const { sqliteRegistryFixture, registryLockHolder, whileRegistryWriterHeld } = await import("@/lib/agent/registryLockHolderFixture");
   const made = sqliteRegistryFixture("llv-conversation-command-refused", { sqliteWriterDeadlineMs: 150 });
   const holder = registryLockHolder(made.sqliteFilename);
   const registry = made.registry;
@@ -238,21 +237,21 @@ test("cancel, rollback and retry commands refused for the lock change nothing, a
       expectedRevision: registry.engineRouting("codex").revision });
     const before = registry.conversation(id)!.migration!;
     for (const action of ["rollback", "retry"] as const) {
-      await holder.hold(500);
-      const { value: result, gapMs } = await longestLoopGap(() => applyConversationMigration(
+      await holder.hold();
+      const { value: result } = await whileRegistryWriterHeld(holder, () => applyConversationMigration(
         { conversationId: id, action, expectedRevision: registry.conversation(id)!.migration!.revision },
-        { registry: () => registry, provider: () => { throw new Error("no provider is reached"); } }));
-      expect(gapMs).toBeLessThan(50);
+        { registry: () => registry, provider: () => { throw new Error("no provider is reached"); } }), { release: false });
+
       expect(result).toMatchObject({ status: 503, body: { retryable: true } });
       expect(registry.conversation(id)!.migration).toMatchObject({ phase: before.phase, revision: before.revision });
-      await Bun.sleep(550);
+      await holder.release();
     }
     registry.transitionConversationMigration(id, before.revision, [before.phase], { phase: "waiting-turn" });
     const waiting = registry.conversation(id)!.migration!;
-    await holder.hold(500);
-    const { value: cancel, gapMs } = await longestLoopGap(() => applyConversationMigration(
-      { conversationId: id, action: "cancel", expectedRevision: waiting.revision }, { registry: () => registry, kick: async () => {} }));
-    expect(gapMs).toBeLessThan(50);
+    await holder.hold();
+    const { value: cancel } = await whileRegistryWriterHeld(holder, () => applyConversationMigration(
+      { conversationId: id, action: "cancel", expectedRevision: waiting.revision }, { registry: () => registry, kick: async () => {} }), { release: false });
+
     expect(cancel).toMatchObject({ status: 503, body: { retryable: true } });
     expect(registry.conversation(id)!.migration).toMatchObject({ phase: "waiting-turn", revision: waiting.revision });
   } finally {
