@@ -777,6 +777,21 @@ export function conversationIdForPath(
   return null;
 }
 
+function conversationPathIndex(
+  registry: Pick<LivenessRegistrySnapshot, "conversations" | "conversationAliases">,
+): Map<string, string> {
+  const paths = new Map<string, string>();
+  for (const conversation of Object.values(registry.conversations)) {
+    const id = canonicalConversationId(registry, conversation.id);
+    for (const path of [...conversation.generations.map(generation => generation.path), ...(conversation.continuityPaths ?? [])]) {
+      // The existing lookup gives the first recorded owner precedence,
+      // including when another conversation claims the same path later.
+      if (!paths.has(path)) paths.set(path, id);
+    }
+  }
+  return paths;
+}
+
 /** The transcripts the registry projection currently hosts. A completed
     generation can predate a launch by its whole refresh cadence, so liveness
     filtered on the scan projection alone would drop a conversation that started
@@ -1039,6 +1054,13 @@ async function livenessSnapshotWithin(
 
   const projectionStartedAt = phaseClock();
   const registry = sources.registrySnapshot();
+  // Archive rows are getters that check the database on every access. A
+  // fallback through every entry must not enumerate every conversation for
+  // each candidate. These indexes belong only to this captured snapshot.
+  let paths: Map<string, string> | undefined;
+  const conversationForPath = (path: string) => (paths ??= conversationPathIndex(registry)).get(path) ?? null;
+  let entriesInRegistry: AgentRegistryEntry[] | undefined;
+  const registryEntries = () => entriesInRegistry ??= Object.values(registry.entries);
   const pipelines = pipelineIndex(sources.pipelines());
   const flows = sources.flows?.() ?? [];
   const hostedPaths = new Set([
@@ -1091,7 +1113,7 @@ async function livenessSnapshotWithin(
   const candidatePaths = new Map<string, Set<string>>();
   const unresolvedCurrentWriters = new Set<string>();
   for (const path of targeted ? requestedPaths : [...hostedPaths].slice(0, limit)) {
-    const id = conversationIdForPath(registry, path);
+    const id = conversationForPath(path);
     const candidates = candidatePaths.get(id ?? path) ?? new Set<string>();
     candidates.add(path);
     const conversation = id ? canonicalConversation(registry, id) : null;
@@ -1104,12 +1126,12 @@ async function livenessSnapshotWithin(
     async (paths, readSignal) => {
       const descriptions = await Promise.all([...paths].map(path => describeWithin(path, sources.describeTranscript, answer).catch(() => null)));
       const describedPaths = new Set(descriptions.flatMap((entry, index) => entry && entry !== ANSWER_SPENT ? [[...paths][index]] : []));
-      const currentWriterPaths = new Set(Object.values(registry.entries)
+      const currentWriterPaths = new Set(registryEntries()
         .filter(entry => hostEvidence(entry, sources.probe).state === "alive")
         .map(entry => entry.artifactPath)
         .filter((path): path is string => Boolean(path && paths.has(path))));
       for (const path of currentWriterPaths) {
-        if (!describedPaths.has(path)) unresolvedCurrentWriters.add(conversationIdForPath(registry, path) ?? path);
+        if (!describedPaths.has(path)) unresolvedCurrentWriters.add(conversationForPath(path) ?? path);
       }
       const entries = descriptions.filter((entry): entry is LivenessTranscript => entry !== null && entry !== ANSWER_SPENT).sort(byNewest);
       if ([...currentWriterPaths].some(path => !describedPaths.has(path))) return;
@@ -1234,7 +1256,7 @@ async function livenessSnapshotWithin(
   const unhostedGenerations = new Map<string, Set<string>>();
   for (const entry of entries) {
     if (hostedDescriptions.has(entry.path)) continue;
-    const id = conversationIdForPath(registry, entry.path) ?? entry.conversationId;
+    const id = conversationForPath(entry.path) ?? entry.conversationId;
     const conversation = id ? canonicalConversation(registry, id) : null;
     const paths = new Set([entry.path, ...(conversation?.generations.map(g => g.path) ?? []), ...(conversation?.continuityPaths ?? [])]);
     if (paths.size > 1) unhostedGenerations.set(id ?? entry.path, paths);
@@ -1242,12 +1264,12 @@ async function livenessSnapshotWithin(
   await Promise.all([...unhostedGenerations.values()].map(async paths => {
     const descriptions = await Promise.all([...paths].map(path => describeWithin(path, sources.describeTranscript, answer).catch(() => null)));
     const describedPaths = new Set(descriptions.flatMap((entry, index) => entry && entry !== ANSWER_SPENT ? [[...paths][index]] : []));
-    const currentWriterPaths = new Set(Object.values(registry.entries)
+    const currentWriterPaths = new Set(registryEntries()
       .filter(entry => hostEvidence(entry, sources.probe).state === "alive")
       .map(entry => entry.artifactPath)
       .filter((path): path is string => Boolean(path && paths.has(path))));
     for (const path of currentWriterPaths) {
-      if (!describedPaths.has(path)) unresolvedCurrentWriters.add(conversationIdForPath(registry, path) ?? path);
+      if (!describedPaths.has(path)) unresolvedCurrentWriters.add(conversationForPath(path) ?? path);
     }
     if ([...currentWriterPaths].some(path => !describedPaths.has(path))) return;
     const newest = descriptions.filter((description): description is LivenessTranscript => description !== null && description !== ANSWER_SPENT).sort(byNewest)[0];
@@ -1259,7 +1281,7 @@ async function livenessSnapshotWithin(
   for (const original of entries) {
     const described = hostedDescriptions.get(original.path);
     const entry = described ? { ...described, title: original.title || described.title, conversationId: original.conversationId ?? described.conversationId } : original;
-    const id = conversationIdForPath(registry, entry.path) ?? entry.conversationId;
+    const id = conversationForPath(entry.path) ?? entry.conversationId;
     const key = id ?? entry.path;
     const existing = folded.get(key);
     if (!existing || entry.mtimeMs > existing.mtimeMs) folded.set(key, { ...entry, conversationId: id });
@@ -1277,7 +1299,7 @@ async function livenessSnapshotWithin(
     hydratable,
     (entry) => Math.min(Number.isFinite(entry.sizeBytes) ? entry.sizeBytes as number : EVIDENCE_TAIL_BYTES, EVIDENCE_TAIL_BYTES),
     async (entry, hydrationSignal) => {
-      const conversationId = conversationIdForPath(registry, entry.path) ?? entry.conversationId;
+      const conversationId = conversationForPath(entry.path) ?? entry.conversationId;
       if (unresolvedCurrentWriters.has(conversationId ?? entry.path)) return null;
       if (hostedEvidence.has(entry.path)) return hostedEvidence.get(entry.path)!;
       return readEntry(entry, hydrationSignal);
@@ -1324,9 +1346,9 @@ async function livenessSnapshotWithin(
        as stalled — the exact question this surface exists to answer. */
     const lastRecordMs = evidence?.lastRecordTs ?? null;
     const silentForMs = lastRecordMs !== null ? Math.max(0, now - lastRecordMs) : null;
-    const conversationId = conversationIdForPath(registry, entry.path) ?? entry.conversationId;
+    const conversationId = conversationForPath(entry.path) ?? entry.conversationId;
     const registryEntry = entryForPath(registry, entry.path, sources.probe)
-      ?? (conversationId ? Object.values(registry.entries).find(candidate => candidate.artifactPath && conversationIdForPath(registry, candidate.artifactPath) === conversationId && hostEvidence(candidate, sources.probe).state === "alive") ?? null : null);
+      ?? (conversationId ? registryEntries().find(candidate => candidate.artifactPath && conversationForPath(candidate.artifactPath) === conversationId && hostEvidence(candidate, sources.probe).state === "alive") ?? null : null);
     const reviewerHost = headlessHostEvidence(flows, entry.path, conversationId, sources.probe, registry);
     const registeredHost = hostEvidence(registryEntry, sources.probe);
     const receiptHost = receiptHostEvidence(registry, conversationId, sources.probe, entry.path);
