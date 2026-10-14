@@ -1788,7 +1788,7 @@ test("resume waits for a short account mutation and starts one successor", async
 
 /* docs/design/delivery-progress-and-drain.md, P4/P9 and C5. */
 test("an account authorization lost after the recovery's admission ends its launch off the loop, correlated, and starts nothing", async () => {
-  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const { sqliteRegistryFixture, registryLockHolder, whileRegistryWriterHeld } = await import("@/lib/agent/registryLockHolderFixture");
   const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
   const lost = async (writerDeadlineMs?: number) => {
     const made = sqliteRegistryFixture("llv-recovery-authorization", writerDeadlineMs === undefined ? {} : { sqliteWriterDeadlineMs: writerDeadlineMs });
@@ -1820,7 +1820,7 @@ test("an account authorization lost after the recovery's admission ends its laun
       let authorizations = 0;
       let spawns = 0;
       resetBlockingWaitsForTests(() => {});
-      const { value: outcome, gapMs } = await longestLoopGap(() => recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
+      const { value: outcome } = await whileRegistryWriterHeld(holder, () => recoverDeadStructuredConversation({ path: artifactPath, conversationId: conversation.id }, {
         registry,
         client: {} as RuntimeHostClient,
         transport: () => "structured",
@@ -1835,9 +1835,9 @@ test("an account authorization lost after the recovery's admission ends its laun
           },
         },
         spawn: async () => { spawns += 1; throw new Error("no host may start"); },
-      }).then(() => null, (error: unknown) => error));
+      }).then(() => null, (error: unknown) => error), { release: writerDeadlineMs === undefined, alreadyHeld: false });
       const wait = blockingWaitDiagnostics().longest.find((sample) => sample.label === "spawn.fail");
-      return { outcome, gapMs, wait, spawns, launchId: launchId!, receipt: registry.snapshot().receipts[launchId!] };
+      return { outcome, wait, spawns, launchId: launchId!, receipt: registry.snapshot().receipts[launchId!] };
     } finally {
       await holder.close();
       registry.close();
@@ -1845,12 +1845,10 @@ test("an account authorization lost after the recovery's admission ends its laun
     }
   };
 
-  /* One unmeasured run first: the first recovery in a process loads its modules. */
-  await lost(150);
   const ended = await lost();
   expect(ended.outcome).toBeInstanceOf(Error);
   expect((ended.outcome as Error).message).toContain("no longer allowed");
-  expect(ended.gapMs).toBeLessThan(50);
+
   expect(ended.wait).toMatchObject({ synchronous: false, operationId: `spawn_message_${ended.launchId}` });
   expect(ended.spawns).toBe(0);
   expect(ended.receipt).toMatchObject({ state: "failed", error: "structured recovery account is no longer allowed" });
@@ -1858,7 +1856,7 @@ test("an account authorization lost after the recovery's admission ends its laun
   /* A refused acquisition changes nothing: the launch is left to the stale-launch convergence. */
   const refused = await lost(150);
   expect(refused.outcome).toBeInstanceOf(Error);
-  expect(refused.gapMs).toBeLessThan(50);
+
   expect(refused.spawns).toBe(0);
   expect(refused.receipt?.state).not.toBe("failed");
 });

@@ -2458,7 +2458,7 @@ test("the reaper actuates a due pinned tmux queue exactly once without a runtime
 test("the inventory sidecar's hygiene waits for the lock off its loop, and an ending the lock refused leaves the pair for the next cycle", async () => {
   /* docs/design/delivery-progress-and-drain.md, C4: measured in the process
      that runs it, as the sidecar would. */
-  const { sqliteRegistryFixture, registryLockHolder, holdBeforeEachWrite, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const { sqliteRegistryFixture, registryLockHolder, holdBeforeEachWrite, whileRegistryWriterHeld } = await import("@/lib/agent/registryLockHolderFixture");
   const made = sqliteRegistryFixture("llv-reaper-hygiene-offloop", { sqliteWriterDeadlineMs: 150 });
   const holder = registryLockHolder(made.sqliteFilename);
   const registry = made.registry;
@@ -2469,19 +2469,17 @@ test("the inventory sidecar's hygiene waits for the lock off its loop, and an en
     const held = registry.holdDelivery(conversation.id, "queued without an owner", "hygiene-held");
 
     /* Refused: the ending and the rollback stay together for the next cycle. */
-    await holder.hold(500);
-    const { value: refused, gapMs: refusedGap } = await longestLoopGap(() => terminalizeStaleUndeliverableHeldDeliveries(registry));
-    expect(refusedGap).toBeLessThan(50);
+    await holder.hold();
+    const { value: refused } = await whileRegistryWriterHeld(holder, () => terminalizeStaleUndeliverableHeldDeliveries(registry), { release: false });
     expect(refused).toEqual([]);
     expect(registry.snapshot().heldDeliveries[held.id]).toMatchObject({ state: "held" });
     expect(registry.conversation(conversation.id)?.migration?.phase).not.toBe("rolled-back");
-    await Bun.sleep(550);
+    await holder.release();
 
     const hook = holdBeforeEachWrite(registry, holder, 100, /reaperRuntime\.ts/);
-    const { value: settled, gapMs } = await longestLoopGap(() => terminalizeStaleUndeliverableHeldDeliveries(registry));
+    const { value: settled } = await whileRegistryWriterHeld(holder, () => terminalizeStaleUndeliverableHeldDeliveries(registry), { alreadyHeld: false });
     hook.restore();
     expect(hook.unwrapped).toEqual([]);
-    expect(gapMs).toBeLessThan(50);
     expect(settled).toEqual([held.id]);
     expect(registry.snapshot().migrationIntents[intent.id]).toMatchObject({ state: "draining" });
     expect(registry.conversation(conversation.id)?.migration).toMatchObject({ phase: "rolled-back" });

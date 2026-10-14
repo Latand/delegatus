@@ -1346,7 +1346,7 @@ function profiledConversation() {
 
 for (const caller of ["control", "migration"] as const) {
   for (const refuse of [false, true]) test(`waiting-pick withdrawal through ${caller} waits off-loop and preserves a refused pick (${refuse})`, async () => {
-    const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+    const { sqliteRegistryFixture, registryLockHolder, whileRegistryWriterHeld } = await import("@/lib/agent/registryLockHolderFixture");
     const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
     const { drainHeldDeliveries } = await import("@/lib/accounts/migration/coordinator");
     const made = sqliteRegistryFixture("llv-waiting-pick", refuse ? { sqliteWriterDeadlineMs: 80 } : {});
@@ -1364,9 +1364,9 @@ for (const caller of ["control", "migration"] as const) {
       expect((await pickAccount(fixture, client, "pick-b", { ...profile, accountId: "codex-b" }))?.status).toBe(202);
       const held = made.registry.holdDelivery(id, "accepted before withdrawal", "waiting-pick-original-key");
       resetBlockingWaitsForTests(() => {});
-      await holder.hold(600);
-      const { value, gapMs } = await longestLoopGap(withdraw);
-      expect(gapMs).toBeLessThan(50);
+      await holder.hold();
+      const { value } = await whileRegistryWriterHeld(holder, withdraw, { release: !refuse });
+
       expect(value?.status).toBe(refuse ? 503 : 200);
       expect(blockingWaitDiagnostics().longest.find(wait => wait.label === "migration.withdraw-pick")?.operationId).toBe("pick-b");
       if (refuse) {
@@ -1553,7 +1553,7 @@ test("«send on the current account» releases the hold and wakes the queue, onc
 
 for (const entry of ["keep-current", "current-account"] as const) {
   test(`${entry} releases a held send off the loop and a refused writer keeps it eligible`, async () => {
-    const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+    const { sqliteRegistryFixture, registryLockHolder, whileRegistryWriterHeld } = await import("@/lib/agent/registryLockHolderFixture");
     const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
     const made = sqliteRegistryFixture("llv-current-account-write", { sqliteWriterDeadlineMs: 80 });
     const holder = registryLockHolder(made.sqliteFilename);
@@ -1572,9 +1572,9 @@ for (const entry of ["keep-current", "current-account"] as const) {
       made.registry.holdForFailedSwitch(id, { operationId: "failed-switch", accountId: "target", reason: "switch refused" });
       const held = made.registry.holdDelivery(id, "accepted behind switch", "switch-held-key");
       resetBlockingWaitsForTests(() => {});
-      await holder.hold(600);
-      const { value: refused, gapMs } = await longestLoopGap(command);
-      expect(gapMs).toBeLessThan(150);
+      await holder.hold();
+      const { value: refused } = await whileRegistryWriterHeld(holder, command, { release: false });
+
       expect(refused).toMatchObject({ status: 503, body: { retryable: true } });
       expect(made.registry.switchHold(id)?.operationId).toBe("failed-switch");
       expect(made.registry.snapshot().heldDeliveries[held.id]?.state).toBe(held.state);

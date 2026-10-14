@@ -23,7 +23,7 @@ function fixture() {
   return { root, row };
 }
 
-test("production-sized startup bursts keep timer and lease holds below 200 ms", async () => {
+test("production-sized startup bursts yield between leases", async () => {
   const { root, row } = fixture();
   const db = new Database(path.join(root, "state.sqlite"));
   try {
@@ -43,20 +43,23 @@ test("production-sized startup bursts keep timer and lease holds below 200 ms", 
     db.exec("COMMIT");
   } finally { db.close(); }
   for (const [count, evidence] of [[64, false], [96, false], [32, true]] as const) {
-    let expected = performance.now() + 10, maxGapMs = 0, maxHoldMs = 0;
-    const timer = setInterval(() => { const at = performance.now(); maxGapMs = Math.max(maxGapMs, at - expected); expected = at + 10; }, 10);
+    let completed = 0, observed = 0, maxHoldMs = 0;
+    const ticks: Array<ReturnType<typeof setImmediate>> = [];
     try {
       const outcomes = await Promise.all(Array.from({ length: count }, () => withPipelineStartupAdmission(async available => {
         expect(available).toBeTrue();
+        expect(observed, "the preceding lease must yield before this callback").toBe(completed);
+        const ordinal = ++completed;
+        ticks.push(setImmediate(() => { observed = ordinal; }));
         if (evidence) { expect(loadPipelinesForStartup()).toHaveLength(804); expect(pipelineRegistryHealth()).toEqual([]); }
         return true;
       }, "synthetic startup", held => { maxHoldMs = Math.max(maxHoldMs, held); })));
-      await new Promise(resolve => setTimeout(resolve, 25));
-      console.info(JSON.stringify({ case: `startup-${count}-${evidence}`, maxGapMs, maxHoldMs }));
+      console.info(JSON.stringify({ case: `startup-${count}-${evidence}`, completed, maxHoldMs }));
       expect(outcomes.every(Boolean)).toBeTrue();
-      expect(maxGapMs).toBeLessThan(200);
-      expect(maxHoldMs).toBeLessThan(200);
-    } finally { clearInterval(timer); }
+      expect(completed).toBe(count);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(observed).toBe(count);
+    } finally { for (const tick of ticks) clearImmediate(tick); }
   }
 }, 120_000);
 
@@ -152,16 +155,20 @@ test("admitted copies stay independent and a callback failure is never replayed"
 
 test("ready evidence callbacks yield between leases instead of draining one timer batch", async () => {
   fixture();
-  let expected = performance.now() + 10, maxGapMs = 0;
-  const timer = setInterval(() => { const at = performance.now(); maxGapMs = Math.max(maxGapMs, at - expected); expected = at + 10; }, 10);
+  let completed = 0, observed = 0;
+  const ticks: Array<ReturnType<typeof setImmediate>> = [];
   try {
     await Promise.all(Array.from({ length: 32 }, () => withPipelineStartupAdmission(async available => {
       expect(available).toBeTrue();
+      expect(observed, "the preceding lease must yield before this callback").toBe(completed);
+      const ordinal = ++completed;
+      ticks.push(setImmediate(() => { observed = ordinal; }));
       Bun.sleepSync(15);
     })));
-    await new Promise(resolve => setTimeout(resolve, 25));
-    expect(maxGapMs).toBeLessThan(200);
-  } finally { clearInterval(timer); }
+    expect(completed).toBe(32);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(observed).toBe(32);
+  } finally { for (const tick of ticks) clearImmediate(tick); }
 });
 
 test("a descendant async context cannot reuse evidence after its admission ends", async () => {

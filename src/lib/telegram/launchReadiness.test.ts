@@ -305,9 +305,8 @@ test("a check that outlives the launch's wait is not waited out, and its unconfi
   expect(grant.env[TELEGRAM_CONNECTOR_TOKEN_ENV]).toBeUndefined();
   await expect(first).resolves.toEqual({ kind: "recoverable" });
   /* The launches that follow do not wait for the same check again. */
-  const again = performance.now();
   await expect(repairTelegramConnection()).resolves.toEqual({ kind: "recoverable" });
-  expect(performance.now() - again).toBeLessThan(30);
+  expect(check.finished).toBe(false);
   check.finish();
   await new Promise((resolve) => setTimeout(resolve, 10));
   await expect(repairTelegramConnection()).resolves.toEqual({ kind: "ready", token: session.connectorToken });

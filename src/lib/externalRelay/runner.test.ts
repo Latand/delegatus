@@ -513,9 +513,17 @@ test("heartbeats continue through silence, newest progress is sent, completion f
 test("a queued step crossing a grid point sends the overdue regular heartbeat immediately", async () => {
   const sends: { at: number; seq: number; label?: string }[] = [];
   let queuedAckAt = 0;
+  let overdueSent = false;
+  const cadenceAfterAck: number[] = [];
+  const schedule = globalThis.setTimeout;
+  const timers = spyOn(globalThis, "setTimeout").mockImplementation(((...args: Parameters<typeof setTimeout>) => {
+    if (queuedAckAt && !overdueSent && new Error().stack?.includes("armCadence")) cadenceAfterAck.push(Number(args[1] ?? 0));
+    return schedule(...args);
+  }) as typeof setTimeout);
   const server = await startTestRelay(async (req, body) => {
     if (req.url?.endsWith("/heartbeat")) {
       const beat = body as { seq: number; progress?: { label?: string } };
+      if (queuedAckAt) overdueSent = true;
       sends.push({ at: Date.now(), seq: beat.seq, label: beat.progress?.label });
       if (beat.progress?.label === "queued") { await Bun.sleep(1500); queuedAckAt = Date.now(); }
       return { body: { status: "ok" } };
@@ -539,9 +547,10 @@ test("a queued step crossing a grid point sends the overdue regular heartbeat im
     expect(result?.outcome).toBe("answered");
     const queued = sends.find(beat => beat.label === "queued")!;
     const following = sends.find(beat => beat.seq > queued.seq)!;
-    expect(following.at - queuedAckAt).toBeLessThan(250);
+    expect(following.seq).toBeGreaterThan(queued.seq);
+    expect(cadenceAfterAck.every(delay => delay === 0)).toBe(true);
     expect(following.at - queued.at).toBeLessThan(1900);
-  } finally { await server.close(); }
+  } finally { timers.mockRestore(); await server.close(); }
 }, 10000);
 test("a full target waits for its slot and a nonzero CLI exit cannot use a written answer", async () => {
   const completions: unknown[] = [];

@@ -300,7 +300,7 @@ test("issue 653: the failed spawn launch never projects a delivering initial mes
 
 /* docs/design/delivery-progress-and-drain.md, C5. */
 test("an inline launch failure waits for the lock off the loop and ends its first message once; refused, the launch and message stay for the convergence", async () => {
-  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("./registryLockHolderFixture");
+  const { sqliteRegistryFixture, registryLockHolder, whileRegistryWriterHeld } = await import("./registryLockHolderFixture");
   const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
   const made = sqliteRegistryFixture("llv-inline-launch-failure", { sqliteWriterDeadlineMs: 150 });
   const holder = registryLockHolder(made.sqliteFilename);
@@ -319,21 +319,21 @@ test("an inline launch failure waits for the lock off the loop and ends its firs
     };
     const waited = launch("waited");
     resetBlockingWaitsForTests(() => {});
-    await holder.hold(120);
-    const { value: failed, gapMs } = await longestLoopGap(() => registry.failSpawnOffLoop(waited.launchId, "launch failed"));
+    await holder.hold();
+    const { value: failed } = await whileRegistryWriterHeld(holder, () => registry.failSpawnOffLoop(waited.launchId, "launch failed"));
     expect(failed).toBe(true);
-    expect(gapMs).toBeLessThan(50);
+
     expect(blockingWaitDiagnostics().longest.find((sample) => sample.label === "spawn.fail")).toMatchObject({
       operationId: `spawn_message_${waited.launchId}`, synchronous: false,
     });
     expect(registry.snapshot().heldDeliveries[waited.delivery.id]).toMatchObject({ state: "failed", attempts: 0 });
 
     const refused = launch("refused");
-    await holder.hold(600);
+    await holder.hold();
     expect(await registry.failSpawnOffLoop(refused.launchId, "launch failed")).toBe(false);
     expect(registry.snapshot().receipts[refused.launchId]?.state).not.toBe("failed");
     expect(registry.snapshot().heldDeliveries[refused.delivery.id]).toMatchObject({ state: "assigned", attempts: 0 });
-    await Bun.sleep(650);
+    await holder.release();
     /* The convergence ends the launch and its first message in one transaction. */
     expect(registry.failSpawn(refused.launchId, "stale launch past its setup bound")).toBe(true);
     expect(registry.snapshot().heldDeliveries[refused.delivery.id]).toMatchObject({ state: "failed", attempts: 0 });

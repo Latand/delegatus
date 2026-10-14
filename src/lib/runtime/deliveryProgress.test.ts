@@ -1,3 +1,4 @@
+import { withoutWriterWait } from "@/lib/agent/registryLockHolderFixture";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -441,9 +442,7 @@ test("a busy file keeps the records owed and returns at once", () => {
   holder.exec("BEGIN IMMEDIATE");
   try {
     store.note("operation-busy", "conversation-a", { waitReason: "awaiting-host" });
-    const startedAt = performance.now();
-    expect(store.flush()).toBe(false);
-    expect(performance.now() - startedAt).toBeLessThan(100);
+    expect(withoutWriterWait(filename, () => store.flush())).toBe(false);
     expect(store.get("operation-busy")?.waitReason).toBe("awaiting-host");
   } finally {
     holder.exec("ROLLBACK");

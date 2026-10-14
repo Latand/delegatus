@@ -244,16 +244,15 @@ test("on macOS a pid whose command never becomes the login is refused when the w
 
 test("on macOS a live pid with an unreadable command is refused, and a dead one immediately", () => {
   const unreadable = processIdentityPorts("darwin", { startToken: () => LOGIN_TOKEN, argv: () => null });
-  const gone = processIdentityPorts("darwin", { startToken: () => null, argv: () => null });
+  let goneArgvReads = 0;
+  const gone = processIdentityPorts("darwin", { startToken: () => null, argv: () => { goneArgvReads++; return null; } });
 
-  const startedAt = Date.now();
   expect(gone.isExpectedClaude(LOGIN_PID)).toBe(false);
-  const goneTook = Date.now() - startedAt;
   expect(unreadable.isExpectedClaude(LOGIN_PID)).toBe(false);
 
   // A pid the kernel no longer knows is decided at once; only a live process
   // whose command has not appeared yet is worth waiting for.
-  expect(goneTook).toBeLessThan(50);
+  expect(goneArgvReads).toBe(2);
 });
 
 test.skipIf(process.platform === "darwin")("the darwin branch reads the kernel and never falls back to /proc", () => {

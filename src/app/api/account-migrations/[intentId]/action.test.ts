@@ -103,7 +103,7 @@ test("operator retry authorizes an unknown Codex fork before restarting the migr
 test("a Stop refused for the lock changes nothing and a repeated Stop cancels the held sends once", async () => {
   /* docs/design/delivery-progress-and-drain.md, C2: the write waits off the
      loop and its refusal is retryable. */
-  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const { sqliteRegistryFixture, registryLockHolder, whileRegistryWriterHeld } = await import("@/lib/agent/registryLockHolderFixture");
   const made = sqliteRegistryFixture("llv-migration-stop-refused", { sqliteWriterDeadlineMs: 150 });
   const holder = registryLockHolder(made.sqliteFilename);
   const registry = made.registry;
@@ -119,15 +119,15 @@ test("a Stop refused for the lock changes nothing and a repeated Stop cancels th
       body: JSON.stringify({ action: "stop", expectedRevision: intent.revision }),
     }), { params: Promise.resolve({ intentId: intent.id }) }, registry);
 
-    await holder.hold(600);
-    const { value: refused, gapMs } = await longestLoopGap(stop);
+    await holder.hold();
+    const { value: refused } = await whileRegistryWriterHeld(holder, stop, { release: false });
     expect(refused.status).toBe(503);
     expect(await refused.json()).toMatchObject({ retryable: true });
-    expect(gapMs).toBeLessThan(50);
+
     expect(registry.snapshot().migrationIntents[intent.id]).toMatchObject({ state: "draining" });
     expect(registry.snapshot().heldDeliveries[held.id]).toMatchObject({ state: "held" });
 
-    await Bun.sleep(650);
+    await holder.release();
     const stopped = await stop();
     expect(stopped.status).toBe(200);
     expect(registry.snapshot().heldDeliveries[held.id]).toMatchObject({ state: "failed", attempts: 0, error: expect.stringContaining("migration was stopped") });
