@@ -8,6 +8,7 @@ import { claimPass, patchPass, readPass } from "@/lib/memory/curation/store";
 import { productionDomainDependencies, viewerMcpBindings, viewerMcpToolPolicy } from "./bindings";
 import { createMcpToolService, MemoryMcpReceiptStore, TOOL_INPUT_SCHEMAS } from "./server";
 import type { ViewerMcpDomainDependencies } from "./bindings";
+import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 
 let root: string, previous: string | undefined;
 beforeEach(() => { previous = process.env.LLV_STATE_DIR; root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-curate-mcp-")); process.env.LLV_STATE_DIR = root; });
@@ -23,9 +24,9 @@ test("real MCP binding checks the live pass before dispatch and receipt replay",
   const pass = claimPass({ project: "mcp-fixture", repoDir: root, now: Date.now() })!;
   const caller = ["conversation", "curator"].join("_") as `conversation_${string}`;
   const snapshot = structuredClone(new AgentRegistry(path.join(root, "registry.json")).readOnlySnapshot());
-  snapshot.conversations[caller] = { id: caller, agentRole: "curator", generations: [], continuityPaths: [] } as never;
-  snapshot.receipts.fixture = { conversationId: caller, agentRole: "curator", clientAttemptId: pass.id, state: "completed", launchId: "fixture", artifactPath: null } as never;
-  const dependencies: ViewerMcpDomainDependencies = { ...productionDomainDependencies, registrySnapshot: () => snapshot, callerAttribution: () => ({ kind: "agent", conversationId: caller, role: snapshot.conversations[caller].agentRole ?? null }), attentionAuthority: () => ({ kind: "worker", conversationId: caller, role: "curator" } as never) };
+  snapshot.conversations[caller] = { id: caller, agentRole: "curator", projectOwnership: { project: "mcp-fixture" }, generations: [], continuityPaths: [] } as never;
+  snapshot.receipts.fixture = { conversationId: caller, agentRole: "curator", clientAttemptId: pass.id, explicitProject: "mcp-fixture", state: "completed", launchId: "fixture", artifactPath: null } as never;
+  const dependencies: ViewerMcpDomainDependencies = { ...productionDomainDependencies, registrySnapshot: () => snapshot, curatorAdmission: async () => {}, callerAttribution: () => ({ kind: "agent", conversationId: caller, role: snapshot.conversations[caller].agentRole ?? null }), attentionAuthority: () => ({ kind: "worker", conversationId: caller, role: "curator" } as never) };
   const policy = viewerMcpToolPolicy(dependencies, false, () => ({ registrySnapshot: () => snapshot } as never));
   expect(policy.permit("create_task", {})).toHaveProperty("allowed", false);
   expect(policy.permit("curate_rules", { action: "apply" })).toHaveProperty("allowed", true);
@@ -36,6 +37,11 @@ test("real MCP binding checks the live pass before dispatch and receipt replay",
   expect((await service.callTool("curate_rules", args)).ok).toBe(true);
   expect((await service.callTool("curate_rules", args)).ok).toBe(true);
   expect(readPass(pass.id)!.counts.calls).toBe(1);
+  dependencies.curatorAdmission = async () => { throw new DeliveryAdmissionRefusedError("seat wake expired"); };
+  const blocked = await service.callTool("curate_rules", { clientRequestId: "stale-seat-read", action: "read", scope });
+  expect(blocked.ok).toBe(false); expect(blocked).toHaveProperty("details.code", "CURATE_CALLER");
+  expect(readPass(pass.id)!.counts.calls).toBe(1);
+  dependencies.curatorAdmission = async () => {};
   patchPass(pass.id, { state: "succeeded", endedAt: new Date().toISOString() });
   const replay = await service.callTool("curate_rules", args);
   expect(replay.ok).toBe(false); expect(replay).toHaveProperty("details.code", "CURATE_CALLER");

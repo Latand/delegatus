@@ -2166,7 +2166,7 @@ export function seatTickWakeCommit(
     return {
       ...state,
       ...note,
-      lastWakeAt: at,
+      lastWakeAt: received,
       lastProposalAt: at,
       lastWakeReasons: [],
       lastWakeFingerprint: commit.fingerprint,
@@ -2191,7 +2191,7 @@ export function seatTickWakeCommit(
   return {
     ...state,
     ...note,
-    lastWakeAt: at,
+    lastWakeAt: received,
     lastWakeReasons: carried,
     lastWakeFingerprint: commit.fingerprint,
     wakesWithoutChange,

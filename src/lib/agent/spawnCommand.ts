@@ -82,6 +82,8 @@ import { AGENT_SPAWN_LINEAGE_ERROR, agentSpawnLineageError, authenticatedAgentSp
 import { internalServiceClaim } from "@/lib/agent/callerClaims";
 import { spawnAccountErrorResponse } from "@/app/api/spawn/accountError";
 import { attributeNamedAccountChoice } from "@/lib/accounts/accountOverrides";
+import { machinePass } from "@/lib/memory/curation/store";
+import { canonicalProject } from "@/lib/projects/aliases";
 
 const SUGGEST_SCAN_LIMIT = 80;
 const SUGGEST_MAX = 10;
@@ -177,6 +179,9 @@ export interface SpawnCommandDependencies {
   prepareAccountAdmission?(accountId: string): (() => void) | Promise<() => void>;
 }
 
+class CuratorSpawnAdmissionError extends Error {
+  constructor() { super("curator launches require an admitted live seat and delivered wake"); this.name = "CuratorSpawnAdmissionError"; }
+}
 class RuntimeImageStorageError extends Error {}
 
 export const productionSpawnCommandDependencies: SpawnCommandDependencies = {
@@ -566,6 +571,15 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
   if (!stat.isDirectory()) {
     return NextResponse.json({ error: `not a directory: ${cwd}` }, { status: 400 });
   }
+  const authorizeLaunch = () => {
+    if (role.value?.role === "curator") {
+      const pass = machinePass();
+      const project = canonicalProject(explicitProject ?? projectForCwd(cwd) ?? "");
+      if (!dependencies.authorizeAutonomousLaunch || !clientAttemptId || !pass || pass.id !== clientAttemptId
+        || canonicalProject(pass.project) !== project) throw new CuratorSpawnAdmissionError();
+    }
+    dependencies.authorizeAutonomousLaunch?.();
+  };
   /* Who started this agent (sign-in-and-team §7.2): in team mode a person
      needs a member session, and the audit names them once the launch exists. */
   const spawnActor = teamActor(req);
@@ -1049,7 +1063,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         existingAttempt?.accountPin ?? (requestedAccount !== undefined),
       )), () => {
       heldForUpdate = false;
-      dependencies.authorizeAutonomousLaunch?.();
+      authorizeLaunch();
       assertRequestedAccountBinding();
       const autonomous = authenticatedCaller?.kind === "agent" || req.headers.get(VIEWER_AUTONOMOUS_SPAWN_HEADER) === "1";
       if ((dependencies.autonomousAdmissionHeld?.() || (autonomous && activeDrain()))
@@ -1252,7 +1266,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     ): void => {
       dependencies.defer(async () => {
         let response: SpawnResponse;
-        try { dependencies.authorizeAutonomousLaunch?.(); }
+        try { authorizeLaunch(); }
         catch {
           await registry.failStructuredSpawnOffLoop(receipt.launchId, "autonomous launch authorization revoked");
           return;
@@ -1419,7 +1433,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
       }
     }
     const startedAtMs = Date.now();
-    dependencies.authorizeAutonomousLaunch?.();
+    authorizeLaunch();
     const pane = await (dependencies.spawnTmuxAgent ?? spawnAgentWithPrompt)(spec, bundle.payload, begun.receipt);
     const childPath = await resolveSpawnedTranscriptPath({
       engine,
@@ -1502,6 +1516,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     if (error instanceof LaunchMembershipError) return NextResponse.json({ error: error.message, ...(error.code ? { code: error.code } : {}) }, { status: error.status });
     if (error instanceof SpawnAdmissionFenceConflictError) return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof SpawnAdmissionFenceError) return NextResponse.json({ error: error.fence.error, code: "spawn_admission_refused" }, { status: error.fence.status });
+    if (error instanceof CuratorSpawnAdmissionError) return NextResponse.json({ error: error.message, code: "curator_admission_refused" }, { status: 409 });
     if (error instanceof AccountProjectBindingsUnreadableError) return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof ProjectAccountRefusedError) return NextResponse.json({ error: error.message, code: "project_account_refused" }, { status: 409 });
     /* Typed terminal admission rejection (#393): the durable receipt already

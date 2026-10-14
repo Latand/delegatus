@@ -14,8 +14,9 @@ const pass = readPass(process.env.LLV_CURATOR_EVAL_PASS ?? "");
 if (!pass) throw Error("isolated evaluation pass is missing");
 const snapshot = structuredClone(new AgentRegistry(statePath("eval-registry.json")).readOnlySnapshot());
 const id = ["conversation", "evaluation"].join("_") as `conversation_${string}`;
-snapshot.conversations[id] = { id, agentRole: "curator", generations: [], continuityPaths: [] } as never;
-snapshot.receipts.fixture = { conversationId: id, agentRole: "curator", clientAttemptId: pass.id, state: "completed", launchId: "fixture", artifactPath: null } as never;
+snapshot.conversations[id] = { id, agentRole: "curator", projectOwnership: { project: pass.project }, generations: [], continuityPaths: [] } as never;
+snapshot.receipts.fixture = { conversationId: id, agentRole: "curator", clientAttemptId: pass.id, explicitProject: pass.project,
+  launchProfile: { project: pass.project }, state: "completed", launchId: "fixture", artifactPath: null } as never;
 const server = new McpServer({ name: "curator-evaluation", version: "1.0.0" });
 server.registerTool("curate_rules", { description: "Read or apply this isolated curator pass. Orders are best first. Every change needs a note; follow the pass checklist.", inputSchema: TOOL_INPUT_SCHEMAS.curate_rules }, async args => {
   try {

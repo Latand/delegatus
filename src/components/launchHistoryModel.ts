@@ -61,6 +61,15 @@ export function isLaunchPlaceholderPath(pathname: string): boolean {
   return pathname.startsWith("spawn:");
 }
 
+/** A placeholder whose receipt is still pending while the server's projection
+    no longer counts it live: its host is gone, or its turn ended. Nothing about
+    it is starting any more, so the window reads it as settled. A terminal
+    receipt keeps its own chips: a failure keeps its retry there. */
+export function isSettledLaunchPlaceholder(file: Pick<FileEntry, "path" | "activity" | "spawn">): boolean {
+  return isLaunchPlaceholderPath(file.path) && !!file.spawn
+    && file.spawn.state !== "failed" && file.spawn.state !== "recovered" && file.activity !== "live";
+}
+
 /** The paths launch history CLAIMS off the board scene. Only the pathless
     `spawn:<launchId>` placeholder qualifies — it has no transcript to mount, so
     shelving it hides nothing. A terminal launch record keyed on a real scanned

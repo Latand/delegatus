@@ -6,6 +6,7 @@ import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/mi
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { ResumeSpec } from "@/lib/agent/cli";
 import { agentRegistry, type AgentRegistry, type ProcessIdentity, type RegistryFile, type SpawnBeginResult } from "@/lib/agent/registry";
+import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { cachedLimitsProvenance } from "@/lib/limits";
 import { captureProcessIdentity, processIdentityMayOwn } from "@/lib/processIdentity";
@@ -72,6 +73,8 @@ export interface StructuredRecoveryResult {
   path: string;
   conversationId: ViewerConversationId;
   spawned: boolean;
+  /** Rechecked when a recovered conversation accepts its queued message. */
+  admissionGuard?: DeliveryAdmissionGuard;
   /** Set when the live host handed back cannot accept a turn yet because the
       provider has parked its account (#611). The host is healthy and keeps its
       claim; what it cannot do is start a turn before `hold.until`. A caller
@@ -414,7 +417,10 @@ async function recoverCandidate(
          account, so a successor would start parked too, and terminating this
          one would throw away the very continuation the caller is trying to
          reach. An explicit ownership takeover still reseats. */
-      if (!ownership) return liveHostResult(current);
+      if (!ownership) return {
+        ...liveHostResult(current),
+        ...(request.admissionGuard ? { admissionGuard: request.admissionGuard } : {}),
+      };
       await ownership.releaseHost(current.key);
       await assertOwnership();
       registry.terminateStructuredHost(current.key);
@@ -435,6 +441,7 @@ async function recoverCandidate(
       current.project,
     );
     const assertAccountAuthorized = async (): Promise<void> => {
+      request.admissionGuard?.();
       await ownership?.authorizeAccount?.(account.accountId ?? null);
       request.authorityGuard?.();
     };
@@ -533,6 +540,7 @@ async function recoverCandidate(
       path: publishedPath,
       conversationId: current.conversationId,
       spawned: true,
+      ...(request.admissionGuard ? { admissionGuard: request.admissionGuard } : {}),
     };
   });
 }
@@ -553,14 +561,32 @@ export async function recoverDeadStructuredConversation(
     dependencies.park ?? defaultParkResolver,
   );
   if (!candidate) return null;
+  let admittedRequest = request;
+  const admissionSnapshot = registry.readOnlySnapshot();
+  if (conversationAgentRole(admissionSnapshot, candidate.conversationId) === "curator") {
+    const [{ curatorRecoveryGuard }, { defaultSeatTickAdmissionSources }] = await Promise.all([
+      import("@/lib/memory/curation/admission"), import("@/lib/monitor/seatTickAdmissionSources"),
+    ]);
+    const curatorGuard = await curatorRecoveryGuard(candidate.conversationId, {
+      ...defaultSeatTickAdmissionSources(), registry: () => registry,
+    });
+    const admissionGuard: DeliveryAdmissionGuard = key => {
+      request.admissionGuard?.(key);
+      curatorGuard();
+    };
+    admittedRequest = { ...request, admissionGuard };
+    admissionGuard();
+  }
   assertRestartCutEvidenceDecided(candidate.key);
   const recoveryKey = dependencies.ownership
     ? `${registry.filename}:${candidate.conversationId}:${dependencies.ownership.operationId}:${dependencies.ownership.revision}`
     : `${registry.filename}:${candidate.conversationId}:${request.operationId ?? "operator"}`;
   const pending = recoveries.get(recoveryKey);
-  if (pending) return pending;
-  if (candidate.hostLive && !dependencies.ownership) return liveHostResult(candidate);
-  const recovery = recoverCandidate(request, dependencies, registry, candidate);
+  if (pending) return pending.then((result: StructuredRecoveryResult | null) => result && admittedRequest.admissionGuard
+    ? { ...result, admissionGuard: admittedRequest.admissionGuard }
+    : result);
+  if (candidate.hostLive && !dependencies.ownership) return { ...liveHostResult(candidate), ...(admittedRequest.admissionGuard ? { admissionGuard: admittedRequest.admissionGuard } : {}) };
+  const recovery = recoverCandidate(admittedRequest, dependencies, registry, candidate);
   recoveries.set(recoveryKey, recovery);
   try {
     return await recovery;

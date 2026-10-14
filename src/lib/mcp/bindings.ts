@@ -46,6 +46,7 @@ import {
   type BindingEngine,
 } from "@/lib/accounts/projectBindings";
 import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
+import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { ENGINE_MODELS, validateLaunchModel } from "@/lib/agent/models";
 import { procBackend } from "@/lib/proc";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
@@ -772,6 +773,8 @@ export interface ViewerMcpDomainDependencies {
       inject their own complete scan. */
   lastCompletedCatalog?(): { projectCatalog: FileScanSnapshot["projectCatalog"]; files: readonly FileScanSnapshot["files"][number][] } | null;
   registrySnapshot(): RegistrySnapshot;
+  /** Fresh seat and delivered-wake admission for curator reads and writes. */
+  curatorAdmission?(conversationId: string | null): Promise<void>;
   boardFor(project: string): ReturnType<typeof boardFor>;
   applyBoardCommand(input: unknown, snapshot: RegistrySnapshot): ReturnType<typeof applyBoardCommand>;
   getFlowsWithPresets(): ReturnType<typeof getFlowsWithPresets>;
@@ -1282,6 +1285,10 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
     return projectCatalog && files ? { projectCatalog, files } : null;
   },
   registrySnapshot: () => agentRegistry().readOnlySnapshot(),
+  curatorAdmission: async conversationId => {
+    const { curatorRecoveryGuard } = await import("@/lib/memory/curation/admission");
+    await curatorRecoveryGuard(conversationId ?? "");
+  },
   readSpawnAdmissionFence,
   validateSpawnAdmission: (body, context) => productionViewerControlDependencies().post(
     "/api/spawn/validate",
@@ -7857,15 +7864,25 @@ export function viewerMcpBindings(
     leave_lesson: (args) => leaveLesson(args, domainDependencies),
     curate_rules: Object.assign(async (args: McpToolArgs) => {
       try {
-        const pass = curatorCallerOf(attributionOf(domainDependencies).conversationId, domainDependencies.registrySnapshot());
+        const conversationId = attributionOf(domainDependencies).conversationId;
+        await domainDependencies.curatorAdmission?.(conversationId);
+        const pass = curatorCallerOf(conversationId, domainDependencies.registrySnapshot());
         return args.action === "read" ? readCuration(pass, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined) : applyCuration(pass, args as unknown as CurationApply);
       } catch (error) {
         if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
+        if (error instanceof DeliveryAdmissionRefusedError) throw new McpToolRefusal(error.message, { code: "CURATE_CALLER", status: 409 });
         throw error;
       }
-    }, { authorizeReceipt: () => {
-      try { curatorCallerOf(attributionOf(domainDependencies).conversationId, domainDependencies.registrySnapshot()); }
-      catch (error) { if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 }); throw error; }
+    }, { authorizeReceipt: async () => {
+      try {
+        const conversationId = attributionOf(domainDependencies).conversationId;
+        await domainDependencies.curatorAdmission?.(conversationId);
+        curatorCallerOf(conversationId, domainDependencies.registrySnapshot());
+      } catch (error) {
+        if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
+        if (error instanceof DeliveryAdmissionRefusedError) throw new McpToolRefusal(error.message, { code: "CURATE_CALLER", status: 409 });
+        throw error;
+      }
     } }),
     link_task_to_pipeline: (args) => unadmittedBeforeMutation(() => linkTaskToPipeline(args, linkTaskDependencies)),
     list_conversations: (args, context) => budgeted("list_conversations", args, 12_000, cursor => listConversations({ ...args, cursor }, viewerControlForCall(controlDependencies, context))),
