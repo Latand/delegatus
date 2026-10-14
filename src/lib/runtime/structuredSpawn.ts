@@ -17,7 +17,7 @@ import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchP
 import { learnedRulesForLaunchProfile } from "@/lib/memory/roleLaunch";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
-import { identityMaterializationFence, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
+import { identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import type { SpawnResponse } from "@/lib/agent/spawnResponse";
@@ -34,7 +34,9 @@ import { signalProcessGroup } from "@/lib/processGroup";
 import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 import { buildImagePayload, deleteInboxImages, spawnAgentWithPrompt } from "@/lib/tmux";
-import { admitRecoveredLaunch } from "@/lib/tasks/launchMembership";
+import { admitRecoveredLaunch, failedLaunchTaskSettlementPending, settleFailedLaunch } from "@/lib/tasks/launchMembership";
+import { hasLifecycleEventKey } from "@/lib/lifecycle/journal";
+import { readSpawnNoticeTurn } from "@/lib/spawnNotice/store";
 import { hardenedRedact } from "@/lib/view/compactText";
 
 import { ClaudeStreamBrokerHost, type ClaudeStreamBrokerHostOptions } from "./claudeStreamBrokerHost";
@@ -482,6 +484,7 @@ async function structuredSpawnEffectForLaunch(
 }
 
 interface LaunchReapOptions {
+  recoveryFence?: (file: RegistryFile, receipt: SpawnReceipt) => boolean;
   /** The launch operation's journal status as last read, null when unread.
       Only a non-terminal status is failed, and an unread one only when
       `failUnreadOperation` says so. */
@@ -505,7 +508,7 @@ async function failStructuredLaunchAndReap(
   reason: string,
   options: LaunchReapOptions,
 ): Promise<{ claimed: boolean; receipt: SpawnReceipt | null }> {
-  const failure = await registry.failStructuredSpawnOffLoop(launchId, reason);
+  const failure = await registry.failStructuredSpawnOffLoop(launchId, reason, { recoveryFence: options.recoveryFence });
   if (!failure.claimed) {
     return { claimed: false, receipt: failure.receipt ?? registry.readOnlySnapshot().receipts[launchId] ?? null };
   }
@@ -1002,6 +1005,49 @@ export async function terminalizeStaleStructuredSpawns(
   const timeoutMs = options.timeoutMs ?? STALE_STRUCTURED_SPAWN_TIMEOUT_MS;
   const actuationCap = options.actuationCap ?? STALE_STRUCTURED_SPAWN_ACTUATION_CAP;
   const reconcile = options.reconcile ?? reconcileStructuredSpawnReplay;
+  const recoverySnapshot = registry.readOnlySnapshot();
+  /* A terminal receipt can outlive a refused task, notice or lifecycle write.
+     Re-run each pending obligation on the bounded reaper so a transient store
+     refusal cannot leave the launcher's report or task assignment unfinished. */
+  let repairs = 0;
+  for (const receipt of registry.failedSpawnReceipts()) {
+    if (repairs >= actuationCap) break;
+    if (receipt.purpose !== "launch" || receipt.artifactLifecycle !== "pending") continue;
+    const reportsEligible = !receipt.rejection && !receipt.failureAnnouncementSuppressed
+      && Boolean(receipt.launcher && receipt.launcher.conversationId !== receipt.conversationId);
+    let taskSettlementPending = false;
+    let lookupFailed = false;
+    let lifecyclePending = false;
+    let noticePending = false;
+    if (reportsEligible) {
+      try {
+        lifecyclePending = !hasLifecycleEventKey(`spawn:${receipt.launchId}:failed`);
+        noticePending = !readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`);
+      } catch (error) {
+        lookupFailed = true;
+        spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] failed launch report lookup refused", {
+          launchId: receipt.launchId,
+          error,
+        });
+      }
+    }
+    try {
+      taskSettlementPending = failedLaunchTaskSettlementPending(receipt);
+    } catch (error) {
+      lookupFailed = true;
+      spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] failed launch task lookup refused", {
+        launchId: receipt.launchId,
+        error,
+      });
+    }
+    if (!lookupFailed && !taskSettlementPending && !lifecyclePending && !noticePending) continue;
+    repairs += 1;
+    options.assertActive?.();
+    settleFailedLaunch(receipt, undefined, {
+      announce: reportsEligible,
+      launcherProject: launcherProjectFromRegistry(recoverySnapshot, receipt.launcher?.conversationId),
+    });
+  }
   await registry.deliveryWrite({ label: "spawn.orphan-hygiene" },() =>
     registry.terminalizeAbandonedSpawnEntries({ now: now(),timeoutMs,limit: actuationCap }));
   const snapshot = registry.readOnlySnapshot();
@@ -1095,6 +1141,13 @@ export async function terminalizeStaleStructuredSpawns(
     }
   }
   return { examined, terminalized, recovered };
+}
+
+function launcherProjectFromRegistry(file: RegistryFile, conversationId: ViewerConversationId | undefined): string | undefined {
+  if (!conversationId) return undefined;
+  const canonical = resolveConversationAlias(file, conversationId);
+  const seat = (file.memberships[canonical] ?? []).find((membership) => membership.kind === "orchestrator");
+  return seat?.containerId;
 }
 
 export interface StructuredSpawnInput {
@@ -1995,6 +2048,29 @@ function unadvanceableStagedLaunch(
   return null;
 }
 
+/** A dispatched launch is lookup-only. Once its observation budget ends and
+ * every recorded owner is proven gone, it settles from transcript evidence or
+ * reports failure. Pipeline attempts retain their engine's recovery policy. */
+function lostStagedLaunch(
+  file: RegistryFile,
+  receipt: SpawnReceipt,
+  now: number,
+): boolean {
+  const recovery = stagedLaunchRecovery(receipt);
+  if (receipt.state !== "path-pending" || !recovery || recovery.phase === "unpublished") return false;
+  if ((file.memberships[resolveConversationAlias(file, receipt.conversationId)] ?? []).some(member => member.kind === "pipeline")) return false;
+  if (!recovery.stopped && now - recovery.startedAt < STAGED_RECOVERY_BUDGET_MS && recovery.checks < STAGED_RECOVERY_MAX_CHECKS) return false;
+  if (receipt.admissionOwner && processIdentityStatus(receipt.admissionOwner) !== "dead") return false;
+  const entry = receipt.key ? file.entries[sessionKeyId(receipt.key)] : null;
+  if (entry?.structuredHost?.process && processIdentityStatus(entry.structuredHost.process) !== "dead") return false;
+  if (entry?.claimOwner) {
+    const owner = structuredClaimIdentity(entry.claimOwner);
+    if (!owner || processIdentityStatus(owner) !== "dead") return false;
+  }
+  if (entry?.structuredTerminationSurvivors?.some(identity => processIdentityStatus(identity) !== "dead")) return false;
+  return true;
+}
+
 /**
  * Settles a staged launch that will never publish as failed, and retires the
  * host it started (#2028). The receipt is claimed first, which also clears the
@@ -2075,6 +2151,27 @@ export async function recoverStagedStructuredLaunch(
     const unadvanceable = unadvanceableStagedLaunch(receipt, recovery, pipelineMember, now());
     if (unadvanceable) {
       const failed = await failStagedResume(launchId, registry, client, unadvanceable, options.reap);
+      return failed.receipt ?? read();
+    }
+    if (lostStagedLaunch(registry.readOnlySnapshot(), receipt, now())) {
+      if (receipt.artifactPath && hasUserAuthoredMessage(receipt.artifactPath, receipt.engine)) {
+        const entry = receipt.key ? registry.readOnlySnapshot().entries[sessionKeyId(receipt.key)] : null;
+        const evidence = !entry && receipt.key ? {
+          key: receipt.key, artifactPath: receipt.artifactPath, cwd: receipt.cwd ?? "", accountId: receipt.accountId,
+          launchProfile: receipt.launchProfile, status: "dead" as const, host: null, structuredHost: null,
+          claimEpoch: 0, claimOwner: null, pendingAction: null,
+        } : undefined;
+        const recovered = registry.recoverStructuredSpawnFromEvidence(launchId, evidence);
+        if (recovered.kind === "settled") stagedContinuations.delete(launchId);
+        return read();
+      }
+      const reason = `lost before its first turn: host exited after first-message dispatch (${recovery!.phase}); no transcript was written; last check: ${recovery!.reason}`;
+      const failed = await failStagedResume(launchId, registry, client, reason, {
+        ...options.reap,
+        recoveryFence: (file, current) => current.error === receipt.error
+          && current.artifactPath === receipt.artifactPath && lostStagedLaunch(file, current, now())
+          && !(current.artifactPath && hasUserAuthoredMessage(current.artifactPath, current.engine)),
+      });
       return failed.receipt ?? read();
     }
     // Pipeline launches are advanced only by the engine's outside-lease probe.
