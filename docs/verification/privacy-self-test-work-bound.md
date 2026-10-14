@@ -1,6 +1,53 @@
 # Privacy self-test work bound
 
-## Failure diagnosis
+## Trusted publication budget (2026-10-15)
+
+[The merge-batch job](https://github.com/Latand/delegatus/actions/runs/38649189612/job/116143494762)
+returned 124 in the candidate self-test step. Its trusted default-branch command
+is `timeout --kill-after=5s 130s bun test scripts/privacy-*.test.ts`, under Bun
+1.3.3. The workflow and its contract tests retain that command and budget.
+
+The table measures that command after gate admission, serially on one machine,
+with `CI=true`, private frozen-lockfile dependencies, installed OCR tools and
+fresh isolated home/config/cache/tmp/state directories. The control URL points to a closed loopback port. The base is main
+at `083158989fbdccb1f5fa21c39fdcd068c8b8a943`; the unmodified PR is the merged
+`ecc7d6ef3a57ffd41a85e04567c51b00404b0d6e`. Later merged main commits leave the
+privacy command and scanner unchanged.
+
+| Version | Wall seconds | Exit | Margin under 130 seconds |
+| --- | ---: | ---: | ---: |
+| Main | 77.42 | 0 | 52.58 |
+| Unmodified PR | 130.02 | 124 | 0 (timed out) |
+| Reduced probes with independent concurrent cases | 74.72 | 0 | 55.28 |
+
+Main passes 681 tests; the optimized PR passes all 684 tests. Repeating the
+large escaped-string scans accounts for most of the added cost: the unmodified
+PR completes only 13 bounded cases before cancellation. The smaller probes
+reduce that CPU work, and independent children overlap through the existing
+four-child cap. Every case retains its own result and cancellation guard.
+
+All 135 shape/source pairs retain three CPU pairs, the 8x input ratio, the 32x
+CPU growth limit, and finding/report assertions at both sizes. The final local
+ratio range is 0.29x–20.54x. An 800/6,400 escaped-quote experiment failed the
+unchanged limit (39.91x–55.80x under throttling) and was discarded. The retained counts are
+3,200/25,600. Wall duration never decides a passing work-bound assertion.
+
+The induced quadratic control rejects 43.92x CPU growth, with no guard
+expiration. The reduced JSON inputs exposed overlapping whitespace suffixes
+in that control: later samples reused preparation and incorrectly passed with
+`CI=true`. Disjoint suffix ranges now keep each sample fresh. The same control
+then exits 1. Cancelling the block-comment child still leaves the JSON peer
+passing; the suite reports the induced failure.
+
+At a kernel-verified 25% CPU quota (`cpu.max` 5000/20000), the same explicit
+bounded-case filter reproduces main's 60-second batch cancellation and 15-case
+cascade (61.90 seconds, exit 1). The optimized branch passes all 15 cases and
+135 shape/source pairs in 314.47 seconds; its single-quote case passes after
+312.34 seconds. The slow control uses a separate 600-second infrastructure
+allowance, while the normal candidate command above retains 130 seconds.
+Its CPU growth range is 0.48x–11.40x; descheduling does not supply the passing verdict.
+
+## Original failure diagnosis (2026-10-14)
 
 Both failed logs were read with `gh run view <run> --log-failed`. The baseline
 for this comparison is `cff9cc6c461a2e6659ea03fdb99e87a1434e4c50`.
@@ -36,31 +83,35 @@ it supplies no evidence of a new quadratic scanner path in either incident.
 ## New contract
 
 Each specimen has its own child and result in
-`scripts/privacy-publication-gate.test.ts:2308`. Each source inspects a 1x input
-and the original full-size 8x input. Three paired CPU samples follow a discarded
-small-input warm-up. Input shapes, findings and value-free reports are checked at both
-sizes. Fresh bytes keep preparation cold for the first source and shared for
-later sources at both sizes, preserving the production cache behavior.
+`scripts/privacy-publication-gate.test.ts:2314`. Each source inspects a 1x input
+and an 8x input. The probes use 3,200 repetitions for delimiter/string runs,
+1,600 for regex classes and chained calls, 480 declarations, 64 unquoted
+literals, and 160 JSON entries at 1x. These counts are 12.8% of the original
+calibration counts, retaining the same input ratio and all 135 shape/source
+pairs. Independent cases overlap through the existing four-child cap; process
+CPU samples exclude CPU consumed by peer children. The original stress sizes
+and results remain recorded below. Three paired CPU samples follow a discarded
+small-input warm-up. Input shapes, findings and value-free reports are checked
+at both sizes. Fresh bytes keep preparation cold for the first source and shared
+for later sources at both sizes, preserving the production cache behavior.
 
 `scripts/privacy-work-bound.ts:11` compares median process CPU consumption.
 The 8x input must stay below 32x CPU growth. The multiplier permits overhead
 above linear growth and rejects quadratic growth, which tends toward 64x.
-Descheduling contributes no process CPU time. The observed ordinary ratios
-range from 0.69x to 12.70x. This is a growth bound on the retained specimens;
+Descheduling contributes no process CPU time. The original stress-size ordinary
+ratios ranged from 0.69x to 12.70x. This is a growth bound on the retained specimens;
 it is not a proof about every possible input or an absolute latency guarantee.
 
 The Linux child guard samples process CPU ticks from `/proc/<pid>/stat`, binds
 those observations to the captured kernel start time, and cancels after 120
 CPU seconds. Its CPU accounting excludes descheduling. A ten-minute wall guard
 and eleven-minute test guard provide infrastructure cancellation; other
-platforms retain that wall guard. The CPU ratio decides bounded work. The workflow gives the existing
-owned runner a ten-minute cancellation guard inside a twelve-minute step, in
-both trusted and candidate test commands. `systemd-run --wait` and
-`KillMode=control-group` in `scripts/owned-runner.ts:128` let cleanup finish
-before the command returns. Finite infrastructure cancellation remains a
-failure and cannot become a passing work verdict.
+platforms retain that wall guard. The CPU ratio decides bounded work. The
+workflow retains main's 130-second candidate suite cancellation and three-minute
+step deadline. The existing preload enters the owned runner; a timeout remains
+a failure. This change requires no increase in the trusted workflow budget.
 
-## Negative controls and cleanup
+## Original negative controls and cleanup (2026-10-14)
 
 With `LLV_PRIVACY_TEST_QUADRATIC=1`, the test wrapper rescans in proportion to
 input size: one scan for 1x, eight for 8x, with fresh equivalent bytes to keep
@@ -83,7 +134,7 @@ dead, drain the owning scope, and preserve recorded bystanders. The stronger
 stress run also found zero extra live owned processes after every base and head
 invocation, and zero load-worker survivors after cleanup.
 
-## Stress comparison
+## Original stress comparison (2026-10-14)
 
 The final comparison used Bun 1.3.3 and two fresh isolated executions per side,
 alternating base and head. An outer `scripts/gate-slot.sh` admission contained
@@ -144,7 +195,7 @@ Per-run exits/timings, CPU samples, guard controls and source hashes are in
 rows are labelled separately from the final full matrix. The full touched
 files are verified separately from the stress filter.
 
-## Verification and workflow provenance
+## Original verification (2026-10-14) and workflow provenance
 
 Touched files are run by explicit path through `scripts/gate-slot.sh`, with
 isolated home, config, temporary and state directories. The full run needs the
@@ -160,10 +211,8 @@ changed-file lint and privacy gate passed. The gate uses
 `LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE` pointing to the committed catalog
 and `--require-known-values --base <merge-base>`.
 
-`pull_request_target` reads main's workflow and trusted scanner. This PR's
-required check consequently still uses the old workflow and its 130-second
-candidate cutoff until the change lands. The current workflow also runs
-candidate test files when its trusted import-closure scope selects them;
-those files come from the candidate checkout. Thus a PR check cannot prove
-the proposed workflow behavior. The new tests and cancellation command are
-verified locally, independent of that old workflow definition.
+`pull_request_target` reads main's workflow and trusted scanner. The candidate
+command remains `timeout --kill-after=5s 130s bun test scripts/privacy-*.test.ts`.
+The candidate suite must pass under that command before merge. A larger
+workflow cancellation budget would need its own follow-up and is unnecessary
+for the reduced probes.

@@ -32,7 +32,7 @@ const step = (job: Job, name: string) => job.steps.find((entry) => entry.name ==
 // Execute the publication suffix with GitHub's step timeout, continue-on-error
 // and original-outcome warning semantics. The CLI double supplies independent
 // baseline, scanner and candidate verdicts without repository or network calls.
-function runPublication(extra: Record<string, string> = {}, budget = "600000") {
+function runPublication(extra: Record<string, string> = {}, budget = "130s") {
   const root = mkdtempSync(join(tmpdir(), "privacy-repair-workflow-"));
   try {
     const log = join(root, "calls");
@@ -43,10 +43,6 @@ function runPublication(extra: Record<string, string> = {}, budget = "600000") {
     mkdirSync(join(root, "trusted/node_modules"));
     writeFileSync(join(root, "bun"), `#!/bin/bash
 directory="$(basename "$PWD")"
-if [[ "$1" == scripts/owned-runner.ts ]]; then
-  shift 2
-  exec timeout --kill-after=1s "$((LLV_OWNED_RUN_TIMEOUT_MS))e-3s" "$0" "$@"
-fi
 printf '%s:%s\\n' "$directory" "$1" >> "$CALL_LOG"
 if [[ "$1" == test && "$STALL_DIRECTORY" == "$directory" ]]; then exec sleep 30; fi
 case "$directory:$1" in
@@ -69,11 +65,11 @@ esac
     for (const entry of job.steps.slice(first)) {
       if (entry.id === "privacy-scope") continue;
       if (entry === warning && baselineCode === 0) continue;
-      // Shorten cancellation guards in the workflow doubles.
-      const command = ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", entry.run!.replace("600000", budget)];
-      // A local timeout supplies the baseline runner step deadline. The
-      // candidate double reads the owned deadline from the workflow command.
-      if (entry === baseline) command.unshift("timeout", "--kill-after=5s", budget === "600000" ? `${entry["timeout-minutes"]}m` : `${Number(budget) / 1000}s`);
+      // Only the wall-clock duration changes in timeout controls.
+      const command = ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", entry.run!.replace("130s", budget)];
+      // A local timeout supplies the runner's step deadline. The candidate's
+      // shell still enforces its own timeout exactly as the workflow declares.
+      if (entry === baseline) command.unshift("timeout", "--kill-after=5s", budget === "130s" ? `${entry["timeout-minutes"]}m` : budget);
       const result = Bun.spawnSync(command, {
         cwd: join(root, entry["working-directory"]!),
         env: { ...process.env, PATH: `${root}:${process.env.PATH}`, CALL_LOG: log, BASELINE_EXIT: "1", SCAN_EXIT: "0", CANDIDATE_EXIT: "0", STALL_DIRECTORY: "", ...extra },
@@ -130,7 +126,7 @@ test("candidate self-test failure still blocks publication after a red baseline"
 });
 
 test("a stalled baseline is diagnosed before inspection and candidate tests proceed", () => {
-  const result = runPublication({ STALL_DIRECTORY: "trusted" }, "100");
+  const result = runPublication({ STALL_DIRECTORY: "trusted" }, "0.1s");
   expect(result.code).toBe(0);
   expect(result.text).toContain("::warning title=Trusted privacy self-tests::");
   expect(result.baselineCode).toBe(124);
@@ -138,23 +134,37 @@ test("a stalled baseline is diagnosed before inspection and candidate tests proc
 });
 
 test("a stalled candidate still refuses publication after a red baseline", () => {
-  const result = runPublication({ STALL_DIRECTORY: "candidate" }, "100");
+  const result = runPublication({ STALL_DIRECTORY: "candidate" }, "0.1s");
   expect(result.code).toBe(124);
   expect(result.calls).toEqual(["trusted:test", "trusted:scripts/privacy-publication-gate.ts", "candidate:test"]);
 });
 
-test("candidate privacy tests run last with an owned cancellation guard", () => {
+test("candidate privacy tests run last with a failing time budget", () => {
   const job = jobs[0]!;
   const trusted = step(job, "Verify privacy gate behavior");
   expect(trusted["working-directory"]).toBe("trusted");
-  expect(trusted["timeout-minutes"]).toBe(12);
-  expect(trusted.run).toBe("LLV_OWNED_RUN_TIMEOUT_MS=600000 bun scripts/owned-runner.ts bun test scripts/privacy-*.test.ts");
+  expect(trusted["timeout-minutes"]).toBe(3);
+  expect(trusted.run).toBe("bun test scripts/privacy-*.test.ts");
   const candidate = step(job, "Verify candidate privacy gate behavior within budget");
   expect(job.steps.at(-1)).toBe(candidate);
   expect(candidate["working-directory"]).toBe("candidate");
-  expect(candidate["timeout-minutes"]).toBe(12);
-  expect(candidate.run).toContain("LLV_OWNED_RUN_TIMEOUT_MS=600000 bun scripts/owned-runner.ts bun test scripts/privacy-*.test.ts");
-  expect(candidate.run).not.toContain("timeout --kill-after");
+  expect(candidate["timeout-minutes"]).toBe(3);
+  expect(candidate.run).toContain("timeout --kill-after=5s 130s bun test scripts/privacy-*.test.ts");
+  const root = mkdtempSync(join(tmpdir(), "privacy-candidate-budget-"));
+  try {
+    // Drive the actual shell with a short budget and a stalled test process.
+    mkdirSync(join(root, "trusted/node_modules"), { recursive: true });
+    mkdirSync(join(root, "candidate"));
+    writeFileSync(join(root, "bun"), "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+    const result = Bun.spawnSync(["bash", "-e", "-c", candidate.run!.replace("130s", "0.1s")], {
+      cwd: join(root, "candidate"),
+      env: { ...process.env, PATH: `${root}:${process.env.PATH}` },
+      stdout: "pipe", stderr: "pipe",
+    });
+    expect(result.exitCode).toBe(124);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 // Execute the actual inline workflow shell. The sudo double records apt
@@ -324,12 +334,6 @@ test("PR self-tests use the trusted import closure and workflow changes while in
         expect(preloadScope.exitCode, preloadScope.stderr.toString()).toBe(0);
         expect(readFileSync(output, "utf8")).toBe("run=true\n");
         const candidate = step(jobs[0]!, "Verify candidate privacy gate behavior within budget");
-        // Scope is trusted; the execution double forwards the owned command
-        // to the real Bun test runner so its broken preload remains decisive.
-        writeFileSync(join(root, "candidate/scripts/owned-runner.ts"), `
-          const child = Bun.spawn(process.argv.slice(2), { stdin: "inherit", stdout: "inherit", stderr: "inherit", env: process.env });
-          process.exit(await child.exited);
-        `);
         const candidateRun = Bun.spawnSync(["bash", "-e", "-c", candidate.run!], { cwd: join(root, "candidate"), env, stdout: "pipe", stderr: "pipe" });
         expect(candidateRun.exitCode).not.toBe(0);
         expect(candidateRun.stderr.toString()).toContain("broken privacy preload");

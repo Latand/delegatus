@@ -2291,28 +2291,30 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nknown_value: 6\n");
       expect(result.stderr.toString()).toBe("");
     }, 15000);
-    // The original full-size adversarial corpus is 8x the calibration input.
-    // Preserve each shape and its verdict at both sizes.
+    // Keep the 8x growth probe and every adversarial shape/source. Repeating
+    // the former stress-size inputs at every sample dominated the trusted
+    // 130-second suite budget. The CPU growth limit and sample count stay fixed.
     const boundedCases = [
-      { name: "unclosed block comments", text: (n: number) => `${"/* ".repeat(n * 25_000)} ${host}`, pass: false },
+      { name: "unclosed block comments", text: (n: number) => `${"/* ".repeat(n * 3_200)} ${host}`, pass: false },
       ...[["templates", 96], ["double quotes", 34], ["single quotes", 39]].map(([name, quote]) => ({
         name: `unclosed ${name}`, text: (n: number) => String.fromCharCode(Number(quote))
-          + String.fromCharCode(92, Number(quote)).repeat(n * 25_000) + ` ${host}`, pass: false,
+          + String.fromCharCode(92, Number(quote)).repeat(n * 3_200) + ` ${host}`, pass: false,
       })),
       ...["/private", "", ";"].map((suffix, index) => ({ name: `nested closing delimiters ${index}`,
-        text: (n: number) => "(".repeat(n * 25_000) + `"${host}"` + ")".repeat(n * 25_000) + suffix, pass: false })),
-      { name: "unclosed regex classes", text: (n: number) => `${"/[".repeat(n * 12_500)} "${host}"`, pass: false },
-      { name: "long identifiers", text: (n: number) => `${"a".repeat(n * 25_000)},"${host}"`, pass: true },
-      { name: "repeated declarations", text: (n: number) => `${"const a: ".repeat(n * 3750)}"${host}"`, pass: true },
-      { name: "long template identifiers", text: (n: number) => `export default ${"a".repeat(n * 25_000)} /*c*/ ${tick}${host}${tick}`, pass: false },
-      { name: "long prose whitespace", text: (n: number) => " ".repeat(n * 25_000) + host, pass: true },
-      { name: "large unquoted tokens", text: (n: number) => `(${host})`.repeat(n * 500), pass: false },
-      { name: "large chained calls", text: (n: number) => `relay${`("${host}")`.repeat(n * 12_500)};`, pass: false },
-      { name: "large quoted JSON", text: (n: number) => JSON.stringify(Array(n * 1250).fill(host)), pass: true },
+        text: (n: number) => "(".repeat(n * 3_200) + `"${host}"` + ")".repeat(n * 3_200) + suffix, pass: false })),
+      { name: "unclosed regex classes", text: (n: number) => `${"/[".repeat(n * 1_600)} "${host}"`, pass: false },
+      { name: "long identifiers", text: (n: number) => `${"a".repeat(n * 3_200)},"${host}"`, pass: true },
+      { name: "repeated declarations", text: (n: number) => `${"const a: ".repeat(n * 480)}"${host}"`, pass: true },
+      { name: "long template identifiers", text: (n: number) => `export default ${"a".repeat(n * 3_200)} /*c*/ ${tick}${host}${tick}`, pass: false },
+      { name: "long prose whitespace", text: (n: number) => " ".repeat(n * 3_200) + host, pass: true },
+      { name: "large unquoted tokens", text: (n: number) => `(${host})`.repeat(n * 64), pass: false },
+      { name: "large chained calls", text: (n: number) => `relay${`("${host}")`.repeat(n * 1_600)};`, pass: false },
+      { name: "large quoted JSON", text: (n: number) => JSON.stringify(Array(n * 160).fill(host)), pass: true },
     ];
-    for (const specimen of boundedCases) test.serial(`${specimen.name}: all sources stay bounded`, async () => {
-      // Every case owns its result and child. Cancellation of one specimen
-      // cannot cache a failed batch for the remaining specimens.
+    for (const specimen of boundedCases) test.concurrent(`${specimen.name}: all sources stay bounded`, async () => {
+      // Every case owns its result and child. The shared child cap permits
+      // independent CPU probes to overlap without charging peer CPU time.
+      // Cancellation cannot cache a failed batch for the remaining specimens.
       const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
       temporaryDirectories.push(directory);
       const batches = sources.map((source, index) => {
@@ -2347,7 +2349,9 @@ exec "$LLV_TEST_REAL_GIT" "$@"
                   let findings;
                   const scans = request.quadratic ? (size === 0 ? 1 : 8) : 1;
                   for (let i = 0; i < scans; i++) {
-                    if (request.quadratic) require("node:fs").writeFileSync(publication, contents + " ".repeat(i + 1));
+                    // Disjoint suffix ranges across samples keep all induced scans
+                    // fresh. Overlapping ranges would turn later pairs into cache hits.
+                    if (request.quadratic) require("node:fs").writeFileSync(publication, contents + " ".repeat(sample * 8 + i + 1));
                     findings = scanner.inspectPaths([publication], false, true);
                   }
                   return { findings: [...findings.keys()], report: scanner.formatPrivacyReport(findings) };
@@ -3160,15 +3164,14 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(workflow).toContain('--base "$PRIVACY_BASE_SHA"');
   });
 
-  test("runs candidate privacy tests last with an owned cancellation deadline", () => {
+  test("runs candidate privacy tests last under the 130-second budget", () => {
     const workflow = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "privacy-publication.yml"), "utf8");
     const trustedCheck = workflow.indexOf("- name: Verify privacy gate behavior");
     const candidateCheck = workflow.indexOf("- name: Verify candidate privacy gate behavior within budget");
 
     expect(trustedCheck).toBeGreaterThanOrEqual(0);
     expect(candidateCheck).toBeGreaterThan(trustedCheck);
-    expect(workflow.slice(candidateCheck)).toContain("LLV_OWNED_RUN_TIMEOUT_MS=600000 bun scripts/owned-runner.ts bun test scripts/privacy-*.test.ts");
-    expect(workflow.slice(candidateCheck)).not.toContain("timeout --kill-after");
+    expect(workflow.slice(candidateCheck)).toContain("timeout --kill-after=5s 130s bun test scripts/privacy-*.test.ts");
   });
 
   test("scopes issue-comment audits to the triggering comment", () => {
@@ -5436,7 +5439,7 @@ describe("mergeBoundaryReview", () => {
 // A final serial test runs after the concurrent CLI checks have returned.
 // Deleting hundreds of Git fixtures exceeded Bun's default five-second hook
 // timeout on hosted runners. Give cleanup a named failure and a 30-second
-// cancellation guard, inside the owned suite deadline.
+// budget, inside the workflow's 130-second suite deadline.
 test.serial("releases privacy fixtures after all concurrent CLI checks", () => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { force: true, recursive: true });
