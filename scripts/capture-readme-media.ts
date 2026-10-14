@@ -84,8 +84,12 @@ const PHONE = { width: 392, height: 848 };
 const clickLabel = (page: Page, label: string) => page.locator(`[aria-label="${label}"]`).first().click();
 const clickText = (page: Page, text: string) => page.getByText(text, { exact: false }).first().click();
 /* A project without an orchestrator opens with the create draft unfolded;
-   the board shots fold it to its one-line bar. */
-const foldOrchestrator = (page: Page) => clickLabel(page, "Collapse the orchestrator chat (O)");
+   the board shots fold it to its one-line bar. A screen too short for the
+   chat opens with it folded already. */
+const foldOrchestrator = async (page: Page) => {
+  const fold = page.locator('[aria-label="Collapse the orchestrator chat (O)"]');
+  if (await fold.count()) await fold.first().click();
+};
 /* The frame ends at the element's border box. Its corners go square, since
    the frame's own edge is now its edge: a rounded corner would show the
    screen behind it. */
@@ -96,25 +100,70 @@ const cropTo = (selector: string) => async (page: Page): Promise<CropRect> => {
   if (!box) throw new Error(`crop target ${selector} is not on the screen`);
   return box;
 };
+/* The frame keeps the named board columns whole across, from just above
+   their heads to just below the lowest card or open menu in them. At README
+   width a frame of the sidebar and all four columns shrinks a card's state
+   line below reading size, and the board under the cards is empty. The
+   margin stays inside the gap between two columns. */
+const cropToColumns = (statuses: string[]) => async (page: Page): Promise<CropRect> => await page.evaluate((statuses) => {
+  const margin = 8;
+  const columns = statuses.map((status) => {
+    const column = document.querySelector(`.kb .column[data-status="${status}"]`);
+    if (!column) throw new Error(`no ${status} column on the board`);
+    return column;
+  });
+  const boxes = columns.map((column) => column.getBoundingClientRect());
+  const content = [...columns.flatMap((column) => [...column.querySelectorAll(".card")]), ...document.querySelectorAll('[role="menu"]')].map((element) => element.getBoundingClientRect().bottom);
+  const left = Math.min(...boxes.map((box) => box.left)) - margin;
+  const top = Math.min(...boxes.map((box) => box.top)) - margin;
+  const right = Math.max(...boxes.map((box) => box.right)) + margin;
+  const bottom = Math.max(...content) + 2 * margin;
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}, statuses);
+/* A stage's reader rests on the tail of its conversation, and its top edge
+   would cut a line of text in half. Each reader gets just enough room under
+   its last message for its tail to start on a whole message. */
+async function alignReadersToMessages(page: Page, scope: string): Promise<void> {
+  await page.evaluate((scope) => {
+    for (const scroller of document.querySelectorAll<HTMLElement>(`${scope} [data-log-feed-scroller]`)) {
+      const bottom = scroller.scrollHeight - scroller.clientHeight;
+      if (bottom <= 0) continue;
+      const origin = scroller.getBoundingClientRect().top - scroller.scrollTop;
+      const starts = [...scroller.querySelectorAll<HTMLElement>("[data-feed-key]")].map((item) => Math.round(item.getBoundingClientRect().top - origin));
+      const next = starts.filter((start) => start >= bottom).sort((a, b) => a - b)[0];
+      if (next === undefined || next === bottom) continue;
+      const padding = Number.parseFloat(getComputedStyle(scroller).paddingBottom) || 0;
+      scroller.style.setProperty("padding-bottom", `${padding + next - bottom}px`, "important");
+      scroller.scrollTop = scroller.scrollHeight;
+    }
+  }, scope);
+}
 
 export const SHOTS: ReadmeShot[] = [
   {
     id: "board",
     target: { kind: "project", project: "harbor-api" },
-    viewport: WIDE,
-    requiredText: ["Idempotent refunds", "Rotate webhook signing keys", "Move invoices to the new ledger", "Document refund error codes", "needs a decision · build"],
-    absentText: ["tmux", "Untitled task"],
+    /* The shortest screen the desktop board draws at: below 600 px the phone
+       layout takes over. */
+    viewport: { width: WIDE.width, height: 600 },
+    requiredText: ["Idempotent refunds", "Rotate webhook signing keys", "Move invoices to the new ledger", "Document refund error codes", "Needs your answer", "1 needs you", "Waiting outside: finance to confirm the rounding rule"],
+    /* "resume ·" is a pane recovery opened for the seat: a stray agent card. */
+    absentText: ["tmux", "Untitled task", "resume ·", "no reason given"],
     prepare: foldOrchestrator,
-    description: "A project's board: tasks by status with their icons, the agents working on each, a running pipeline's stages, and a card that names why it needs you; account limits in the sidebar.",
+    crop: cropToColumns(["inbox", "assigned", "blocked"]),
+    description: "Three columns of a project's board: a task in Inbox; in In progress the agents working on each task, a running pipeline's stages and a card waiting on your answer, counted in the column's head; in Waiting a card that names what it waits for.",
   },
   {
     id: "orchestrator",
     target: { kind: "project", project: "harbor-api" },
-    /* Below 800 px the seat folds its Reports log away. */
-    viewport: { width: WIDE.width, height: 800 },
-    requiredText: ["Orchestrator", "Reports", "Take the open harbor-api work", "Paginate GET /charges is done", "review verdict"],
+    /* Below 800 px the seat folds its Reports log away; at this height the
+       whole three-question form and its Telegram line fit in the column. */
+    viewport: { width: WIDE.width, height: 1040 },
+    /* The column opens on Decisions while a form waits: the seeded retry
+       window, which the seat handed on and Telegram received. */
+    requiredText: ["Orchestrator", "workers ", "Decisions", "Reports", "Take the open harbor-api work", "Retry policy for failed webhook deliveries", "Sent to Telegram"],
     /* A seat nothing hosts reads as finished, with the resume banner. */
-    absentText: ["tmux", "Untitled task", "has not reported anything yet", "finished", "has finished its run"],
+    absentText: ["tmux", "Untitled task", "resume ·", "has not reported anything yet", "finished", "has finished its run"],
     /* The demo seat's conversation is not in the agent registry, so the
        header has no model to size the context window by and would show a
        bare byte estimate; a real seat shows its share of the window. */
@@ -123,21 +172,23 @@ export const SHOTS: ReadmeShot[] = [
         for (const element of elements) (element as HTMLElement).style.setProperty("display", "none", "important");
       });
     },
-    description: "A project's orchestrator on top of its board: its chat with the operator, and beside it the log of the reports it filed.",
+    /* The panel alone: the board under it and the sidebar beside it would
+       shrink the form below reading size at README width. */
+    crop: cropTo("[data-orchestrator-panel]"),
+    description: "A project's orchestrator: its chat with the operator, its worker count against the limit, and beside it a task's decision form waiting for an answer, already sent to Telegram.",
   },
   {
     id: "conversation",
     target: { kind: "conversation", key: "refunds-builder" },
     viewport: { width: 1440, height: 1080 },
     requiredText: ["Idempotency-Key", "4 pass", "UPDATE"],
+    /* A conversation opens in the agent window; the frame is its reader. */
     prepare: async (page) => {
-      await clickLabel(page, "Open as a full pane");
-      await page.waitForTimeout(800);
       await clickText(page, "1 search");
       await page.waitForTimeout(500);
       await clickText(page, "wrote 1 file");
     },
-    crop: cropTo("[data-reader-full] .reader.conv"),
+    crop: cropTo(".reader.conv"),
     description: "A Claude Code conversation read as a chat: an edit shown as a diff, a test run with its output, and the answer.",
   },
   {
@@ -150,9 +201,14 @@ export const SHOTS: ReadmeShot[] = [
     prepare: async (page) => {
       await foldOrchestrator(page);
       await page.waitForTimeout(500);
-      /* The lane row's head opens the pipeline: its graph over the stages. */
+      /* A card is closed until opened; the lane row's head inside it opens
+         the pipeline: its graph over the stages. */
+      await clickLabel(page, "Expand «Idempotent refunds»");
+      await page.waitForTimeout(500);
       await page.locator('[data-open-stages][aria-label^="Idempotent refunds"]').first().click();
       await page.waitForSelector("[data-stages-sheet]");
+      await page.waitForTimeout(1_000);
+      await alignReadersToMessages(page, "[data-stages-sheet]");
     },
     crop: cropTo("[data-stages-sheet]"),
     description: "A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation side by side.",
@@ -162,7 +218,7 @@ export const SHOTS: ReadmeShot[] = [
     target: { kind: "project", project: "harbor-api" },
     viewport: WIDE,
     requiredText: ["Idempotent refunds", "Inbox", "Done", "Top of the Inbox", "Appearance", "Pipeline actions", "keeps working"],
-    absentText: ["tmux", "Untitled task"],
+    absentText: ["tmux", "Untitled task", "resume ·"],
     prepare: async (page) => {
       await foldOrchestrator(page);
       await page.waitForTimeout(500);
@@ -170,6 +226,9 @@ export const SHOTS: ReadmeShot[] = [
       await page.waitForSelector('[role="menu"]');
       await page.waitForTimeout(400);
     },
+    /* The card's column and the next one, so the menu and the cards around it
+       read at README width. */
+    crop: cropToColumns(["assigned", "blocked"]),
     description: "A task card's ⋯ menu: the columns in a row, icon actions with what hiding leaves running, the priorities, and the sections that open in place.",
   },
   {
@@ -205,12 +264,15 @@ export const SHOTS: ReadmeShot[] = [
     target: { kind: "project", project: "harbor-api" },
     viewport: PHONE,
     requiredText: ["Inbox", "In progress", "Waiting", "Done", "Back off webhook retries", "Idempotent refunds"],
-    absentText: ["Untitled task"],
+    absentText: ["Untitled task", "resume ·"],
     prepare: async (page) => {
       await page.locator('[data-phone-kanban-tab="assigned"]').first().click();
       await page.waitForTimeout(600);
+      /* Cards that need the operator come first in their column. */
+      const text = await page.evaluate(() => document.body.innerText);
+      if (!(text.indexOf("Back off webhook retries") < text.indexOf("Idempotent refunds"))) throw new Error("phone-board: the card waiting on your answer is not first in In progress");
     },
-    description: "A project's board on a phone: the four status columns as tabs, with the card that needs you pinned first.",
+    description: "A project's board on a phone: the four status columns as tabs, In progress counting the card that needs you and showing it first.",
   },
 ];
 
@@ -244,6 +306,10 @@ export function buildCaptureEnvironment(root: string, source = process.env): Nod
     NEXT_TELEMETRY_DISABLED: "1",
     /* A production server: without this it would send the install ping. */
     DELEGATUS_TELEMETRY: "0",
+    /* One multiplexed stream is a request that never ends, so a page using
+       it never reaches network idle; each stream on its own connection
+       draws the same page and lets the capture wait for it. */
+    LLV_STREAM_MUX: "0",
     TZ: "UTC",
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
@@ -813,8 +879,13 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
       const png = path.join(EVIDENCE_DIR, `${shot.id}.png`);
       const frame = await page.screenshot({ path: png, ...(crop ? { clip: crop } : {}) });
       /* A browser raster never carries provenance, so those two classes are
-         expected here; anything else the gate finds in the pixels is not. */
-      const rasterFindings = [...inspectPaths([png]).keys()].filter((finding) => !finding.startsWith("provenance_"));
+         expected here; anything else the gate finds in the pixels is not.
+         OCR is a second reader of a finished frame and never a capture
+         prerequisite: without tesseract the frame goes unread by OCR, and
+         the person committing it looks at every PNG themselves. */
+      const rasterClasses = [...inspectPaths([png]).keys()];
+      if (rasterClasses.includes("tool_unavailable")) process.stdout.write(`${shot.id}: no OCR on this machine; look at ${png} before committing its SVG\n`);
+      const rasterFindings = rasterClasses.filter((finding) => !finding.startsWith("provenance_") && finding !== "tool_unavailable");
       if (rasterFindings.length) throw new Error(`${shot.id}: the gate finds ${rasterFindings.join(", ")} in the rendered frame`);
       await page.emulateMedia({ media: "screen", colorScheme: "dark" });
       /* The print is one page the size of the screen: a card that crosses its
