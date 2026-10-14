@@ -248,7 +248,21 @@ conversation. Copilot agents start only this way.
 ## Prepare a project for pipelines
 
 A pipeline starts from a commit of your project, so the folder needs one
-before the first pipeline. Pick one of these:
+before the first pipeline. Git also needs to know who you are before it
+commits, and a new machine often has no identity set. `git config user.name`
+and `git config user.email` each print a value when it is. When either prints nothing, `git commit` stops
+with `Author identity unknown`. Set both once for every repository on the
+machine, with your own name and an address you are happy to see in public
+history (GitHub offers a no-reply address under **Settings** → **Emails**):
+
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+```
+
+To set an identity for this project only, leave out `--global`.
+
+Pick one of these:
 
 - **A repository on GitHub.** This is the default and the only setup that
   ends in a pull request. The project needs at least one commit and an
@@ -276,17 +290,22 @@ reason names the `origin/main` it could not fetch.
 
 ## If only one engine is connected
 
-Each pipeline stage runs on the engine its role is mapped to, and the
-default roles use both engines: the **Builder** runs on Claude Code and the
-**Reviewer** on Codex. With only one of them connected, a build-and-review
-pipeline is refused before any stage starts, with a message that a stage's
-engine is not connected. Before the first pipeline, do one of these:
+Each pipeline stage runs on the engine its role is mapped to. The general
+**Builder** and the **Reviewer** both default to Codex, so an installation
+with only Codex connected can run a build-and-review pipeline made of those
+two roles. Some Builder variants default to Claude Code instead: the
+documentation, frontend and trivial-size rows, and the fix rounds for
+documentation and frontend work. A pipeline that selects one of those, or a
+setup with only Claude Code connected, meets a stage whose engine is not
+connected. That pipeline is refused before any stage starts, with a message
+that a stage's engine is not connected. Before the first pipeline, do one of
+these:
 
 - connect the other engine in the setup guide's **Engines** step;
 - open the sidebar's ⋯ menu → **Settings** → **Roles: engine and model**
-  and move every role to the engine you have. When roles sit on an engine
-  that is not connected, the table says so above its rows and offers a
-  button that moves them to the connected one. A change applies to
+  and move every role you will use to the engine you have. When roles sit on
+  an engine that is not connected, the table says so above its rows and
+  offers a button that moves them to the connected one. A change applies to
   pipelines created after it;
 - or ask the orchestrator to set the engine on each stage of that one
   pipeline.

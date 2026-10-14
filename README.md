@@ -34,8 +34,6 @@ Delegatus runs on your own machine with your own agent accounts. What it adds:
 - **Made for a team.** People sign in as themselves, and two machines can
   share one board.
 
-New here? The [Delegatus guide](docs/guide/README.md) takes you from installation to your first pipeline.
-
 <a id="run"></a>
 
 ## Quick start
