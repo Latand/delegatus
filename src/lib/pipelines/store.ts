@@ -1663,7 +1663,7 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
     }
     pipeline.delivery = { target, disposition: "owner", publish: "enabled", active: true,
       ownerId: pipeline.id, epoch: expectedEpoch + 1, journal: pipeline.delivery.journal };
-    pipeline.publication = "remote-branch";
+    delete pipeline.publication;
     pipeline.publishedCommit = null;
     deliveryJournal(pipeline, "takeover", reason, conversationId);
     const action = pipeline.remoteAction;

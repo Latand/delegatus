@@ -10,6 +10,7 @@ import { mailboxPattern } from "@/lib/privacy/mailbox";
 import publicationFingerprints from "../../../scripts/privacy-known-value-fingerprints.json";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
+import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { procBackend } from "@/lib/proc";
 import { tryLockFenceExclusive } from "@/runtime-host/fenceLock";
 import { writeJsonDurably } from "@/lib/state/durableJson";
@@ -45,6 +46,36 @@ export type StageCommitControl = { recoveryHead?: string; beforeCommit: (head: s
     retried by the controller while retaining the passed verdict and index. */
 export const STAGE_COMMIT_TIMEOUT_MS = 15 * 60_000;
 export type PipelineBaseResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
+
+/** Only a missing configured remote (Git exit 2) is local-only. A failed
+    repository read must never silently remove a lane's publication fence. */
+export async function resolveDeliveryRemote(repoDir: string, requested: string | undefined, exec: ExecPort,
+  options: { allowLiteral?: boolean } = {}): Promise<
+  { ok: true; remote: string; repository: string } | { ok: false; error: string; status: 400 | 409 }
+> {
+  const name = requested === undefined ? "origin" : requested;
+  if (typeof name !== "string" || !name.trim() || name.startsWith("-") || /[\r\n\0]/.test(name)) {
+    return { ok: false, error: "invalid delivery remote", status: 400 };
+  }
+  const alias = await exec("git", ["remote", "get-url", "--push", name], repoDir);
+  const literal = options.allowLiteral && requested !== undefined
+    && (/[/:\\]/.test(name) || fs.existsSync(path.resolve(repoDir, name)));
+  if (alias.code === 2 && !literal) {
+    return { ok: true, remote: "", repository: localRepositoryProjectId(repoDir)! };
+  }
+  if (alias.code !== 2 && (alias.code !== 0 || !alias.stdout.trim())) {
+    return { ok: false, error: `could not read the repository's remotes: ${(alias.stderr || alias.stdout || "no output").trim()}; retry the request`, status: 409 };
+  }
+  // Creation also accepts stored literal targets from PR-refresh producers.
+  // Adoption uses configured names only, so it cannot invent a new target.
+  let remote = alias.code === 2 ? requested!.trim() : alias.stdout.trim();
+  if (remote.startsWith("-") || /[\r\n\0]/.test(remote)) return { ok: false, error: "invalid delivery remote", status: 400 };
+  // Preserve relative filesystem remotes in the sibling lane worktree.
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(remote) && !/^[^/]+:/.test(remote)) remote = path.resolve(repoDir, remote);
+  const repository = projectIdentityFromRemote(remote, repoDir)?.project;
+  if (!repository) return { ok: false, error: "invalid delivery remote", status: 400 };
+  return { ok: true, remote, repository };
+}
 
 async function stageCommitRefusal(staged: readonly string[] | null, exec: ExecPort, cwd: string): Promise<StageCommitRefusal> {
   if (staged) return { paths: [...staged] };
@@ -189,7 +220,14 @@ export async function resolvePipelineBaseAsync(
   const baseBranch = input.baseBranch?.trim() || DEFAULT_PIPELINE_BASE_BRANCH;
   if (!validBaseBranch(baseBranch)) return { ok: false, error: INVALID_BASE_BRANCH };
   const requestedRef = input.baseRef?.trim();
+  let localBase = false;
   if (!requestedRef) {
+    const origin = await exec("git", ["remote", "get-url", "origin"], repoDir, signal);
+    if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
+    localBase = origin.code === 2;
+    if (!localBase && origin.code !== 0) return failure("reading origin for the pipeline base", origin);
+  }
+  if (!requestedRef && !localBase) {
     const fetch = await exec("timeout",
       ["--signal=KILL", BASE_FETCH_TIMEOUT, "git", "fetch", "--no-tags", "origin", `+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`], repoDir, signal);
     if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
@@ -197,7 +235,7 @@ export async function resolvePipelineBaseAsync(
     if (fetch.code !== 0) return failure(`fetching origin/${baseBranch}`, fetch);
   }
   if (signal?.aborted) return { ok: false, error: "pipeline provisioning cancelled" };
-  const ref = requestedRef || `origin/${baseBranch}`;
+  const ref = requestedRef || (localBase ? `refs/heads/${baseBranch}` : `origin/${baseBranch}`);
   const resolved = await exec("git", ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], repoDir, signal);
   if (resolved.code !== 0) return failure(`resolving pipeline base ${ref}`, resolved);
   const baseRef = resolved.stdout.trim();

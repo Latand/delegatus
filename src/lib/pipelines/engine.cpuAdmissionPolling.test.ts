@@ -66,6 +66,7 @@ async function harness(words = ["one", "two"]) {
     cpuAdmissionSuspend: adapter.cpuAdmissionSuspend, drainHold: adapter.drainHold,
     exec: async (_command: string, args: string[], cwd: string) => {
       const pipeline = loadPipelines().find(p => p.worktreeDir === cwd);
+      if (args[0] === "remote" && args[1] === "get-url") return { code: 2, stdout: "", stderr: "no such remote" };
       if (args[0] === "commit") {
         const result = await realExec("bash", ["scripts/gate-slot.sh", "true"], process.cwd(), {
           ...process.env, DELEGATUS_AGENT_CPU: "off", DELEGATUS_CPU_PRESSURE: "on",

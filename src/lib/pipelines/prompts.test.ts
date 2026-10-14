@@ -370,3 +370,17 @@ test("design and UI stages receive the task-bound prototype publishing contract"
   expect(prompt).toContain("maxRounds 2");
   for (const role of ["builder", "architect"]) expect(ROLE_DEFAULTS.find(r => r.id === role)!.promptScaffold).toContain("publish_prototype_review");
 });
+
+test("an owner without a delivery remote gets a local commit instruction", () => {
+  const stage: PipelineStage = { id: "build", kind: "run", prompt: "Build", next: null,
+    effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } };
+  const pipeline = buildPipeline({ id: "local", task: "Build", project: "viewer", repoDir: "/repo", stages: [stage],
+    srcPath: null, srcConversationId: null, now: "now" });
+  pipeline.delivery = { target: { repository: "repo-local", remote: "", branch: `refs/heads/${pipeline.branch}` },
+    disposition: "owner", publish: "enabled", active: true, ownerId: pipeline.id, epoch: 1, journal: [] };
+  const local = renderStagePrompt(pipeline, stage, stage.effectiveRole, "");
+  expect(local).toContain("keep the commits on this local branch and do not push");
+  expect(local).not.toContain("Push this branch");
+  pipeline.delivery.target.remote = "https://example.invalid/repo.git";
+  expect(renderStagePrompt(pipeline, stage, stage.effectiveRole, "")).toContain("Push this branch.");
+});

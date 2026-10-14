@@ -1913,7 +1913,8 @@ test("delivery creation clamps the second target lane and replays its original k
   expect(h.calls.some((call) => call.startsWith("git push"))).toBe(false);
   const takeover = await patchPipeline(second.pipeline!.id, { action: "takeover", expectedOwner: first.pipeline!.id, expectedEpoch: 1, reason: "comparison selected" }, h.ports,
     { kind: "agent", role: "builder", conversationId: "conversation_requester" });
-  expect(takeover.pipeline).toMatchObject({ publication: "remote-branch", delivery: { disposition: "owner", active: true, epoch: 2 } });
+  expect(takeover.pipeline!.publication).toBeUndefined();
+  expect(takeover.pipeline).toMatchObject({ delivery: { disposition: "owner", active: true, epoch: 2 } });
   expect(takeover.pipeline?.delivery?.journal.at(-1)?.conversationId).toBe("conversation_requester");
   expect((await patchPipeline(first.pipeline!.id, { action: "publish", acceptedSha: ORIGIN_MAIN_SHA }, h.ports)).error).toContain(second.pipeline!.id);
 });
