@@ -12,6 +12,42 @@ test("fixture tree cleanup never signals an exited root's old group", async () =
   finally { signal.mockRestore(); }
 }, 3_000);
 
+test("tree and direct fixture cleanup share one root-stop owner", async () => {
+  const child = ownFixtureTree(spawn("/bin/sleep", ["30"], { stdio: "ignore" }));
+  const root = captureProcessIdentity(child.pid!);
+  const originalKill = process.kill;
+  const signals: NodeJS.Signals[] = [];
+  const send = spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (pid === child.pid) signals.push(signal as NodeJS.Signals);
+    return originalKill(pid, signal);
+  });
+  try {
+    await Promise.all([stopFixtureTree(child), stopFixtureProcess(child)]);
+    expect(signals).toEqual(["SIGTERM"]);
+    expect(processIdentityStatus(root)).toBe("dead");
+  } finally { send.mockRestore(); await stopFixtureTree(child); }
+}, 3_000);
+
+test("tree cleanup accepts terminal kernel evidence before the root handle exit event", async () => {
+  const child = ownFixtureTree(spawn("/bin/sleep", ["30"], { stdio: "ignore" }));
+  const originalExited = procBackend.processExited.bind(procBackend);
+  const originalKill = process.kill;
+  let termSent = false;
+  const exited = spyOn(procBackend, "processExited").mockImplementation(pid =>
+    pid === child.pid && termSent ? true : originalExited(pid));
+  const send = spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (pid === child.pid && signal === "SIGTERM") termSent = true;
+    return originalKill(pid, signal);
+  });
+  try {
+    await stopFixtureTree(child);
+    expect(send.mock.calls.filter(([pid]) => pid === child.pid)).toEqual([[child.pid!, "SIGTERM"]]);
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+  } finally {
+    send.mockRestore(); exited.mockRestore(); await stopFixtureTree(child);
+  }
+}, 3_000);
+
 test("fixture tree cleanup refuses a reused start token before sending any signal", async () => {
   const child = ownFixtureTree(spawn("/bin/sleep", ["30"], { stdio: "ignore" }));
   const original = procBackend.processIdentity.bind(procBackend);
@@ -19,6 +55,50 @@ test("fixture tree cleanup refuses a reused start token before sending any signa
   const signal = spyOn(process, "kill");
   try { await stopFixtureTree(child); expect(signal).not.toHaveBeenCalled(); }
   finally { signal.mockRestore(); probe.mockRestore(); await stopFixtureProcess(child); }
+}, 3_000);
+
+test("fixture tree cleanup rechecks a temporarily unverified member before escalation", async () => {
+  const child = ownFixtureTree(spawn("/bin/sleep", ["30"], { stdio: "ignore" }));
+  const originalIdentity = procBackend.processIdentity.bind(procBackend);
+  const originalKill = process.kill;
+  let termSent = false;
+  let unverified = false;
+  const token = spyOn(procBackend, "processIdentity").mockImplementation(pid => {
+    if (pid === child.pid && termSent && !unverified) { unverified = true; return null; }
+    return originalIdentity(pid);
+  });
+  const send = spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (pid === child.pid && signal === "SIGTERM") { termSent = true; return true; }
+    return originalKill(pid, signal);
+  });
+  try {
+    await stopFixtureTree(child);
+    expect(unverified).toBe(true);
+    expect(send.mock.calls.filter(([pid]) => pid === child.pid)).toEqual([[child.pid!, "SIGTERM"], [child.pid!, "SIGKILL"]]);
+  } finally {
+    send.mockRestore(); token.mockRestore(); await stopFixtureProcess(child);
+  }
+}, 3_000);
+
+test("fixture tree cleanup keeps an observed exit terminal across later kernel reads", async () => {
+  const child = ownFixtureTree(spawn("/bin/sleep", ["30"], { stdio: "ignore" }));
+  const originalExited = procBackend.processExited.bind(procBackend);
+  let reads = 0;
+  // A zombie is visible once; after reaping, the stat read can be absent.
+  // Keep the identity read alive to model the preceding read's stale result.
+  const exited = spyOn(procBackend, "processExited").mockImplementation(pid =>
+    pid === child.pid ? ++reads % 2 === 0 : originalExited(pid));
+  const originalKill = process.kill;
+  const send = spyOn(process, "kill").mockImplementation((pid, signal) => originalKill(pid, signal));
+  try {
+    await stopFixtureTree(child);
+    expect(send.mock.calls).toEqual([[child.pid!, "SIGTERM"]]);
+    expect(reads).toBe(2);
+  } finally {
+    send.mockRestore();
+    exited.mockRestore();
+    await stopFixtureProcess(child);
+  }
 }, 3_000);
 
 test("fixture tree cleanup reaps descendants within its bound and preserves a same-argv bystander", async () => {
@@ -36,6 +116,27 @@ test("fixture tree cleanup reaps descendants within its bound and preserves a sa
     for (const descendant of descendants) expect(processIdentityStatus(descendant) !== "alive" || procBackend.processExited(descendant.pid)).toBe(true);
     expect(processIdentityStatus(other)).toBe("alive");
     await stopFixtureTree(child);
+    expect(processIdentityStatus(other)).toBe("alive");
+  } finally { await stopFixtureTree(child); await stopFixtureTree(bystander); }
+}, 5_000);
+
+test("tree cleanup stops a respawning wrapper before ending its captured child", async () => {
+  const script = "trap '' TERM; while :; do sleep 30 & printf '{\"pid\":%s}\\n' $!; wait; done";
+  const reports: Array<{ pid: number }> = [];
+  const child = ownFixtureTree(spawn("/bin/sh", ["-c", script], { stdio: ["ignore", "pipe", "pipe"], detached: true }));
+  const bystander = ownFixtureTree(spawn("/bin/sh", ["-c", script], { stdio: ["ignore", "pipe", "pipe"], detached: true }));
+  const other = captureProcessIdentity(bystander.pid!);
+  try {
+    const [report] = await Promise.all([
+      fixtureReport(child, "respawning wrapper", reports),
+      fixtureReport(bystander, "respawning bystander", []),
+    ]);
+    const descendant = captureProcessIdentity(report.pid);
+    expect(processIdentityStatus(descendant)).toBe("alive");
+    await stopFixtureTree(child);
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    expect(processIdentityStatus(descendant) !== "alive" || procBackend.processExited(descendant.pid)).toBe(true);
+    expect(reports).toEqual([report]);
     expect(processIdentityStatus(other)).toBe("alive");
   } finally { await stopFixtureTree(child); await stopFixtureTree(bystander); }
 }, 5_000);
@@ -119,5 +220,23 @@ test("a stalled owned report reaps its child tree and preserves a same-argv byst
     expect(processIdentityStatus(other)).toBe("alive");
   } finally {
     await stopFixtureTree(child); await stopFixtureTree(bystander);
+  }
+}, 3_000);
+
+test("a stalled unregistered report stops its handle and preserves a same-argv bystander", async () => {
+  const child = spawn("/bin/sleep", ["30"], { stdio: ["ignore", "pipe", "pipe"] });
+  const bystander = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
+  const other = captureProcessIdentity(bystander.pid!);
+  const identity = captureProcessIdentity(child.pid!);
+  try {
+    await expect(fixtureReport(child, "unregistered stalled child", [], 100)).rejects.toThrow(
+      "unregistered stalled child did not report within 100ms",
+    );
+    expect(processIdentityStatus(identity)).toBe("dead");
+    expect(processIdentityStatus(other)).toBe("alive");
+    expect(bystander.exitCode).toBeNull();
+  } finally {
+    await stopFixtureProcess(child);
+    await stopFixtureProcess(bystander);
   }
 }, 3_000);
