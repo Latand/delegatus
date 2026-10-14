@@ -1,3 +1,7 @@
+import { appendLifecycleEvents } from "@/lib/lifecycle/journal";
+import { operatorSafeSummary } from "@/lib/lifecycle/vocabulary";
+import { canonicalProject } from "@/lib/projects/aliases";
+import { recordSpawnNoticeObligation } from "@/lib/spawnNotice/store";
 import { loadPipelinesForProjection } from "@/lib/pipelines/store";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { orchestratorSeatForOrUnknown } from "@/lib/orchestrator/seats";
@@ -5,7 +9,8 @@ import { orchestratorSeatForOrUnknown } from "@/lib/orchestrator/seats";
 import { firstRunsElsewhere } from "@/lib/links/linked";
 import { cleanTitle, durableSemanticTitle, firstMeaningfulPromptLine } from "@/lib/title";
 
-import { commitFailedLaunchMembership, commitTaskMembership, type FailedLaunchIdentity, type MembershipAdmission, type MembershipIdentity, type MembershipInput, type MembershipResult } from "./membership";
+import { loadTasks } from "./store";
+import { commitFailedLaunchMembership, commitTaskMembership, type FailedLaunchIdentity, type FailedLaunchTaskMove, type MembershipAdmission, type MembershipIdentity, type MembershipInput, type MembershipResult } from "./membership";
 
 /**
  * Task membership at the shared launch boundary (#1586).
@@ -243,33 +248,105 @@ export interface FailedLaunchReceipt {
   purpose: string;
   artifactLifecycle: string;
   error: string | null;
+  launcher?: { conversationId: string; notify: boolean } | null;
+  rejection?: unknown;
+  agentRole?: string | null;
+  launchProfile?: { title?: string | null };
+  cwd?: string;
+  explicitProject?: string | null;
+  createdAt?: string;
+}
+
+/** A failed launch can have durable reports while its task transaction was
+    refused. Keep that task obligation visible to the bounded receipt repair
+    pass until the launch's linked assignment has settled. */
+export function failedLaunchTaskSettlementPending(receipt: FailedLaunchReceipt): boolean {
+  if (receipt.purpose !== "launch" || receipt.artifactLifecycle !== "pending") return false;
+  const launchKey = receipt.clientAttemptId ?? receipt.launchId;
+  return loadTasks().some(task => {
+    if (task.origin?.kind === "launch" && (task.origin.key === launchKey || task.origin.key === receipt.launchId)) return false;
+    return task.assignments.some(assignment => assignment.launchId === receipt.launchId
+      && assignment.state === "linked"
+      && (!assignment.conversationId || assignment.conversationId === receipt.conversationId));
+  });
 }
 
 /**
  * The task side of a launch that failed (#2170): the membership admission
- * committed before anything ran is settled, so the task does not sit in
- * Assigned with nobody on it. Only a fresh launch that never wrote a
+ * committed before anything ran is settled, restoring the task status when
+ * linking moved it. Only a fresh launch that never wrote a
  * transcript qualifies — a resume or migration successor continues a
  * conversation whose membership predates it and stays exactly as it was.
  *
  * The receipt has already failed when this runs, and that is the fact the
  * launching caller reports; a task store that cannot take this write costs the
- * board a stale column, never the failure its caller is answering with.
+ * board a stale column; the receipt remains failed. Launcher reports and
+ * lifecycle events use separate idempotent writes so one failed write cannot
+ * suppress the other. Refusals before acceptance silence these reports.
  */
 export function settleFailedLaunch(
   receipt: FailedLaunchReceipt,
-  commit: (launch: FailedLaunchIdentity) => boolean = commitFailedLaunchMembership,
+  commit: (launch: FailedLaunchIdentity) => FailedLaunchTaskMove[] = commitFailedLaunchMembership,
+  options: {
+    announce?: boolean;
+    launcherProject?: string | null;
+    appendLifecycleEvents?: typeof appendLifecycleEvents;
+    recordSpawnNoticeObligation?: typeof recordSpawnNoticeObligation;
+  } = {},
 ): boolean {
   if (receipt.purpose !== "launch" || receipt.artifactLifecycle !== "pending") return false;
+  let moves: FailedLaunchTaskMove[] = [];
+  let taskCommitAvailable = true;
   try {
-    return commit({
+    moves = commit({
       launchId: receipt.launchId,
       conversationId: receipt.conversationId,
       clientAttemptId: receipt.clientAttemptId,
       error: receipt.error,
     });
   } catch (error) {
+    taskCommitAvailable = false;
     console.warn(`[tasks] failed launch ${receipt.launchId} left its task unsettled: ${error instanceof Error ? error.message : String(error)}`);
-    return false;
   }
+  if (moves.length === 0 && taskCommitAvailable) {
+    /* A report retry runs after the task transaction may already have
+       committed. Rebuild its task list from the failed assignment rows so a
+       notice refused on the first pass still names the work it affected. */
+    try {
+      moves = loadTasks().flatMap(task => task.assignments.some(assignment =>
+        assignment.launchId === receipt.launchId
+          && assignment.state === "failed"
+          && (!assignment.conversationId || assignment.conversationId === receipt.conversationId)
+          && assignment.error === (receipt.error?.trim() || "launch failed"))
+        ? [{ taskId: task.id, from: task.assignments.find(assignment => assignment.launchId === receipt.launchId)?.statusBeforeLink ?? task.status, to: task.status }]
+        : []);
+    } catch (error) {
+      console.warn(`[tasks] failed launch ${receipt.launchId} task report lookup failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const launcher = receipt.launcher;
+  if (options.announce !== false && !receipt.rejection && launcher && launcher.conversationId !== receipt.conversationId) {
+    const at = new Date().toISOString();
+    const title = receipt.launchProfile?.title?.trim() || "spawned agent";
+    const reason = receipt.error?.trim() || "launch failed";
+    try {
+      const project = options.launcherProject || receipt.explicitProject || productionLaunchMembershipPorts.projectForCwd(receipt.cwd ?? "")
+        || loadTasks().find(task => task.assignments.some(row => row.launchId === receipt.launchId))?.project;
+      (options.appendLifecycleEvents ?? appendLifecycleEvents)([{ key: `spawn:${receipt.launchId}:failed`, type: "spawn_failed", at,
+        project: project ? canonicalProject(project) : null, conversationId: receipt.conversationId, role: receipt.agentRole,
+        summary: `${operatorSafeSummary(title, 45)}: ${operatorSafeSummary(reason, 70)}; agent ${receipt.conversationId}; launch ${receipt.launchId}; launcher ${launcher.conversationId}; ${moves.map(task => `task ${task.taskId}: ${task.from} → ${task.to}`).join("; ")}`,
+      }]);
+    } catch (error) {
+      console.warn(`[spawn] failed launch ${receipt.launchId} lifecycle report failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    try {
+      (options.recordSpawnNoticeObligation ?? recordSpawnNoticeObligation)({ childConversationId: receipt.conversationId, turnId: `launch:${receipt.launchId}`,
+        launcherConversationId: launcher.conversationId, outcome: "lost", startedAt: receipt.createdAt ?? null, endedAt: at,
+        lost: { launchId: receipt.launchId, title, reason, tasks: moves },
+      });
+    } catch (error) {
+      console.warn(`[spawn] failed launch ${receipt.launchId} launcher report failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return moves.length > 0;
 }

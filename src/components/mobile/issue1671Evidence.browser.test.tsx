@@ -6915,6 +6915,12 @@ describe("a new conversation's first message is a normal row on the phone", () =
 });
 
 describe("fast TTS header", () => {
+  browserTest("read-aloud provider voice menu states", async () => {
+    const { captureReadAloudVoiceMenu } = await import("@/components/kanban/issue1695BrowserHarness");
+    const browser = await launchChromium();
+    try { await captureReadAloudVoiceMenu(browser, true); } finally { await browser.close(); }
+  }, 600_000);
+
   browserTest("Fish Audio read-aloud menu models in both locales and free, paid and ended states", async () => {
     const { captureFishAudioMenu } = await import("@/components/kanban/issue1695BrowserHarness");
     const browser = await launchChromium();
@@ -9870,6 +9876,67 @@ describe("prototype review on the phone", () => {
 });
 
 describe("short questionnaire rendered evidence", () => {
+  browserTest("question skip: open and decided review in both languages", async () => {
+    const out = path.resolve(process.env.QUESTION_SKIP_PNG_DIR ?? ".artifacts/prototype-review-phone/question-skip"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, headless: true, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const taskId of ["t-search", "t-disk"]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=questions`, { width: 390, height: 844 }, scheme, lang, "reduce", true);
+        try {
+          await page.waitForSelector("[data-mobile2-bar]");
+          await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          await page.locator(`[data-phone-card-prototype-button="${taskId}"]`).click();
+          await page.waitForSelector("[data-prototype-questions]");
+          const fields = page.locator("[data-prototype-question]");
+          const question = await fields.nth(1).getAttribute("data-prototype-question");
+          if (!question) throw new Error("the second question is missing");
+          const skip = page.locator(`[data-prototype-question-skip="${question}"]`);
+          expect(await skip.count()).toBe(1);
+          await skip.click();
+          for (const state of ["open", "decided"] as const) {
+            if (state === "decided") {
+              await page.locator("[data-prototype-save]").click();
+              await page.waitForSelector("[data-prototype-decision]");
+              const posts = await page.evaluate(() => (window as unknown as { protoPosts: Array<{ answers: Array<{ questionId: string; options: number[]; skipped?: true }> }> }).protoPosts);
+              expect(posts).toHaveLength(1);
+              expect(posts[0]!.answers[1]).toEqual({ questionId: question, options: [], skipped: true });
+              expect(posts[0]!.answers.filter(answer => answer.skipped)).toHaveLength(1);
+            }
+            // Keep the long question's heading below the sticky round context.
+            await fields.nth(1).evaluate(field => {
+              const body = field.closest<HTMLElement>("[data-mobile2-sheet-body]")!;
+              const context = body.querySelector("[data-prototype-context]")!.getBoundingClientRect();
+              body.scrollTop += field.getBoundingClientRect().top - body.getBoundingClientRect().top - context.height - 8;
+            });
+            await skip.scrollIntoViewIfNeeded();
+            const reading = await capturePrototypeQuestions(page, true);
+            expect(reading.sideways).toBeLessThanOrEqual(1);
+            expect(reading.skipRows.length).toBe(state === "decided" ? 1 : reading.questionCount);
+            for (const row of reading.skipRows) {
+              expect(row.height).toBeGreaterThanOrEqual(44); expect(row.insideFieldset).toBe(true);
+              expect(row.clipped).toBe(false); expect(row.overlapsOptions).toBe(false);
+              expect(row.checked).toBe(row.question === question); expect(row.disabled).toBe(state === "decided");
+              expect(row.borderStyle).toBe(row.checked ? "solid" : "dashed");
+              if (row.checked) expect(row.background).not.toBe("rgba(0, 0, 0, 0)");
+              if (row.checked) expect(row.markBackground).not.toBe("rgba(0, 0, 0, 0)");
+              if (row.checked && state === "open") expect(row.optionsOpacity).toBeLessThan(1);
+              else expect(row.optionsOpacity).toBe(1);
+              if (!row.checked) expect(row.label).toBe(lang === "uk" ? "Вже вирішено" : "Already decided");
+              expect(row.reason).toBe(row.checked ? (lang === "uk" ? "Пропущено: вже вирішено або неактуально" : "Skipped: already decided or no longer relevant") : (lang === "uk" ? "Вже вирішено: пропустити це питання, воно неактуальне" : "Already decided: skip this question, it is no longer relevant"));
+            }
+            expect(pageErrors).toEqual([]);
+            readings.push({ lang, scheme, taskId, state, width: 390, ...reading, pageErrors });
+            await page.screenshot({ path: path.join(out, `${scheme}-${lang}-${taskId}-${state}.png`) });
+          }
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/prototype-review-phone", { recursive: true });
+      fs.writeFileSync("evidence/prototype-review-phone/question-skip.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+
   browserTest("questions only, images, multi-select, long text and answered in both languages and themes", async () => {
     const out = path.resolve(".artifacts/prototype-review-phone/questions"); fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);

@@ -2193,14 +2193,14 @@ test("an uncertain first-message admission stays lookup-only until its budget is
       const state = await runningHost.health();
       targetRegistry.setStructuredHostClaimed(key, {
         kind: "codex-app-server", endpoint: state.endpoint,
-        process: { pid: process.pid, startIdentity: "pre-admission-host" },
+        process: captureProcessIdentity(process.pid),
         eventCursor: state.eventCursor, protocolVersion: state.protocolVersion,
         writerClaimEpoch: claimEpoch, activeTurnRef: state.activeTurnRef,
         pendingAttention: state.pendingAttention, activeFlags: state.activeFlags,
       }, "idle", claimOwner, claimEpoch);
       return () => {};
     },
-    processIdentity: () => ({ pid: process.pid, startIdentity: "pre-admission-host" }),
+    processIdentity: () => captureProcessIdentity(process.pid),
   });
 
   expect(response).toMatchObject({ state: "path-pending", initialMessage: "queued", retrySafe: false });
@@ -6483,8 +6483,12 @@ describe.each(["http", "stdio"] as const)("a Claude spawn born on a non-routed a
         });
       },
     });
-    const previous = Object.fromEntries(["LLV_MCP_TRANSPORT", "LLV_MCP_HTTP_URL", "LLV_TOKEN", "LLV_CLAUDE_BINARY"]
+    const previous = Object.fromEntries(["LLV_MCP_TRANSPORT", "LLV_MCP_HTTP_URL", "LLV_TOKEN", "LLV_CLAUDE_BINARY", "LLV_AGENT_MEMORY", "DELEGATUS_AGENT_MEMORY"]
       .map((name) => [name, process.env[name]] as const));
+    // The owned test runner contains this real child. Memory-scope admission
+    // has its own host tests; this fixture exercises account routing.
+    delete process.env.DELEGATUS_AGENT_MEMORY;
+    process.env.LLV_AGENT_MEMORY = "off";
     if (transport === "http") {
       process.env.LLV_MCP_TRANSPORT = "http";
       process.env.LLV_MCP_HTTP_URL = `http://127.0.0.1:${endpoint.port}/api/mcp`;

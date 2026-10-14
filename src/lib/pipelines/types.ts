@@ -207,11 +207,14 @@ export type PipelineVerdictRecovery = {
     pipeline runs. Creating or starting one without `baseRef` still fetches
     `origin/<base>` once, time-bounded, so it starts from the current base —
     since #1799 the controller makes that fetch after the call is answered,
-    outside the registry lease; a pinned `baseRef` never touches the network.
+    outside the registry lease. Without origin it resolves local
+    `refs/heads/<base>`; a pinned `baseRef` never touches the network.
 
-    `remote-branch` (also the default for an owner delivery whose older record
-    has no publication field): Every accepted revision
-    is pushed to `origin/<branch>`, reviewers launch only on a published head,
+    Omitted: an owner delivery with a remote uses `remote-branch`; an owner
+    without one stays local. Comparison deliveries use `internal`.
+
+    `remote-branch` (requires a delivery remote): Every accepted revision
+    is pushed to the stored delivery branch, reviewers launch only on a published head,
     an approval settles only when the remote carries the reviewed SHA, and a
     terminal stage completes only once its revision is remotely durable. A
     publication failure is its own state beside the verdict and never rewrites
@@ -1015,9 +1018,9 @@ export type Pipeline = {
   /** The caller explicitly pinned baseRef; automatically fetched bases are not pins. */
   baseRefPinned?: boolean;
   lastPassedCommit: string;
-  /** Absent reads as `internal`. See {@link PipelinePublication}. */
+  /** Omitted publishes when the owner delivery has a remote; otherwise local-only. See {@link PipelinePublication}. */
   publication?: PipelinePublication;
-  /** The revision the orchestrator last published to `origin/<branch>` under
+  /** The revision the orchestrator last published to the delivery branch under
       the `remote-branch` policy. Under that policy the review layer fences
       every round on the published head, so publication is the pipeline's job,
       not a stage's; recording what landed lets a steady state skip the remote
@@ -1221,7 +1224,7 @@ export type CreatePipelineRequest = {
   /** Creator transcript. API callers may omit it only when caller authentication can derive it. */
   src?: string;
   autoStart?: boolean;
-  /** Defaults to `internal`; see {@link PipelinePublication}. */
+  /** Omitted follows the delivery remote; internal never pushes; remote-branch requires a remote. */
   publication?: PipelinePublication;
 };
 
@@ -1230,6 +1233,7 @@ export type CreatePipelineRequest = {
    to one and forgotten in the other is the defect this constant prevents. */
 export const PIPELINE_ACTIONS = [
   "publish",
+  "set-delivery-remote",
   "takeover",
   "start",
   "update-draft",
@@ -1281,6 +1285,8 @@ export type PatchPipelineRequest = {
   expectedOwner?: string;
   expectedEpoch?: number;
   acceptedSha?: string;
+  /** set-delivery-remote: configured Git remote name, default origin; fills an empty target only. */
+  remote?: string;
   reason?: string;
   action: PipelineAction;
   applyNow?: boolean;

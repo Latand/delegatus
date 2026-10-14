@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { readBounded, voiceRefusal, providerErrorMessage } from "@/lib/ttsVoices";
 import { redactSecrets } from "@/lib/review";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
-import { MAX_TTS_TEXT_LENGTH } from "@/lib/tts";
+import { MAX_TTS_TEXT_LENGTH, isPcmTtsBackend } from "@/lib/tts";
 import { activeTtsOption, readFishAudioApiKey, readOpenAiApiKey, resolveTtsBackend, ttsBackendInfo, type TtsBackend, type TtsBackendOption } from "@/lib/ttsBackend";
 import { readElevenLabsApiKey, readSonioxApiKey } from "@/lib/transcribeBackend";
 
@@ -75,31 +76,19 @@ function boundedAudioStream(body: ReadableStream<Uint8Array>, release: () => voi
   });
 }
 
-/**
- * The upstream synthesis call per provider.
- *
- * OpenAI and Soniox answer with audio bytes on the response body, so the route
- * streams those straight through (Soniox's realtime socket delivers base64 JSON
- * frames, which the audio-element playback in SpeakButton would have to
- * reassemble anyway). ElevenLabs is asked for `/with-timestamps` instead: the
- * same mp3, base64-encoded inside a JSON envelope that also carries a start and
- * an end second for every character. That alignment is what turns the karaoke
- * follow-along and click-to-seek of issue #1022 from proportional guessing into
- * word-exact positions, so the route passes it through beside the audio.
- */
+/** One provider request, using the configured voice without fallback. */
 function synthesisRequest(
   backend: TtsBackend,
   option: TtsBackendOption,
   apiKey: string,
   text: string,
   fast = false,
-): { url: string; headers: Record<string, string>; body: string; timestamped: boolean } {
+): { url: string; headers: Record<string, string>; body: string } {
   if (backend === "openai") {
     return {
       url: OPENAI_SPEECH_URL,
       headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({ model: option.model, voice: option.voice, input: text, response_format: "mp3" }),
-      timestamped: false,
     };
   }
   if (backend === "fishaudio") {
@@ -107,7 +96,6 @@ function synthesisRequest(
       url: "https://api.fish.audio/v1/tts",
       headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json", model: option.model },
       body: JSON.stringify({ text, format: "pcm", sample_rate: 24000, latency: "balanced", ...(option.voice === "default" ? {} : { reference_id: option.voice }) }),
-      timestamped: false,
     };
   }
   if (backend === "soniox") {
@@ -122,14 +110,12 @@ function synthesisRequest(
         ...(fast ? { sample_rate: 24000 } : {}),
         text,
       }),
-      timestamped: false,
     };
   }
   return {
-    url: `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(option.voice)}/with-timestamps`,
-    headers: { "xi-api-key": apiKey, "content-type": "application/json", accept: "application/json" },
+    url: `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(option.voice)}/stream?output_format=pcm_24000`,
+    headers: { "xi-api-key": apiKey, "content-type": "application/json", accept: "audio/pcm" },
     body: JSON.stringify({ model_id: option.model, text }),
-    timestamped: true,
   };
 }
 
@@ -153,47 +139,6 @@ function billedBy(backend: TtsBackend, option: TtsBackendOption, fast = false): 
     "x-tts-encoding": fast ? "pcm_s16le" : "mp3",
     ...(fast ? { "x-tts-sample-rate": "24000", "x-tts-channels": "1" } : {}),
   };
-}
-
-/** Reads a whole upstream body under the same ceiling the audio stream keeps. */
-async function readBounded(body: ReadableStream<Uint8Array>, limit: number): Promise<string | null> {
-  const reader = body.getReader();
-  const parts: Uint8Array[] = [];
-  let bytes = 0;
-  try {
-    for (let result = await reader.read(); !result.done; result = await reader.read()) {
-      bytes += result.value.byteLength;
-      if (bytes > limit) {
-        await reader.cancel("TTS response exceeded the size limit");
-        return null;
-      }
-      parts.push(result.value);
-    }
-  } catch {
-    return null;
-  }
-  const joined = new Uint8Array(bytes);
-  let offset = 0;
-  for (const part of parts) { joined.set(part, offset); offset += part.byteLength; }
-  return new TextDecoder().decode(joined);
-}
-
-/** The character alignment of a `/with-timestamps` payload, or null when absent. */
-function alignmentOf(value: unknown): { characters: string[]; starts: number[]; ends: number[] } | null {
-  if (!value || typeof value !== "object") return null;
-  const candidate = value as {
-    characters?: unknown;
-    character_start_times_seconds?: unknown;
-    character_end_times_seconds?: unknown;
-  };
-  const characters = candidate.characters;
-  const starts = candidate.character_start_times_seconds;
-  const ends = candidate.character_end_times_seconds;
-  if (!Array.isArray(characters) || !Array.isArray(starts) || !Array.isArray(ends)) return null;
-  if (characters.length !== starts.length || starts.length !== ends.length || characters.length === 0) return null;
-  if (!characters.every((entry) => typeof entry === "string")) return null;
-  if (!starts.every((entry) => typeof entry === "number") || !ends.every((entry) => typeof entry === "number")) return null;
-  return { characters: characters as string[], starts: starts as number[], ends: ends as number[] };
 }
 
 export async function GET(): Promise<NextResponse<{ available: boolean }>> {
@@ -229,7 +174,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   const body = parsed as { text?: unknown; mode?: unknown };
   if (body.mode !== undefined && body.mode !== "soniox-pcm" && body.mode !== "pcm") return NextResponse.json({ error: "invalid speech mode" }, { status: 400 });
   const fast = body.mode === "soniox-pcm" || body.mode === "pcm";
-  if ((fast && backend !== "soniox" && backend !== "fishaudio") || (backend === "fishaudio" && body.mode !== "pcm")) return NextResponse.json({ error: "speech backend changed; refresh configuration" }, { status: 409 });
+  if ((fast && !isPcmTtsBackend(backend)) || ((backend === "fishaudio" || backend === "elevenlabs") && body.mode !== "pcm")) return NextResponse.json({ error: "speech backend changed; refresh configuration" }, { status: 409 });
   if (typeof body.text !== "string" || !body.text.trim()) {
     return NextResponse.json({ error: "text must be a non-empty string" }, { status: 400 });
   }
@@ -267,40 +212,19 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   if (signal.aborted) { void upstream.body?.cancel().catch(() => undefined); release(); return new Response(null, { status: 499 }); }
   if (!upstream.ok || !upstream.body) {
-    void upstream.body?.cancel().catch(() => undefined);
+    const payload = upstream.body ? await readBounded(upstream.body, 8192, signal) : null;
     release();
-    const status = ((backend === "soniox" && [400, 401, 402, 403, 429].includes(upstream.status)) || (backend === "fishaudio" && [400, 401, 402, 403, 404, 429].includes(upstream.status))) ? upstream.status : 502;
-    return NextResponse.json({ error: `${backend} TTS failed (HTTP ${upstream.status})`, ...(backend === "fishaudio" && option.model === "s2.1-pro-free" && [402, 403, 404].includes(upstream.status) ? { code: "fishaudio-free-refused" } : {}) }, {
+    const refusal = voiceRefusal(backend, upstream.status, payload);
+    if (refusal) return NextResponse.json({ error: `${backend} does not know voice «${option.voice}»`, code: "voice-not-found", voice: option.voice }, { status: 422 });
+    const message = backend === "elevenlabs" ? providerErrorMessage(payload, apiKey) : null;
+    const status = ((backend === "soniox" && [400, 401, 402, 403, 429].includes(upstream.status)) || (["fishaudio", "elevenlabs"].includes(backend) && [400, 401, 402, 403, 404, 429].includes(upstream.status))) ? upstream.status : 502;
+    return NextResponse.json({ error: message ?? `${backend} TTS failed (HTTP ${upstream.status})`, ...(backend === "fishaudio" && option.model === "s2.1-pro-free" && [402, 403, 404].includes(upstream.status) ? { code: "fishaudio-free-refused" } : {}) }, {
       status, headers: status === 429 ? { "retry-after": safeRetryAfter(upstream.headers.get("retry-after")) } : {},
     });
   }
 
   let contentType = upstream.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() ?? "";
-  if (backend === "fishaudio" && (contentType.startsWith("audio/") || contentType === "application/octet-stream")) contentType = "audio/pcm";
-  if (request.timestamped) {
-    const payload = await readBounded(upstream.body, MAX_AUDIO_BYTES);
-    release();
-    let envelope: unknown;
-    try {
-      envelope = payload === null ? null : JSON.parse(payload);
-    } catch {
-      envelope = null;
-    }
-    const audio = (envelope as { audio_base64?: unknown } | null)?.audio_base64;
-    if (typeof audio !== "string" || !audio) {
-      return NextResponse.json({ error: `${backend} TTS returned invalid audio` }, { status: 502 });
-    }
-    /* `alignment` indexes the text as it was sent, which is the text the client
-       chunked — `normalized_alignment` would index the provider's own rewrite. */
-    return NextResponse.json(
-      {
-        audio,
-        contentType: "audio/mpeg",
-        alignment: alignmentOf((envelope as { alignment?: unknown }).alignment),
-      },
-      { headers: { "cache-control": "no-store", ...billedBy(backend, option) } },
-    );
-  }
+  if ((backend === "fishaudio" || backend === "elevenlabs") && (contentType.startsWith("audio/") || contentType === "application/octet-stream")) contentType = "audio/pcm";
   if (!contentType.startsWith("audio/") || (fast && contentType !== "audio/pcm")) {
     void upstream.body.cancel().catch(() => undefined);
     release();

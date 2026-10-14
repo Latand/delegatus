@@ -3,6 +3,8 @@ import os from "node:os";
 
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import type { AgentRegistry, ProcessIdentity, RegistryFile } from "@/lib/agent/registry";
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { BACKGROUND_TASK_WAIT_LIMIT_MS, isTaskNotificationRecord, verifiedBackgroundWork, type VerifiedBackgroundWork } from "@/lib/pipelines/backgroundTasks";
 import { claudeTurnClosedByProviderFailure, lastAgentWorkIndex, withoutExitBookkeeping } from "@/lib/pipelines/durableEvidence";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
@@ -888,15 +890,17 @@ export function outstandingDeliverySince(
   snapshot: RegistryFile,
   conversationId: string,
 ): number | null {
-  let earliest: number | null = null;
-  for (const delivery of Object.values(snapshot.heldDeliveries)) {
-    if (delivery.conversationId !== conversationId) continue;
-    if (delivery.state !== "held" && delivery.state !== "assigned" && delivery.state !== "delivery-uncertain") continue;
-    const at = Date.parse(delivery.createdAt);
-    if (!Number.isFinite(at)) continue;
-    if (earliest === null || at < earliest) earliest = at;
-  }
-  return earliest;
+  return withViewerOperation("pipelines.delivery-liveness", () => {
+    let earliest: number | null = null;
+    for (const delivery of registryRowsMatching(snapshot, "heldDeliveries", "conversationId", conversationId)) {
+      if (delivery.conversationId !== conversationId) continue;
+      if (delivery.state !== "held" && delivery.state !== "assigned" && delivery.state !== "delivery-uncertain") continue;
+      const at = Date.parse(delivery.createdAt);
+      if (!Number.isFinite(at)) continue;
+      if (earliest === null || at < earliest) earliest = at;
+    }
+    return earliest;
+  });
 }
 
 export interface ConversationTurnLiveness extends TurnLivenessDecision {

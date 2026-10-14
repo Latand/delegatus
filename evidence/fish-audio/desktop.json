@@ -11,7 +11,7 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 554.0625,
+        "bottom": 614.5625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
@@ -25,7 +25,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_v4_turbo · default",
             "left": 1067,
             "right": 1353,
             "top": 340.1875,
@@ -88,7 +88,7 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 554.0625,
+        "bottom": 614.5625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
@@ -102,7 +102,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_v4_turbo · default",
             "left": 1067,
             "right": 1353,
             "top": 340.1875,
@@ -160,7 +160,7 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 559.5625,
+        "bottom": 620.0625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
@@ -174,7 +174,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_v4_turbo · default",
             "left": 1067,
             "right": 1353,
             "top": 339.1875,
@@ -237,7 +237,7 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 506.0625,
+        "bottom": 566.5625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
@@ -251,7 +251,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_v4_turbo · default",
             "left": 627,
             "right": 913,
             "top": 292.1875,
@@ -314,7 +314,7 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 506.0625,
+        "bottom": 566.5625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
@@ -328,7 +328,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_v4_turbo · default",
             "left": 627,
             "right": 913,
             "top": 292.1875,
@@ -386,7 +386,7 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 511.5625,
+        "bottom": 572.0625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
@@ -400,7 +400,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_v4_turbo · default",
             "left": 627,
             "right": 913,
             "top": 291.1875,
@@ -463,7 +463,7 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 554.0625,
+        "bottom": 614.5625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
@@ -477,7 +477,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_v4_turbo · default",
             "left": 1067,
             "right": 1353,
             "top": 340.1875,
@@ -540,7 +540,7 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 554.0625,
+        "bottom": 614.5625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
@@ -554,7 +554,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_v4_turbo · default",
             "left": 1067,
             "right": 1353,
             "top": 340.1875,
@@ -612,7 +612,7 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 559.5625,
+        "bottom": 620.0625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
@@ -626,7 +626,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_v4_turbo · default",
             "left": 1067,
             "right": 1353,
             "top": 339.1875,
@@ -689,7 +689,7 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 506.0625,
+        "bottom": 566.5625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
@@ -703,7 +703,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_v4_turbo · default",
             "left": 627,
             "right": 913,
             "top": 292.1875,
@@ -766,7 +766,7 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 506.0625,
+        "bottom": 566.5625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
@@ -780,7 +780,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_v4_turbo · default",
             "left": 627,
             "right": 913,
             "top": 292.1875,
@@ -838,7 +838,7 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 511.5625,
+        "bottom": 572.0625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
@@ -852,7 +852,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_v4_turbo · default",
             "left": 627,
             "right": 913,
             "top": 291.1875,
@@ -915,7 +915,7 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 593.5625,
+        "bottom": 654.0625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
@@ -929,7 +929,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_v4_turbo · default",
             "left": 1067,
             "right": 1353,
             "top": 373.1875,
@@ -992,7 +992,7 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 609.3125,
+        "bottom": 669.8125,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
@@ -1006,7 +1006,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_v4_turbo · default",
             "left": 1067,
             "right": 1353,
             "top": 388.9375,
@@ -1064,7 +1064,7 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 575.3125,
+        "bottom": 635.8125,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
@@ -1078,7 +1078,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_v4_turbo · default",
             "left": 1067,
             "right": 1353,
             "top": 354.9375,
@@ -1141,7 +1141,7 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 545.5625,
+        "bottom": 606.0625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
@@ -1155,7 +1155,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_v4_turbo · default",
             "left": 627,
             "right": 913,
             "top": 325.1875,
@@ -1218,7 +1218,7 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 561.3125,
+        "bottom": 621.8125,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
@@ -1232,7 +1232,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_v4_turbo · default",
             "left": 627,
             "right": 913,
             "top": 340.9375,
@@ -1290,7 +1290,7 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 527.3125,
+        "bottom": 587.8125,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
@@ -1304,7 +1304,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_v4_turbo · default",
             "left": 627,
             "right": 913,
             "top": 306.9375,
@@ -1367,7 +1367,7 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 593.5625,
+        "bottom": 654.0625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
@@ -1381,7 +1381,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_v4_turbo · default",
             "left": 1067,
             "right": 1353,
             "top": 373.1875,
@@ -1444,7 +1444,7 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 609.3125,
+        "bottom": 669.8125,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
@@ -1458,7 +1458,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_v4_turbo · default",
             "left": 1067,
             "right": 1353,
             "top": 388.9375,
@@ -1516,7 +1516,7 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 575.3125,
+        "bottom": 635.8125,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
@@ -1530,7 +1530,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_v4_turbo · default",
             "left": 1067,
             "right": 1353,
             "top": 354.9375,
@@ -1593,7 +1593,7 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 545.5625,
+        "bottom": 606.0625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
@@ -1607,7 +1607,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_v4_turbo · default",
             "left": 627,
             "right": 913,
             "top": 325.1875,
@@ -1670,7 +1670,7 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 561.3125,
+        "bottom": 621.8125,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
@@ -1684,7 +1684,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_v4_turbo · default",
             "left": 627,
             "right": 913,
             "top": 340.9375,
@@ -1742,7 +1742,7 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 527.3125,
+        "bottom": 587.8125,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
@@ -1756,7 +1756,7 @@
             "width": 286
           },
           {
-            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_v4_turbo · default",
             "left": 627,
             "right": 913,
             "top": 306.9375,

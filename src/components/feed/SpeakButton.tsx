@@ -6,7 +6,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncE
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { translate, useLocale } from "@/lib/i18n";
 import { fishAudioFreeDate, fishAudioFreeEnded, ttsProviderName, type FishAudioModel } from "@/lib/fishAudio";
-import { MAX_TTS_MESSAGE_LENGTH } from "@/lib/tts";
+import { MAX_TTS_MESSAGE_LENGTH, isPcmTtsBackend } from "@/lib/tts";
 import { wordSpanAt } from "@/lib/ttsAlignment";
 import { chunkSpeech } from "@/lib/ttsChunks";
 
@@ -149,7 +149,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
   };
   const frozenText = useRef("");
   const frozenId = useRef<string | null>(null);
-  const chunks = useMemo(() => chunkSpeech(text, info?.backend === "soniox" || info?.backend === "fishaudio" ? { backend: info.backend, language: info.options.find((o) => o.id === info.backend)?.language } : undefined), [text, info]);
+  const chunks = useMemo(() => chunkSpeech(text, info && isPcmTtsBackend(info.backend) ? { backend: info.backend, language: info.options.find((o) => o.id === info.backend)?.language } : undefined), [text, info]);
   const generation = useRef(0);
   const mounted = useRef(true);
   const ownedStop = useRef<(() => void) | null>(null);
@@ -195,7 +195,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
   if (!text && !header && phase === "idle") return null;
   const option = info.options.find((candidate) => candidate.id === info.backend);
   if (!option) return null;
-  const fast = option.id === "soniox" || option.id === "fishaudio";
+  const fast = isPcmTtsBackend(option.id);
   const freeModel = option.id === "fishaudio" && option.model === "s2.1-pro-free";
   const freeEnded = freeModel && (option.freeEnded || fishAudioFreeEnded());
   const freeDate = fishAudioFreeDate(locale);
@@ -310,7 +310,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
         /* The provider's own words when it refused; otherwise the failure is
            the browser's (blocked or dead audio) or the network's. */
         const message = cause instanceof TtsRequestError
-          ? cause.code === "fishaudio-free-ended" ? t("tts.fishFreeEnded", { date: freeDate, action: choosePaid }) : cause.code === "fishaudio-free-refused" ? t("tts.fishFreeRefused", { action: choosePaid }) : cause.provider ?? t("tts.requestError", { status: cause.status })
+          ? cause.code === "voice-not-found" ? t("tts.voiceNotFoundAlert", { provider: ttsProviderName(option.id), voice: cause.voice ?? option.voice, action: t(isMobile ? "tts.voiceChooseTouch" : "tts.voiceChooseMouse") }) : cause.code === "fishaudio-free-ended" ? t("tts.fishFreeEnded", { date: freeDate, action: choosePaid }) : cause.code === "fishaudio-free-refused" ? t("tts.fishFreeRefused", { action: choosePaid }) : cause.provider ?? t("tts.requestError", { status: cause.status })
           : cause instanceof TtsPlaybackError
             ? t("tts.playError")
             : t("tts.requestFailed");
@@ -422,13 +422,13 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
       .catch(() => { if (mounted.current) setError(t("tts.configError")); });
   };
 
-  const pickBackend = async (backend: BackendId, model?: FishAudioModel): Promise<boolean> => {
-    if (info.lockedByEnv && (model === undefined || backend !== info.backend)) return false;
+  const pickBackend = async (backend: BackendId, model?: FishAudioModel, voice?: string): Promise<boolean> => {
+    if (info.lockedByEnv && ((model === undefined && voice === undefined) || backend !== info.backend)) return false;
     try {
       const response = await fetch("/api/tts/backend", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ backend, ...(model ? { model } : {}) }),
+        body: JSON.stringify({ backend, ...(model ? { model } : {}), ...(voice ? { voice } : {}) }),
       });
       if (!response.ok) return false;
       const value = (await response.json()) as BackendInfo;
@@ -470,6 +470,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
       ) : null}
       {menuOpen ? (
         <SpeakMenu
+          key={`${option.id}/${option.model}/${option.voice}/${option.available}/${option.voiceLockedByEnv}`}
           anchorRef={triggerRef}
           info={info}
           option={option}
@@ -479,6 +480,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
           active={active}
           tooLong={tooLong}
           onPick={pickBackend}
+          onPickVoice={(backend, voice) => pickBackend(backend, undefined, voice)}
           onClose={closeMenu}
         />
       ) : null}

@@ -38,6 +38,8 @@ export function renderStagePrompt(
       (the store reads Viewer state), so the client previews pass nothing and
       show the scaffold as persisted. */
   workerLimit?: number,
+  /** Resolved by server assembly; browser previews cannot inspect tooling. */
+  testGuidance = "Use the project's test command from its instruction files or package scripts, selecting test files by explicit path. Gate wrapper availability and its installed path are resolved when this stage launches.",
 ): string {
   let body = replaceAll(stage.prompt, "{{task}}", pipeline.task);
   body = replaceAll(body, RELAY_PLACEHOLDER, previousOutput);
@@ -75,7 +77,7 @@ export function renderStagePrompt(
     ...(pipeline.delivery?.disposition === "owner" && pipeline.delivery.target.branch !== `refs/heads/${pipeline.branch}`
       ? [`If the worktree is already checked out on its owned delivery branch ${pipeline.delivery.target.branch}, keep that branch checked out and use it for the commits below.`] : []),
     ...(role.access === "read-write"
-      ? [`Commit your changes on ${pipeline.branch} (or its already checked-out owned delivery branch).${pipeline.delivery?.publish === "disabled" ? "" : ` Push this branch${pipeline.delivery?.disposition === "owner" && pipeline.delivery.target.branch !== `refs/heads/${pipeline.branch}` ? ` to the delivery target ${pipeline.delivery.target.branch}` : ""}.`}`]
+      ? [`Commit your changes on ${pipeline.branch} (or its already checked-out owned delivery branch).${pipeline.delivery?.publish === "disabled" ? "" : pipeline.delivery && !pipeline.delivery.target.remote ? " This repository has no delivery remote: keep the commits on this local branch and do not push." : ` Push this branch${pipeline.delivery?.disposition === "owner" && pipeline.delivery.target.branch !== `refs/heads/${pipeline.branch}` ? ` to the delivery target ${pipeline.delivery.target.branch}` : ""}.`}`]
       : []),
   ];
   const roleContext = role.roleId
@@ -102,7 +104,7 @@ export function renderStagePrompt(
     ...branchContract,
     ...pipelineDeliveryGuidance(pipeline),
     "Pipeline nesting is forbidden. Never create or start another pipeline from this stage.",
-    "Run test files by explicit path with bash scripts/gate-slot.sh bun test <file>, using isolated HOME, XDG, TMPDIR and LLV_STATE_DIR. The owned runner ends detached descendants on deadline or cancellation; never bypass it for lifecycle tests.",
+    testGuidance,
     "",
     /* One completion channel, one fallback (#1797): asking for the call AND an
        unconditional fenced block let a stage treat the block as the real answer

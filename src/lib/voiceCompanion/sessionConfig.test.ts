@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { BACKEND_INSTRUCTIONS, backendRequest, COMPANION_TOOLS, LIVE_API_VERSION, LIVE_BACKEND_MODEL, LIVE_MODEL, liveSessionConfiguration, PROTOTYPE_BACKEND_RULES, PROTOTYPE_LIVE_RULES } from "./sessionConfig";
 import { z } from "zod";
 import { VOICE_ASK_MAX_CHARS } from "./liveGate";
-import { codexVoiceThread } from "./codexProvider";
+import { codexVoiceStart, codexVoiceThread } from "./codexProvider";
 
 // Official DataChannelConfigParam / ServerEventSelectorParam, verified on
 // 2026-10-06. Response wrappers require the nested selector; other events forbid it.
@@ -23,7 +24,7 @@ test("the frontend data channel receives no provider event: the server's cleaned
 test("Live delegates to this server, which runs the backend itself with the registry tools", () => {
   expect(liveSessionConfiguration("uk").delegation).toEqual({ type: "client" });
   const request = backendRequest([{ role: "user", content: "context" }]);
-  expect(request).toMatchObject({ model: LIVE_BACKEND_MODEL, store: false, parallel_tool_calls: false, max_output_tokens: 512, service_tier: "default", reasoning: { effort: "none" } });
+  expect(request).toMatchObject({ model: LIVE_BACKEND_MODEL, store: false, parallel_tool_calls: false, max_output_tokens: 2048, service_tier: "default", reasoning: { effort: "none" } });
   expect(request.tools.map(tool => tool.name)).toEqual(COMPANION_TOOLS.map(tool => tool.name));
 });
 
@@ -52,12 +53,12 @@ test("the Live configuration exposes the explicit read allowlist and the delegat
   }
 });
 
-test("the backend answers from reads, sends one short ask in the operator's words, names a waiting request instead of sending it again, and keeps report facts with their subjects", () => {
+test("the backend answers from reads, composes one complete task, names a waiting request instead of sending it again, and keeps report facts with their subjects", () => {
   expect(BACKEND_INSTRUCTIONS).toContain("Answer from the reads whatever the board, the orchestrator's messages and its reports already hold");
   expect(BACKEND_INSTRUCTIONS).toContain("send only work, or a question the reads cannot answer");
   expect(BACKEND_INSTRUCTIONS).toContain("A question about what the voice can do is answered from the registry and never sent");
-  expect(BACKEND_INSTRUCTIONS).toContain(`Compose one short ask, at most ${VOICE_ASK_MAX_CHARS} characters, in the operator's words and language, from their latest turn alone`);
-  expect(BACKEND_INSTRUCTIONS).toContain("never translate it, expand it or bundle earlier questions into it");
+  expect(BACKEND_INSTRUCTIONS).toContain("Write every send yourself, in your own words, as one complete task");
+  expect(BACKEND_INSTRUCTIONS).toContain("independent requests are separate tasks");
   expect(BACKEND_INSTRUCTIONS).toContain("passes its handle as pending_request and nothing is sent");
   expect(BACKEND_INSTRUCTIONS).toContain("a request still waiting for its report is not sent again");
   expect(BACKEND_INSTRUCTIONS).toContain("set asked_again, and it is sent again even while its report is pending");
@@ -91,7 +92,7 @@ test("both voice paths require prototype evidence and stop reading on a hand-off
     expect(instructions).toContain(PROTOTYPE_BACKEND_RULES);
     expect(instructions).toContain("State a prototype detail only when a read in this call returned it.");
     expect(instructions).toContain("Say what a frame shows only when view_prototype_frame returned that frame to you in this call");
-    expect(instructions).toContain("call no read or search tool: send one ask in their words");
+    expect(instructions).toContain("call no read or search tool: send one task you write from what this call already holds");
     expect(instructions).toContain("A spoken choice records no decision");
   }
   for (const locale of ["uk", "en"] as const) {
@@ -103,7 +104,6 @@ test("both voice paths require prototype evidence and stop reading on a hand-off
   }
 });
 
-
 test("Telegram history reads directly and never hands private content to the orchestrator", () => {
   for (const locale of ["en", "uk"] as const) {
     expect(liveSessionConfiguration(locale).instructions).toContain("Telegram groups");
@@ -112,4 +112,52 @@ test("Telegram history reads directly and never hands private content to the orc
   expect(BACKEND_INSTRUCTIONS).toContain("read relay_owner_history directly");
   expect(BACKEND_INSTRUCTIONS).toContain("Do not send history questions to the orchestrator");
   expect(BACKEND_INSTRUCTIONS).toContain("Never put message text, names, usernames, chat titles or chat ids");
+});
+
+test("composed tasks carry project scope, provenance and interface language in both backend paths", () => {
+  const send = COMPANION_TOOLS.find(tool => tool.name === "request_orchestrator_delegation")!;
+  for (const locale of ["uk", "en"] as const) {
+    const language = `The operator's interface language is ${locale === "uk" ? "Ukrainian" : "English"}.`;
+    for (const instructions of [backendRequest([], { locale }).instructions, codexVoiceThread("/fixture", true, "Call memory", locale).developerInstructions]) {
+      expect(instructions).toContain(language);
+      expect(instructions).toContain("Write every send yourself, in your own words, as one complete task");
+      expect(instructions).toContain("Never send the transcript or the operator's raw phrasing as the task");
+      expect(instructions).toContain("what to do and why, the outcome the operator expects");
+      expect(instructions).toContain("card, pull request, issue, project or earlier point");
+      expect(instructions).toContain("add no step, requirement, constraint, priority, deadline or suggestion of your own");
+      expect(instructions).toContain("earlier turns only resolve what it refers to");
+      expect(instructions).toContain("even when the operator asks to send it");
+      expect(instructions).toContain("riddles, poems");
+      expect(instructions).toContain("at most one sentence, on a last line that names it as theirs");
+      expect(instructions).toContain("when you could not resolve a referent, say so in the task and never guess it");
+      expect(instructions).not.toMatch(/in the operator's words and language|never translate it|send one ask in their words|operator's words\/language/);
+    }
+    expect(liveSessionConfiguration(locale).instructions).toContain("When the backend says a request is not work for the orchestrator, nothing was sent: answer it yourself when you can.");
+  }
+  expect(send.description).toContain("Write the instruction yourself, in your own words, as one complete task");
+  expect(send.description).toContain("General knowledge, chit-chat and content the voice can give itself are never sent");
+  expect(send.description).toContain("Never pass the transcript or the operator's raw phrasing as the task");
+  expect(send.description).toContain("operator's interface language unless they asked for another");
+  expect(send.description).not.toContain("in their own words and language");
+  expect(send.parameters.properties.instruction.maxLength).toBe(6000);
+  expect(VOICE_ASK_MAX_CHARS).toBe(4000);
+});
+
+test("voice design docs describe the current composition rule and contain no copied-phrasing directive", () => {
+  const docs = [
+    readFileSync(new URL("../../../docs/design/voice-lean-delegation.md", import.meta.url), "utf8"),
+    readFileSync(new URL("../../../docs/design/voice-prototype-review-flow.md", import.meta.url), "utf8"),
+  ];
+  for (const document of docs) {
+    expect(document).toContain("4,000 Unicode scalars");
+    expect(document).toContain("own words");
+    expect(document).not.toMatch(/send one ask in their words|in the operator's words and language|operator's words\/language|never translate it|shared 400-Unicode-scalar limit/i);
+  }
+});
+
+test("both native voice transports receive the shared speech language restriction", () => {
+  for (const locale of ["uk", "en"] as const) {
+    expect(liveSessionConfiguration(locale).instructions).toContain("Speech recognition languages: uk, ru, en.");
+    expect(codexVoiceStart("fixture", locale, "v=0").prompt).toContain("Speech recognition languages: uk, ru, en.");
+  }
 });

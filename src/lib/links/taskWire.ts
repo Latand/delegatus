@@ -31,7 +31,9 @@ export const TASK_BOARD_WIRE_VERSION = 3;
 /** v5 adds public prototype metadata; capability upgrade replays both sides. */
 export const TASK_PROTOTYPE_WIRE_VERSION = 5;
 export const TASK_QUESTIONS_WIRE_VERSION = 6;
-export const TASK_WIRE_VERSION = TASK_QUESTIONS_WIRE_VERSION;
+/** v7 adds per-question skipped; a v6 peer's strict schema fails the exchange. */
+export const TASK_QUESTION_SKIP_WIRE_VERSION = 7;
+export const TASK_WIRE_VERSION = TASK_QUESTION_SKIP_WIRE_VERSION;
 
 export const isWireGone = (row: WireRow): row is WireGone => "gone" in row;
 export const isWireStub = (row: WireRow): row is WireStub => "withheld" in row;
@@ -52,7 +54,9 @@ export function encodeTask(task: BoardTask, self: { id: string; prefix: string }
   const candidate = options.includePrototypeReview !== false ? prototypeReviewReplica(task) : undefined;
   const hasQuestions = candidate?.summary.asks === "questions" || candidate?.summary.decision?.answered
     || candidate?.rounds.some(round => round.questions?.length);
-  const replica = (options.peerTaskWireVersion ?? TASK_WIRE_VERSION) < TASK_QUESTIONS_WIRE_VERSION && hasQuestions ? undefined : candidate;
+  const skipsQuestions = candidate?.rounds.some(round => round.decision?.answers?.some(answer => answer.skipped));
+  const peer = options.peerTaskWireVersion ?? TASK_WIRE_VERSION;
+  const replica = (peer < TASK_QUESTIONS_WIRE_VERSION && hasQuestions) || (peer < TASK_QUESTION_SKIP_WIRE_VERSION && skipsQuestions) ? undefined : candidate;
   const row: WireTask = {
     id: task.id, project: task.project, text: task.text,
     ...(options.includeBoard !== false && task.board !== undefined ? { board: task.board } : {}),

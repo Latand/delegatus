@@ -160,6 +160,7 @@ test.each(["expanded prompt", "role scaffold"] as const)("an oversized %s launch
     h.setPaneAlive(false);
     const { assertStructuredTextEnvelope } = await import("@/lib/runtime/structuredContent");
     const { renderStagePrompt } = await import("./prompts");
+    const { resolveStageTestGuidance } = await import("./testGuidance");
     const spawnAgent = h.ports.spawnAgent;
     h.ports.spawnAgent = (input, reserved) => {
       assertStructuredTextEnvelope(input.prompt);
@@ -172,7 +173,7 @@ test.each(["expanded prompt", "role scaffold"] as const)("an oversized %s launch
     }
     savePipelines([lane]);
     const previous = "Design head\n" + "🙂".repeat(12_000) + "\nDesign tail";
-    const expected = renderStagePrompt(lane, build, build.effectiveRole, previous);
+    const expected = renderStagePrompt(lane, build, build.effectiveRole, previous, undefined, resolveStageTestGuidance());
     expect(Buffer.byteLength(expected)).toBeGreaterThan(32_000);
     expect(await engineModule.reportStageCompletion({ verdict: "pass" },
       { kind: "agent", role: "architect", conversationId: "conversation_stage_1" }, h.ports))
@@ -1454,6 +1455,22 @@ test("create answers before the base fetch finishes, and the lane starts from wh
     lastPassedCommit: FETCHED_SHA,
     stateDetail: null,
   });
+});
+
+test("a handover creation admitted by the controller is provisioned in the same pass", async () => {
+  const { queuePipelineCreation } = await import("./creationQueue");
+  const h = harness();
+  savePipelines([]);
+  const remote = slowRemote(h);
+  const created = await createPipelineFromRequest({ task: "Queued lane", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+  expect(created.pipeline).toBeDefined();
+  const queued = loadPipelines()[0]!;
+  const target = queued.delivery!.target;
+  savePipelines([]);
+  queuePipelineCreation(queued, target, false, "fixture handover", h.ports.now());
+  await tickPipelines([], h.ports);
+  expect(remote.fetched()).toBe(true);
+  expect(loadPipelines()[0]).toMatchObject({ id: queued.id, state: "running", baseRef: FETCHED_SHA });
 });
 
 test("a create that arrives while the controller is provisioning is not held behind it (#1799)", async () => {

@@ -1,3 +1,4 @@
+import { TRANSCRIPTION_LANGUAGES, transcriptionResult } from "./languages";
 import type { TranscribeResponse } from "./types";
 
 /* Soniox async STT for the record-then-transcribe fallback (the realtime model
@@ -36,14 +37,16 @@ async function uploadFile(apiKey: string, file: File): Promise<string> {
   return json.id;
 }
 
-async function createTranscription(apiKey: string, fileId: string, language: string): Promise<string> {
+async function createTranscription(apiKey: string, fileId: string): Promise<string> {
   const res = await fetch(`${SONIOX_API_BASE}/transcriptions`, {
     method: "POST",
     headers: { ...authHeaders(apiKey), "content-type": "application/json" },
     body: JSON.stringify({
       file_id: fileId,
       model: SONIOX_ASYNC_MODEL,
-      ...(language ? { language_hints: [language.slice(0, 2)] } : {}),
+      language_hints: TRANSCRIPTION_LANGUAGES,
+      language_hints_strict: true,
+      enable_language_identification: true,
     }),
     signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
   });
@@ -73,23 +76,26 @@ async function waitForCompletion(apiKey: string, transcriptionId: string): Promi
   }
 }
 
-async function fetchTranscript(apiKey: string, transcriptionId: string): Promise<string> {
+async function fetchTranscript(apiKey: string, transcriptionId: string, language: string): Promise<TranscribeResponse> {
   const res = await fetch(`${SONIOX_API_BASE}/transcriptions/${encodeURIComponent(transcriptionId)}/transcript`, {
     headers: authHeaders(apiKey),
     signal: AbortSignal.timeout(POLL_TIMEOUT_MS),
   });
   await expectOk(res, "transcript");
-  const json = (await res.json()) as { text?: unknown; tokens?: unknown };
-  if (typeof json.text === "string") return json.text.trim();
+  const json = (await res.json()) as { text?: unknown; tokens?: unknown; language?: unknown };
+  const tokens = Array.isArray(json.tokens) ? json.tokens : [];
+  const languages = [json.language, ...tokens.map(token => token && typeof token === "object" ? (token as { language?: unknown }).language : undefined)];
+  if (typeof json.text === "string") return transcriptionResult(json.text.trim(), languages, language);
   /* Older responses carry only tokens; their texts already include spacing. */
   if (Array.isArray(json.tokens)) {
-    return json.tokens
+    const text = json.tokens
       .map((token) => (token && typeof token === "object" ? (token as { text?: unknown }).text : null))
       .filter((text): text is string => typeof text === "string")
       .join("")
       .trim();
+    return transcriptionResult(text, languages, language);
   }
-  return "";
+  return transcriptionResult("", languages, language);
 }
 
 /* Best-effort teardown: a dictation that transcribed fine must not fail
@@ -106,9 +112,9 @@ export async function sonioxTranscribe(apiKey: string, file: File, language: str
   const fileId = await uploadFile(apiKey, file);
   let transcriptionId: string | null = null;
   try {
-    transcriptionId = await createTranscription(apiKey, fileId, language);
+    transcriptionId = await createTranscription(apiKey, fileId);
     await waitForCompletion(apiKey, transcriptionId);
-    return { text: await fetchTranscript(apiKey, transcriptionId) };
+    return await fetchTranscript(apiKey, transcriptionId, language);
   } finally {
     if (transcriptionId) await discard(apiKey, `${SONIOX_API_BASE}/transcriptions/${encodeURIComponent(transcriptionId)}`);
     await discard(apiKey, `${SONIOX_API_BASE}/files/${encodeURIComponent(fileId)}`);

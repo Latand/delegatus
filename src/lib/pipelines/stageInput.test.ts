@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { composeStageInput } from "./stageInput";
+import { resolveStageTestGuidance } from "./testGuidance";
 import { commitPipelineStage } from "./git";
 import { buildPipeline } from "./store";
 import type { PipelineStage } from "./types";
@@ -79,8 +80,12 @@ test.each([
   const rendered = await composeStageInput(pipeline, stage, stage.effectiveRole, previous);
   expect(rendered).toContain(`Pipeline branch: ${pipeline.branch}.`);
   expect(rendered).toContain(`Commit your changes on ${pipeline.branch}`);
-  // SHA-256 snapshots verified against main's renderer, including branch framing.
-  expect(crypto.createHash("sha256").update(rendered).digest("hex")).toBe(hash);
+  // Retain the historical framing snapshots, normalizing only the
+  // installed-path guidance covered by the assembly regression tests.
+  const originalGuidance = "Run test files by explicit path with bash scripts/gate-slot.sh bun test <file>, using isolated HOME, XDG, TMPDIR and LLV_STATE_DIR. The owned runner ends detached descendants on deadline or cancellation; never bypass it for lifecycle tests.";
+  expect(rendered).toContain(resolveStageTestGuidance());
+  const normalized = rendered.replace(resolveStageTestGuidance(), originalGuidance);
+  expect(crypto.createHash("sha256").update(normalized).digest("hex")).toBe(hash);
 });
 
 test("the exact UTF-8 boundary stays inline and one byte over becomes a file reference", async () => {

@@ -1214,3 +1214,14 @@ test("a route refusal settles the sending card without an operation and names it
   expect(companionErrorMessage(state.delegation!.notice!, "en")).toContain("conversation closed");
   expect(companionErrorMessage(state.delegation!.notice!, "uk")).toContain("Нічого не надіслано");
 });
+
+
+test("the reducer preserves every scalar of a composed 4000-scalar task on candidate, send and confirmation cards", () => {
+  const instruction = "ї".repeat(3999) + "🎙";
+  const at = (payload: Payload, seq: number): CompanionEvent => ({ ...payload, version: 1, sessionId: "s", generation: 1, eventId: `s:1:${seq}`, seq, atMs: seq } as CompanionEvent);
+  const called = [at({ type: "session.ready", mode: "official-realtime" }, 0), at({ type: "delegation.tool.called", callId: "c1", sourceItemId: "i1", instruction }, 1)].reduce(reduceCompanion, INITIAL_COMPANION_STATE);
+  expect(called.delegation?.instruction).toBe(instruction);
+  const proposal = { proposalId: "p1", callId: "c1", sourceItemId: "i1", instruction, authority: "live-model" as const, recipient: RECIPIENT };
+  expect(reduceCompanion(called, at({ type: "delegation.sending", proposal }, 2)).delegation?.instruction).toBe(instruction);
+  expect(reduceCompanion(called, at({ type: "delegation.confirmation.required", proposal: { ...proposal, confirmation: { reason: "Confirm it." } } }, 2)).delegation).toMatchObject({ stage: "awaiting-confirmation", instruction });
+});

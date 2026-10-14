@@ -1,3 +1,4 @@
+import { transcriptionLanguage, transcriptionResult } from "./languages";
 import type { TranscribeResponse } from "./types";
 
 /* ElevenLabs Scribe batch STT. The realtime scribe_v2 model is WebSocket-only;
@@ -10,7 +11,7 @@ export async function elevenLabsTranscribe(apiKey: string, file: File, language:
   const form = new FormData();
   form.append("model_id", ELEVENLABS_MODEL);
   form.append("file", file, "dictation.webm");
-  if (language) form.append("language_code", language);
+  form.append("language_code", transcriptionLanguage(language));
   const res = await fetch(ELEVENLABS_STT_URL, {
     method: "POST",
     headers: { "xi-api-key": apiKey },
@@ -21,6 +22,6 @@ export async function elevenLabsTranscribe(apiKey: string, file: File, language:
     const body = await res.text().catch(() => "");
     throw new Error(`HTTP ${res.status}${body ? ` — ${body.slice(0, 200)}` : ""}`);
   }
-  const json = (await res.json()) as { text?: unknown };
-  return { text: typeof json.text === "string" ? json.text : "" };
+  const json = (await res.json()) as { text?: unknown; language_code?: unknown };
+  return transcriptionResult(json.text, [json.language_code], language);
 }

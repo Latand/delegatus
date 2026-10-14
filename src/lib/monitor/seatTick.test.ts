@@ -2109,3 +2109,14 @@ describe("waits routed to the seat", () => {
     expect(seatTickDecision(input({ workerAsks: [ask], settings: off })).verdict.kind).toBe("quiet");
   });
 });
+
+
+test("a lost spawn without pipeline or lineage is owed in the seat's next wake", () => {
+  const summary = "Restore lost work: host gone before first turn (conversation_fixture_lost)";
+  const decision = seatTickDecision(input({
+    events: [event({ type: "spawn_failed", pipelineId: null, summary })],
+    state: stateWith({ eventsThrough: 41, lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() }),
+  }));
+  expect(reasonsOf(decision.verdict)).toEqual(["lane-event"]);
+  expect(decision.verdict.kind === "wake" && decision.verdict.items[0]).toMatchObject({ kind: "event", label: `spawn_failed: ${summary}` });
+});

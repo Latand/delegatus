@@ -14,6 +14,8 @@ export interface TtsBackendOption {
   keyPath: string;
   model: string;
   voice: string;
+  voiceLockedByEnv?: boolean;
+  voiceList: boolean;
   cap: number;
   /** Soniox requires the language of the input text on every request; the
       other providers infer it from the text. */
@@ -68,6 +70,17 @@ export function writeFishAudioModel(model: FishAudioModel): void {
   fs.writeFileSync(file, `${model}\n`);
 }
 
+export function isTtsVoiceId(value: unknown): value is string {
+  return typeof value === "string" && value === value.trim() && value.length > 0 && value.length <= 128 && !/[\p{Cc}\p{Zl}\p{Zp}]|[^\S ]/u.test(value);
+}
+
+export function writeTtsVoice(backend: TtsBackend, voice: string): void {
+  if (!isTtsVoiceId(voice)) throw new Error("invalid voice id");
+  const file = configFilePath(`tts-voice-${backend}`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${voice}\n`);
+}
+
 export function ttsBackendInfo(now = Date.now()): TtsBackendInfo {
   const fishModelEnv = process.env.LLV_TTS_FISHAUDIO_MODEL?.trim();
   const fishModel = fishModelEnv || readFile("tts-model-fishaudio");
@@ -78,6 +91,8 @@ export function ttsBackendInfo(now = Date.now()): TtsBackendInfo {
     options: [
       {
         id: "openai",
+        voiceList: false,
+        voiceLockedByEnv: Boolean(process.env.LLV_TTS_OPENAI_VOICE?.trim()),
         available: readOpenAiApiKey() !== null,
         keyPath: configFilePath("openai-api-key"),
         model: process.env.LLV_TTS_OPENAI_MODEL?.trim() || readFile("tts-model-openai") || "gpt-4o-mini-tts",
@@ -86,14 +101,18 @@ export function ttsBackendInfo(now = Date.now()): TtsBackendInfo {
       },
       {
         id: "elevenlabs",
+        voiceList: true,
+        voiceLockedByEnv: Boolean(process.env.LLV_TTS_ELEVENLABS_VOICE?.trim()),
         available: readElevenLabsApiKey() !== null,
         keyPath: configFilePath("elevenlabs-api-key"),
-        model: process.env.LLV_TTS_ELEVENLABS_MODEL?.trim() || readFile("tts-model-elevenlabs") || "eleven_multilingual_v2",
-        voice: process.env.LLV_TTS_ELEVENLABS_VOICE?.trim() || readFile("tts-voice-elevenlabs") || "21m00Tcm4TlvDq8ikWAM",
+        model: process.env.LLV_TTS_ELEVENLABS_MODEL?.trim() || readFile("tts-model-elevenlabs") || "eleven_v4_turbo",
+        voice: process.env.LLV_TTS_ELEVENLABS_VOICE?.trim() || readFile("tts-voice-elevenlabs") || "JBFqnCBsd6RMkjVDRZzb",
         cap: 4000,
       },
       {
         id: "soniox",
+        voiceList: true,
+        voiceLockedByEnv: Boolean(process.env.LLV_TTS_SONIOX_VOICE?.trim()),
         available: readSonioxApiKey() !== null,
         keyPath: configFilePath("soniox-api-key"),
         model: process.env.LLV_TTS_SONIOX_MODEL?.trim() || readFile("tts-model-soniox") || "tts-rt-v2",
@@ -103,6 +122,8 @@ export function ttsBackendInfo(now = Date.now()): TtsBackendInfo {
       },
       {
         id: "fishaudio",
+        voiceList: true,
+        voiceLockedByEnv: Boolean(process.env.LLV_TTS_FISHAUDIO_VOICE?.trim()),
         available: readFishAudioApiKey() !== null,
         keyPath: configFilePath("fishaudio-api-key"),
         model: isFishAudioModel(fishModel) ? fishModel : "s2.1-pro-free",

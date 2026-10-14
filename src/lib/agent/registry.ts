@@ -92,7 +92,7 @@ import {
 } from "./registryBackendIdentity";
 import {
   SqliteAgentRegistryStore,
-  registryRowsMatching, registryKeysMatching, registryConversationsForPath, registryHasPathIndex,
+  registryRowsMatching, registryKeysMatching, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported,
   type SqliteRegistryReplacement,
@@ -314,6 +314,9 @@ export interface SpawnReceipt {
       never launched: no conversation, lineage edge, membership, transcript,
       or process exists for it. */
   rejection: SpawnRejection | null;
+  /** A caller already received a pre-acceptance refusal. Keep its reporting
+      policy with the failed receipt so recovery cannot announce lost work. */
+  failureAnnouncementSuppressed?: true;
   /** False only while a newly reserved receipt is waiting for task membership.
       Missing on legacy receipts means their historical admission is complete. */
   membershipAdmitted?: boolean;
@@ -341,6 +344,8 @@ export interface SpawnReceipt {
 }
 
 interface StructuredSpawnFailureOptions {
+  /** A synchronous refusal before acceptance already reached its caller. */
+  announce?: boolean;
   retainRegisteredHost?: boolean;
   startingRecovery?: { now: number; timeoutMs: number };
   /** A recovery observation must still hold inside the failure transaction. */
@@ -3942,6 +3947,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     delegationDepth: normalizeDelegationDepth(value.delegationDepth),
     launcher: normalizeSpawnLauncher(value.launcher),
     rejection: normalizeSpawnRejection(value.rejection),
+    ...(value.failureAnnouncementSuppressed === true ? { failureAnnouncementSuppressed: true as const } : {}),
     membershipAdmitted: value.membershipAdmitted === false ? false : true,
     launchProfile: receiptLaunchProfile(value, policy),
     explicitProject: validExplicitProject(value.explicitProject),
@@ -5730,6 +5736,23 @@ export class AgentRegistry {
       ["starting","pane-bound","host-verified","prompt-delivered","path-pending"])));
   }
 
+  /** Failed receipts remain available for idempotent reporting recovery. */
+  failedSpawnReceipts(): SpawnReceipt[] {
+    return this.readKeyed(file => registryRowsMatching(file, "receipts", "state", "failed")
+      .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+      .map(clone));
+  }
+
+  private reportFailedLaunch(receipt: SpawnReceipt, options: { announce?: boolean } = {}): void {
+    const launcherId = receipt.launcher?.conversationId;
+    const file = this.readOnlySnapshot();
+    const canonical = launcherId ? resolveConversationAlias(file, launcherId) : null;
+    const launcherProject = canonical
+      ? file.memberships[canonical]?.find(membership => membership.kind === "orchestrator")?.containerId
+      : undefined;
+    settleFailedLaunch(receipt, undefined, { ...options, launcherProject });
+  }
+
   terminalizeAbandonedSpawnEntries(options: { now: number; timeoutMs: number; limit: number }): string[] {
     return this.mutate(file => {
       const terminalized: string[] = [];
@@ -5931,7 +5954,7 @@ export class AgentRegistry {
     if (result.kind === "created" || result.kind === "replay") {
       admitReservedLaunch(input, result.receipt, (reason) => {
         if (result.kind !== "created") return;
-        if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason);
+        if (input.transport === "structured") this.failStructuredSpawn(result.receipt.launchId, reason, { announce: false });
         else this.failSpawn(result.receipt.launchId, reason);
       });
       this.mutate((file) => {
@@ -7037,7 +7060,7 @@ export class AgentRegistry {
 
   failSpawn(launchId: string, error: string): boolean {
     const failed = this.failSpawnInFile(launchId, error);
-    if (failed.receipt) settleFailedLaunch(failed.receipt);
+    if (failed.receipt) this.reportFailedLaunch(failed.receipt);
     return failed.result;
   }
 
@@ -7053,7 +7076,7 @@ export class AgentRegistry {
     const written = await this.whenWriterHeld({ label: "spawn.fail", operationId: `spawn_message_${launchId}` },
       () => this.failSpawnInFile(launchId, error));
     if (!written.acquired) return false;
-    if (written.value.receipt) settleFailedLaunch(written.value.receipt);
+    if (written.value.receipt) this.reportFailedLaunch(written.value.receipt);
     return written.value.result;
   }
 
@@ -7064,7 +7087,7 @@ export class AgentRegistry {
     const written = this.deliveryWriteNow({ label: "spawn.fail", operationId: `spawn_message_${launchId}` },
       () => this.failSpawnInFile(launchId, error));
     if (!written.acquired) return false;
-    if (written.value.receipt) settleFailedLaunch(written.value.receipt);
+    if (written.value.receipt) this.reportFailedLaunch(written.value.receipt);
     return written.value.result;
   }
 
@@ -7140,7 +7163,7 @@ export class AgentRegistry {
         },
       }));
     if (!written.acquired) return false;
-    if (written.value.claimed && written.value.receipt) settleFailedLaunch(written.value.receipt);
+    if (written.value.claimed && written.value.receipt) this.reportFailedLaunch(written.value.receipt);
     return written.value.claimed;
   }
 
@@ -7219,7 +7242,7 @@ export class AgentRegistry {
     options: StructuredSpawnFailureOptions = {},
   ): StructuredSpawnFailureClaim {
     const claim = this.failStructuredSpawnInFile(launchId, error, options);
-    if (claim.claimed && claim.receipt?.state === "failed") settleFailedLaunch(claim.receipt);
+    if (claim.claimed && claim.receipt?.state === "failed") this.reportFailedLaunch(claim.receipt, { announce: options.announce });
     return claim;
   }
 
@@ -7236,7 +7259,7 @@ export class AgentRegistry {
       return { claimed: false, receipt: this.readOnlySnapshot().receipts[launchId] ?? null, cleanup: null };
     }
     const claim = written.value;
-    if (claim.claimed && claim.receipt?.state === "failed") settleFailedLaunch(claim.receipt);
+    if (claim.claimed && claim.receipt?.state === "failed") this.reportFailedLaunch(claim.receipt, { announce: options.announce });
     return claim;
   }
 
@@ -7267,6 +7290,7 @@ export class AgentRegistry {
       }
       receipt.state = "failed";
       receipt.error = error;
+      if (options.announce === false) receipt.failureAnnouncementSuppressed = true;
       if (receipt.queuedPinnedSpawn) {
         receipt.launchProfile = emptyLaunchProfile(
           receipt.queuedPinnedSpawn.spec.launchProfile,
@@ -10542,7 +10566,14 @@ export class AgentRegistry {
       const keyFor = (candidateConversationId: ViewerConversationId, candidateOperationId: string) =>
         `${resolveConversationAlias(file, candidateConversationId)}\u0000${candidateOperationId}`;
       const deliveries = new Map<string, HeldDelivery>();
-      for (const delivery of Object.values(file.heldDeliveries)) {
+      // Select each recipient once in collection order. Legacy commands can
+      // derive their operation ID during normalization, so selecting raw stored
+      // operation IDs would miss acknowledgements for those deliveries.
+      const canonicalIds = [...new Set(outcomes.map(outcome => resolveConversationAlias(file, outcome.conversationId)))];
+      const candidates = registryHasLookupIndex(file)
+        ? canonicalIds.flatMap(id => conversationRows(file, "heldDeliveries", id))
+        : outcomes.length ? Object.values(file.heldDeliveries) : [];
+      for (const delivery of candidates) {
         const key = keyFor(delivery.conversationId, delivery.command.operationId);
         if (!deliveries.has(key)) deliveries.set(key, delivery);
       }

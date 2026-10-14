@@ -12,7 +12,15 @@ discardUnsupportedApiCredentials();
    below reach `@/lib/configDir`; the env name is written out rather than
    imported because this entry keeps state-resolving modules behind dynamic
    imports. */
-if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "runtime-host";
+process.env.LLV_STATE_OWNER = "runtime-host";
+delete process.env.DELEGATUS_STATE_OWNER;
+/* The runtime spans Viewer releases. An inherited image PORT or Viewer
+   revision would bind its consumers to a web generation they do not own.
+   The stable listener uses LLV_VIEWER_PORT; state writes still wait for the
+   current Viewer's activation and remain fenced throughout its handoff. */
+delete process.env.PORT;
+delete process.env.LLV_HOT_STATE_RELEASE_REVISION;
+delete process.env.DELEGATUS_HOT_STATE_RELEASE_REVISION;
 
 const { stateDir, statePath } = await import("@/lib/configDir");
 const { agentRegistry } = await import("@/lib/agent/registry");

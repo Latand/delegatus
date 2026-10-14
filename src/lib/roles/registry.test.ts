@@ -17,12 +17,17 @@ test("merger resolves a required reviewed-PR list with a read-write, non-nesting
   expect(role.value.definition.capabilities).toEqual([]);
   expect(role.value.prompt).toContain("12@abcdef1,13@1234567");
   expect(role.value.prompt).toContain("Never judge your own resolution");
+  expect(role.value.prompt).toContain("An outstanding human CHANGES_REQUESTED blocks every merge");
+  expect(role.value.prompt).toContain("A re-request or COMMENTED review does not clear it");
+  expect(role.value.prompt).toContain("Ignore GitHub bot and agent reviews");
   // The rule a seat once had to rule on is the default: main's own red never
   // stops a batch, foreign detectors are skipped, gates run one at a time.
   expect(role.value.prompt).toContain("produces on native main are pre-existing and never stop the batch");
   expect(role.value.prompt).toContain("A detector of a PR outside the candidate is skipped with a note");
   expect(role.value.prompt).toContain("drops only the PR whose removal clears it");
-  expect(role.value.prompt).toContain("one at a time through scripts/gate-slot.sh");
+  expect(role.value.prompt).toContain("runs every gate command one at a time");
+  expect(role.value.prompt).toContain("follow the assembled gate guidance for checks you run yourself, using the project's own commands");
+  expect(role.value.prompt).not.toContain("scripts/gate-slot.sh");
   expect(role.value.prompt).toContain("Full browser campaigns are opt-in (gate --browser)");
   expect(role.value.prompt).not.toContain("/var/tmp/llv-gate");
 });
@@ -328,7 +333,8 @@ test("every role scaffold carries the shared rules and names no stack or retired
   for (const definition of listRoles()) {
     const body = roleScaffoldBody(definition, { mode: definition.id === "builder" ? "apply-fixes" : "", domain: "frontend" }) + roleFenceBlock(definition);
     for (const pattern of STACK_SPECIFIC) expect(body).not.toMatch(pattern);
-    for (const marker of ["REVIEW_READY", "VERDICT", "NO FINDINGS", "APPROVE", "COMMENT"]) expect(body).not.toContain(marker);
+    // Match complete completion markers while allowing GitHub review-state enums.
+    expect(body).not.toMatch(/\b(?:REVIEW_READY|VERDICT|NO FINDINGS|APPROVE|COMMENT)\b/);
     expect(body).toContain(PROCESS_CLEANUP_MARKER);
     if (definition.id === "orchestrator") continue;
     expect(body).toContain("search_transcripts");

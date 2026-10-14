@@ -23,7 +23,12 @@ export interface PrototypeQuestion {
   multiple?: boolean;
   other?: boolean;
 }
-export interface PrototypeAnswer { questionId: string; options: number[]; other?: true; customText?: string }
+export interface PrototypeAnswer {
+  questionId: string; options: number[]; other?: true; customText?: string;
+  /** This question is already decided or no longer relevant; options is [].
+      The decision's own skipped takes recommendations for the whole form. */
+  skipped?: true;
+}
 export interface PublishPrototypeInput {
   clientRequestId: string;
   taskId?: string;

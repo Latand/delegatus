@@ -107,6 +107,7 @@ test("a stopped merge is stored, raises lane-merge with its two answers, and ret
           mergeCommit: merged ? { oid: "f".repeat(40) } : null, mergedAt: merged ? iso(clock) : null,
         });
       }
+      if (args[0] === "api" && args[1] === `repos/${REPO}/pulls/7/reviews?per_page=100`) return "";
       if (args[0] === "api" && args[1] === `repos/${REPO}/branches/main`) return "[]";
       if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
       if (args[0] === "pr" && args[1] === "merge") { mergeState = "MERGED"; return ""; }
@@ -201,6 +202,7 @@ test("a completed lane with no PR keeps its task open, persists a visible block,
           mergeCommit: merged ? { oid: "f".repeat(40) } : null, mergedAt: merged ? iso(clock) : null,
         });
       }
+      if (args[0] === "api" && args[1] === `repos/${REPO}/pulls/7/reviews?per_page=100`) return "";
       if (args[0] === "api" && args[1] === `repos/${REPO}/branches/main`) return "[]";
       if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
       if (args[0] === "pr" && args[1] === "merge") { merged = true; return ""; }
@@ -241,4 +243,56 @@ test("a completed lane with no PR keeps its task open, persists a visible block,
   expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", prNumber: 7, attempts: 2, mergedHead: HEAD });
   expect(loadTasks().find((item) => item.id === task.id)?.status).toBe("done");
   expect(calls.filter((args) => args[1] === "merge")).toHaveLength(1);
+});
+
+test("a human change request persists, and retry-merge waits for that reviewer's approval (#2866)", async () => {
+  resetAutoMergeForTests();
+  setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+  savePipelines([completedLane("pipe-human-review")]);
+  let clock = T0;
+  let approved = false;
+  let merged = false;
+  let writes = 0;
+  const ports = productionAutoMergePorts({
+    now: () => clock, loadPipelines, pullRequestOf: () => ({ repository: REPO, number: 7 }), cachedState: () => null,
+    run: async (args) => {
+      if (args[0] === "pr" && args[1] === "view") return JSON.stringify({
+        state: merged ? "MERGED" : "OPEN", isDraft: false, headRefOid: HEAD, baseRefName: "main",
+        mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", reviewDecision: "",
+        statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }],
+      });
+      if (args[0] === "api" && args[1]?.includes("/reviews")) return [
+        { reviewer: "reviewer-a", isBot: false, state: "CHANGES_REQUESTED" },
+        ...(approved ? [{ reviewer: "reviewer-a", isBot: false, state: "APPROVED" }] : []),
+      ].map((review) => JSON.stringify(review)).join("\n");
+      if (args[0] === "api") return "[]";
+      if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
+      if (args[0] === "pr" && args[1] === "merge") { merged = true; return ""; }
+      throw new Error(`unexpected gh ${args.join(" ")}`);
+    },
+  });
+  ports.write = (args) => { writes += 1; return ports.run(args); };
+  await sweepAutoMerge(ports);
+  let stored = loadPipelines()[0]!;
+  expect(stored.merge).toMatchObject({ state: "blocked", reason: "a reviewer requested changes" });
+  expect(laneNeed(stored)?.need.kind).toBe("lane-merge");
+  expect(pipelineAnswers(stored, (stage) => stage.id)?.choices.map((choice) => choice.action)).toContain("retry-merge");
+  expect(writes).toBe(0);
+
+  // A re-request changes no submitted review; retry must still refuse.
+  expect((await patchPipeline(stored.id, { action: "retry-merge" }, { now: () => iso(clock) } as never)).error).toBeUndefined();
+  clock += MERGE_POLL_MS;
+  await sweepAutoMerge(ports);
+  stored = loadPipelines()[0]!;
+  expect(stored.merge).toMatchObject({ state: "blocked", reason: "a reviewer requested changes", attempts: 1 });
+  expect(writes).toBe(0);
+
+  approved = true;
+  expect((await patchPipeline(stored.id, { action: "retry-merge" }, { now: () => iso(clock) } as never)).error).toBeUndefined();
+  for (let step = 0; step < 6; step += 1) {
+    clock += MERGE_POLL_MS;
+    await sweepAutoMerge(ports);
+  }
+  expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", by: "auto-merge", attempts: 2, reason: null });
+  expect(writes).toBe(1);
 });
