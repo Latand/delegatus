@@ -359,14 +359,16 @@ describe("Fish Audio route", () => {
   const fixtureKey = "provider-fixture";
   const names = ["FISH_AUDIO_API_KEY", "LLV_TTS_FISHAUDIO_MODEL", "LLV_TTS_FISHAUDIO_VOICE"];
   const original = names.map((name) => process.env[name]);
+  let clock: ReturnType<typeof spyOn>;
   beforeEach(() => {
+    clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-14T00:00:00Z"));
     process.env.LLV_TTS_BACKEND = "fishaudio";
     process.env.XDG_CONFIG_HOME = "/nonexistent/fish-route-test";
     setEnv(names[0]!, "provider-fixture");
     setEnv(names[1]!, "s2.1-pro-free");
     setEnv(names[2]!, undefined);
   });
-  afterEach(() => { names.forEach((name, index) => setEnv(name, original[index])); mock.restore(); });
+  afterEach(() => { names.forEach((name, index) => setEnv(name, original[index])); mock.restore(); clock.mockRestore(); });
   const pcmRequest = (text = "Привіт. Привет. Hello.", signal?: AbortSignal) => request(JSON.stringify({ text, mode: "pcm" }), signal);
   const safe = (response: Response, body: string) => {
     expect(body).not.toContain("provider-fixture");

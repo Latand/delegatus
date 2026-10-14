@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
@@ -962,7 +962,12 @@ test("a change of the visible answer re-renders the header only, never a row's b
 });
 
 
-test("Fish Audio menu chooses a persisted model and states free and paid billing", async () => {
+describe("Fish Audio UI before the free-model expiry", () => {
+let clock: ReturnType<typeof spyOn>;
+beforeEach(() => { clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-14T00:00:00Z")); });
+afterEach(() => clock.mockRestore());
+
+test("menu chooses a persisted model and states free and paid billing", async () => {
   const fish = { id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeUntil: "2026-11-30", freeEnded: false, modelLockedByEnv: false };
   let info = { backend: "fishaudio", lockedByEnv: false, options: [...backendInfo.options, fish] };
   const posts: unknown[] = [];
@@ -993,7 +998,7 @@ test("Fish Audio menu chooses a persisted model and states free and paid billing
   } finally { flushSync(() => view.root.unmount()); view.host.remove(); }
 });
 
-test.each(["model", "provider"])("Fish Audio %s lock disables both model rows", async (lock) => {
+test.each(["model", "provider"])("%s lock disables both model rows", async (lock) => {
   const info = { backend: lock === "provider" ? "openai" : "fishaudio", lockedByEnv: lock === "provider", options: [...backendInfo.options, { id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, modelLockedByEnv: lock === "model" }] };
   globalThis.fetch = mock(async () => Response.json(info)) as unknown as typeof fetch;
   const view = await mount("Fish Audio lock");
@@ -1004,7 +1009,7 @@ test.each(["model", "provider"])("Fish Audio %s lock disables both model rows", 
   } finally { flushSync(() => view.root.unmount()); view.host.remove(); }
 });
 
-test("expired free Fish Audio refuses in Ukrainian without synthesis", async () => {
+test("expired free model refuses in Ukrainian without synthesis", async () => {
   const { setLocale } = await import("@/lib/i18n");
   setLocale("uk");
   const info = { backend: "fishaudio", lockedByEnv: false, options: [{ id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeEnded: true }] };
@@ -1022,7 +1027,7 @@ test("expired free Fish Audio refuses in Ukrainian without synthesis", async () 
 });
 
 
-test("Fish Audio provider refusal explains the paid choice without retrying", async () => {
+test("provider refusal explains the paid choice without retrying", async () => {
   const prior = { context: globalThis.AudioContext, frame: globalThis.requestAnimationFrame, cancel: globalThis.cancelAnimationFrame };
   class Context {
     state = "running"; currentTime = 0;
@@ -1046,4 +1051,5 @@ test("Fish Audio provider refusal explains the paid choice without retrying", as
     flushSync(() => view.root.unmount()); view.host.remove();
     Object.assign(globalThis, { AudioContext: prior.context, requestAnimationFrame: prior.frame, cancelAnimationFrame: prior.cancel });
   }
+});
 });

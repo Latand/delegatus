@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import { MAX_TTS_MESSAGE_LENGTH } from "@/lib/tts";
 import { chunkSpeech, MIN_CHUNK_CHARS } from "@/lib/ttsChunks";
@@ -533,6 +533,7 @@ describe("PCM production client and route", () => {
     decoder.finish(); decoder.decode(new Uint8Array([1])); expect(() => decoder.finish()).toThrow();
   });
   test.each(["soniox", "fishaudio"])("%s: first audio precedes EOF, prefetch stays bounded, joins are contiguous and stop cancels", async (backend) => {
+    const clock = backend === "fishaudio" ? spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-14T00:00:00Z")) : null;
     const { PcmSession, clearPcmCache, pcmChunksCached, pcmVoice } = await import("./ttsPcmSession");
     const { POST } = await import("@/app/api/tts/route");
     const { NextRequest } = await import("next/server");
@@ -593,6 +594,7 @@ describe("PCM production client and route", () => {
       session.stop(); globalThis.requestAnimationFrame = oldRaf; globalThis.cancelAnimationFrame = oldCancel;
       envNames.forEach((name, i) => { if (prior[i] === undefined) delete process.env[name]; else process.env[name] = prior[i]; });
       clearPcmCache();
+      clock?.mockRestore();
     }
   });
   test("language and output geometry participate in cache identity", () => {
