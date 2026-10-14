@@ -2563,7 +2563,7 @@ test("conversation_migration forwards revision fences and stable identity to Vie
 
 test("pipeline close acknowledges pending teardown and get_pipeline reads final host results", async () => {
   const target = { stageId: "build", attempt: 1, conversationId: "conversation_build", agentPath: null, paneId: null };
-  const close = { status: "pending", pending: [target], stopped: [], alreadyStopped: [], unconfirmed: [],
+  const close = { status: "pending", pending: [target], pendingContinuations: [target], stopped: [], alreadyStopped: [], unconfirmed: [],
     acknowledged: [], reviewers: [], stillRunning: [], notes: [], worktree: null };
   const { buildPipeline, savePipelines, findPipelineRecord } = await import("@/lib/pipelines/store");
   const pipeline = buildPipeline({ id: "pipeline_close_pending", task: "Close pending", project: "viewer", repoDir: "/repo", stages: [{
@@ -2580,12 +2580,12 @@ test("pipeline close acknowledges pending teardown and get_pipeline reads final 
   } as never);
   const answer = await bindings.pipeline_action({ clientRequestId: "close-pending", pipelineId: pipeline.id, action: "close" });
   /* #2030: counts, never the host list; get_pipeline reads the list below. */
-  expect(answer).toMatchObject({ state: "closed", close: { status: "pending", pending: 1, stopped: 0, alreadyStopped: 0 } });
+  expect(answer).toMatchObject({ state: "closed", close: { status: "pending", pending: 1, pendingContinuations: 1, stopped: 0, alreadyStopped: 0 } });
   expect(JSON.stringify(answer)).not.toContain("conversation_build");
   expect(answer).not.toHaveProperty("stageDigests");
   const full = await bindings.pipeline_action({ clientRequestId: "close-pending-full", pipelineId: pipeline.id, action: "close", full: true });
-  expect(full).toMatchObject({ close: { pending: [target] } });
-  Object.assign(close, { status: "settled", pending: [], stopped: [target] });
+  expect(full).toMatchObject({ close: { pending: [target], pendingContinuations: [target] } });
+  Object.assign(close, { status: "settled", pending: [], pendingContinuations: [], stopped: [target] });
   pipeline.closeReport = close as import("@/lib/pipelines/types").PipelineCloseReport;
   pipeline.closeTeardown = { id: "close-fixture", phase: "settled", waitingForActivation: false, acknowledgeHosts: false, flow: null };
   savePipelines([pipeline]);

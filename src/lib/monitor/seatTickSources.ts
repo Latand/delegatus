@@ -1,3 +1,4 @@
+import { defaultSeatTickAdmissionSources } from "./seatTickAdmissionSources";
 import { readReleaseProject } from "@/lib/release/store";
 import { readSeatTurnOutcome, type SeatTurnOutcome } from "./seatAuthIncident";
 import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
@@ -44,7 +45,7 @@ import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
 import { readReplySuggestionsFile } from "@/lib/suggestions/store";
 import type { ReplySuggestionsFileV1 } from "@/lib/suggestions/types";
 import viewerPackageManifest from "../../../package.json";
-import { agentLivenessSnapshot, productionLivenessSources, type AgentLivenessRecord } from "@/lib/lifecycle/liveness";
+import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { orchestratorMandateCarriesTickContract } from "@/lib/orchestrator/prompt";
 import { canonicalOrchestratorProject, orchestratorSeatEverHeld, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject, orchestratorSeatForCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
@@ -89,7 +90,7 @@ import {
   seatTickWakeDue,
   seatTurnProgressing,
 } from "./seatTick";
-import { effectiveSeatTickSettings, readSeatTickSettings, type SeatTickSettings } from "./seatTickSettings";
+import { effectiveSeatTickSettings, type SeatTickSettings } from "./seatTickSettings";
 import type { PipelineSummary, TaskSummary } from "./viewerApi";
 import {
   SEAT_TICK_CHILDREN_GAPS,
@@ -660,6 +661,7 @@ export async function settleRecordFromJournal(
 
 export function defaultSeatTickSources(): SeatTickSources {
   return {
+    ...defaultSeatTickAdmissionSources(),
     memoryProblems: memoryProblemSignals,
     recordRuleReports(project, at) {
       const seat = orchestratorSeatForCurrentProject(project).active;
@@ -694,26 +696,13 @@ export function defaultSeatTickSources(): SeatTickSources {
     maintenanceRuns,
     /* Seats under the project they serve now (#1874): a seat keyed by its
        folder's old identity is the seat of the key its lanes are written to. */
-    seatFor: (project) => orchestratorSeatForCurrentProject(project),
     seatEverHeld: (project) => orchestratorSeatEverHeld(project),
     activeSeats: () => activeSeatsByCurrentProject().map((seat) => seat.project),
     workerCounts: projectWorkerCounts,
     pipelines: () => loadPipelinesForList(),
     archivedPipelines: () => loadArchivedPipelines(),
     tasks: () => loadTasks(),
-    registry: () => agentRegistry(),
-    liveness: async (request) => {
-      const snapshot = await agentLivenessSnapshot({
-        ...(request.reconcileStructuredIdle ? { reconcileStructuredIdle: true } : {}),
-        ...(request.conversationId ? { conversationId: request.conversationId } : {}),
-        ...(request.project ? { project: request.project, liveOnly: true } : {}),
-        stallAfterMs: request.stallAfterMs,
-        limit: request.limit,
-      }, productionLivenessSources());
-      return snapshot.conversations;
-    },
     lifecycleJournal: readLifecycleJournal,
-    latestDeployment: latestLedgerDeployment,
     seatDeployments: (conversationId) => seatDeploymentsFor(conversationId),
     deploymentByKey: findSeatDeploymentByKey,
     deployment: (deploymentId) => ledgerDeployment(deploymentId),
@@ -723,7 +712,6 @@ export function defaultSeatTickSources(): SeatTickSources {
       return report && typeof report === "object" ? report as StructuredHostRetirementReport : null;
     },
     retirementJournal: (sinceMs) => readRetirementJournalWindow(statePath("host-retirement-journal.ndjson"), sinceMs),
-    settings: (project) => readSeatTickSettings(project),
     workerAsks: async (project) => {
       const [{ operatorBoardRepresentation }, { seatAgendaAsks }] = await Promise.all([
         import("@/app/api/files/operatorProjection"),
@@ -757,7 +745,6 @@ export function defaultSeatTickSources(): SeatTickSources {
         () => registry.withdrawHeldDelivery(delivery.id, operationId, reason));
       return withdrawn.acquired ? withdrawn.value : "unknown";
     },
-    now: () => Date.now(),
     refreshLifecycle: (pipelines) => {
       refreshLifecycleJournal({ pipelines: [...pipelines] });
     },

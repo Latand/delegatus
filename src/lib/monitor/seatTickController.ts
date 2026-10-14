@@ -7,6 +7,7 @@ import { seatHostRecoveryKey, seatHostRecoveryCard, type SeatHostRecovery, type 
 import { recoverSeatAuthentication, type SeatAuthRecoveryPorts } from "./seatAuthRecovery";
 import { openSeatAuthIncident } from "./seatAuthIncident";
 import { productionCurationController, type CurationController } from "@/lib/memory/curation/run";
+import { machinePass } from "@/lib/memory/curation/store";
 import { productionBoardMaintenanceController, type BoardMaintenanceController } from "@/lib/boardMaintenance/run";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -2150,8 +2151,12 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
   }
   followProjectSuccessions(dependencies.recordSuccessions);
   const records: SeatTickRunRecord[] = [];
+  const projects = new Set(seatTickProjects(sources));
+  // Recovery must settle a curator whose project no longer has a seat or open work.
+  const incumbent = machinePass();
+  if (incumbent) projects.add(canonicalOrchestratorProject(incumbent.project));
   let first = true;
-  for (const project of seatTickProjects(sources)) {
+  for (const project of [...projects].sort()) {
     /* One project's check at a time, with the event loop between them. Every
        phase below awaits promises that are usually already settled, so without
        this a sweep over thirty-odd seats ran as one block of several seconds
