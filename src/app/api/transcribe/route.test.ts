@@ -16,10 +16,10 @@ afterEach(() => {
   for (const restore of restores.splice(0).reverse()) restore();
 });
 
-async function upload(filename: string, type: string) {
+async function upload(filename: string, type: string, language = "uk") {
   const form = new FormData();
   form.append("file", new Blob([payload], { type }), filename);
-  form.append("language", "uk");
+  if (language) form.append("language", language);
   // Serialize and parse real multipart bytes: returning a fabricated FormData
   // would hide Bun's filename-based MIME inference.
   const serialized = new Request("http://127.0.0.1/api/transcribe", { method: "POST", body: form });
@@ -78,4 +78,28 @@ describe("transcription multipart media guard", () => {
     expect(await response.json()).toEqual({ error: "expected audio" });
     expect(select).not.toHaveBeenCalled();
   });
+});
+
+
+test.each([["", "uk"], ["be", "uk"], ["ru-RU", "ru"], ["en-US", "en"]])("the route restricts %j and tags a provider language outside the set", async (language, expected) => {
+  const select = spyOn(backend, "resolveTranscribeBackend").mockReturnValue("chatgpt");
+  const auth = spyOn(codexAuth, "readCodexAuth").mockReturnValue({ accessToken: "fixture", accountId: "fixture" });
+  const transcribe = spyOn(chatgpt, "callTranscribe").mockImplementation(async (_auth, _file, _mime, hint) => {
+    expect(hint).toBe(expected);
+    return { status: 200, body: JSON.stringify({ text: "speech", language: "be" }) };
+  });
+  restores.push(() => select.mockRestore(), () => auth.mockRestore(), () => transcribe.mockRestore());
+  const { response } = await upload("dictation.webm", "audio/webm", language);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ text: "speech", language: expected });
+});
+
+
+test.each([{ language_code: "bel" }, { languages: [{ code: "en" }, { code: "be" }] }])("the route normalizes provider language metadata %j", async metadata => {
+  const select = spyOn(backend, "resolveTranscribeBackend").mockReturnValue("chatgpt");
+  const auth = spyOn(codexAuth, "readCodexAuth").mockReturnValue({ accessToken: "fixture", accountId: "fixture" });
+  const transcribe = spyOn(chatgpt, "callTranscribe").mockResolvedValue({ status: 200, body: JSON.stringify({ text: "speech", ...metadata }) });
+  restores.push(() => select.mockRestore(), () => auth.mockRestore(), () => transcribe.mockRestore());
+  const { response } = await upload("dictation.webm", "audio/webm", "ru");
+  expect(await response.json()).toEqual({ text: "speech", language: "ru" });
 });

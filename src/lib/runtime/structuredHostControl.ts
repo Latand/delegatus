@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { agentRegistry, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
+import { hotRegistryRows, registryConversationsForEntryKey, registryHasEntryKeyIndex } from "@/lib/agent/sqliteRegistryStore";
 import { procBackend } from "@/lib/proc";
 import { descendantPids } from "@/lib/proc/memory";
 import {
@@ -35,11 +36,9 @@ export function readStructuredHostRecords(dependencies: {
 } = {}): StructuredHostRecord[] {
   const file = (dependencies.snapshot ?? (() => agentRegistry().readOnlySnapshot()))();
   const owned = dependencies.owned ?? hasStructuredDeliveryHost;
-  const conversationsBySession = new Map<string, RegistryFile["conversations"][string]>();
-  for (const conversation of Object.values(file.conversations)) {
-    for (const generation of conversation.generations) conversationsBySession.set(generation.id, conversation);
-  }
-  const entries = Object.values(file.entries)
+  // Archived entries have no structured process. Select hosts before opening
+  // conversation payloads, including when the inventory is empty.
+  const entries = hotRegistryRows(file, "entries").map(([, entry]) => entry)
     .filter((entry) => Boolean(entry.structuredHost?.process)
       && (entry.key.engine === "claude" || entry.key.engine === "codex" || entry.key.engine === "copilot")
       /* A pane-hosted entry is already a tmux row; listing it twice would
@@ -47,6 +46,32 @@ export function readStructuredHostRecords(dependencies: {
       && entry.host === null)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .slice(0, RESOURCE_STRUCTURED_HOST_LIMIT);
+  if (!entries.length) return [];
+
+  const sessionIds = new Set(entries.map((entry) => entry.key.sessionId));
+  let conversations: RegistryFile["conversations"][string][];
+  if (registryHasEntryKeyIndex(file)) {
+    const selected = new Map<string, RegistryFile["conversations"][string]>();
+    for (const id of sessionIds) {
+      // Keep the inventory's existing raw-session matching and last-owner
+      // precedence across engines; the index itself uses qualified keys.
+      for (const engine of ["claude", "codex", "copilot"] as const) {
+        for (const conversation of registryConversationsForEntryKey(file, `${engine}:${id}`)) {
+          selected.set(conversation.id, conversation);
+        }
+      }
+    }
+    conversations = Object.keys(file.conversations).flatMap((id) => {
+      const conversation = selected.get(id);
+      return conversation ? [conversation] : [];
+    });
+  } else conversations = Object.values(file.conversations);
+  const conversationsBySession = new Map<string, RegistryFile["conversations"][string]>();
+  for (const conversation of conversations) {
+    for (const generation of conversation.generations) {
+      if (sessionIds.has(generation.id)) conversationsBySession.set(generation.id, conversation);
+    }
+  }
 
   return entries.map((entry) => {
     const process = entry.structuredHost!.process!;

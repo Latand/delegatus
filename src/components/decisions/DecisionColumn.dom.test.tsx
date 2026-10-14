@@ -389,3 +389,20 @@ test("an undelivered notice keeps the feed's saved answer and follows background
   await settle(20);
   expect(methods).toHaveLength(settled);
 });
+
+test("the inline card submits a skipped question and its feed record reads Skipped", async () => {
+  const posts: unknown[] = [];
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)); posts.push(body);
+    return new Response(JSON.stringify({ project: "project-a", decisions: [] }), { status: 200 });
+  }) as typeof fetch;
+  const host = await render(<DecisionList project="project-a" initial={[seatDecision()]} />);
+  await click(host.querySelector('[data-prototype-question-skip="why"]'));
+  await click(host.querySelector("[data-decision-send]"));
+  const answers = [{ questionId: "when", options: [0] }, { questionId: "why", options: [], skipped: true as const }];
+  expect(posts).toHaveLength(1); expect(posts[0]).toMatchObject({ answers });
+  await act(async () => root!.unmount()); root = null;
+  const { DecisionRecord } = await import("./DecisionCard");
+  const record = await render(<DecisionRecord decision={seatDecision({ decision: { chosen: [], answers, comment: "", at: "2026-10-11T14:46:00.000Z", delivery: { state: "sent", retryable: false } } })} />);
+  expect(record.querySelector('[data-decision-record-skipped="why"]')?.textContent).toBe("Skipped");
+});

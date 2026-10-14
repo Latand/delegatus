@@ -8,12 +8,56 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 
-import { commitPipelineStage, currentPipelineRemoteBranchHead, mapReplayPatchLocation, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
+import { commitPipelineStage, currentPipelineRemoteBranchHead, mapReplayPatchLocation, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import type { Pipeline } from "./types";
 import { createPipelineWithDelivery, findPipelineRecord, savePipelines, takeoverPipelineDelivery, withPipelineMutation } from "./store";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 import { closeAgentRegistryForTests } from "@/lib/agent/registry";
+
+test("delivery remote resolution distinguishes absence, read failures and relative push aliases", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-remote-"));
+  try {
+    await git(root, "init", "-q", "-b", "main");
+    expect(await resolveDeliveryRemote(root, undefined, realExec)).toMatchObject({ ok: true, remote: "" });
+    expect(await resolveDeliveryRemote(root, "https://example.invalid/project.git", realExec, { allowLiteral: true }))
+      .toMatchObject({ ok: true, remote: "https://example.invalid/project.git" });
+    expect(await resolveDeliveryRemote(root, "https://example.invalid/project.git", realExec))
+      .toMatchObject({ ok: true, remote: "" });
+    await git(root, "remote", "add", "origin", "../fetch.git");
+    await git(root, "remote", "set-url", "--push", "origin", "../push.git");
+    expect(await resolveDeliveryRemote(root, undefined, realExec)).toMatchObject({ ok: true, remote: path.resolve(root, "../push.git") });
+    for (const code of [128, null]) {
+      expect(await resolveDeliveryRemote(root, undefined, () => ({ code, stdout: "", stderr: "read failed" })))
+        .toMatchObject({ ok: false, status: 409, error: expect.stringContaining("retry") });
+    }
+    for (const remote of ["-invalid", "a\nb", "a\0b"]) {
+      expect(await resolveDeliveryRemote(root, remote, realExec)).toMatchObject({ ok: false, status: 400 });
+      expect(await resolveDeliveryRemote(root, "origin", () => ({ code: 0, stdout: remote, stderr: "" })))
+        .toMatchObject({ ok: false, status: 400 });
+    }
+    for (const remote of [null, 17, {}]) {
+      expect(await resolveDeliveryRemote(root, remote as unknown as string, realExec, { allowLiteral: true }))
+        .toMatchObject({ ok: false, status: 400 });
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("an unpinned base without origin resolves local main without fetching", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "local-base-"));
+  try {
+    await git(root, "init", "-q", "-b", "main");
+    await git(root, "commit", "-q", "--allow-empty", "-m", "base");
+    const head = await git(root, "rev-parse", "HEAD");
+    const calls: string[] = [];
+    const result = await resolvePipelineBaseAsync(root, {}, (command, args, cwd, signal) => {
+      calls.push([command, ...args].join(" "));
+      return realProvisionExec(command, args, cwd, signal);
+    });
+    expect(result).toEqual({ ok: true, baseBranch: "main", baseRef: head });
+    expect(calls.some(call => call.includes(" fetch "))).toBe(false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test.each(["probe", "push-reply"] as const)("closing a lane during a real publication %s fences its outcome", async (phase) => {
   const box = await publishSandbox();
@@ -32,8 +76,11 @@ test.each(["probe", "push-reply"] as const)("closing a lane during a real public
   let pending: ReturnType<typeof publishPipelineBranch> | undefined;
   try {
     pending = publishPipelineBranch(box.subject, realExec, { acceptedSha: head });
-    const deadline = Date.now() + 2_000;
-    while (!fs.existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+    // Wait for the actual Git boundary. Startup under a busy runner is outside
+    // the publication contract; the test's infrastructure deadline bounds it.
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    while (!fs.existsSync(entered) && !settled) await Bun.sleep(5);
     expect(fs.existsSync(entered)).toBe(true);
     const ports = { ...defaultPipelinePorts(), stopStageAgent: async () => ({ outcome: "not-running" as const }), paneAgentAlive: async () => false, stageHostResident: async () => false };
     expect((await patchPipeline(box.subject.id, { action: "close" }, ports)).error).toBeUndefined();
@@ -51,11 +98,14 @@ test.each(["probe", "push-reply"] as const)("closing a lane during a real public
       expect(findPipelineRecord(box.subject.id)!.delivery!.journal.at(-1)!.reason).toContain("reconcile");
     }
   } finally {
-    fs.writeFileSync(released, ""); await pending;
-    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
-    restoreTick(); fs.rmSync(box.root, { recursive: true, force: true });
+    fs.writeFileSync(released, "");
+    try { await pending; }
+    finally {
+      for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+      restoreTick(); fs.rmSync(box.root, { recursive: true, force: true });
+    }
   }
-});
+}, 30_000);
 
 let previousState: string | undefined;
 let previousGitConfig: Record<string, string> = {};
@@ -632,6 +682,7 @@ test("async provisioning preserves the synchronous base and adoption decisions",
       };
       const expected = (await resolvePipelineBase("/repo", input, exec));
       const expectedCommands = commands.splice(0);
+      if (!input.baseRef && !input.baseBranch?.startsWith("..")) expectedCommands.unshift("git remote get-url origin");
       expect(await resolvePipelineBaseAsync("/repo", input, async (command, args, cwd) => (await exec(command, args, cwd)))).toEqual(expected);
       expect(commands).toEqual(expectedCommands);
     }
@@ -685,6 +736,7 @@ test("async exec reports launch errors, pre-abort, and a killed timeout without 
   expect(fs.existsSync(marker)).toBe(false);
   const calls: string[] = [];
   const base = await resolvePipelineBaseAsync(publicationState, {}, async (command, args, cwd) => {
+    if (command === "git" && args[0] === "remote") return { code: 0, stdout: "https://example.invalid/repo.git", stderr: "" };
     calls.push(args.join(" "));
     return (await realProvisionExec(command, [args[0]!, "0.05s", process.execPath, "-e", "setTimeout(() => {}, 5000)"], cwd));
   });

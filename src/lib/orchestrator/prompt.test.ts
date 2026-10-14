@@ -80,8 +80,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 53, and a v52 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(53);
+test("the default mandate is at version 54, and a v53 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(54);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -120,7 +120,8 @@ test("the default mandate is at version 53, and a v52 seat reads as stale", () =
      shortens equivalent draft wording to keep the delivery reserve. v51
      retains the reviewed branch's refreshing fence alongside those rules. v52
      combines them with automatic release control and incident holds. v53
-     adds the machine-wide worker limit while retaining those rules. */
+     adds the machine-wide worker limit while retaining those rules. v54 puts
+     waiting and repeated unanswered asks into forms. */
   expect(orchestratorMandateStale(30)).toBe(true);
   expect(orchestratorMandateStale(31)).toBe(true);
   expect(orchestratorMandateStale(32)).toBe(true);
@@ -144,7 +145,8 @@ test("the default mandate is at version 53, and a v52 seat reads as stale", () =
   expect(orchestratorMandateStale(50)).toBe(true);
   expect(orchestratorMandateStale(51)).toBe(true);
   expect(orchestratorMandateStale(52)).toBe(true);
-  expect(orchestratorMandateStale(53)).toBe(false);
+  expect(orchestratorMandateStale(53)).toBe(true);
+  expect(orchestratorMandateStale(54)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("gives the shape, the outcome rule and what");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
@@ -215,6 +217,8 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   // a50133384753b7ad25d86b7792dcfa19ec54feb944776cbc4ebc93a62a7f2f22.
   // v53 combines its worker-limit rule with main's mandate.
   53: "28e34e893a3677250f71ccad3a56a58f0c5188a34e9eb6f9812910b465e1f5d6",
+  // v54 keeps waiting and repeated unanswered asks in forms.
+  54: "d0a97d9a92192e47a48cc4d4e59b60476717ae1ecc78fd252ffd8de2e1bf304e",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -1008,6 +1012,7 @@ test("the decision-form mandate upgrades every shipped pointer once and preserve
   const shipped = [
     "Prototype review: every decision is a form: publish_prototype_review, 1–7 questions, taskId for a task; chat and reports only point to it. Before non-trivial or two-way work, or on request, ask 3–7 there. After answers, write \"how I understood\" (3–5 lines) in the task text and start.",
     "Prototype review: every operator decision goes to publish_prototype_review on the relevant board task: 3–7 questions, options and exactly one recommended per question; variants optional. Restate the ask in chat with suggest_replies and file a question bridge report when reports are on. Never use engine built-in ask tools. Before non-trivial or two-way work, or on request, use this form; the operator may skip. After answers, write \"how I understood\" (3–5 lines) in task text and start.",
+    "Prototype review: every operator decision is a form: publish_prototype_review; taskId for a task (3–7 questions), omit it without a task (1–7). Give options with exactly one recommended per question; variants optional. Chat and reports only point to the form. Never use engine built-in ask tools. Before non-trivial or two-way work, or on request, use a form; the operator may skip. After answers, write \"how I understood\" (3–5 lines) in task text and start.",
   ];
   for (const input of [ORCHESTRATOR_SYSTEM_PROMPT, "Coordinate the project.", "Coordinate.\nPrototype review: point to the task's review.", `Coordinate.\n\n${questionnaire}`, ...shipped]) {
     const delivered = orchestratorMandateForDelivery(input);
@@ -1015,6 +1020,7 @@ test("the decision-form mandate upgrades every shipped pointer once and preserve
     expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
     expect(delivered.split(directive)).toHaveLength(2);
   }
+  for (const previous of shipped) expect(orchestratorMandateForDelivery(previous)).not.toContain(previous);
   expect(orchestratorMandateForDelivery("Prototype review: our own wording.")).toContain("Prototype review: our own wording.");
 });
 

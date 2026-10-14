@@ -211,6 +211,8 @@ test("a completed lane's merge says its word, and a stopped one asks with two pl
   expect(answers.choices.map((choice) => answerLabel(t, answers, choice, false))).toEqual(["Leave the PR open", "Try the merge again"]);
   expect(answers.choices.map((choice) => answerLabel(uk, answers, choice, true))).toEqual(["Залишити PR відкритим", "Спробувати мердж ще раз"]);
   expect(mergeReasonText(t, stopped.merge!.reason)).toBe("check slow failed");
+  expect(mergeReasonText(t, "a reviewer requested changes")).toBe("a reviewer requested changes");
+  expect(mergeReasonText(uk, "a reviewer requested changes")).toBe("ревʼюер запросив зміни");
   expect(mergeReasonText(uk, "conflict with the base branch")).toBe("конфлікт з базовою гілкою");
   expect(mergeReasonText(t, "GitHub refused the merge: Head branch was modified")).toBe("GitHub refused the merge: Head branch was modified");
 

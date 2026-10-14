@@ -259,7 +259,7 @@ export function DecisionRecord({ decision, onRetry, retrying = false, retryError
                 <span className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-sm bg-sunken text-caption font-bold text-secondary">{at + 1}</span>
                 <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
                   <span className="text-secondary">{question.text} </span>
-                  <span className="font-semibold text-accent">{chosen}</span>
+                  {answer?.skipped ? <span data-decision-record-skipped={question.id} className="font-semibold text-muted">{t("proto.q.skippedShort")}</span> : <span className="font-semibold text-accent">{chosen}</span>}
                 </span>
               </li>
             );

@@ -1133,7 +1133,7 @@ function publishHarness(h: ReturnType<typeof harness>, options: { origin?: boole
     if (args[0] === "branch" && args[1] === "--show-current") return { code: 0, stdout: `${branch}\n`, stderr: "" };
     if (args[0] === "remote" && args[1] === "get-url") {
       return options.origin === false
-        ? { code: 128, stdout: "", stderr: "error: No such remote 'origin'" }
+        ? { code: 2, stdout: "", stderr: "error: No such remote 'origin'" }
         : { code: 0, stdout: "git@example.invalid:owner/repo.git\n", stderr: "" };
     }
     if (args[0] === "ls-remote") {

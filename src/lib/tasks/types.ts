@@ -107,6 +107,8 @@ export interface TaskOrigin {
 }
 
 export interface TaskAssignment {
+  /** Task status before this launch added its membership row. */
+  statusBeforeLink?: TaskStatus;
   /** Durable Viewer launch identity used to replay attribution safely. */
   launchId?: string | null;
   /** Client idempotency key paired with launchId. */

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -18,11 +19,24 @@ import { STATE_OWNER_ENV } from "./stateOwnership";
  * environment — which is how the Viewer MCP server and two operator scripts
  * were found dead on arrival.
  *
- * The "operator home" is a directory inside `node_modules`: it must NOT sit
- * under a temp root, since a `$HOME` under one is exactly the sandbox the
+ * The "operator home" is a newly owned directory in the user's cache. It must
+ * stay outside temp roots, since a `$HOME` under one is exactly the sandbox the
  * mechanism leaves alone.
  */
-const OPERATOR_HOME = path.join(process.cwd(), "node_modules", ".llv-entry-point-test", "home");
+// Bun caches userInfo()'s home from the startup environment. A fresh process
+// without the runner's temporary home finds the native cache instead.
+function nativeHome(): string {
+  const env = { ...process.env };
+  delete env.HOME;
+  delete env.USERPROFILE;
+  const result = runEntryPoint(["-e", "console.log(require('node:os').userInfo().homedir)"], env);
+  if (result.status !== 0) throw new Error(result.output);
+  return result.stdout.trim();
+}
+const cache = path.join(nativeHome(), ".cache");
+fs.mkdirSync(cache, { recursive: true });
+const operatorRoot = fs.mkdtempSync(path.join(cache, "llv-entry-point-test-"));
+const OPERATOR_HOME = path.join(operatorRoot, "home");
 /* Both shapes an operator's home takes after the rename (rename-delegatus.md
    §4.2): a new install holds only `~/.config/delegatus`, an existing one only
    `~/.config/agent-log-viewer`. */
@@ -49,17 +63,27 @@ interface RunResult {
  * production because the runner exports `test`, which would hand the child a
  * throw-away directory and answer a different question than the one asked.
  */
-function runEntryPoint(command: string[]): RunResult {
+function operatorEnvironment(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
   delete env[STATE_OWNER_ENV];
   delete env.LLV_STATE_DIR;
+  delete env.DELEGATUS_STATE_OWNER;
+  delete env.DELEGATUS_STATE_DIR;
+  // An operator's stdio MCP starts locally. An inherited agent capability
+  // selects lazy delegation and never opens the local receipt store at EOF.
+  delete env.LLV_SPAWN_CAPABILITY;
+  delete env.DELEGATUS_SPAWN_CAPABILITY;
   delete env.NEXT_PHASE;
   delete env.NEXT_RUNTIME;
   env.HOME = OPERATOR_HOME;
   env.XDG_CONFIG_HOME = path.join(OPERATOR_HOME, ".config");
   env.TMPDIR = temporaryRoot();
   env.NODE_ENV = "production";
+  return env;
+}
+
+function runEntryPoint(command: string[], env: Record<string, string | undefined> = operatorEnvironment()): RunResult {
   const result = Bun.spawnSync({
     cmd: [process.execPath, ...command],
     cwd: process.cwd(),
@@ -154,6 +178,50 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
     }, 60_000);
   }
 
+  test("the runtime host starts and keeps its journal in the operator's state directory", async () => {
+    /* A long-lived server, so it is started, observed listening and stopped
+       by its own handle. Its socket sits under the temp root because one
+       under this home is longer than `sun_path` allows; deployments stay off
+       so no stable port is bound, and the Viewer control URL is a closed
+       port. */
+    const socketPath = path.join(temporaryRoot(), "runtime-host.sock");
+    const child = Bun.spawn({
+      cmd: [process.execPath, "src/runtime-host/main.ts"],
+      cwd: process.cwd(),
+      env: { ...operatorEnvironment(), LLV_RUNTIME_HOST_SOCKET: socketPath, LLV_VIEWER_DEPLOYMENTS: "0", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stdout = new Response(child.stdout).text();
+    const stderr = new Response(child.stderr).text();
+    const connects = () => new Promise<boolean>((resolve) => {
+      const socket = net.createConnection(socketPath);
+      socket.once("connect", () => { socket.destroy(); resolve(true); });
+      socket.once("error", () => resolve(false));
+    });
+    let listening = false;
+    try {
+      const deadline = Date.now() + 30_000;
+      while (child.exitCode === null && Date.now() < deadline) {
+        if (await connects()) { listening = true; break; }
+        await Bun.sleep(50);
+      }
+    } finally {
+      if (child.exitCode === null) child.kill("SIGTERM");
+      if (!await Promise.race([child.exited.then(() => true), Bun.sleep(5_000).then(() => false)])) {
+        child.kill("SIGKILL");
+        await child.exited;
+      }
+    }
+    const result = { status: child.exitCode, stdout: await stdout, stderr: await stderr, output: "" };
+    result.output = result.stdout + result.stderr;
+
+    expectNoRefusal(result);
+    expect(listening, result.output).toBeTrue();
+    expect(fs.existsSync(path.join(STATE_DIRECTORY, "runtime-events.sqlite"))).toBeTrue();
+  }, 60_000);
+
   test("the launcher runs under the operator's home", () => {
     /* `--help` resolves no state today, so this case says only that the
        launcher entry itself is not refused while loading — which is exactly
@@ -171,7 +239,7 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
        stands. */
     const result = runEntryPoint(["src/lib/state/fixtures/stateOwnershipProbe.ts"]);
 
-    expect(result.status).not.toBe(0);
+    expect(result.status, result.output).not.toBe(0);
     expect(result.stderr).toContain("refusing to resolve the operator's state directory");
   }, 60_000);
 });
