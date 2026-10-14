@@ -39,14 +39,16 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
   const known = new Set([...members.map(row => aliased(row.project)), ...Object.keys(aliases.displayNames).map(aliased),
     ...seats.map(row => aliased(row.project))]);
   const roots = new Map<string, ReturnType<typeof projectInfoFromCwd>>();
-  for (const row of [...(last?.projectCatalog ?? []), ...members.filter(row => row.worktree)]) {
-    const cwd = row.projectRoot || row.cwd;
+  // Retained conversation cwd/worktree fields cannot replace a member's
+  // current root or its authoritative alias. Fold only catalog member roots.
+  for (const row of last?.projectCatalog ?? []) {
+    const cwd = row.projectRoot;
     if (!cwd) continue;
     if (!roots.has(cwd)) roots.set(cwd, projectInfoFromCwd(cwd));
     const info = roots.get(cwd);
     const key = aliased(row.project);
     if (key !== row.project) continue;
-    if (info && (info.worktree || row.worktree) && known.has(aliased(info.project))) {
+    if (info?.worktree && known.has(aliased(info.project))) {
       const targets = evidence.get(key) ?? new Set<string>();
       targets.add(aliased(info.project)); evidence.set(key, targets);
     }

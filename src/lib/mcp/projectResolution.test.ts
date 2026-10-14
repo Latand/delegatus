@@ -443,3 +443,21 @@ test("MCP prefers the one designated seat among unrelated same-name members", as
   expect(await h.call("get_orchestrator", "Orion Works")).toMatchObject({ ok: true, project: "orion-seated" });
   expect(h.scans()).toBe(0);
 });
+
+
+test("retained conversation worktree markers cannot retarget an authoritative member project", async () => {
+  const root = path.join(directory, "OrionParent");
+  fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+  fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/OrionParent.git\n');
+  const parent = projectForCwd(root)!;
+  seat(parent, "Orion Parent", "conversation_parent");
+  seat("orion-member", "Orion Member", "conversation_member");
+  const h = harness(false, { lastCompletedCatalog: () => ({ projectCatalog: [
+    { project: parent, displayName: "Orion Parent", projectRoot: root, smt: 1, conversations: 1 },
+    { project: "orion-member", displayName: "Orion Member", projectRoot: path.join(directory, "MemberRepo"), smt: 1, conversations: 1 },
+  ], files: [{ project: "orion-member", projectName: "Orion Member", projectRoot: root,
+    cwd: path.join(root, ".worktrees", "gone"), worktree: "gone" } as import("@/lib/types").FileEntry] }) });
+  expect(await h.call("get_orchestrator", "Orion Member")).toMatchObject({ ok: true, project: "orion-member", conversationId: "conversation_member" });
+  expect(h.scans()).toBe(0);
+});
