@@ -80,7 +80,7 @@ test("warm ended-owner discovery and one-row revalidation do not reread retained
     expect([...reads.values()].reduce((sum, count) => sum + count, 0)).toBeLessThan(10);
     const id = expected.keys().next().value!;
     reads.clear();
-    expect(hostlessConversationEvidence(registry.readOnlySnapshot(), id)).toEqual(expected.get(id)!);
+    expect<ReturnType<typeof hostlessConversationEvidence> | undefined>(hostlessConversationEvidence(registry.readOnlySnapshot(), id)).toEqual(expected.get(id));
     expect((reads.get("conversations") ?? 0) + (reads.get("entries") ?? 0)).toBeLessThan(10);
     expect(reads.get("receipts") ?? 0).toBeLessThan(200);
   } finally { registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
