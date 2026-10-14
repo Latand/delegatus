@@ -88,7 +88,7 @@ export function resolveNativeCaller(sources: NativeCallerSources): NativeCallerV
     if (matches.length !== 1) return refuse("generation-ambiguous");
     const { conversation, generation } = matches[0]!;
     if (generation !== conversation.generations.at(-1) || generation.archivedAt !== null || conversation.supersededBy !== null
-      || (conversation.migration && !["committed", "rolled-back"].includes(conversation.migration.phase))) {
+      || (conversation.migration && !["committed", "rolled-back", "failed-recoverable"].includes(conversation.migration.phase))) {
       return refuse("generation-not-current");
     }
     const transcript = sources.realpath(generation.path);
@@ -98,6 +98,9 @@ export function resolveNativeCaller(sources: NativeCallerSources): NativeCallerV
       || path.basename(transcript) !== `${record.sessionId}.jsonl`) return refuse("transcript-outside-home");
     for (const entry of Object.values(snapshot.entries)) {
       if (entry.artifactPath !== generation.path && sources.realpath(entry.artifactPath) !== transcript) continue;
+      if ((entry.host && !entry.host.agent?.pid) || (entry.structuredHost && !entry.structuredHost.process?.pid)) {
+        return refuse("generation-hosted");
+      }
       for (const host of [entry.host?.agent, entry.structuredHost?.process]) {
         if (host?.pid && sources.hostStatus(host) !== "dead") return refuse("generation-hosted");
       }

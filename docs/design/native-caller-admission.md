@@ -440,7 +440,9 @@ The implementation uses the native chain only after hosted ancestry and launch
 capability resolution. A presented credential that does not resolve refuses the
 call, including when ancestry would otherwise match. Native worker, manager and
 deputy attribution retain the native marker and never register a completion
-notice launcher. Receipt bindings keep their existing durable shape.
+notice launcher. Receipt bindings keep their existing durable shape. A host
+reservation with no recorded PID remains unverified and refuses native admission. Terminal migration
+phases, including `failed-recoverable`, leave the current generation admissible.
 
 The packaged stdio fixture creates a sandbox Claude-shaped parent, writes that
 parent's real kernel start token and PID domain, and reconciles its transcript

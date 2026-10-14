@@ -170,3 +170,16 @@ test("every refusal gives the reason and continuation route without identity dis
     expect(text).not.toContain("conversation_native");
   }
 });
+
+
+for (const phase of ["committed", "rolled-back", "failed-recoverable"] as const) test(`terminal migration ${phase} leaves the current native generation admissible`, () => {
+  const f = fixture(); Object.assign(f.conversation, { migration: { phase } });
+  expect(resolveNativeCaller(f.sources).kind).toBe("admitted");
+});
+
+test("a host reservation without a recorded PID stays unverified", () => {
+  for (const host of [{ structuredHost: { process: null } }, { host: { agent: null } }]) {
+    const f = fixture(); Object.assign(f.snapshot.entries, { reserved: { artifactPath: f.generation.path, ...host } });
+    refused(f.sources, "generation-hosted");
+  }
+});
