@@ -12,6 +12,54 @@ import { renderDecisionInput, renderStagePrompt } from "./prompts";
 import { parseStageVerdict } from "./verdict";
 import { pipelineRoleLookup, resolvePipelineRole } from "./roles";
 import type { PipelineStage } from "./types";
+import { composeStageInput } from "./stageInput";
+import { seededTemplatesFromRoles } from "@/lib/workflows/store";
+
+test.each(["vitest", "delegatus", "missing"])("assembled test guidance uses installed tooling and project checks: %s", async (kind) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-test-guidance-"));
+  const toolingCwd = process.cwd();
+  const worktree = path.join(root, "project checkout");
+  fs.mkdirSync(worktree);
+  fs.writeFileSync(path.join(worktree, "package.json"), JSON.stringify({
+    name: kind === "delegatus" ? "delegatus-cli" : "fixture-project",
+    scripts: { test: kind === "delegatus" ? "bun test" : "vitest run" },
+  }));
+  const stage: PipelineStage = { id: "build", kind: "run", prompt: "Build", next: null,
+    effectiveRole: { roleId: "builder", engine: "codex", model: null, effort: "high", access: "read-write", promptScaffold: null } };
+  const pipeline = buildPipeline({ id: "test-guidance", task: "Build", project: "fixture", repoDir: worktree,
+    stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
+  pipeline.worktreeDir = worktree;
+  try {
+    if (kind === "missing") process.chdir(root);
+    const prompt = await composeStageInput(pipeline, stage, stage.effectiveRole, "", worktree,
+      async () => ({ code: 1, stdout: "", stderr: "not a Git repository" }));
+    expect(prompt).toContain("project's test command");
+    expect(prompt).toContain("instruction files or package scripts");
+    expect(prompt).not.toContain("bun test");
+    expect(prompt).toContain("explicit path");
+    expect(prompt).toContain("isolated HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR");
+    if (kind === "missing") {
+      expect(prompt).toContain("Gate wrapper unavailable");
+      expect(prompt).toContain("one at a time directly");
+      expect(prompt).not.toContain("never bypass it");
+      expect(prompt).not.toContain("bash scripts/gate-slot.sh");
+    } else {
+      const wrapper = fs.realpathSync(path.join(toolingCwd, "scripts", "gate-slot.sh"));
+      expect(prompt).toContain(wrapper);
+      expect(path.isAbsolute(wrapper)).toBe(true);
+      expect(prompt).toContain("never bypass it for lifecycle tests");
+      expect(prompt).not.toContain("bash scripts/gate-slot.sh");
+    }
+  } finally {
+    process.chdir(toolingCwd);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("role and workflow defaults leave gate location and test runner to assembly and project rules", () => {
+  for (const role of ROLE_DEFAULTS) expect(role.promptScaffold).not.toContain("scripts/gate-slot.sh");
+  for (const template of seededTemplatesFromRoles()) expect(template.verify).toBeUndefined();
+});
 
 test("comparison guidance names the owner while preserving full host capabilities", () => {
   const stage: PipelineStage = { id: "build", kind: "run", prompt: "Compare changes", next: null, sandbox: "full",

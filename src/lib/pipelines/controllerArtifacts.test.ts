@@ -8,6 +8,7 @@ import { composeStructuredFirstMessage } from "@/lib/runtime/structuredFirstMess
 import { CONTROLLER_ARTIFACT_DIRECTORY, prepareControllerArtifactDirectory } from "./controllerArtifacts";
 import { realExec } from "@/lib/workflows/provision";
 import { renderStagePrompt } from "./prompts";
+import { resolveStageTestGuidance } from "./testGuidance";
 import { composeStageInput } from "./stageInput";
 import { buildPipeline } from "./store";
 import type { PipelineStage } from "./types";
@@ -45,7 +46,7 @@ async function compose(kind: "structured" | "pipeline", cwd: string) {
   const pipeline = buildPipeline({ id: "private-index", task: "t".repeat(500), spec: "AC", project: "fixture", repoDir: cwd,
     stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
   pipeline.worktreeDir = cwd;
-  return { text: renderStagePrompt(pipeline, stage, stage.effectiveRole, text), delivered: (await composeStageInput(pipeline, stage, stage.effectiveRole, text)) };
+  return { text: renderStagePrompt(pipeline, stage, stage.effectiveRole, text, undefined, resolveStageTestGuidance()), delivered: (await composeStageInput(pipeline, stage, stage.effectiveRole, text)) };
 }
 
 async function composeSmall(kind: "structured" | "pipeline", cwd: string) {
@@ -56,7 +57,7 @@ async function composeSmall(kind: "structured" | "pipeline", cwd: string) {
     stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
   pipeline.worktreeDir = cwd;
   const delivered = (await composeStageInput(pipeline, stage, stage.effectiveRole, ""));
-  expect(delivered).toBe(renderStagePrompt(pipeline, stage, stage.effectiveRole, ""));
+  expect(delivered).toBe(renderStagePrompt(pipeline, stage, stage.effectiveRole, "", undefined, resolveStageTestGuidance()));
   return delivered;
 }
 
