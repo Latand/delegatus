@@ -68,3 +68,41 @@ Use the existing backing model to resolve pending question references, existing 
 ## Deferred — not currently justified
 
 Embedding services, a new workflow/queue framework, larger retrieval budgets, model replacement, capability expansion, backend-switch UI changes and redesign of the older bridge hook. The required work fits existing proposals, report storage, backing models and provider adapters. This stage publishes only the authorized note; it introduces no UI variants or prototype media.
+
+
+## Amendment, 2026-10-14: compose a complete task
+
+The operator asked that Voice Delegatus write the whole task in its own words
+and set its limit to 4,000 characters. This amendment supersedes item 2's
+composition and length rule and the corresponding composition wording in the
+cause table. The earlier text records the design at that date.
+
+Every send is one self-contained task: what to do and why, the expected
+outcome, and the necessary card, PR, issue or earlier point resolved from the
+call's reads and conversation. The voice uses the operator's interface
+language unless asked otherwise. It never forwards raw speech as the task;
+one attributed sentence at the end may quote the operator. Every part comes
+from the operator's request or a read. Earlier turns resolve references, and
+an earlier request is included only when the latest turn asks to send it.
+Unresolved references are stated, and an unclear task gets a short question.
+Independent tasks remain separate. No steps, constraints or deadlines are added.
+
+Only project work and questions about it that reads cannot answer reach the
+orchestrator. General knowledge, chat, riddles, poems, translations and advice
+are answered by the voice or declined, even on an explicit request to send
+them. Possible work for another project gets a project clarification.
+
+The task cap is 4,000 Unicode scalars. It allows the action, outcome and
+resolved context to travel together; length alone cannot prevent bundling.
+A 6,000-scalar tool envelope lets the handler explain overflow and ask for
+recomposition. Admission events and delegation cards retain the whole task,
+including emoji. Compact 400-scalar task references keep pending handles in
+backend context and report reads. The API backend has 2,048 output tokens to
+write a task of this length; spoken answers keep their existing limit.
+
+Explicit-send admission, pending-request handles, explicit renewal,
+confirmation and withdrawal, project fences, private-history rules, and report
+correlation retain their existing contracts. The simulator keeps its own gate.
+An already-open page needs a reload to use the raised confirmation-card cap.
+Semantic composition and project relevance remain backend model judgments;
+these tests pin their instructions and exercise delivery with a fake provider.

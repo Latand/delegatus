@@ -21,9 +21,12 @@ const { POST: mountedPOST } = await import("@/app/api/conversation-host/route");
 const { CompanionStorage } = await import("./storage");
 const { CompanionAdmission } = await import("./admission");
 const { companionDeliveryPaths, sendCompanionMessage } = await import("./deliveryPaths");
+const { runCompanionTool } = await import("./tools");
+const { fixtureBoardReads } = await import("./boardReads.fixture");
 let registry: InstanceType<typeof AgentRegistry>;
 let count = 0;
 let delivered: Record<string, unknown>[];
+let heldTexts: string[];
 let scan: () => void = () => {};
 beforeEach(() => {
   resetTeamStoreForTests();
@@ -32,6 +35,7 @@ beforeEach(() => {
   registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR, "registry.json"));
   setAgentRegistryForTests(registry);
   delivered = [];
+  heldTexts = [];
   scan = () => {};
   setConversationHostDependenciesForTests({
     completedFileScan: async () => { scan(); return { snapshot: { files: [] } } as never; },
@@ -41,6 +45,7 @@ beforeEach(() => {
       delivered.push({ ...message });
       const held = registry.holdDelivery(message.conversationId as never, message.text, message.clientMessageId ?? null, "text", [], null,
         { policy: message.policy, origin: message.origin });
+      heldTexts.push(registry.snapshot().heldDeliveries[held.id].text);
       registry.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
       return { ok: true, structured: true, outcome: "delivered", target: null, operationId: held.command.operationId } as never;
     },
@@ -132,4 +137,30 @@ test("an error response that names an operation retains its unknown fate and ori
   const result = await sendCompanionMessage({ sessionId: f.session.id, proposalId: proposal.proposalId, delivery: held.delivery!, text: held.text!, startedBy: f.session.startedBy },
     async () => new Response(JSON.stringify({ code: "voice_seat_changed", operationId: "op-already-admitted" }), { status: 409, headers: { "content-type": "application/json" } }));
   expect(result).toEqual({ status: "unknown", operationId: "op-already-admitted", code: "voice_seat_changed" });
+});
+
+
+for (const unit of ["ї", "🎙"]) for (const confirm of [false, true]) test(`composed 4000-scalar task reaches the real handler intact (unit=${unit}, confirmation=${confirm})`, async () => {
+  const f = fixture();
+  const instruction = "Перевір задачу. " + unit.repeat(4000 - [..."Перевір задачу. "].length);
+  const context = { project: f.session.project, sessionId: f.session.id, callId: "long-call", delegationId: "long-turn", admission: f.admission,
+    reads: fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), endConversation() {} };
+  const result = await runCompanionTool(context, "request_orchestrator_delegation", { instruction, confirmation_reason: confirm ? "Confirm this task." : null });
+  expect(result).toMatchObject({ status: confirm ? "awaiting_confirmation" : "sent" });
+  const held = Object.values(f.admission.session(f.session.id).proposals)[0];
+  if (confirm) {
+    expect(delivered).toHaveLength(0);
+    await f.admission.confirm(f.session.id, { proposalId: held.proposal.proposalId, decision: "send", via: "tap" });
+  }
+  expect(delivered).toHaveLength(1);
+  expect(delivered[0].text).toBe(f.admission.session(f.session.id).proposals[held.proposal.proposalId].text!);
+  expect(heldTexts).toEqual([delivered[0].text as string]);
+  expect(delivered[0].filePaths).toBeUndefined();
+  expect(String(delivered[0].text)).toStartWith(instruction + "\n\n[Voice Delegatus wrote this request");
+  expect(delivered[0].images).toEqual([]);
+  expect(held.proposal.instruction).toBe(instruction);
+  expect(f.admission.session(f.session.id).events.filter(event => event.type === "delegation.tool.called")).toMatchObject([{ instruction }]);
+  expect(await runCompanionTool({ ...context, callId: "overflow" }, "request_orchestrator_delegation", { instruction: unit.repeat(4001) })).toMatchObject({ status: "too_long" });
+  await expect(runCompanionTool({ ...context, callId: "envelope-overflow" }, "request_orchestrator_delegation", { instruction: unit.repeat(6001) })).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
+  expect(delivered).toHaveLength(1);
 });

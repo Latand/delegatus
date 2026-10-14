@@ -1,3 +1,4 @@
+import { askGist } from "./liveGate";
 import type { CallMemory } from "./callMemory";
 import type { OwnerHistoryRead } from "@/lib/externalRelay/ownerHistory";
 import { createHash, randomUUID } from "node:crypto";
@@ -460,9 +461,9 @@ export class CompanionLiveSessions {
       const awaiting = this.admission.awaitingReports(active.id);
       this.admission.showAwaiting(active.id, delegationId, awaiting.map(request => request.proposalId));
       const scrub = (text: string) => withoutLocalPaths(withoutCredentials(text, active.secrets));
-      const awaitingList = awaiting.map(request => scrub(`- ${request.handle}, project ${JSON.stringify(reportHeaderName(request.project, stored.locale))}, sent ${request.sentMinutesAgo} min ago, ${request.progressReports} progress report(s)${request.askedBack ? ", the orchestrator asked back" : ""}: ${JSON.stringify(request.instruction)}`)).join("\n").slice(-3000);
+      const awaitingList = awaiting.map(request => scrub(`- ${request.handle}, project ${JSON.stringify(reportHeaderName(request.project, stored.locale))}, sent ${request.sentMinutesAgo} min ago, ${request.progressReports} progress report(s)${request.askedBack ? ", the orchestrator asked back" : ""}: ${JSON.stringify(askGist(request.instruction))}`)).join("\n").slice(-3000);
       const latest = (sourceTurn === undefined ? stored.inputs.slice(-1) : stored.inputs.filter(row => row.turn === sourceTurn)).map(row => row.text).join(" ").slice(-2_000);
-      const input: BackendItem[] = [...(active.memory ? [{ role: "developer", content: active.memory }] : []), { role: "user", content: `Project currently in view: ${projectLabel}. Default reads and sends to this project; a named project overrides it.\n${active.projectDirectory}\nReads earlier in this call, newest last:\n${previousReads || "(none)"}\n\nRequests sent to the orchestrator in this call that still wait for its report:\n${awaitingList || "(none)"}\nAn ask that repeats or rephrases one of these passes its handle as pending_request. orchestrator_reports reads what came back.\n\nThe conversation so far, oldest first:\n${record || "(no transcript yet)"}\n\nThe operator's latest turn, which this delegation answers: ${latest ? JSON.stringify(scrub(latest)) : "(not transcribed yet)"}\nAct on that turn alone. Earlier questions are context; never put them into a send.\n\nThe voice delegated here. Answer it with the registry tools, or send the operator's explicit orchestrator request.${waiting
+      const input: BackendItem[] = [...(active.memory ? [{ role: "developer", content: active.memory }] : []), { role: "user", content: `Project currently in view: ${projectLabel}. Default reads and sends to this project; a named project overrides it.\n${active.projectDirectory}\nReads earlier in this call, newest last:\n${previousReads || "(none)"}\n\nRequests sent to the orchestrator in this call that still wait for its report:\n${awaitingList || "(none)"}\nAn ask that repeats or rephrases one of these passes its handle as pending_request. orchestrator_reports reads what came back.\n\nThe conversation so far, oldest first:\n${record || "(no transcript yet)"}\n\nThe operator's latest turn, which this delegation answers: ${latest ? JSON.stringify(scrub(latest)) : "(not transcribed yet)"}\nAct on that turn alone. Earlier turns only resolve what it refers to; never add an earlier request it does not ask to send.\n\nThe voice delegated here. Answer it with the registry tools, or write and send the task the operator explicitly asked to send.${waiting
         ? `\n\nA request to the orchestrator is waiting for the operator's answer and has not been sent: "${waiting.instruction}". When the operator has just answered it, pass that answer on with resolve_orchestrator_confirmation.` : ""}` }];
       const calls = new Set<string>();
       // Tool rounds, then one answer with tools off, so what the reads returned is still spoken.
@@ -475,7 +476,7 @@ export class CompanionLiveSessions {
         catch { this.capReached(active, delegationId); return; }
         this.storage.change(document => { document.sessions[active.id].usage!.responses[responseKey] = { usd: null, complete: false }; });
         let result: Record<string, unknown> | null;
-        try { result = jsonObject(await active.provider.respond(active.key, backendRequest(input, { final }), active.abort.signal)); }
+        try { result = jsonObject(await active.provider.respond(active.key, backendRequest(input, { final, locale: stored.locale }), active.abort.signal)); }
         catch { result = null; }
         // A request with no answer may still have been billed: its reservation stays held.
         const usd = backendUsageUsd(result?.usage);
@@ -491,7 +492,7 @@ export class CompanionLiveSessions {
         }
         if (active.ended || active.closePromise) return;
         const asked = output.filter(item => item.type === "function_call" && typeof item.call_id === "string" && item.call_id.length <= 200
-          && typeof item.name === "string" && typeof item.arguments === "string" && item.arguments.length <= 8_000 && !calls.has(item.call_id));
+          && typeof item.name === "string" && typeof item.arguments === "string" && [...item.arguments].length <= 8_000 && !calls.has(item.call_id));
         if (!asked.length || final) {
           const text = output.filter(item => item.type === "message" && Array.isArray(item.content)).flatMap(item => (item.content as unknown[]).map(jsonObject))
             .filter(part => part?.type === "output_text" && typeof part.text === "string").map(part => part!.text as string).join(" ");
@@ -554,7 +555,7 @@ export class CompanionLiveSessions {
     let argumentsText: string;
     try { argumentsText = privateHistoryBlocked || PRIVATE_RESULT_TOOLS.has(name) ? "[private owner history arguments omitted]" : JSON.stringify(cleanStrings(JSON.parse(item.arguments as string),
       text=>withoutLocalPaths(withoutCredentials(text,active.secrets)),true), null, 2); } catch { argumentsText = String(item.arguments); }
-    const toolData = { name: privateHistoryBlocked ? "private_history_blocked" : name, callId: recordedCallId, delegationId, sourceTurn, arguments: argumentsText.slice(0, 4_000) };
+    const toolData = { name: privateHistoryBlocked ? "private_history_blocked" : name, callId: recordedCallId, delegationId, sourceTurn, arguments: [...argumentsText].slice(0, 8_000).join("") };
     this.admission.record(active.id, { id: `tool-${recordedCallId}`, kind: "tool", atMs, data: { ...toolData, status: "running" } }, false);
     this.admission.emit(active.id, { type: "tool.called", callId: recordedCallId, name: toolData.name.slice(0, 80), summary: toolData.name.replaceAll("_", " ") });
     if (privateHistoryBlocked) {
