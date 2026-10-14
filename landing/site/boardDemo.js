@@ -172,16 +172,28 @@
     <p class="d-turn"><i></i>${esc(t("d.turn"))}</p>`;
   }
 
-  function composerHtml() {
-    const words = t("d.prompt").split(" ");
-    return `<div class="d-comp">
-        <span class="d-focus"></span>
+  /* The typed request and its caret, in both layouts. */
+  const typedHtml = () => `<span class="d-focus"></span>
         <span class="d-ph-text">${esc(t("d.placeholder"))}</span>
-        <p class="d-typed">${words.map((word) => `<span>${esc(word)}</span>`).join(" ")}</p>
-        <span class="d-caret"><i></i></span>
+        <p class="d-typed">${t("d.prompt").split(" ").map((word) => `<span>${esc(word)}</span>`).join(" ")}</p>
+        <span class="d-caret"><i></i></span>`;
+
+  function composerHtml() {
+    return `<div class="d-comp">
+        ${typedHtml()}
         <span class="d-cr"><span class="d-mic">${ICON.mic}</span><span class="d-send">${ICON.play}</span><span class="d-dd">${ICON.down}</span></span>
       </div>
       <div class="d-cfoot"><span class="d-model">${ICON.zap}Opus 5.5 · Light${ICON.down}</span><span class="d-cf-r">${ICON.clip}${ICON.more}</span></div>`;
+  }
+
+  /* The phone's composer is one box: the field on top, the tools row inside the
+     same box (model chip, attach, dictate, send). Copies the unit in
+     src/components/ComposerBar.tsx (`unitTools`). */
+  function phoneComposerHtml() {
+    return `<div class="d-comp d-pcomp">
+        ${typedHtml()}
+        <div class="d-ptools"><span class="d-pchip">Opus 5.5 · high${ICON.down}</span><span class="d-pt">${ICON.clip}</span><span class="d-pt d-mic">${ICON.mic}</span><span class="d-grow"></span><span class="d-send">${ICON.play}</span><span class="d-pt d-dd">${ICON.down}</span></div>
+      </div>`;
   }
 
   /* A task's calm card on one of its faces: the Inbox card is its head alone,
@@ -279,8 +291,8 @@
         <div class="p-seat">
           <i class="p-ic">${ICON.bot}</i>
           <span class="p-st p-st-none"><b>${esc(t("d.m.none"))}</b><u>${esc(t("d.m.create"))}${ICON.right}</u></span>
-          <span class="p-st p-st-wait"><b>${esc(t("d.orch"))}</b><em><i class="d-q"></i>${esc(t("d.status.waiting"))}</em></span>
-          <span class="p-st p-st-work"><b>${esc(t("d.orch"))}</b><em><i class="d-live"><i></i></i>${esc(t("d.status.working"))}</em></span>
+          <span class="p-st p-st-wait"><b>${esc(t("d.orch"))}</b><i class="p-badge">${esc(t("d.m.returned"))}</i></span>
+          <span class="p-st p-st-work"><b>${esc(t("d.orch"))}</b><i class="p-badge p-badge-ok">${esc(t("d.m.working"))}</i></span>
           <span class="p-sl">${ICON.sliders}</span>
         </div>
         <nav class="p-tabs"><i class="p-sel"></i>${["inbox", "progress", "waiting", "done"].map(tab).join("")}<i class="p-under"></i></nav>
@@ -291,9 +303,9 @@
         </div>
       </div>
       <div class="p-chat">
-        <header class="p-ch">${ICON.left}${AVATAR(30)}<span class="p-ct"><b>${esc(t("d.orch"))}</b><em class="d-status"><span class="d-s d-s-wait"><i class="d-q"></i>${esc(t("d.status.waiting"))}</span><span class="d-s d-s-work"><i class="d-live"><i></i></i>${esc(t("d.status.working"))}</span></em></span></header>
+        <header class="p-ch">${ICON.left}${AVATAR(30)}<span class="p-ct"><b>${esc(t("d.orch"))}</b><em class="d-status"><span class="d-s d-s-wait"><i class="p-cd"></i>${esc(t("d.m.returned"))}</span><span class="d-s d-s-work"><i class="p-cd p-cd-ok"></i>${esc(t("d.m.working"))}</span></em></span></header>
         ${chatHtml()}
-        ${composerHtml()}
+        ${phoneComposerHtml()}
       </div>
       <div class="d-wires"></div>
       <span class="d-click"></span>

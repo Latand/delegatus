@@ -228,6 +228,8 @@ product file, compare the drawing, fix `boardDemo.js` and `styles.css`.
 | Seat head (costume avatar, dot and word, role tab, chips) | `OrchestratorPanel.tsx`, `IncumbentHeader.tsx`, `src/components/brand/RoleAvatar.tsx` |
 | Chat rows, tool rows, «Worked for», the turn line | `src/components/feed/FeedItem.tsx`, `UserMessageRow.tsx`, `cards/ToolCard.tsx` |
 | Composer (placeholder, mic, send, footer row) | `src/components/TmuxComposer.tsx` |
+| Phone composer (one box, field above the tools row: model chip, attach, dictate, send) | `src/components/ComposerBar.tsx` (`unitTools`) |
+| Phone seat badge and chat state line | `src/components/mobile/MobileOrchestratorSheet.tsx` (`SeatBadge`), `MobileBoard.tsx` (`statePhrase`), `MobileFocusView.tsx` |
 | Columns, strips, empty boxes, counts | `src/components/kanban/KanbanBoard.tsx`, `kanbanLayout.ts`, `kanbanBoard.css` |
 | Calm card (stripe, state line, chain, ended line) | `KanbanCard.tsx`, `CardStateLine.tsx`, `src/components/pipelines/PipelineBlock.tsx` |
 | Model glyphs and their badges | `src/components/kanban/StageGlyph.tsx`, `modelGlyph.css` |
@@ -237,6 +239,10 @@ product file, compare the drawing, fix `boardDemo.js` and `styles.css`.
 
 Where the hero departs from the product, on purpose:
 
+- The phone's seat row and chat header carry the product's words with a fixed age
+  («finished the turn · 1m», «working»), because the stage runs no clock; the
+  seat row leaves out the context meter and the «now» line, and the chat header
+  leaves out the model chip and the stage count that follow the state word.
 - Inbox and Done stay open while empty, with the product's empty-box words. The
   product shrinks an empty shelf to a 48 px strip and opens it when a card
   arrives; animating column widths would lay out during the loop.
