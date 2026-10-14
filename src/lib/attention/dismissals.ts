@@ -644,17 +644,21 @@ function systemClearSettled(held: AttentionDismissalV1, clear: SystemAttentionCl
 export function systemClearAttention(clears: readonly SystemAttentionClear[], now = new Date()): SystemAttentionClear[] {
   if (!clears.length) return [];
   const at = now.toISOString();
+  const launchPlaceholder = (clear: SystemAttentionClear) => clear.rule.startsWith("launch-") && clear.path?.startsWith("spawn:");
+  const subjectOf = (clear: SystemAttentionClear) => launchPlaceholder(clear)
+    ? clear.path
+    : clear.conversationId ?? clear.path;
   return mutate((records) => {
     let next = records;
     const written: SystemAttentionClear[] = [];
     for (const clear of clears) {
-      const subject = clear.conversationId ?? clear.path;
-      if (!subject || written.some((done) => (done.conversationId ?? done.path) === subject)) continue;
+      const subject = subjectOf(clear);
+      if (!subject || written.some((done) => subjectOf(done) === subject)) continue;
       const held = next.find((record) => record.subject === subject);
       if (held && systemClearSettled(held, clear)) continue;
       const record: AttentionDismissalV1 = {
         subject,
-        conversationId: clear.conversationId,
+        conversationId: launchPlaceholder(clear) ? null : clear.conversationId,
         path: clear.path,
         at,
         by: { kind: "system", rule: clear.rule },

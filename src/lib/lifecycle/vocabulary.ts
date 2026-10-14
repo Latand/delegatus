@@ -33,6 +33,7 @@ export type LifecycleState = typeof LIFECYCLE_STATES[number];
 export type LifecycleTurnState = "busy" | "idle" | "unknown";
 
 export const LIFECYCLE_EVENT_TYPES = [
+  "spawn_failed",
   "stage_waiting",
   "stage_relaunched",
   "stage_started",
@@ -74,6 +75,7 @@ export type LifecycleEventType = typeof LIFECYCLE_EVENT_TYPES[number];
 /** Every event type maps onto exactly one lifecycle state — that mapping is the
     reason there is only one vocabulary rather than two parallel ones. */
 export const LIFECYCLE_STATE_FOR_EVENT: Record<LifecycleEventType, LifecycleState> = {
+  spawn_failed: "failed",
   stage_waiting: "waiting",
   stage_relaunched: "running",
   stage_started: "running",
@@ -107,6 +109,7 @@ export const LIFECYCLE_STATE_FOR_EVENT: Record<LifecycleEventType, LifecycleStat
  * deploy outcome, and a delivery that was held or expired instead of landing.
  */
 export const TERMINAL_HIGH_SIGNAL_EVENT_TYPES: ReadonlySet<LifecycleEventType> = new Set<LifecycleEventType>([
+  "spawn_failed",
   "stage_completed",
   "stage_failed",
   "stage_blocked",

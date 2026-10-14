@@ -4,6 +4,8 @@ import path from "node:path";
 import { cacheEntryPath } from "@/lib/configDir";
 import { endLeasedHelper, spawnLeasedHelper } from "@/lib/helperLease";
 
+import { transcriptionLanguage, transcriptionResult } from "./languages";
+
 import type { TranscribeResponse } from "./types";
 
 /* Local faster-whisper path (default). Model and device are overridable per
@@ -38,7 +40,7 @@ export function localTranscribe(audioPath: string, language: string): Promise<Tr
        populated (src/lib/helperLease.ts). */
     const child = spawnLeasedHelper("whisper-transcribe", {
       command: python,
-      args: [script, audioPath, WHISPER_MODEL, WHISPER_DEVICE, language],
+      args: [script, audioPath, WHISPER_MODEL, WHISPER_DEVICE, transcriptionLanguage(language)],
       cwd: process.cwd(),
       env: process.env,
     }, undefined, { stdout: "pipe", stderr: "ignore", followRelease: false });
@@ -67,12 +69,12 @@ export function localTranscribe(audioPath: string, language: string): Promise<Tr
         return;
       }
       try {
-        const parsed = JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}") as { text?: unknown; error?: unknown };
+        const parsed = JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}") as { text?: unknown; error?: unknown; language?: unknown };
         if (typeof parsed.error === "string") {
           reject(new Error(parsed.error));
           return;
         }
-        resolve({ text: typeof parsed.text === "string" ? parsed.text : "" });
+        resolve(transcriptionResult(parsed.text, [parsed.language], language));
       } catch {
         reject(new Error("local STT returned invalid output"));
       }

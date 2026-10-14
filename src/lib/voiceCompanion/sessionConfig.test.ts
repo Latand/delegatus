@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { BACKEND_INSTRUCTIONS, backendRequest, COMPANION_TOOLS, LIVE_API_VERSION, LIVE_BACKEND_MODEL, LIVE_MODEL, liveSessionConfiguration, PROTOTYPE_BACKEND_RULES, PROTOTYPE_LIVE_RULES } from "./sessionConfig";
 import { z } from "zod";
 import { VOICE_ASK_MAX_CHARS } from "./liveGate";
-import { codexVoiceThread } from "./codexProvider";
+import { codexVoiceStart, codexVoiceThread } from "./codexProvider";
 
 // Official DataChannelConfigParam / ServerEventSelectorParam, verified on
 // 2026-10-06. Response wrappers require the nested selector; other events forbid it.
@@ -104,7 +104,6 @@ test("both voice paths require prototype evidence and stop reading on a hand-off
   }
 });
 
-
 test("Telegram history reads directly and never hands private content to the orchestrator", () => {
   for (const locale of ["en", "uk"] as const) {
     expect(liveSessionConfiguration(locale).instructions).toContain("Telegram groups");
@@ -114,7 +113,6 @@ test("Telegram history reads directly and never hands private content to the orc
   expect(BACKEND_INSTRUCTIONS).toContain("Do not send history questions to the orchestrator");
   expect(BACKEND_INSTRUCTIONS).toContain("Never put message text, names, usernames, chat titles or chat ids");
 });
-
 
 test("composed tasks carry project scope, provenance and interface language in both backend paths", () => {
   const send = COMPANION_TOOLS.find(tool => tool.name === "request_orchestrator_delegation")!;
@@ -154,5 +152,12 @@ test("voice design docs describe the current composition rule and contain no cop
     expect(document).toContain("4,000 Unicode scalars");
     expect(document).toContain("own words");
     expect(document).not.toMatch(/send one ask in their words|in the operator's words and language|operator's words\/language|never translate it|shared 400-Unicode-scalar limit/i);
+  }
+});
+
+test("both native voice transports receive the shared speech language restriction", () => {
+  for (const locale of ["uk", "en"] as const) {
+    expect(liveSessionConfiguration(locale).instructions).toContain("Speech recognition languages: uk, ru, en.");
+    expect(codexVoiceStart("fixture", locale, "v=0").prompt).toContain("Speech recognition languages: uk, ru, en.");
   }
 });

@@ -5,6 +5,13 @@ message to an agent instead of typing it. Transcription runs through a pluggable
 backend: the default keeps everything on your machine, and three cloud providers
 are available as an explicit per-machine opt-in.
 
+Recognition uses Ukrainian, Russian and English. Soniox uses strict language
+hints for that set; ElevenLabs live supplies the UI language and the other two
+allowed languages. Single-language providers use the UI locale (Ukrainian or
+English), with Russian accepted when explicitly requested. Unexpected returned
+language codes receive an allowed tag while their text is retained. See the
+[language policy and provider limits](design/dictation-languages.md).
+
 ## What it does in the UI
 
 A microphone button sits next to the send button in the composers that talk to
@@ -120,7 +127,8 @@ the `metadata_errors` argument faster-whisper 1.2.1 passes to `av.open`.
 | `LLV_WHISPER_DEVICE`| `cpu`                                      | `cpu` (int8) or `cuda` (int8_float16) if you have a working CUDA setup. |
 
 The route shells out to `scripts/whisper_transcribe.py` inside that venv; the
-language is auto-detected. A per-request timeout of 120 seconds applies.
+language is explicitly selected from the UI locale, with multilingual detection
+disabled. A per-request timeout of 120 seconds applies.
 
 **Privacy:** audio and transcripts never leave the machine.
 

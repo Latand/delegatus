@@ -1,3 +1,6 @@
+import { TRANSCRIPTION_LANGUAGES, transcriptionResult } from "./languages";
+import type { TranscriptionLanguage } from "./languages";
+
 /**
  * Soniox realtime STT wire protocol, kept pure so the browser hook stays a
  * thin transport around it and the frame handling is unit-testable without a
@@ -27,14 +30,16 @@ export interface SonioxStartRequest {
   sample_rate: number;
   num_channels: number;
   enable_endpoint_detection: boolean;
-  language_hints?: string[];
+  language_hints: readonly TranscriptionLanguage[];
+  language_hints_strict: true;
+  enable_language_identification: true;
 }
 
 /**
  * The start request for a browser microphone stream. `api_key` carries the
  * server-minted temporary key — the real account key never leaves the server.
  */
-export function sonioxStartRequest({ token, sampleRate, languageHints }: {
+export function sonioxStartRequest({ token, sampleRate }: {
   token: string;
   sampleRate: number;
   languageHints?: string[];
@@ -48,18 +53,22 @@ export function sonioxStartRequest({ token, sampleRate, languageHints }: {
     /* Gives us utterance boundaries (`<end>`), which is what turns the live
        stream into draft-sized segments instead of one growing blob. */
     enable_endpoint_detection: true,
+    language_hints: TRANSCRIPTION_LANGUAGES,
+    language_hints_strict: true,
+    enable_language_identification: true,
   };
-  if (languageHints?.length) request.language_hints = languageHints;
   return request;
 }
 
 /** Finalized text of the utterance in progress, still short of its endpoint. */
 export interface SonioxLiveState {
   finalText: string;
+  language?: TranscriptionLanguage;
 }
 
 export interface SonioxLiveUpdate {
   state: SonioxLiveState;
+  language?: TranscriptionLanguage;
   /** Segment closed by an endpoint token; ready to drop into the draft. Empty
       when this frame carried no boundary. */
   commit: string;
@@ -76,6 +85,7 @@ export function sonioxLiveInitialState(): SonioxLiveState {
 }
 
 interface SonioxToken {
+  language?: unknown;
   text?: unknown;
   is_final?: unknown;
 }
@@ -116,10 +126,12 @@ export function applySonioxFrame(state: SonioxLiveState, data: unknown): SonioxL
   let finalText = state.finalText;
   let tail = "";
   const segments: string[] = [];
+  const languages: unknown[] = [state.language];
   for (const raw of Array.isArray(frame.tokens) ? frame.tokens : []) {
     if (!raw || typeof raw !== "object") continue;
     const token = raw as SonioxToken;
     if (typeof token.text !== "string" || !token.text) continue;
+    languages.push(token.language);
     if (token.is_final !== true) {
       tail += token.text;
       continue;
@@ -133,8 +145,10 @@ export function applySonioxFrame(state: SonioxLiveState, data: unknown): SonioxL
     finalText += token.text;
   }
 
+  const language = transcriptionResult("", languages).language;
   return {
-    state: { finalText },
+    ...(language ? { language } : {}),
+    state: { finalText, ...(finalText && language ? { language } : {}) },
     commit: segments.join(" "),
     /* Tokens carry their own spacing, so the seam needs no separator — only
        the leading space of a fresh segment is dropped, since the composer

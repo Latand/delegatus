@@ -464,9 +464,14 @@ async function projectionFor(
     const persistedSnapshot = statePath("files-scan-snapshot.json");
     const epoch = scan.epoch ?? "0";
     const inlineProjection = async (): Promise<ProjectionRepresentation> => {
+      // The worker receives serialized data or reads its own file. Inline
+      // enrichment instead needs an owned copy of the borrowed cache value.
+      const cloneStartedAt = performance.now();
+      const ownedSnapshot = structuredClone(snapshot);
+      scan.cloneDurationMs += performance.now() - cloneStartedAt;
       const built: FilesBuilt = { epoch, generation: scan.generation, sequence: nextProjectionSequence() };
       const response = await buildFilesResponse(new Request(request.url, { headers }), {
-        listFilesWithProjectCatalog: async () => snapshot,
+        listFilesWithProjectCatalog: async () => ownedSnapshot,
       });
       return {
         body: await response.text(),
@@ -633,6 +638,7 @@ async function getFiles(request: Request): Promise<Response> {
     Date.now(),
     requiredRevision,
     requiredGeneration,
+    { copySnapshot: false },
   );
 
   /* One-time, in the long-lived server process rather than in the per-request
@@ -725,7 +731,7 @@ async function getFiles(request: Request): Promise<Response> {
     Internal reads neither mark presence nor run the board migration. */
 export async function operatorBoardRepresentation(): Promise<import("@/lib/attention/needsYouRead").NeedsYouBody> {
   const request = new Request("http://localhost/api/files?view=summary");
-  const scan = await cachedFileScan(undefined, undefined, Date.now());
+  const scan = await cachedFileScan(undefined, undefined, Date.now(), undefined, undefined, { copySnapshot: false });
   const scope = projectionScopeKey(undefined, true, false);
   const cached = projectionCache().get(scope)?.representation;
   const projected = filesystemExhausted() && cached ? { representation: cached } : await projectionFor(scope, projectionKey(projectionBaseKey(scan, undefined)), request, scan, true);

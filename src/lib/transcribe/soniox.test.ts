@@ -64,13 +64,13 @@ describe("Soniox async transcription", () => {
       "DELETE https://api.soniox.com/v1/files/file-1",
     ]);
     for (const call of calls) expect(call.auth).toBe("Bearer real-key");
-    expect(calls[1]!.body).toEqual({ file_id: "file-1", model: "stt-async-v5", language_hints: ["en"] });
+    expect(calls[1]!.body).toEqual({ file_id: "file-1", model: "stt-async-v5", language_hints: ["uk", "ru", "en"], language_hints_strict: true, enable_language_identification: true });
   });
 
-  test("omits language hints when the request carried no language", async () => {
+  test("restricts languages even when the request carried no language", async () => {
     const calls = stubSoniox();
     await sonioxTranscribe("real-key", dictation(), "");
-    expect(calls[1]!.body).toEqual({ file_id: "file-1", model: "stt-async-v5" });
+    expect(calls[1]!.body).toEqual({ file_id: "file-1", model: "stt-async-v5", language_hints: ["uk", "ru", "en"], language_hints_strict: true, enable_language_identification: true });
   });
 
   test("polls until the transcription completes", async () => {
@@ -94,4 +94,9 @@ describe("Soniox async transcription", () => {
     stubSoniox({ transcript: { id: "tr-1", tokens: [{ text: "Hel" }, { text: "lo" }, { text: " there" }] } });
     expect(await sonioxTranscribe("real-key", dictation(), "en")).toEqual({ text: "Hello there" });
   });
+});
+
+test.each(["be", "fr", "bel"])("Soniox tags unexpected %s token language with the preferred allowed language", async language => {
+  stubSoniox({ transcript: { text: "мовлення", tokens: [{ text: "мовлення", language }] } });
+  expect(await sonioxTranscribe("fixture", dictation(), "ru")).toEqual({ text: "мовлення", language: "ru" });
 });

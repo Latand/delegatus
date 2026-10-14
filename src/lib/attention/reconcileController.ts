@@ -17,8 +17,8 @@ const FIRST_RECONCILE_DELAY_MS = 30_000;
 
 export interface AttentionReconcilePorts {
   now(): Date;
-  board(): Promise<Pick<NeedsYouBody, "files" | "pipelines">>;
-  facts(body: Pick<NeedsYouBody, "pipelines">): ReconcileFacts;
+  board(): Promise<Pick<NeedsYouBody, "files" | "pipelines"> & Partial<Pick<NeedsYouBody, "tasks">>>;
+  facts(body: Pick<NeedsYouBody, "pipelines"> & Partial<Pick<NeedsYouBody, "tasks">>): ReconcileFacts;
   write(clears: readonly SystemAttentionClear[], now: Date): SystemAttentionClear[];
   /** Tell the board something changed; best effort. */
   announce(): Promise<void>;
@@ -50,6 +50,7 @@ async function productionPorts(): Promise<AttentionReconcilePorts> {
         retiredSeats: retiredSeatConversations(seats.readOrchestratorSeatFileOrNull(), canonical),
         operatorWroteAt,
         pipeline: (id) => lanes.get(id) ?? null,
+        tasks: body.tasks,
       };
     },
     write: systemClearAttention,
