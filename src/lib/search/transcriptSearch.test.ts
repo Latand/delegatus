@@ -520,6 +520,32 @@ test("upgrades version two with file-time fallbacks and a persistent ID watermar
   } finally { upgraded.close(); }
 });
 
+test("ambiguous project search returns shared candidates and does not search either project", async () => {
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+  persistProjectAliases([{ source: "orion-legacy", target: "project-orion-a", displayName: "Orion" }]);
+  for (const [project, requestId] of [["project-orion-a", "search-seat-a"], ["project-orion-b", "search-seat-b"]]) {
+    beginOrchestratorSeatIntent({ project, mandate: "Own this board", clientRequestId: requestId, mode: "spawn", promptVersion: null });
+    completeOrchestratorSeatIntent({ project, clientRequestId: requestId, conversationId: `conversation_${project}`, path: null });
+  }
+  replaceConversationCatalog([{ path: path.join(sandbox, "orion-b.jsonl"), root: "claude-projects", name: "fixture", project: "project-orion-b",
+    projectName: "Orion", title: "Fixture", firstPrompt: "", engine: "claude", kind: "session", fmt: "claude", mtime: 0, size: 0 }]);
+  const a = path.join(sandbox, "orion-a.jsonl");
+  const b = path.join(sandbox, "orion-b-content.jsonl");
+  const body = (text: string) => JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } }) + "\n";
+  fs.writeFileSync(a, body("orion unique secret marker"));
+  fs.writeFileSync(b, body("orion another unique marker"));
+  try {
+    await indexTranscriptSources([source(a, "claude", "project-orion-a"), source(b, "claude", "project-orion-b")], { complete: true });
+    expect(searchTranscripts({ query: "unique marker", project: "Orion" })).toMatchObject({ total: 0, items: [], projectScope: {
+      resolved: null, code: "ambiguous_project", candidates: [
+        { project: "project-orion-a", name: "Orion" }, { project: "project-orion-b", name: "Orion" },
+      ],
+    } });
+  } finally { replaceConversationCatalog([]); }
+});
+
 test("failed reindex rolls back retained rows, FTS changes and the ID watermark together", async () => {
   const pathname = path.join(sandbox, "failed-reindex.jsonl");
   fs.writeFileSync(pathname, JSON.stringify({ type: "user", message: { content: "beryl original" } }) + "\n");

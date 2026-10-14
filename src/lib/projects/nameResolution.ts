@@ -13,8 +13,10 @@ type Sources = {
   callerProject?(): string | null;
   lastCompletedCatalog?(): { projectCatalog: readonly Member[]; files: readonly Member[] } | null;
 };
+export type NamedProjectSources = Sources;
 export interface NamedProjectDirectory {
   names: Map<string, Set<string>>;
+  identities: Map<string, Set<string>>;
   labels: Map<string, string>;
   active: Set<string>;
   suggestions: Set<string>;
@@ -34,10 +36,15 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
   const last = sources.lastCompletedCatalog?.();
   const members: readonly Member[] = [...(last?.projectCatalog ?? []), ...(last?.files ?? []), ...conversationCatalogSnapshot()];
   const seats = activeOrchestratorSeats();
+  const authorized = sources.authorizedSeats?.() ?? [];
+  const manualProjects = projectCurationSnapshot().manualProjects;
+  const caller = sources.callerProject?.();
   const parents = new Map<string, string>();
   const evidence = new Map<string, Set<string>>();
   const known = new Set([...members.map(row => aliased(row.project)), ...Object.keys(aliases.displayNames).map(aliased),
-    ...seats.map(row => aliased(row.project))]);
+    ...Object.values(aliases.aliases).map(aliased), ...seats.map(row => aliased(row.project)),
+    ...authorized.flatMap(row => row.project ? [aliased(row.project)] : []), ...manualProjects.map(row => aliased(row.project)),
+    ...(caller ? [aliased(caller)] : []), ...extraKeys.map(aliased)]);
   const roots = new Map<string, ReturnType<typeof projectInfoFromCwd>>();
   // Retained conversation cwd/worktree fields cannot replace a member's
   // current root or its authoritative alias. Fold only catalog member roots.
@@ -63,9 +70,9 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
     return key;
   };
   const active = new Set(seats.map(seat => canonical(seat.project)));
-  const authorized = sources.authorizedSeats?.() ?? [];
   for (const seat of authorized) if (seat.project) active.add(canonical(seat.project));
   const names = new Map<string, Set<string>>();
+  const identities = new Map<string, Set<string>>();
   const labels = new Map<string, string>();
   const index = (name: string | undefined | null, key: string) => {
     const folded = name?.trim().toLowerCase();
@@ -75,6 +82,12 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
     projects.add(canonical(key)); names.set(folded, projects);
   };
   const added = new Set<string>();
+  const identify = (name: string | undefined | null, key: string) => {
+    const folded = name?.trim().toLowerCase();
+    if (!folded) return;
+    const projects = identities.get(folded) ?? new Set<string>();
+    projects.add(canonical(key)); identities.set(folded, projects);
+  };
   const add = (key: string, name?: string) => {
     const signature = JSON.stringify([key, name ?? null]);
     if (added.has(signature)) return;
@@ -82,16 +95,17 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
     const project = canonical(key);
     const label = projectDisplayName(project, aliases.displayNames[project] ?? (name && !["Unnamed project", "Unresolved project"].includes(name) ? name : undefined) ?? labels.get(project));
     labels.set(project, label);
+    identify(key, project);
     index(key, project); index(project, project); index(name, project); index(label, project);
     index(reportHeaderName(project), project);
   };
   for (const row of members) add(row.project, row.displayName ?? row.projectName);
-  for (const [source, target] of Object.entries(aliases.aliases)) { add(target); index(source, target); }
+  for (const [source, target] of Object.entries(aliases.aliases)) { add(target); identify(source, target); index(source, target); }
   for (const [key, name] of Object.entries(aliases.displayNames)) add(key, name);
-  for (const row of projectCurationSnapshot().manualProjects) add(row.project, row.displayName);
+  for (const row of manualProjects) add(row.project, row.displayName);
   for (const seat of seats) add(seat.project);
   for (const seat of authorized) if (seat.project) add(seat.project);
-  const caller = sources.callerProject?.(); if (caller) add(caller);
+  if (caller) add(caller);
   for (const key of extraKeys) add(key);
   for (const row of last?.projectCatalog ?? []) if (row.projectRoot) index(path.basename(row.projectRoot), row.project);
   for (const [key, remote] of Object.entries(recordedProjectRemotes())) {
@@ -99,8 +113,21 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
     const parts = remote.replace(/\.git$/u, "").split("/");
     index(parts.at(-1), key); index(parts.slice(-2).join("/"), key);
   }
+  // Transcript index project names can contain path-encoded directory names.
+  // Keep this vocabulary in the shared resolver so it cannot bypass ambiguity.
+  for (const [name, projects] of names) {
+    const normalized = normalizeProjectName(name);
+    if (!normalized || normalized === name) continue;
+    const keys = identities.get(normalized) ?? new Set<string>();
+    for (const project of projects) keys.add(project);
+    identities.set(normalized, keys);
+  }
   const suggestions = new Set([...active, ...Object.keys(aliases.displayNames).map(canonical), ...Object.values(aliases.aliases).map(canonical)]);
-  return { names, labels, active, suggestions, canonical };
+  return { names, identities, labels, active, suggestions, canonical };
+}
+
+function normalizeProjectName(value: string): string {
+  return value.toLowerCase().replace(/[._/\\-]+/gu, "-").replace(/^-|-$/gu, "");
 }
 
 export class ProjectNameRefusal extends Error {
@@ -112,9 +139,36 @@ export class ProjectNameRefusal extends Error {
 export function resolveNamedProject(named: string, directory: NamedProjectDirectory, requireActiveSeat = false): string {
   const requested = named.trim();
   const folded = requested.toLowerCase();
-  const all = [...(directory.names.get(folded) ?? [])].sort();
-  const seated = all.filter(key => directory.active.has(key));
-  const candidates = seated.length ? seated : all;
+  const identity = [...(directory.identities.get(folded) ?? [])].sort();
+  const namedCandidates = [...(directory.names.get(folded) ?? [])];
+  const identityCollision = identity.length > 0 && namedCandidates.some(project => !identity.includes(project));
+  const seatedNames = namedCandidates.filter(project => directory.active.has(project));
+  if (identity.length === 1 && (!identityCollision || (seatedNames.length === 1 && seatedNames[0] === identity[0]))) return identity[0]!;
+  if (identity.length > 1 || identityCollision) {
+    const candidates = [...new Set([...identity, ...namedCandidates])].sort();
+    const candidateNames = candidates.map(project => ({ project, name: directory.labels.get(project) ?? project }));
+    throw new ProjectNameRefusal(`ambiguous project identity "${requested}": ${candidateNames.map(row => `${row.name} (${row.project})`).join(", ")}; ask which project`, {
+      outcome: "not-executed", evidence: "project-resolution", nextAction: "new-request-permitted", retryable: false,
+      code: "ambiguous_project", candidates, candidateNames,
+    });
+  }
+  const all = namedCandidates.sort();
+  let candidatesForName = all;
+  if (!candidatesForName.length) {
+    const wanted = normalizeProjectName(folded);
+    let specificity = 0;
+    const matched = new Set<string>();
+    for (const [name, projects] of directory.names) {
+      const candidate = normalizeProjectName(name);
+      if (candidate && (wanted === candidate || wanted.endsWith(`-${candidate}`))) {
+        if (candidate.length > specificity) { matched.clear(); specificity = candidate.length; }
+        if (candidate.length === specificity) for (const project of projects) matched.add(project);
+      }
+    }
+    candidatesForName = [...matched].sort();
+  }
+  const seated = candidatesForName.filter(key => directory.active.has(key));
+  const candidates = seated.length ? seated : candidatesForName;
   const details = { outcome: "not-executed", evidence: "project-resolution", nextAction: "new-request-permitted", retryable: false };
   if (candidates.length > 1) {
     const candidateNames = candidates.map(project => ({ project, name: directory.labels.get(project) ?? project }));

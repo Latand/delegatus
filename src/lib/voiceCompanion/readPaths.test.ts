@@ -358,3 +358,36 @@ test("voice reads select the single seated parent when a catalog lookalike share
     expect(sent).toContain(project);
   } finally { replaceConversationCatalog([]); }
 });
+
+test("an explicit project key collision refuses instead of following a seated project's label", async () => {
+  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  persistProjectAliases([{ source: "a-old", target: "project-a", displayName: "project-b" }]);
+  beginOrchestratorSeatIntent({ project: "project-a", mandate: "Own this board", clientRequestId: "identity-seat", mode: "spawn", promptVersion: null });
+  completeOrchestratorSeatIntent({ project: "project-a", clientRequestId: "identity-seat", conversationId: "conversation_project_a", path: null });
+  const catalog = (project: string, projectName: string) => ({ path: path.join(root, `${project}.jsonl`), root: "claude-projects" as const,
+    name: "fixture", project, projectName, title: "Fixture", firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const, mtime: 0, size: 0 });
+  replaceConversationCatalog([catalog("project-a", "project-b"), catalog("project-b", "Project B")]);
+  const at = "2026-10-14T08:00:00Z";
+  saveTasks(["project-a", "project-b"].map(project => ({ id: `task-${project}`, project, text: project, status: "inbox" as const,
+    placement: "unplaced" as const, assignments: [], createdAt: at, updatedAt: at })));
+  const reads = new CompanionBoardReads(createCompanionBoardReadPaths());
+  try {
+    expect(() => reads.resolveProject("project-b", "project-b")).toThrow("PROJECT_AMBIGUOUS");
+    await expect(reads.call("project-b", "list_tasks", { project: "project-b" })).rejects.toThrow("PROJECT_AMBIGUOUS");
+    const { CompanionAdmission } = await import("./admission");
+    const { CompanionStorage } = await import("./storage");
+    const { runCompanionTool } = await import("./tools");
+    const recipients: string[] = [];
+    const admission = new CompanionAdmission(new CompanionStorage(), { recipient: project => {
+      recipients.push(project);
+      return { project, conversationId: "conversation_project_a", seatEpoch: 1, engine: "claude" };
+    }, reports: () => [], send: async () => ({ status: "delivered", operationId: "identity-send" }) });
+    const session = admission.create({ project: "project-b", locale: "en", authority: "live-model" });
+    await expect(runCompanionTool({ project: "project-b", sessionId: session.id, callId: "identity-call", delegationId: "identity-turn", admission,
+      reads, endConversation: () => undefined }, "request_orchestrator_delegation", { project: "project-b", instruction: "Check project B", confirmation_reason: null }))
+      .rejects.toThrow("PROJECT_AMBIGUOUS");
+    expect(recipients).toEqual([]);
+  } finally { replaceConversationCatalog([]); }
+});
