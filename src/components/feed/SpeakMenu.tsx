@@ -8,8 +8,9 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { useOverlayEscape } from "@/hooks/useOverlayEscape";
 import { useLocale } from "@/lib/i18n";
 import { FISH_AUDIO_MODELS, fishAudioFreeDate, fishAudioFreeEnded, ttsProviderName, type FishAudioModel } from "@/lib/fishAudio";
-import { MAX_TTS_MESSAGE_LENGTH } from "@/lib/tts";
+import { MAX_TTS_MESSAGE_LENGTH, isPcmTtsBackend } from "@/lib/tts";
 
+import type { TtsVoice, TtsVoicesResponse } from "@/lib/ttsVoices";
 import { subscribeTtsCache } from "./ttsSession";
 import { Z } from "@/components/layers";
 
@@ -21,6 +22,8 @@ export interface BackendOption {
   keyPath: string;
   model: string;
   voice: string;
+  voiceLockedByEnv?: boolean;
+  voiceList?: boolean;
   cap: number;
   language?: string;
   modelLockedByEnv?: boolean;
@@ -37,6 +40,7 @@ export interface BackendInfo {
 const MARGIN = 8;
 const MENU_WIDTH = 300;
 const ALERT_WIDTH = 224;
+const voiceLists = new Map<string, TtsVoicesResponse>();
 
 /**
  * Pure placement math for the read-aloud menu (kept out of the effect so it is
@@ -225,6 +229,7 @@ export interface SpeakMenuProps {
       stop, and costs nothing either way. */
   active: boolean;
   tooLong: boolean;
+  onPickVoice: (backend: BackendId, voice: string) => Promise<boolean>;
   onPick: (backend: BackendId, model?: FishAudioModel) => Promise<boolean>;
   onClose: (restoreFocus?: boolean) => void;
 }
@@ -239,16 +244,57 @@ export interface SpeakMenuProps {
  * `absolute` popover was clipped by the message it belonged to and painted
  * under the next message in the feed.
  */
-export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, active, tooLong, onPick, onClose }: SpeakMenuProps) {
+export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, active, tooLong, onPick, onPickVoice, onClose }: SpeakMenuProps) {
   const { t, locale } = useLocale();
   const date = fishAudioFreeDate(locale);
   const freeModel = option.id === "fishaudio" && option.model === "s2.1-pro-free";
   const freeEnded = freeModel && (option.freeEnded || fishAudioFreeEnded());
   const providerName = ttsProviderName(option.id);
-  const isPcm = option.id === "soniox" || option.id === "fishaudio";
+  const isPcm = isPcmTtsBackend(option.id);
   const isMobile = useIsMobile();
   const rootRef = useRef<HTMLDivElement>(null);
   const { style } = useAnchoredBox(anchorRef, rootRef);
+  const listKey = `${option.id}/${option.model}/${option.voice}`;
+  const [voices, setVoices] = useState<TtsVoicesResponse | null>(() => option.available && option.id !== "openai" ? voiceLists.get(listKey) ?? null : null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [retry, setRetry] = useState(0);
+  const [loading, setLoading] = useState(() => option.available && option.id !== "openai" && !voiceLists.has(listKey));
+  useEffect(() => {
+    if (!option.available || option.id === "openai") return;
+    const key = `${option.id}/${option.model}/${option.voice}`;
+    if (!retry && voiceLists.has(key)) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch(`/api/tts/voices?backend=${option.id}`, { signal: controller.signal });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        if (data.backend !== option.id || !Array.isArray(data.voices) || !data.selected) throw new Error("Invalid voice list response");
+        if (!controller.signal.aborted) { voiceLists.set(key, data); setVoices(data); }
+      } catch (cause) { if (!controller.signal.aborted) setListError(cause instanceof Error ? cause.message : String(cause)); }
+      finally { if (!controller.signal.aborted) setLoading(false); }
+    })();
+    return () => controller.abort();
+  }, [option.id, option.model, option.voice, option.available, retry]);
+  const resolvedVoiceName = (candidate: BackendOption) => {
+    const list = candidate.id === option.id ? voices : voiceLists.get(`${candidate.id}/${candidate.model}/${candidate.voice}`);
+    return list?.selected.name ?? null;
+  };
+  const voiceName = (candidate: BackendOption) => resolvedVoiceName(candidate) ?? candidate.voice;
+  /* The active provider's voice is the checked row of its Voice group below
+     and the summary line above, so its row carries the model alone. OpenAI and
+     Soniox name their voices themselves (alloy, Adrian); an ElevenLabs voice is
+     an opaque id until a cached list resolves it, so an inactive row shows the
+     model alone until then. */
+  const providerSubline = (candidate: BackendOption, active: boolean) => {
+    if (active) return candidate.model;
+    const name = candidate.id === "elevenlabs" ? resolvedVoiceName(candidate) : candidate.voice;
+    return name ? `${candidate.model} · ${name}` : candidate.model;
+  };
+  const filtered = (voices?.voices ?? []).filter((voice) => `${voice.name} ${voice.id}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const typed = query.trim();
+  const useTyped = Boolean(typed && !(voices?.voices ?? []).some((voice) => voice.id === typed));
   const [saving, setSaving] = useState<BackendId | null>(null);
   const [error, setError] = useState<string | null>(null);
   /* Only a re-render trigger: the cost line is answered by the tts cache, and
@@ -276,10 +322,10 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
      — on the provider currently in use — and Escape hands it back. */
   useEffect(() => {
     const root = rootRef.current;
-    const items = Array.from(root?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? []);
+    const items = Array.from(root?.querySelectorAll<HTMLButtonElement>("button[data-tts-provider]:not(:disabled)") ?? []);
     const active = items.find((item) => item.getAttribute("aria-checked") === "true");
     (active ?? items[0] ?? root)?.focus();
-  }, []);
+  }, [info.backend]);
 
   const pick = async (backend: BackendId, model?: FishAudioModel) => {
     if (saving || (info.lockedByEnv && (model === undefined || backend !== info.backend)) || (model && info.options.find((candidate) => candidate.id === backend)?.modelLockedByEnv) || (backend === info.backend && (model === undefined || model === option.model))) return;
@@ -290,6 +336,23 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
     if (ok) onClose(true);
     else setError(t("tts.saveFailed"));
   };
+
+  const pickVoice = async (voice: string) => {
+    if (saving || option.voiceLockedByEnv || !voice || voice.length > 128) return;
+    setSaving(option.id); setError(null);
+    const ok = await onPickVoice(option.id, voice);
+    setSaving(null);
+    if (ok) { voiceLists.delete(`${option.id}/${option.model}/${voice}`); onClose(true); }
+    else setError(t("tts.voiceSaveFailed"));
+  };
+  const voiceRow = (voice: TtsVoice) => <button key={voice.id} type="button" role="menuitemradio" data-tts-voice
+    title={voice.id} aria-checked={voice.id === option.voice} disabled={saving !== null || option.voiceLockedByEnv}
+    onClick={() => void pickVoice(voice.id)}
+    className={`flex w-full min-w-0 items-center gap-2 rounded-control px-2 text-left text-[12px] text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${isMobile ? "min-h-11 py-2" : "py-1.5"} ${voice.id === option.voice ? "bg-accent/10" : "hover:bg-canvas"}`}>
+    {voice.id === option.voice ? <Check className="h-3.5 w-3.5 shrink-0" aria-hidden /> : null}
+    <span className="min-w-0 flex-1 break-words">{voice.id === "default" && option.id === "fishaudio" ? t("tts.fishDefaultVoice") : voice.name}</span>
+    {voice.own ? <span className="shrink-0 text-[10px] text-muted">{t("tts.voiceOwn")}</span> : null}
+  </button>;
 
   if (typeof document === "undefined") return null;
   return createPortal(
@@ -311,11 +374,11 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
       <div className={`px-2 text-[11.5px] font-semibold ${active ? "text-secondary" : freeReplay() ? "text-success" : "text-primary"}`}>
         {active ? t("tts.nextStop") : freeReplay() ? t("tts.nextFree") : freeModel ? t(freeEnded ? "tts.fishFreeEnded" : "tts.nextFreeModel", { date, action: t("tts.fishChoosePaidMenu") }) : t("tts.nextPaid")}
       </div>
-      <div className="px-2 pt-1 text-[10.5px] text-muted">{providerName} · {option.model} · {option.voice}{option.language ? ` · ${option.language}` : ""}</div>
+      <div data-tts-summary className="break-words px-2 pt-1 text-[10.5px] text-muted">{providerName} · {option.model} · {voiceName(option)}{option.language ? ` · ${option.language}` : ""}</div>
       <div className="px-2 text-[10.5px] text-muted">{t("tts.characters", { count: chars.toLocaleString() })}</div>
       {freeEnded ? null : <div className="px-2 pt-1 text-[10.5px] text-primary">{option.id === "fishaudio" ? t(freeModel ? "tts.billingFree" : "tts.billingBytes", { date }) : t("tts.billing", { provider: providerName })}</div>}
       <div className="px-2 text-[10.5px] text-primary">{t("tts.disclosure")}</div>
-      <div className="px-2 pb-1 text-[10.5px] text-muted">{t(option.id === "fishaudio" ? "tts.fishSeekHint" : isPcm ? "tts.batchSeekHint" : "tts.seekHint", { provider: option.id === "fishaudio" ? "Fish Audio" : "Soniox" })}</div>
+      <div className="px-2 pb-1 text-[10.5px] text-muted">{t(option.id === "fishaudio" || option.id === "elevenlabs" ? "tts.estimatedSeekHint" : isPcm ? "tts.batchSeekHint" : "tts.seekHint", { provider: providerName })}</div>
       {tooLong ? (
         <div className="px-2 pb-1 text-[10.5px] font-semibold text-danger">
           {t("tts.tooLong", { count: MAX_TTS_MESSAGE_LENGTH.toLocaleString() })}
@@ -335,6 +398,7 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
               <button
                 type="button"
                 role="menuitemradio"
+                data-tts-provider
                 aria-checked={active}
                 disabled={info.lockedByEnv || saving !== null}
                 onClick={() => void pick(candidate.id)}
@@ -362,7 +426,7 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
                       <span className="rounded-full bg-warning-soft px-1.5 py-px text-[9.5px] font-bold text-warning">{t("tts.noKey")}</span>
                     ) : null}
                   </span>
-                  {candidate.id === "fishaudio" ? null : <span className="block text-[10.5px] leading-snug text-muted">{`${candidate.model} · ${candidate.voice}`}</span>}
+                  {candidate.id === "fishaudio" ? null : <span data-tts-provider-voice className="block break-words text-[10.5px] leading-snug text-muted">{providerSubline(candidate, active)}</span>}
                 </span>
               </button>
               {candidate.id === "fishaudio" ? (
@@ -378,6 +442,23 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
                   {candidate.modelLockedByEnv ? <div className="px-2 text-[10.5px] text-danger">{t("tts.fishModelLocked")}</div> : null}
                 </div>
               ) : null}
+              {active ? <div role="group" data-tts-voice-group aria-label={t("tts.voiceGroup")} className="ml-5 min-w-0 space-y-1 border-l border-border py-1 pl-1">
+                <div className="px-2 text-[11px] font-semibold text-secondary">{t("tts.voiceGroup")}</div>
+                {option.voiceLockedByEnv ? null : <input aria-label={t("tts.voiceInput")} placeholder={t("tts.voiceInput")} autoComplete="off" spellCheck={false} value={query} maxLength={128}
+                  disabled={saving !== null || option.voiceLockedByEnv}
+                  onInput={(event) => setQuery(event.currentTarget.value)}
+                  onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing && typed) { event.preventDefault(); void pickVoice(filtered.length === 1 ? filtered[0]!.id : typed); } }}
+                  className={`w-full min-w-0 rounded-control border border-border bg-card px-2 text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 placeholder:text-muted disabled:opacity-60 ${isMobile ? "min-h-11 text-[16px]" : "h-8 text-[12px]"}`} />}
+                {option.voiceLockedByEnv ? <div className="break-words px-2 text-[10.5px] text-muted">{t("tts.voiceLocked", { variable: `LLV_TTS_${option.id.toUpperCase()}_VOICE` })}</div> : null}
+                {option.available && option.id === "openai" ? <div className="px-2 text-[10.5px] text-muted">{t("tts.voiceTypeOnly")}</div> : null}
+                {loading ? <div className="flex items-center gap-1 px-2 text-[11px] text-muted"><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />{t("tts.voicesLoading")}</div> : null}
+                {listError ? <div role="alert" className="break-words px-2 text-[11px] text-danger">{t("tts.voicesFailed", { provider: providerName, message: listError })}<button type="button" onClick={() => { setVoices(null); setListError(null); setLoading(true); setRetry((n) => n + 1); }} className={`flex w-fit items-center text-left underline ${isMobile ? "min-h-11" : "min-h-7"}`}>{t("tts.voicesRetry")}</button></div> : null}
+                {voices?.selected.known === false ? <div role="alert" className="break-words px-2 text-[11px] text-danger">{t("tts.voiceNotFound", { provider: providerName, voice: option.voice })}</div> : null}
+                {option.voiceLockedByEnv ? <div data-tts-voice-locked className="flex min-w-0 items-center gap-2 break-words px-2 text-[12px] text-primary"><Check className="h-3.5 w-3.5 shrink-0" aria-hidden /><span className="min-w-0 flex-1 break-words">{voiceName(option)}</span></div> : null}
+                {option.voiceLockedByEnv ? null : filtered.slice(0, 6).map(voiceRow)}
+                {!option.voiceLockedByEnv && (filtered.length > 6 || voices?.truncated) ? <div data-tts-voice-more className="px-2 text-[10.5px] text-muted">{t("tts.voiceMore", { count: Math.max(0, filtered.length - 6) })}</div> : null}
+                {useTyped ? <><button type="button" data-tts-typed disabled={saving !== null || option.voiceLockedByEnv} onClick={() => void pickVoice(typed)} className="min-h-11 w-full break-words rounded-control px-2 py-1.5 text-left text-[12px] text-primary hover:bg-canvas disabled:opacity-60">{t("tts.voiceUseTyped", { voice: typed })}</button>{voices ? <div className="px-2 text-[10.5px] text-muted">{t("tts.voiceNotListed")}</div> : null}</> : null}
+              </div> : null}
             </Fragment>
           );
         })}

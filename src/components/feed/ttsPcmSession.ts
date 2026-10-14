@@ -1,5 +1,6 @@
 "use client";
 
+import { isPcmTtsBackend } from "@/lib/tts";
 import type { SpeechChunk } from "@/lib/ttsChunks";
 import { announceCacheChange, billedVoice, TtsRequestError, voiceKey, type VoiceKey } from "./ttsSession";
 
@@ -63,11 +64,12 @@ export async function requestPcm(text: string, signal: AbortSignal): Promise<{ b
     if (!response.ok) {
       let message: string | null = null;
       let code: string | undefined;
-      try { const body = await response.json(); message = typeof body.error === "string" ? body.error : null; code = typeof body.code === "string" ? body.code : undefined; } catch { /* status remains useful */ }
-      throw new TtsRequestError(response.status, message, code);
+      let refusedVoice: string | undefined;
+      try { const body = await response.json(); message = typeof body.error === "string" ? body.error : null; code = typeof body.code === "string" ? body.code : undefined; refusedVoice = typeof body.voice === "string" ? body.voice : undefined; } catch { /* status remains useful */ }
+      throw new TtsRequestError(response.status, message, code, refusedVoice);
     }
     const voice = billedVoice(response);
-    if (!voice || (voice.id !== "soniox" && voice.id !== "fishaudio") || (voice.id === "soniox" && !voice.language) || voice.encoding !== "pcm_s16le" || voice.sampleRate !== PCM_RATE || response.headers.get("x-tts-channels") !== "1" || response.headers.get("content-type")?.split(";")[0] !== "audio/pcm" || !response.body) {
+    if (!voice || !isPcmTtsBackend(voice.id) || (voice.id === "soniox" && !voice.language) || voice.encoding !== "pcm_s16le" || voice.sampleRate !== PCM_RATE || response.headers.get("x-tts-channels") !== "1" || response.headers.get("content-type")?.split(";")[0] !== "audio/pcm" || !response.body) {
       await response.body?.cancel();
       throw new Error("invalid PCM geometry or voice identity");
     }
@@ -270,7 +272,7 @@ export class PcmSession {
       const total = this.options.chunks.reduce((sum, value, index) => sum + (this.durations.get(index) ?? value.text.length / 15), 0);
       const chunkDuration = this.durations.get(current.chunk) ?? chunk.text.length / 15;
       const playedSeconds = current.sample / PCM_RATE + Math.max(0, now - current.start);
-      const charIndex = this.options.voice.id === "fishaudio"
+      const charIndex = this.options.voice.id !== "soniox"
         ? chunk.start + Math.min(chunk.text.length - 1, Math.floor(playedSeconds / chunkDuration * chunk.text.length))
         : chunk.start;
       this.options.onPosition({ chunkIndex: current.chunk, charIndex, elapsed, total });

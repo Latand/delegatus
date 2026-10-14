@@ -147,7 +147,7 @@ export function clearTtsCache(): void {
 
 /** A synthesis that the provider (or the route) refused, carrying its own words. */
 export class TtsRequestError extends Error {
-  constructor(readonly status: number, readonly provider: string | null, readonly code?: string) {
+  constructor(readonly status: number, readonly provider: string | null, readonly code?: string, readonly voice?: string) {
     super(provider ?? `TTS request failed (${status})`);
     this.name = "TtsRequestError";
   }
