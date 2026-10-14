@@ -1457,6 +1457,22 @@ test("create answers before the base fetch finishes, and the lane starts from wh
   });
 });
 
+test("a handover creation admitted by the controller is provisioned in the same pass", async () => {
+  const { queuePipelineCreation } = await import("./creationQueue");
+  const h = harness();
+  savePipelines([]);
+  const remote = slowRemote(h);
+  const created = await createPipelineFromRequest({ task: "Queued lane", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+  expect(created.pipeline).toBeDefined();
+  const queued = loadPipelines()[0]!;
+  const target = queued.delivery!.target;
+  savePipelines([]);
+  queuePipelineCreation(queued, target, false, "fixture handover", h.ports.now());
+  await tickPipelines([], h.ports);
+  expect(remote.fetched()).toBe(true);
+  expect(loadPipelines()[0]).toMatchObject({ id: queued.id, state: "running", baseRef: FETCHED_SHA });
+});
+
 test("a create that arrives while the controller is provisioning is not held behind it (#1799)", async () => {
   const h = harness();
   savePipelines([]);

@@ -5,7 +5,7 @@ import { pipelineWorktreeChanges } from "./git";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { observeForgePullRequest } from "@/lib/forge/cache";
 import { pipelineRepository } from "@/lib/forge/resolve";
-import { loadPipelines, withPipelineMutation } from "./store";
+import { findPipelineRecord, selectControllerPipelines, withPipelineMutation } from "./store";
 import type { Pipeline, PipelineStageProvenance } from "./types";
 
 /** Forge observation runs after durable report acceptance. A timeout or an
@@ -103,11 +103,11 @@ export async function collectStageProvenance(
 /** Pending intent is durable. Observation is attached only to the same report
     sequence and conversation, including when its turn has already settled. */
 export async function settlePendingStageProvenance(ports: Pick<import("./engine").PipelinePorts, "exec" | "now">): Promise<void> {
-  for (const pipeline of loadPipelines()) for (const run of pipeline.runs) for (const attempt of run.attempts) {
+  for (const pipeline of await selectControllerPipelines("provenance")) for (const run of pipeline.runs) for (const attempt of run.attempts) {
     const report = attempt.report;
     if (report?.provenance.state !== "pending") continue;
     const abort = new AbortController();
-    const currentLane = () => loadPipelines().find((item) => item.id === pipeline.id);
+    const currentLane = () => findPipelineRecord(pipeline.id) ?? undefined;
     const matches = (current: Pipeline | undefined) => current !== undefined
       && report.provenanceFence !== undefined && stageProvenanceFence(current) === report.provenanceFence;
     const revalidate = () => {

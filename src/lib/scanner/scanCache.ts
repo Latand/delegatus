@@ -720,27 +720,32 @@ function completedScan(
   pinnedPath: string | undefined,
   targetGeneration: number,
   cacheStatus?: CachedFileScan["cacheStatus"],
+  copySnapshot = true,
 ): CachedFileScan {
   const cloneStartedAt = performance.now();
   const pinned = pinnedPath ? cachedPinnedSnapshot(slot, pinnedPath) : undefined;
   if (pinned) {
-    const completed = structuredClone({
+    const value = {
       snapshot: pinned.snapshot,
       pinOverlayPaths: pinned.pinOverlayPaths,
       generation: pinned.generation,
       targetGeneration,
-    });
+    };
+    const completed = copySnapshot ? structuredClone(value) : {
+      ...value,
+      pinOverlayPaths: value.pinOverlayPaths?.slice(),
+    };
     return {
       ...completed,
       epoch: slot.epoch,
       cacheStatus: cacheStatus ?? (completed.generation < targetGeneration ? "stale" : "hit"),
       requestCount: slot.requestCount ?? 0,
-      cloneDurationMs: performance.now() - cloneStartedAt,
+      cloneDurationMs: copySnapshot ? performance.now() - cloneStartedAt : 0,
       refreshedAt: pinned.refreshedAt,
       ...(slot.lastScan ? { lastScan: { ...slot.lastScan } } : {}),
     };
   }
-  const snapshot = structuredClone(slot.snapshot!);
+  const snapshot = copySnapshot ? structuredClone(slot.snapshot!) : slot.snapshot!;
   return {
     snapshot,
     epoch: slot.epoch,
@@ -748,7 +753,7 @@ function completedScan(
     targetGeneration,
     cacheStatus: cacheStatus ?? (slot.snapshotGeneration < targetGeneration ? "stale" : "hit"),
     requestCount: slot.requestCount ?? 0,
-    cloneDurationMs: performance.now() - cloneStartedAt,
+    cloneDurationMs: copySnapshot ? performance.now() - cloneStartedAt : 0,
     refreshedAt: slot.completedAt ?? slot.refreshedAt,
     ...(slot.lastScan ? { lastScan: { ...slot.lastScan } } : {}),
   };
@@ -909,14 +914,20 @@ export async function refreshFileCatalogMembership(): Promise<void> {
   await waitForCatalogMembership(slot);
 }
 
+/** Returns an owned snapshot by default. A read-only projection may borrow the
+    completed snapshot; it must copy it before any in-process enrichment.
+    Publication replaces snapshots, so the returned generation keeps its data. */
 export async function cachedFileScan(
   _selectedProject?: string,
   pinnedPath?: string,
   now = Date.now(),
   requiredRevision?: number,
   requiredGeneration?: number,
+  options: { copySnapshot?: boolean } = {},
 ): Promise<CachedFileScan> {
   const slot = globalFileScanSlot();
+  const complete = (pin: string | undefined, generation: number, status?: CachedFileScan["cacheStatus"]) =>
+    completedScan(slot, pin, generation, status, options.copySnapshot !== false);
   slot.requestCount = (slot.requestCount ?? 0) + 1;
   /* A selected conversation that already belongs to the global snapshot needs
      no private scan scope. Treating every browser hash as exclusive serializes
@@ -930,7 +941,7 @@ export async function cachedFileScan(
 
   if (slot.snapshot) {
     const membershipRefresh = await membershipFileScanRefresh(slot);
-    if (membershipRefresh) return completedScan(slot, scanPinnedPath, membershipRefresh.generation);
+    if (membershipRefresh) return complete(scanPinnedPath, membershipRefresh.generation);
   }
 
   /* Transcript appends can publish many runtime revisions during one full
@@ -949,8 +960,7 @@ export async function cachedFileScan(
     )
   ) {
     const completedGeneration = completedPinned?.generation ?? slot.snapshotGeneration;
-    return completedScan(
-      slot,
+    return complete(
       scanPinnedPath,
       completedGeneration,
       slot.refresh ? "stale" : "hit",
@@ -987,7 +997,7 @@ export async function cachedFileScan(
     if (!slot.snapshot) {
       try {
         await refresh;
-        return completedScan(slot, scanPinnedPath, targetGeneration, "miss");
+        return complete(scanPinnedPath, targetGeneration, "miss");
       } finally {
         clearForcedGeneration();
       }
@@ -1000,7 +1010,7 @@ export async function cachedFileScan(
     const missesSnapshot = !slot.snapshot;
     if (missesSnapshot) await refresh;
     else continueRefreshInBackground(refresh);
-    return completedScan(slot, scanPinnedPath, targetGeneration, missesSnapshot ? "miss" : undefined);
+    return complete(scanPinnedPath, targetGeneration, missesSnapshot ? "miss" : undefined);
   }
 
   /* A pin is an overlay on one global snapshot. The scanner marks every row
@@ -1010,21 +1020,21 @@ export async function cachedFileScan(
     slot.pinnedSnapshots ??= new Map();
     const pinned = cachedPinnedSnapshot(slot, scanPinnedPath);
     if (pinned && now - pinned.refreshedAt < FILE_SCAN_FRESH_MS) {
-      return completedScan(slot, scanPinnedPath, pinned.generation);
+      return complete(scanPinnedPath, pinned.generation);
     }
     targetGeneration = pinnedRefreshGeneration(slot, scanPinnedPath);
     const refresh = refreshThroughGeneration(slot, targetGeneration, scanPinnedPath, "pinned");
     const missesSnapshot = !slot.snapshot;
     if (missesSnapshot) await refresh;
     else continueRefreshInBackground(refresh);
-    return completedScan(slot, scanPinnedPath, targetGeneration, missesSnapshot ? "miss" : undefined);
+    return complete(scanPinnedPath, targetGeneration, missesSnapshot ? "miss" : undefined);
   }
 
   if (!slot.snapshot) {
     targetGeneration = slot.refresh?.generation ?? nextGeneration(slot);
     const refresh = slot.refresh ?? beginFileScanRefresh(slot, targetGeneration, "cold");
     await waitForFileScanRefresh(refresh);
-    return completedScan(slot, undefined, targetGeneration, "miss");
+    return complete(undefined, targetGeneration, "miss");
   }
 
   if (slot.refresh) {
@@ -1036,7 +1046,7 @@ export async function cachedFileScan(
   } else {
     targetGeneration = slot.snapshotGeneration;
   }
-  return completedScan(slot, undefined, targetGeneration);
+  return complete(undefined, targetGeneration);
 }
 
 /** Returns the latest completed global generation. A missing snapshot joins

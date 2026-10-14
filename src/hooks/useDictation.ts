@@ -14,6 +14,7 @@ import {
 import { chime } from "@/lib/chime";
 import { CAP_SECONDS, dictationCues, remaining as remainingSeconds } from "@/lib/dictationTimer";
 import { useLocale } from "@/lib/i18n";
+import { TRANSCRIPTION_LANGUAGES, transcriptionLanguage, transcriptionResult, type TranscriptionLanguage } from "@/lib/transcribe/languages";
 import { rememberMicGrant } from "@/lib/micPermission";
 import {
   applySonioxFrame,
@@ -143,7 +144,7 @@ export interface UseDictationOptions {
       (an ElevenLabs VAD commit, a Soniox endpoint) — the composer appends it
       to the draft right away, so stop() only ever returns the short
       uncommitted tail. */
-  onLiveCommit: (segment: string) => void;
+  onLiveCommit: (segment: string, language?: TranscriptionLanguage) => void;
 }
 
 export interface UseDictationResult {
@@ -192,7 +193,7 @@ export interface UseDictationResult {
  * around the same recording (see TmuxComposer's stop-and-send).
  */
 export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDictationOptions): UseDictationResult {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
   const [phase, setPhase] = useState<DictationPhase>("idle");
   const [elapsed, setElapsed] = useState(0);
   const [liveText, setLiveText] = useState("");
@@ -355,6 +356,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     try {
       const form = new FormData();
       form.append("file", blob, "dictation.webm");
+      form.append("language", transcriptionLanguage(locale));
       const res = await fetch("/api/transcribe", { method: "POST", body: form });
       const json = (await res.json()) as { text?: string; error?: string };
       if (!res.ok || typeof json.text !== "string") {
@@ -426,7 +428,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
         return;
       }
       /* Straight into the draft, mid-recording. */
-      if (update.commit) onLiveCommit(update.commit);
+      if (update.commit) onLiveCommit(update.commit, update.language);
       live.partial = update.liveText;
       setLiveText(live.partial);
       /* The server closed on its own (session cap): keep what arrived. */
@@ -455,8 +457,12 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
       token,
       audio_format: `pcm_${LIVE_SAMPLE_RATE}`,
       commit_strategy: "vad",
+      language_code: transcriptionLanguage(locale),
       vad_silence_threshold_secs: LIVE_VAD_SILENCE_SECS,
     });
+    for (const language of TRANSCRIPTION_LANGUAGES) {
+      if (language !== transcriptionLanguage(locale)) params.append("secondary_languages", language);
+    }
     const ws = new WebSocket(`${LIVE_WS_URL}?${params.toString()}`);
     const processor = ctx.createScriptProcessor(4096, 1, 1);
     const live: LiveSession = { ws, ctx, processor, stream, preOpenQueue: [], partial: "" };
@@ -486,7 +492,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
     ws.addEventListener("message", (event) => {
       if (liveRef.current !== live) return;
       try {
-        const msg = JSON.parse(event.data as string) as { message_type: string; text?: string; error?: string };
+        const msg = JSON.parse(event.data as string) as { message_type: string; text?: string; error?: string; language_code?: string };
         if (msg.message_type === "partial_transcript") {
           live.partial = msg.text ?? "";
         } else if (
@@ -495,7 +501,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
         ) {
           /* Straight into the draft, mid-recording. */
           live.partial = "";
-          onLiveCommit(msg.text);
+          onLiveCommit(msg.text, transcriptionResult(msg.text, [msg.language_code], locale).language ?? transcriptionLanguage(locale));
         } else if (
           msg.message_type === "auth_error" ||
           msg.message_type === "error" ||

@@ -27,13 +27,13 @@ def main() -> int:
     compute_type = "int8_float16" if device == "cuda" else "int8"
     try:
         model = WhisperModel(model_name, device=device, compute_type=compute_type)
-        segments, _ = model.transcribe(audio_path, language=language, vad_filter=True)
+        segments, info = model.transcribe(audio_path, language=language, multilingual=False, vad_filter=True)
         text = "".join(segment.text for segment in segments).strip()
     except Exception as exc:  # noqa: BLE001
         print(json.dumps({"error": f"розпізнавання не вдалося: {exc}"}))
         return 4
 
-    print(json.dumps({"text": text}))
+    print(json.dumps({"text": text, "language": info.language}))
     return 0
 
 
