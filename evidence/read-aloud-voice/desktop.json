@@ -1,0 +1,2340 @@
+{
+  "readings": [
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "light",
+      "state": "loaded",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 167,
+        "bottom": 891.5625,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 498.375,
+            "bottom": 528.375,
+            "height": 30
+          },
+          {
+            "top": 532.375,
+            "bottom": 562.375,
+            "height": 30
+          },
+          {
+            "top": 566.375,
+            "bottom": 596.375,
+            "height": 30
+          },
+          {
+            "top": 600.375,
+            "bottom": 630.375,
+            "height": 30
+          },
+          {
+            "top": 634.375,
+            "bottom": 664.375,
+            "height": 30
+          },
+          {
+            "top": 668.375,
+            "bottom": 698.375,
+            "height": 30
+          }
+        ],
+        "more": "+6 more — type to narrow"
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "light",
+      "state": "filtered",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 847.5625,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 508.375,
+            "bottom": 538.375,
+            "height": 30
+          },
+          {
+            "top": 542.375,
+            "bottom": 572.375,
+            "height": 30
+          },
+          {
+            "top": 576.375,
+            "bottom": 606.375,
+            "height": 30
+          }
+        ]
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "light",
+      "state": "typed-unlisted",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 745.5625,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "light",
+      "state": "loading",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 698.3125,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "light",
+      "state": "failed",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 742.3125,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "light",
+      "state": "unconfigured",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 713.3125,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "light",
+      "state": "locked",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 148,
+        "bottom": 892.3125,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 499.125,
+            "bottom": 529.125,
+            "height": 30
+          },
+          {
+            "top": 533.125,
+            "bottom": 563.125,
+            "height": 30
+          },
+          {
+            "top": 567.125,
+            "bottom": 597.125,
+            "height": 30
+          },
+          {
+            "top": 601.125,
+            "bottom": 631.125,
+            "height": 30
+          },
+          {
+            "top": 635.125,
+            "bottom": 665.125,
+            "height": 30
+          },
+          {
+            "top": 669.125,
+            "bottom": 699.125,
+            "height": 30
+          }
+        ],
+        "more": "+6 more — type to narrow"
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "light",
+      "state": "fish-jarvis",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 727.5625,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 686.5625,
+            "bottom": 716.5625,
+            "height": 30
+          }
+        ]
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "light",
+      "state": "selected-unknown",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 130,
+        "bottom": 891.5625,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 498.375,
+            "bottom": 528.375,
+            "height": 30
+          },
+          {
+            "top": 532.375,
+            "bottom": 562.375,
+            "height": 30
+          },
+          {
+            "top": 566.375,
+            "bottom": 596.375,
+            "height": 30
+          },
+          {
+            "top": 600.375,
+            "bottom": 630.375,
+            "height": 30
+          },
+          {
+            "top": 634.375,
+            "bottom": 664.375,
+            "height": 30
+          },
+          {
+            "top": 668.375,
+            "bottom": 698.375,
+            "height": 30
+          }
+        ],
+        "more": "+6 more — type to narrow"
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "light",
+      "state": "alert-voice-not-found",
+      "reading": {
+        "text": "ElevenLabs does not know the voice «unknown-voice». Right-click to pick another.",
+        "wordBreak": "normal",
+        "sideways": false
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "light",
+      "state": "loaded",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 339.375,
+            "bottom": 369.375,
+            "height": 30
+          },
+          {
+            "top": 373.375,
+            "bottom": 403.375,
+            "height": 30
+          },
+          {
+            "top": 407.375,
+            "bottom": 437.375,
+            "height": 30
+          },
+          {
+            "top": 441.375,
+            "bottom": 471.375,
+            "height": 30
+          },
+          {
+            "top": 475.375,
+            "bottom": 505.375,
+            "height": 30
+          },
+          {
+            "top": 509.375,
+            "bottom": 539.375,
+            "height": 30
+          }
+        ],
+        "more": "+6 more — type to narrow"
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "light",
+      "state": "filtered",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 21,
+        "bottom": 691.5625,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 352.375,
+            "bottom": 382.375,
+            "height": 30
+          },
+          {
+            "top": 386.375,
+            "bottom": 416.375,
+            "height": 30
+          },
+          {
+            "top": 420.375,
+            "bottom": 450.375,
+            "height": 30
+          }
+        ]
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "light",
+      "state": "typed-unlisted",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 123,
+        "bottom": 691.5625,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "light",
+      "state": "loading",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 129,
+        "bottom": 650.3125,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "light",
+      "state": "failed",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 127,
+        "bottom": 692.3125,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "light",
+      "state": "unconfigured",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 129,
+        "bottom": 665.3125,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "light",
+      "state": "locked",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 359.125,
+            "bottom": 389.125,
+            "height": 30
+          },
+          {
+            "top": 393.125,
+            "bottom": 423.125,
+            "height": 30
+          },
+          {
+            "top": 427.125,
+            "bottom": 457.125,
+            "height": 30
+          },
+          {
+            "top": 461.125,
+            "bottom": 491.125,
+            "height": 30
+          },
+          {
+            "top": 495.125,
+            "bottom": 525.125,
+            "height": 30
+          },
+          {
+            "top": 529.125,
+            "bottom": 559.125,
+            "height": 30
+          }
+        ],
+        "more": "+6 more — type to narrow"
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "light",
+      "state": "fish-jarvis",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 129,
+        "bottom": 679.5625,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 638.5625,
+            "bottom": 668.5625,
+            "height": 30
+          }
+        ]
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "light",
+      "state": "selected-unknown",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 376.375,
+            "bottom": 406.375,
+            "height": 30
+          },
+          {
+            "top": 410.375,
+            "bottom": 440.375,
+            "height": 30
+          },
+          {
+            "top": 444.375,
+            "bottom": 474.375,
+            "height": 30
+          },
+          {
+            "top": 478.375,
+            "bottom": 508.375,
+            "height": 30
+          },
+          {
+            "top": 512.375,
+            "bottom": 542.375,
+            "height": 30
+          },
+          {
+            "top": 546.375,
+            "bottom": 576.375,
+            "height": 30
+          }
+        ],
+        "more": "+6 more — type to narrow"
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "light",
+      "state": "alert-voice-not-found",
+      "reading": {
+        "text": "ElevenLabs does not know the voice «unknown-voice». Right-click to pick another.",
+        "wordBreak": "normal",
+        "sideways": false
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "loaded",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 167,
+        "bottom": 891.5625,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 498.375,
+            "bottom": 528.375,
+            "height": 30
+          },
+          {
+            "top": 532.375,
+            "bottom": 562.375,
+            "height": 30
+          },
+          {
+            "top": 566.375,
+            "bottom": 596.375,
+            "height": 30
+          },
+          {
+            "top": 600.375,
+            "bottom": 630.375,
+            "height": 30
+          },
+          {
+            "top": 634.375,
+            "bottom": 664.375,
+            "height": 30
+          },
+          {
+            "top": 668.375,
+            "bottom": 698.375,
+            "height": 30
+          }
+        ],
+        "more": "+6 more — type to narrow"
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "filtered",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 847.5625,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 508.375,
+            "bottom": 538.375,
+            "height": 30
+          },
+          {
+            "top": 542.375,
+            "bottom": 572.375,
+            "height": 30
+          },
+          {
+            "top": 576.375,
+            "bottom": 606.375,
+            "height": 30
+          }
+        ]
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "typed-unlisted",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 745.5625,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "loading",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 698.3125,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "failed",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 742.3125,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "unconfigured",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 713.3125,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "locked",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 148,
+        "bottom": 892.3125,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 499.125,
+            "bottom": 529.125,
+            "height": 30
+          },
+          {
+            "top": 533.125,
+            "bottom": 563.125,
+            "height": 30
+          },
+          {
+            "top": 567.125,
+            "bottom": 597.125,
+            "height": 30
+          },
+          {
+            "top": 601.125,
+            "bottom": 631.125,
+            "height": 30
+          },
+          {
+            "top": 635.125,
+            "bottom": 665.125,
+            "height": 30
+          },
+          {
+            "top": 669.125,
+            "bottom": 699.125,
+            "height": 30
+          }
+        ],
+        "more": "+6 more — type to narrow"
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "fish-jarvis",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 727.5625,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 686.5625,
+            "bottom": 716.5625,
+            "height": 30
+          }
+        ]
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "selected-unknown",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 130,
+        "bottom": 891.5625,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 498.375,
+            "bottom": 528.375,
+            "height": 30
+          },
+          {
+            "top": 532.375,
+            "bottom": 562.375,
+            "height": 30
+          },
+          {
+            "top": 566.375,
+            "bottom": 596.375,
+            "height": 30
+          },
+          {
+            "top": 600.375,
+            "bottom": 630.375,
+            "height": 30
+          },
+          {
+            "top": 634.375,
+            "bottom": 664.375,
+            "height": 30
+          },
+          {
+            "top": 668.375,
+            "bottom": 698.375,
+            "height": 30
+          }
+        ],
+        "more": "+6 more — type to narrow"
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "alert-voice-not-found",
+      "reading": {
+        "text": "ElevenLabs does not know the voice «unknown-voice». Right-click to pick another.",
+        "wordBreak": "normal",
+        "sideways": false
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "loaded",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 339.375,
+            "bottom": 369.375,
+            "height": 30
+          },
+          {
+            "top": 373.375,
+            "bottom": 403.375,
+            "height": 30
+          },
+          {
+            "top": 407.375,
+            "bottom": 437.375,
+            "height": 30
+          },
+          {
+            "top": 441.375,
+            "bottom": 471.375,
+            "height": 30
+          },
+          {
+            "top": 475.375,
+            "bottom": 505.375,
+            "height": 30
+          },
+          {
+            "top": 509.375,
+            "bottom": 539.375,
+            "height": 30
+          }
+        ],
+        "more": "+6 more — type to narrow"
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "filtered",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 21,
+        "bottom": 691.5625,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 352.375,
+            "bottom": 382.375,
+            "height": 30
+          },
+          {
+            "top": 386.375,
+            "bottom": 416.375,
+            "height": 30
+          },
+          {
+            "top": 420.375,
+            "bottom": 450.375,
+            "height": 30
+          }
+        ]
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "typed-unlisted",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 123,
+        "bottom": 691.5625,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "loading",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 129,
+        "bottom": 650.3125,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "failed",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 127,
+        "bottom": 692.3125,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "unconfigured",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 129,
+        "bottom": 665.3125,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "locked",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 359.125,
+            "bottom": 389.125,
+            "height": 30
+          },
+          {
+            "top": 393.125,
+            "bottom": 423.125,
+            "height": 30
+          },
+          {
+            "top": 427.125,
+            "bottom": 457.125,
+            "height": 30
+          },
+          {
+            "top": 461.125,
+            "bottom": 491.125,
+            "height": 30
+          },
+          {
+            "top": 495.125,
+            "bottom": 525.125,
+            "height": 30
+          },
+          {
+            "top": 529.125,
+            "bottom": 559.125,
+            "height": 30
+          }
+        ],
+        "more": "+6 more — type to narrow"
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "fish-jarvis",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 129,
+        "bottom": 679.5625,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 638.5625,
+            "bottom": 668.5625,
+            "height": 30
+          }
+        ]
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "selected-unknown",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 376.375,
+            "bottom": 406.375,
+            "height": 30
+          },
+          {
+            "top": 410.375,
+            "bottom": 440.375,
+            "height": 30
+          },
+          {
+            "top": 444.375,
+            "bottom": 474.375,
+            "height": 30
+          },
+          {
+            "top": 478.375,
+            "bottom": 508.375,
+            "height": 30
+          },
+          {
+            "top": 512.375,
+            "bottom": 542.375,
+            "height": 30
+          },
+          {
+            "top": 546.375,
+            "bottom": 576.375,
+            "height": 30
+          }
+        ],
+        "more": "+6 more — type to narrow"
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "alert-voice-not-found",
+      "reading": {
+        "text": "ElevenLabs does not know the voice «unknown-voice». Right-click to pick another.",
+        "wordBreak": "normal",
+        "sideways": false
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "loaded",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 112,
+        "bottom": 891.8125,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 492.125,
+            "bottom": 522.125,
+            "height": 30
+          },
+          {
+            "top": 526.125,
+            "bottom": 556.125,
+            "height": 30
+          },
+          {
+            "top": 560.125,
+            "bottom": 590.125,
+            "height": 30
+          },
+          {
+            "top": 594.125,
+            "bottom": 624.125,
+            "height": 30
+          },
+          {
+            "top": 628.125,
+            "bottom": 658.125,
+            "height": 30
+          },
+          {
+            "top": 662.125,
+            "bottom": 692.125,
+            "height": 30
+          }
+        ],
+        "more": "ще +6 — уточніть пошук"
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "filtered",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 166,
+        "bottom": 891.8125,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 546.125,
+            "bottom": 576.125,
+            "height": 30
+          },
+          {
+            "top": 580.125,
+            "bottom": 610.125,
+            "height": 30
+          },
+          {
+            "top": 614.125,
+            "bottom": 644.125,
+            "height": 30
+          }
+        ]
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "typed-unlisted",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 800.8125,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "loading",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 753.5625,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "failed",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 814.0625,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "unconfigured",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 768.5625,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "locked",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 77,
+        "bottom": 892.3125,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 492.625,
+            "bottom": 522.625,
+            "height": 30
+          },
+          {
+            "top": 526.625,
+            "bottom": 556.625,
+            "height": 30
+          },
+          {
+            "top": 560.625,
+            "bottom": 590.625,
+            "height": 30
+          },
+          {
+            "top": 594.625,
+            "bottom": 624.625,
+            "height": 30
+          },
+          {
+            "top": 628.625,
+            "bottom": 658.625,
+            "height": 30
+          },
+          {
+            "top": 662.625,
+            "bottom": 692.625,
+            "height": 30
+          }
+        ],
+        "more": "ще +6 — уточніть пошук"
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "fish-jarvis",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 782.8125,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 741.8125,
+            "bottom": 771.8125,
+            "height": 30
+          }
+        ]
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "selected-unknown",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 75,
+        "bottom": 891.8125,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 492.125,
+            "bottom": 522.125,
+            "height": 30
+          },
+          {
+            "top": 526.125,
+            "bottom": 556.125,
+            "height": 30
+          },
+          {
+            "top": 560.125,
+            "bottom": 590.125,
+            "height": 30
+          },
+          {
+            "top": 594.125,
+            "bottom": 624.125,
+            "height": 30
+          },
+          {
+            "top": 628.125,
+            "bottom": 658.125,
+            "height": 30
+          },
+          {
+            "top": 662.125,
+            "bottom": 692.125,
+            "height": 30
+          }
+        ],
+        "more": "ще +6 — уточніть пошук"
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "alert-voice-not-found",
+      "reading": {
+        "text": "У ElevenLabs немає голосу «unknown-voice». Натисніть правою кнопкою, щоб вибрати інший.",
+        "wordBreak": "normal",
+        "sideways": false
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "loaded",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 403.875,
+            "bottom": 433.875,
+            "height": 30
+          },
+          {
+            "top": 437.875,
+            "bottom": 467.875,
+            "height": 30
+          },
+          {
+            "top": 471.875,
+            "bottom": 501.875,
+            "height": 30
+          },
+          {
+            "top": 505.875,
+            "bottom": 535.875,
+            "height": 30
+          },
+          {
+            "top": 539.875,
+            "bottom": 569.875,
+            "height": 30
+          },
+          {
+            "top": 573.875,
+            "bottom": 603.875,
+            "height": 30
+          }
+        ],
+        "more": "ще +6 — уточніть пошук"
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "filtered",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 403.875,
+            "bottom": 433.875,
+            "height": 30
+          },
+          {
+            "top": 437.875,
+            "bottom": 467.875,
+            "height": 30
+          },
+          {
+            "top": 471.875,
+            "bottom": 501.875,
+            "height": 30
+          }
+        ]
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "typed-unlisted",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 68,
+        "bottom": 691.8125,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "loading",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 115,
+        "bottom": 691.5625,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "failed",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 55,
+        "bottom": 692.0625,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "unconfigured",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 100,
+        "bottom": 691.5625,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "locked",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 439.375,
+            "bottom": 469.375,
+            "height": 30
+          },
+          {
+            "top": 473.375,
+            "bottom": 503.375,
+            "height": 30
+          },
+          {
+            "top": 507.375,
+            "bottom": 537.375,
+            "height": 30
+          },
+          {
+            "top": 541.375,
+            "bottom": 571.375,
+            "height": 30
+          },
+          {
+            "top": 575.375,
+            "bottom": 605.375,
+            "height": 30
+          },
+          {
+            "top": 609.375,
+            "bottom": 639.375,
+            "height": 30
+          }
+        ],
+        "more": "ще +6 — уточніть пошук"
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "fish-jarvis",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 86,
+        "bottom": 691.8125,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 650.8125,
+            "bottom": 680.8125,
+            "height": 30
+          }
+        ]
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "selected-unknown",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 440.875,
+            "bottom": 470.875,
+            "height": 30
+          },
+          {
+            "top": 474.875,
+            "bottom": 504.875,
+            "height": 30
+          },
+          {
+            "top": 508.875,
+            "bottom": 538.875,
+            "height": 30
+          },
+          {
+            "top": 542.875,
+            "bottom": 572.875,
+            "height": 30
+          },
+          {
+            "top": 576.875,
+            "bottom": 606.875,
+            "height": 30
+          },
+          {
+            "top": 610.875,
+            "bottom": 640.875,
+            "height": 30
+          }
+        ],
+        "more": "ще +6 — уточніть пошук"
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "alert-voice-not-found",
+      "reading": {
+        "text": "У ElevenLabs немає голосу «unknown-voice». Натисніть правою кнопкою, щоб вибрати інший.",
+        "wordBreak": "normal",
+        "sideways": false
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "loaded",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 112,
+        "bottom": 891.8125,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 492.125,
+            "bottom": 522.125,
+            "height": 30
+          },
+          {
+            "top": 526.125,
+            "bottom": 556.125,
+            "height": 30
+          },
+          {
+            "top": 560.125,
+            "bottom": 590.125,
+            "height": 30
+          },
+          {
+            "top": 594.125,
+            "bottom": 624.125,
+            "height": 30
+          },
+          {
+            "top": 628.125,
+            "bottom": 658.125,
+            "height": 30
+          },
+          {
+            "top": 662.125,
+            "bottom": 692.125,
+            "height": 30
+          }
+        ],
+        "more": "ще +6 — уточніть пошук"
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "filtered",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 166,
+        "bottom": 891.8125,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 546.125,
+            "bottom": 576.125,
+            "height": 30
+          },
+          {
+            "top": 580.125,
+            "bottom": 610.125,
+            "height": 30
+          },
+          {
+            "top": 614.125,
+            "bottom": 644.125,
+            "height": 30
+          }
+        ]
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "typed-unlisted",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 800.8125,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "loading",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 753.5625,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "failed",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 814.0625,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "unconfigured",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 768.5625,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "locked",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 77,
+        "bottom": 892.3125,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 492.625,
+            "bottom": 522.625,
+            "height": 30
+          },
+          {
+            "top": 526.625,
+            "bottom": 556.625,
+            "height": 30
+          },
+          {
+            "top": 560.625,
+            "bottom": 590.625,
+            "height": 30
+          },
+          {
+            "top": 594.625,
+            "bottom": 624.625,
+            "height": 30
+          },
+          {
+            "top": 628.625,
+            "bottom": 658.625,
+            "height": 30
+          },
+          {
+            "top": 662.625,
+            "bottom": 692.625,
+            "height": 30
+          }
+        ],
+        "more": "ще +6 — уточніть пошук"
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "fish-jarvis",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 177,
+        "bottom": 782.8125,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 741.8125,
+            "bottom": 771.8125,
+            "height": 30
+          }
+        ]
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "selected-unknown",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 75,
+        "bottom": 891.8125,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 492.125,
+            "bottom": 522.125,
+            "height": 30
+          },
+          {
+            "top": 526.125,
+            "bottom": 556.125,
+            "height": 30
+          },
+          {
+            "top": 560.125,
+            "bottom": 590.125,
+            "height": 30
+          },
+          {
+            "top": 594.125,
+            "bottom": 624.125,
+            "height": 30
+          },
+          {
+            "top": 628.125,
+            "bottom": 658.125,
+            "height": 30
+          },
+          {
+            "top": 662.125,
+            "bottom": 692.125,
+            "height": 30
+          }
+        ],
+        "more": "ще +6 — уточніть пошук"
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "alert-voice-not-found",
+      "reading": {
+        "text": "У ElevenLabs немає голосу «unknown-voice». Натисніть правою кнопкою, щоб вибрати інший.",
+        "wordBreak": "normal",
+        "sideways": false
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "loaded",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 403.875,
+            "bottom": 433.875,
+            "height": 30
+          },
+          {
+            "top": 437.875,
+            "bottom": 467.875,
+            "height": 30
+          },
+          {
+            "top": 471.875,
+            "bottom": 501.875,
+            "height": 30
+          },
+          {
+            "top": 505.875,
+            "bottom": 535.875,
+            "height": 30
+          },
+          {
+            "top": 539.875,
+            "bottom": 569.875,
+            "height": 30
+          },
+          {
+            "top": 573.875,
+            "bottom": 603.875,
+            "height": 30
+          }
+        ],
+        "more": "ще +6 — уточніть пошук"
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "filtered",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 403.875,
+            "bottom": 433.875,
+            "height": 30
+          },
+          {
+            "top": 437.875,
+            "bottom": 467.875,
+            "height": 30
+          },
+          {
+            "top": 471.875,
+            "bottom": 501.875,
+            "height": 30
+          }
+        ]
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "typed-unlisted",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 68,
+        "bottom": 691.8125,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "loading",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 115,
+        "bottom": 691.5625,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "failed",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 55,
+        "bottom": 692.0625,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "unconfigured",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 100,
+        "bottom": 691.5625,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": []
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "locked",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 439.375,
+            "bottom": 469.375,
+            "height": 30
+          },
+          {
+            "top": 473.375,
+            "bottom": 503.375,
+            "height": 30
+          },
+          {
+            "top": 507.375,
+            "bottom": 537.375,
+            "height": 30
+          },
+          {
+            "top": 541.375,
+            "bottom": 571.375,
+            "height": 30
+          },
+          {
+            "top": 575.375,
+            "bottom": 605.375,
+            "height": 30
+          },
+          {
+            "top": 609.375,
+            "bottom": 639.375,
+            "height": 30
+          }
+        ],
+        "more": "ще +6 — уточніть пошук"
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "fish-jarvis",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 86,
+        "bottom": 691.8125,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 650.8125,
+            "bottom": 680.8125,
+            "height": 30
+          }
+        ]
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "selected-unknown",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 440.875,
+            "bottom": 470.875,
+            "height": 30
+          },
+          {
+            "top": 474.875,
+            "bottom": 504.875,
+            "height": 30
+          },
+          {
+            "top": 508.875,
+            "bottom": 538.875,
+            "height": 30
+          },
+          {
+            "top": 542.875,
+            "bottom": 572.875,
+            "height": 30
+          },
+          {
+            "top": 576.875,
+            "bottom": 606.875,
+            "height": 30
+          },
+          {
+            "top": 610.875,
+            "bottom": 640.875,
+            "height": 30
+          }
+        ],
+        "more": "ще +6 — уточніть пошук"
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "alert-voice-not-found",
+      "reading": {
+        "text": "У ElevenLabs немає голосу «unknown-voice». Натисніть правою кнопкою, щоб вибрати інший.",
+        "wordBreak": "normal",
+        "sideways": false
+      }
+    }
+  ]
+}

@@ -262,13 +262,28 @@ echo soniox > ~/.config/delegatus/tts-backend
 ```
 
 The server posts the answer text to `https://tts-rt.soniox.com/tts` (model
-`tts-rt-v2`, voice `Adrian`, language `en`, mp3) and streams the audio straight
+`tts-rt-v2`, voice `Adrian`, language `en`, 24 kHz PCM) and streams the audio
 back to the browser; the key never leaves the server. Model, voice and language
 follow the same per-provider override pattern as the other backends —
 `LLV_TTS_SONIOX_MODEL` / `LLV_TTS_SONIOX_VOICE` / `LLV_TTS_SONIOX_LANGUAGE`, or
 the files `tts-model-soniox`, `tts-voice-soniox`, `tts-language-soniox`. The
 language is the language of the text being read; Soniox requires it on every
 request, so set it if your agents answer in something other than English.
+
+ElevenLabs reads `ELEVENLABS_API_KEY` or `elevenlabs-api-key` from the
+same config folder. It uses `eleven_v4_turbo` and streams 24 kHz PCM through
+`/v1/text-to-speech/{voice_id}/stream?output_format=pcm_24000`.
+
+The existing read-aloud menu contains a **Voice** group under the selected
+provider. Filter its own voice list by name or id, choose a row, or type an id
+and press Enter. OpenAI accepts a typed voice name. Each choice is saved in
+`tts-voice-<provider>` and applies to the next read, including after a restart.
+`LLV_TTS_<PROVIDER>_VOICE` overrides that file and locks the voice controls.
+ElevenLabs includes account-generated voices; Fish lists owned voices and
+resolves a saved public id; Soniox lists shared voices for its configured model
+and cloned voices. A failed list offers Retry while manual entry remains
+available. An unknown voice produces a visible error; no substitute is chosen.
+One provider serves every message, with no message-language routing.
 
 Without a readable key the button reports text-to-speech as unavailable and
 names the file to drop the key into — the same degradation as the other
@@ -293,7 +308,7 @@ lists the transport and voice quality checks still awaiting a key.
 
 ### Long answers, replay, and following along
 
-A long answer is split client-side into chunks of roughly 400–800 characters on
+OpenAI answers are split client-side into chunks of roughly 400–800 characters on
 paragraph and sentence boundaries, and a word is never cut. (What reaches the
 splitter is the spoken text, which has already had code blocks, inline code,
 tables and `http(s)://…` runs stripped out of it.) Two chunks are synthesized at
@@ -302,29 +317,25 @@ card — and playback starts as soon as the FIRST chunk is ready, while the rest
 are still being made. Chunks play back to back on two alternating audio
 elements, so the joins are inaudible.
 
-A message under ~800 characters is one chunk, exactly as before. Nothing is ever
-truncated: the old "speak the first 4,000 characters" slice is gone, and a
-message past the 20,000-character ceiling is refused out loud in the confirm
-dialog instead of being quietly cut.
+ElevenLabs, Soniox and Fish stream PCM through Web Audio. The first sentence
+is requested separately; later requests contain up to three sentences. Audio
+starts before the first response finishes. A message past 20,000 characters
+shows an alert before synthesis.
 
 Chunks are cached per provider/model/voice/chunk text, so:
 
 - **Replay** — once an answer has been read to the END, and while all of its
   chunks are still cached, the speaker button becomes a replay control that
   replays at no cost. Any other state — stopped part-way, or evicted since — is
-  a paid synthesis, so the control says so and goes back through the same
-  confirm dialog. The cache is sized to hold one whole message at the length
-  ceiling (~22 MB of audio at the worst case), so a replay of the answer just
+  a new synthesis, with its billing shown in the control and menu. The cache
+  holds one whole message at the length ceiling (~22 MB of audio at the worst case), so a replay of the answer just
   read is free.
 - **Karaoke** — while a message is being read, the word being spoken is
   highlighted in the rendered answer. The highlight uses the CSS Custom
   Highlight API over the markdown already on screen: nothing is re-parsed or
-  rewritten, and selecting text still works. With ElevenLabs the position is
-  word-exact (the route asks its `/with-timestamps` endpoint, which returns a
-  start and end second per character, and passes that alignment through beside
-  the audio). OpenAI returns no timestamps and Soniox's REST `/tts` returns raw
-  audio only — their character timestamps are WebSocket-only — so for both the
-  position is interpolated inside the chunk and snapped to word boundaries.
+  rewritten, and selecting text still works. ElevenLabs and Fish estimate word
+  positions from the streamed audio duration. Soniox highlights its sentence
+  batch. OpenAI interpolates inside its MP3 chunk and snaps to word boundaries.
 - **Click-to-seek** — while an answer is playing, clicking anywhere in its text
   jumps the audio there: exactly with an alignment, proportionally without one.
   Clicking in a part that has not been synthesized yet queues that chunk next

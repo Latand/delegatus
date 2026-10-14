@@ -139,3 +139,12 @@ test.each(["Привіт світе. Це наступне речення. ", "�
   expect(chunks.map((chunk) => text.slice(chunk.start, chunk.end))).toEqual(chunks.map((chunk) => chunk.text));
   expect(chunks).toEqual(chunkSpeech(text, { backend: "soniox" }));
 });
+
+
+test("ElevenLabs uses short sentence batches", () => {
+  const source = "First sentence. Second sentence. Third sentence.";
+  const eleven = chunkSpeech(source, { backend: "elevenlabs" });
+  expect(eleven).toEqual(chunkSpeech(source, { backend: "fishaudio" }));
+  expect(eleven[0]!.text).toBe("First sentence.");
+  expect(eleven.length).toBeGreaterThan(1);
+});

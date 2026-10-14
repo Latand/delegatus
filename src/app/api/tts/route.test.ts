@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { writeTtsVoice } from "@/lib/ttsBackend";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
 
@@ -196,95 +200,6 @@ describe("/api/tts — soniox (#1020)", () => {
     expect(raw).not.toContain(SONIOX_KEY);
   });
 
-  test("selecting soniox leaves the ElevenLabs request body untouched", async () => {
-    process.env.LLV_TTS_BACKEND = "elevenlabs";
-    process.env.XDG_CONFIG_HOME = "/nonexistent/tts-route-soniox";
-    setEnv("ELEVENLABS_API_KEY", "eleven-key");
-    const fetchMock = mock(async () => Response.json(elevenPayload("Read this answer.")));
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
-
-    const response = await POST(request(JSON.stringify({ text: "Read this answer." })));
-    await response.json();
-
-    const [url, init] = fetchMock.mock.calls[0]! as unknown as [string, RequestInit];
-    expect(url).toBe("https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM/with-timestamps");
-    const headers = new Headers(init.headers as HeadersInit);
-    expect(headers.get("xi-api-key")).toBe("eleven-key");
-    expect(JSON.parse(String(init.body))).toEqual({ model_id: "eleven_multilingual_v2", text: "Read this answer." });
-
-    setEnv("ELEVENLABS_API_KEY", undefined);
-  });
-});
-
-/** An ElevenLabs `/with-timestamps` envelope for `text`, one 0.1s per character. */
-function elevenPayload(text: string, audio = "QUJD") {
-  return {
-    audio_base64: audio,
-    alignment: {
-      characters: [...text],
-      character_start_times_seconds: [...text].map((_, index) => index * 0.1),
-      character_end_times_seconds: [...text].map((_, index) => (index + 1) * 0.1),
-    },
-    normalized_alignment: { characters: [], character_start_times_seconds: [], character_end_times_seconds: [] },
-  };
-}
-
-describe("/api/tts — elevenlabs character alignment (#1022)", () => {
-  test("asks for timestamps and passes the alignment through beside the audio", async () => {
-    process.env.LLV_TTS_BACKEND = "elevenlabs";
-    process.env.XDG_CONFIG_HOME = "/nonexistent/tts-route-eleven";
-    setEnv("ELEVENLABS_API_KEY", "eleven-key");
-    globalThis.fetch = mock(async () => Response.json(elevenPayload("Hi"))) as unknown as typeof fetch;
-
-    const response = await POST(request(JSON.stringify({ text: "Hi" })));
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toContain("application/json");
-    expect(response.headers.get("x-tts-backend")).toBe("elevenlabs");
-    expect(response.headers.get("x-tts-model")).toBe("eleven_multilingual_v2");
-    expect(response.headers.get("x-tts-voice")).toBe("21m00Tcm4TlvDq8ikWAM");
-    expect(await response.json()).toEqual({
-      audio: "QUJD",
-      contentType: "audio/mpeg",
-      alignment: { characters: ["H", "i"], starts: [0, 0.1], ends: [0.1, 0.2] },
-    });
-    setEnv("ELEVENLABS_API_KEY", undefined);
-  });
-
-  test("a payload without a usable alignment still plays, with alignment null", async () => {
-    process.env.LLV_TTS_BACKEND = "elevenlabs";
-    process.env.XDG_CONFIG_HOME = "/nonexistent/tts-route-eleven";
-    setEnv("ELEVENLABS_API_KEY", "eleven-key");
-    globalThis.fetch = mock(async () => Response.json({
-      audio_base64: "QUJD",
-      alignment: { characters: ["H", "i"], character_start_times_seconds: [0], character_end_times_seconds: [0.1] },
-    })) as unknown as typeof fetch;
-
-    const response = await POST(request(JSON.stringify({ text: "Hi" })));
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ audio: "QUJD", contentType: "audio/mpeg", alignment: null });
-    setEnv("ELEVENLABS_API_KEY", undefined);
-  });
-
-  test("a malformed envelope is a clean 502 and releases the synthesis slot", async () => {
-    process.env.LLV_TTS_BACKEND = "elevenlabs";
-    process.env.XDG_CONFIG_HOME = "/nonexistent/tts-route-eleven";
-    setEnv("ELEVENLABS_API_KEY", "eleven-key");
-    globalThis.fetch = mock(async () => new Response("<html>gateway</html>", { headers: { "content-type": "text/html" } })) as unknown as typeof fetch;
-
-    const broken = await POST(request(JSON.stringify({ text: "Hi" })));
-    expect(broken.status).toBe(502);
-    expect(await broken.json()).toEqual({ error: "elevenlabs TTS returned invalid audio" });
-
-    /* The slot came back: three more syntheses are admitted right after. */
-    globalThis.fetch = mock(async () => Response.json(elevenPayload("Hi"))) as unknown as typeof fetch;
-    for (const response of await Promise.all([1, 2, 3].map(() => POST(request(JSON.stringify({ text: "Hi" })))))) {
-      expect(response.status).toBe(200);
-      await response.json();
-    }
-    setEnv("ELEVENLABS_API_KEY", undefined);
-  });
 });
 
 describe("Soniox fast route", () => {
@@ -454,5 +369,72 @@ describe("Fish Audio route", () => {
     const missing = await POST(pcmRequest());
     expect(missing.status).toBe(503);
     expect((await missing.json()).keyPath).toMatch(/fishaudio-api-key$/);
+  });
+});
+
+
+describe("persisted voices and ElevenLabs PCM", () => {
+  const names = ["ELEVENLABS_API_KEY", "FISH_AUDIO_API_KEY", "LLV_TTS_ELEVENLABS_VOICE", "LLV_TTS_FISHAUDIO_VOICE", "LLV_TTS_SONIOX_VOICE", "LLV_TTS_FISHAUDIO_MODEL"];
+  const saved = names.map((name) => process.env[name]);
+  let root: string;
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "tts-persisted-"));
+    process.env.XDG_CONFIG_HOME = root;
+    names.forEach((name) => setEnv(name, undefined));
+    ["ELEVENLABS_API_KEY", "FISH_AUDIO_API_KEY", "SONIOX_API_KEY"].forEach((name) => setEnv(name, "provider-fixture"));
+    process.env.LLV_TTS_FISHAUDIO_MODEL = "s2.1-pro";
+  });
+  afterEach(() => { names.forEach((name, i) => setEnv(name, saved[i])); fs.rmSync(root, { recursive: true, force: true }); });
+
+  test.each(["elevenlabs", "fishaudio", "soniox"] as const)("%s sends the persisted provider voice", async (backend) => {
+    process.env.LLV_TTS_BACKEND = backend;
+    writeTtsVoice(backend, "saved voice/id");
+    let end!: () => void;
+    const upstream = mock(async (...args: [unknown, RequestInit?]) => { void args; return new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array([1, 0])); end = () => c.close(); } }), { headers: { "content-type": backend === "soniox" ? "audio/pcm" : "application/octet-stream" } }); });
+    globalThis.fetch = upstream as unknown as typeof fetch;
+    const response = await POST(request(JSON.stringify({ text: "Hi", mode: "pcm" })));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("audio/pcm");
+    expect(response.headers.get("x-tts-encoding")).toBe("pcm_s16le");
+    expect(response.headers.get("x-tts-sample-rate")).toBe("24000");
+    expect(response.headers.get("x-tts-channels")).toBe("1");
+    expect(decodeURIComponent(response.headers.get("x-tts-voice")!)).toBe("saved voice/id");
+    const reader = response.body!.getReader();
+    expect((await reader.read()).value).toEqual(new Uint8Array([1, 0]));
+    end(); await reader.read();
+    const [url, init] = upstream.mock.calls[0]!;
+    const body = JSON.parse(String(init?.body));
+    if (backend === "elevenlabs") {
+      expect(url).toBe("https://api.elevenlabs.io/v1/text-to-speech/saved%20voice%2Fid/stream?output_format=pcm_24000");
+      expect(new Headers(init?.headers).get("xi-api-key")).toBe("provider-fixture");
+      expect(body).toEqual({ model_id: "eleven_v4_turbo", text: "Hi" });
+    } else expect(body[backend === "fishaudio" ? "reference_id" : "voice"]).toBe("saved voice/id");
+    expect(upstream).toHaveBeenCalledTimes(1);
+  });
+
+  test("ElevenLabs requires PCM mode before calling the provider", async () => {
+    process.env.LLV_TTS_BACKEND = "elevenlabs";
+    const upstream = mock(async () => { throw new Error("unexpected synthesis"); }); globalThis.fetch = upstream as unknown as typeof fetch;
+    expect((await POST(request(JSON.stringify({ text: "Hi" })))).status).toBe(409);
+    expect(upstream).not.toHaveBeenCalled();
+  });
+  test.each([
+    ["elevenlabs", 404, { detail: { type: "not_found", code: "voice_not_found", status: "voice_not_found", message: "A voice was not found." } }],
+    ["fishaudio", 400, { message: "Reference not found", status: 400 }],
+    ["soniox", 400, { error_code: 400, error_message: "Invalid voice missing for model tts-rt-v2.", error_type: "invalid_request" }],
+  ] as const)("%s unknown voice is 422 with no fallback", async (backend, status, body) => {
+    process.env.LLV_TTS_BACKEND = backend; writeTtsVoice(backend, "missing");
+    const upstream = mock(async () => Response.json(body, { status })); globalThis.fetch = upstream as unknown as typeof fetch;
+    const response = await POST(request(JSON.stringify({ text: "Hi", mode: "pcm" })));
+    expect(response.status).toBe(422); expect(await response.json()).toMatchObject({ code: "voice-not-found", voice: "missing" });
+    expect(upstream).toHaveBeenCalledTimes(1);
+  });
+  test.each([400, 401, 402, 403, 404, 429, 500])("ElevenLabs HTTP %i does not echo a secret", async (status) => {
+    process.env.LLV_TTS_BACKEND = "elevenlabs";
+    globalThis.fetch = mock(async () => Response.json({ detail: { message: "provider-fixture is refused" } }, { status, headers: { "retry-after": "7" } })) as unknown as typeof fetch;
+    const response = await POST(request(JSON.stringify({ text: "Hi", mode: "pcm" })));
+    expect(response.status).toBe(status === 500 ? 502 : status);
+    expect(await response.text()).not.toContain("provider-fixture");
+    if (status === 429) expect(response.headers.get("retry-after")).toBe("7");
   });
 });

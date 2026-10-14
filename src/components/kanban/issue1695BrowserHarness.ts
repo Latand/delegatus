@@ -889,7 +889,7 @@ export async function captureFishAudioMenu(browser: Browser, mobile: boolean): P
   const fish = { id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeUntil: "2026-11-30", freeEnded: false };
   const speech = { backend: "fishaudio", lockedByEnv: false, options: [
     { id: "openai", available: false, keyPath: "$CONFIG/openai-api-key", model: "gpt-4o-mini-tts", voice: "alloy", cap: 4000 },
-    { id: "elevenlabs", available: false, keyPath: "$CONFIG/elevenlabs-api-key", model: "eleven_multilingual_v2", voice: "default", cap: 4000 },
+    { id: "elevenlabs", available: false, keyPath: "$CONFIG/elevenlabs-api-key", model: "eleven_v4_turbo", voice: "default", cap: 4000 },
     { id: "soniox", available: false, keyPath: "$CONFIG/soniox-api-key", model: "tts-rt-v2", voice: "Adrian", cap: 4000 }, fish,
   ] };
   const server = await serveEvidenceFixture(path.resolve(".artifacts/fish-audio", mobile ? "phone" : "desktop"), mobile ? "src/components/mobile/issue1671Evidence.fixture.tsx" : undefined, { "/api/tts/backend": speech });
@@ -908,6 +908,7 @@ export async function captureFishAudioMenu(browser: Browser, mobile: boolean): P
           }
           await route.fulfill({ json: current });
         });
+        await page.route("**/api/tts/voices?*", async (route) => route.fulfill({ json: { backend: "fishaudio", voices: [], truncated: false, selected: { id: "default", name: null, known: true } } }));
         await page.route("**/api/tts", async (route) => {
           if (route.request().method() !== "POST") { await route.fallback(); return; }
           await route.fulfill({ status: 403, json: { error: "provider refused", code: "fishaudio-free-refused" } });
@@ -917,9 +918,9 @@ export async function captureFishAudioMenu(browser: Browser, mobile: boolean): P
         // The first navigation may already have read the fixture response; the menu refresh is authoritative.
         await control.click({ button: "right" });
         const menu = page.locator("[data-tts-menu]"); await menu.waitFor();
-        const group = menu.getByRole("group");
+        const group = menu.getByRole("group").filter({ hasNot: page.locator("input") });
         expect(await group.getByRole("menuitemradio").count()).toBe(2);
-        expect(await menu.getByRole("menuitemradio").count()).toBe(6);
+        expect(await menu.locator("[data-tts-provider]").count()).toBe(4);
         expect(await menu.textContent()).toContain(locale === "en" ? "free until" : "безкоштовно до");
         expect(await menu.textContent()).not.toMatch(/left click|лівий клік/);
         expect(await menu.getByRole("menuitemradio").filter({ hasText: "Fish Audio" }).first().textContent()).toBe("Fish Audio");
@@ -993,5 +994,99 @@ export async function captureFishAudioMenu(browser: Browser, mobile: boolean): P
     }
     fs.mkdirSync("evidence/fish-audio", { recursive: true });
     fs.writeFileSync(`evidence/fish-audio/${mobile ? "phone" : "desktop"}.json`, JSON.stringify({ driver: mobile ? "src/components/mobile/issue1671Evidence.browser.test.tsx" : "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
+  } finally { server.stop(); }
+}
+
+/** Read-aloud provider voice choices, rendered by both existing surface drivers. */
+export async function captureReadAloudVoiceMenu(browser: Browser, mobile: boolean): Promise<void> {
+  const { expect } = await import("bun:test");
+  const os = await import("node:os");
+  const out = process.env.LLV_TTS_EVIDENCE_DIR || path.join(os.homedir(), "Pictures/delegatus-review/read-aloud-voice");
+  fs.mkdirSync(out, { recursive: true });
+  const server = await serveEvidenceFixture(path.resolve(".artifacts/read-aloud-voice", mobile ? "phone" : "desktop"), mobile ? "src/components/mobile/issue1671Evidence.fixture.tsx" : undefined);
+  const readings: unknown[] = [];
+  const states = ["loaded", "filtered", "typed-unlisted", "loading", "failed", "unconfigured", "locked", "fish-jarvis", "selected-unknown", "alert-voice-not-found"] as const;
+  try {
+    for (const locale of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const width of mobile ? [320, 390] : [1440, 1000]) {
+      const height = mobile ? (width === 320 ? 640 : 844) : width === 1000 ? 700 : 900;
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?${mobile ? "fast-tts=1&runtime=structured#c=conversation_running" : "scenario=fast-tts#c=conversation_export-impl"}`, { width, height }, scheme, locale, "reduce", mobile);
+      let state: typeof states[number] = "loaded";
+      const voices = Array.from({ length: 12 }, (_, i) => ({ id: `voice-${i}`, name: i === 0 ? "Delegatus" : `Narrator ${i}`, own: i < 2 }));
+      let listCalls = 0; let synthesisCalls = 0; const saves: unknown[] = [];
+      let release: (() => void) | undefined;
+      const speech = () => ({ backend: state === "fish-jarvis" ? "fishaudio" : "elevenlabs", lockedByEnv: false, options: [
+        { id: "openai", available: false, keyPath: "$CONFIG/openai-api-key", model: "gpt-4o-mini-tts", voice: "alloy", cap: 4000 },
+        { id: "elevenlabs", available: state !== "unconfigured", keyPath: "$CONFIG/elevenlabs-api-key", model: "eleven_v4_turbo", voice: state === "selected-unknown" || state === "alert-voice-not-found" ? "unknown-voice" : "voice-0", voiceLockedByEnv: state === "locked", cap: 4000 },
+        { id: "soniox", available: false, keyPath: "$CONFIG/soniox-api-key", model: "tts-rt-v2", voice: "Adrian", cap: 4000 },
+        { id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro", voice: "public-jarvis", cap: 4000 },
+      ] });
+      try {
+        await page.route("**/api/tts/backend", async (route) => {
+          if (route.request().method() === "POST") saves.push(route.request().postDataJSON());
+          await route.fulfill({ json: speech() });
+        });
+        await page.route("**/api/tts/voices?*", async (route) => {
+          listCalls++;
+          if (state === "loading") await new Promise<void>((resolve) => { release = resolve; });
+          if (state === "failed") { await route.fulfill({ status: 502, json: { error: "Missing voices_read permission", code: "provider-refused" } }); return; }
+          const fish = state === "fish-jarvis";
+          await route.fulfill({ json: { backend: fish ? "fishaudio" : "elevenlabs", voices: fish ? [{ id: "public-jarvis", name: "Jarvis", own: false }] : voices, truncated: false, selected: { id: fish ? "public-jarvis" : state === "selected-unknown" ? "unknown-voice" : "voice-0", name: fish ? "Jarvis" : state === "selected-unknown" ? null : "Delegatus", known: state !== "selected-unknown" } } });
+        });
+        await page.route("**/api/tts", async (route) => {
+          if (route.request().method() !== "POST") { await route.fallback(); return; }
+          synthesisCalls++; expect(route.request().postDataJSON().mode).toBe("pcm");
+          await route.fulfill({ status: 422, json: { error: "Unknown voice", code: "voice-not-found", voice: "unknown-voice" } });
+        });
+        for (const next of states) {
+          state = next; const beforeCalls = listCalls; const beforeSaves = saves.length;
+          await page.reload();
+          const control = page.locator(mobile ? "[data-mobile-message-actions] [data-tts-trigger]" : "[data-kanban-reader=conversation_export-impl] [data-tts-message] [data-tts-trigger]").last();
+          await control.waitFor({ timeout: 20000 });
+          await page.waitForFunction(() => [...document.querySelectorAll("[data-tts-trigger]")].some((node) => !(node as HTMLButtonElement).disabled));
+          const prefix = `${mobile ? "phone" : "desktop"}-${width}-${locale}-${scheme}-${state}`;
+          if (state === "alert-voice-not-found") {
+            await control.click(); const alert = page.locator("[data-tts-alert]"); await alert.waitFor();
+            const reading = await alert.evaluate((node) => ({ text: node.textContent, wordBreak: getComputedStyle(node).wordBreak, sideways: node.scrollWidth > node.clientWidth }));
+            expect(reading.text).toContain("unknown-voice"); expect(reading.wordBreak).not.toBe("break-all"); expect(reading.sideways).toBe(false); expect(synthesisCalls).toBe(1);
+            await page.screenshot({ path: path.join(out, `${prefix}.png`) });
+            await alert.screenshot({ path: path.join(out, `${prefix}-detail.png`) });
+            readings.push({ width, height, locale, scheme, state, reading }); continue;
+          }
+          await control.click({ button: "right" }); const menu = page.locator("[data-tts-menu]"); await menu.waitFor();
+          const group = menu.locator("[data-tts-voice-group]"); const input = group.locator("input");
+          if (state === "loading") await group.getByText(locale === "en" ? "Loading voices…" : "Завантаження голосів…", { exact: true }).waitFor();
+          else if (state === "failed") await group.getByRole("alert").waitFor();
+          else if (state !== "unconfigured") await group.locator("[data-tts-voice]").first().waitFor();
+          if (state === "filtered") await input.fill("Narrator 1");
+          if (state === "typed-unlisted") await input.fill("typed-voice-id");
+          await group.scrollIntoViewIfNeeded();
+          if (["typed-unlisted", "selected-unknown", "failed"].includes(state)) await group.locator(state === "typed-unlisted" ? "[data-tts-typed]" : "[role=alert]").scrollIntoViewIfNeeded();
+          const reading = await menu.evaluate((node) => {
+            const box = node.getBoundingClientRect(); const input = node.querySelector("input")!;
+            const rows = [...node.querySelectorAll("[data-tts-voice]")].map((row) => { const r = row.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: r.height }; });
+            return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, background: getComputedStyle(node).backgroundColor, sideways: node.scrollWidth > node.clientWidth, inputHeight: input.getBoundingClientRect().height, inputFont: getComputedStyle(input).fontSize, rows, more: node.querySelector("[data-tts-voice-more]")?.textContent };
+          });
+          expect(reading.left).toBeGreaterThanOrEqual(0); expect(reading.right).toBeLessThanOrEqual(width); expect(reading.top).toBeGreaterThanOrEqual(0); expect(reading.bottom).toBeLessThanOrEqual(height);
+          expect(reading.sideways).toBe(false); expect(reading.background).not.toBe("rgba(0, 0, 0, 0)"); expect(reading.rows.length).toBeLessThanOrEqual(6);
+          for (const row of reading.rows) { expect(row.top).toBeGreaterThanOrEqual(reading.top); expect(row.bottom).toBeLessThanOrEqual(reading.bottom); }
+          for (let i = 1; i < reading.rows.length; i++) expect(reading.rows[i]!.top).toBeGreaterThanOrEqual(reading.rows[i - 1]!.bottom);
+          if (mobile) { expect(reading.inputHeight).toBeGreaterThanOrEqual(44); expect(reading.inputFont).toBe("16px"); for (const row of reading.rows) expect(row.height).toBeGreaterThanOrEqual(44); }
+          if (state === "loaded") expect(reading.more).toContain("6");
+          if (state === "unconfigured") expect(listCalls).toBe(beforeCalls);
+          if (state === "locked") expect(await input.isDisabled()).toBe(true);
+          if (state === "fish-jarvis") expect(await menu.textContent()).toContain("s2.1-pro · Jarvis");
+          if (state === "selected-unknown") expect(await group.getByRole("alert").textContent()).toContain("unknown-voice");
+          await page.screenshot({ path: path.join(out, `${prefix}.png`) });
+          await menu.screenshot({ path: path.join(out, `${prefix}-detail.png`) });
+          if (state === "filtered") { await group.locator("[data-tts-voice]").first().click(); await menu.waitFor({ state: "hidden" }); expect(saves.slice(beforeSaves)).toEqual([{ backend: "elevenlabs", voice: "voice-1" }]); }
+          if (state === "typed-unlisted") { await input.press("Enter"); await menu.waitFor({ state: "hidden" }); expect(saves.slice(beforeSaves)).toEqual([{ backend: "elevenlabs", voice: "typed-voice-id" }]); }
+          release?.(); release = undefined;
+          readings.push({ width, height, locale, scheme, state, reading });
+        }
+        expect(pageErrors).toEqual([]);
+      } finally { release?.(); await context.close(); }
+    }
+    fs.mkdirSync("evidence/read-aloud-voice", { recursive: true });
+    fs.writeFileSync(`evidence/read-aloud-voice/${mobile ? "phone" : "desktop"}.json`, JSON.stringify({ readings }, null, 2) + "\n");
   } finally { server.stop(); }
 }

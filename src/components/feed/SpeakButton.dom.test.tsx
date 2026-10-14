@@ -49,7 +49,7 @@ const backendInfo = {
   lockedByEnv: false,
   options: [
     { id: "openai", available: true, keyPath: "/keys/openai", model: "gpt-4o-mini-tts", voice: "alloy", cap: 4000 },
-    { id: "elevenlabs", available: false, keyPath: "/keys/elevenlabs", model: "eleven_multilingual_v2", voice: "Rachel", cap: 4000 },
+    { id: "elevenlabs", available: false, keyPath: "/keys/elevenlabs", model: "eleven_v4_turbo", voice: "Rachel", cap: 4000 },
   ],
 };
 
@@ -756,7 +756,7 @@ test("the menu switches provider, and every answer control follows", async () =>
   expect(menuOpen()).toBe(false);
 
   const other = await openMenu(second);
-  expect(other.textContent).toContain("ElevenLabs · eleven_multilingual_v2 · Rachel");
+  expect(other.textContent).toContain("ElevenLabs · eleven_v4_turbo · Rachel");
   expect(first.button.getAttribute("title")).toBe("Read aloud (paid) · right-click: voice & billing");
   flushSync(() => { first.root.unmount(); second.root.unmount(); });
   first.host.remove();
@@ -815,7 +815,7 @@ test("a provider switched under a stale tab is keyed and named by what the route
     posts += 1;
     /* The server is on ElevenLabs now, whatever this tab believes. */
     return new Response(new Blob(["audio"]), {
-      headers: { "x-tts-backend": "elevenlabs", "x-tts-model": "eleven_multilingual_v2", "x-tts-voice": "Rachel" },
+      headers: { "x-tts-backend": "elevenlabs", "x-tts-model": "eleven_v4_turbo", "x-tts-voice": "Rachel" },
     });
   }) as unknown as typeof fetch;
   URL.createObjectURL = () => "blob:tts";
@@ -839,17 +839,16 @@ test("a provider switched under a stale tab is keyed and named by what the route
   const texts = chunkSpeech(TEXT).map((chunk) => chunk.text);
   expect(chunksCached(texts.map((text) => voiceKey({ id: "openai", model: "gpt-4o-mini-tts", voice: "alloy" }, text)))).toBe(false);
   /* ...and everything under the one that answered. */
-  expect(chunksCached(texts.map((text) => voiceKey({ id: "elevenlabs", model: "eleven_multilingual_v2", voice: "Rachel" }, text)))).toBe(true);
+  expect(chunksCached(texts.map((text) => voiceKey({ id: "elevenlabs", model: "eleven_v4_turbo", voice: "Rachel" }, text)))).toBe(true);
 
   /* And the surface names the provider that was charged, without the click
      having waited on /api/tts/backend to find out. */
   expect(alertNode()!.textContent).toBe("The voice provider changed — this read is billed to ElevenLabs.");
   const after = await openMenu(view);
-  expect(after.textContent).toContain("ElevenLabs · eleven_multilingual_v2 · Rachel");
+  expect(after.textContent).toContain("ElevenLabs · eleven_v4_turbo · Rachel");
   expect(after.textContent).toContain("Billed to your ElevenLabs account per character");
-  /* The replay it now offers is a replay of the audio that was actually paid
-     for, so it is genuinely free. */
-  expect(after.textContent).toContain("Next click: free replay from the cache");
+  // A legacy MP3 response cannot be replayed by the new ElevenLabs PCM player.
+  expect(after.textContent).toContain("Next click: paid synthesis of this answer");
 
   flushSync(() => { view.root.unmount(); });
   view.host.remove();
@@ -1009,7 +1008,7 @@ test.each(["model", "provider"])("%s lock disables both model rows", async (lock
   const view = await mount("Fish Audio lock");
   try {
     const menu = await openMenu(view);
-    const models = menu.querySelectorAll<HTMLButtonElement>('[role="group"] button');
+    const models = menu.querySelectorAll<HTMLButtonElement>('[role="group"]:not([data-tts-voice-group]) button');
     expect(models.length).toBe(2); expect([...models].every((button) => button.disabled)).toBe(true);
   } finally { flushSync(() => view.root.unmount()); view.host.remove(); }
 });
@@ -1050,6 +1049,7 @@ test("provider refusal explains the paid choice without retrying", async () => {
   let calls = 0;
   globalThis.fetch = mock(async (input: unknown) => {
     if (String(input) === "/api/tts/backend") return Response.json(info);
+    if (String(input).startsWith("/api/tts/voices")) return Response.json({ backend: "fishaudio", voices: [], selected: { id: "default", name: null, known: true }, truncated: false });
     calls++; return Response.json({ error: "provider refused", code: "fishaudio-free-refused" }, { status: 403 });
   }) as unknown as typeof fetch;
   const view = await mount("Fish refusal");
@@ -1121,4 +1121,96 @@ test.each(["header", "row"])("a refusal raised from the %s shows one alert, not 
     Object.assign(globalThis, { AudioContext: prior.context, requestAnimationFrame: prior.frame, cancelAnimationFrame: prior.cancel });
   }
 });
+});
+
+
+describe("per-provider voice menu", () => {
+  let current: typeof backendInfo & { options: Array<typeof backendInfo.options[number] & { voiceLockedByEnv?: boolean; voiceList?: boolean }> };
+  let saves: unknown[];
+  let lists: number;
+  let state: "loaded" | "failed" | "loading" | "unknown";
+  beforeEach(() => {
+    current = { ...backendInfo, backend: "elevenlabs", options: backendInfo.options.map((o) => ({ ...o, available: true, model: o.id === "elevenlabs" ? "eleven_v4_turbo" : o.model, voice: o.id === "elevenlabs" ? "voice-menu-selected" : o.voice })) };
+    saves = []; lists = 0; state = "loaded";
+    globalThis.fetch = mock(async (url: unknown, init?: RequestInit) => {
+      if (String(url).startsWith("/api/tts/voices")) {
+        lists++;
+        if (state === "loading") return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true }));
+        if (state === "failed") return Response.json({ error: "voices_read permission required" }, { status: 502 });
+        return Response.json({ backend: "elevenlabs", voices: [{ id: "voice-menu-selected", name: "Current narrator", own: true }, { id: "voice-menu-other", name: "Other narrator", own: false }], truncated: false, selected: { id: current.options[1]!.voice, name: "Current narrator", known: state !== "unknown" } });
+      }
+      if (String(url) === "/api/tts" && init?.method === "POST") return Response.json({ error: "voice missing", code: "voice-not-found" }, { status: 422 });
+      if (init?.method === "POST") {
+        const body = JSON.parse(String(init.body)); saves.push(body);
+        current = { ...current, options: current.options.map((o) => o.id === body.backend ? { ...o, voice: body.voice } : o) };
+      }
+      return Response.json(current);
+    }) as unknown as typeof fetch;
+  });
+  test("list pick and typed Enter persist voices and update every control", async () => {
+    const first = await mount("Voice first"); const second = await mount("Voice second");
+    let menu = await openMenu(first);
+    expect(menu.querySelectorAll("[data-tts-voice-group]").length).toBe(1);
+    expect(document.activeElement?.hasAttribute("data-tts-provider")).toBe(true);
+    const row = [...menu.querySelectorAll<HTMLButtonElement>("[data-tts-voice]")].find((node) => node.title === "voice-menu-other")!;
+    flushSync(() => row.click()); await drainUpdates();
+    expect(saves).toEqual([{ backend: "elevenlabs", voice: "voice-menu-other" }]);
+    menu = await openMenu(second); expect(menu.textContent).toContain("Other narrator");
+    const input = menu.querySelector("input")!;
+    input.focus();
+    const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;
+    flushSync(() => { setter.call(input, "custom-id"); input.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event); });
+    await drainUpdates();
+    expect(menu.querySelector("[data-tts-typed]")).not.toBeNull();
+    flushSync(() => input.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Enter", bubbles: true }) as unknown as Event)); await drainUpdates();
+    expect(saves.at(-1)).toEqual({ backend: "elevenlabs", voice: "custom-id" });
+    flushSync(() => { first.root.unmount(); second.root.unmount(); });
+  });
+  test.each(["loading", "failed", "unknown"] as const)("shows the %s voice state", async (value) => {
+    state = value; current.options[1]!.voice = `state-${value}`;
+    const view = await mount("Voice state"); const menu = await openMenu(view);
+    expect(menu.textContent).toContain(value === "loading" ? "Loading voices" : value === "failed" ? "voices_read" : "has no voice");
+    expect(menu.querySelector("input")).not.toBeNull();
+    if (value === "failed") {
+      state = "loaded";
+      const retry = [...menu.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Retry")!;
+      flushSync(() => retry.click()); await drainUpdates(); expect(menu.querySelectorAll("[data-tts-voice]").length).toBe(2);
+    }
+    flushSync(() => view.root.unmount());
+  });
+  test("unconfigured skips list fetch, env lock disables, OpenAI is typed only", async () => {
+    current.options[1]!.available = false;
+    const view = await mount("Unconfigured voice"); let menu = await openMenu(view);
+    expect(lists).toBe(0); expect(menu.querySelectorAll("[data-tts-voice]").length).toBe(0); expect(menu.textContent).toContain("/keys/elevenlabs");
+    await pressEscape(); current.options[1]!.voiceLockedByEnv = true; menu = await openMenu(view);
+    expect(menu.querySelector<HTMLInputElement>("input")!.disabled).toBe(true); expect(menu.textContent).toContain("LLV_TTS_ELEVENLABS_VOICE");
+    await pressEscape(); current.backend = "openai"; menu = await openMenu(view);
+    expect(menu.textContent).toContain("OpenAI has no voice list"); expect(lists).toBe(0);
+    flushSync(() => view.root.unmount());
+  });
+});
+
+
+test.each([['en', false], ['uk', false], ['en', true], ['uk', true]] as const)("bad voice alert in %s (phone %s) stops with one PCM request", async (locale, mobile) => {
+  const { setLocale } = await import("@/lib/i18n");
+  const prior = { context: globalThis.AudioContext, frame: globalThis.requestAnimationFrame, cancel: globalThis.cancelAnimationFrame, media: dom.matchMedia };
+  class Context { state = "running"; currentTime = 0; async resume() {} async close() {} }
+  Object.assign(globalThis, { AudioContext: Context, requestAnimationFrame: () => 1, cancelAnimationFrame: () => undefined });
+  dom.matchMedia = ((query: string) => ({ matches: mobile, media: query, addEventListener() {}, removeEventListener() {} })) as unknown as typeof dom.matchMedia;
+  setLocale(locale);
+  const info = { backend: "elevenlabs", lockedByEnv: false, options: [{ id: "elevenlabs", available: true, keyPath: "$CONFIG/elevenlabs-api-key", model: "eleven_v4_turbo", voice: "unknown-voice", cap: 4000 }] };
+  let calls = 0;
+  globalThis.fetch = mock(async (url: unknown, init?: RequestInit) => {
+    if (String(url) === "/api/tts/backend") return Response.json(info);
+    if (String(url).startsWith("/api/tts/voices")) return Response.json({ backend: "elevenlabs", voices: [], truncated: false, selected: { id: "unknown-voice", name: null, known: false } });
+    calls++; expect(JSON.parse(String(init?.body)).mode).toBe("pcm");
+    return Response.json({ error: "voice missing", code: "voice-not-found", voice: "server-unknown-voice" }, { status: 422 });
+  }) as unknown as typeof fetch;
+  const view = await mount("Unknown voice alert");
+  try {
+    await openMenu(view); await pressEscape(); await speak(view);
+    expect(calls).toBe(1); expect(view.button.dataset.ttsPhase).toBe("idle");
+    expect(alertNode()?.textContent).toContain("server-unknown-voice");
+    expect(alertNode()?.textContent).toContain(locale === "uk" ? mobile ? "Затисніть" : "правою кнопкою" : mobile ? "Press and hold" : "Right-click");
+  } finally { flushSync(() => view.root.unmount()); setLocale("en"); dom.matchMedia = prior.media; Object.assign(globalThis, { AudioContext: prior.context, requestAnimationFrame: prior.frame, cancelAnimationFrame: prior.cancel }); }
 });

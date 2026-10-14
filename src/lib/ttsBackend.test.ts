@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { configFilePath } from "./configDir";
-import { isTtsBackend, readFishAudioApiKey, writeFishAudioModel, readOpenAiApiKey, resolveTtsBackend, TTS_BACKENDS, ttsBackendInfo, writeTtsBackend } from "./ttsBackend";
+import { isTtsBackend, readFishAudioApiKey, writeFishAudioModel, readOpenAiApiKey, resolveTtsBackend, TTS_BACKENDS, ttsBackendInfo, writeTtsBackend, writeTtsVoice, isTtsVoiceId } from "./ttsBackend";
 
 const originalConfigHome = process.env.XDG_CONFIG_HOME;
 const originalBackend = process.env.LLV_TTS_BACKEND;
@@ -155,4 +155,24 @@ describe("Fish Audio configuration", () => {
     expect(fish(Date.parse("2026-11-30T23:59:59Z"))).toMatchObject({ freeUntil: "2026-11-30", freeEnded: false });
     expect(fish(Date.parse("2026-12-01T00:00:00Z"))).toMatchObject({ freeEnded: true });
   });
+});
+
+
+describe("voice persistence", () => {
+  const names = TTS_BACKENDS.map((b) => `LLV_TTS_${b.toUpperCase()}_VOICE`);
+  const saved = names.map((name) => process.env[name]);
+  afterEach(() => names.forEach((name, i) => setEnv(name, saved[i])));
+  test("per-provider values survive a fresh module import and selection changes", async () => {
+    configHome(); names.forEach((name) => setEnv(name, undefined)); delete process.env.LLV_TTS_BACKEND;
+    expect(ttsBackendInfo().options.find((o) => o.id === "elevenlabs")).toMatchObject({ model: "eleven_v4_turbo", voice: "JBFqnCBsd6RMkjVDRZzb" });
+    for (const backend of TTS_BACKENDS) { writeTtsVoice(backend, `${backend} voice`); writeTtsBackend(backend); }
+    const restartPath = "./ttsBackend.ts?restart=voices";
+    const fresh: typeof import("./ttsBackend") = await import(restartPath);
+    expect(fresh.resolveTtsBackend()).toBe("fishaudio");
+    for (const option of fresh.ttsBackendInfo().options) expect(option).toMatchObject({ voice: `${option.id} voice`, voiceList: option.id !== "openai", voiceLockedByEnv: false });
+    process.env.LLV_TTS_ELEVENLABS_VOICE = "env voice";
+    expect(fresh.ttsBackendInfo().options[1]).toMatchObject({ voice: "env voice", voiceLockedByEnv: true });
+  });
+  test.each(["", " ", " x", "x ", "x\ny", "x\ty", "x\u2028y", "x".repeat(129)])("rejects invalid id %j", (value) => expect(isTtsVoiceId(value)).toBe(false));
+  test("accepts names and ids", () => { expect(isTtsVoiceId("Adrian")).toBe(true); expect(isTtsVoiceId("a voice")).toBe(true); });
 });
