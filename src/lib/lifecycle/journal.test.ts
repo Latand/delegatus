@@ -82,6 +82,28 @@ test("the journal survives a restart and a replay appends nothing twice", () => 
   expect(next.appended.map((event) => event.seq)).toEqual([3]);
 });
 
+test("a failed spawn report remains deduplicated after its event leaves bounded history", () => {
+  sandbox();
+  const failure: LifecycleEventInput = {
+    key: "spawn:launch_retained:failed",
+    type: "spawn_failed",
+    at: "2026-10-14T17:00:00.000Z",
+    conversationId: "conversation_lost_agent",
+    summary: "launch failed",
+  };
+  appendLifecycleEvents([failure]);
+  appendLifecycleEvents(Array.from({ length: 10_001 }, (_, index) => ({
+    key: `delivery:${index}:expired`,
+    type: "delivery_expired" as const,
+    at: "2026-10-14T17:00:00.000Z",
+  })));
+
+  expect(readLifecycleJournal().events.some(event => event.id === lifecycleEventId(failure.key))).toBe(false);
+  const beforeReplay = readLifecycleJournal().lastSeq;
+  expect(appendLifecycleEvents([failure])).toEqual({ appended: [], skipped: 1 });
+  expect(readLifecycleJournal().lastSeq).toBe(beforeReplay);
+});
+
 test("events are queryable by project, pipeline, conversation and cursor", () => {
   sandbox();
   appendLifecycleEvents([

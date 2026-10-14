@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -49,7 +50,7 @@ interface RunResult {
  * production because the runner exports `test`, which would hand the child a
  * throw-away directory and answer a different question than the one asked.
  */
-function runEntryPoint(command: string[]): RunResult {
+function operatorEnvironment(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
   delete env[STATE_OWNER_ENV];
@@ -60,10 +61,14 @@ function runEntryPoint(command: string[]): RunResult {
   env.XDG_CONFIG_HOME = path.join(OPERATOR_HOME, ".config");
   env.TMPDIR = temporaryRoot();
   env.NODE_ENV = "production";
+  return env;
+}
+
+function runEntryPoint(command: string[]): RunResult {
   const result = Bun.spawnSync({
     cmd: [process.execPath, ...command],
     cwd: process.cwd(),
-    env,
+    env: operatorEnvironment(),
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
@@ -153,6 +158,50 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
       expect(result.output).toContain(marker);
     }, 60_000);
   }
+
+  test("the runtime host starts and keeps its journal in the operator's state directory", async () => {
+    /* A long-lived server, so it is started, observed listening and stopped
+       by its own handle. Its socket sits under the temp root because one
+       under this home is longer than `sun_path` allows; deployments stay off
+       so no stable port is bound, and the Viewer control URL is a closed
+       port. */
+    const socketPath = path.join(temporaryRoot(), "runtime-host.sock");
+    const child = Bun.spawn({
+      cmd: [process.execPath, "src/runtime-host/main.ts"],
+      cwd: process.cwd(),
+      env: { ...operatorEnvironment(), LLV_RUNTIME_HOST_SOCKET: socketPath, LLV_VIEWER_DEPLOYMENTS: "0", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stdout = new Response(child.stdout).text();
+    const stderr = new Response(child.stderr).text();
+    const connects = () => new Promise<boolean>((resolve) => {
+      const socket = net.createConnection(socketPath);
+      socket.once("connect", () => { socket.destroy(); resolve(true); });
+      socket.once("error", () => resolve(false));
+    });
+    let listening = false;
+    try {
+      const deadline = Date.now() + 30_000;
+      while (child.exitCode === null && Date.now() < deadline) {
+        if (await connects()) { listening = true; break; }
+        await Bun.sleep(50);
+      }
+    } finally {
+      if (child.exitCode === null) child.kill("SIGTERM");
+      if (!await Promise.race([child.exited.then(() => true), Bun.sleep(5_000).then(() => false)])) {
+        child.kill("SIGKILL");
+        await child.exited;
+      }
+    }
+    const result = { status: child.exitCode, stdout: await stdout, stderr: await stderr, output: "" };
+    result.output = result.stdout + result.stderr;
+
+    expectNoRefusal(result);
+    expect(listening, result.output).toBeTrue();
+    expect(fs.existsSync(path.join(STATE_DIRECTORY, "runtime-events.sqlite"))).toBeTrue();
+  }, 60_000);
 
   test("the launcher runs under the operator's home", () => {
     /* `--help` resolves no state today, so this case says only that the

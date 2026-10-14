@@ -2180,14 +2180,14 @@ test("an uncertain first-message admission stays lookup-only until its budget is
       const state = await runningHost.health();
       targetRegistry.setStructuredHostClaimed(key, {
         kind: "codex-app-server", endpoint: state.endpoint,
-        process: { pid: process.pid, startIdentity: "pre-admission-host" },
+        process: captureProcessIdentity(process.pid),
         eventCursor: state.eventCursor, protocolVersion: state.protocolVersion,
         writerClaimEpoch: claimEpoch, activeTurnRef: state.activeTurnRef,
         pendingAttention: state.pendingAttention, activeFlags: state.activeFlags,
       }, "idle", claimOwner, claimEpoch);
       return () => {};
     },
-    processIdentity: () => ({ pid: process.pid, startIdentity: "pre-admission-host" }),
+    processIdentity: () => captureProcessIdentity(process.pid),
   });
 
   expect(response).toMatchObject({ state: "path-pending", initialMessage: "queued", retrySafe: false });

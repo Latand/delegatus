@@ -336,6 +336,12 @@ const CLAUSE_CHECKS: Record<
 
   "turn-settled": (subject) => {
     if (subject.activeTurnRef !== null) return refuses(`turn ${subject.activeTurnRef} is in flight`);
+    if (!subject.turnBusy.determined && subject.structuredHostOperationId
+      && subject.structuredHostOperationReceiptState
+      && !TERMINAL_RECEIPT_STATES.has(subject.structuredHostOperationReceiptState)
+      && !subject.structuredHostOperationReceiptAbandoned) {
+      return refuses(`launch ${subject.structuredHostOperationId} has not settled (${subject.structuredHostOperationReceiptState}); no turn is recorded yet`);
+    }
     return mapDeterminable(subject.turnBusy, (busy) => (busy ? "the conversation turn has not settled" : null));
   },
 

@@ -463,3 +463,18 @@ test("a launch its own failure marked failed can still be dismissed on the card"
   const again = dismissUnstartedLaunch(result.tasks, "t1", { launchId: "launch-1", conversationId: "conversation_1" }, now);
   expect(again.ok && again.tasks).toBe(result.tasks);
 });
+
+
+test("a lost launch restores Inbox only when linking originally moved the task", () => {
+  const identity = { launchId: "restore-status-launch", conversationId: "conversation_fixture_restore", clientAttemptId: "restore-status-attempt" };
+  for (const status of ["assigned", "inbox"] as const) {
+    const admitted = ensureTaskMembership([task("restore-status", "fixture", { status })], {
+      project: "fixture", origin: { kind: "launch", key: identity.clientAttemptId }, identity, explicitTaskIds: ["restore-status"],
+    }, deps);
+    if (!admitted.ok) throw new Error(admitted.error);
+    expect(admitted.tasks[0]!.assignments[0]!.statusBeforeLink).toBe(status);
+    const failed = failUnstartedLaunchMembership(admitted.tasks, { ...identity, error: "host gone" }, now);
+    expect(failed.tasks[0]!.status).toBe(status);
+    expect(failed.tasks[0]!.assignments[0]!.state).toBe("failed");
+  }
+});
