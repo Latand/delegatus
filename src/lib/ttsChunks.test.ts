@@ -129,3 +129,13 @@ test("native sentence segmentation keeps titles and decimal numbers in the first
   const source = "Dr. Smith paid 3.14 dollars. He left. Another sentence.";
   expect(chunkSpeech(source, { backend: "soniox", language: "en" })[0]!.text).toBe("Dr. Smith paid 3.14 dollars.");
 });
+
+
+test.each(["Привіт світе. Це наступне речення. ", "Привет мир. Это следующее предложение. ", "Hello world. This is another sentence. "])("Fish Audio uses the bounded sentence policy for %s", (sentence) => {
+  const text = sentence.repeat(20);
+  const chunks = chunkSpeech(text, { backend: "fishaudio" });
+  expect([...chunks[0]!.text].length).toBeLessThanOrEqual(160);
+  expect(chunks.length).toBeGreaterThan(1);
+  expect(chunks.map((chunk) => text.slice(chunk.start, chunk.end))).toEqual(chunks.map((chunk) => chunk.text));
+  expect(chunks).toEqual(chunkSpeech(text, { backend: "soniox" }));
+});

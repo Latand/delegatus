@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 import { GET, POST } from "./route";
@@ -352,4 +352,105 @@ test("Soniox rolling admission rejects the 101st start and reopens after one min
     const next = await POST(request(JSON.stringify({ text: "Hello", mode: "soniox-pcm" })));
     expect(next.status).toBe(200); await next.arrayBuffer(); expect(calls).toBe(101);
   } finally { Date.now = originalNow; }
+});
+
+
+describe("Fish Audio route", () => {
+  const fixtureKey = "provider-fixture";
+  const names = ["FISH_AUDIO_API_KEY", "LLV_TTS_FISHAUDIO_MODEL", "LLV_TTS_FISHAUDIO_VOICE"];
+  const original = names.map((name) => process.env[name]);
+  beforeEach(() => {
+    process.env.LLV_TTS_BACKEND = "fishaudio";
+    process.env.XDG_CONFIG_HOME = "/nonexistent/fish-route-test";
+    setEnv(names[0]!, "provider-fixture");
+    setEnv(names[1]!, "s2.1-pro-free");
+    setEnv(names[2]!, undefined);
+  });
+  afterEach(() => { names.forEach((name, index) => setEnv(name, original[index])); mock.restore(); });
+  const pcmRequest = (text = "Привіт. Привет. Hello.", signal?: AbortSignal) => request(JSON.stringify({ text, mode: "pcm" }), signal);
+  const safe = (response: Response, body: string) => {
+    expect(body).not.toContain("provider-fixture");
+    expect(JSON.stringify([...response.headers])).not.toContain("provider-fixture");
+  };
+
+  test.each(["s2.1-pro-free", "s2.1-pro"])("sends the exact native request for %s without a language", async (model) => {
+    setEnv(names[1]!, model);
+    const upstream = mock(async () => new Response(new Uint8Array([1, 0]), { headers: { "content-type": "audio/pcm" } }));
+    globalThis.fetch = upstream as unknown as typeof fetch;
+    const response = await POST(pcmRequest());
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-tts-backend")).toBe("fishaudio");
+    expect(response.headers.get("x-tts-model")).toBe(model);
+    expect(await response.arrayBuffer()).toEqual(new Uint8Array([1, 0]).buffer);
+    const call = upstream.mock.calls[0] as unknown as [string, RequestInit];
+    expect(call[0]).toBe("https://api.fish.audio/v1/tts");
+    expect(call[1].headers).toEqual({ authorization: `Bearer ${fixtureKey}`, "content-type": "application/json", model });
+    expect(JSON.parse(String(call[1].body))).toEqual({ text: "Привіт. Привет. Hello.", format: "pcm", sample_rate: 24000, latency: "balanced" });
+    safe(response, "");
+  });
+
+  test("streams octet-stream PCM before EOF, sets an explicit voice and propagates stop", async () => {
+    setEnv(names[2]!, "configured-voice");
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    let cancelled = false;
+    let upstreamSignal: AbortSignal | undefined;
+    globalThis.fetch = mock(async (_url: unknown, init?: RequestInit) => {
+      upstreamSignal = init?.signal as AbortSignal;
+      expect(JSON.parse(String(init?.body)).reference_id).toBe("configured-voice");
+      return new Response(new ReadableStream({ start(c) { controller = c; c.enqueue(new Uint8Array([1, 0])); }, cancel() { cancelled = true; } }), { headers: { "content-type": "application/octet-stream" } });
+    }) as unknown as typeof fetch;
+    const abort = new AbortController();
+    const response = await POST(pcmRequest("Hello", abort.signal));
+    expect(response.headers.get("content-type")).toBe("audio/pcm");
+    const reader = response.body!.getReader();
+    expect((await reader.read()).value).toEqual(new Uint8Array([1, 0]));
+    controller.enqueue(new Uint8Array([2, 0]));
+    expect((await reader.read()).value).toEqual(new Uint8Array([2, 0]));
+    abort.abort();
+    expect(upstreamSignal?.aborted).toBe(true);
+    await reader.cancel();
+    expect(cancelled).toBe(true);
+  });
+
+  test("free expiry refuses before fetch and keeps the free model", async () => {
+    const now = spyOn(Date, "now").mockReturnValue(Date.parse("2026-12-01T00:00:00Z"));
+    const upstream = mock(async () => { throw new Error("must not call"); });
+    globalThis.fetch = upstream as unknown as typeof fetch;
+    try {
+      const response = await POST(pcmRequest());
+      expect(response.status).toBe(410);
+      const body = await response.text(); safe(response, body);
+      expect(JSON.parse(body).code).toBe("fishaudio-free-ended");
+      expect(upstream).not.toHaveBeenCalled();
+      expect(process.env.LLV_TTS_FISHAUDIO_MODEL).toBe("s2.1-pro-free");
+    } finally { now.mockRestore(); }
+  });
+
+  test.each([400, 401, 402, 403, 404, 429, 500])("maps HTTP %i without echoing upstream secrets", async (status) => {
+    globalThis.fetch = mock(async () => new Response("provider-fixture", { status })) as unknown as typeof fetch;
+    const response = await POST(pcmRequest());
+    const body = await response.text(); safe(response, body);
+    expect(response.status).toBe(status === 500 ? 502 : status);
+    expect(JSON.parse(body).code).toBe([402, 403, 404].includes(status) ? "fishaudio-free-refused" : undefined);
+    if (status === 429) expect(response.headers.get("retry-after")).toBe("1");
+  });
+  test("paid credit refusals have no free-model code", async () => {
+    setEnv(names[1]!, "s2.1-pro");
+    globalThis.fetch = mock(async () => new Response("provider-fixture", { status: 402 })) as unknown as typeof fetch;
+    const response = await POST(pcmRequest());
+    const body = await response.text(); safe(response, body);
+    expect(response.status).toBe(402); expect(JSON.parse(body).code).toBeUndefined();
+  });
+  test("missing key, stale modes and non-audio are clean refusals", async () => {
+    const upstream = mock(async () => new Response("provider-fixture", { headers: { "content-type": "application/json" } }));
+    globalThis.fetch = upstream as unknown as typeof fetch;
+    for (const mode of [undefined, "soniox-pcm"]) expect((await POST(request(JSON.stringify({ text: "Hello", mode })))).status).toBe(409);
+    expect(upstream).not.toHaveBeenCalled();
+    const invalid = await POST(pcmRequest());
+    expect(invalid.status).toBe(502); safe(invalid, await invalid.text());
+    setEnv(names[0]!, undefined);
+    const missing = await POST(pcmRequest());
+    expect(missing.status).toBe(503);
+    expect((await missing.json()).keyPath).toMatch(/fishaudio-api-key$/);
+  });
 });

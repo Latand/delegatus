@@ -8,7 +8,7 @@ import { appDirIn } from "./appDir.mjs";
 
 const FORWARDED_API_KEYS = new Set([
   "ANTHROPIC_API_KEY", "ELEVENLABS_API_KEY", "OPENAI_API_KEY",
-  "OPENROUTER_API_KEY", "SONIOX_API_KEY",
+  "OPENROUTER_API_KEY", "SONIOX_API_KEY", "FISH_AUDIO_API_KEY",
 ]);
 
 export function unsupportedApiCredentialNames(base) {

@@ -36,3 +36,8 @@ test("startup and container snapshots discard unapproved API keys", () => {
     `${serviceKey}=service-fixture`,
   ])).toEqual([`${serviceKey}=service-fixture`]);
 });
+
+test("Fish Audio credentials survive the provider allowlist", () => {
+  const name = ["FISH", "AUDIO", "API", "KEY"].join("_");
+  expect(withoutUnsupportedApiCredentials({ [name]: "provider-fixture" })[name]).toBe("provider-fixture");
+});

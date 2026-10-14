@@ -147,7 +147,7 @@ export function clearTtsCache(): void {
 
 /** A synthesis that the provider (or the route) refused, carrying its own words. */
 export class TtsRequestError extends Error {
-  constructor(readonly status: number, readonly provider: string | null) {
+  constructor(readonly status: number, readonly provider: string | null, readonly code?: string) {
     super(provider ?? `TTS request failed (${status})`);
     this.name = "TtsRequestError";
   }
@@ -175,12 +175,14 @@ function base64ToBlob(base64: string, type: string): Blob {
   return new Blob([bytes], { type });
 }
 
-async function providerError(response: Response): Promise<string | null> {
+async function providerError(response: Response): Promise<TtsRequestError> {
   try {
-    const body = (await response.json()) as { error?: unknown };
-    return typeof body.error === "string" && body.error ? body.error : null;
+    const body = (await response.json()) as { error?: unknown; code?: unknown };
+    return new TtsRequestError(response.status,
+      typeof body.error === "string" && body.error ? body.error : null,
+      typeof body.code === "string" ? body.code : undefined);
   } catch {
-    return null;
+    return new TtsRequestError(response.status, null);
   }
 }
 
@@ -222,7 +224,7 @@ export async function synthesizeChunk(
       if (signal.aborted) throw new DOMException("aborted", "AbortError");
       continue;
     }
-    if (!response.ok) throw new TtsRequestError(response.status, await providerError(response));
+    if (!response.ok) throw await providerError(response);
     const voice = billedVoice(response);
     const contentType = response.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {

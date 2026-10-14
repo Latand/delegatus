@@ -960,3 +960,90 @@ test("a change of the visible answer re-renders the header only, never a row's b
   expect(second!.dataset.ttsPhase).toBe("idle");
   root.unmount();
 });
+
+
+test("Fish Audio menu chooses a persisted model and states free and paid billing", async () => {
+  const fish = { id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeUntil: "2026-11-30", freeEnded: false, modelLockedByEnv: false };
+  let info = { backend: "fishaudio", lockedByEnv: false, options: [...backendInfo.options, fish] };
+  const posts: unknown[] = [];
+  globalThis.fetch = mock(async (_input: unknown, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      const body = JSON.parse(String(init.body)); posts.push(body);
+      info = { ...info, backend: body.backend, options: info.options.map((option) => option.id === "fishaudio" ? { ...option, model: body.model } : option) };
+    }
+    return Response.json(info);
+  }) as unknown as typeof fetch;
+  const view = await mount("Fish Audio choice");
+  try {
+    let menu = await openMenu(view);
+    expect(menu.textContent).toContain("Fish Audio");
+    expect(menu.textContent).toContain("free until Nov 30, 2026");
+    expect(menu.textContent).toContain("Next left click: free synthesis");
+    expect(menu.textContent).toContain("may use the text");
+    expect(view.button.title).toContain("Read aloud (free model)");
+    const group = menu.querySelector('[role="group"]')!;
+    const paid = group.querySelectorAll<HTMLButtonElement>("button")[1]!;
+    expect(paid.textContent).toContain("S2.1 Pro — paid");
+    flushSync(() => paid.click()); await drainUpdates();
+    expect(posts).toEqual([{ backend: "fishaudio", model: "s2.1-pro" }]);
+    menu = await openMenu(view);
+    expect(menu.querySelector('[role="group"] button[aria-checked="true"]')?.textContent).toContain("S2.1 Pro — paid");
+    expect(menu.textContent).toContain("Billed per UTF-8 byte");
+    expect(view.button.title).toContain("Read aloud (paid)");
+  } finally { flushSync(() => view.root.unmount()); view.host.remove(); }
+});
+
+test.each(["model", "provider"])("Fish Audio %s lock disables both model rows", async (lock) => {
+  const info = { backend: lock === "provider" ? "openai" : "fishaudio", lockedByEnv: lock === "provider", options: [...backendInfo.options, { id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, modelLockedByEnv: lock === "model" }] };
+  globalThis.fetch = mock(async () => Response.json(info)) as unknown as typeof fetch;
+  const view = await mount("Fish Audio lock");
+  try {
+    const menu = await openMenu(view);
+    const models = menu.querySelectorAll<HTMLButtonElement>('[role="group"] button');
+    expect(models.length).toBe(2); expect([...models].every((button) => button.disabled)).toBe(true);
+  } finally { flushSync(() => view.root.unmount()); view.host.remove(); }
+});
+
+test("expired free Fish Audio refuses in Ukrainian without synthesis", async () => {
+  const { setLocale } = await import("@/lib/i18n");
+  setLocale("uk");
+  const info = { backend: "fishaudio", lockedByEnv: false, options: [{ id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeEnded: true }] };
+  let posts = 0;
+  globalThis.fetch = mock(async (_input: unknown, init?: RequestInit) => { if (init?.method === "POST") posts++; return Response.json(info); }) as unknown as typeof fetch;
+  const view = await mount("Привіт світе");
+  try {
+    const menu = await openMenu(view);
+    expect(menu.textContent).toContain("безкоштовний період закінчився");
+    await speak(view);
+    expect(posts).toBe(0);
+    expect(alertNode()?.textContent).toContain("Безкоштовна модель Fish Audio закінчилася");
+    expect(alertNode()?.textContent).toContain("S2.1 Pro (платно)");
+  } finally { flushSync(() => view.root.unmount()); view.host.remove(); setLocale("en"); }
+});
+
+
+test("Fish Audio provider refusal explains the paid choice without retrying", async () => {
+  const prior = { context: globalThis.AudioContext, frame: globalThis.requestAnimationFrame, cancel: globalThis.cancelAnimationFrame };
+  class Context {
+    state = "running"; currentTime = 0;
+    async resume() {} async close() { this.state = "closed"; }
+  }
+  Object.assign(globalThis, { AudioContext: Context, requestAnimationFrame: () => 1, cancelAnimationFrame: () => undefined });
+  const info = { backend: "fishaudio", lockedByEnv: false, options: [{ id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeEnded: false }] };
+  let calls = 0;
+  globalThis.fetch = mock(async (input: unknown) => {
+    if (String(input) === "/api/tts/backend") return Response.json(info);
+    calls++; return Response.json({ error: "provider refused", code: "fishaudio-free-refused" }, { status: 403 });
+  }) as unknown as typeof fetch;
+  const view = await mount("Fish refusal");
+  try {
+    await openMenu(view); await speak(view);
+    expect(calls).toBe(1);
+    expect(alertNode()?.textContent).toContain("Fish Audio refused its free model (HTTP 403)");
+    expect(alertNode()?.textContent).toContain("S2.1 Pro (paid)");
+    expect(view.button.dataset.ttsPhase).toBe("idle");
+  } finally {
+    flushSync(() => view.root.unmount()); view.host.remove();
+    Object.assign(globalThis, { AudioContext: prior.context, requestAnimationFrame: prior.frame, cancelAnimationFrame: prior.cancel });
+  }
+});

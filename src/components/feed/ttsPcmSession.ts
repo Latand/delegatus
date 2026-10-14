@@ -52,7 +52,7 @@ export function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
  * is terminal because replaying it could repeat speech already rendered. */
 export async function requestPcm(text: string, signal: AbortSignal): Promise<{ body: ReadableStream<Uint8Array>; voice: VoiceKey }> {
   for (let attempt = 0; ; attempt++) {
-    const response = await fetch("/api/tts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, mode: "soniox-pcm" }), signal });
+    const response = await fetch("/api/tts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, mode: "pcm" }), signal });
     if (response.status === 429 && attempt < 3) {
       await response.body?.cancel();
       const raw = response.headers.get("retry-after");
@@ -62,11 +62,12 @@ export async function requestPcm(text: string, signal: AbortSignal): Promise<{ b
     }
     if (!response.ok) {
       let message: string | null = null;
-      try { const body = await response.json(); message = typeof body.error === "string" ? body.error : null; } catch { /* status remains useful */ }
-      throw new TtsRequestError(response.status, message);
+      let code: string | undefined;
+      try { const body = await response.json(); message = typeof body.error === "string" ? body.error : null; code = typeof body.code === "string" ? body.code : undefined; } catch { /* status remains useful */ }
+      throw new TtsRequestError(response.status, message, code);
     }
     const voice = billedVoice(response);
-    if (!voice || voice.id !== "soniox" || !voice.language || voice.encoding !== "pcm_s16le" || voice.sampleRate !== PCM_RATE || response.headers.get("x-tts-channels") !== "1" || response.headers.get("content-type")?.split(";")[0] !== "audio/pcm" || !response.body) {
+    if (!voice || (voice.id !== "soniox" && voice.id !== "fishaudio") || (voice.id === "soniox" && !voice.language) || voice.encoding !== "pcm_s16le" || voice.sampleRate !== PCM_RATE || response.headers.get("x-tts-channels") !== "1" || response.headers.get("content-type")?.split(";")[0] !== "audio/pcm" || !response.body) {
       await response.body?.cancel();
       throw new Error("invalid PCM geometry or voice identity");
     }
@@ -267,7 +268,12 @@ export class PcmSession {
       const chunk = this.options.chunks[current.chunk]!;
       const elapsed = this.options.chunks.slice(0, current.chunk).reduce((sum, chunk, index) => sum + (this.durations.get(index) ?? chunk.text.length / 15), 0) + current.sample / PCM_RATE + Math.max(0, now - current.start);
       const total = this.options.chunks.reduce((sum, value, index) => sum + (this.durations.get(index) ?? value.text.length / 15), 0);
-      this.options.onPosition({ chunkIndex: current.chunk, charIndex: chunk.start, elapsed, total });
+      const chunkDuration = this.durations.get(current.chunk) ?? chunk.text.length / 15;
+      const playedSeconds = current.sample / PCM_RATE + Math.max(0, now - current.start);
+      const charIndex = this.options.voice.id === "fishaudio"
+        ? chunk.start + Math.min(chunk.text.length - 1, Math.floor(playedSeconds / chunkDuration * chunk.text.length))
+        : chunk.start;
+      this.options.onPosition({ chunkIndex: current.chunk, charIndex, elapsed, total });
       this.pump();
     } else {
       this.setPhase("loading");

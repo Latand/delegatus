@@ -1,18 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, Fragment, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 import { Check, Loader2 } from "@/components/icons";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useOverlayEscape } from "@/hooks/useOverlayEscape";
 import { useLocale } from "@/lib/i18n";
+import { FISH_AUDIO_MODELS, fishAudioFreeDate, type FishAudioModel } from "@/lib/fishAudio";
 import { MAX_TTS_MESSAGE_LENGTH } from "@/lib/tts";
 
 import { subscribeTtsCache } from "./ttsSession";
 import { Z } from "@/components/layers";
 
-export type BackendId = "openai" | "elevenlabs" | "soniox";
+export type BackendId = "openai" | "elevenlabs" | "soniox" | "fishaudio";
 
 export interface BackendOption {
   id: BackendId;
@@ -22,6 +23,9 @@ export interface BackendOption {
   voice: string;
   cap: number;
   language?: string;
+  modelLockedByEnv?: boolean;
+  freeUntil?: string;
+  freeEnded?: boolean;
 }
 
 export interface BackendInfo {
@@ -220,7 +224,7 @@ export interface SpeakMenuProps {
       stop, and costs nothing either way. */
   active: boolean;
   tooLong: boolean;
-  onPick: (backend: BackendId) => Promise<boolean>;
+  onPick: (backend: BackendId, model?: FishAudioModel) => Promise<boolean>;
   onClose: (restoreFocus?: boolean) => void;
 }
 
@@ -235,7 +239,10 @@ export interface SpeakMenuProps {
  * under the next message in the feed.
  */
 export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, active, tooLong, onPick, onClose }: SpeakMenuProps) {
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
+  const date = fishAudioFreeDate(locale);
+  const freeModel = option.id === "fishaudio" && option.model === "s2.1-pro-free";
+  const isPcm = option.id === "soniox" || option.id === "fishaudio";
   const isMobile = useIsMobile();
   const rootRef = useRef<HTMLDivElement>(null);
   const { style } = useAnchoredBox(anchorRef, rootRef);
@@ -271,11 +278,11 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
     (active ?? items[0] ?? root)?.focus();
   }, []);
 
-  const pick = async (backend: BackendId) => {
-    if (info.lockedByEnv || saving || backend === info.backend) return;
+  const pick = async (backend: BackendId, model?: FishAudioModel) => {
+    if (saving || (info.lockedByEnv && (model === undefined || backend !== info.backend)) || (model && info.options.find((candidate) => candidate.id === backend)?.modelLockedByEnv) || (backend === info.backend && (model === undefined || model === option.model))) return;
     setSaving(backend);
     setError(null);
-    const ok = await onPick(backend);
+    const ok = await onPick(backend, model);
     setSaving(null);
     if (ok) onClose(true);
     else setError(t("tts.saveFailed"));
@@ -299,13 +306,13 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
           removed for. Otherwise it is a replay or a purchase, asked of the
           cache on every render this menu is subscribed to. */}
       <div className={`px-2 text-[11.5px] font-semibold ${active ? "text-secondary" : freeReplay() ? "text-success" : "text-primary"}`}>
-        {active ? t("tts.nextStop") : freeReplay() ? t("tts.nextFree") : t("tts.nextPaid")}
+        {active ? t("tts.nextStop") : freeReplay() ? t("tts.nextFree") : freeModel ? t(option.freeEnded ? "tts.fishFreeEnded" : "tts.nextFreeModel", { date }) : t("tts.nextPaid")}
       </div>
       <div className="px-2 pt-1 text-[10.5px] text-muted">{option.id} · {option.model} · {option.voice}{option.language ? ` · ${option.language}` : ""}</div>
       <div className="px-2 text-[10.5px] text-muted">{t("tts.characters", { count: chars.toLocaleString() })}</div>
-      <div className="px-2 pt-1 text-[10.5px] text-primary">{t("tts.billing", { provider: option.id })}</div>
+      <div className="px-2 pt-1 text-[10.5px] text-primary">{option.id === "fishaudio" ? t(freeModel ? "tts.billingFree" : "tts.billingBytes", { date }) : t("tts.billing", { provider: option.id })}</div>
       <div className="px-2 text-[10.5px] text-primary">{t("tts.disclosure")}</div>
-      <div className="px-2 pb-1 text-[10.5px] text-muted">{t(option.id === "soniox" ? "tts.batchSeekHint" : "tts.seekHint")}</div>
+      <div className="px-2 pb-1 text-[10.5px] text-muted">{t(option.id === "fishaudio" ? "tts.fishSeekHint" : isPcm ? "tts.batchSeekHint" : "tts.seekHint", { provider: option.id === "fishaudio" ? "Fish Audio" : "Soniox" })}</div>
       {tooLong ? (
         <div className="px-2 pb-1 text-[10.5px] font-semibold text-danger">
           {t("tts.tooLong", { count: MAX_TTS_MESSAGE_LENGTH.toLocaleString() })}
@@ -321,40 +328,54 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
         {info.options.map((candidate) => {
           const active = candidate.id === info.backend;
           return (
-            <button
-              key={candidate.id}
-              type="button"
-              role="menuitemradio"
-              aria-checked={active}
-              disabled={info.lockedByEnv || saving !== null}
-              onClick={() => void pick(candidate.id)}
-              className={`flex w-full items-start gap-2 rounded-[9px] px-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${
-                isMobile ? "min-h-11 py-2" : "py-1.5"
-              } ${active ? "bg-accent/10" : "hover:bg-canvas"}`}
-            >
-              <span className="mt-[3px] flex h-3.5 w-3.5 shrink-0 items-center justify-center">
-                {saving === candidate.id ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" aria-hidden />
-                ) : active ? (
-                  <Check className="h-3.5 w-3.5 text-accent" aria-hidden />
-                ) : (
-                  <span
-                    aria-hidden
-                    className="h-2 w-2 rounded-full"
-                    style={{ backgroundColor: candidate.available ? "var(--color-success)" : "var(--color-warning)" }}
-                  />
-                )}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="flex items-center gap-1.5 text-[12px] font-semibold text-primary">
-                  {candidate.id}
-                  {!candidate.available ? (
-                    <span className="rounded-full bg-warning-soft px-1.5 py-px text-[9.5px] font-bold text-warning">{t("tts.noKey")}</span>
-                  ) : null}
+            <Fragment key={candidate.id}>
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={active}
+                disabled={info.lockedByEnv || saving !== null}
+                onClick={() => void pick(candidate.id)}
+                className={`flex w-full items-start gap-2 rounded-[9px] px-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${
+                  isMobile ? "min-h-11 py-2" : "py-1.5"
+                } ${active ? "bg-accent/10" : "hover:bg-canvas"}`}
+              >
+                <span className="mt-[3px] flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                  {saving === candidate.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-muted" aria-hidden />
+                  ) : active ? (
+                    <Check className="h-3.5 w-3.5 text-accent" aria-hidden />
+                  ) : (
+                    <span
+                      aria-hidden
+                      className="h-2 w-2 rounded-full"
+                      style={{ backgroundColor: candidate.available ? "var(--color-success)" : "var(--color-warning)" }}
+                    />
+                  )}
                 </span>
-                <span className="block text-[10.5px] leading-snug text-muted">{candidate.model} · {candidate.voice}</span>
-              </span>
-            </button>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-1.5 text-[12px] font-semibold text-primary">
+                    {candidate.id === "fishaudio" ? "Fish Audio" : candidate.id}
+                    {!candidate.available ? (
+                      <span className="rounded-full bg-warning-soft px-1.5 py-px text-[9.5px] font-bold text-warning">{t("tts.noKey")}</span>
+                    ) : null}
+                  </span>
+                  <span className="block text-[10.5px] leading-snug text-muted">{candidate.model} · {candidate.voice}</span>
+                </span>
+              </button>
+              {candidate.id === "fishaudio" ? (
+                <div role="group" aria-label={t("tts.fishModelGroup")} className="ml-5">
+                  {FISH_AUDIO_MODELS.map((model) => (
+                    <button key={model} type="button" role="menuitemradio" aria-checked={info.backend === "fishaudio" && candidate.model === model}
+                      disabled={saving !== null || candidate.modelLockedByEnv || (info.lockedByEnv && info.backend !== "fishaudio")}
+                      onClick={() => void pick("fishaudio", model)}
+                      className={`block min-h-11 w-full rounded-[9px] px-2 py-2 text-left text-[11.5px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${info.backend === "fishaudio" && candidate.model === model ? "bg-accent/10" : "hover:bg-canvas"} ${model === "s2.1-pro-free" && candidate.freeEnded ? "text-danger" : "text-primary"}`}>
+                      {t(model === "s2.1-pro" ? "tts.fishModelPaid" : candidate.freeEnded ? "tts.fishModelFreeEnded" : "tts.fishModelFree", { date })}
+                    </button>
+                  ))}
+                  {candidate.modelLockedByEnv ? <div className="px-2 text-[10.5px] text-danger">{t("tts.fishModelLocked")}</div> : null}
+                </div>
+              ) : null}
+            </Fragment>
           );
         })}
       </div>

@@ -860,3 +860,81 @@ export async function capturePrototypeQuestions(page: Page, phone: boolean) {
       readonly: options.every(o => (o as HTMLButtonElement).disabled), skipped: Boolean(frame.querySelector("[data-prototype-skipped]")) };
   }, phone);
 }
+
+
+/** Fish Audio model choices in the real message controls, without provider calls. */
+export async function captureFishAudioMenu(browser: Browser, mobile: boolean): Promise<void> {
+  const { expect } = await import("bun:test");
+  const os = await import("node:os");
+  const out = path.join(os.homedir(), "Pictures/delegatus-review/fish-audio");
+  fs.mkdirSync(out, { recursive: true });
+  const fish = { id: "fishaudio", available: true, keyPath: "$CONFIG/fishaudio-api-key", model: "s2.1-pro-free", voice: "default", cap: 4000, freeUntil: "2026-11-30", freeEnded: false };
+  const speech = { backend: "fishaudio", lockedByEnv: false, options: [
+    { id: "openai", available: false, keyPath: "$CONFIG/openai-api-key", model: "gpt-4o-mini-tts", voice: "alloy", cap: 4000 },
+    { id: "elevenlabs", available: false, keyPath: "$CONFIG/elevenlabs-api-key", model: "eleven_multilingual_v2", voice: "default", cap: 4000 },
+    { id: "soniox", available: false, keyPath: "$CONFIG/soniox-api-key", model: "tts-rt-v2", voice: "Adrian", cap: 4000 }, fish,
+  ] };
+  const server = await serveEvidenceFixture(path.resolve(".artifacts/fish-audio", mobile ? "phone" : "desktop"), mobile ? "src/components/mobile/issue1671Evidence.fixture.tsx" : undefined, { "/api/tts/backend": speech });
+  const readings: unknown[] = [];
+  try {
+    for (const locale of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const width of mobile ? [320, 390] : [1440]) {
+      const height = width === 320 ? 640 : mobile ? 844 : 900;
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?${mobile ? "fast-tts=1&runtime=structured#c=conversation_running" : "scenario=fast-tts#c=conversation_export-impl"}`, { width, height }, scheme, locale, "reduce", mobile);
+      try {
+        const current = structuredClone(speech);
+        const saves: unknown[] = [];
+        await page.route("**/api/tts/backend", async (route) => {
+          if (route.request().method() === "POST") {
+            const body = route.request().postDataJSON(); saves.push(body);
+            current.options = current.options.map((option) => option.id === "fishaudio" ? { ...option, model: body.model } : option);
+          }
+          await route.fulfill({ json: current });
+        });
+        const control = page.locator(mobile ? '[data-mobile-message-actions] [data-tts-trigger]' : '[data-kanban-reader="conversation_export-impl"] [data-tts-header]').last();
+        await control.waitFor({ timeout: 20000 });
+        // The first navigation may already have read the fixture response; the menu refresh is authoritative.
+        await control.click({ button: "right" });
+        const menu = page.locator("[data-tts-menu]"); await menu.waitFor();
+        const group = menu.getByRole("group");
+        expect(await group.getByRole("menuitemradio").count()).toBe(2);
+        expect(await menu.getByRole("menuitemradio").count()).toBe(6);
+        expect(await menu.textContent()).toContain(locale === "en" ? "free until" : "безкоштовно до");
+        const prefix = `${mobile ? "phone" : "desktop"}-${width}-${locale}-${scheme}`;
+        const readGeometry = () => menu.evaluate((node) => {
+          const menu = node.getBoundingClientRect();
+          const controls = [...node.querySelectorAll<HTMLButtonElement>("button")].map((button) => { const box = button.getBoundingClientRect(); return { label: button.textContent?.trim(), left: box.left, right: box.right, top: box.top, bottom: box.bottom, height: box.height, width: box.width }; });
+          return { left: menu.left, right: menu.right, top: menu.top, bottom: menu.bottom, background: getComputedStyle(node).backgroundColor, sideways: node.scrollWidth > node.clientWidth, controls };
+        });
+        for (const state of ["free", "paid", "ended"] as const) {
+          const models = group.getByRole("menuitemradio");
+          if (state === "paid") {
+            await models.nth(1).click(); await menu.waitFor({ state: "hidden" });
+            expect(saves).toEqual([{ backend: "fishaudio", model: "s2.1-pro" }]);
+            await control.click({ button: "right" }); await menu.waitFor();
+            expect(await models.nth(1).getAttribute("aria-checked")).toBe("true");
+            expect(await menu.textContent()).toContain(locale === "en" ? "UTF-8 byte" : "байт UTF-8");
+          }
+          if (state === "ended") {
+            current.options = current.options.map((option) => option.id === "fishaudio" ? { ...option, model: "s2.1-pro-free", freeEnded: true } : option);
+            await page.keyboard.press("Escape"); await control.click({ button: "right" }); await menu.waitFor();
+            await page.waitForFunction((label) => document.querySelector("[data-tts-menu]")?.textContent?.includes(label), locale === "en" ? "free period ended" : "безкоштовний період закінчився");
+          }
+          await models.nth(1).scrollIntoViewIfNeeded();
+          const geometry = await readGeometry();
+          expect(geometry.left).toBeGreaterThanOrEqual(0); expect(geometry.right).toBeLessThanOrEqual(width);
+          expect(geometry.top).toBeGreaterThanOrEqual(0); expect(geometry.bottom).toBeLessThanOrEqual(height);
+          expect(geometry.sideways).toBe(false); expect(geometry.background).not.toBe("rgba(0, 0, 0, 0)");
+          const modelBoxes = geometry.controls.slice(-2);
+          expect(modelBoxes[0]!.bottom).toBeLessThanOrEqual(modelBoxes[1]!.top);
+          expect(modelBoxes[1]!.bottom).toBeLessThanOrEqual(geometry.bottom);
+          if (mobile) for (const box of modelBoxes) { expect(box.height).toBeGreaterThanOrEqual(44); expect(box.width).toBeGreaterThanOrEqual(44); }
+          await page.screenshot({ path: path.join(out, `${prefix}-${state}.png`) });
+          readings.push({ width, height, locale, scheme, state, geometry });
+        }
+        expect(pageErrors).toEqual([]);
+      } finally { await context.close(); }
+    }
+    fs.mkdirSync("evidence/fish-audio", { recursive: true });
+    fs.writeFileSync(`evidence/fish-audio/${mobile ? "phone" : "desktop"}.json`, JSON.stringify({ driver: mobile ? "src/components/mobile/issue1671Evidence.browser.test.tsx" : "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
+  } finally { server.stop(); }
+}

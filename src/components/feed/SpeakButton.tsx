@@ -5,6 +5,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncE
 
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { translate, useLocale } from "@/lib/i18n";
+import { fishAudioFreeDate, fishAudioFreeEnded, type FishAudioModel } from "@/lib/fishAudio";
 import { MAX_TTS_MESSAGE_LENGTH } from "@/lib/tts";
 import { wordSpanAt } from "@/lib/ttsAlignment";
 import { chunkSpeech } from "@/lib/ttsChunks";
@@ -141,7 +142,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
   };
   const frozenText = useRef("");
   const frozenId = useRef<string | null>(null);
-  const chunks = useMemo(() => chunkSpeech(text, info?.backend === "soniox" ? { backend: "soniox", language: info.options.find((o) => o.id === "soniox")?.language } : undefined), [text, info]);
+  const chunks = useMemo(() => chunkSpeech(text, info?.backend === "soniox" || info?.backend === "fishaudio" ? { backend: info.backend, language: info.options.find((o) => o.id === info.backend)?.language } : undefined), [text, info]);
   const generation = useRef(0);
   const mounted = useRef(true);
   const ownedStop = useRef<(() => void) | null>(null);
@@ -187,7 +188,10 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
   if (!text && !header && phase === "idle") return null;
   const option = info.options.find((candidate) => candidate.id === info.backend);
   if (!option) return null;
-  const fast = option.id === "soniox";
+  const fast = option.id === "soniox" || option.id === "fishaudio";
+  const freeModel = option.id === "fishaudio" && option.model === "s2.1-pro-free";
+  const freeEnded = freeModel && (option.freeEnded || fishAudioFreeEnded());
+  const freeDate = fishAudioFreeDate(locale);
   const requestedVoice = fast ? pcmVoice(option) : option;
   const key = voiceKey(requestedVoice, text);
   /* "Replay aloud (free)" has to be TRUE when it is shown, so it takes both: a
@@ -288,7 +292,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
       },
       onPosition: ({ chunkIndex, charIndex, elapsed, total }: { chunkIndex: number; charIndex: number; elapsed: number; total: number }) => {
         refreshRoots();
-        const word = fast ? chunks[chunkIndex] : wordSpanAt(text, charIndex);
+        const word = fast && option.id === "soniox" ? chunks[chunkIndex] : wordSpanAt(text, charIndex);
         if (word) karaoke?.highlight(word.start, word.end);
         if (alive()) setProgress({ elapsed, total, chunk: chunkIndex + 1, chunks: chunks.length });
       },
@@ -297,7 +301,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
         /* The provider's own words when it refused; otherwise the failure is
            the browser's (blocked or dead audio) or the network's. */
         const message = cause instanceof TtsRequestError
-          ? cause.provider ?? t("tts.requestError", { status: cause.status })
+          ? cause.code === "fishaudio-free-ended" ? t("tts.fishFreeEnded", { date: freeDate }) : cause.code === "fishaudio-free-refused" ? t("tts.fishFreeRefused", { status: cause.status }) : cause.provider ?? t("tts.requestError", { status: cause.status })
           : cause instanceof TtsPlaybackError
             ? t("tts.playError")
             : t("tts.requestFailed");
@@ -369,6 +373,10 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
       refuse(t("tts.missingKey", { provider: option.id, path: option.keyPath }));
       return;
     }
+    if (freeEnded && !freeReplay()) {
+      refuse(t("tts.fishFreeEnded", { date: freeDate }));
+      return;
+    }
     /* The tooltip promising a free replay is only as fresh as the last render,
        and another card's long answer can evict these chunks in between. Asked
        once more here: the audio still starts on this click, but a replay that
@@ -405,13 +413,13 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
       .catch(() => { if (mounted.current) setError(t("tts.configError")); });
   };
 
-  const pickBackend = async (backend: BackendId): Promise<boolean> => {
-    if (info.lockedByEnv) return false;
+  const pickBackend = async (backend: BackendId, model?: FishAudioModel): Promise<boolean> => {
+    if (info.lockedByEnv && (model === undefined || backend !== info.backend)) return false;
     try {
       const response = await fetch("/api/tts/backend", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ backend }),
+        body: JSON.stringify({ backend, ...(model ? { model } : {}) }),
       });
       if (!response.ok) return false;
       const value = (await response.json()) as BackendInfo;
@@ -437,7 +445,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
       ? t("tts.tooLong", { count: MAX_TTS_MESSAGE_LENGTH.toLocaleString() })
       : !option.available
         ? t("tts.missingKey", { provider: option.id, path: option.keyPath })
-        : t("tts.triggerTitle", { action: replayable ? t("tts.replayFree") : t("tts.readPaid") });
+        : freeEnded && !replayable ? t("tts.fishFreeEnded", { date: freeDate }) : t("tts.triggerTitle", { action: replayable ? t("tts.replayFree") : freeModel ? t("tts.readFreeModel") : t("tts.readPaid") });
   const title = header ? `${actionTitle} · ${t("tts.loadedSnapshot")}${text || snapshot?.activeText ? ` · ${(active ? snapshot?.activeText ?? text : text).slice(0, 100)}` : ""}` : actionTitle;
   return (
     <span className="relative inline-flex shrink-0">

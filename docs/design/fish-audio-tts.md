@@ -296,3 +296,36 @@ Validation in this stage:
 - Read the source at `f70bf716b`.
 - Ran no tests, because no product code changed.
 - Made no paid provider calls.
+
+
+## 10. Implementation verification (2026-10-14)
+
+The adapter uses the native PCM request from §3. Model choices and both key
+allowlists are implemented. `pcm` is the shared client mode; the earlier
+`soniox-pcm` mode remains valid for Soniox. A Fish Audio request without the
+shared mode is refused so a stale mp3 player refreshes its configuration.
+The Fish Audio PCM path estimates word positions from the chunk duration;
+Soniox retains its existing sentence highlighting. Both transport paths retain
+structured refusal codes, including a stale tab using the earlier mp3 player.
+
+Mocked-provider tests exercise both model headers, the exact request body,
+automatic language handling for Ukrainian, Russian and English input,
+configured reference voices, pre-EOF delivery, cancellation, the UTC expiry,
+free-model refusals, rate-limit responses and credential non-disclosure.
+Configuration and DOM tests cover persistence, environment locks, invalid
+models, missing keys, free and paid billing copy and Ukrainian error text.
+The production route and PCM session are exercised together with a synthetic
+upstream for both Soniox and Fish Audio, including first audio before EOF,
+bounded prefetch, contiguous scheduling, cached seeking and immediate stop.
+
+The existing desktop and phone browser drivers render the free, paid and ended
+menus in English and Ukrainian, in light and dark themes. Measurements cover
+1440 px desktop and 390 px / 320 px phones, model selection, whole model buttons,
+viewport containment and opaque backgrounds. The committed readings are
+`evidence/fish-audio/desktop.json` and `evidence/fish-audio/phone.json`.
+
+**Live synthesis was not exercised.** The implementation stage found neither
+an environment key nor a key file. The official-source observations in §1 are
+the external evidence; provider audio Content-Type, byte order, streaming
+latency, default voice quality and actual free-period withdrawal behavior
+remain unverified with Fish Audio. No paid provider call was made.
