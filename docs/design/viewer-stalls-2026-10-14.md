@@ -740,8 +740,12 @@ process passes. The final checks also include full `tsc --noEmit`, the productio
 build, and `scripts/verify-viewer-runtime.ts` under Bun 1.4.0: 25/25 compiled
 server modules load and a private port-0 Viewer serves `GET /` with status 200.
 The production build reports the existing TTS CSS pseudo-element warning.
-Publication privacy is checked against merge base `eb8882900` with the committed
-known-value fingerprints. The pull request's required hosted checks, including
+Publication privacy passed against merge base `eb8882900` with the committed
+known-value fingerprints. The pre-push comparator found zero new failures and
+matched four existing failures on that base: one in
+`src/lib/monitor/seatTickController.agenda.test.ts` and three in
+`src/lib/monitor/seatTickController.policy.test.ts`. Its Linux head was green;
+full types and changed-file lint also passed. The pull request's required hosted checks, including
 `runtime-gate`, must pass before promotion.
 
 ### Left for later
