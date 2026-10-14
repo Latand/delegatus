@@ -23,7 +23,8 @@ Read these three pages in order the first time.
 Pages marked *(planned)* are not written yet.
 
 - [Getting started](getting-started.md): requirements, the install paths, the
-  setup guide, the machine check, the first agent and the first pipeline.
+  setup guide, the machine check, the first agent, preparing a project and
+  the engines for pipelines, and the first pipeline.
 - [Core concepts](concepts.md): one short section per idea, then how they
   connect.
 - [Everyday workflows](workflows.md): the things an operator does every day.
