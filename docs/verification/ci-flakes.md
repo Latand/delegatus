@@ -84,7 +84,7 @@ label, file, name, count=sys.argv[1:]
 count=int(count)
 env=os.environ.copy()
 env.update(HOME=str(root/'home'), XDG_CONFIG_HOME=str(root/'config'), TMPDIR=str(root/'tmp'), LLV_STATE_DIR=str(root/'state'), LLV_CODEX_BINARY=os.environ.get('FLAKE_CODEX_BINARY', str(root/'codex154/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex')))
-# Keep load in the owned scope, on the same CPU as each test and its children.
+# Keep load in the owned scope; preloads select each tested process's CPU.
 cpu=min(os.sched_getaffinity(0)); os.sched_setaffinity(0,{cpu})
 load=subprocess.Popen(['python3','-c','while True: pass'],env=env)
 results=[]
