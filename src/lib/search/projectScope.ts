@@ -35,6 +35,10 @@ export function resolveProjectScope(requested: string, indexed: ReadonlySet<stri
     const selected = new Set([...keys].filter(key => known.has(key)));
     return selected.size ? [[name, selected] as const] : [];
   }));
+  directory.encodedDirectories = new Map([...directory.encodedDirectories].flatMap(([name, keys]) => {
+    const selected = new Set([...keys].filter(key => known.has(key)));
+    return selected.size ? [[name, selected] as const] : [];
+  }));
   let resolved: string | undefined;
   try { resolved = known.get(resolveNamedProject(requested, directory)); }
   catch (error) {

@@ -17,6 +17,7 @@ export type NamedProjectSources = Sources;
 export interface NamedProjectDirectory {
   names: Map<string, Set<string>>;
   identities: Map<string, Set<string>>;
+  encodedDirectories: Map<string, Set<string>>;
   labels: Map<string, string>;
   active: Set<string>;
   suggestions: Set<string>;
@@ -73,6 +74,7 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
   for (const seat of authorized) if (seat.project) active.add(canonical(seat.project));
   const names = new Map<string, Set<string>>();
   const identities = new Map<string, Set<string>>();
+  const encodedDirectories = new Map<string, Set<string>>();
   const labels = new Map<string, string>();
   const index = (name: string | undefined | null, key: string) => {
     const folded = name?.trim().toLowerCase();
@@ -109,7 +111,10 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
   for (const key of extraKeys) add(key);
   for (const row of last?.projectCatalog ?? []) if (row.projectRoot) {
     index(path.basename(row.projectRoot), row.project);
-    identify(normalizeProjectName(path.resolve(row.projectRoot)), row.project);
+    const encoded = normalizeProjectName(path.resolve(row.projectRoot));
+    const projects = encodedDirectories.get(encoded) ?? new Set<string>();
+    projects.add(canonical(row.project));
+    encodedDirectories.set(encoded, projects);
   }
   for (const [key, remote] of Object.entries(recordedProjectRemotes())) {
     if (!labels.has(canonical(key))) continue;
@@ -126,7 +131,7 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
     identities.set(normalized, keys);
   }
   const suggestions = new Set([...active, ...Object.keys(aliases.displayNames).map(canonical), ...Object.values(aliases.aliases).map(canonical)]);
-  return { names, identities, labels, active, suggestions, canonical };
+  return { names, identities, encodedDirectories, labels, active, suggestions, canonical };
 }
 
 function normalizeProjectName(value: string): string {
@@ -143,11 +148,12 @@ export function resolveNamedProject(named: string, directory: NamedProjectDirect
   const requested = named.trim();
   const folded = requested.toLowerCase();
   const normalized = normalizeProjectName(folded);
+  const normalizedNames = normalized ? [...directory.names].filter(([name]) => normalizeProjectName(name) === normalized).flatMap(([, projects]) => [...projects]) : [];
   const identity = [...new Set([
     ...(directory.identities.get(folded) ?? []),
-    ...(normalized ? directory.identities.get(normalized) ?? [] : []),
+    ...(!normalizedNames.length && normalized ? directory.encodedDirectories.get(normalized) ?? [] : []),
   ])].sort();
-  const namedCandidates = [...(directory.names.get(folded) ?? [])];
+  const namedCandidates = [...new Set([...(directory.names.get(folded) ?? []), ...normalizedNames])];
   const identityCollision = identity.length > 0 && namedCandidates.some(project => !identity.includes(project));
   const seatedNames = namedCandidates.filter(project => directory.active.has(project));
   if (identity.length === 1 && (!requireActiveSeat || directory.active.has(identity[0]!))
