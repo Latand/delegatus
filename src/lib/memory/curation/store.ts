@@ -39,11 +39,15 @@ function collection(create = false) {
   cache.set(file, held); return held;
 }
 export const passIsLive = (pass: CuratorPass | null) => !!pass && ["claimed", "launching", "running"].includes(pass.state);
-export function readPass(id: string): CuratorPass | null {
+function passMetadata(id: string): CuratorPass | null {
   const row = collection()?.get(`r:${id}`);
-  if (row?.kind !== "pass") return null;
+  return row?.kind === "pass" ? row : null;
+}
+export function readPass(id: string): CuratorPass | null {
+  const row = passMetadata(id);
+  if (!row) return null;
   const calls = new Map<string, CuratorPass["counts"]>();
-  for (const scope of roleMemoryCollection()?.snapshot() ?? []) if (scope.kind === "scope") {
+  for (const scope of roleMemoryCollection()?.loadReadonly() ?? []) if (scope.kind === "scope") {
     for (const h of scope.history) if (h.pass === id && h.counts) calls.set(h.at, h.counts);
   }
   if (!calls.size) return row;
@@ -53,19 +57,20 @@ export function readPass(id: string): CuratorPass | null {
 }
 function projectRows(project: string): ProjectRow[] {
   const canonical = canonicalProject(project);
-  return collection()?.snapshot().flatMap(row => row.kind === "project" && canonicalProject(row.project) === canonical ? [row] : []) ?? [];
+  return collection()?.loadReadonly().flatMap(row => row.kind === "project" && canonicalProject(row.project) === canonical ? [row] : []) ?? [];
 }
 function combineProjectRows(project: string, rows: readonly ProjectRow[]): ProjectRow | null {
   if (!rows.length) return null;
+  const metadata = new Map(rows.flatMap(row => row.passes).map(id => [id, passMetadata(id)]));
   const passes = [...new Set(rows.flatMap(row => row.passes))].sort((a, b) => {
-    const left = readPass(a)?.claimedAt ?? "", right = readPass(b)?.claimedAt ?? "";
+    const left = metadata.get(a)?.claimedAt ?? "", right = metadata.get(b)?.claimedAt ?? "";
     return left.localeCompare(right) || a.localeCompare(b);
   });
   const claimRevisions: Record<string, number> = {};
   for (const row of rows) for (const [scope, revision] of Object.entries(row.claimRevisions ?? {})) {
     claimRevisions[scope] = Math.max(claimRevisions[scope] ?? 0, revision);
   }
-  const current = rows.map(row => row.current).find(id => id && passIsLive(readPass(id))) ?? null;
+  const current = rows.map(row => row.current).find(id => id && passIsLive(metadata.get(id) ?? passMetadata(id))) ?? null;
   return {
     kind: "project", project: canonicalProject(project), current,
     lastClaimAt: rows.map(row => row.lastClaimAt).sort().at(-1)!,
@@ -75,7 +80,11 @@ function combineProjectRows(project: string, rows: readonly ProjectRow[]): Proje
   };
 }
 function projectRow(project: string): ProjectRow | null { return combineProjectRows(project, projectRows(project)); }
-export function currentPass(project: string) { const id = projectRow(project)?.current; return id ? readPass(id) : null; }
+export function currentPass(project: string) {
+  // Reconciliation needs only the live selection; retained passes need no sort.
+  const id = projectRows(project).map(row => row.current).find(id => id && passIsLive(passMetadata(id)));
+  return id ? readPass(id) : null;
+}
 export function machinePass() { const row = collection()?.get("machine"); return row?.kind === "machine" && row.current ? readPass(row.current) : null; }
 export function passForConversation(id: string): CuratorPass | null { const row = collection()?.get(`c:${id}`); return row?.kind === "conversation" ? readPass(row.pass) : null; }
 export function passScopes(project: string): string[] {

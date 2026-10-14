@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, spyOn } from "bun:test";
 
 import { HOT_STATE_RELEASE_REVISION_ENV, publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { stateImportIncidents } from "@/lib/state/legacyImport";
@@ -19,6 +19,7 @@ import {
   mutateTasksFile,
 } from "./store";
 import type { BoardTask } from "./types";
+import { taskRevision } from "./revision";
 
 /* #1870 slice 1: the task store runs on the `tasks` collection of the
    `state.sqlite` beside its legacy path. Every case uses its own mkdtemp
@@ -56,6 +57,65 @@ function writeLegacy(file: string, body: unknown): string {
   fs.writeFileSync(file, text);
   return text;
 }
+
+test("a warmed no-write task callback skips task fingerprints and preserves nested edits and receipts", () => {
+  const { file } = sandbox();
+  writeLegacy(file, { tasks: Array.from({ length: 300 }, (_, i) => task(`retained-${i}`, {
+    details: "retained detail ".repeat(300),
+    assignments: [{ path: `/sessions/retained-${i}.jsonl`, panePid: null, state: "delivered", error: null, at: "2026-09-01T00:00:00.000Z" }],
+  })), recentCreates: [{ clientRequestId: "kept-receipt", taskId: "retained-0" }], migrations: { kept: "2026-09-01T00:00:00.000Z" } });
+  mutateTasks(() => ({ tasks: undefined, result: null }), file);
+  const before = loadTasksFile(file);
+  const stringify = JSON.stringify;
+  const clone = structuredClone;
+  let fingerprints = 0;
+  let copiedTasks = 0;
+  const copies = spyOn(globalThis, "structuredClone").mockImplementation(value => {
+    if (value && typeof value === "object" && "assignments" in value) copiedTasks++;
+    return clone(value);
+  });
+  const calls = spyOn(JSON, "stringify").mockImplementation((...args) => {
+    if (new Error().stack?.includes("taskFingerprint")) fingerprints++;
+    return Reflect.apply(stringify, JSON, args) as string;
+  });
+  try {
+    expect(mutateTasks(tasks => {
+      tasks[0]!.assignments[0]!.error = "discarded";
+      return { tasks: undefined, result: "no write" };
+    }, file)).toBe("no write");
+    expect(fingerprints).toBe(0);
+    expect(copiedTasks).toBe(1);
+  } finally { calls.mockRestore(); copies.mockRestore(); }
+  expect(loadTasksFile(file)).toEqual(before);
+  mutateTasks(tasks => {
+    tasks[0]!.assignments[0]!.error = "nested edit";
+    return { tasks, result: null };
+  }, file);
+  const after = loadTasksFile(file);
+  expect(after.tasks[0]!.assignments[0]!.error).toBe("nested edit");
+  expect(taskRevision(after.tasks[0]!)).not.toBe(taskRevision(before.tasks[0]!));
+  expect(taskRevision(after.tasks[1]!)).toBe(taskRevision(before.tasks[1]!));
+  expect(after.recentCreates).toEqual(before.recentCreates);
+  expect(after.migrations).toEqual(before.migrations);
+});
+
+test("lazy task drafts preserve original revisions through sorting, replacement, deletion and insertion", () => {
+  const { file } = sandbox();
+  writeLegacy(file, { tasks: [task("a"), task("b"), task("c")] });
+  const before = loadTasks(file);
+  mutateTasks(tasks => {
+    tasks.reverse();
+    tasks[0] = { ...tasks[0]! };
+    tasks.splice(1, 1);
+    tasks.push(task("d"));
+    return { tasks, result: null };
+  }, file);
+  const after = loadTasks(file);
+  // Collection order remains creation order even when a callback reorders drafts.
+  expect(after.map(t => t.id)).toEqual(["a", "c", "d"]);
+  expect(taskRevision(after[1]!)).not.toBe(taskRevision(before[2]!));
+  expect(taskRevision(after[0]!)).toBe(taskRevision(before[0]!));
+});
 
 function siblings(dir: string, prefix: string): string[] {
   return fs.readdirSync(dir).filter((name) => name.startsWith(prefix));

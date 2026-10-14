@@ -837,8 +837,8 @@ export async function checkStateDatabasesBeforeStores(
   stateDirectory: string,
 ): Promise<{ start(ownsTraffic: () => boolean): void }> {
   try {
-    const { checkStateDatabasesAtActivation, startStateDurability } = await import("@/lib/state/durability");
-    const incidents = checkStateDatabasesAtActivation(stateDirectory);
+    const { checkStateDatabasesInWorker, startStateDurability } = await import("@/lib/state/durability");
+    const incidents = await checkStateDatabasesInWorker(stateDirectory);
     return { start: (ownsTraffic) => { startStateDurability({ stateDirectory, incidents, ownsTraffic }); } };
   } catch (error) {
     console.error("[state durability] activation check failed", error instanceof Error ? error.message : String(error));

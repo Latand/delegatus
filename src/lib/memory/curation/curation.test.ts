@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +9,7 @@ import { roleIsClean } from "../eligibility";
 import { ROLE_MEMORY_BOUND, CURATION_INTERVAL_MS, type RoleMemoryRule, type RuleSource } from "../roleTypes";
 import { canonicalScope, leaveLessons, newRuleId, projectView, recordLessonRequest, learnedRulesBlock, roleMemoryCollection, roleScope, projectScope, restoreRule, deleteRule, storedLessonTexts } from "../roleStore";
 import { applyCuration, revertCuratorPass, type CurationApply } from "./apply";
-import { claimPass, curationStatus, curationView, machinePass, patchPass, readPass, type CuratorPass } from "./store";
+import { claimPass, currentPass, curationStatus, curationView, machinePass, patchPass, readPass, type CuratorPass } from "./store";
 import { curatorCallerOf } from "./guard";
 import { readCuration } from "./read";
 import { productionCurationController } from "./run";
@@ -63,6 +63,35 @@ function input(scopes: Record<string, string[]>, edits: Partial<CurationApply> =
   }), ...edits };
 }
 function ended(p: CuratorPass, delta = 1000) { patchPass(p.id, { state: "succeeded", endedAt: at(delta) }); }
+
+test("current curation selection and history ordering never copy the role archive", () => {
+  fixture();
+  const passes: CuratorPass[] = [];
+  for (let i = 0; i < 8; i++) {
+    const p = pass(NOW + i * (CURATION_INTERVAL_MS + 1000));
+    passes.push(p);
+    patchPass(p.id, { state: "succeeded", endedAt: at(i * (CURATION_INTERVAL_MS + 1000) + 1) });
+  }
+  const memory = roleMemoryCollection()!;
+  memory.loadReadonly();
+  const copied = spyOn(memory, "snapshot");
+  try {
+    expect(currentPass(PROJECT)).toBeNull();
+    expect(curationView(PROJECT).passes.map(p => p.id)).toEqual(passes.map(p => p.id).reverse());
+    const live = pass(NOW + 8 * (CURATION_INTERVAL_MS + 1000));
+    copied.mockClear();
+    expect(currentPass(PROJECT)?.id).toBe(live.id);
+    expect(readPass(live.id)?.counts).toEqual(live.counts);
+    expect(copied).not.toHaveBeenCalled();
+    const selected = currentPass(PROJECT)!;
+    selected.counts.calls = 999;
+    selected.scopes.push("caller-only");
+    expect(currentPass(PROJECT)?.counts.calls).toBe(0);
+    expect(currentPass(PROJECT)?.scopes).not.toContain("caller-only");
+    patchPass(live.id, { state: "succeeded", endedAt: at(9 * CURATION_INTERVAL_MS) });
+    expect(currentPass(PROJECT)).toBeNull();
+  } finally { copied.mockRestore(); }
+});
 function hostingFixture() {
   const registry = new AgentRegistry(path.join(dir, "registry.json"));
   const seats = new Map<string, { conversationId: string; seatEpoch: number; designatedAt: string; path: null }>();

@@ -26,8 +26,16 @@ export function taskRevision(task: BoardTask): string {
   return revision;
 }
 
-export function snapshotTasks(tasks: BoardTask[]) {
-  return new Map(tasks.map(task => [task.id, { ref: task, fingerprint: taskFingerprint(task), revision: taskRevision(task), status: task.status, statusBy: JSON.stringify(task.statusBy ?? null) }]));
+export function snapshotTasks(tasks: BoardTask[], pristine?: readonly BoardTask[], originalDraft?: (index: number) => BoardTask) {
+  return new Map((pristine ?? tasks).map((task, index) => {
+    const original = pristine?.[index];
+    // A store-owned immutable baseline lets no-write callbacks skip hashing.
+    // Capture all mutable metadata now; the fingerprint reads only that baseline.
+    let fingerprint = original ? undefined : taskFingerprint(task);
+    return [task.id, { get ref() { return originalDraft ? originalDraft(index) : task; },
+      get fingerprint() { return fingerprint ??= taskFingerprint(original!); },
+      revision: taskRevision(task), status: task.status, statusBy: JSON.stringify(task.statusBy ?? null) }];
+  }));
 }
 
 /** Snapshot before the callback: writers can mutate nested assignments in place. */

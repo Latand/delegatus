@@ -19,8 +19,9 @@ All times are UTC on 2026-10-14. The earlier attempt used the service journal,
 aggregate. The continuation took the authorized backups and created only owned
 scratch processes and files. No live Viewer or runtime-host HTTP/RPC measurement probe,
 inspector attachment, signal, restart or deployment occurred. The earlier
-refused performance-counter probe below was not repeated. Only this declared
-repository document changed; nothing was staged, committed or pushed.
+refused performance-counter probe below was not repeated. During measurement, only this declared
+repository document changed; nothing was staged, committed or pushed. The
+implementation continuation below records the subsequent source changes.
 
 ## Scope and evidence boundaries
 
@@ -672,3 +673,98 @@ supplemental scans found no absolute home paths, email addresses, private UUIDs
 or learned-rule identifiers. The final whitespace check produces no diagnostics.
 `git status --short` shows only the declared report, untracked. Nothing was
 staged, committed or pushed.
+
+
+## Implementation continuation
+
+The builder rebased this pipeline onto main `eb8882900` before changing source.
+The seat opened the memory fence after #2849 and #2850 merged. The other fences
+remain; this report is the only changed document.
+
+### Fixed causes and expected behavior
+
+| Cause | Measured before | Change and expected after | Observed after on the retained dataset |
+| --- | --- | --- | --- |
+| Curation current-pass lookup and historical sorting | Original R3: 366–476 ms synchronously for eight retained passes. Fresh main replay: 524.502 / 372.741 / 358.019 ms. | Select and validate current pass metadata without sorting history; sort historical metadata without recounting lessons. Count-bearing reads scan the revision-aware role view without cloning it. Expect <10 ms for the captured no-live-pass selection, while preserving canonical aliases, live-state validation, count deduplication and caller-owned returned passes. | 4.579 / 0.374 / 0.345 ms; all three select the same null current pass as main. |
+| Task mutation preparation and maintenance card reads | Original R5 no-change preparation: 143.779 / 99.655 / 96.302 ms. Fresh main replay: 99.924 / 92.054 / 94.188 ms. Full original reads: 42–87 ms. | Cache validated immutable preparation by collection revision and aliases, clone individual task drafts when read, and defer fingerprints until a callback returns a write. Preserve the lease, revision stamping, nested edits, receipts and linked tombstone transaction. Maintenance's unchanged-card test uses the existing immutable list. Expect warm no-change preparation around 15 ms under this profiled boundary and sub-millisecond warmed card-list reads. | Preparation 42.149 ms first, then 14.870 / 13.149 ms. List 17.688 ms first, then 0.679 / 0.628 ms. Full mutable reads still cost 38–74 ms. The original <10 ms preparation target remains unmet; cold validation and full-read work remain. |
+| Startup integrity inspection on the Viewer thread | Full production-build R2 startup gap: 10,625 ms with 7,824 integrity SQL samples. Source-level activation-hook control: 3,200.949 / 1,187.346 / 1,262.240 ms maximum timer gaps. | Await activation checking and fallback in the existing leased durability worker before opening stores. Keep the existing corruption/busy decisions and logged startup failure policy. Expect no >1 s serving-thread integrity pause; startup itself can still take seconds. | Source hook completes in 1,148.447 / 1,145.959 / 1,117.585 ms while 114 / 114 / 111 timer ticks run; maximum timer gaps 1.255 / 1.140 / 1.002 ms. |
+
+The final component comparison ran main and fixed source sequentially in one
+owned gate admission, under Bun 1.4.0, using fresh copies of the same retained
+R1 component state, identical namespace isolation and the same query/callback
+sequence. Curation and task spans include JSC profiling overhead. The first
+sample includes cold collection/validation work; subsequent samples reuse that
+process's caches. The earlier partial task implementation was discarded after
+it still measured 45–51 ms warm; the table describes the final lazy drafts.
+The activation control times the real exported startup hook with an independent
+ten-millisecond timer. It is a source-level hook measurement, distinct from the
+original compiled full-startup observation. These component tests contain no
+normal live agent traffic and supply no new 30-minute serving-window verdict.
+
+### Regression checks and main failures
+
+The new checks were copied into a detached scratch export of main `eb8882900`
+and run by explicit path through `scripts/gate-slot.sh`, with private HOME,
+XDG config/cache, TMPDIR and state roots. Each fixed cause has a red control:
+
+| Explicit test file | Check | Main failure |
+| --- | --- | --- |
+| `src/lib/memory/curation/curation.test.ts` | Eight retained passes, history order, live selection, returned-object isolation and completed-pass exclusion without role-archive copies | 19 role-memory snapshot calls where zero are required |
+| `src/lib/tasks/store.sqlite.test.ts` | Warm no-write callback fingerprints no tasks and copies only the one it reads; discarded nested edits, subsequent committed nested edits, receipts and migration markers survive | 600 task fingerprint serializations where zero are required |
+| `src/lib/state/durability.test.ts` | A 41 MB retained-size database is checked while an independent timer runs before the awaited activation finishes | The timer observes the operation already complete after synchronous inspection |
+
+Additional checks cover draft sorting/replacement/deletion/insertion, foreign
+writer revisions, linked companion atomicity, corruption restoration before
+store opening, five-second busy refusal without moving a healthy database,
+worker launch refusal, and activation-worker owner death. The latter uses the
+real leased launch path and verifies that its helper descendants end while the
+Viewer's separately started agent remains alive.
+
+Individual isolated runs passed:
+
+| Explicit test file | Passing tests |
+| --- | ---: |
+| `src/lib/memory/curation/curation.test.ts` | 71 |
+| `src/lib/tasks/store.sqlite.test.ts` | 34 |
+| `src/lib/tasks/revision.test.ts` | 5 |
+| `src/lib/tasks/store.listView.test.ts` | 3 |
+| `src/lib/monitor/seatTickController.test.ts` | 107 |
+| `src/lib/state/durability.test.ts` | 21 |
+| `src/lib/helperLease.test.ts` | 14 |
+| `src/lib/links/taskSync.test.ts` | 17; one existing optional compatibility check skipped |
+| `src/lib/viewerInstrumentation.test.ts` | 4 |
+
+A combined exploratory task-test process exposed a module-load state-path
+assumption in `revision.test.ts`; running each file in its own required isolated
+process passes. The final checks also include full `tsc --noEmit`, the production
+build, and `scripts/verify-viewer-runtime.ts` under Bun 1.4.0: 25/25 compiled
+server modules load and a private port-0 Viewer serves `GET /` with status 200.
+The production build reports the existing TTS CSS pseudo-element warning.
+Publication privacy is checked against merge base `eb8882900` with the committed
+known-value fingerprints. The pull request's required hosted checks, including
+`runtime-gate`, must pass before promotion.
+
+### Left for later
+
+- **Contended registry admission:** retain the measured 606.9–754.7 ms Viewer
+  stalls as unresolved. The minified live caller labels do not identify which
+  synchronous public mutations should become asynchronous or which can safely
+  refuse. Changing every synchronous mutation to immediate refusal would alter
+  successful admission/retry behavior. A follow-up must identify those callers,
+  route them through the existing held-writer APIs, and prove fresh-revision
+  admission with a second-process contention control.
+- **Runtime-host cache misses and queueing:** collection remains 110–132 ms in
+  R4 and 257.4 ms in E1; assembly caching stays intact. Interleaved journal
+  writers, status RPCs and two-process caller/host timing are still required
+  before choosing a host change. This PR changes no runtime-host source or pin.
+- **Complete health reads, transcript indexing and full mutable task reads:**
+  preserve the existing worker and cooperative row reader. R2 attributes CPU
+  here, with health preparation 289–364 ms under `--smol`, but does not identify
+  a >1 s exclusive row/batch. Narrow SQL/decode/validation measurements and
+  revision-safe reuse remain follow-up work. Actual task writes still perform
+  required fingerprints and linked-group preparation.
+- **The original 35–37 second stalls and release acceptance:** exclusive live
+  attribution remains the operator-accepted gap. No production deployment or
+  signal occurred in this build stage. Release 1.13.0 remains held for the
+  authorized Deployer and the required 30-minute normal-load window with zero
+  >1 s gaps, exceeded deadlines and runtime-host timeouts.

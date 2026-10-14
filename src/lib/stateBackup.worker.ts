@@ -1,6 +1,6 @@
 import { answerBackupWorkerRequest, type BackupWorkerRequest } from "./state/durability";
 
-/* One state database backup pass off the Viewer's thread (#1870 slice 10):
+/* One state database backup or activation pass off the Viewer's thread:
    reads a request on stdin, answers one JSON line on stdout. */
 
 let input = "";

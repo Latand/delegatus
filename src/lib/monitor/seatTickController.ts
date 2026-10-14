@@ -25,7 +25,7 @@ import { recordSeatProjectSuccessions } from "@/lib/orchestrator/seatProjectIden
 import { RUNTIME_IDEMPOTENCY_KEY_LIMIT, runtimeIdempotencyKeyAdmissible } from "@/lib/runtime/contracts";
 import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { createTask, patchTask } from "@/lib/tasks/commands";
-import { loadTasks, mutateTasksFile } from "@/lib/tasks/store";
+import { loadTasksForList, mutateTasksFile } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import {
@@ -333,7 +333,7 @@ function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): bo
      only a real create, close or rewrite takes the write below, which rebuilds
      and fingerprints every task under the lease (#1987). A card that changes
      between this read and a later check is simply seen by that check. */
-  if (seatTickCardIsCurrent(project, card, at, loadTasks(file))) return true;
+  if (seatTickCardIsCurrent(project, card, at, loadTasksForList(file))) return true;
   return mutateTasksFile<boolean>((loaded) => {
     const absorbed = closeAttemptCards(loaded.tasks, project, card);
     const state = { ...loaded, tasks: absorbed ?? loaded.tasks };

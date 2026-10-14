@@ -554,6 +554,70 @@ test("a backup pass of a realistic database runs in the worker and leaves the Vi
   expect(lastRevisions.get("state.sqlite")).toBeString();
 }, 60_000);
 
+test("activation checks a retained-size database off-thread and awaits its verdict before stores open", async () => {
+  const directory = sandbox();
+  const database = stateDatabase(directory);
+  const db = new Database(database.filename, { create: true });
+  try {
+    db.exec("CREATE TABLE filler(body BLOB)");
+    db.exec("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000) INSERT INTO filler SELECT randomblob(4000) FROM n");
+  } finally { db.close(); }
+  expect(fs.statSync(database.filename).size).toBeGreaterThan(40_000_000);
+  const helper = await import("@/lib/helperLease");
+  const go = path.join(directory, "activation-go");
+  const workerPath = path.join(directory, "held-activation-worker.ts");
+  fs.writeFileSync(workerPath, `import fs from "node:fs";
+    while (!fs.existsSync(${JSON.stringify(go)})) await Bun.sleep(1);
+    await import(${JSON.stringify(path.resolve("src/lib/stateBackup.worker.ts"))});
+  `);
+  const spawn = helper.spawnLeasedHelper;
+  const progress = loopProgressProbe();
+  let started = false;
+  const launch = spyOn(helper, "spawnLeasedHelper").mockImplementation((name, spec, ...rest) => {
+    started = true;
+    const child = spawn(name, { ...spec, command: process.execPath, args: [workerPath] }, ...rest);
+    return child;
+  });
+  progress.arm(() => { fs.writeFileSync(go, "release"); });
+  try {
+    await progress.run(() => checkStateDatabasesBeforeStores(directory));
+    expect(started).toBe(true);
+    expect(readStorageIncidents(directory)).toEqual([]);
+    expect(fs.existsSync(database.filename)).toBe(true);
+  } finally { launch.mockRestore(); }
+}, 60_000);
+
+test("activation leaves a busy healthy database intact while the Viewer timers progress", async () => {
+  const directory = sandbox();
+  const database = stateDatabase(directory);
+  const holder = new Database(database.filename, { create: true });
+  holder.exec("CREATE TABLE kept(value TEXT)");
+  holder.exec("INSERT INTO kept VALUES ('retained')");
+  holder.exec("BEGIN EXCLUSIVE");
+  const progress = loopProgressProbe();
+  progress.arm();
+  try {
+    await progress.run(() => checkStateDatabasesBeforeStores(directory));
+    expect(holder.inTransaction).toBe(true);
+    expect(readStorageIncidents(directory)).toEqual([]);
+    expect(fs.readdirSync(directory).some(name => name.includes(".corrupt-"))).toBe(false);
+    expect(holder.query("SELECT value FROM kept").get()).toEqual({ value: "retained" });
+  } finally { holder.exec("ROLLBACK"); holder.close(); }
+}, 20_000);
+
+test("an activation worker launch refusal retains the existing logged startup failure policy", async () => {
+  const directory = sandbox();
+  const helper = await import("@/lib/helperLease");
+  const launch = spyOn(helper, "spawnLeasedHelper").mockImplementation(() => { throw new Error("fixture launch refused"); });
+  const log = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const checked = await checkStateDatabasesBeforeStores(directory);
+    expect(log).toHaveBeenCalledWith("[state durability] activation check failed", "fixture launch refused");
+    expect(() => checked.start(() => true)).not.toThrow();
+    expect(readStorageIncidents(directory)).toEqual([]);
+  } finally { launch.mockRestore(); log.mockRestore(); }
+});
+
 test("a production store held across a fresh fallback writes into the new database, not the damaged one", () => {
   const directory = sandbox();
   const filename = path.join(directory, "handoff-queue.sqlite");

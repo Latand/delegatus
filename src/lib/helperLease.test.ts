@@ -230,18 +230,22 @@ test.if(process.platform === "linux")("a file scan worker that is mid-scan ends 
   expect(() => process.kill(line.agent!, 0)).not.toThrow();
 }, 30_000);
 
-test.if(process.platform === "linux")("a state backup pass ends when the Viewer that started it dies", async () => {
-  const state = path.join(SANDBOX, "backup-state");
+for (const operation of ["backup", "activation"] as const) {
+test.if(process.platform === "linux")(`a state ${operation} pass ends when the Viewer that started it dies`, async () => {
+  const state = path.join(SANDBOX, `${operation}-state`);
   fs.mkdirSync(state, { recursive: true, mode: 0o700 });
-  const report = path.join(SANDBOX, "backup.json");
-  const worker = requestWorker(path.join(SANDBOX, "backup", "worker.mjs"), report);
-  const { viewer, line } = await startViewer("backing-up-viewer", [
+  const report = path.join(SANDBOX, `${operation}.json`);
+  const cwd = path.join(SANDBOX, `${operation}-viewer`);
+  const worker = requestWorker(path.join(cwd, "src", "lib", "stateBackup.worker.ts"), report);
+  const { viewer, line } = await startViewer(`${operation}-viewer`, [
     "import { spawn } from 'node:child_process';",
-    `const { runBackupPassInWorker } = await import(${JSON.stringify(path.join(REPO, "src/lib/state/durability.ts"))});`,
-    `void runBackupPassInWorker(${JSON.stringify(state)}, new Map(), { launch: { executable: process.execPath, workerPath: ${JSON.stringify(worker)} } }).catch(() => {});`,
+    `const durability = await import(${JSON.stringify(path.join(REPO, "src/lib/state/durability.ts"))});`,
+    operation === "backup"
+      ? `void durability.runBackupPassInWorker(${JSON.stringify(state)}, new Map(), { launch: { executable: process.execPath, workerPath: ${JSON.stringify(worker)} } }).catch(() => {});`
+      : `void durability.checkStateDatabasesInWorker(${JSON.stringify(state)}).catch(() => {});`,
     ...AGENT,
     "process.stdout.write(JSON.stringify({ agent: agent.pid }) + '\\n');",
-  ], { env: { LLV_STATE_DIR: state, LLV_HELPER_LEASE_ENTRY: LEASE_ENTRY } });
+  ], { cwd, env: { LLV_STATE_DIR: state, LLV_HELPER_LEASE_ENTRY: LEASE_ENTRY } });
   const helper = await readReport(report);
   expect(JSON.parse(fs.readFileSync(report, "utf8")).request).toContain(JSON.stringify(state));
   expect(fs.readdirSync(path.join(state, "helpers")).filter((file) => file.endsWith(".json"))).toHaveLength(1);
@@ -249,6 +253,7 @@ test.if(process.platform === "linux")("a state backup pass ends when the Viewer 
   expect(await gone([helper.helper, helper.child])).toBe(true);
   expect(() => process.kill(line.agent!, 0)).not.toThrow();
 }, 30_000);
+}
 
 /* The display reading of the update drain (#2594): an observation that was
    in flight when its Viewer crashed left this worker behind, and a later

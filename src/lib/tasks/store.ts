@@ -622,14 +622,22 @@ function taskSyncWrite(filePath: string): { write: TaskSyncWrite; companion: Non
     are deleted in the same transaction. */
 function writeTaskState<R>(
   filePath: string,
-  prepare: (current: TasksFileState, sync: TaskSyncWrite | null) => { next: { rows: unknown[]; recentCreates: RecentCreate[]; migrations: TaskMigrations } | undefined; result: R },
+  prepare: (current: TasksFileState, sync: TaskSyncWrite | null, pristine: readonly BoardTask[], originalDraft: (index: number) => BoardTask) => { next: { rows: unknown[]; recentCreates: RecentCreate[]; migrations: TaskMigrations } | undefined; result: R },
 ): R {
   const collection = taskCollection(filePath, "write")!;
   const sync = taskSyncWrite(filePath);
   let result: R;
   collection.patchSync(() => {
-    const committed = collection.snapshot();
-    const outcome = prepare(stateFromBody(bodyFromRows(committed)), sync?.write ?? null);
+    const committed = collection.loadReadonly();
+    const aliases = JSON.stringify(projectAliasSnapshot().aliases);
+    let baseline = writeSnapshots.get(committed);
+    if (baseline?.aliases !== aliases) {
+      baseline = { aliases, state: deepFreeze(stateFromBody(bodyFromRows(committed))) };
+      writeSnapshots.set(committed, baseline);
+    }
+    const draft = taskDrafts(baseline.state.tasks);
+    const current = { tasks: draft.tasks, recentCreates: structuredClone(baseline.state.recentCreates), migrations: { ...baseline.state.migrations } };
+    const outcome = prepare(current, sync?.write ?? null, baseline.state.tasks, draft.original);
     result = outcome.result;
     const companion = sync?.pending();
     if (!outcome.next) return { records: [], ...(companion ? { companion } : {}) };
@@ -653,6 +661,31 @@ function writeTaskState<R>(
     return { records: changed, deleteKeys, appendKeys, ...(companion ? { companion } : {}) };
   }, sync ? { companion: sync.companion } : {});
   return result!;
+}
+
+const writeSnapshots = new WeakMap<object, { aliases: string; state: TasksFileState }>();
+
+/** Clone a task only when the callback reads it. Original drafts stay available
+    after array replacement, sorting or deletion for revision comparison. */
+function taskDrafts(pristine: readonly BoardTask[]) {
+  const copies = new Map<number, BoardTask>();
+  const original = (index: number): BoardTask => {
+    let copy = copies.get(index);
+    if (!copy) {
+      copy = structuredClone(pristine[index]!);
+      persistedRows.set(copy, persistedRows.get(pristine[index]!));
+      copies.set(index, copy);
+    }
+    return copy;
+  };
+  const tasks: BoardTask[] = new Array(pristine.length);
+  pristine.forEach((_, index) => {
+    Object.defineProperty(tasks, index, { configurable: true, enumerable: true,
+      get: () => original(index),
+      set: (value: BoardTask) => { Object.defineProperty(tasks, index, { configurable: true, enumerable: true, writable: true, value }); },
+    });
+  });
+  return { tasks, original };
 }
 
 const syncStep = (current: readonly BoardTask[], sync: TaskSyncWrite | null) =>
@@ -695,8 +728,8 @@ export function mutateLinkedTasks<R>(
   mutate: (tasks: BoardTask[], sync: TaskSyncWrite | null) => { tasks: BoardTask[] | undefined; result: R },
   filePath = TASKS_FILE,
 ): R {
-  return writeTaskState(filePath, (current, sync) => {
-    const before = snapshotTasks(current.tasks);
+  return writeTaskState(filePath, (current, sync, pristine, originalDraft) => {
+    const before = snapshotTasks(current.tasks, pristine, originalDraft);
     const step = syncStep(current.tasks, sync);
     const outcome = mutate(current.tasks, sync);
     if (!outcome.tasks) return { next: undefined, result: outcome.result };
@@ -715,8 +748,8 @@ export function mutateTasksFile<R>(
   mutate: (state: TasksFileState) => { state: TasksFileState | undefined; result: R },
   filePath = TASKS_FILE,
 ): R {
-  return writeTaskState(filePath, (current, sync) => {
-    const before = snapshotTasks(current.tasks);
+  return writeTaskState(filePath, (current, sync, pristine, originalDraft) => {
+    const before = snapshotTasks(current.tasks, pristine, originalDraft);
     const step = syncStep(current.tasks, sync);
     const outcome = mutate(current);
     if (!outcome.state) return { next: undefined, result: outcome.result };
