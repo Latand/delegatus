@@ -11921,6 +11921,21 @@ export async function patchPipeline(
     const resolved = await resolveDeliveryRemote(snapshot.repoDir, req.remote, ports.exec);
     if (!resolved.ok) return { error: resolved.error, status: resolved.status };
     if (!resolved.remote) return { error: `repository has no configured remote ${req.remote ?? "origin"}; add it before set-delivery-remote`, status: 409 };
+    if (snapshot.stages.some((stage) => stage.kind === "review-loop")) {
+      // Legacy review flows resolve their fence from origin's fetch URL. Keep
+      // adoption aligned with creation so a separate push URL or named remote
+      // cannot make publication succeed while review reads another repository.
+      const originFetch = await ports.exec("git", ["remote", "get-url", "origin"], snapshot.repoDir);
+      if (originFetch.code !== 0 || !originFetch.stdout.trim()) {
+        if (originFetch.code !== 2 && originFetch.code !== 0) {
+          return { error: `could not read the repository's remotes: ${(originFetch.stderr || originFetch.stdout || "no output").trim()}; retry the request`, status: 409 };
+        }
+        return { error: "legacy review-loop delivery requires a configured origin fetch repository matching the adopted delivery target", status: 409 };
+      }
+      if (resolved.repository !== projectIdentityFromRemote(originFetch.stdout.trim(), snapshot.repoDir)?.project) {
+        return { error: "review-loop delivery must use the origin repository; create the lane in a checkout of the PR head repository", status: 400 };
+      }
+    }
     const result = await withDeliveryMutationAsync<PipelinePatchResult>((tx) => {
       const current = tx.get(id);
       if (!current) return { error: "pipeline not found", status: 404 };

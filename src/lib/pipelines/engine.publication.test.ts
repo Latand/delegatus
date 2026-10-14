@@ -2366,3 +2366,44 @@ test("legacy review delivery keeps the origin fetch repository fence with a sepa
     expect(loadPipelines()).toHaveLength(0);
   } finally { f.cleanup(); }
 });
+
+const legacyReviewStages = [
+  { id: "plan", kind: "run", role: { roleId: "architect" }, prompt: "Plan", next: "review" },
+  { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+] as const;
+
+test.each([
+  { label: "origin push URL", remote: undefined, splitOrigin: true },
+  { label: "named remote", remote: "delivery", splitOrigin: false },
+] as const)("remote adoption refuses a legacy review target outside origin fetch repository via $label", async ({ remote, splitOrigin }) => {
+  const f = await repository();
+  try {
+    const lane = await f.start({ publication: "internal", stages: structuredClone(legacyReviewStages) as unknown as CreatePipelineRequest["stages"] });
+    await f.addRemote();
+    const other = await f.addRemote("other");
+    if (splitOrigin) await f.git(f.repo, "remote", "set-url", "--push", "origin", other);
+    else await f.git(f.repo, "remote", "add", "delivery", other);
+    const before = structuredClone(f.current().delivery);
+
+    expect(await engineModule.patchPipeline(lane.id, { action: "set-delivery-remote", ...(remote ? { remote } : {}) }, f.h.ports))
+      .toMatchObject({ status: 400, error: expect.stringContaining("origin repository") });
+    expect(f.current().delivery).toEqual(before);
+    expect(f.current().delivery!.epoch).toBe(1);
+  } finally { f.cleanup(); }
+});
+
+test("legacy review adoption from origin publishes the accepted head and launches review", async () => {
+  const f = await repository();
+  try {
+    const lane = await f.start({ publication: "internal", stages: structuredClone(legacyReviewStages) as unknown as CreatePipelineRequest["stages"] });
+    lane.publication = "remote-branch";
+    savePipelines([lane]);
+    const origin = await f.addRemote();
+    expect((await engineModule.patchPipeline(lane.id, { action: "set-delivery-remote" }, f.h.ports)).error).toBeUndefined();
+    await f.pass(1);
+    expect(f.current()).toMatchObject({ cursor: { stageId: "review", state: "reviewing" } });
+    expect(f.h.flowRequests).toHaveLength(1);
+    expect(f.h.flowRequests[0]).toMatchObject({ targetSha: f.current().lastPassedCommit, headRef: lane.branch, requireRemoteHead: true });
+    expect(await f.git(origin, "rev-parse", `refs/heads/${lane.branch}`)).toBe(f.current().lastPassedCommit);
+  } finally { f.cleanup(); }
+});
