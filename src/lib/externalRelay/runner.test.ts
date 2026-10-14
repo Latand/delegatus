@@ -2699,6 +2699,36 @@ test("slice 3 dark and ineligible paths preserve the slice 2b wire and records",
 }, 30000);
 
 
+test("short owner reply continues the earlier relay answer", async () => {
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.ownerTier = true;
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  const message = contextRequest.input.conversation[0];
+  const earlierText = "Can you fix the issue discussed here?";
+  const answerText = "I can implement the fix and open a pull request. Shall I proceed?";
+  const bodies: Record<string, unknown>[] = [];
+  try {
+    const result = await runClaimedRequest(paired, { ...contextRequest, answer: { max_chars: 1000, progress: "none" }, input: {
+      ...contextRequest.input, request_text: "Роби", requester: { ...contextRequest.input.requester, is_owner: true },
+      conversation: [
+        { ...message, id: "earlier-request", text: earlierText },
+        { ...message, id: "earlier-answer", author: { key: "assistant", name: "Assistant", self: true }, text: answerText, reply_to: "earlier-request" },
+        { ...message, text: "Роби", reply_to: "earlier-answer" },
+      ],
+    } }, undefined, { ownerPorts: {
+      launch: async body => { bodies.push(body); return { status: 202, body: { conversationId: "conversation_reply_fixture" } }; },
+      observe: async () => ({ state: "ended", finalText: "Fix completed." }), stop: async () => {}, pollMs: 1,
+    } });
+    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "Fix completed.", reply_to: message.id } });
+    expect(bodies).toHaveLength(1);
+    const prompt = String(bodies[0]!.prompt);
+    const context = JSON.parse(prompt.match(/<owner_reply_context>\n([^]*?)\n<\/owner_reply_context>/)![1]!);
+    expect(context).toMatchObject({ message_id: "earlier-answer", text: answerText, reply_to: "earlier-request",
+      earlier_request: { message_id: "earlier-request", text: earlierText } });
+  } finally { await server.close(); }
+});
+
 test("unresolved short owner approval asks one question without account selection or work", async () => {
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const paired = relay(`${server.origin}/v1`);
