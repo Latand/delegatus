@@ -25,7 +25,9 @@ test("merger resolves a required reviewed-PR list with a read-write, non-nesting
   expect(role.value.prompt).toContain("produces on native main are pre-existing and never stop the batch");
   expect(role.value.prompt).toContain("A detector of a PR outside the candidate is skipped with a note");
   expect(role.value.prompt).toContain("drops only the PR whose removal clears it");
-  expect(role.value.prompt).toContain("one at a time through scripts/gate-slot.sh");
+  expect(role.value.prompt).toContain("runs every gate command one at a time");
+  expect(role.value.prompt).toContain("follow the assembled gate guidance for checks you run yourself, using the project's own commands");
+  expect(role.value.prompt).not.toContain("scripts/gate-slot.sh");
   expect(role.value.prompt).toContain("Full browser campaigns are opt-in (gate --browser)");
   expect(role.value.prompt).not.toContain("/var/tmp/llv-gate");
 });

@@ -59,7 +59,6 @@ export function seededTemplatesFromRoles(): WorkflowTemplate[] {
   {
     name: "fullstack",
     setup: "bun install",
-    verify: "bun test && bun run build",
     finish: "pr",
     stages: [
       {
@@ -83,7 +82,6 @@ export function seededTemplatesFromRoles(): WorkflowTemplate[] {
   },
   {
     name: "Builder → Reviewer",
-    verify: "bun test && bun run build",
     finish: "pr",
     stages: [
       {
