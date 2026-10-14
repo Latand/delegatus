@@ -30918,3 +30918,290 @@ describe("stale working status", () => {
     } finally { await browser.close(); server.stop(); fs.rmSync(directory, { recursive: true, force: true }); }
   }, 300_000);
 });
+
+describe("independent panel scroll", () => {
+  /*
+   * docs/design/independent-panel-scroll.md. The desktop board with the
+   * orchestrator's seat on top is a page (`.kb-page`) that holds the seat and a
+   * full page of board, so it always overflows. The seat's conversation and a
+   * column each scroll on their own, and a scroll that reached the end of one
+   * used to carry the page on: a column at its top and three wheel notches up
+   * brought the seat back into view (687 → 207), a conversation at its end and
+   * three notches down carried the page onto the board (0 → 480).
+   *
+   * For each layout the page has (rail open and hidden, tabs, the seat folded)
+   * every end of both panels takes a wheel, a trackpad-like gesture and a key,
+   * and the page must stay where it was. The page-moving places (its own
+   * scrollbar, a column head, the seat head) must move it, and what must not
+   * change (the sideways wheel, focus scrolling, the conversation at its end)
+   * must hold. The same inputs then run with the rule taken away, and every one
+   * of them has to carry the page, so the case is proven able to fail. The
+   * scrollbars are drawn, since the page's own bar is one of the places.
+   * Readings go to `evidence/panel-scroll/desktop.json`.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "independent panel scroll"
+   */
+  const CONTAINED_OFF = ".kb .col-body, .kb .seat [data-log-feed-scroller] { overscroll-behavior-y: auto !important }";
+  const PAGE = ".kb .kb-page";
+  const COLUMN = '.kb .column[data-status="assigned"]';
+  const FEED = ".kb .seat [data-orchestrator-conversation] [data-log-feed-scroller]";
+  const NOTCH = 240;
+  const NOTCHES = 3;
+  type Layout = { name: string; width: number; height: number; rail: "open" | "hidden"; seat: "top" | "folded" | "side" };
+  const LAYOUTS: Layout[] = [
+    { name: "rail-open", width: 1440, height: 900, rail: "open", seat: "top" },
+    { name: "rail-hidden", width: 1440, height: 900, rail: "hidden", seat: "top" },
+    { name: "tabs", width: 1000, height: 800, rail: "open", seat: "top" },
+    { name: "seat-folded", width: 1440, height: 900, rail: "open", seat: "folded" },
+    { name: "seat-side", width: 1440, height: 900, rail: "hidden", seat: "side" },
+  ];
+  const stored = (layout: Layout) => `try {
+    localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: ${layout.seat === "folded" ? "{ atlas: true }" : "{}"}, placement: "${layout.seat === "side" ? "side" : "top"}", width: null, topWidths: {}, sideWidths: {}, heightV: 2 }));
+    ${layout.rail === "hidden" ? 'localStorage.setItem("llv:rail-hidden:v1", "hidden");' : ""}
+  } catch {}`;
+  type Input = "wheel" | "gesture" | "key";
+  type Reading = { layout: string; row: string; input: Input | "drag" | "touch" | "focus"; from: number; to: number; panelFrom?: number; panelTo?: number };
+  type Spot = { x: number; y: number };
+
+  const pageTop = (page: Page) => page.evaluate((selector) => document.querySelector<HTMLElement>(selector)!.scrollTop, PAGE);
+  const setScroll = (page: Page, selector: string, top: number | "end") => page.evaluate(({ selector, top }) => {
+    const element = document.querySelector<HTMLElement>(selector)!;
+    element.scrollTop = top === "end" ? element.scrollHeight : top;
+    return element.scrollTop;
+  }, { selector, top });
+  const topOf = (page: Page, selector: string) => page.evaluate((selector) => document.querySelector<HTMLElement>(selector)!.scrollTop, selector);
+  const maxOf = (page: Page, selector: string) => page.evaluate((selector) => { const element = document.querySelector<HTMLElement>(selector)!; return element.scrollHeight - element.clientHeight; }, selector);
+  /* The part of an element the window shows, and a point in it that the wheel turns over. */
+  const spotIn = (page: Page, selector: string, from = 0.5): Promise<Spot> => page.evaluate(({ selector, from }) => {
+    const box = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+    const top = Math.max(box.top, 48), bottom = Math.min(box.bottom, innerHeight);
+    return { x: Math.round(box.left + box.width / 2), y: Math.round(top + (bottom - top) * from) };
+  }, { selector, from });
+  const settle = (page: Page) => page.waitForTimeout(350);
+  async function wheel(page: Page, at: Spot, delta: number, notches = NOTCHES, sideways = false) {
+    await page.mouse.move(at.x, at.y);
+    for (let count = 0; count < notches; count += 1) { await (sideways ? page.mouse.wheel(delta, 0) : page.mouse.wheel(0, delta)); await page.waitForTimeout(120); }
+    await settle(page);
+  }
+  /* A trackpad-like gesture: one scroll of `distance` px (positive scrolls up) at one point. */
+  async function gesture(page: Page, at: Spot, distance: number) {
+    const session = await page.context().newCDPSession(page);
+    try {
+      await session.send("Input.synthesizeScrollGesture", { x: at.x, y: at.y, yDistance: distance, gestureSourceType: "mouse", speed: 1_600, preventFling: true });
+    } finally { await session.detach(); }
+    await settle(page);
+  }
+  /* A finger put down at one point and dragged `distance` px down the screen (the page scrolls up).
+     Dispatched touch by touch, since the synthesized touch gesture does not reach a desktop context. */
+  async function finger(page: Page, at: Spot, distance: number) {
+    const session = await page.context().newCDPSession(page);
+    try {
+      await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: at.x, y: at.y }] });
+      for (let step = 1; step <= 10; step += 1) {
+        await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: at.x, y: at.y + (distance * step) / 10 }] });
+        await page.waitForTimeout(16);
+      }
+      await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    } finally { await session.detach(); }
+    await settle(page);
+  }
+
+  async function open(browser: Browser, base: string, layout: Layout, touch = false) {
+    const context = await browser.newContext({ viewport: { width: layout.width, height: layout.height }, colorScheme: "light", reducedMotion: "reduce", ...(touch ? { hasTouch: true } : {}) });
+    await context.addInitScript(stored(layout));
+    const page = await context.newPage();
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`${base}?scenario=agent-report`);
+    await page.waitForSelector(`${COLUMN} .card[data-id]`, { state: "attached", timeout: 30_000 });
+    await page.waitForTimeout(1_200);
+    return { context, page, pageErrors };
+  }
+
+  /* The inputs that carried the page on from the end of a panel. Each one starts with the panel at the
+     named end and the page where the end's direction leaves it room, and returns the page before and after. */
+  async function chainRows(page: Page, layout: Layout): Promise<Reading[]> {
+    const readings: Reading[] = [];
+    const room = await maxOf(page, PAGE);
+    const record = async (row: string, input: Input, run: () => Promise<void>, page0: number, panel?: string) => {
+      const from = await setScroll(page, PAGE, page0);
+      const panelFrom = panel ? await topOf(page, panel) : undefined;
+      await run();
+      readings.push({ layout: layout.name, row, input, from, to: await pageTop(page), ...(panel ? { panelFrom, panelTo: await topOf(page, panel) } : {}) });
+    };
+    const column = `${COLUMN} > .col-body`;
+    const columnAt = async () => spotIn(page, column, 0.5);
+    /* A column at its top, the page low: up. */
+    await record("column top, up", "wheel", async () => { await setScroll(page, column, 0); await wheel(page, await columnAt(), -NOTCH); }, room, column);
+    await record("column top, up", "gesture", async () => { await setScroll(page, column, 0); await gesture(page, await columnAt(), 600); }, room, column);
+    await record("column top, up", "key", async () => {
+      await setScroll(page, column, 0);
+      await page.locator(`${COLUMN} .card[data-id]`).first().focus({ preventScroll: true } as never);
+      await page.keyboard.press("PageUp");
+      await settle(page);
+    }, room, column);
+    /* A column at its end, the page at its top: down. */
+    await setScroll(page, PAGE, 0);
+    await record("column end, down", "wheel", async () => { await setScroll(page, column, "end"); await wheel(page, await columnAt(), NOTCH); }, 0, column);
+    await record("column end, down", "gesture", async () => { await setScroll(page, column, "end"); await gesture(page, await columnAt(), -600); }, 0, column);
+    if (layout.seat !== "top") return readings;
+    const feed = FEED;
+    const feedAt = async () => spotIn(page, feed, 0.5);
+    /* The conversation at its end, the page at its top: down. */
+    await record("conversation end, down", "wheel", async () => { await setScroll(page, feed, "end"); await wheel(page, await feedAt(), NOTCH); }, 0, feed);
+    await record("conversation end, down", "gesture", async () => { await setScroll(page, feed, "end"); await gesture(page, await feedAt(), -600); }, 0, feed);
+    await record("conversation end, down", "key", async () => {
+      await setScroll(page, feed, "end");
+      const at = await feedAt();
+      await page.mouse.click(at.x, at.y);
+      await page.keyboard.press("PageDown");
+      await page.keyboard.press("End");
+      await settle(page);
+    }, 0, feed);
+    /* The conversation at its top, the page part-way down: up. */
+    await record("conversation top, up", "wheel", async () => { await setScroll(page, feed, 0); await wheel(page, await feedAt(), -NOTCH); }, 160, feed);
+    await record("conversation top, up", "gesture", async () => { await setScroll(page, feed, 0); await gesture(page, await feedAt(), 600); }, 160, feed);
+    return readings;
+  }
+
+  /* The places that scroll the page, which must go on doing so. */
+  async function pageRows(page: Page, layout: Layout): Promise<Reading[]> {
+    const readings: Reading[] = [];
+    const room = await maxOf(page, PAGE);
+    const record = async (row: string, input: Reading["input"], run: () => Promise<void>, page0: number) => {
+      const from = await setScroll(page, PAGE, page0);
+      await run();
+      readings.push({ layout: layout.name, row, input, from, to: await pageTop(page) });
+    };
+    const bar = { x: layout.width - 7, y: Math.round(layout.height / 2) };
+    await record("page scrollbar, down", "wheel", () => wheel(page, bar, NOTCH, 1), 0);
+    await record("page scrollbar, up", "wheel", () => wheel(page, bar, -NOTCH, 1), room);
+    const head = () => spotIn(page, `${COLUMN} .col-head`);
+    await record("column head, up", "wheel", async () => wheel(page, await head(), -NOTCH, 1), room);
+    await record("column head, down", "wheel", async () => wheel(page, await head(), NOTCH, 1), 0);
+    if (layout.seat === "top") {
+      const seatHead = () => spotIn(page, ".kb-page > .seat .seat-head");
+      await record("seat head, down", "wheel", async () => wheel(page, await seatHead(), NOTCH, 1), 0);
+    }
+    return readings;
+  }
+
+  /* What must not change, read in the layout where the page scrolls sideways and the seat is on top. */
+  async function heldRows(page: Page, layout: Layout) {
+    const room = await maxOf(page, PAGE);
+    const held: Record<string, unknown> = { layout: layout.name };
+    /* The page's thumb dragged by hand moves the page and selects no text. */
+    await setScroll(page, PAGE, 0);
+    const x = layout.width - 7;
+    await page.mouse.move(x, 150);
+    await page.mouse.down();
+    await page.mouse.move(x, 300, { steps: 8 });
+    await page.mouse.move(x, 450, { steps: 8 });
+    await page.mouse.up();
+    await settle(page);
+    held.thumbDrag = { from: 0, to: await pageTop(page), selected: await page.evaluate(() => getSelection()?.toString() ?? "") };
+    /* The sideways wheel over a column still moves the board in scroll mode, and not the page. */
+    const board = ".kb .board.scroll";
+    if (await page.locator(board).count()) {
+      await setScroll(page, PAGE, room);
+      await page.evaluate((selector) => { document.querySelector<HTMLElement>(selector)!.scrollLeft = 0; }, board);
+      await wheel(page, await spotIn(page, `${COLUMN} > .col-body`), NOTCH, 1, true);
+      held.sideways = { scrollLeft: await page.evaluate((selector) => document.querySelector<HTMLElement>(selector)!.scrollLeft, board), page: [room, await pageTop(page)] };
+    }
+    /* Focus still brings a card below the window into view through the page. */
+    await setScroll(page, PAGE, 0);
+    const card = page.locator(`${COLUMN} .card[data-id]`).first();
+    await card.focus();
+    await settle(page);
+    held.focus = { page: [0, await pageTop(page)] };
+    return held;
+  }
+
+  /* The frames for the record: the page after three notches up at a column's top (it was low) and after three
+     notches down at the conversation's end (it was at the top). Taken with the rule and with it taken away. */
+  async function frames(page: Page, room: number, when: "before" | "after") {
+    const out = path.resolve(".artifacts/panel-scroll");
+    const column = `${COLUMN} > .col-body`;
+    await setScroll(page, PAGE, room); await setScroll(page, column, 0);
+    await wheel(page, await spotIn(page, column), -NOTCH);
+    await page.screenshot({ path: path.join(out, `${when}-column-top-up.png`) });
+    await setScroll(page, PAGE, 0); await setScroll(page, FEED, "end");
+    await wheel(page, await spotIn(page, FEED), NOTCH);
+    await page.screenshot({ path: path.join(out, `${when}-conversation-end-down.png`) });
+  }
+
+  browserTest("a panel keeps its scroll to itself at both ends, and the page scrolls from its bar and the heads", async () => {
+    const out = path.resolve(".artifacts/panel-scroll");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    const contained: Reading[] = [];
+    const uncontained: Reading[] = [];
+    const placed: Reading[] = [];
+    const held: Record<string, unknown>[] = [];
+    const pageRoom = new Map<string, number>();
+    try {
+      for (const layout of LAYOUTS) {
+        for (const variant of ["contained", "uncontained"] as const) {
+          const { context, page, pageErrors } = await open(browser, server.base, layout);
+          try {
+            if (variant === "uncontained") await page.addStyleTag({ content: CONTAINED_OFF });
+            const room = await maxOf(page, PAGE);
+            if (layout.seat === "side") {
+              if (variant === "contained") held.push({ layout: layout.name, pageRoom: room });
+              if (room > 1) failures.push(`${layout.name}: the page overflows by ${room} px with the seat at the side`);
+              continue;
+            }
+            if (room < 40) { failures.push(`${layout.name}: the page overflows by only ${room} px, so there is nothing to chain into`); continue; }
+            const rows = await chainRows(page, layout);
+            if (variant === "uncontained") {
+              uncontained.push(...rows);
+              for (const row of rows) if (Math.abs(row.to - row.from) < 1) failures.push(`${layout.name}: ${row.row} by ${row.input} did not carry the page with the rule taken away, so the case cannot fail there`);
+              if (layout.name === "rail-open") await frames(page, room, "before");
+              continue;
+            }
+            contained.push(...rows);
+            for (const row of rows) if (Math.abs(row.to - row.from) > 1) failures.push(`${layout.name}: ${row.row} by ${row.input} carried the page ${row.from} → ${row.to}`);
+            if (layout.name === "rail-open") await frames(page, room, "after");
+            pageRoom.set(layout.name, room);
+            placed.push(...await pageRows(page, layout));
+            if (layout.name !== "seat-folded") {
+              const rows = await heldRows(page, layout);
+              held.push(rows);
+              const drag = rows.thumbDrag as { to: number; selected: string };
+              if (drag.to < 300) failures.push(`${layout.name}: the page's thumb dragged 300 px moved the page only to ${drag.to}`);
+              if (drag.selected !== "") failures.push(`${layout.name}: dragging the page's thumb selected text`);
+              const sideways = rows.sideways as { scrollLeft: number; page: [number, number] } | undefined;
+              if (layout.name === "rail-open" && (!sideways || sideways.scrollLeft < 100 || sideways.page[1] !== sideways.page[0])) failures.push(`${layout.name}: the sideways wheel read ${JSON.stringify(sideways)}`);
+              const focus = rows.focus as { page: [number, number] };
+              if (focus.page[1] <= 0) failures.push(`${layout.name}: focusing the first card of a column did not bring it into view through the page`);
+            }
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+      }
+      /* Touch on the desktop board: a finger on a column head moves the page, one on a column at its top moves nothing. */
+      const touchLayout = LAYOUTS[0]!;
+      const { context, page } = await open(browser, server.base, touchLayout, true);
+      try {
+        const room = await maxOf(page, PAGE);
+        const column = `${COLUMN} > .col-body`;
+        await setScroll(page, PAGE, room); await setScroll(page, column, 0);
+        await finger(page, await spotIn(page, column), 250);
+        const body = { row: "column top, finger down", from: room, to: await pageTop(page) };
+        await setScroll(page, PAGE, room);
+        await finger(page, await spotIn(page, `${COLUMN} .col-head`), 250);
+        const head = { row: "column head, finger down", from: room, to: await pageTop(page) };
+        held.push({ layout: touchLayout.name, touch: { body, head } });
+        if (body.to !== body.from) failures.push(`touch on a column at its top moved the page ${body.from} → ${body.to}`);
+        if (head.from - head.to < 100) failures.push(`touch on a column head moved the page only ${head.from} → ${head.to}`);
+      } finally { await context.close(); }
+    } finally { await browser.close(); server.stop(); }
+    fs.mkdirSync("evidence/panel-scroll", { recursive: true });
+    fs.writeFileSync("evidence/panel-scroll/desktop.json", JSON.stringify({ contained, uncontained, placed, held, failures }, null, 2) + "\n");
+    for (const row of placed) if (Math.abs(row.to - row.from) < Math.min(NOTCH, pageRoom.get(row.layout) ?? 0) - 1) failures.push(`${row.layout}: ${row.row} by ${row.input} moved the page only ${row.from} → ${row.to}`);
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
