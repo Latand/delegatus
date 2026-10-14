@@ -1,4 +1,8 @@
 import { expect, test } from "bun:test";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
 
 import { viewerMcpHttpCodexEntry, viewerMcpServerEntry, viewerMcpServerEnv } from "./agent/spawnPolicy";
 import { codexViewerOverHttp, headlessCodexThreadConfig } from "./codexHeadlessConfig";
@@ -28,6 +32,50 @@ test("stdio Viewer forwards the current launch capability without embedding it i
     viewer: { ...configured, env_vars: ["LLV_SPAWN_CAPABILITY", "CUSTOM_VIEWER_ENV"] },
   } } }) as { mcp_servers: { viewer: { env_vars: string[] } } };
   expect(replay.mcp_servers.viewer.env_vars.filter((name) => name === "LLV_SPAWN_CAPABILITY")).toHaveLength(1);
+});
+
+test("Codex registered Viewer endpoint keeps inherited credentials scoped to the parent listener", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-viewer-endpoint-"));
+  const parentKey = crypto.randomUUID();
+  const authorizations: Array<string | null> = [];
+  const parent = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => {
+    authorizations.push(request.headers.get("authorization"));
+    return new Response("ok");
+  } });
+  const child = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => {
+    authorizations.push(request.headers.get("authorization"));
+    return new Response("ok");
+  } });
+  const names = ["LLV_VIEWER_PORT", "LLV_TOKEN", "LLV_VIEWER_CONTROL_TOKEN", "LLV_VIEWER_CONTROL_URL", "XDG_CONFIG_HOME", "LLV_STATE_DIR"] as const;
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  try {
+    process.env.LLV_VIEWER_PORT = String(parent.port);
+    process.env.LLV_TOKEN = parentKey;
+    process.env.LLV_VIEWER_CONTROL_TOKEN = "";
+    process.env.LLV_VIEWER_CONTROL_URL = "";
+    process.env.XDG_CONFIG_HOME = path.join(root, "config");
+    process.env.LLV_STATE_DIR = path.join(root, "state");
+    const config = headlessCodexThreadConfig({ config: { mcp_servers: {
+      viewer: { command: "viewer-mcp", env: { LLV_VIEWER_PORT: String(child.port) } },
+    } } }) as { mcp_servers: { viewer: { env: Record<string, string> } } };
+    expect(config.mcp_servers.viewer.env.LLV_VIEWER_PORT).toBe(String(child.port));
+    expect(config.mcp_servers.viewer.env.LLV_VIEWER_CONTROL_TOKEN).toBeUndefined();
+
+    const parentEnv = viewerMcpServerEnv({ ...process.env, LLV_VIEWER_PORT: String(parent.port), LLV_TOKEN: parentKey });
+    await fetch(`http://127.0.0.1:${parent.port}`, { headers: { authorization: `Bearer ${parentEnv.LLV_VIEWER_CONTROL_TOKEN}` } });
+    await fetch(`http://127.0.0.1:${child.port}`, { headers: config.mcp_servers.viewer.env.LLV_VIEWER_CONTROL_TOKEN
+      ? { authorization: `Bearer ${config.mcp_servers.viewer.env.LLV_VIEWER_CONTROL_TOKEN}` } : {} });
+    expect(authorizations).toEqual([`Bearer ${parentKey}`, null]);
+  } finally {
+    parent.stop(true);
+    child.stop(true);
+    fs.rmSync(root, { recursive: true, force: true });
+    for (const name of names) {
+      const value = previous[name];
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });
 
 test("a granted Codex thread materializes the operator Telegram connector when account registration is missing", () => {

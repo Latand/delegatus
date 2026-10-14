@@ -89,13 +89,22 @@ export function viewerMcpServerEnv(source: McpEnvironment = process.env, overrid
     const value = source[name]?.trim();
     if (value) env[name] = value;
   }
-  // Resolve before the agent sandbox replaces config roots. The existing
-  // resolver admits ambient keys only for this installation's own endpoint.
+  // Resolve the inherited credential against the parent endpoint before a
+  // registered server can replace that endpoint.
+  const parentEnvironment = { ...source, ...env };
+  const parentOrigin = viewerControlOrigin(parentEnvironment);
+  const inheritedToken = viewerControlToken(parentEnvironment, parentOrigin);
   for (const [name, value] of Object.entries(overrides)) {
-    if (typeof value === "string") env[name] = value;
+    if (typeof value === "string" && name !== "LLV_TOKEN" && name !== VIEWER_CONTROL_TOKEN_ENV) env[name] = value;
   }
   const effective = { ...source, ...env };
-  const token = viewerControlToken(effective, viewerControlOrigin(effective));
+  const childOrigin = viewerControlOrigin(effective);
+  const registeredToken = overrides[VIEWER_CONTROL_TOKEN_ENV] ?? overrides.LLV_TOKEN;
+  const token = typeof registeredToken === "string"
+    ? viewerControlToken({ [VIEWER_CONTROL_TOKEN_ENV]: registeredToken }, childOrigin)
+    : childOrigin === parentOrigin ? inheritedToken : null;
+  delete env.LLV_TOKEN;
+  delete env[VIEWER_CONTROL_TOKEN_ENV];
   if (token) env[VIEWER_CONTROL_TOKEN_ENV] = token;
   return env;
 }
