@@ -1013,6 +1013,7 @@ export async function terminalizeStaleStructuredSpawns(
   for (const receipt of registry.failedSpawnReceipts()) {
     if (reportRepairs >= actuationCap) break;
     if (receipt.purpose !== "launch" || receipt.artifactLifecycle !== "pending" || receipt.rejection
+      || receipt.failureAnnouncementSuppressed
       || !receipt.launcher || receipt.launcher.conversationId === receipt.conversationId) continue;
     let lifecyclePending: boolean;
     let noticePending: boolean;

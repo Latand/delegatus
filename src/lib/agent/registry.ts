@@ -311,6 +311,9 @@ export interface SpawnReceipt {
       never launched: no conversation, lineage edge, membership, transcript,
       or process exists for it. */
   rejection: SpawnRejection | null;
+  /** A caller already received a pre-acceptance refusal. Keep its reporting
+      policy with the failed receipt so recovery cannot announce lost work. */
+  failureAnnouncementSuppressed?: true;
   /** False only while a newly reserved receipt is waiting for task membership.
       Missing on legacy receipts means their historical admission is complete. */
   membershipAdmitted?: boolean;
@@ -3940,6 +3943,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     delegationDepth: normalizeDelegationDepth(value.delegationDepth),
     launcher: normalizeSpawnLauncher(value.launcher),
     rejection: normalizeSpawnRejection(value.rejection),
+    ...(value.failureAnnouncementSuppressed === true ? { failureAnnouncementSuppressed: true as const } : {}),
     membershipAdmitted: value.membershipAdmitted === false ? false : true,
     launchProfile: receiptLaunchProfile(value, policy),
     explicitProject: validExplicitProject(value.explicitProject),
@@ -7282,6 +7286,7 @@ export class AgentRegistry {
       }
       receipt.state = "failed";
       receipt.error = error;
+      if (options.announce === false) receipt.failureAnnouncementSuppressed = true;
       if (receipt.queuedPinnedSpawn) {
         receipt.launchProfile = emptyLaunchProfile(
           receipt.queuedPinnedSpawn.spec.launchProfile,

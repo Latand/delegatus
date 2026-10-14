@@ -76,6 +76,9 @@ export interface LifecycleJournalFile {
   lastSeq: number;
   events: LifecycleEvent[];
   retired: string[];
+  /** Permanent idempotency keys for spawn failures. Event rows are bounded;
+      losing this receipt would let a later repair emit a second seat wake. */
+  spawnFailureKeys?: string[];
 }
 
 export interface LifecycleEventQuery {
@@ -126,7 +129,7 @@ export function lifecycleEventId(key: string): string {
 }
 
 function emptyJournal(): LifecycleJournalFile {
-  return { version: LIFECYCLE_JOURNAL_VERSION, lastSeq: 0, events: [], retired: [] };
+  return { version: LIFECYCLE_JOURNAL_VERSION, lastSeq: 0, events: [], retired: [], spawnFailureKeys: [] };
 }
 
 function normalizeEvent(value: unknown): LifecycleEvent | null {
@@ -176,7 +179,10 @@ function normalizeJournal(value: unknown, journalPath: string): LifecycleJournal
   const retired = Array.isArray(file.retired) ? file.retired.filter((id): id is string => typeof id === "string") : [];
   const highest = events.at(-1)?.seq ?? 0;
   const lastSeq = Number.isInteger(file.lastSeq) ? Math.max(file.lastSeq as number, highest) : highest;
-  return { version: LIFECYCLE_JOURNAL_VERSION, lastSeq, events, retired };
+  const spawnFailureKeys = Array.isArray(file.spawnFailureKeys)
+    ? [...new Set(file.spawnFailureKeys.filter((key): key is string => typeof key === "string" && key.startsWith("spawn:") && key.endsWith(":failed")))]
+    : [];
+  return { version: LIFECYCLE_JOURNAL_VERSION, lastSeq, events, retired, spawnFailureKeys };
 }
 
 function readLegacyJournalFile(): LifecycleJournalFile {
@@ -235,10 +241,18 @@ export function appendLifecycleEvents(inputs: LifecycleEventInput[]): { appended
   if (inputs.length === 0) return { appended: [], skipped: 0 };
   return withFileTransactionSync(lifecycleJournalPath(), "lifecycle journal is busy", () => {
     const file = readJournalFile();
-    const known = new Set<string>([...file.events.map((event) => event.id), ...file.retired]);
+    const spawnFailureKeys = file.spawnFailureKeys ?? (file.spawnFailureKeys = []);
+    const known = new Set<string>([...file.events.map((event) => event.id), ...file.retired,
+      ...spawnFailureKeys.map(lifecycleEventId)]);
     const appended: LifecycleEvent[] = [];
     let skipped = 0;
+    let spawnFailureKeysChanged = false;
     for (const input of inputs) {
+      if (input.type === "spawn_failed" && input.key.startsWith("spawn:") && input.key.endsWith(":failed")
+        && !spawnFailureKeys.includes(input.key)) {
+        spawnFailureKeys.push(input.key);
+        spawnFailureKeysChanged = true;
+      }
       const id = lifecycleEventId(input.key);
       if (known.has(id)) {
         skipped += 1;
@@ -263,7 +277,7 @@ export function appendLifecycleEvents(inputs: LifecycleEventInput[]): { appended
       file.events.push(event);
       appended.push(event);
     }
-    if (appended.length === 0) return { appended, skipped };
+    if (appended.length === 0 && !spawnFailureKeysChanged) return { appended, skipped };
     if (file.events.length > LIFECYCLE_JOURNAL_CAPACITY) {
       const trimmed = file.events.splice(0, file.events.length - LIFECYCLE_JOURNAL_CAPACITY);
       file.retired = [...file.retired, ...trimmed.map((event) => event.id)].slice(-RETIRED_ID_CAPACITY);
@@ -277,7 +291,8 @@ export function appendLifecycleEvents(inputs: LifecycleEventInput[]): { appended
 export function hasLifecycleEventKey(key: string): boolean {
   const id = lifecycleEventId(key);
   const file = readJournalFile();
-  return file.events.some(event => event.id === id) || file.retired.includes(id);
+  return file.events.some(event => event.id === id) || file.retired.includes(id)
+    || file.spawnFailureKeys?.includes(key) === true;
 }
 
 /** Queryable by project, pipeline, conversation and cursor, as #686 requires. */

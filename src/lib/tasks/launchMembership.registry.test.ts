@@ -420,7 +420,10 @@ test.each(["journal", "notice"] as const)("a failed receipt repairs its refused 
   if (begun.kind !== "created") throw new Error("expected launch");
   registry.rememberMembership("conversation_fixture_launcher", { kind: "orchestrator", containerId: "launcher-project",
     role: "orchestrator", slot: "seat", stageId: null, stageOrder: null, round: null, parentConversationId: null });
-  registry.failStructuredSpawn(begun.receipt.launchId, "host vanished", { announce: false });
+  const failedFile = JSON.parse(fs.readFileSync(registry.filename, "utf8")) as { receipts: Record<string, { state: string; error: string | null }> };
+  failedFile.receipts[begun.receipt.launchId]!.state = "failed";
+  failedFile.receipts[begun.receipt.launchId]!.error = "host vanished";
+  fs.writeFileSync(registry.filename, JSON.stringify(failedFile));
   const failOnce = () => { throw new Error("temporary transaction refusal"); };
   settleFailedLaunch(registry.snapshot().receipts[begun.receipt.launchId]!, undefined, {
     launcherProject: "launcher-project",
@@ -435,7 +438,7 @@ test.each(["journal", "notice"] as const)("a failed receipt repairs its refused 
   expect(events[0]).toMatchObject({ type: "spawn_failed", project: "launcher-project" });
   expect(notices).toHaveLength(1);
   expect(notices[0]).toMatchObject({ launcherConversationId: "conversation_fixture_launcher", outcome: "lost",
-    lost: { tasks: [{ taskId: `report-${refused}`, from: "inbox", to: "inbox" }] } });
+    lost: { tasks: [{ taskId: `report-${refused}`, from: refused === "journal" ? "assigned" : "inbox", to: "inbox" }] } });
   expect(restarted.snapshot().receipts[begun.receipt.launchId]!.state).toBe("failed");
 });
 

@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expect, spyOn, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, type AgentRegistrySqliteMode, type SpawnLauncher } from "@/lib/agent/registry";
 import { spawnResponseForReceipt } from "@/lib/agent/spawnResponse";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { claimPass, patchPass, readPass } from "@/lib/memory/curation/store";
@@ -12,6 +12,8 @@ import { defaultSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
 import { emptySeatTickState } from "@/lib/monitor/types";
 import { writeSeatTickState } from "@/lib/monitor/seatTickState";
+import { appendLifecycleEvents, lifecycleJournalPath, queryLifecycleEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
+import { readSpawnNoticeTurn } from "@/lib/spawnNotice/store";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import {
@@ -29,12 +31,12 @@ const DEAD_RUNTIME_CLIENT = {
   effectBatch: async () => [],
 } as unknown as RuntimeHostClient;
 
-function registry(): AgentRegistry {
+function registry(sqliteMode: AgentRegistrySqliteMode = "off"): AgentRegistry {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-terminalize-"));
-  return new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  return new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode });
 }
 
-function staleStructuredReceipt(store: AgentRegistry, attempt: string) {
+function staleStructuredReceipt(store: AgentRegistry, attempt: string, launcher?: SpawnLauncher) {
   const begun = store.beginSpawnRequest({
     engine: "codex",
     cwd: "/repo",
@@ -42,6 +44,7 @@ function staleStructuredReceipt(store: AgentRegistry, attempt: string) {
     accountId: "work",
     clientAttemptId: attempt,
     requestDigest: "d".repeat(64),
+    launcher,
     launchProfile: emptyLaunchProfile({ title: "Stale launch fixture", cwd: "/repo" }),
   });
   if (begun.kind !== "created") throw new Error("expected structured launch creation");
@@ -79,6 +82,12 @@ function stagedStructuredReceipt(store: AgentRegistry, attempt: string) {
 }
 
 const AGED = () => Date.now() + STALE_STRUCTURED_SPAWN_TIMEOUT_MS + 60_000;
+const originalStateDir = process.env.LLV_STATE_DIR;
+
+afterEach(() => {
+  if (originalStateDir === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = originalStateDir;
+});
 
 test.each(["starting", "host-verified"] as const)("an abandoned transport-null %s receipt terminalizes without losing its replay identity", async state => {
   const store = registry();
@@ -224,6 +233,64 @@ test("a stale dead-evidence structured launch converges to durable retry-safe fa
   const after = store.snapshot();
   expect(Object.keys(after.receipts)).toHaveLength(receiptCount);
   expect(Object.keys(after.conversations)).toHaveLength(conversationCount);
+});
+
+test.each(["off", "sqlite"] as const)("a refused pre-acceptance launch stays silent after %s registry restart and repeated repair sweeps", async sqliteMode => {
+  const store = registry(sqliteMode);
+  const receipt = staleStructuredReceipt(store, "silent-refusal-20261014", { conversationId: "conversation_refusing_launcher", notify: true });
+  expect(store.failStructuredSpawn(receipt.launchId, "launch refused before acceptance", { announce: false }).claimed).toBe(true);
+  expect(store.snapshot().receipts[receipt.launchId]?.failureAnnouncementSuppressed).toBe(true);
+
+  const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode });
+  await terminalizeStaleStructuredSpawns(reopened, null, { now: AGED });
+  await terminalizeStaleStructuredSpawns(reopened, null, { now: AGED });
+
+  expect(queryLifecycleEvents({ type: "spawn_failed" }).events.filter(event => event.conversationId === receipt.conversationId)).toEqual([]);
+  expect(readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`)).toBeNull();
+});
+
+test.each(["off", "sqlite"] as const)("a reported failure does not emit another wake after journal retention and %s registry restart", async sqliteMode => {
+  const store = registry(sqliteMode);
+  const receipt = staleStructuredReceipt(store, "retained-failure-20261014", { conversationId: "conversation_retained_launcher", notify: true });
+  expect(store.failStructuredSpawn(receipt.launchId, "accepted launch was lost").claimed).toBe(true);
+  const firstSeq = readLifecycleJournal().lastSeq;
+  appendLifecycleEvents(Array.from({ length: 10_001 }, (_, index) => ({
+    key: `delivery:${receipt.launchId}:${index}:expired`,
+    type: "delivery_expired" as const,
+    at: new Date(AGED()).toISOString(),
+  })));
+  const afterRetention = readLifecycleJournal().lastSeq;
+  expect(afterRetention).toBeGreaterThan(firstSeq);
+
+  const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode });
+  await terminalizeStaleStructuredSpawns(reopened, null, { now: AGED });
+  expect(readLifecycleJournal().lastSeq).toBe(afterRetention);
+  expect(readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`)).not.toBeNull();
+});
+
+test("a refused first lifecycle append is repaired once by the next sweep", async () => {
+  const store = registry();
+  const receipt = staleStructuredReceipt(store, "repaired-first-append-20261014", { conversationId: "conversation_repair_launcher", notify: true });
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-terminalize-report-"));
+  process.env.LLV_STATE_DIR = path.join(sandbox, "state");
+  const journalPath = lifecycleJournalPath();
+  fs.mkdirSync(journalPath, { recursive: true });
+  try {
+    expect(store.failStructuredSpawn(receipt.launchId, "accepted launch was lost").claimed).toBe(true);
+    fs.rmSync(journalPath, { recursive: true });
+
+    const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode: "off" });
+    await terminalizeStaleStructuredSpawns(reopened, null, { now: AGED });
+    const events = queryLifecycleEvents({ type: "spawn_failed" }).events.filter(event => event.conversationId === receipt.conversationId);
+    expect(events).toHaveLength(1);
+    expect(readSpawnNoticeTurn(receipt.conversationId, `launch:${receipt.launchId}`)).not.toBeNull();
+
+    await terminalizeStaleStructuredSpawns(reopened, null, { now: AGED });
+    expect(queryLifecycleEvents({ type: "spawn_failed" }).events.filter(event => event.conversationId === receipt.conversationId)).toHaveLength(1);
+  } finally {
+    process.env.LLV_STATE_DIR = originalStateDir;
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 test.each(["missing", "corrupt"] as const)("a %s queued payload cannot keep an ownerless receipt alive past the setup bound", async (condition) => {
