@@ -90,3 +90,26 @@ test("level cards follow the All rules order and a topic list says which topic i
     globalThis.fetch = originalFetch;
   }
 });
+
+for (const [model, name] of [["claude-opus-5-5", "Opus 5.5"], ["claude-haiku-5-5", "Haiku 5.5"]]) {
+  test(`profile footer names the stored ${name} model`, async () => {
+    setLocale("en");
+    const originalFetch = globalThis.fetch;
+    const rules = sampleMemory();
+    const base = profileView(rules, "en", "claude-opus-5-5", null);
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    globalThis.fetch = (async () => Response.json({ ...base, overall: {
+      scope: "overall", model, createdAt: "2026-01-01", durationMs: 1, promptVersion: 1, stale: false,
+      answer: { headline: "Clearer samples", text: "Agents check sample colors.", topics: [] },
+    } })) as unknown as typeof fetch;
+    try {
+      flushSync(() => root.render(<MemoryProfile rules={rules} renderRules={() => null} />));
+      await tick(); await tick();
+      expect(container.textContent).toContain(name);
+      expect(container.textContent).not.toContain(model);
+    } finally {
+      flushSync(() => root.unmount()); globalThis.fetch = originalFetch;
+    }
+  });
+}

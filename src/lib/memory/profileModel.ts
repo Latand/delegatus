@@ -5,8 +5,10 @@ import { MemoryProfileError, OVERALL_SCOPE, profilePrompt, profileSchema, type P
 import type { Locale } from "@/lib/i18n/core";
 
 // The approved model is pinned; catalogue absence must never select an older model.
-export const MEMORY_PROFILE_MODEL = "claude-haiku-5-5";
-export type ProfileCaller = (input: ProfileInput, locale: Locale) => Promise<unknown>;
+export const MEMORY_PROFILE_MODEL = "claude-opus-5-5";
+export const MEMORY_PROFILE_FALLBACK_MODEL = "claude-haiku-5-5";
+export type ProfileResult = Pick<JsonAnswer, "answer" | "model">;
+export type ProfileCaller = (input: ProfileInput, locale: Locale) => Promise<ProfileResult>;
 export type ProfileFetch = (url: string, init: RequestInit) => Promise<Response>;
 
 export interface JsonRequest { prompt: string; schema: object; maxTokens: number; deadlineMs?: number }
@@ -22,12 +24,12 @@ export function directJsonCaller(oauthToken: string, model: string, request: Pro
         method: "POST", redirect: "error", signal: AbortSignal.timeout(input.deadlineMs ?? 30_000),
         headers: { authorization: `Bearer ${oauthToken}`, "anthropic-version": "2023-06-01", "anthropic-beta": "oauth-2025-04-20", "content-type": "application/json" },
         body: JSON.stringify({ model,
-          // Haiku 5.5 counts thinking against this ceiling; prose stays bounded by validation.
+          // Thinking shares the output ceiling; prose stays bounded by validation.
           max_tokens: input.maxTokens,
           // Subscription model admission requires this client identity, even without tools.
           system: [{ type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." }],
           messages: [{ role: "user", content: input.prompt }],
-          output_config: { ...(model === "claude-haiku-5-5" ? { effort: "low" } : {}), format: { type: "json_schema", schema: input.schema } },
+          output_config: { ...([MEMORY_PROFILE_MODEL, MEMORY_PROFILE_FALLBACK_MODEL].includes(model) ? { effort: "low" } : {}), format: { type: "json_schema", schema: input.schema } },
         }),
       });
     } catch (error) {
@@ -39,36 +41,59 @@ export function directJsonCaller(oauthToken: string, model: string, request: Pro
     }
     try {
       const body = await response.json() as { stop_reason?: string; content?: { type: string; text?: string }[]; usage?: Record<string, number> };
+      if (body.stop_reason === "refusal") throw new MemoryProfileError("failed");
       if (body.stop_reason !== "end_turn" || !Array.isArray(body.content) || body.content.some(part => !["text", "thinking", "redacted_thinking"].includes(part.type))) throw new MemoryProfileError("invalid");
       return { answer: JSON.parse(body.content.filter(part => part.type === "text").map(part => part.text ?? "").join("")), durationMs: performance.now() - started, inputTokens: body.usage?.input_tokens ?? 0, outputTokens: body.usage?.output_tokens ?? 0, model };
-    } catch { throw new MemoryProfileError("invalid"); }
+    } catch (error) {
+      if (error instanceof MemoryProfileError) throw error;
+      throw new MemoryProfileError(error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name) ? "timeout" : "invalid");
+    }
   };
 }
 
 export function directProfileCaller(oauthToken: string, model: string, request: ProfileFetch = fetch): ProfileCaller {
   const caller = directJsonCaller(oauthToken, model, request);
-  return async (input, locale) => (await caller({ prompt: profilePrompt(input, locale), schema: profileSchema(input.scope === OVERALL_SCOPE),
-    maxTokens: model === MEMORY_PROFILE_MODEL ? (input.scope === OVERALL_SCOPE ? 4096 : 2048) : 650 })).answer;
+  return profileCaller(caller, model);
 }
 
-type AccountPorts = { manager: Pick<AccountManager, "resolveHeadlessSpawn">; credentials: typeof readClaudeCredentials; model: string };
-export async function prepareJsonCaller(project: string, ports: AccountPorts = { manager: accountManager, credentials: readClaudeCredentials, model: MEMORY_PROFILE_MODEL }, managedOnly = false): Promise<JsonCaller> {
+type AccountPorts = { manager?: Pick<AccountManager, "resolveHeadlessSpawn">; credentials?: typeof readClaudeCredentials; model: string; request?: ProfileFetch };
+export async function prepareJsonCaller(project: string, ports: AccountPorts = { model: MEMORY_PROFILE_MODEL }, managedOnly = false): Promise<JsonCaller> {
+  const manager = ports.manager ?? accountManager;
+  const readCredentials = ports.credentials ?? readClaudeCredentials;
   const unavailable: string[] = [];
   while (true) {
-    const selected = ports.manager.resolveHeadlessSpawn("claude", null, [], project, ports.model, unavailable);
+    const selected = manager.resolveHeadlessSpawn("claude", null, [], project, ports.model, unavailable);
     if (selected.kind !== "available" || unavailable.includes(selected.account.accountId)) throw new MemoryProfileError("account");
     if (!selected.account.claudeProvider && (!managedOnly || selected.account.kind === "managed")) {
-      const credentials = ports.credentials(selected.account.home);
+      const credentials = readCredentials(selected.account.home);
       const oauth = credentials.state === "present" ? credentials.document.claudeAiOauth : null;
-      if (typeof oauth?.accessToken === "string" && oauth.accessToken && typeof oauth.expiresAt === "number" && oauth.expiresAt > Date.now()) return directJsonCaller(oauth.accessToken, ports.model);
+      if (typeof oauth?.accessToken === "string" && oauth.accessToken && typeof oauth.expiresAt === "number" && oauth.expiresAt > Date.now()) return directJsonCaller(oauth.accessToken, ports.model, ports.request);
     }
     unavailable.push(selected.account.accountId);
   }
 }
 
-export async function prepareProfileCaller(project: string, ports?: AccountPorts): Promise<ProfileCaller> {
-  const caller = await prepareJsonCaller(project, ports);
-  const model = ports?.model ?? MEMORY_PROFILE_MODEL;
-  return async (input, locale) => (await caller({ prompt: profilePrompt(input, locale), schema: profileSchema(input.scope === OVERALL_SCOPE),
-    maxTokens: model === MEMORY_PROFILE_MODEL ? (input.scope === OVERALL_SCOPE ? 4096 : 2048) : 650 })).answer;
+function profileCaller(caller: JsonCaller, model: string): ProfileCaller {
+  return async (input, locale) => {
+    const result = await caller({ prompt: profilePrompt(input, locale), schema: profileSchema(input.scope === OVERALL_SCOPE),
+      maxTokens: model === MEMORY_PROFILE_MODEL ? (input.scope === OVERALL_SCOPE ? 8192 : 4096)
+        : model === MEMORY_PROFILE_FALLBACK_MODEL ? (input.scope === OVERALL_SCOPE ? 4096 : 2048) : 650 });
+    return { answer: result.answer, model: result.model };
+  };
+}
+
+export async function prepareProfileCaller(project: string, ports: AccountPorts = { model: MEMORY_PROFILE_MODEL }): Promise<ProfileCaller> {
+  // Share admission across parallel slices, but keep failure and attribution per request.
+  let primary: Promise<JsonCaller> | undefined;
+  let fallback: Promise<JsonCaller> | undefined;
+  return async (input, locale) => {
+    try {
+      const caller = await (primary ??= prepareJsonCaller(project, ports));
+      return await profileCaller(caller, ports.model)(input, locale);
+    } catch (error) {
+      if (ports.model !== MEMORY_PROFILE_MODEL || !(error instanceof MemoryProfileError) || !["account", "failed", "timeout"].includes(error.code)) throw error;
+      const caller = await (fallback ??= prepareJsonCaller(project, { ...ports, model: MEMORY_PROFILE_FALLBACK_MODEL }));
+      return profileCaller(caller, MEMORY_PROFILE_FALLBACK_MODEL)(input, locale);
+    }
+  };
 }
