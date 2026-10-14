@@ -145,20 +145,20 @@ test("publish transport retains the exact reference and resolves a report absent
   } finally { await server.close(); }
 });
 
-test("an approval immediately following a published report resolves even at the same timestamp", () => {
+test("an adjacent published report does not resolve without an explicit reply", () => {
   report(); receipt("http://127.0.0.1:1/v1");
   const request = ownerRequest(null, "published-report");
-  expect(resolveOwnerBridgeContext(request, ownerTierFor({ ownerTier: true }, request)!, "http://127.0.0.1:1/v1")).toMatchObject({ reportText: body });
+  expect(resolveOwnerBridgeContext(request, ownerTierFor({ ownerTier: true }, request)!, "http://127.0.0.1:1/v1")).toBeNull();
 });
 
 for (const requestText of ["Implement the new feature in project-a.", null])
-  test(`an owner instruction retains the mechanically matched preceding report (${requestText === null ? "message text" : "request text"})`, () => {
+  test(`an owner instruction does not inherit the preceding report (${requestText === null ? "message text" : "request text"})`, () => {
     report(); receipt("http://127.0.0.1:1/v1");
     const request = ownerRequest(null, "published-report");
     request.input.request_text = requestText;
     request.input.conversation[1]!.text = "/ai Implement the new feature in project-a.";
     const owner = ownerTierFor({ ownerTier: true }, request)!;
-    expect(resolveOwnerBridgeContext(request, owner, "http://127.0.0.1:1/v1")).toMatchObject({ reportText: body });
+    expect(resolveOwnerBridgeContext(request, owner, "http://127.0.0.1:1/v1")).toBeNull();
   });
 
 test("an explicit reply retains its report context even with a substantive instruction", () => {

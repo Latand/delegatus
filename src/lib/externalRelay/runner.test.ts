@@ -1,3 +1,4 @@
+import { ownerRelayTargetMatches } from "./ownerAuthority";
 import * as ownerContext from "./ownerBridgeContext";
 import { setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 import { createHash, randomBytes } from "node:crypto";
@@ -2784,7 +2785,8 @@ test("a non-owner short reply keeps the restricted answer path", async () => {
   } finally { await server.close(); }
 });
 
-test("runner preserves matched report context without resolving ordinary reply context", async () => {
+for (const explicitReply of [false, true])
+  test(`owner report custody restricts handoff only with an explicit reply (${explicitReply})`, async () => {
   const { Database } = await import("bun:sqlite");
   const { appendBridgeReports, recordBridgeReportTelegram } = await import("@/lib/bridge/store");
   const { recordPublishedRelayReference } = await import("./publishedReferences");
@@ -2810,20 +2812,23 @@ test("runner preserves matched report context without resolving ordinary reply c
   const accessor = spyOn(ownerContext, "resolveOwnerReplyContext");
   try {
     const result = await runClaimedRequest(paired, { ...contextRequest, request_id: "owner-report-reply", answer: { max_chars: 1000, progress: "none" },
-      input: { ...contextRequest.input, request_text: "го", requester: { ...contextRequest.input.requester, is_owner: true },
+      input: { ...contextRequest.input, request_text: "implement X in project-a", requester: { ...contextRequest.input.requester, is_owner: true },
         conversation: [
           { ...contextRequest.input.conversation[0], id: "posted-report", text: "An altered history copy of the report." },
-          ...contextRequest.input.conversation.map(message => ({ ...message, text: "/ai го", reply_to: "posted-report" })),
+          ...contextRequest.input.conversation.map(message => ({ ...message, text: "/ai implement X in project-a", reply_to: explicitReply ? "posted-report" : null })),
         ] } }, undefined,
       { ownerPorts: { launch: async () => {
         launches++;
-        expect(accessor).not.toHaveBeenCalled();
+        if (explicitReply) expect(accessor).not.toHaveBeenCalled();
+        else expect(accessor).toHaveBeenCalledTimes(1);
         return { status: 202, body: { conversationId: "conversation_report_reply" } };
       },
         observe: async () => {
-          expect(readRunLedger().runs.find(run => run.requestId === "owner-report-reply")?.ownerTurn).toMatchObject({
-            bridgeReport: { project: "project-b", sourceSeat: "seat-b", reportText: body },
-          });
+          const run = readRunLedger().runs.find(run => run.requestId === "owner-report-reply")!;
+          if (explicitReply) expect(run.ownerTurn?.bridgeReport).toMatchObject({ project: "project-b", sourceSeat: "seat-b", reportText: body });
+          else expect(run.ownerTurn).not.toHaveProperty("bridgeReport");
+          expect(ownerRelayTargetMatches(run.conversationId!, "project-a", "seat-a")).toBe(!explicitReply);
+          expect(ownerRelayTargetMatches(run.conversationId!, "project-b", "seat-b")).toBe(true);
           return { state: "ended", finalText: "Передано до місця проєкту." };
         }, stop: async () => {}, pollMs: 1 } });
     expect(result).toMatchObject({ outcome: "answered" });
