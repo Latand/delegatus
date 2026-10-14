@@ -9,7 +9,7 @@ const task: BoardTask = { id: ["00000000", "0000", "0000", "0000", "000000000001
 test("v6 questionnaire replicas round trip; v5 peers still receive the task without the replica", () => {
   const round = { id: `pr_${"a".repeat(32)}`, taskId: task.id, project: task.project, title: "Before work", createdAt: task.createdAt, source: { conversationId: null }, publicationKey: "question", inputDigest: "digest", variants: [], questions };
   const withQuestions = { ...task, prototypeReviews: [round] };
-  expect(TASK_WIRE_VERSION).toBe(6);
+  expect(TASK_WIRE_VERSION).toBe(7);
   const replica = prototypeReviewReplica(withQuestions)!;
   expect(isPrototypeReplica(replica, task.id, task.project)).toBe(true);
   expect(decodeWireRow(encodeTask(withQuestions, self, { peerTaskWireVersion: 6 }).row)).toHaveProperty("prototypeReviewReplica");
@@ -42,4 +42,19 @@ test("rejected variants survive the strict replica wire and local critic evidenc
     if (change === "no-variants") invalid.rounds[0]!.variants = [];
     expect(isPrototypeReplica(invalid, task.id, task.project)).toBe(false);
   }
+});
+
+test("v7 skipped answers round trip and withhold the replica from v6 peers", () => {
+  const answers = questions.map((q, i) => ({ questionId: q.id, options: i === 1 ? [] : [0], ...(i === 1 ? { skipped: true as const } : {}) }));
+  const round = { id: `pr_${"c".repeat(32)}`, taskId: task.id, project: task.project, title: "Before work", createdAt: task.createdAt, source: { conversationId: null }, publicationKey: "skip", inputDigest: "digest", variants: [], questions,
+    decision: { chosen: [], answers, comment: "", at: task.createdAt, delivery: { state: "sent" as const, clientMessageId: "skip", conversationId: null, text: "answer" } } };
+  const decided = { ...task, prototypeReviews: [round] };
+  const replica = prototypeReviewReplica(decided)!;
+  expect(isPrototypeReplica(replica, task.id, task.project)).toBe(true);
+  for (const peerTaskWireVersion of [5, 6]) expect(encodeTask(decided, self, { peerTaskWireVersion }).row).not.toHaveProperty("prototypeReviewReplica");
+  const wire = decodeWireRow(encodeTask(decided, self, { peerTaskWireVersion: 7 }).row);
+  expect(wire && "prototypeReviewReplica" in wire && wire.prototypeReviewReplica?.rounds[0]?.decision?.answers).toEqual(answers);
+  const invalid = structuredClone(replica);
+  Object.assign(invalid.rounds[0]!.decision!.answers![1]!, { skipped: false });
+  expect(isPrototypeReplica(invalid, task.id, task.project)).toBe(false);
 });

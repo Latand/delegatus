@@ -243,9 +243,16 @@ card's review button. Telegram (f3bc9ab1) posts it with the same format.
   agreeing with everything is one click on «Відповісти». A different option is
   one click; «Інше» opens the shared comment, which «Відповісти» then requires,
   exactly as in the review window.
-- The inline card has **no «Пропустити»**: with the recommendations preselected
-  it would send the same answers under another name. The review window keeps
-  it. `skipped` is not written from the inline card.
+- The inline card has no whole-form «Пропустити»; the review window keeps
+  that action, which takes the recommendations. In both surfaces every
+  question ends with its own «Пропустити» row, one line in the card and at
+  390 px; the full «Пропустити: вже вирішено або неактуально» is its tooltip and
+  accessible name. Pressed, the row reads «Пропущено» in bold with a filled
+  mark and the question's options dim, so it differs from an unanswered and an
+  answered question before saving. It is stored as
+  `{questionId, options: [], skipped: true}`. The seat is told that question is
+  settled and must not be asked again; the decided record keeps the longer
+  «Пропущено: вже вирішено або неактуально».
 - After «Відповісти» the card collapses at once to its answer record (each
   question with the chosen answer, the time, the delivery state), which is
   #2747's optimistic acceptance applied to the same route; delivery retries in
@@ -471,7 +478,7 @@ light/dark, with the measurements of `frames.json` (Answer reachable, rows
 - **Choosing variants by clicking thumbnails inside the card.** The seat asks
   the variant as a question; the window keeps the variant choice for older
   rounds.
-- **«Пропустити» in the inline card** (§2.4).
+- **Whole-form «Пропустити» in the inline card** (§2.4).
 
 ## The prototype
 

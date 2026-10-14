@@ -33,6 +33,7 @@ export function prototypeDecisionText(task: { id: string; text: string } | null,
   if (!round.questions?.length) return decision.rejected ? `${header}\nRound: ${round.title}\n${rejection}${footer}` : `${header}\nChosen: ${chosen}${footer}`;
   const answers = round.questions.map((q, i) => {
     const answer = decision.answers!.find(a => a.questionId === q.id)!;
+    if (answer.skipped) return `${i + 1}. ${q.text}${q.multiple ? " (several allowed)" : ""}\n   Skipped by the operator: already decided or no longer relevant — do not ask again.`;
     const selected = answer.options.map(index => `   ${String.fromCharCode(97 + index)}) ${q.options[index]!.label}${q.options[index]!.recommended ? " (recommended)" : ""}`);
     if (answer.other && !answer.customText) selected.push("   Other: see the comment");
     if (answer.customText) selected.push(`   Owner's custom note:\n${answer.customText}`);

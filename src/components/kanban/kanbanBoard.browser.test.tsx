@@ -24,7 +24,7 @@ import { RISE_FRAME_SHARE, RISE_MS } from "@/lib/voiceCompanion/motion";
 import { CONTROL_SELECTOR, LANE_HEIGHTS, NARROW_LANE_WIDTHS } from "@/lib/voiceCompanion/placement";
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { DELEGATION_LINGER_MS, REPORT_CAP } from "@/components/voiceCompanion/VoiceCompanion";
-import { browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
+import { browserCase, caseChromium as chromium, captureWorkerLimitFrames, capturePrototypeQuestions, capturePrototypeSkipRows, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
 import { WIRE_RIDE_ID } from "./orchestratorWires";
@@ -28612,6 +28612,59 @@ describe("fresh context rotation advice", () => {
 });
 
 describe("short questionnaire rendered evidence", () => {
+  browserTest("question skip: open and decided review in both languages", async () => {
+    const out = path.resolve(process.env.QUESTION_SKIP_PNG_DIR ?? ".artifacts/prototype-review/question-skip"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, headless: true, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const taskId of ["t-upload", "t-disk"]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=questions`, { width: 1440, height: 900 }, scheme, lang, "reduce", false);
+        try {
+          await page.locator(`[data-prototype-button="${taskId}"]`).click();
+          await page.waitForSelector("[data-prototype-review] [data-prototype-questions]");
+          const fields = page.locator("[data-prototype-review] [data-prototype-question]");
+          const question = await fields.nth(1).getAttribute("data-prototype-question");
+          if (!question) throw new Error("the second question is missing");
+          const skip = page.locator(`[data-prototype-review] [data-prototype-question-skip="${question}"]`);
+          expect(await skip.count()).toBe(1);
+          await skip.click();
+          for (const state of ["open", "decided"] as const) {
+            if (state === "decided") {
+              await page.locator("[data-prototype-review] [data-prototype-save]").click();
+              await page.waitForSelector("[data-prototype-review] [data-prototype-decision]");
+              const posts = await page.evaluate(() => (window as unknown as { protoPosts: Array<{ answers: Array<{ questionId: string; options: number[]; skipped?: true }> }> }).protoPosts);
+              expect(posts).toHaveLength(1);
+              expect(posts[0]!.answers[1]).toEqual({ questionId: question, options: [], skipped: true });
+              expect(posts[0]!.answers.filter(answer => answer.skipped)).toHaveLength(1);
+            }
+            await skip.scrollIntoViewIfNeeded();
+            const reading = await capturePrototypeQuestions(page, false);
+            expect(reading.sideways).toBeLessThanOrEqual(1);
+            expect(reading.skipRows.length).toBe(state === "decided" ? 1 : reading.questionCount);
+            for (const row of reading.skipRows) {
+              expect(row.height).toBeGreaterThanOrEqual(44); expect(row.insideFieldset).toBe(true);
+              expect(row.clipped).toBe(false); expect(row.overlapsOptions).toBe(false);
+              expect(row.checked).toBe(row.question === question); expect(row.disabled).toBe(state === "decided");
+              expect(row.borderStyle).toBe(row.checked ? "solid" : "dashed");
+              if (row.checked) expect(row.background).not.toBe("rgba(0, 0, 0, 0)");
+              if (row.checked) expect(row.markBackground).not.toBe("rgba(0, 0, 0, 0)");
+              if (row.checked && state === "open") expect(row.optionsOpacity).toBeLessThan(1);
+              else expect(row.optionsOpacity).toBe(1);
+              if (!row.checked) expect(row.label).toBe(lang === "uk" ? "Вже вирішено" : "Already decided");
+              expect(row.reason).toBe(row.checked ? (lang === "uk" ? "Пропущено: вже вирішено або неактуально" : "Skipped: already decided or no longer relevant") : (lang === "uk" ? "Вже вирішено: пропустити це питання, воно неактуальне" : "Already decided: skip this question, it is no longer relevant"));
+            }
+            expect(pageErrors).toEqual([]);
+            readings.push({ lang, scheme, taskId, state, width: 1440, ...reading, pageErrors });
+            await page.screenshot({ path: path.join(out, `${scheme}-${lang}-${taskId}-${state}.png`) });
+          }
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/prototype-review", { recursive: true });
+      fs.writeFileSync("evidence/prototype-review/question-skip.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+
   browserTest("questions only, images, multi-select, long text and answered in both languages and themes", async () => {
     const out = path.resolve(".artifacts/prototype-review/questions"); fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
@@ -28755,6 +28808,60 @@ describe("operator decision forms: the «Рішення» column beside the seat
   const OUT = path.resolve(process.env.OPERATOR_DECISIONS_PNG_DIR ?? ".artifacts/operator-decisions");
   const SEAT_ASK = `pr_${"d".repeat(32)}`;
   const LANE_ROUND = `pr_${"c".repeat(32)}`;
+  browserTest("question skip: inline card and feed record at desktop and 390 in both languages", async () => {
+    const out = path.resolve(process.env.QUESTION_SKIP_CARD_PNG_DIR ?? ".artifacts/operator-decisions/question-skip"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?decisions=1`, { width, height: phone ? 844 : 900 }, scheme, lang, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator("[data-mobile2-seat-open]").click();
+            await page.locator("[data-decision-strip]").click();
+          }
+          const scope = phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]';
+          await page.locator(`${scope} [data-decision-row="${SEAT_ASK}"]`).click();
+          const card = `${scope} [data-decision-card="open"][data-decision-review="${SEAT_ASK}"]`;
+          const skip = page.locator(`${card} [data-prototype-question-skip="deploy"]`);
+          expect(await skip.count()).toBe(1);
+          await skip.click(); await skip.scrollIntoViewIfNeeded();
+          const skipRows = await capturePrototypeSkipRows(page, card);
+          expect(skipRows).toHaveLength(2);
+          for (const row of skipRows) {
+            expect(row.height).toBeGreaterThanOrEqual(phone ? 44 : 36);
+            expect(row.insideFieldset).toBe(true); expect(row.clipped).toBe(false); expect(row.overlapsOptions).toBe(false);
+            expect(row.checked).toBe(row.question === "deploy"); expect(row.disabled).toBe(false);
+            expect(row.borderStyle).toBe(row.checked ? "solid" : "dashed");
+            if (row.checked) expect(row.background).not.toBe("rgba(0, 0, 0, 0)");
+            if (row.checked) expect(row.markBackground).not.toBe("rgba(0, 0, 0, 0)");
+            expect(row.optionsOpacity < 1).toBe(row.checked);
+            if (!row.checked) { expect(row.label).toBe(lang === "uk" ? "Вже вирішено" : "Already decided"); expect(row.height).toBeLessThanOrEqual(phone ? 56 : 44); }
+          }
+          const sideways = await page.locator(card).evaluate(node => node.scrollWidth - node.clientWidth);
+          expect(sideways).toBeLessThanOrEqual(1);
+          await page.screenshot({ path: path.join(out, `${scheme}-${width}-${lang}-open.png`) });
+          await page.locator(`${card} [data-decision-send]`).click();
+          const posts = await page.evaluate(() => (window as unknown as { decisionPosts: Array<{ answers: unknown[] }> }).decisionPosts);
+          expect(posts).toHaveLength(1);
+          expect(posts[0]!.answers).toEqual([{ questionId: "place", options: [0] }, { questionId: "deploy", options: [], skipped: true }]);
+          if (phone) await page.locator('[data-mobile2-sheet="decisions"] [data-mobile2-close]').click();
+          const record = page.locator(`[data-decision-card="answered"][data-decision-review="${SEAT_ASK}"]`);
+          await record.waitFor(); await record.scrollIntoViewIfNeeded();
+          expect(await record.locator('[data-decision-record-skipped="deploy"]').textContent()).toBe(lang === "uk" ? "Пропущено" : "Skipped");
+          expect(await record.locator("[data-prototype-question-skip]").count()).toBe(0);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${scheme}-${width}-${lang}-decided.png`) });
+          readings.push({ lang, scheme, width, sideways, skipRows, posted: posts[0]!.answers, record: await record.textContent(), pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/operator-decisions", { recursive: true });
+      fs.writeFileSync("evidence/operator-decisions/question-skip.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 300_000);
+
   /* What one frame reads of the open form and the page around it. */
   const readForm = (page: Page, scope: string) => page.evaluate((root) => {
     const within = document.querySelector<HTMLElement>(root);
