@@ -19,11 +19,24 @@ import { STATE_OWNER_ENV } from "./stateOwnership";
  * environment — which is how the Viewer MCP server and two operator scripts
  * were found dead on arrival.
  *
- * The "operator home" is a directory inside `node_modules`: it must NOT sit
- * under a temp root, since a `$HOME` under one is exactly the sandbox the
+ * The "operator home" is a newly owned directory in the user's cache. It must
+ * stay outside temp roots, since a `$HOME` under one is exactly the sandbox the
  * mechanism leaves alone.
  */
-const OPERATOR_HOME = path.join(process.cwd(), "node_modules", ".llv-entry-point-test", "home");
+// Bun caches userInfo()'s home from the startup environment. A fresh process
+// without the runner's temporary home finds the native cache instead.
+function nativeHome(): string {
+  const env = { ...process.env };
+  delete env.HOME;
+  delete env.USERPROFILE;
+  const result = runEntryPoint(["-e", "console.log(require('node:os').userInfo().homedir)"], env);
+  if (result.status !== 0) throw new Error(result.output);
+  return result.stdout.trim();
+}
+const cache = path.join(nativeHome(), ".cache");
+fs.mkdirSync(cache, { recursive: true });
+const operatorRoot = fs.mkdtempSync(path.join(cache, "llv-entry-point-test-"));
+const OPERATOR_HOME = path.join(operatorRoot, "home");
 /* Both shapes an operator's home takes after the rename (rename-delegatus.md
    §4.2): a new install holds only `~/.config/delegatus`, an existing one only
    `~/.config/agent-log-viewer`. */
@@ -55,6 +68,12 @@ function operatorEnvironment(): Record<string, string> {
   for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
   delete env[STATE_OWNER_ENV];
   delete env.LLV_STATE_DIR;
+  delete env.DELEGATUS_STATE_OWNER;
+  delete env.DELEGATUS_STATE_DIR;
+  // An operator's stdio MCP starts locally. An inherited agent capability
+  // selects lazy delegation and never opens the local receipt store at EOF.
+  delete env.LLV_SPAWN_CAPABILITY;
+  delete env.DELEGATUS_SPAWN_CAPABILITY;
   delete env.NEXT_PHASE;
   delete env.NEXT_RUNTIME;
   env.HOME = OPERATOR_HOME;
@@ -64,11 +83,11 @@ function operatorEnvironment(): Record<string, string> {
   return env;
 }
 
-function runEntryPoint(command: string[]): RunResult {
+function runEntryPoint(command: string[], env: Record<string, string | undefined> = operatorEnvironment()): RunResult {
   const result = Bun.spawnSync({
     cmd: [process.execPath, ...command],
     cwd: process.cwd(),
-    env: operatorEnvironment(),
+    env,
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
@@ -220,7 +239,7 @@ for (const appDir of APP_DIRS) describe(`an entry point that owns the operator's
        stands. */
     const result = runEntryPoint(["src/lib/state/fixtures/stateOwnershipProbe.ts"]);
 
-    expect(result.status).not.toBe(0);
+    expect(result.status, result.output).not.toBe(0);
     expect(result.stderr).toContain("refusing to resolve the operator's state directory");
   }, 60_000);
 });

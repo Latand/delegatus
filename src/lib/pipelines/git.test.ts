@@ -76,8 +76,11 @@ test.each(["probe", "push-reply"] as const)("closing a lane during a real public
   let pending: ReturnType<typeof publishPipelineBranch> | undefined;
   try {
     pending = publishPipelineBranch(box.subject, realExec, { acceptedSha: head });
-    const deadline = Date.now() + 2_000;
-    while (!fs.existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+    // Wait for the actual Git boundary. Startup under a busy runner is outside
+    // the publication contract; the test's infrastructure deadline bounds it.
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    while (!fs.existsSync(entered) && !settled) await Bun.sleep(5);
     expect(fs.existsSync(entered)).toBe(true);
     const ports = { ...defaultPipelinePorts(), stopStageAgent: async () => ({ outcome: "not-running" as const }), paneAgentAlive: async () => false, stageHostResident: async () => false };
     expect((await patchPipeline(box.subject.id, { action: "close" }, ports)).error).toBeUndefined();
@@ -95,11 +98,14 @@ test.each(["probe", "push-reply"] as const)("closing a lane during a real public
       expect(findPipelineRecord(box.subject.id)!.delivery!.journal.at(-1)!.reason).toContain("reconcile");
     }
   } finally {
-    fs.writeFileSync(released, ""); await pending;
-    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
-    restoreTick(); fs.rmSync(box.root, { recursive: true, force: true });
+    fs.writeFileSync(released, "");
+    try { await pending; }
+    finally {
+      for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+      restoreTick(); fs.rmSync(box.root, { recursive: true, force: true });
+    }
   }
-});
+}, 30_000);
 
 let previousState: string | undefined;
 let previousGitConfig: Record<string, string> = {};
