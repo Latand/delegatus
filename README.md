@@ -208,7 +208,7 @@ Telegram step or the **Reports** section in the orchestrator's own row. The
 **Bridge reports** switch, on the **Orchestrator** page of the board's ⋯
 menu, turns reports off for a project.
 
-![A project's orchestrator on top of its board: its chat with you, its worker count against the limit, and beside it a decision form waiting for your answer, already sent to Telegram](docs/media/readme/orchestrator.svg)
+![A project's orchestrator: its chat with you, its worker count against the limit, and beside it a task's three-question decision form waiting for your answer, already sent to Telegram with a link to send it again](docs/media/readme/orchestrator.svg)
 
 ### Tasks and the board
 
@@ -256,7 +256,7 @@ and **Pipeline actions** opens as a page with a back row. A column's ⋯, a
 conversation's ⋯ and the board's ⋯ follow the same layout, and the board's ⋯
 keeps merging and the orchestrator's switches on pages of their own.
 
-![A task card's ⋯ menu open on the board: the four columns in a row, icon actions to rename, describe, attach and hide with a line saying one agent keeps working, the three priorities, and the Appearance, Pipeline actions and More rows](docs/media/readme/card-menu.svg)
+![A task card's ⋯ menu open in the In progress column: the four columns in a row, icon actions to rename, describe, attach and hide with a line saying one agent keeps working, the three priorities, and the Appearance, Pipeline actions and More rows](docs/media/readme/card-menu.svg)
 
 When an agent has screens for you to judge, it publishes them as a prototype
 review on the task, a few numbered variants with a name and a short
@@ -312,7 +312,7 @@ with its reset time. When a disk runs low, a "Disk" line shows its free
 space and names what takes the most room, and new lanes wait while it is
 critically low.
 
-![A project's board: tasks by status with their icons, the agents working on each, a running pipeline's stages and a card that says why it needs you; on the left, the projects and the system block](docs/media/readme/board.svg)
+![Three columns of a project's board: a task in Inbox; In progress with its working agents, a running pipeline's stages and a card that needs your answer, counted in the column's head; Waiting with a card that names what it waits for](docs/media/readme/board.svg)
 
 ### Pipelines and review loops
 
@@ -478,7 +478,7 @@ an agent asks for your attention, the phone shows a quiet notice and leaves
 your screen where it is. [Phone access](#phone-access) explains how to reach
 Delegatus from your phone.
 
-<img src="docs/media/readme/phone-board.svg" width="300" alt="A project's board on a phone: the four status columns as tabs, the orchestrator's question for you, and a card waiting on your answer"> <img src="docs/media/readme/phone-conversation.svg" width="300" alt="A conversation on a phone screen, its test run expanded">
+<img src="docs/media/readme/phone-board.svg" width="300" alt="A project's board on a phone: the four status columns as tabs, and In progress showing first the card that waits on your answer, counted on its tab"> <img src="docs/media/readme/phone-conversation.svg" width="300" alt="A conversation on a phone screen, its test run expanded">
 
 ## Read any agent as a chat
 

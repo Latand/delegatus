@@ -2,44 +2,56 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "043e8128fab4195b2c20d48c98fe30ae71463e697e72b965c2564e29ef032063",
+  "generatorSha256": "00c1570ac28fe395c9e36ca411dfdfe7938334881bb3f6200b55a6c748bb526a",
   "seed": "scripts/readme-demo-state.ts",
-  "seedSha256": "e874541e59260f1fb487c7aa0a59d1f205582192def6540533563ee64e4b58aa",
+  "seedSha256": "4f9ae80434b95b97639f1330e7e67ba4041ddf0207456a4fd53794192e2d9fb3",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
   "assets": [
     {
       "path": "board.svg",
-      "description": "A project's board: tasks by status with their icons, the agents working on each, a running pipeline's stages, and a card waiting on your answer; account limits in the sidebar.",
+      "description": "Three columns of a project's board: a task in Inbox; in In progress the agents working on each task, a running pipeline's stages and a card waiting on your answer, counted in the column's head; in Waiting a card that names what it waits for.",
       "viewport": {
         "width": 1728,
-        "height": 944
+        "height": 600
+      },
+      "crop": {
+        "x": 260,
+        "y": 106,
+        "width": 1149,
+        "height": 418
       },
       "colorScheme": "dark",
       "rasterTiles": 19,
       "renderBack": {
-        "worstTileMean": 12.867,
-        "changedTileShare": 0.01,
-        "meanDifference": 0.243,
+        "worstTileMean": 5.104,
+        "changedTileShare": 0,
+        "meanDifference": 0.196,
         "ringsClipped": 0
       },
-      "sha256": "d69a642a137cab90e55e27fe7ce8e55c2f4e47162b57e70b097d457db4f2d460"
+      "sha256": "218b8573450a13cabae6a221d5c098627fffde76d59302b8ee2b94058717e590"
     },
     {
       "path": "orchestrator.svg",
-      "description": "A project's orchestrator on top of its board: its chat with the operator, its worker count against the limit, and beside it a decision form waiting for an answer, already sent to Telegram.",
+      "description": "A project's orchestrator: its chat with the operator, its worker count against the limit, and beside it a task's decision form waiting for an answer, already sent to Telegram.",
       "viewport": {
         "width": 1728,
-        "height": 800
+        "height": 1040
+      },
+      "crop": {
+        "x": 469,
+        "y": 61,
+        "width": 1038,
+        "height": 778
       },
       "colorScheme": "dark",
-      "rasterTiles": 17,
+      "rasterTiles": 20,
       "renderBack": {
-        "worstTileMean": 12.867,
-        "changedTileShare": 0.014,
-        "meanDifference": 0.373,
+        "worstTileMean": 16.144,
+        "changedTileShare": 0.097,
+        "meanDifference": 1.278,
         "ringsClipped": 1
       },
-      "sha256": "4b51639db8e3e1ce0bc4cdee48520f9916fcbac6fc55d2a2241f99600bd14352"
+      "sha256": "f866d10d40a1171c2a3b654b5643d3bd374dca3bd912041339a6c4b4029043ec"
     },
     {
       "path": "conversation.svg",
@@ -55,14 +67,14 @@
         "height": 1016
       },
       "colorScheme": "dark",
-      "rasterTiles": 24,
+      "rasterTiles": 26,
       "renderBack": {
         "worstTileMean": 13.31,
-        "changedTileShare": 0.016,
-        "meanDifference": 0.68,
+        "changedTileShare": 0.006,
+        "meanDifference": 0.367,
         "ringsClipped": 2
       },
-      "sha256": "810dffdaac89049b3d41a0d70488448d6dd66a4bc25f1fe7eaec672e5654650c"
+      "sha256": "4b1fa78f94fc3da7bbbbca122ce4a15aa84533a74819d025625fe3bb24cd892c"
     },
     {
       "path": "pipeline.svg",
@@ -82,10 +94,10 @@
       "renderBack": {
         "worstTileMean": 9.363,
         "changedTileShare": 0.001,
-        "meanDifference": 0.311,
+        "meanDifference": 0.273,
         "ringsClipped": 0
       },
-      "sha256": "51df4e0211d71590ee12b54008cefd2a7d0aca4b94dd9fc7485b866e32704e70"
+      "sha256": "dcb2f7347a73d1d36f3ec3f14c077492515ce4471ec865979d521b48fbb3779b"
     },
     {
       "path": "card-menu.svg",
@@ -94,15 +106,21 @@
         "width": 1728,
         "height": 944
       },
+      "crop": {
+        "x": 567,
+        "y": 106,
+        "width": 842,
+        "height": 418
+      },
       "colorScheme": "dark",
       "rasterTiles": 23,
       "renderBack": {
-        "worstTileMean": 12.867,
-        "changedTileShare": 0.01,
-        "meanDifference": 0.259,
+        "worstTileMean": 4.952,
+        "changedTileShare": 0,
+        "meanDifference": 0.297,
         "ringsClipped": 0
       },
-      "sha256": "d4db9cbb0dbb52f54c7fc65a574e7a6cd222a0efdc904d6640611d215b12d6a2"
+      "sha256": "131e63968cc2330dcf4e8d959719cb2ad9e9700bbe35fbac366892678a88a49f"
     },
     {
       "path": "accounts.svg",
@@ -125,7 +143,7 @@
         "meanDifference": 0.23,
         "ringsClipped": 0
       },
-      "sha256": "029e9b96647f0d8f3c57450e1678256b305dd99324ba5607e39a74abdda6630b"
+      "sha256": "af2ddd0ab9a9b66876d544dcb1083d7f076055bcff27296b5cdb09111eb14bef"
     },
     {
       "path": "phone-conversation.svg",
@@ -142,11 +160,11 @@
         "meanDifference": 0.773,
         "ringsClipped": 0
       },
-      "sha256": "4394172b0efb39a89acbfb1e7c1ee95d03168c6289def6ab284e47d48c5b421a"
+      "sha256": "41bda3c5390d47777e98171bfd099f91637489b7623d5bc3526717a386882d99"
     },
     {
       "path": "phone-board.svg",
-      "description": "A project's board on a phone: the four status columns as tabs, the orchestrator's question for you, and a card waiting on your answer.",
+      "description": "A project's board on a phone: the four status columns as tabs, In progress counting the card that needs you and showing it first.",
       "viewport": {
         "width": 392,
         "height": 848
@@ -155,11 +173,11 @@
       "rasterTiles": 10,
       "renderBack": {
         "worstTileMean": 12.37,
-        "changedTileShare": 0.021,
-        "meanDifference": 0.394,
+        "changedTileShare": 0.022,
+        "meanDifference": 0.421,
         "ringsClipped": 0
       },
-      "sha256": "fb7846b914f34181826987beeedc932552ea8e526b59d4c86b6432f8f521453d"
+      "sha256": "bdaba06e47d7ebc509d93fdbb8c5db4f94974a6e25fb3a329338159f793eb0dd"
     }
   ]
 }

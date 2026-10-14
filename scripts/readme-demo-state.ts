@@ -85,11 +85,16 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
       project: "harbor-api",
       model: "claude-opus-5-5",
       effort: "high",
+      /* The last answer lands after the retries lane parked (18 min ago),
+         and more than 15 minutes before the capture: a turn that ended
+         sooner reads as one just finished. */
       startedMinutesAgo: 50,
-      pace: 70,
+      pace: 510,
       steps: [
         { user: "Take the open harbor-api work: idempotent refunds first, then the webhook retries and the key rotation. The ledger move waits for finance." },
         { say: "On it. I opened a pipeline for **Idempotent refunds** (Build, Review, Verify) and started the webhook retries and the key rotation beside it. The ledger task waits until finance answers.\n\nI'll report each stage as it lands, and bring you any decision the spec leaves open." },
+        { user: "Where are the retries and refunds now?" },
+        { say: "**Back off webhook retries** stopped on a choice the spec leaves open: how long a failed delivery keeps retrying. That one is yours, so it waits in Decisions with two related questions, and I sent it to Telegram.\n\n**Idempotent refunds** is still in Build; I'll report when it reaches Review." },
       ],
     },
     {
@@ -302,8 +307,10 @@ function claudeTranscript(conversation: Conversation, cwd: string, sessionId: st
     if ("user" in step) {
       lines.push(JSON.stringify({ type: "user", ...next(), ...base, message: { role: "user", content: step.user } }));
     } else if ("say" in step) {
-      /* The last answer of a finished conversation closes its turn. */
-      const closes = !conversation.midTurn && index === conversation.steps.length - 1;
+      /* An answer the operator writes back to closes its turn, and so does
+         the last answer of a finished conversation. */
+      const following = conversation.steps[index + 1];
+      const closes = following ? "user" in following : !conversation.midTurn;
       lines.push(JSON.stringify({ type: "assistant", ...next(), ...base, message: { role: "assistant", model: conversation.model, content: [...thought(String(index)), { type: "text", text: step.say }], stop_reason: closes ? "end_turn" : null } }));
     } else {
       const id = `toolu_${createHash("sha256").update(`${conversation.key}:${n}`).digest("hex").slice(0, 20)}`;
@@ -351,8 +358,8 @@ function assignment(file: Written, engine: "claude" | "codex") {
 function buildTasks(layout: DemoLayout, files: Record<string, Written>) {
   const { ids, now } = layout;
   const ago = (minutes: number) => iso(now - minutes * 60_000);
-  const task = (id: string, project: DemoProject, status: string, text: string, assignments: unknown[], createdMinutesAgo: number, color?: string, icon?: string) => ({
-    id, project: ids[project], status, text, placement: "unplaced", board: "shown", ...(color ? { color } : {}), ...(icon ? { icon } : {}), assignments, createdAt: ago(createdMinutesAgo), updatedAt: ago(Math.max(1, createdMinutesAgo - 5)),
+  const task = (id: string, project: DemoProject, status: string, text: string, assignments: unknown[], createdMinutesAgo: number, color?: string, icon?: string, hold?: unknown) => ({
+    id, project: ids[project], status, text, placement: "unplaced", board: "shown", ...(color ? { color } : {}), ...(icon ? { icon } : {}), ...(hold ? { hold } : {}), assignments, createdAt: ago(createdMinutesAgo), updatedAt: ago(Math.max(1, createdMinutesAgo - 5)),
   });
   return {
     tasks: [
@@ -360,7 +367,10 @@ function buildTasks(layout: DemoLayout, files: Record<string, Written>) {
       task("task-key-rotation", "harbor-api", "assigned", "Rotate webhook signing keys\nSign with the new key, accept both for a day, then drop the old one.", [assignment(files["key-rotation"]!, "claude")], 10, "amber", "key-round"),
       task("task-webhook-retries", "harbor-api", "assigned", "Back off webhook retries\nExponential backoff with jitter, and a limit on how long a delivery retries.", [assignment(files["webhook-retries"]!, "claude")], 22, "teal", "repeat"),
       task("task-refund-errors", "harbor-api", "inbox", "Document refund error codes\nOne table in the API reference: code, meaning, whether a retry is safe.", [], 55, "pink", "file-text"),
-      task("task-ledger", "harbor-api", "blocked", "Move invoices to the new ledger\nWaiting on finance to confirm the rounding rule for partial refunds.", [], 300, "amber", "book-open"),
+      /* A stated waiting reason, so the card's state line names what ends
+         the wait instead of «no reason given». */
+      task("task-ledger", "harbor-api", "blocked", "Move invoices to the new ledger\nWaiting on finance to confirm the rounding rule for partial refunds.", [], 300, "amber", "book-open",
+        { kind: "external", note: "finance to confirm the rounding rule", since: ago(290), by: "operator" }),
       task("task-charges-pagination", "harbor-api", "done", "Paginate GET /charges\nCursor pagination, 50 per page, capped at 200.", [assignment(files["charges-pagination"]!, "claude")], 215, "lime", "list-ordered"),
       task("task-cart-rounding", "lumen-web", "done", "Fix cart rounding\nKeep money in integer cents and format once.", [assignment(files["cart-rounding"]!, "claude")], 100, "coral", "calculator"),
       task("task-product-grid", "lumen-web", "assigned", "Lazy-load the product grid\nImages below the fold load on scroll; measure LCP before and after.", [assignment(files["product-grid"]!, "claude")], 8, "teal", "layout-grid"),
@@ -496,7 +506,7 @@ function buildPipelines(layout: DemoLayout, files: Record<string, Written>) {
      park() in the engine leaves it. */
   const retriesTask = "Back off webhook retries";
   const decision = "Retry window: stop retrying a failed delivery after 24 hours or after 72 hours? The spec leaves it open, and it sets how many attempts a delivery gets.";
-  const parkedBuild = attempt("builder", "needs_decision", ago(19), ago(3), "Backoff with jitter is ready; the retry window is a product choice.", files["webhook-retries"]!.path, null, { status: "needs_decision", findings: [decision] });
+  const parkedBuild = attempt("builder", "needs_decision", ago(20), ago(18), "Backoff with jitter is ready; the retry window is a product choice.", files["webhook-retries"]!.path, null, { status: "needs_decision", findings: [decision] });
   const parked = {
     ...common,
     id: "b17e5a90",
@@ -681,7 +691,7 @@ export async function seedDemoOrchestrator(layout: DemoLayout & { files: Record<
     report("charges-review", 193, "review_verdict", "Paginate GET /charges passed review with no findings: pages of 50, the cap of 200 holds, and next_cursor stops on the last page."),
     report("charges", 190, "completed", "Paginate GET /charges is done: cursor pages of 50, capped at 200, 7 tests pass. The PR is merged and the task moved to Done."),
     report("build", 6, "completed", "Idempotent refunds: Build passed. A repeated Idempotency-Key now answers from the stored response, and 4 tests pass."),
-    report("retries", 3, "status", "Back off webhook retries stopped on a decision the spec leaves open: stop retrying after 24 or 72 hours. It waits on the card."),
+    report("retries", 18, "status", "Back off webhook retries stopped on a decision the spec leaves open: stop retrying after 24 or 72 hours. It waits on the card."),
     report("review", 1, "status", "Idempotent refunds is in Review: the reviewer is checking two requests with the same key arriving together."),
   ]);
 
@@ -689,21 +699,45 @@ export async function seedDemoOrchestrator(layout: DemoLayout & { files: Record<
      decide it hands it on as a decision form, which is then the operator's
      only row for it. Seeded as already handed on: the seat owes no wake for
      it during the capture (a wake would resume the seat in a pane, a stray
-     card), and the form waits in Decisions, sent to Telegram. */
+     card), and the form waits in Decisions, sent to Telegram. The form is the
+     task's own (a task form asks three to seven questions), so the card is
+     the one that needs the operator: it counts in its column and comes first
+     on the phone. */
   const { publishPrototype, mutatePrototypeRound } = await import("@/lib/prototypeReview/store");
+  const retriesTask = "task-webhook-retries";
   const round = await publishPrototype({
     clientRequestId: "readme-demo-retry-window",
-    title: "Retry window for failed webhook deliveries",
-    questions: [{
-      id: "retry-window",
-      text: "How long should a failed webhook delivery keep retrying? The spec leaves it open, and it sets how many attempts a delivery gets.",
-      options: [
-        { label: "24 hours, about 12 attempts" },
-        { label: "72 hours, about 18 attempts: covers an endpoint that is down over a weekend", recommended: true },
-      ],
-    }],
-  }, null, { conversationId }, project);
-  mutatePrototypeRound(null, round.id, (held) => {
+    title: "Retry policy for failed webhook deliveries",
+    questions: [
+      {
+        id: "retry-window",
+        text: "How long should a failed webhook delivery keep retrying? The spec leaves it open, and it sets how many attempts a delivery gets.",
+        options: [
+          { label: "24 hours, about 12 attempts" },
+          { label: "72 hours, about 18 attempts: covers an endpoint that is down over a weekend", recommended: true },
+        ],
+      },
+      {
+        id: "after-last-attempt",
+        text: "Who hears about a delivery that gave up?",
+        options: [
+          { label: "The endpoint's owner, by email", recommended: true },
+          { label: "Nobody: it stays in the delivery log" },
+        ],
+      },
+      {
+        id: "failing-endpoint",
+        text: "Should an endpoint that keeps failing be paused?",
+        options: [
+          { label: "Pause it after 50 failed deliveries in a row", recommended: true },
+          { label: "Never pause it" },
+        ],
+      },
+    ],
+  }, retriesTask, { conversationId });
+  mutatePrototypeRound(retriesTask, round.id, (held) => {
+    /* Published as the lane parked, before the seat's answer that names it. */
+    held.createdAt = iso(now - 17 * 60_000);
     held.telegramPost = { key: held.id, state: "sent", at: held.createdAt };
   });
   const { loadPipelines } = await import("@/lib/pipelines/store");
@@ -713,7 +747,7 @@ export async function seedDemoOrchestrator(layout: DemoLayout & { files: Record<
   const need = retries ? laneNeedKind(retries) : null;
   if (!retries || !need) throw new Error("the demo's parked retries lane waits on nothing to hand on");
   writeAttentionEscalation(
-    { key: laneRouteKey(retries, need), seat: conversationId, taskId: null, reviewId: round.id },
+    { key: laneRouteKey(retries, need), seat: conversationId, taskId: retriesTask, reviewId: round.id },
     { kind: "agent", conversationId, role: "orchestrator" },
   );
 }
