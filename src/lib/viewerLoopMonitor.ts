@@ -7,6 +7,7 @@ const shared = globalThis as typeof globalThis & { __delegatusLoopMonitor?: Retu
 /** Completed operations survive until the next timer: their synchronous work
     can have returned before that timer is allowed to run. */
 export function createViewerLoopMonitor(log: (line: string) => void = console.warn, now = () => performance.now()) {
+  let writeLog = log;
   const context = new AsyncLocalStorage<ViewerOperation>();
   const active = new Set<Operation>();
   let completed: Operation[] = [];
@@ -28,13 +29,18 @@ export function createViewerLoopMonitor(log: (line: string) => void = console.wa
         } else named.set(op.name, { name: op.name, durationMs, completed: op.end !== undefined, count: 1 });
       }
       const operations = [...named.values()].sort((a, b) => b.durationMs - a.durationMs).slice(0, 16);
-      log(`[viewer loop-gap] ${JSON.stringify({ gapMs: Math.round(gapMs), operations })}`);
+      writeLog(`[viewer loop-gap] ${JSON.stringify({ gapMs: Math.round(gapMs), operations })}`);
     }
     completed = [];
     last = at;
   };
   return {
     current: () => context.getStore(),
+    setLogSink(sink: (line: string) => void) {
+      const previous = writeLog;
+      writeLog = sink;
+      return () => { writeLog = previous; };
+    },
     run<T>(name: ViewerOperation, work: () => T): T {
       const op: Operation = { name, start: now() };
       if (active.size < 128) active.add(op);
