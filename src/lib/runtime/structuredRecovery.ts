@@ -7,7 +7,6 @@ import { requestAccountMigrationTick } from "@/lib/accounts/migration/controller
 import type { ResumeSpec } from "@/lib/agent/cli";
 import { agentRegistry, type AgentRegistry, type ProcessIdentity, type RegistryFile, type SpawnBeginResult } from "@/lib/agent/registry";
 import { conversationAgentRole } from "@/lib/agent/spawnAdmission";
-import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { cachedLimitsProvenance } from "@/lib/limits";
 import { captureProcessIdentity, processIdentityMayOwn } from "@/lib/processIdentity";
@@ -565,9 +564,11 @@ export async function recoverDeadStructuredConversation(
   let admittedRequest = request;
   const admissionSnapshot = registry.readOnlySnapshot();
   if (conversationAgentRole(admissionSnapshot, candidate.conversationId) === "curator") {
-    const { curatorRecoveryGuard } = await import("@/lib/memory/curation/run");
+    const [{ curatorRecoveryGuard }, { defaultSeatTickAdmissionSources }] = await Promise.all([
+      import("@/lib/memory/curation/admission"), import("@/lib/monitor/seatTickAdmissionSources"),
+    ]);
     const curatorGuard = await curatorRecoveryGuard(candidate.conversationId, {
-      ...defaultSeatTickSources(), registry: () => registry,
+      ...defaultSeatTickAdmissionSources(), registry: () => registry,
     });
     const admissionGuard: DeliveryAdmissionGuard = key => {
       request.admissionGuard?.(key);

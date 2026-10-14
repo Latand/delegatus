@@ -794,11 +794,11 @@ export interface StructuredSpawnRecoveryOptions {
 
 async function curatorReceiptAdmission(receipt: SpawnReceipt, registry: AgentRegistry, sources?: SeatTickSources): Promise<() => void> {
   if (receipt.agentRole !== "curator") return () => {};
-  const [{ curatorRecoveryGuard }, { defaultSeatTickSources }] = await Promise.all([
-    import("@/lib/memory/curation/run"), import("@/lib/monitor/seatTickSources"),
+  const [{ curatorRecoveryGuard }, { defaultSeatTickAdmissionSources }] = await Promise.all([
+    import("@/lib/memory/curation/admission"), import("@/lib/monitor/seatTickAdmissionSources"),
   ]);
   return curatorRecoveryGuard(receipt.conversationId, {
-    ...(sources ?? defaultSeatTickSources()), registry: () => registry,
+    ...(sources ?? defaultSeatTickAdmissionSources()), registry: () => registry,
   });
 }
 

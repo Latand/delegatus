@@ -1286,7 +1286,7 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   },
   registrySnapshot: () => agentRegistry().readOnlySnapshot(),
   curatorAdmission: async conversationId => {
-    const { curatorRecoveryGuard } = await import("@/lib/memory/curation/run");
+    const { curatorRecoveryGuard } = await import("@/lib/memory/curation/admission");
     await curatorRecoveryGuard(conversationId ?? "");
   },
   readSpawnAdmissionFence,
