@@ -147,9 +147,6 @@ guarantees for the 1.x series.
   environment, while an instance on another state directory uses
   `<state>/cpu-gate/admission.sqlite` unless `LLV_GATE_LOCK_DIR` is set
   ([#2818]).
-- `scripts/capture-readme-media.ts` captures without `tesseract`: a frame
-  OCR could not read is kept, and the driver prints which PNG to look at
-  before committing it.
 
 ## [1.12.0] — 2026-10-13
 
