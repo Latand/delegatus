@@ -124,6 +124,12 @@ export function canonicalProject(project: string): string {
   return resolveAlias(project, readSnapshot().aliases);
 }
 
+/** Resolve a batch against one alias snapshot without filesystem reads per row. */
+export function projectAliasResolver(): (project: string) => string {
+  const { aliases } = readSnapshot();
+  return (project) => resolveAlias(project, aliases);
+}
+
 export function projectAliasSnapshot(options: { strict?: boolean } = {}): ProjectAliasSnapshot {
   const snapshot = readSnapshot(options.strict);
   return {
