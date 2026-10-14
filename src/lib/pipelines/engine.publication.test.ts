@@ -2352,3 +2352,17 @@ test("a local comparison takeover keeps its new owner local until a remote is ad
     expect(current.publication).toBeUndefined(); expect(pipelinePublishesRemoteBranch(current)).toBe(false);
   } finally { f.cleanup(); }
 });
+
+test("legacy review delivery keeps the origin fetch repository fence with a separate push URL", async () => {
+  const f = await repository();
+  try {
+    await f.addRemote(); const pushRemote = await f.addRemote("push-target");
+    await f.git(f.repo, "remote", "set-url", "--push", "origin", pushRemote);
+    const result = await f.create({ autoStart: false, publication: "internal", stages: [
+      { id: "plan", kind: "run", role: { roleId: "architect" }, prompt: "Plan", next: "review" },
+      { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+    ] });
+    expect(result).toMatchObject({ status: 400, error: expect.stringContaining("origin repository") });
+    expect(loadPipelines()).toHaveLength(0);
+  } finally { f.cleanup(); }
+});

@@ -10871,9 +10871,15 @@ export async function createPipelineFromRequest(
       expected: "omit publication (local-only lane), or add a remote first" }] };
   }
   if (normalized.stages.some((stage) => stage.kind === "review-loop") && origin) {
-    const originRemote = await resolveDeliveryRemote(repoDir, undefined, ports.exec);
-    if (!originRemote.ok) return { error: originRemote.error, status: originRemote.status };
-    if (originRemote.remote && repository !== originRemote.repository) return { error: "review-loop delivery must use the origin repository; create the lane in a checkout of the PR head repository", status: 400 };
+    // Legacy flows read origin's fetch repository, even when its push URL
+    // differs. Keep that existing repository fence when resolving delivery.
+    const originFetch = await ports.exec("git", ["remote", "get-url", "origin"], repoDir);
+    if (originFetch.code !== 2 && (originFetch.code !== 0 || !originFetch.stdout.trim())) {
+      return { error: `could not read the repository's remotes: ${(originFetch.stderr || originFetch.stdout || "no output").trim()}; retry the request`, status: 409 };
+    }
+    if (originFetch.code === 0 && repository !== projectIdentityFromRemote(originFetch.stdout.trim(), repoDir)?.project) {
+      return { error: "review-loop delivery must use the origin repository; create the lane in a checkout of the PR head repository", status: 400 };
+    }
   }
   const target = { repository, remote: origin, branch: targetInput?.branch ?? `refs/heads/${pipeline.branch}`,
     ...(targetInput?.pr ? { pr: targetInput.pr } : {}), ...(targetInput?.rejectedHead ? { rejectedHead: targetInput.rejectedHead } : {}) };
