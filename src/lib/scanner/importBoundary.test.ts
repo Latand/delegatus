@@ -5,6 +5,10 @@ import ts from "typescript";
 
 const root = path.resolve(import.meta.dir, "../../..");
 
+function normalizePathSeparators(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
 // Next compiles the scanner worker in its Pages Router graph. Dynamic imports
 // are compiled too, so delaying a spawn import does not protect this boundary.
 function nextServerImports(entry: string): string[] {
@@ -35,7 +39,7 @@ function nextServerImports(entry: string): string[] {
       // The existing team HTTP helper uses NextResponse, which Pages Router
       // workers can compile. Any other runtime import, including after added
       // to that helper, must fail this check.
-      const teamResponse = path.relative(root, file) === "src/lib/team/actor.ts"
+      const teamResponse = normalizePathSeparators(path.relative(root, file)) === "src/lib/team/actor.ts"
         && ts.isImportDeclaration(node) && !node.importClause?.name
         && node.importClause?.namedBindings && ts.isNamedImports(node.importClause.namedBindings)
         && node.importClause.namedBindings.elements.every(element => (element.propertyName ?? element.name).text === "NextResponse");
@@ -54,6 +58,10 @@ function nextServerImports(entry: string): string[] {
   visitFile(path.join(root, entry), [entry]);
   return violations;
 }
+
+test("normalizes Windows paths when identifying the allowed team response helper", () => {
+  expect(normalizePathSeparators("src\\lib\\team\\actor.ts")).toBe("src/lib/team/actor.ts");
+});
 
 test("the scanner worker's runtime import graph stays outside next/server", () => {
   expect(nextServerImports("src/lib/scanner/index.ts")).toEqual([]);
