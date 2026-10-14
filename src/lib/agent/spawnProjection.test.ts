@@ -1758,6 +1758,52 @@ test.each(["gone", "reused-pid"] as const)("stale working: recorded %s host clea
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("a route-recovered completed receipt stays working while its verified structured host has an active turn", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-recovered-active-turn-"));
+  try {
+    const now = Date.now();
+    const registry = legacyRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+    const begun = registry.beginSpawnRequest({
+      engine: "codex", cwd: directory, transport: "structured", accountId: "work",
+      launchProfile: emptyLaunchProfile({ cwd: directory, title: "Late success" }),
+    });
+    if (begun.kind !== "created") throw new Error("expected structured launch creation");
+    const artifactPath = path.join(directory, "pending-transcript.jsonl");
+    registry.settleSpawn(begun.receipt.launchId, {
+      key: { engine: "codex", sessionId: "late-success-active" }, artifactPath, cwd: directory,
+      accountId: "work", launchProfile: emptyLaunchProfile({ cwd: directory, title: "Late success" }),
+      status: "live", host: null,
+      structuredHost: {
+        kind: "codex-app-server", endpoint: "fixture", process: { pid: 71, startIdentity: "71:1" },
+        eventCursor: 4, protocolVersion: "test", writerClaimEpoch: 0, activeTurnRef: "turn-live",
+        pendingAttention: [], activeFlags: [],
+      },
+      claimEpoch: 0, claimOwner: null, pendingAction: null,
+    }, "route-recovered");
+    const snapshot = registry.snapshot();
+    const receipt = snapshot.receipts[begun.receipt.launchId]!;
+    expect(receipt).toMatchObject({ state: "completed", completionMode: "route-recovered", artifactLifecycle: "pending" });
+    const probe = livenessProbe({ now: () => now, pidAlive: () => true, processIdentity: () => "71:1" });
+
+    const file = projectLaunchConversations([], snapshot, now, () => false, undefined, probe).cards[0]!;
+    expect(receiptIsLive(snapshot, receipt, probe)).toBe(true);
+    expect(file.activity).toBe("live");
+    expect(turnIsRunning(file)).toBe(true);
+    expect(isWorkingAgent(file, now / 1000)).toBe(true);
+    expect(cardStatus(file, now)?.kind).toBe("running");
+    expect(workingSince(file)).not.toBeNull();
+    expect(workingAgentCount([file], now / 1000)).toBe(1);
+
+    const deadProbe = livenessProbe({ now: () => now, pidAlive: () => false, processIdentity: () => null });
+    expect(receiptIsLive(snapshot, receipt, deadProbe)).toBe(false);
+    const dead = projectLaunchConversations([], snapshot, now, () => false, undefined, deadProbe).cards[0]!;
+    expect(dead.proc).toBe("killed");
+    expect(turnIsRunning(dead)).toBe(false);
+    expect(workingSince(dead)).toBeNull();
+    expect(workingAgentCount([dead], now / 1000)).toBe(0);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("stale working: an expired unproven launch stays recent until the quiet horizon", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stale-recent-"));
   try {

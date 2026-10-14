@@ -390,12 +390,12 @@ function newestLaunchReceipts(snapshot: RegistryFile, nowMs: number): SpawnRecei
 }
 
 function projectedActivity(spawn: StructuredSpawnCardState, createdAt: string, nowMs: number, live: boolean): FileEntry["activity"] {
+  if (live) return "live";
   const terminal = spawn.state === "failed" || spawn.state === "recovered";
   const createdMs = Date.parse(createdAt);
   if (terminal && Number.isFinite(createdMs) && nowMs - createdMs >= TERMINAL_SPAWN_RECENT_MS) return "idle";
   if (spawn.state === "failed") return "stalled";
   if (spawn.state === "recovered") return "recent";
-  if (live) return "live";
   return Number.isFinite(createdMs) && nowMs - createdMs < TERMINAL_SPAWN_RECENT_MS ? "recent" : "idle";
 }
 
