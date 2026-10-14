@@ -299,7 +299,7 @@ export class UpdateRunner {
       }
       case "checkout":
         /* A directory an earlier attempt at this target left is reused. */
-        if (this.ports.exists(release)) return command(["git", "checkout", "--detach", target], release);
+        if (this.ports.exists(release)) return command(["git", "checkout", "--force", "--detach", target], release);
         return command(["git", "worktree", "add", "--detach", release, target], checkout);
       case "install":
         if (await reusable()) { push(`${shortSha(target)} is already built in ${release}; its dependencies are kept`, false); return null; }

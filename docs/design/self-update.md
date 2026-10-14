@@ -448,7 +448,9 @@ installs and builds there, and only a ready build is published to
 **installed release** is that pointer, or the checkout at its `HEAD` when
 nothing was published. Every start and restart runs from the installed
 release as it stands at that moment, and records its short SHA with the PID.
-Old release directories stay on disk (Deferred: pruning).
+Release retention was added on 2026-10-15 for #2886; see
+[bounded-cleanup.md](bounded-cleanup.md) for protections, cache reclamation and
+recovery.
 
 **Check.** `git ls-remote <remote> refs/heads/<branch>` (no objects) against
 the installed release's SHA. Equal → `up-to-date`. Different → the check also

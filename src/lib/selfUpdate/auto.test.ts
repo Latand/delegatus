@@ -1,7 +1,8 @@
+import { tmpdir } from "node:os";
 import { afterAll, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { initialAuto, pruneReleaseWorktrees, readAuto, writeAuto } from "./auto";
+import { initialAuto, readAuto, writeAuto } from "./auto";
 import { initialCheck } from "./checkState";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "./types";
@@ -26,7 +27,7 @@ import { ReleasePointer, releaseDirFor } from "./release";
 import { watchRestartRequests as watchOldRestartRequests } from "./__fixtures__/preAutoLauncher.mjs";
 import { owners } from "./quietTestFixtures";
 
-const root = mkdtempSync("/var/tmp/self-update-auto-");
+const root = mkdtempSync(join(tmpdir(), "llv-self-update-auto-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 const TARGET = "a".repeat(40);
 const OLD = "b".repeat(40);
@@ -1318,25 +1319,6 @@ test("a new launcher generation drops its old request and re-reads facts", async
   service.stop();
 });
 
-test("release cleanup only removes a registered old worktree under the release root", async () => {
-  const h = scenario();
-  const shas = ["a", "b", "c", "d"].map((letter) => letter.repeat(40));
-  const dirs = shas.map((sha) => join(h.record.releasesDir, sha.slice(0, 12)));
-  for (const [index, dir] of dirs.entries()) {
-    mkdirSync(dir, { recursive: true });
-    utimesSync(dir, new Date((index + 1) * 1_000), new Date((index + 1) * 1_000));
-  }
-  h.record.web.revision = shas[0]!.slice(0, 7);
-  h.record.runtimeHost.revision = shas[0]!.slice(0, 7);
-  writeFileSync(h.record.releasePointer, JSON.stringify({ sha: shas[0], dir: dirs[0] }));
-  const commands: string[][] = [];
-  const run = async (args: string[]) => {
-    commands.push(args);
-    return { code: 0, stdout: args[1] === "list" ? dirs.map((dir, index) => `worktree ${dir}\nHEAD ${shas[index]}\n`).join("\n") : "", stderr: "" };
-  };
-  await pruneReleaseWorktrees(h.record, JSON.stringify({ sha: shas[1], dir: dirs[1] }), run);
-  expect(commands).toEqual([["worktree", "list", "--porcelain"], ["worktree", "remove", "--force", dirs[2]!], ["worktree", "prune"]]);
-});
 
 test("a disabled drain releases after a crash between switch persistence and lease cleanup", async () => {
   const h = scenario();
@@ -1694,7 +1676,7 @@ test("a refused automatic admission is admitted again without building the relea
     await service.autoTick();
     await until(() => existsSync(h.record.releasePointer));
     expect(JSON.parse(readFileSync(h.record.releasePointer, "utf8"))).toMatchObject({ sha: target, dir });
-    expect(commands.map(argv => argv.slice(0, 3).join(" "))).toEqual(["git fetch --no-tags", `git checkout --detach`]);
+    expect(commands.map(argv => argv.slice(0, 3).join(" "))).toEqual(["git fetch --no-tags", `git checkout --force`]);
     expect(commands.some(argv => argv.includes("install") || argv.includes("build"))).toBe(false);
     // Every runner step is done; install and build ran no command.
     const update = (await service.snapshot()).update;
@@ -1710,3 +1692,69 @@ test("a refused automatic admission is admitted again without building the relea
     expect(commands.some(argv => argv.includes("install") || argv.includes("build"))).toBe(false);
   } finally { service.stop(); }
 }, 30_000);
+
+
+/** Drive the real settlement method with a durable seat apply and a healthy launcher receipt. */
+function settledSeat(outcome: "done" | "failed" | "fell-back" = "done") {
+  const h = scenario(); const requestId = "seat-retention";
+  h.record.checkout = h.dir;
+  h.record.launcher = { ...h.record.launcher, state: "healthy", requestId, relaunch: 1 };
+  h.record.web.revision = h.record.runtimeHost.revision = outcome === "done" ? TARGET.slice(0, 7) : OLD.slice(0, 7);
+  if (outcome !== "done") h.record.launcher.error = outcome === "fell-back" ? { kind: "fell-back", revision: OLD, detail: "fixture rollback" } : { kind: "message", text: "fixture failure" };
+  h.deps.hostHealth = async () => ({ pid: 102, startIdentity: "host", hostEpoch: 1 });
+  writeFileSync(join(h.dir, "apply.json"), JSON.stringify({ requestId, target: TARGET, trigger: "seat", state: "switching", rolledBack: false,
+    rollbackPointer: null, rollbackWebRevision: OLD.slice(0, 7), rollbackHostRevision: OLD.slice(0, 7), launcherPid: 100, launcherIdentity: "launch", startedAt: new Date(h.deps.now()).toISOString() }));
+  const update = { ...idleUpdate(), state: "done" as const, target: TARGET, releaseDir: join(h.dir, "releases", TARGET.slice(0, 12)) };
+  h.deps.createRunner = () => ({ get state() { return update; }, restore: () => {}, start: async () => {}, retry: async () => {}, logPath: () => "" });
+  const service = new SelfUpdateService(h.deps);
+  return { ...h, service };
+}
+
+test("a settled seat apply runs retention", async () => {
+  const h = settledSeat();
+  try {
+    const snapshot = await h.service.snapshot();
+    expect(JSON.parse(readFileSync(join(h.dir, "apply.json"), "utf8")).state).toBe("done");
+    expect(snapshot.update.state).toBe("done");
+    expect(h.prunes()).toBe(1);
+    await h.service.snapshot(); expect(h.prunes()).toBe(1);
+  } finally { h.service.stop(); }
+});
+
+test.each(["failed", "fell-back"] as const)("a %s activation runs no retention and keeps recovery", async outcome => {
+  const h = settledSeat(outcome);
+  const candidate = join(h.dir, "releases", TARGET.slice(0, 12)); mkdirSync(candidate, { recursive: true }); writeFileSync(join(candidate, "recovery"), "keep");
+  try {
+    await h.service.snapshot();
+    expect(JSON.parse(readFileSync(join(h.dir, "apply.json"), "utf8")).state).toBe("failed");
+    expect(h.prunes()).toBe(0); expect(existsSync(join(candidate, "recovery"))).toBeTrue();
+  } finally { h.service.stop(); }
+});
+
+test("a retention failure leaves the apply done and records the error", async () => {
+  const h = settledSeat(); h.deps.prune = async () => { throw new Error("fixture cleanup refused"); };
+  try {
+    const snapshot = await h.service.snapshot(); expect(snapshot.update.state).toBe("done");
+    const report = JSON.parse(readFileSync(join(h.dir, "retention.json"), "utf8")); expect(report.errors).toEqual(["fixture cleanup refused"]);
+    expect(JSON.parse(readFileSync(join(h.dir, "apply.json"), "utf8")).state).toBe("done");
+  } finally { h.service.stop(); }
+});
+
+test("an update request during retention answers busy", async () => {
+  const h = settledSeat(); let release!: () => void; let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  h.deps.prune = async () => { entered(); await new Promise<void>(resolve => { release = resolve; }); };
+  const snapshot = h.service.snapshot();
+  try {
+    await started;
+    const result = await h.service.startUpdate("during-retention"); expect(result).toMatchObject({ ok: false, code: "busy-update" });
+  } finally { release?.(); await snapshot; h.service.stop(); }
+});
+
+
+test("retention skips while a build runs", async () => {
+  const h = settledSeat();
+  const update = { ...idleUpdate(), state: "running" as const, target: TARGET };
+  h.deps.createRunner = () => ({ state: update, restore: () => {}, start: async () => {}, retry: async () => {}, logPath: () => "" });
+  try { await h.service.snapshot(); expect(h.prunes()).toBe(0); } finally { h.service.stop(); }
+});
