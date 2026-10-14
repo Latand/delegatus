@@ -76,23 +76,25 @@ test.each([
   expect(h.spawnInputs).toHaveLength(1);
 });
 
-test("a pipeline whose repo has no origin keeps its producer head before review ingress", async () => {
+test("an older remote-branch lane without origin parks with its producer head before review ingress", async () => {
   const h = harness();
   const box = publishHarness(h, { origin: false });
-  await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  const legacy = await create(h.ports, PUBLISH_STAGES as never);
+  legacy.publication = "remote-branch";
+  savePipelines([legacy]);
   await tickPipelines([], h.ports);
   await tickPipelines([], h.ports);
   /* The builder's commit remains accepted while the successor waits. */
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
-  expect(loadPipelines()[0]).toMatchObject({ state: "running", lastPassedCommit: box.passedSha, publishedCommit: null,
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", lastPassedCommit: box.passedSha, publishedCommit: null,
     cursor: { stageId: "build", state: "committing" } });
 
   await tickPipelines([entry("/codex/stage-1.jsonl")], h.ports);
 
   const waiting = loadPipelines()[0]!;
-  expect(waiting.state).toBe("running");
+  expect(waiting.state).toBe("needs_decision");
   expect(waiting.cursor).toMatchObject({ stageId: "build", state: "committing" });
-  expect(waiting.stateDetail).toContain("configure it to publish this accepted head");
+  expect(waiting.stateDetail).toContain("set-delivery-remote");
   /* The flow is not created before the accepted head can be published. */
   expect(box.order).toEqual(["commit"]);
   expect(h.flows.size).toBe(0);

@@ -1959,6 +1959,12 @@ export class RuntimeJournal {
 
   compact(maxEvents = this.maxEvents, unprojectedReceiptLimit = RUNTIME_UNPROJECTED_RECEIPT_RETENTION_LIMIT): void {
     this.assertHealthy();
+    // A deferred consumer can hold a long tail across many appends. Until it
+    // moves past the anchor, no retained event is eligible for compaction.
+    // Avoid counting and walking that history on every publication. The cursor
+    // is checked again inside the transaction before any rows are removed.
+    const held = this.db.query<{ seq: number | null }, []>("SELECT MIN(completed_seq) AS seq FROM consumer_cursors").get()?.seq;
+    if (held !== null && held !== undefined && held <= Number(this.meta("anchor_seq"))) return;
     const count = Number(this.db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM events").get()?.count ?? 0);
     if (count <= maxEvents) return;
     const remove = count - maxEvents;

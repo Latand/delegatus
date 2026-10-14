@@ -423,3 +423,30 @@ test("a turn that ends while hot-state writes are fenced is deferred past the qu
     journal.close();
   }
 });
+
+
+test("a lost launch sends its reason and task moves once even with a busy child and no transcript", async () => {
+  const child = nextChild();
+  obligation(child, "launch:lost-fixture", { outcome: "lost", lost: {
+    launchId: "lost-fixture", title: "Restore lost work", reason: "no rollout found for thread id",
+    tasks: [{ taskId: "task-loss", from: "assigned", to: "assigned" }],
+  } });
+  const { ports, sent, busy, answers } = harness([child], {
+    finalMessage: () => { throw new Error("a lost launch has no final message to read"); },
+    recipient: () => ({ kind: "deliver", conversationId: "conversation_fixture_current_seat", path: "/sessions/current-seat.jsonl" }),
+  });
+  busy.add(child);
+  answers.push({ ok: false, error: "delivery unknown", uncertain: true });
+  await sweepSpawnNotices(ports);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.text).toContain(`Agent lost before its first turn: Restore lost work (${child})`);
+  expect(sent[0]!.text).toContain("Launch lost-fixture failed: no rollout found for thread id");
+  expect(sent[0]!.text).toContain("Task task-loss: launch row failed, assigned → assigned");
+  expect(sent[0]!.text).toContain("original key replays this failure");
+  expect(sent[0]!.conversationId).toBe("conversation_fixture_current_seat");
+  await sweepSpawnNotices(ports);
+  expect(sent).toHaveLength(2);
+  expect(sent[1]).toEqual(sent[0]);
+  await sweepSpawnNotices(ports);
+  expect(sent).toHaveLength(2);
+});

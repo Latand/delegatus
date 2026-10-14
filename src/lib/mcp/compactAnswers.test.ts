@@ -38,6 +38,22 @@ agentRegistry().ensureConversation("codex", creatorPath, null);
 const CURRENT_HEAD = execFileSync("git", ["rev-parse", "HEAD"], { cwd: process.cwd(), encoding: "utf8" }).trim();
 const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 
+test("create_pipeline states local-only delivery and documents remote adoption", async () => {
+  const repo = fs.mkdtempSync(path.join(sandbox, "local-repo-"));
+  const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", ...args], { cwd: repo, encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main"); git("commit", "-q", "--allow-empty", "-m", "base");
+  const bindings = viewerMcpBindings();
+  const args = { task: "Local lane", src: creatorPath, repoDir: repo, baseRef: git("rev-parse", "HEAD"), autoStart: false,
+    stages: [{ id: "build", kind: "run", engine: "codex", prompt: "Build", next: null }] };
+  const local = await bindings.create_pipeline({ ...args, clientRequestId: "local-delivery-create" }) as { delivery: { publishes: boolean; note: string } };
+  expect(local.delivery.publishes).toBe(false);
+  expect(local.delivery.note).toContain("local lane branch");
+  expect(local.delivery.note).toContain("set-delivery-remote");
+  git("remote", "add", "origin", "https://example.invalid/project.git");
+  const remote = await bindings.create_pipeline({ ...args, clientRequestId: "remote-delivery-create" }) as { delivery: { publishes: boolean } };
+  expect(remote.delivery.publishes).toBe(true);
+});
+
 function expectNoBodies(value: unknown): void {
   const serialized = JSON.stringify(value);
   for (const marker of Object.values(CORPUS_BODY_MARKERS)) expect(serialized).not.toContain(marker);

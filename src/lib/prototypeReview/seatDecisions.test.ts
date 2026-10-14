@@ -346,3 +346,20 @@ test("a held receipt refresh cannot settle a newer amendment", async () => {
   expect(sent[0]).toContain("Second");
   expect(loadSeatRounds()[0]!.decision).toMatchObject({ comment: "Second", revision: 2, delivery: { state: "sent" } });
 });
+
+test("a seat decision skips one question and exposes it through the column and MCP read", async () => {
+  const reviewId = (await (await publishAs(seat, { clientRequestId: "seat-skip-one", title: "Before work", questions })).json()).reviewId as string;
+  const { sent, delivery } = recorder();
+  const answers = [{ questionId: "place", options: [0] }, { questionId: "scope", options: [], skipped: true as const }, { questionId: "timing", options: [0] }];
+  const body = { project: "project-a", reviewId, chosen: [], comment: "", answers };
+  const malformed = { ...body, answers: answers.map(a => a.skipped ? { ...a, options: [0] } : a) };
+  expect((await decisionsPOST(request("/api/projects/decisions", malformed), operator, delivery)).status).toBe(400);
+  expect(sent).toEqual([]);
+  expect((await decisionsPOST(request("/api/projects/decisions", body), operator, delivery)).status).toBe(200);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toContain("Skipped by the operator: already decided or no longer relevant — do not ask again.");
+  expect(loadSeatRounds()[0]!.decision!.answers).toEqual(answers);
+  expect((await decisions("project-a", reviewId)).round?.decision?.answers).toEqual(answers);
+  const read = await (await reviewReadPOST(request("/api/prototype-reviews/read", {}), seat)).json() as PrototypeReviewRead;
+  expect(read.rounds[0]!.decision!.answers).toEqual(answers);
+});

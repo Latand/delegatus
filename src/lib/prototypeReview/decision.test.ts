@@ -27,3 +27,8 @@ test("rejection asks for a new round with corrections and no chosen variant", ()
     expect(prototypeDecisionText(task, review, { ...decision, answers: questions.map(q => ({ questionId: q.id, options: [0] })) }, { at: "earlier" })).toContain("(amended)");
   }
 });
+
+test("one skipped question tells the agent it is settled in the exact decision text", () => {
+  const answers = [{ questionId: "place", options: [0] }, { questionId: "scope", options: [], skipped: true as const }, { questionId: "timing", options: [0] }];
+  expect(prototypeDecisionText(task, { ...round, variants: [], questions }, { chosen: [], answers, comment: "" })).toBe(`Prototype review decision\nTask: task-review — Review layout\nRound: Before work\n\nAnswers:\n1. Where should this live?\n   a) Existing review (recommended)\n2. Which surfaces? (several allowed)\n   Skipped by the operator: already decided or no longer relevant — do not ask again.\n3. When should work start?\n   a) After answering (recommended)\n\nComment:\n\n\nEnd of prototype review decision.`);
+});

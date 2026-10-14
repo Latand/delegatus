@@ -1,5 +1,5 @@
 import { readAttentionDismissals } from "@/lib/attention/dismissals";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import os from "node:os";
@@ -519,6 +519,69 @@ test("repeated files reads reuse the pure read snapshot and retain ETag behavior
   expect(first.headers.get("server-timing")).toMatch(/files-task-store;dur=\d+(?:\.\d+)?/);
   expect(first.headers.get("server-timing")).toMatch(/files-role-titles;dur=\d+(?:\.\d+)?/);
 });
+
+test("cached files responses avoid scan copies and keep inline enrichment out of the scan cache", async () => {
+  const pathname = path.join(registryRoot, "cached-copy.jsonl");
+  scannedFiles = deepFreeze([file(pathname)]) as FileEntry[];
+  const before = JSON.stringify(scannedFiles);
+  const first = await GET(new Request("http://127.0.0.1/api/files"));
+  expect(first.status).toBe(200);
+  const etag = first.headers.get("etag")!;
+  expect(JSON.stringify(scannedFiles)).toBe(before);
+  const clone = spyOn(globalThis, "structuredClone");
+  try {
+    const replies = await Promise.all(Array.from({ length: 8 }, () => GET(new Request("http://127.0.0.1/api/files", {
+      headers: { "if-none-match": etag },
+    }))));
+    expect(replies.every((response) => response.status === 304)).toBe(true);
+    expect(replies.every((response) => response.headers.get("x-llv-files-projection-cache") === "hit")).toBe(true);
+    const scanCopies = clone.mock.calls.filter(([value]) => {
+      const candidate = value as { files?: FileEntry[]; snapshot?: { files?: FileEntry[] } } | null;
+      const files = candidate?.files ?? candidate?.snapshot?.files;
+      return Array.isArray(files) && files.some((entry) => entry.path === pathname);
+    });
+    expect(scanCopies).toHaveLength(0);
+    expect(JSON.stringify(scannedFiles)).toBe(before);
+    const owned = await cachedFileScan();
+    owned.snapshot.files[0]!.title = "Changed only in the caller's copy";
+    const next = await cachedFileScan();
+    expect(next.snapshot.files[0]!.title).not.toBe(owned.snapshot.files[0]!.title);
+    expect(JSON.stringify(scannedFiles)).toBe(before);
+  } finally { clone.mockRestore(); }
+});
+
+test("eight cold worker projection scopes borrow one completed scan without parent copies", async () => {
+  scannedFiles = deepFreeze(Array.from({ length: 8 }, (_, index) => file(`/sessions/copy-scope-${index}.jsonl`))) as FileEntry[];
+  const before = JSON.stringify(scannedFiles);
+  await cachedFileScan();
+  setFilesResponseWorkerRuntimeForTests({
+    launch: { executable: process.execPath, workerPath: path.join(process.cwd(), "src/lib/filesResponse.worker.ts") },
+    env: { ...process.env, NODE_ENV: "production", LLV_STATE_DIR: stateDir, LLV_AGENT_REGISTRY_SQLITE: "off", LLV_FILES_RESPONSE_WORKER: "1" },
+    timeoutMs: 30_000,
+  });
+  const clone = spyOn(globalThis, "structuredClone");
+  try {
+    const replies = await Promise.all(scannedFiles.map((entry) => GET(new Request(
+      `http://127.0.0.1/api/files?view=summary&path=${encodeURIComponent(entry.path)}`,
+    ))));
+    expect(replies.every((response) => response.status === 200)).toBe(true);
+    for (const [index, response] of replies.entries()) {
+      const body = await response.json();
+      expect(body.files.some((entry: FileEntry) => entry.path === scannedFiles[index]!.path)).toBe(true);
+    }
+    const scanCopies = clone.mock.calls.filter(([value]) => {
+      const candidate = value as { files?: FileEntry[]; snapshot?: { files?: FileEntry[] } } | null;
+      const files = candidate?.files ?? candidate?.snapshot?.files;
+      return Array.isArray(files) && files.some((entry) => entry.path === scannedFiles[0]!.path);
+    });
+    expect(scanCopies).toHaveLength(0);
+    expect(JSON.stringify(scannedFiles)).toBe(before);
+  } finally {
+    clone.mockRestore();
+    setFilesResponseWorkerRuntimeForTests(null);
+    await stopTestWorker();
+  }
+}, 60_000);
 
 test("SQLite health exposes the authoritative revision and no mirror, without conditional-response churn", async () => {
   scannedFiles = [];

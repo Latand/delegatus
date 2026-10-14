@@ -10,7 +10,7 @@ export function normalizePrototypeAnswers(questions: readonly PrototypeQuestion[
   const ids = new Set<string>();
   for (const answer of raw) {
     if (!answer || typeof answer !== "object" || Array.isArray(answer) || typeof answer.questionId !== "string"
-      || Object.keys(answer).some(k => !["questionId", "options", "other", "customText"].includes(k))
+      || Object.keys(answer).some(k => !["questionId", "options", "other", "customText", "skipped"].includes(k))
       || (answer.customText !== undefined && (!ownerReply || typeof answer.customText !== "string" || !answer.customText.trim() || prototypeTextLength(answer.customText) > 20_000))
       || (answer.other !== undefined && answer.other !== true) || ids.has(answer.questionId)
       || !questions.some(q => q.id === answer.questionId)) throw new Error("invalid or duplicate question answer");
@@ -18,6 +18,11 @@ export function normalizePrototypeAnswers(questions: readonly PrototypeQuestion[
   }
   return questions.map(q => {
     const answer = raw.find(a => a.questionId === q.id)!;
+    if (answer.skipped !== undefined) {
+      if (answer.skipped !== true || !Array.isArray(answer.options) || answer.options.length || answer.other !== undefined || answer.customText !== undefined)
+        throw new Error(`${q.id}: a skipped question takes no answer`);
+      return { questionId: q.id, options: [], skipped: true as const };
+    }
     const options = answer.options;
     if (!Array.isArray(options) || new Set(options).size !== options.length
       || options.some(i => !Number.isInteger(i) || i < 0 || i >= q.options.length)) throw new Error(`${q.id}: choose declared options`);

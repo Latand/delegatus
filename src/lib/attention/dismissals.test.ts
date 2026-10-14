@@ -8,6 +8,7 @@ import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentSto
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
+import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { readPrototypeReviews, withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
 import { prototypeReviewNotices } from "@/lib/prototypeReview/model";
 
@@ -27,6 +28,7 @@ import {
 } from "./dismissals";
 import type { DismissedBy } from "./dismissalTypes";
 import { needsYouAnswer } from "./needsYouRead";
+import { attentionSystemClears } from "./reconcile";
 import { openBridgeAsks } from "@/lib/bridge/asks";
 import type { BridgeReportLogV1 } from "@/lib/bridge/types";
 
@@ -47,6 +49,7 @@ beforeEach(() => {
   process.env.LLV_STATE_DIR = sandbox;
 });
 afterEach(() => {
+  closeAgentRegistryForTests();
   resetLegacyDocumentStoresForTests();
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
@@ -55,6 +58,36 @@ afterEach(() => {
 
 const OPERATOR: DismissedBy = { kind: "operator", surface: "desktop" };
 const SEAT: DismissedBy = { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" };
+
+test.each(["done", "relaunched"])("a %s launch leaves both waiting projections with a stored reason and Undo", async (settlement) => {
+  const now = new Date("2026-10-14T17:00:00Z");
+  const file = { path: "spawn:launch-settled", conversationId: "conversation_launch_settled", project: "repo-fixture", title: "Failed launch", mtime: now.getTime() / 1000 - 60,
+    spawn: { state: "failed", admittedAt: now.getTime() - 60_000 } } as FileEntry;
+  const task = { id: "task-launch", project: file.project, status: settlement === "done" ? "done" : "assigned", assignments: [
+    { launchId: "launch-settled", at: new Date(now.getTime() - 60_000).toISOString() },
+    ...(settlement === "relaunched" ? [{ launchId: "launch-new", at: new Date(now.getTime() - 30_000).toISOString() }] : []),
+  ] } as unknown as BoardTask;
+  const facts = { canonicalConversationId: (id: string) => id, retiredSeats: new Set<string>(), operatorWroteAt: new Map<string, number>(), pipeline: () => null, tasks: [task] };
+  const clears = attentionSystemClears([file], now.getTime() / 1000, facts);
+  expect(clears).toHaveLength(1);
+  expect(systemClearAttention(clears, now)).toHaveLength(1);
+  const record = readAttentionDismissals(undefined, now).records[0]!;
+  expect(record.subject).toBe(file.path);
+  expect(record.conversationId).toBeNull();
+  expect(record.by).toEqual({ kind: "system", rule: settlement === "done" ? "launch-task-done" : "launch-relaunched" });
+  const body = { files: [file], tasks: [task], pipelines: [] };
+  const evidence = () => ({ tasks: [task], pipelines: [], dismissals: readAttentionDismissals(undefined, now).records, reports: null, admissions: [], unavailable: [] });
+  overlayAttentionDismissals(body.files);
+  const hidden = needsYouAnswer(body, null, now.getTime() / 1000, file.project, evidence());
+  expect(hidden).toMatchObject({ count: 0, cleared: [{ kind: "launch", cleared: { by: record.by }, undo: { path: file.path } }] });
+  expect(hidden.cleared).toHaveLength(1);
+  expect(systemClearAttention(attentionSystemClears(body.files, now.getTime() / 1000, facts), now)).toEqual([]);
+  await dismissAttention({ kind: "conversation", conversationId: file.conversationId, path: file.path, reasonId: `spawn:launch-settled:launch-failed` }, OPERATOR, { undo: true });
+  expect(readAttentionDismissals(undefined, now).records[0]).toMatchObject({ subject: file.path, restoredAt: expect.any(String) });
+  overlayAttentionDismissals(body.files);
+  expect(needsYouAnswer(body, null, now.getTime() / 1000, file.project, evidence())).toMatchObject({ count: 1 });
+  expect(systemClearAttention(attentionSystemClears(body.files, now.getTime() / 1000, facts), now)).toEqual([]);
+});
 
 test("rule 3: hide removes a review from both waiting lists, keeps history and undo restores it; task completion alone leaves it waiting", async () => {
   const task = { id: "task-prototype", project: "repo-fixture", status: "done", assignments: [], text: "Layout",

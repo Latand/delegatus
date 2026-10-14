@@ -40,7 +40,7 @@ export function compactRound(candidate: ReviewCandidate) {
       ...(q.multiple ? { multiple: true } : {}), ...(q.other ? { other: true } : {}) })),
     ...(decision ? { decision: { chosen: decision.chosen.map(number => ({ number, name: round.variants.find(v => v.number === number)?.name ?? "" })),
       ...(decision.answers ? { answers: decision.answers.map(answer => { const question = round.questions?.find(q => q.id === answer.questionId);
-        return { question: question?.text ?? answer.questionId, options: answer.options.map(index => question?.options[index]?.label ?? String(index)), ...(answer.other ? { other: true } : {}) }; }) } : {}),
+        return { question: question?.text ?? answer.questionId, options: answer.options.map(index => question?.options[index]?.label ?? String(index)), ...(answer.other ? { other: true } : {}), ...(answer.skipped ? { skipped: true } : {}) }; }) } : {}),
       ...(decision.skipped ? { skipped: true } : {}), comment: decision.comment, at: decision.at, delivery: decision.delivery.state } } : {}),
     ...(read.rounds.length > 1 ? { otherRounds: read.rounds.filter(r => r.id !== round.id).slice().reverse().slice(0, 5).map(r => ({ reviewId: r.id, title: r.title, createdAt: r.createdAt, state: state({ task, read, round: r }) })) } : {}),
     ...(read.unavailable ? { unavailable: read.unavailable } : {}) };

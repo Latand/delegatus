@@ -112,3 +112,12 @@ test("a later decision supersedes old waiting rounds, while an explicit round re
   expect(await reads().call("fixture", "read_prototype_review", { taskId: task.id })).toMatchObject({ item: { reviewId: decided.id, state: "decided" } });
   expect(await reads().call("fixture", "read_prototype_review", { taskId: task.id, reviewId: older.id })).toMatchObject({ item: { reviewId: older.id, state: "superseded" } });
 });
+
+test("a compact decided round preserves a skipped question", async () => {
+  const task = prototypeTask(); const round = task.prototypeReviews![0];
+  round.decision = { chosen: [], answers: [{ questionId: "question-0", options: [], skipped: true }], comment: "", at: round.createdAt,
+    delivery: { state: "sent", clientMessageId: "fixture-skip", conversationId: null, text: "Internal" } };
+  saveTasks([task]);
+  const result = await reads().call("fixture", "read_prototype_review", { taskId: task.id });
+  expect(result.item).toMatchObject({ decision: { answers: [{ options: [], skipped: true }] } });
+});

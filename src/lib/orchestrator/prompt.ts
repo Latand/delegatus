@@ -70,7 +70,8 @@
  * (docs/design/operator-decision-forms.md §2.7) makes every decision a form. v52
  * combines those rules with automatic release control through the seat-tick
  * setting, incident holds and the reviewed branch's refreshing fence. v53
- * combines those rules with the machine-wide worker limit named in each wake. */
+ * combines those rules with the machine-wide worker limit named in each wake.
+ * v54 puts waiting and repeated unanswered asks into decision forms. */
 
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { configForVariant, VARIANT_PARAMS, variantParamLabel } from "@/lib/roles/paramConfig";
@@ -98,7 +99,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 53;
+export const ORCHESTRATOR_PROMPT_VERSION = 54;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -409,14 +410,16 @@ Warm and friendly, a good friend on this project who likes to tease a little; ke
 
 /** v49 (docs/design/operator-decision-forms.md §2.7): every decision the
     seat needs is a form the operator answers with clicks, in its own
-    conversation's «Рішення» column when no task carries it. */
-export const ORCHESTRATOR_PROTOTYPE_DIRECTIVE = "Prototype review: every operator decision is a form: publish_prototype_review; taskId for a task (3–7 questions), omit it without a task (1–7). Give options with exactly one recommended per question; variants optional. Chat and reports only point to the form. Never use engine built-in ask tools. Before non-trivial or two-way work, or on request, use a form; the operator may skip. After answers, write \"how I understood\" (3–5 lines) in task text and start.";
+    conversation's «Рішення» column when no task carries it. v54 keeps waiting
+    and repeated unanswered asks in those forms. */
+export const ORCHESTRATOR_PROTOTYPE_DIRECTIVE = "Prototype review: every operator decision is a form: publish_prototype_review; taskId for a task (3–7 questions), omit it without a task (1–7). Give options with exactly one recommended per question; variants optional. Chat and reports only point to the form; chat may hold only a one-off ask needed now, and an ask you wait on across wakes or repeat unanswered is a form. Never use engine built-in ask tools. Before non-trivial or two-way work, or on request, use a form; the operator may skip. After answers, write \"how I understood\" (3–5 lines) in task text and start.";
 /** Replace each shipped directive whole when delivering the current contract. */
 const SHIPPED_PROTOTYPE_DIRECTIVES = [
   "Prototype review: every decision is a form: publish_prototype_review, 1–7 questions, taskId for a task; chat and reports only point to it. Before non-trivial or two-way work, or on request, ask 3–7 there. After answers, write \"how I understood\" (3–5 lines) in the task text and start.",
   "Prototype review: every operator decision goes to publish_prototype_review on the relevant board task: 3–7 questions, options and exactly one recommended per question; variants optional. Restate the ask in chat with suggest_replies and file a question bridge report when reports are on. Never use engine built-in ask tools. Before non-trivial or two-way work, or on request, use this form; the operator may skip. After answers, write \"how I understood\" (3–5 lines) in task text and start.",
   "Prototype review: every decision you need is a form: publish_prototype_review, 1–7 questions, taskId when a task exists; chat and reports only point to it. Before non-trivial or two-way work, or on request, ask 3–7 there. After the answers, write \"how I understood\" (3–5 lines) in the task text and start.",
   "Prototype review: point to the task's review. Before work that is non-trivial or reads two ways, or on request, ask 3–7 questions there; the operator may skip. After the answers, write \"how I understood\" (3–5 lines) into the task text and start.",
+  "Prototype review: every operator decision is a form: publish_prototype_review; taskId for a task (3–7 questions), omit it without a task (1–7). Give options with exactly one recommended per question; variants optional. Chat and reports only point to the form. Never use engine built-in ask tools. Before non-trivial or two-way work, or on request, use a form; the operator may skip. After answers, write \"how I understood\" (3–5 lines) in task text and start.",
 ] as const;
 
 export const ORCHESTRATOR_SYSTEM_PROMPT = `You are this project's orchestrator in Delegatus — the agent that owns its board and runs its work through Delegatus's MCP tools (registered under the key \`viewer\`). You never act outside them.

@@ -15,6 +15,8 @@ test("every delivered seat mandate asks operator decisions through a durable for
       "variants optional",
       "Chat and reports only point to the form",
       "Never use engine built-in ask tools",
+      "chat may hold only a one-off ask needed now",
+      "an ask you wait on across wakes or repeat unanswered is a form",
     ]) expect(mandate).toContain(rule);
     expect(orchestratorMandateForDelivery(mandate)).toBe(mandate);
   }

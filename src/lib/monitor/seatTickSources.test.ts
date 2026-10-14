@@ -1002,11 +1002,14 @@ test("a pull request the merge runner holds is left out, and a stopped merge nam
     const held = await gather({ pipelines: [finishedLane({ merge: merge(state, null) } as never)], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
     expect(held.pullRequests).toEqual([]);
   }
-  const input = await gather({ pipelines: [finishedLane({ merge: merge("blocked", "conflict with the base branch") } as never)], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
-  expect(input.pullRequests).toEqual([expect.objectContaining({ number: 1289, mergeBlocked: "conflict with the base branch" })]);
-  const verdict = seatTickDecision(input).verdict;
-  expect(verdict.kind === "wake" && verdict.reasons[0]!.detail)
-    .toBe("pull request #1289 left open by a lane that finished; merge stopped: conflict with the base branch");
+  for (const reason of ["conflict with the base branch", "a reviewer requested changes"]) {
+    const input = await gather({ pipelines: [finishedLane({ merge: merge("blocked", reason) } as never)], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
+    expect(input.pullRequests).toEqual([expect.objectContaining({ number: 1289, mergeBlocked: reason })]);
+    const verdict = seatTickDecision(input).verdict;
+    expect(verdict.kind === "wake" && verdict.reasons[0]!.detail)
+      .toBe(`pull request #1289 left open by a lane that finished; merge stopped: ${reason}`);
+    expect(verdict.kind === "wake" && verdict.items.find((item) => item.kind === "pull-request")?.label).toContain(`merge stopped: ${reason}`);
+  }
 });
 
 /* #2187 §5.3: a finished lane marked as finishing its task, whose move to
@@ -2502,4 +2505,29 @@ test("automatic refresh belongs to its seat: parent PR is held and a semantic pa
   const input = await gather({ pipelines: [parent, refresh], openPullRequests: [openPullRequest()] }, withCursor(0, OVERDUE));
   expect(input.pullRequests).toEqual([]);
   expect(input.ownLanes).toEqual(expect.arrayContaining([expect.objectContaining({ id: "refresh-one", settled: "needs_decision" })]));
+});
+
+
+test("a retirement signal names undetermined subjects and puts the seat's own launch first", async () => {
+  const ports = sources({ pipelines: [] });
+  const conversations = {
+    fixtureForeign: { id: "fixtureForeign", generations: [{ launchProfile: { title: "Other agent" } }] },
+    fixtureOwn: { id: "fixtureOwn", launcher: { conversationId: CONVERSATION, notify: true }, generations: [{ launchProfile: { title: "Lost builder" } }] },
+  };
+  const baseRegistry = ports.registry();
+  ports.registry = () => ({ ...baseRegistry, conversation: (id: string) => conversations[id as keyof typeof conversations] ?? baseRegistry.conversation(id as `conversation_${string}`),
+    readOnlySnapshot: () => ({ ...baseRegistry.readOnlySnapshot(), conversations }),
+  }) as never;
+  ports.retirementReport = () => ({ failed: [], refused: [
+    { key: "codex:foreign", conversationId: "fixtureForeign", clause: "events-flushed", reason: "ledger unreadable", undetermined: true },
+    { key: "codex:own", conversationId: "fixtureOwn", clause: "turn-settled", reason: "turn unknown", undetermined: true },
+  ] }) as never;
+  const gathered = await gatherSeatTickInput(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString() }, DEFAULT_SEAT_TICK_POLICY, ports);
+  const label = gathered.signals.find(s => s.id === "host-retirement")!.label;
+  expect(label).toContain("Lost builder (fixtureOwn) turn-settled: turn unknown (launched by you)");
+  expect(label).toContain("Other agent (fixtureForeign) events-flushed: ledger unreadable");
+  expect(label.indexOf("Lost builder")).toBeLessThan(label.indexOf("Other agent"));
+  const wake = seatTickDecision(gathered).verdict;
+  expect(wake).toMatchObject({ kind: "wake" });
+  expect(wake.kind === "wake" && wake.items.some(item => item.kind === "signal" && item.id === "host-retirement" && item.label.includes("Lost builder"))).toBe(true);
 });

@@ -8,6 +8,7 @@ import { readCodexAuth } from "@/lib/codexAuth";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { callTranscribe } from "@/lib/transcribe/chatgpt";
 import { elevenLabsTranscribe } from "@/lib/transcribe/elevenlabs";
+import { transcriptionLanguage, transcriptionResult } from "@/lib/transcribe/languages";
 import { localTranscribe } from "@/lib/transcribe/local";
 import { sonioxTranscribe } from "@/lib/transcribe/soniox";
 import type { TranscribeResponse } from "@/lib/transcribe/types";
@@ -18,7 +19,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_AUDIO_BYTES = 16 * 1024 * 1024;
-const LANGUAGE_RE = /^[a-z]{2}(?:-[A-Z]{2})?$/;
 
 export async function POST(req: NextRequest): Promise<NextResponse<TranscribeResponse | ApiError>> {
   const rejection = rejectCrossOrigin(req);
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<TranscribeRes
   }
   const mime = containerAudioType || type || "audio/webm";
   const rawLanguage = form.get("language");
-  const language = typeof rawLanguage === "string" && LANGUAGE_RE.test(rawLanguage) ? rawLanguage : "";
+  const language = transcriptionLanguage(rawLanguage);
   const backend = resolveTranscribeBackend();
 
   if (backend === "elevenlabs") {
@@ -112,8 +112,8 @@ export async function POST(req: NextRequest): Promise<NextResponse<TranscribeRes
     if (upstream.status !== 200) {
       return NextResponse.json({ error: `transcription backend: HTTP ${upstream.status || "0 (network)"}` }, { status: 502 });
     }
-    const json = JSON.parse(upstream.body) as { text?: unknown };
-    return NextResponse.json({ text: typeof json.text === "string" ? json.text : "" });
+    const json = JSON.parse(upstream.body) as { text?: unknown; language?: unknown; language_code?: unknown; languages?: Array<{ code?: unknown }> };
+    return NextResponse.json(transcriptionResult(json.text, [json.language, json.language_code, ...(Array.isArray(json.languages) ? json.languages.map(item => item?.code) : [])], language));
   } catch (error) {
     const label = backend === "local" ? "local STT" : "transcription backend";
     return NextResponse.json(

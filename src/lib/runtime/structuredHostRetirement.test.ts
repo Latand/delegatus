@@ -1370,3 +1370,18 @@ test("a retired conversation still opens and resumes from its transcript", async
 test("every clause of the predicate has a case that proves it blocks retirement", () => {
   expect([...pinnedClauses].sort()).toEqual([...STRUCTURED_HOST_RETIREMENT_CLAUSES].sort());
 });
+
+
+test("an unsettled own launch explains the unknown turn as a determined retirement refusal", async () => {
+  const launchId = "fixture-setup-launch";
+  const state = snapshot({ entries: { [`claude:${SESSION}`]: entry({ structuredHostOperationId: launchId }) },
+    conversations: { [CONVERSATION]: conversation({ turn: { state: "unknown" } }) },
+    receipts: { [launchId]: { launchId, key: null, conversationId: CONVERSATION, engine: "claude", state: "path-pending", createdAt: new Date(NOW - 60_000).toISOString() } },
+  });
+  const probe = await sweep({ snapshot: () => state });
+  expect(probe.terminated).toEqual([]);
+  expect(probe.report.refused[0]).toMatchObject({ clause: "turn-settled", reason: `launch ${launchId} has not settled (path-pending); no turn is recorded yet` });
+  expect(probe.report.refused[0]!.undetermined).toBeUndefined();
+  state.receipts[launchId]!.state = "completed";
+  await refusedBy("turn-settled", { snapshot: () => state }, "undetermined");
+});

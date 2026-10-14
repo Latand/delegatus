@@ -2,6 +2,8 @@ import { execFile } from "node:child_process";
 
 import type { CodexAuth } from "@/lib/codexAuth";
 
+import { transcriptionLanguage } from "./languages";
+
 import type { UpstreamResult } from "./types";
 
 /* ChatGPT-backend path (opt-in only). Same endpoint the Codex Desktop composer
@@ -22,7 +24,7 @@ export function callTranscribe(auth: CodexAuth, audioPath: string, mime: string,
     `header = "originator: codex_cli_rs"`,
     `header = "User-Agent: codex_cli_rs (live-log-viewer)"`,
     `form = "file=@${audioPath};type=${mime}"`,
-    ...(language ? [`form = "language=${language}"`] : []),
+    `form = "language=${transcriptionLanguage(language)}"`,
     `write-out = "\\n%{http_code}"`,
   ].join("\n");
 

@@ -11,7 +11,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
-import { callerAttributionFrom, viewerMcpBindings } from "./bindings";
+import { callerAttributionFrom, targetedConversationAtPath, viewerMcpBindings, type TargetedConversationDependencies } from "./bindings";
 import { createMcpToolService, MemoryMcpReceiptStore, MCP_TOOL_NAMES, TOOL_INPUT_SCHEMAS, type McpToolResult } from "./server";
 
 /*
@@ -248,6 +248,98 @@ test("a failed launch absent from the scanner resolves its project from the rece
   expect(readAttentionDismissals().records).toMatchObject([{ path, reasonId: `${path}:launch-failed`, note: "A later launch succeeded" }]);
 });
 
+test("an unresolved conversation refusal names launch placeholders and cannot invite a retry", async () => {
+  const service = serviceAs(ROOT);
+  const args = { clientRequestId: "unknown-launch", target: { kind: "conversation", conversationId: "conversation_missing", reasonId: "spawn:launch_missing:launch-failed" } };
+  const result = await service.callTool("dismiss_attention", args);
+  expect(result).toMatchObject({ ok: false, code: "CONVERSATION_NOT_FOUND", retryable: false });
+  expect((result as { error: string }).error).toContain("spawn:<launchId>");
+  expect((result as { error: string }).error).toContain("spawn:launch_missing");
+  expect(await service.callTool("dismiss_attention", args)).toMatchObject({ ok: false, retryable: false, replayed: true });
+  expect(readAttentionDismissals().records).toEqual([]);
+});
+
+test.each(["spawn:launch_missing", "/t/missing.jsonl"])("an unresolved path %s is refused with usable target forms", async (path) => {
+  const result = await serviceAs(ROOT).callTool("dismiss_attention", { clientRequestId: "unknown-path", target: { kind: "conversation", path } });
+  expect(result).toMatchObject({ ok: false, code: "CONVERSATION_NOT_FOUND", retryable: false });
+  expect((result as { error: string }).error).toContain("spawn:<launchId>");
+  expect(readAttentionDismissals().records).toEqual([]);
+});
+
+test("a catalogued transcript that is temporarily empty remains retryable", async () => {
+  const root = path.join(sandbox, "transcripts");
+  fs.mkdirSync(root);
+  const transcriptPath = path.join(root, "empty.jsonl");
+  fs.writeFileSync(transcriptPath, "");
+  const pathAllowed = (candidate: string) => {
+    try { return fs.realpathSync(candidate).startsWith(fs.realpathSync(root) + path.sep); } catch { return false; }
+  };
+  const catalogued = { ...ASKER, path: transcriptPath, root: "codex-sessions" } as FileEntry;
+  const targetedDependencies: TargetedConversationDependencies = { roots: [["codex-sessions", root]], pathAllowed };
+  const service = serviceAs(ROOT, world(), new MemoryMcpReceiptStore(), {
+    completedFileScan: async () => ({ snapshot: { files: [catalogued], projectCatalog: [], complete: true } }),
+    targetedFileEntry: (pathname: string, options?: { signal?: AbortSignal; deadlineAt?: number; tailLines?: number }) => targetedConversationAtPath(pathname, options, targetedDependencies),
+  });
+  const result = await service.callTool("dismiss_attention", {
+    clientRequestId: "empty-known-transcript",
+    target: { kind: "conversation", path: transcriptPath },
+  });
+  expect(result).toMatchObject({ ok: false, retryable: true });
+  expect((result as { error: string }).error).toContain("temporarily unavailable");
+  expect(readAttentionDismissals().records).toEqual([]);
+});
+
+test("a registry-known temporarily empty transcript stays retryable when the catalog omits it", async () => {
+  const root = path.join(sandbox, "registry-transcripts");
+  fs.mkdirSync(root);
+  const transcriptPath = path.join(root, "empty.jsonl");
+  fs.writeFileSync(transcriptPath, "");
+  const pathAllowed = (candidate: string) => {
+    try { return fs.realpathSync(candidate).startsWith(fs.realpathSync(root) + path.sep); } catch { return false; }
+  };
+  const targetedDependencies: TargetedConversationDependencies = { roots: [["codex-sessions", root]], pathAllowed };
+  const conversationId = "conversation_registry_known";
+  const service = serviceAs(ROOT, world(), new MemoryMcpReceiptStore(), {
+    completedFileScan: async () => ({ snapshot: { files: [], projectCatalog: [], complete: true } }),
+    registrySnapshot: () => ({ conversations: { [conversationId]: { id: conversationId, generations: [{ path: transcriptPath }], continuityPaths: [] } }, conversationAliases: {}, lineageEdges: {}, memberships: {}, receipts: {} }),
+    targetedFileEntry: (pathname: string, options?: { signal?: AbortSignal; deadlineAt?: number; tailLines?: number }) => targetedConversationAtPath(pathname, options, targetedDependencies),
+  });
+  const result = await service.callTool("dismiss_attention", {
+    clientRequestId: "empty-registry-known-omitted",
+    target: { kind: "conversation", conversationId },
+  });
+  expect(result).toMatchObject({ ok: false, retryable: true, details: { code: "CONVERSATION_READ_UNAVAILABLE", retryable: true } });
+  expect((result as { error: string }).error).toContain("temporarily unavailable");
+  expect(readAttentionDismissals().records).toEqual([]);
+});
+
+test("a registry-known temporarily empty transcript stays retryable when the catalog budget expires", async () => {
+  const root = path.join(sandbox, "registry-transcripts");
+  fs.mkdirSync(root);
+  const transcriptPath = path.join(root, "empty.jsonl");
+  fs.writeFileSync(transcriptPath, "");
+  const pathAllowed = (candidate: string) => {
+    try { return fs.realpathSync(candidate).startsWith(fs.realpathSync(root) + path.sep); } catch { return false; }
+  };
+  const targetedDependencies: TargetedConversationDependencies = { roots: [["codex-sessions", root]], pathAllowed };
+  const conversationId = "conversation_registry_known";
+  const service = serviceAs(ROOT, world(), new MemoryMcpReceiptStore(), {
+    completedFileScan: ({ signal }: { signal?: AbortSignal } = {}) => new Promise((_resolve, reject) => {
+      if (signal?.aborted) reject(signal.reason);
+      else signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }),
+    registrySnapshot: () => ({ conversations: { [conversationId]: { id: conversationId, generations: [{ path: transcriptPath }], continuityPaths: [] } }, conversationAliases: {}, lineageEdges: {}, memberships: {}, receipts: {} }),
+    targetedFileEntry: (pathname: string, options?: { signal?: AbortSignal; deadlineAt?: number; tailLines?: number }) => targetedConversationAtPath(pathname, options, targetedDependencies),
+  });
+  const result = await service.callTool("dismiss_attention", {
+    clientRequestId: "empty-registry-known-budget-expired",
+    target: { kind: "conversation", conversationId },
+  });
+  expect(result).toMatchObject({ ok: false, retryable: true, details: { code: "CONVERSATION_READ_UNAVAILABLE", retryable: true } });
+  expect((result as { error: string }).error).toContain("temporarily unavailable");
+  expect(readAttentionDismissals().records).toEqual([]);
+});
+
 test("a failed launch's projected target belongs to its explicit project when the cwd names another project", async () => {
   const { AgentRegistry } = await import("@/lib/agent/registry");
   const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
@@ -281,6 +373,14 @@ test("a failed launch's projected target belongs to its explicit project when th
   expect(writes).toBe(0);
   expect(readAttentionDismissals().records).toEqual([]);
   const owner = serviceAs(MANAGER, state, new MemoryMcpReceiptStore(), overrides);
+  const idTarget = { kind: "conversation", conversationId: begun.receipt.conversationId, reasonId: `spawn:${begun.receipt.launchId}:launch-failed` };
+  expect(await serviceAs(OTHER_SEAT, state, new MemoryMcpReceiptStore(), overrides).callTool("dismiss_attention", { clientRequestId: "launch-foreign-id", target: idTarget })).toMatchObject({ ok: false, details: { code: "DISMISS_NOT_PERMITTED" } });
+  expect(writes).toBe(0);
+  expect(await owner.callTool("dismiss_attention", { clientRequestId: "launch-owner-id", target: idTarget })).toMatchObject({ ok: true });
+  expect(readAttentionDismissals().records).toMatchObject([{ path: `spawn:${begun.receipt.launchId}`, reasonId: idTarget.reasonId }]);
+  expect(await owner.callTool("dismiss_attention", { clientRequestId: "launch-owner-id-undo", target: idTarget, undo: true })).toMatchObject({ ok: true });
+  expect(readAttentionDismissals().records).toEqual([]);
+  writes = 0;
   expect(await owner.callTool("dismiss_attention", { clientRequestId: "launch-owner-seat", target })).toMatchObject({ ok: true });
   expect(writes).toBe(1);
   expect(readAttentionDismissals().records).toMatchObject([{ path: `spawn:${begun.receipt.launchId}`, by: { kind: "manager", conversationId: SEAT } }]);
