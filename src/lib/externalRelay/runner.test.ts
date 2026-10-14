@@ -2699,7 +2699,7 @@ test("slice 3 dark and ineligible paths preserve the slice 2b wire and records",
 }, 30000);
 
 
-test("short owner reply continues the earlier relay answer", async () => {
+test.each(["Роби", "так", "давай"])("short owner reply continues the earlier relay answer (%s)", async approval => {
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const paired = relay(`${server.origin}/v1`);
   paired.targets[0]!.ownerTier = true;
@@ -2710,11 +2710,11 @@ test("short owner reply continues the earlier relay answer", async () => {
   const bodies: Record<string, unknown>[] = [];
   try {
     const result = await runClaimedRequest(paired, { ...contextRequest, answer: { max_chars: 1000, progress: "none" }, input: {
-      ...contextRequest.input, request_text: "Роби", requester: { ...contextRequest.input.requester, is_owner: true },
+      ...contextRequest.input, request_text: approval, requester: { ...contextRequest.input.requester, is_owner: true },
       conversation: [
         { ...message, id: "earlier-request", text: earlierText },
         { ...message, id: "earlier-answer", author: { key: "assistant", name: "Assistant", self: true }, text: answerText, reply_to: "earlier-request" },
-        { ...message, text: "Роби", reply_to: "earlier-answer" },
+        { ...message, text: approval, reply_to: "earlier-answer" },
       ],
     } }, undefined, { ownerPorts: {
       launch: async body => { bodies.push(body); return { status: 202, body: { conversationId: "conversation_reply_fixture" } }; },
@@ -2729,7 +2729,7 @@ test("short owner reply continues the earlier relay answer", async () => {
   } finally { await server.close(); }
 });
 
-test("unresolved short owner approval asks one question without account selection or work", async () => {
+test.each(["го", "Роби", "так", "давай"])("unresolved short owner approval asks one question without account selection or work (%s)", async approval => {
   const server = await startTestRelay(() => ({ body: { status: "ok" } }));
   const paired = relay(`${server.origin}/v1`);
   paired.targets[0]!.ownerTier = true;
@@ -2737,12 +2737,34 @@ test("unresolved short owner approval asks one question without account selectio
   const select = spyOn(accountManager, "resolveHeadlessSpawn").mockImplementation(() => { throw new Error("a clarification needs no agent account"); });
   try {
     const result = await runClaimedRequest(paired, { ...contextRequest, request_id: "owner-clarification", answer: { max_chars: 1000, progress: "none" },
-      input: { ...contextRequest.input, request_text: "го", requester: { ...contextRequest.input.requester, is_owner: true },
-        conversation: contextRequest.input.conversation.map(message => ({ ...message, text: "/ai го" })) } });
+      input: { ...contextRequest.input, request_text: approval, requester: { ...contextRequest.input.requester, is_owner: true },
+        conversation: contextRequest.input.conversation.map(message => ({ ...message, text: `/ai ${approval}` })) } });
     expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringContaining("Що саме підтверджуєте?") } });
     expect(select).not.toHaveBeenCalled();
     expect(readRunLedger().runs).toEqual([]);
   } finally { select.mockRestore(); await server.close(); }
+});
+
+test("a non-owner short reply keeps the restricted answer path", async () => {
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${server.origin}/v1`);
+  paired.targets[0]!.ownerTier = true;
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  const message = contextRequest.input.conversation[0];
+  try {
+    const result = await runClaimedRequest(paired, { ...contextRequest, answer: { max_chars: 1000, progress: "none" }, input: {
+      ...contextRequest.input, tools: [], request_text: "Роби", conversation: [
+        { ...message, id: "earlier-answer", author: { key: "assistant", name: "Assistant", self: true }, text: "Shall I proceed?" },
+        { ...message, text: "Роби", reply_to: "earlier-answer" },
+      ],
+    } }, undefined, {
+      command: stub("const a=process.argv.slice(2);const prompt=await Bun.stdin.text();if(prompt.includes('<owner_reply_context>'))throw new Error('owner context reached a member');await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Normal reply',reply_to:'m1'}));"),
+      ownerPorts: { launch: async () => { throw new Error("a member cannot launch an owner agent"); },
+        observe: async () => ({ state: "failed" }), stop: async () => {} },
+    });
+    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "Normal reply", reply_to: message.id } });
+    expect(readAnswerRecord(paired.id, paired.targets[0]!.id, contextRequest.request_id)?.profile).not.toHaveProperty("owner");
+  } finally { await server.close(); }
 });
 
 test("runner freezes the stored report context into owner custody and the launched prompt", async () => {
@@ -2771,8 +2793,16 @@ test("runner freezes the stored report context into owner custody and the launch
   try {
     const result = await runClaimedRequest(paired, { ...contextRequest, request_id: "owner-report-reply", answer: { max_chars: 1000, progress: "none" },
       input: { ...contextRequest.input, request_text: "го", requester: { ...contextRequest.input.requester, is_owner: true },
-        conversation: contextRequest.input.conversation.map(message => ({ ...message, text: "/ai го", reply_to: "posted-report" })) } }, undefined,
-      { ownerPorts: { launch: async input => { launches++; expect(input.prompt).toContain(body); return { status: 202, body: { conversationId: "conversation_report_reply" } }; },
+        conversation: [
+          { ...contextRequest.input.conversation[0], id: "posted-report", text: "An altered history copy of the report." },
+          ...contextRequest.input.conversation.map(message => ({ ...message, text: "/ai го", reply_to: "posted-report" })),
+        ] } }, undefined,
+      { ownerPorts: { launch: async input => {
+        launches++; expect(input.prompt).toContain(body);
+        expect(input.prompt).toContain("Forward the owner's text and request_text verbatim");
+        expect(input.prompt).not.toContain("<owner_reply_context>\n");
+        return { status: 202, body: { conversationId: "conversation_report_reply" } };
+      },
         observe: async () => {
           expect(readRunLedger().runs.find(run => run.requestId === "owner-report-reply")?.ownerTurn).toMatchObject({
             request: { text: "/ai го", requestText: "го" }, bridgeReport: { project: "project-b", sourceSeat: "seat-b", reportText: body },
