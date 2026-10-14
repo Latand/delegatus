@@ -28,11 +28,11 @@ ownership model: the `runtime-host` profile owns the stable listener, journal,
 deployment coordinator, and socket configured below. CLI supervision does not
 change this profile.
 
-The Docker image pins Node 22 and builds the Next.js app inside the image from a clean environment. It keeps the viewer host-coupled by design: Compose uses the host network, host PID namespace, privileged `nsenter` shims, the runtime user's home tree, and the host tmux socket.
+The Docker image is built on Node 22, pins Bun 1.4.0, and builds the Next.js app inside the image from a clean environment. The Viewer and the runtime host both run under that Bun, installed in the image as `bun-container`. It keeps the viewer host-coupled by design: Compose uses the host network, host PID namespace, privileged `nsenter` shims, the runtime user's home tree, and the host tmux socket.
 
-Runtime tools are split by coupling. The image owns stable runtimes: Node 22, Git, GitHub CLI, OpenSSH client, curl, CA certificates, Python 3, and a faster-whisper venv at `/opt/llv-whisper-venv`. Compose mounts the full host home at its original path, so SSH keys, Git config, GitHub CLI auth, Claude/Codex state, app cache, Hugging Face cache, and workspace roots line up with host paths.
+Runtime tools are split by coupling. The image owns stable runtimes: Node 22, Bun 1.4.0 (`bun-container`), Git, GitHub CLI, OpenSSH client, curl, CA certificates, Python 3, util-linux, and a faster-whisper venv at `/opt/llv-whisper-venv`. Compose mounts the full host home at its original path, so SSH keys, Git config, GitHub CLI auth, Claude/Codex state, app cache, Hugging Face cache, and workspace roots line up with host paths.
 
-Host developer CLIs run through `nsenter` shims in `/usr/local/bin`, ahead of mounted user bins in `PATH`. The shims enter the host mount and PID namespaces, use the caller uid/gid, preserve host-visible cwd values, and fall back to `$HOME` for container-only paths such as `/app`. They execute the exact host paths: `claude`, `codex`, and `bun` from `$HOME/.bun/bin`; `uv` from `$HOME/.local/bin`; `just`, `tmux` and `tailscale` from `/usr/bin`. `LLV_DOCKER_NSENTER_SHIMS=1` also makes direct Claude/Codex resolver calls, and the Setup guide's phone step, choose `/usr/local/bin` shims. The image contains the app, Node dependencies, the local transcription helper script, and the prebuilt `.next` output.
+Host developer CLIs run through `nsenter` shims in `/usr/local/bin`, ahead of mounted user bins in `PATH`. The shims enter the host mount and PID namespaces, use the caller uid/gid, preserve host-visible cwd values, and fall back to `$HOME` for container-only paths such as `/app`. They execute the exact host paths: `claude`, `codex`, `copilot`, and `bun` from `$HOME/.bun/bin`; `uv` from `$HOME/.local/bin`; `just`, `tmux` and `tailscale` from `/usr/bin`. A `docker` wrapper enters the host namespaces the same way and runs `/usr/bin/docker`. `LLV_DOCKER_NSENTER_SHIMS=1` also makes direct Claude/Codex resolver calls, and the Setup guide's phone step, choose `/usr/local/bin` shims. The image contains the app, Node dependencies, the local transcription helper script, and the prebuilt `.next` output.
 
 ## Production instance
 
@@ -53,7 +53,7 @@ tag instead of `edge` to pin the bootstrap image to a release.
 
 ```bash
 export DELEGATUS_CONFIG_DIR="$(bun scripts/app-config-dir.mjs)"
-export LLV_DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
+export DELEGATUS_DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
 export DELEGATUS_IMAGE=ghcr.io/latand/delegatus:edge
 docker compose --profile legacy-viewer-migration --profile runtime-host pull viewer runtime-host
 ```
@@ -224,7 +224,7 @@ matters: the tailnet moves to the authenticated entry before the local entry
 is trusted, so no remote traffic ever reaches a token-free listener.
 
 ```bash
-state="${XDG_CONFIG_HOME:-$HOME/.config}/agent-log-viewer/state"
+state="${DELEGATUS_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/delegatus}/state"
 
 # 1. Name the remote entry only. The local entry stays authenticated.
 printf '%s\n' '{ "remoteEntryPort": 8897 }' > "$state/viewer-gateway.json.next" \
@@ -330,7 +330,7 @@ To move new spawns to the shared endpoint, set the flag in `service.env` and
 remove the Viewer-managed Codex accounts' own `viewer` registration:
 
 ```sh
-echo 'LLV_MCP_TRANSPORT=http' >> ~/.config/agent-log-viewer/service.env
+echo 'LLV_MCP_TRANSPORT=http' >> "$DELEGATUS_CONFIG_DIR/service.env"
 LLV_MCP_TRANSPORT=http scripts/install-mcp.sh
 ```
 
@@ -369,7 +369,7 @@ Docker shape is what carries the key file's key.
 
 ## Moving off the systemd install
 
-Docker is the only install. The systemd user units an earlier install set up,
+The systemd user units an earlier install set up,
 `agent-log-viewer.service` and `agent-log-viewer-legacy-tmux.service`, are
 retired, and the repository no longer ships or installs them. When either unit
 file is still in `~/.config/systemd/user`, the `delegatus` CLI prints this
@@ -377,13 +377,18 @@ migration at start and then starts as usual; it never stops a unit itself.
 
 Stopping `agent-log-viewer-legacy-tmux.service` ends every tmux session it
 hosts, so finish the agents in those panes first. Then stop and remove the
-units and install with the production instance steps above:
+units:
 
 ```bash
 systemctl --user disable --now agent-log-viewer.service agent-log-viewer-legacy-tmux.service
 rm -f ~/.config/systemd/user/agent-log-viewer.service ~/.config/systemd/user/agent-log-viewer-legacy-tmux.service
 systemctl --user daemon-reload
 ```
+
+Then start Delegatus any current way (see
+[Choose how to install](guide/getting-started.md#choose-how-to-install)), or
+follow [Production instance](#production-instance) for a long-running Docker
+service.
 
 ## Attach to a Viewer pane
 
@@ -403,7 +408,7 @@ Detach with `Ctrl-b d`; the pane and its agent continue running. The endpoint pr
 
 ## Test instance
 
-Use the test profile for local validation on another port:
+Use the test profile for local validation on another port. Unlike [Run the published image](#run-the-published-image), which pulls the image, this command builds it locally:
 
 ```bash
 LLV_TEST_PORT=8901 docker compose --profile test up --build viewer-test
@@ -421,7 +426,7 @@ LLV_TEST_PORT=8901 LLV_TRANSCRIBE_BACKEND=chatgpt docker compose --profile test 
 
 Compose mounts the whole host home:
 
-- `/home/user:/home/user`
+- `$HOME:$HOME` (`/home/user` when `HOME` is unset)
 
 This gives the scanner and spawn validation the same paths the host service sees, including:
 
@@ -430,12 +435,13 @@ This gives the scanner and spawn validation the same paths the host service sees
 - `/home/user/.claude.json`
 - any cwd under `/home/user`, such as `.agents`, `Projects`, `Documents`, `Downloads`, `Desktop`, and `remote`
 
-Additional runtime mounts keep host sockets reachable:
+Additional runtime mounts keep host sockets and evidence reachable:
 
 - `/tmp/tmux-1000`
 - `/tmp/claude-1000`
+- `/var/tmp`, read-only, where agents on the host render evidence
 
-If the host uid differs, run with `LLV_UID` and `LLV_GID` set and make sure the matching `/tmp/tmux-$LLV_UID` and `/tmp/claude-$LLV_UID` paths exist.
+If the host uid differs, run with `DELEGATUS_UID` and `DELEGATUS_GID` set (`LLV_UID` and `LLV_GID` are accepted) and make sure the matching `/tmp/tmux-$DELEGATUS_UID` and `/tmp/claude-$DELEGATUS_UID` paths exist.
 
 ## Agent memory limits
 
@@ -450,6 +456,7 @@ the largest process when a tree or the shared agent budget exceeds its limit.
 One interval of growth can overshoot, double-forked descendants can escape,
 swap is unbounded, and kernel OOM kills lack attribution. Agents inherit an OOM
 score of at least 500; the container restart policy still handles a dead core.
-`DELEGATUS_AGENT_MEMORY=off` disables isolation. See the
-[agent memory design](design/agent-memory-isolation.md) for the systemd drop-in
-needed by an existing host user-service install.
+`DELEGATUS_AGENT_MEMORY=off` disables isolation. The systemd
+drop-in needed by an existing host user-service install is in
+[Agent memory](guide/operations.md#agent-memory); the
+[agent memory design](design/agent-memory-isolation.md) has the reasoning.

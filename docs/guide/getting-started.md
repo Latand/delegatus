@@ -48,8 +48,18 @@ you already use.
   a merge, and a stopped merge names a signed-out `gh` as its reason.
 - Linux or macOS. Linux is the main platform and macOS works. Native
   Windows runs Delegatus with Claude Code only; use WSL 2 for Codex, the MCP
-  server and the rest. [Platform support](../../README.md#platform-support)
-  has the details.
+  server and the rest. [Platforms](#platforms) has the details.
+
+### Platforms
+
+Delegatus is built for Linux and also runs on macOS and Windows.
+
+macOS works through a backend that uses `ps` and `lsof` in place of `/proc`.
+Native Windows runs Delegatus with Claude Code; install Claude with its
+native installer so a `claude.exe` is on `PATH`. Codex, managed accounts,
+local dictation, the MCP server and `--tailscale` are missing there, so run
+under WSL 2 if you need them. Windows also has no open-file scan, so
+Delegatus judges whether an agent is alive from file modification times.
 
 ## Choose how to install
 
@@ -120,8 +130,8 @@ bun bin/cli.mjs
 
 The command serves the output of the last build, so build again after every
 pull. `bun dev` runs the app with hot reload, and with it you start the
-runtime host yourself. [From a clone](../../README.md#from-a-clone) in the
-README has the rest.
+runtime host yourself. [Updates](operations.md#updates) covers keeping a
+clone current.
 
 ### Docker
 
@@ -132,8 +142,9 @@ getting one), because `docker-compose.yml` is at the top of that checkout.
 
 - **The test Viewer** shows the interface over your existing transcripts and
   nothing more. It is the web app alone, without a runtime host, so it
-  cannot start an orchestrator, an agent or a pipeline. The README's
-  [Docker](../../README.md#docker) section has its two commands. It opens
+  cannot start an orchestrator, an agent or a pipeline. The
+  [Run the published image](../docker.md#run-the-published-image) section of
+  docs/docker.md has its two commands. It opens
   on `http://127.0.0.1:8901/`, runs in the background, and stops with
   `docker compose --profile test stop viewer-test`.
 - **The production setup** is the Docker installation that runs agents. Its
@@ -177,8 +188,8 @@ The first start shows a notice about the anonymous install ping, in the page
 and in the start output. Turn it off in the sidebar's ⋯ menu under
 **Settings** → **Install ping**, or start Delegatus with
 `DELEGATUS_TELEMETRY=0` or `DO_NOT_TRACK=1`.
-[What leaves your machine](../../README.md#what-leaves-your-machine) lists
-what it sends.
+[What leaves your machine](security-and-privacy.md#what-leaves-your-machine)
+lists what it sends.
 
 ## The setup guide
 
@@ -191,8 +202,8 @@ Delegatus**. Its numbered steps are **Engines**, **Project**, **Telegram
    the ones you use. After installing a missing CLI, press **Check again**.
    If you use a service that speaks the Anthropic Messages API, **Add
    compatible provider** under Claude accounts takes its address, token and
-   models; the README's [Quick start](../../README.md#quick-start) has the
-   fields.
+   models; [Compatible providers](accounts-and-roles.md#compatible-providers)
+   has the fields.
 2. **Project** asks for the folder the orchestrator will work on. Pick it from
    **Already on this computer**, which lists the projects Delegatus already
    found here with how many conversations each has, or **Open another
@@ -356,14 +367,14 @@ turn on **Merge when the review passes**; see
   `origin` and a signed-in `gh`. Run `gh auth login` and check
   `git remote -v`.
 
-[Configuration](../../README.md#configuration) in the README lists every
-option and environment variable.
+[Configuration](configuration.md) lists every option and environment
+variable.
 
 ## Next
 
 - [Core concepts](concepts.md): what each part is and how they connect.
 - [Everyday workflows](workflows.md): asking for work and steering it.
-- [Phone access](../../README.md#phone-access): opening Delegatus on your
+- [Phone access](phone.md#phone-access): opening Delegatus on your
   phone.
-- [MCP server for agents](../../README.md#mcp-server-for-agents): giving your
+- [The MCP server](mcp.md): giving your
   own Claude Code or Codex sessions the same tools the orchestrator uses.

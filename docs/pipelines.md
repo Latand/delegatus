@@ -1,28 +1,26 @@
-# Linear agent pipelines
+# Pipelines
 
-Pipelines run a user-defined chain of two to four agent stages in one dedicated git worktree. The first slice supports `run` and `review-loop` stages. Every transition is linear and declared through `next`.
+A pipeline runs one to eight `run` stages in one dedicated git worktree. `next` is a stage's pass edge and `onFail` its fail edge; the pass graph is acyclic and cycles live only on fail edges. `review-loop` is a legacy kind kept for stored lanes ([Legacy review-loop stages](#legacy-review-loop-stages)). For the operator's view of a pipeline, read [Pipelines in depth](guide/pipelines.md) in the guide; this page is the stage contract, the HTTP API and recovery.
 
 ## Create and inspect
 
-`GET /api/pipelines` returns `{ "pipelines": [...] }`.
+`GET /api/pipelines` returns `{ "pipelines": [...] }`. It filters by `project`, `state`, `includeClosed` and `limit`; unknown parameters are refused.
 
-`GET /api/pipelines/<id>` returns `{ "ok": true, "pipeline": {...} }` with the full record for one pipeline.
+`GET /api/pipelines/<id>` returns `{ "ok": true, "pipeline": {...} }` with the full record for one pipeline, plus its `revision`, `stageDigests` and `graphDigest`.
 
 `POST /api/pipelines` accepts:
 
 ```json
 {
   "task": "Implement and verify pipeline support",
-  "spec": "AC1: every run stage ends with structured JSON\nAC2: review uses the existing flow engine",
+  "spec": "AC1: every run stage ends with a structured verdict\nAC2: a review failure routes to a fix stage",
   "repoDir": "/absolute/path/to/repository",
   "src": "/absolute/path/to/the/launching/conversation.jsonl",
   "stages": [
     {
       "id": "plan",
       "kind": "run",
-      "engine": "claude",
-      "model": "sonnet",
-      "effort": "high",
+      "role": { "roleId": "architect" },
       "access": "read-only",
       "outputs": ["docs/design/pipeline-support.md"],
       "prompt": "Plan {{task}}. Use the pinned specification.",
@@ -38,39 +36,47 @@ Pipelines run a user-defined chain of two to four agent stages in one dedicated 
     },
     {
       "id": "review",
-      "kind": "review-loop",
+      "kind": "run",
       "role": { "roleId": "reviewer" },
-      "effort": "xhigh",
       "access": "read-only",
       "sandbox": "restricted",
       "prompt": "Review the full pinned task and acceptance criteria.",
-      "next": null
+      "next": null,
+      "onFail": { "to": "fix", "maxRounds": 2 }
+    },
+    {
+      "id": "fix",
+      "kind": "run",
+      "role": { "roleId": "builder", "params": { "mode": "apply-fixes" } },
+      "access": "read-write",
+      "prompt": "Fix the findings handed to this stage.",
+      "next": "review"
     }
   ]
 }
 ```
 
-Stage ids use letters, numbers, `_`, and `-`. They must be unique. Each `next` value names the following array entry; the last stage ends with `null`. A review-loop requires an earlier run session.
+Stage ids use letters, numbers, `_`, and `-`. They must be unique. `next` names the stage a passing stage hands to, or `null` to end the pipeline; the array order is presentation. `onFail` names where a `fail` verdict goes, how many reviewed rounds it may run (`maxRounds`) and what happens once they are spent (`onExhausted`: `advance`, `stop-after-fix` or `park`, see [review-loop.md](review-loop.md)). Beside `task`, `spec`, `repoDir`, `src` and `stages`, a request may carry `taskIds`, `finishesTask`, `autoStart`, `baseBranch`, `baseRef`, `publication` and `delivery`.
 
 `access` controls repository mutation policy at settlement. It does not remove read tools, network access, SSH, GitHub CLI access, or worktree visibility. `sandbox` independently controls the engine's tool/network boundary. Every stage gets full host access by default; set `"sandbox": "restricted"` to keep the same repository policy inside the restrictive engine sandbox.
 
-A read-only `run` stage may declare repository-relative `outputs`, such as a report or design document. The agent may write those files and scratch space. The controller verifies that the stage created no commit and touched no undeclared worktree path, then records the declared outputs itself. Unsafe paths, traversal, globs, duplicates, and `.git` are rejected at creation. Review-loop findings continue to use the flow's existing artifact and cannot declare worktree outputs.
+A read-only `run` stage may declare repository-relative `outputs`, such as a report or design document. The agent may write those files and scratch space. The controller verifies that the stage created no commit and touched no undeclared worktree path, then records the declared outputs itself. Unsafe paths, traversal, globs, duplicates, and `.git` are rejected at creation.
 
-### Role references and issue #35
+### Role references
 
-`role` is optional. When present, `role.roleId` is a durable reference to one of the eight presets from issue #35. `engine`, `model`, `effort`, and `access` live on the stage as explicit overrides.
+`role` is optional. When present, `role.roleId` is a durable reference to one of ten pipeline roles: orchestrator, reviewer, verifier, builder, architect, cleaner, prod-auditor, deployer (release mode only), merger, visual-critic. `engine`, `model`, `effort`, and `access` live on the stage as explicit overrides.
 
-Resolution follows this order for each runtime field: explicit stage value, referenced role preset, Builder preset from the shared role registry. The current Builder preset is Codex GPT-5.6-Sol with medium effort. Pipeline creation fails closed when the registry cannot provide Builder, preventing a second embedded default from drifting away from the registry. A raw-prompt stage receives the task/spec context and structured verdict contract without a role scaffold. A referenced role receives its registry scaffold. Creation persists one immutable effective-role snapshot on each stage, and every attempt clones that snapshot so later registry edits cannot change first execution or retries.
+Resolution follows this order for each runtime field: explicit stage value, referenced role preset, Builder preset from the shared role registry. The Builder row of the role registry (shown under **Roles: engine and model** in Settings, and read with `role_presets`) decides it. Pipeline creation fails closed when the registry cannot provide Builder, preventing a second embedded default from drifting away from the registry. A raw-prompt stage receives the task/spec context and structured verdict contract without a role scaffold. A referenced role receives its registry scaffold. Creation persists one immutable effective-role snapshot on each stage, and every attempt clones that snapshot so later registry edits cannot change first execution or retries.
 
 ### UI lane order
 
-A lane whose diff touches UI runs three stages in this order: the **builder**, then a **design critique** whose `onFail` edge points back to the builder, then **one code review** at the final head. The critique judges the rendered result — weight, wording, hierarchy — and its `fail` verdict returns the lane to the builder for another pass inside the edge's `maxRounds`. The single review then reads the head the critique passed, so no approval is ever given to a head nobody has looked at.
+A lane whose diff touches UI runs, in order: a read-only brief stage that names the files, the states and the widths to check; a frontend **builder**; the review loop (a reviewer stage whose `onFail` edge leads to a fix stage); and a **visual-critic** stage last. The visual critic judges the rendered result — weight, wording, hierarchy — and its `fail` verdict returns the lane to the builder for another pass inside the edge's `maxRounds`. The mandate that composes this order is in `src/lib/orchestrator/prompt.ts`.
 
-Blocking layout breakage is not the critique's private business. Every review scaffold carries the standing rule that rendered surfaces are part of correctness (`REVIEW_FRAME_RULES` in `src/lib/roles/defaults.ts`): a UI diff is reviewed against the rendered result as well as the code, evidence that skips a surface the requirement names is REQUEST_CHANGES on its own, and overflow, clipped or zero-width controls, overlap and unreadable states are severity-ranked findings carrying the viewport and the measured numbers, rendered from an export of the reviewed HEAD — never the live worktree, never the operator's Delegatus.
+Blocking layout breakage is not the visual critic's private business. Every review scaffold carries the standing rule that rendered surfaces are part of correctness (`REVIEW_FRAME_RULES` in `src/lib/roles/defaults.ts`): a UI diff is reviewed against the rendered result as well as the code, evidence that skips a surface the requirement names is a finding on its own, and overflow, clipped or zero-width controls, overlap and unreadable states are severity-ranked findings carrying the viewport and the measured numbers, rendered from an export of the reviewed HEAD — never the live worktree, never the operator's Delegatus.
 
 ## Structured stage verdicts
 
-A run stage completes only when its finished turn ends with a fenced JSON block matching this contract:
+A run stage reports its verdict through the `stage_report` tool (next section). When that call is unavailable or returned an error, the stage falls back to ending its finished turn with a fenced JSON block matching this contract; the controller reads the last well-formed block:
 
 ```json
 {
@@ -80,15 +86,19 @@ A run stage completes only when its finished turn ends with a fenced JSON block 
 }
 ```
 
-Valid statuses are `pass`, `fail`, and `needs_decision`. Findings are optional, with at most 50 bounded strings. Confidence is optional and ranges from zero through one. A stage may include its own completion-evidence keys beside those controller fields; they remain in the canonical transcript while the controller persists only the bounded core verdict. The guard rejects invalid core fields, malformed JSON, and arbitrary trailing text. A terminal `REVIEW_READY` handoff line is accepted for compatibility with builder stages. Human-readable prose before the block becomes the stage output available through `{{prev.output}}`. A stage prompt (or role scaffold) that places the placeholder decides where the relay lands; one that never names it still receives the previous output, appended after the instruction as a labelled `Previous stage output` section, so a stage cannot lose its handoff to prompt authoring.
+Valid statuses are `pass`, `fail`, and `needs_decision`. Findings are optional, with at most 50 bounded strings. Confidence is optional and ranges from zero through one. A stage may include its own completion-evidence keys beside those controller fields; they remain in the canonical transcript while the controller persists only the bounded core verdict. The guard rejects invalid core fields, malformed JSON, conflicting statuses, a `pass` that carries findings, and a prose verdict marker that disagrees with the block. The block may also carry `blocked`, `blockedReason` and `rankedFindings`. Human-readable prose before the block becomes the stage output available through `{{prev.output}}`. A stage prompt (or role scaffold) that places the placeholder decides where the relay lands; one that never names it still receives the previous output, appended after the instruction as a labelled `Previous stage output` section, so a stage cannot lose its handoff to prompt authoring.
 
 ### The stage's own completion call
 
-A run stage's attempt reports its completion through the Delegatus MCP tool `stage_report`: `{ verdict, findings: [{ severity, text }], summary, stageId? }`, where `severity` is `P0` through `P3`. The server resolves the calling conversation to the live attempt it is running, so a conversation that holds no live attempt, or that names a stage it does not hold, is refused and nothing is written; `stageId` is needed only to disambiguate a conversation holding more than one live stage. A review-loop stage is refused too: its attempt holds the review flow's reviewer conversation, and the flow's own outcome is what settles it, so a report there would be recorded and shown while nothing acted on it. An attempt whose verdict has already been recorded — including one still committing that verdict — is settled for this purpose, since the graph has routed on it.
+A run stage's attempt reports its completion through the Delegatus MCP tool `stage_report`: `{ verdict, findings: [{ severity, text }], summary, stageId?, blocked?, blockedReason? }` (a fix stage that cannot proceed returns `fail` with `blocked: true` and a non-empty `blockedReason`), where `severity` is `P0` through `P3`. The server resolves the calling conversation to the live attempt it is running, so a conversation that holds no live attempt, or that names a stage it does not hold, is refused and nothing is written; `stageId` is needed only to disambiguate a conversation holding more than one live stage. A legacy review-loop stage is refused too: its attempt holds the review flow's reviewer conversation, and the flow's own outcome is what settles it, so a report there would be recorded and shown while nothing acted on it. An attempt whose verdict has already been recorded — including one still committing that verdict — is settled for this purpose, since the graph has routed on it.
 
 Provenance is collected by the server and never taken from the caller. At the moment of the call it reads the worktree HEAD, the uncommitted paths, the pull request the forge reports for the pipeline branch and whether each declared output is present, and records that on the attempt beside the verdict. A read the server cannot make is recorded as `null` rather than refusing the report.
 
 The call records an intent. Its successful acknowledgement carries the pipeline and stage identity, attempt, replacement flag, report sequence and time, verdict status, finding count with severity counts, bounded provenance metadata, and call count. It does not echo the submitted finding text or summary. `get_pipeline` with the pipeline id and `stageId` reads the authoritative stored findings and summary in one follow-up call. Error, unknown-outcome, and refusal replies keep their recovery fields. The attempt settles when its turn completes, on the same lifecycle-aware path a fenced verdict settles on, so an attempt that reports and then keeps working does not settle early. A second call before settlement replaces the first; a call after it is refused. Both inputs run through one normaliser, so a call and a fenced block produce the same record, and the call wins when a turn carries both. Findings are recorded most severe first, rendered as `P1 — text`, so the relay, the park detail and the card all lead with the worst one; findings that carry no rank keep the order they arrived in, which is what every fenced verdict written before ranking existed carries. A rank is read from a leading `P1 — text`, `P1 - text` or `P1: text` and from nothing else, so a finding that merely opens on a severity (`P1-based scoring is wrong`) keeps the words it was written with. The 2000-character bound is on the rendered finding, so a text within five characters of it keeps its rank and loses that tail. Each accepted call is appended to the pipeline's `stageReports` with the calling conversation, the stage, the attempt and the time.
+
+### Legacy review-loop stages
+
+A `review-loop` stage is the older form of a review. A new pipeline that names one is converted at creation into a reviewer stage and a fix stage (`src/lib/pipelines/legacyReviewDefinition.ts`); stored pipelines keep theirs, and three actions manage them: `preview-legacy-review`, `convert-legacy-review` and `revert-legacy-review`. A review-loop stage requires an earlier run session, and its findings use the flow's artifact and cannot declare worktree outputs.
 
 A review-loop stage attaches the latest passed run session to a regular review Flow. The stage role supplies the fresh reviewer. Flow approval becomes a pipeline `pass`; comment, closed, missing, and decision states park the pipeline for an operator. Review rounds, verdict parsing, findings delivery, and fresh-reviewer behavior stay owned by the Flow engine.
 
@@ -96,7 +106,7 @@ Two flow stops are technical rather than review outcomes, and the pipeline rides
 
 ## Worktree, lineage, and recovery
 
-Creation provisions a sibling worktree on `pipeline/<task-slug>-<id>`. Passed read-write stages commit pending work. For passed read-only stages, the controller commits only verified declared outputs. Both advance the saved `lastPassedCommit`. Retry closes an embedded flow, runs `git reset --hard <lastPassedCommit>` plus `git clean -fd` inside the pipeline-owned worktree, and appends a fresh attempt.
+Creation provisions a sibling worktree on `pipeline/<task-slug>-<id>`. Passed read-write stages commit pending work. For passed read-only stages, the controller commits only verified declared outputs. Both advance the saved `lastPassedCommit`. Retry closes a legacy stage's embedded flow, runs `git reset --hard <lastPassedCommit>` plus `git clean -fd` inside the pipeline-owned worktree, and appends a fresh attempt.
 
 The stage transcript artifact is the completion authority. When a durable read of the attempt's transcript shows a native terminal turn whose final assistant message contains a valid fenced verdict without a conflicting verdict fence, the attempt settles once from the last valid fence: the controller records the verdict, commits any pending work, advances `lastPassedCommit` to the actual stage HEAD, and schedules the next stage — even when the runtime session ledger is still reporting the turn as running, the scanner projection has transiently lost the transcript, or the host is already gone. A transcript whose turn is still open is mid-work: its messages are never verdict candidates, so a recovered idle host cannot terminalize the attempt.
 
@@ -108,19 +118,30 @@ Run stages use Delegatus spawn receipts and conversation lineage. Stage zero des
 
 A task spawn reserves its linked draft pipeline after task admission and before pane actuation. The draft keeps a `task-spawn` creation intent keyed by task id and launch id, plus the reserved Delegatus conversation id. Transcript settlement fills the creator path through the same idempotent ensure operation. Controller recovery can fill the path from the conversation registry when the route process stops after launch settlement. Replays reuse the receipt and the task's linked draft, preserving one pane and one active pipeline.
 
-Pipeline stages cannot create another pipeline. The stage-kind validator and the injected prompt contract enforce this one-level composition limit.
+Pipeline stages cannot create another pipeline. Every stage's prompt forbids it, and `create_pipeline` refuses reviewer, verifier, maintainer, merger, issue-reporter and visual-critic callers.
 
 ## Control
 
-`PATCH /api/pipelines/<id>` accepts one action:
+`PATCH /api/pipelines/<id>` accepts one of 30 actions. The route admits exactly the set declared in `src/lib/pipelines/types.ts`.
 
-- `set-position` — persist `{ x, y }` as the exact desktop board pin for the pipeline group. Automatic anchors remain render-derived; a drag writes this smallest durable override directly on the pipeline record.
-- `pause` — hold coordinator transitions and pause an embedded review flow.
-- `resume` — return to the saved pipeline phase and resume an embedded flow.
+| Group | Actions |
+| --- | --- |
+| Draft and graph | `publish`, `takeover`, `start`, `update-draft`, `add-stage`, `remove-stage`, `reorder-stage`, `set-edge`, `set-src`, `delete` |
+| Run control | `pause`, `resume`, `retry-stage`, `skip-stage`, `override-stage`, `close` |
+| Decisions and review | `resolve-decision`, `continue-review` (always refused: a review budget is fixed at creation), `accept-head` |
+| Legacy review | `preview-legacy-review`, `convert-legacy-review`, `revert-legacy-review` |
+| Tasks and links | `link-task`, `unlink-task`, `attach-link`, `detach-link` |
+| Board | `set-position`, `dismiss`, `undismiss` |
+| Merge | `retry-merge` |
+
+`set-position` persists `{ x, y }` as a board pin on the pipeline record. It is accepted for compatibility; no current interface sends it. The actions below need more than their name:
+
+- `pause` — hold coordinator transitions and pause a legacy stage's embedded review flow.
+- `resume` — return to the saved pipeline phase and resume a legacy stage's embedded flow.
 - `override-stage` — change a stage definition from its next attempt. For a running structured run stage, `applyNow: true` moves its runtime immediately while preserving its current attempt, worktree, branch and receipts. Only engine, model, effort, service tier and account may change now. The operator, creator or authorized project seat can request it; a stale stage digest, an already reported stage, or a conflicting open switch is refused before cutting the turn. `expectedAttempt` and `expectedConversationId` name the attempt and conversation the choice was made on; when a retry has started another agent since, the request answers 409 `STAGE_CHANGED` and changes nothing.
 - `retry-stage` — restore the last passed commit and start a fresh attempt.
 - `skip-stage` — record an operator skip and follow `next`.
-- `close` — close the pipeline and any embedded flow while retaining history, the worktree, and any live stage panes for inspection. A close first asks the runtime host to end each resident stage host; when the calling process has no structured control channel at all (an MCP host process), it ends the host by the identity the registry recorded (pid, start identity, boot epoch). That path acts only on an attempt affirmatively bound to the row: the attempt names the conversation the row is the current generation of, and its launch has a receipt naming that same conversation; no launch, no receipt, or a receipt naming another conversation is unresolved ownership and nothing is signalled. The same authority (the row still naming that exact process for that conversation, no orchestrator seat) is asked again after every await inside the termination and one step before each signal. The report says which Delegatus generation started the host and whether it still exists. A signal that was sent and did not end the whole authorized tree — a survivor, a refused signal — leaves the close refused with the pids named, and the survivors' identities are kept on the attempt: until each is proven gone, no later close may terminalize the attempt on registry or transcript evidence, however dead the row looks.
+- `close` — close the pipeline and any legacy embedded flow while retaining history, the worktree, and any live stage panes for inspection. A close first asks the runtime host to end each resident stage host; when the calling process has no structured control channel at all (an MCP host process), it ends the host by the identity the registry recorded (pid, start identity, boot epoch). That path acts only on an attempt affirmatively bound to the row: the attempt names the conversation the row is the current generation of, and its launch has a receipt naming that same conversation; no launch, no receipt, or a receipt naming another conversation is unresolved ownership and nothing is signalled. The same authority (the row still naming that exact process for that conversation, no orchestrator seat) is asked again after every await inside the termination and one step before each signal. The report says which Delegatus generation started the host and whether it still exists. A signal that was sent and did not end the whole authorized tree — a survivor, a refused signal — leaves the close refused with the pids named, and the survivors' identities are kept on the attempt: until each is proven gone, no later close may terminalize the attempt on registry or transcript evidence, however dead the row looks.
 
 A runtime switch is a durable record on the attempt. Same-engine moves interrupt the turn, apply the existing conversation reconfigure, and deliver one keyed continuation; account moves use the engine’s native fork/resume. An engine change first confirms the old host stopped, then starts a linked successor in the same stage slot with the bound brief and a bounded handoff. The tick replays persisted operation keys after restart. A failed move reuses its held continuation on the original runtime; an unconfirmed cancellation or launch parks with its reason. A newer operator kill and a lane close fence continuation. After commitment, verdict evidence starts at the new turn, and the former conversation cannot report the attempt. Allowed account selection and the attempt’s access/sandbox remain in force: the project’s allowed accounts are asked again when the queued move runs, before the new runtime is created and before it is published, so a target revoked after the request launches nothing and the attempt continues on its previous runtime. The speed is written exactly as chosen, and a repeated identical request after the move settled starts nothing. The operator switches a running stage in the runtime pill of its conversation: a model, reasoning, speed or account row there applies now, and the pill shows the switch under way and, when it does not take, whether the stage stayed on its runtime, continued there after a rollback, waits for a decision, or was stopped. An engine change goes through MCP `pipeline_action override-stage`.
 
@@ -174,9 +195,9 @@ When a park happened before the stage produced a verdict, `retry-stage` and `ski
 
 The pipeline tick runs in the same durable scanner-controller pass as the flow tick. `GET /api/files` remains a pure read and includes the current pipeline records for the project UI. The pipeline store fails closed on malformed or future-schema state, and that failure is contained: the files payload carries `pipelinesError` and serves everything else, and the shared tick skips pipelines while flows, workflows, and tasks keep running.
 
-## Deferred composition
+## Not supported
 
-Branching, conditional verdict edges, fan-out, parallel stages, voting panels, DAGs, rich visual editing, and runtime-event ownership remain later slices.
+Not supported: parallel stages, fan-out and voting panels. One stage runs at a time.
 
 ## Out-of-memory recovery
 

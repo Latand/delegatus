@@ -98,12 +98,18 @@ gets a **Prototype** button, and the round waits in the **Decisions** tab.
    original can stand beside its change, and a video plays in place.
 2. Choose one variant or several by number. The number keys work too.
 3. Add a comment, typed or dictated, and press **Save choice**. The review
-   then reads **Decision saved · delivered to the orchestrator**.
+   then reads **Decision saved · delivered to the orchestrator**. Your choice goes to the
+   project's orchestrator once, as your own message, and the card shows the
+   numbers you chose.
 
 If none of the variants fits, press **None fits**, write what to redo, and
 press **Reject and redo** to ask for the next round. **Hide** takes a round
 off the waiting lists without a choice, and can be undone. If the review was
 also posted to Telegram, **Send to Telegram again** resends it.
+
+A review is published after a visual critic has passed it. Before work on a
+request with important choices open, a review can instead hold three to seven
+questions; answer them in one message or skip to the recommended answers.
 
 On a phone the review fills the screen, and a tap opens a frame full screen.
 
@@ -133,8 +139,9 @@ use **Pipeline actions** in the card's ⋯:
   review fix;
 - **Close the pipeline** ends it.
 
-[docs/pipelines.md](../pipelines.md) covers stage definitions, verdicts and
-recovery in depth.
+[Pipelines in depth](pipelines.md) covers the stages, verdicts and review
+budget; [docs/pipelines.md](../pipelines.md) covers stage definitions, verdicts and
+recovery.
 
 ## Merge and deploy
 
@@ -149,7 +156,8 @@ shows **waiting for checks**, **merging**, **merged** or **merge stopped**. A
 stopped merge names its reason, appears under **Needs you**, and offers **Try
 the merge again** or **Leave the PR open**. The orchestrator can also land
 several reviewed pull requests as one batch through a merger stage;
-[docs/merge-batch.md](../merge-batch.md) has the procedure.
+[docs/merge-batch.md](../merge-batch.md) has the procedure, and
+[Merging](pipelines.md#merging) in the pipelines page covers the rest.
 
 To deploy your project, ask the orchestrator. No pipeline stage deploys, and
 only the orchestrator or your own session can start a deployer agent. To make
@@ -164,6 +172,7 @@ the previous release if verification fails. Running sessions reconnect.
 - **Automatic updates**, off by default, waits for green checks and a quiet
   minute before it applies an update. It works for an install run from a
   clone and is unavailable for a packaged install.
+  [Operations](operations.md#automatic-updates) has the details.
 - A packaged install updates through the dialog or with
   `bunx delegatus-cli@latest`.
 - A Docker production instance deploys with `scripts/rebuild.sh`; see
@@ -180,4 +189,5 @@ Delegatus. It is off by default. Switched on, it prepares a release once 30
 visible changes have gathered and twelve hours have passed since the last
 one, from a revision production has served for six hours. With **Ask before
 publishing** on, it asks you before it publishes.
-[docs/RELEASING.md](../RELEASING.md) has the procedure.
+[docs/RELEASING.md](../RELEASING.md) has the procedure, and
+[the tick panel](orchestrator.md#releases) is where the switch lives.

@@ -1,6 +1,6 @@
 # README restructure, guide additions and technical-doc corrections
 
-Status: design for the docs builder. Written against `main` at `cfe9ae97b`
+Status: implemented in the README restructure pull request. Written against `main` at `cfe9ae97b`
 (2026-10-14); remote `main` was the same commit when this was written. Every
 `file:line` below was read at that commit. This stage wrote only this file.
 

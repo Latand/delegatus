@@ -162,9 +162,8 @@ verification stages read none and leave none. **Learned rules** in the
 board's ⋯ menu shows a project's rules and lets you remove one.
 
 Shared memory is a separate feature: it lets Claude and Codex agents look up
-what either engine remembered. The README's
-[Agents and accounts](../../README.md#agents-and-accounts) section explains
-it.
+what either engine remembered. [Learned rules and shared memory](memory.md)
+explains both.
 
 ## Reports
 
