@@ -8,7 +8,7 @@ import { saveTasks, loadTasks, TASKS_FILE } from "@/lib/tasks/store";
 import { setConversationHostDependenciesForTests } from "@/app/api/conversation-host/dependencies";
 import { publishPOST as gatedPublishPOST, reviewGET, reviewPOST } from "./http";
 import { decidePrototype, prototypeDecisionText, prototypeDelivery, prototypeDeliveryResponse, type PrototypeDelivery, type PrototypeDeliveryPorts } from "./decision";
-import { prototypeCopyLine, parsePrototypeAnswer } from "./telegramAnswer";
+import { prototypeCopyLine, parsePrototypeAnswer, prototypeReference } from "./telegramAnswer";
 import { ownerTelegramReply } from "./telegram.fixture";
 import { runPrototypeAnswer } from "@/lib/externalRelay/prototypeAnswer";
 import type { ExternalRelayAnswer } from "@/lib/externalRelay/protocol";
@@ -234,7 +234,7 @@ test("the exact owner reservation is saved, acknowledged and delivered to the as
   expect((await read()).rounds.find(r => r.id === round.id)!.decision!.recommendedWithReservation).toBe(true);
 });
 
-test.each(["custom", "numbered-reservation", "long"])("owner %s replies survive decision normalization, reload and production delivery", async kind => {
+test.each(["custom", "numbered-reservation", "numbered-custom", "continuation-control", "long", "long-unicode"])("owner %s replies survive decision normalization, reload and production delivery", async kind => {
   const published = await publishPOST(new NextRequest("http://localhost/api/prototype-reviews", { method: "POST", headers: { host: "localhost" }, body: JSON.stringify({
     clientRequestId: `owner-${kind}`, taskId: "task-prototype", title: "Owner words", questions }) }), world);
   expect(published.status).toBe(200);
@@ -243,13 +243,16 @@ test.each(["custom", "numbered-reservation", "long"])("owner %s replies survive 
   const copy = prototypeCopyLine(round);
   const words = kind === "custom" ? copy.replace("Відповіді рекомендовані", "1: Власне місце.\n2: Власні поверхні.\n3: Власний час.")
     : kind === "numbered-reservation" ? `${copy}, але 2: Беремо реальний інтерфейс телеги.`
+    : kind === "numbered-custom" ? `${prototypeReference(round)} · 1: Мій гайд;2: Реальна телега;3: Перший ролик`
+    : kind === "continuation-control" ? `${copy}\nВаріант 2`
+    : kind === "long-unicode" ? `${copy} · ${"🙂".repeat(20_000 - [...copy].length - 3)}`
     : `${copy}, ${"я".repeat(20_000 - copy.length - 2)}`;
   const match = parsePrototypeAnswer(round, words);
   expect(match).toHaveProperty("input");
   const before = runtime.delivered.length;
   const result = await runPrototypeAnswer(match, "owner-message", () => {}, { world, delivery }).done;
   expect((result.answer as ExternalRelayAnswer).text).toContain("✅ Записав рішення");
-  expect((result.answer as ExternalRelayAnswer).text).toContain(kind === "custom" ? "власні відповіді" : "рекомендовані з застереженням");
+  expect((result.answer as ExternalRelayAnswer).text).toContain(kind === "custom" || kind === "numbered-custom" ? "власні відповіді" : "рекомендовані з застереженням");
   await settlePrototypeDeliveriesForTests();
   await until(() => runtime.delivered.length === before + 1);
   resetLegacyDocumentStoresForTests();
@@ -263,10 +266,29 @@ test.each(["custom", "numbered-reservation", "long"])("owner %s replies survive 
     expect(saved.answers![1]).toEqual({ questionId: "scope", options: [0], customText: "2: Беремо реальний інтерфейс телеги." });
     expect(runtime.delivered.at(-1)!.text).toContain("Owner's custom note:\n2: Беремо реальний інтерфейс телеги.");
   }
+  if (kind === "numbered-custom") {
+    expect(saved.answers!.map(answer => answer.customText)).toEqual(["1: Мій гайд", "2: Реальна телега", "3: Перший ролик"]);
+    expect(runtime.delivered.at(-1)!.text).toContain("Owner's custom note:\n2: Реальна телега");
+  }
+  if (kind === "continuation-control") {
+    expect(saved.comment).toBe("Варіант 2");
+    expect(saved.skipped).toBeUndefined();
+    expect(saved.recommendedWithReservation).toBe(true);
+    expect((result.answer as ExternalRelayAnswer).text).toContain("Варіант 2");
+    expect(runtime.delivered.at(-1)!.text).toContain("recommended with reservation; resolve the owner's open point below.");
+    expect(runtime.delivered.at(-1)!.text).toContain("Варіант 2");
+  }
   if (kind === "long") {
-    expect(words.length).toBe(20_000);
+    expect([...words]).toHaveLength(20_000);
+    expect(isPrototypeReplica(prototypeReviewReplica(task), task.id, task.project)).toBe(true);
     expect(Buffer.byteLength(saved.delivery.text)).toBeLessThanOrEqual(32_000);
     expect(saved.delivery.text).toContain("Read read_prototype_review");
     expect(saved.delivery.text).not.toContain("\uFFFD");
+  }
+  if (kind === "long-unicode") {
+    expect([...words]).toHaveLength(20_000);
+    expect(Buffer.byteLength(saved.delivery.text)).toBeLessThanOrEqual(32_000);
+    expect(saved.originalReply).toBe(words);
+    expect(isPrototypeReplica(prototypeReviewReplica(task), task.id, task.project)).toBe(true);
   }
 });

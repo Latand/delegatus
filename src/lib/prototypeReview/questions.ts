@@ -1,4 +1,5 @@
 import type { PrototypeAnswer, PrototypeQuestion } from "./types";
+import { prototypeTextLength } from "./textLength";
 
 export function recommendedAnswers(questions: readonly PrototypeQuestion[]): PrototypeAnswer[] {
   return questions.map(q => ({ questionId: q.id, options: [q.options.findIndex(o => o.recommended)] }));
@@ -10,7 +11,7 @@ export function normalizePrototypeAnswers(questions: readonly PrototypeQuestion[
   for (const answer of raw) {
     if (!answer || typeof answer !== "object" || Array.isArray(answer) || typeof answer.questionId !== "string"
       || Object.keys(answer).some(k => !["questionId", "options", "other", "customText"].includes(k))
-      || (answer.customText !== undefined && (!ownerReply || typeof answer.customText !== "string" || !answer.customText.trim() || answer.customText.length > 20_000))
+      || (answer.customText !== undefined && (!ownerReply || typeof answer.customText !== "string" || !answer.customText.trim() || prototypeTextLength(answer.customText) > 20_000))
       || (answer.other !== undefined && answer.other !== true) || ids.has(answer.questionId)
       || !questions.some(q => q.id === answer.questionId)) throw new Error("invalid or duplicate question answer");
     ids.add(answer.questionId);

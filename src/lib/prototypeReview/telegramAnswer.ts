@@ -3,6 +3,7 @@ import { runsElsewhere } from "@/lib/links/linked";
 import { prototypeReviewSummary } from "./model";
 import { normalizePrototypeAnswers, recommendedAnswers } from "./questions";
 import { loadSeatRounds } from "./seatRounds";
+import { prototypeTextLength } from "./textLength";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { DecidePrototypeInput, PrototypeAnswer, PrototypeReviewRound } from "./types";
 
@@ -36,7 +37,7 @@ export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string):
   const refs = originalReply.match(/#proto-[a-f0-9]{8}\b/gi) ?? [];
   if (!refs.length) return { round, error: "додайте посилання на раунд" };
   if (refs.length !== 1 || refs[0]!.toLowerCase() !== prototypeReference(round)) return { round, error: "вкажіть один раунд" };
-  if (originalReply.length > 20_000) return { round, error: "скоротіть відповідь до 20000 символів" };
+  if (prototypeTextLength(originalReply) > 20_000) return { round, error: "скоротіть відповідь до 20000 символів" };
   const body = originalReply.replace(/^\s*Прототип «[^»]*»\s*/iu, "").replace(/#proto-[a-f0-9]{8}\b/i, "");
   const questions = round.questions ?? [];
   const chosen = new Set<number>();
@@ -48,12 +49,14 @@ export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string):
   for (const part of body.matchAll(/[^·\n]+/g)) {
     const segment = part[0].trim();
     if (!segment) continue;
+    // Once the recommendation marker has appeared, every later segment is
+    // owner text, even when it happens to look like a copied control.
+    if (recommended) { notes.push(segment); continue; }
     const choice = /^варіант(?:и)?\s+([1-9](?:\s*,\s*[1-9])*)$/i.exec(segment);
     if (choice && choice[1]!.split(",").every(n => round.variants.some(v => v.number === Number(n)))) {
       choice[1]!.split(",").forEach(n => chosen.add(Number(n)));
       continue;
     }
-    if (recommended) { notes.push(segment); continue; }
     let words = segment.replace(/^відповіді(?:\s+|$)/i, "");
     const recommendation = /^рекомендовані(?=$|[^\p{L}\p{N}_])/iu.exec(words);
     if (recommendation && questions.length) {
@@ -78,10 +81,10 @@ export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string):
     ? [...notes.slice(0, notesBeforeRecommendation), reservation].join("\n") : notes.join("\n");
   const answers = questions.map(q => selected.get(q.id) ?? (recommended ? recommendedAnswers([q])[0]! : { questionId: q.id, options: [], other: true as const }));
   for (const note of notes) {
-    const numbered = [...note.matchAll(/(?<!\S)([1-7])\s*[:.)—–-]\s*/g)];
+    const numbered = [...note.matchAll(/(?<![\p{L}\p{N}_])([1-7])\s*[:.)—–-]\s*/gu)];
     const named = questions.filter(q => note.toLowerCase().includes(q.text.toLowerCase()));
     const parts = numbered.length ? numbered.map((match, i) => ({
-      question: Number(match[1]) - 1, text: note.slice(match.index, numbered[i + 1]?.index).trim(),
+      question: Number(match[1]) - 1, text: note.slice(match.index, numbered[i + 1]?.index).trim().replace(/[;,]$/, ""),
     })) : named.length === 1 ? [{ question: questions.indexOf(named[0]!), text: note }] : [];
     for (const part of parts) {
       const answer = answers[part.question];

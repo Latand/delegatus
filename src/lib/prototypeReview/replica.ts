@@ -2,6 +2,7 @@ import { z } from "zod";
 import { prototypeQuestionsSchema } from "./input";
 import { normalizePrototypeAnswers, recommendedAnswers } from "./questions";
 import type { PrototypeReviewReplica } from "./types";
+import { prototypeTextLength } from "./textLength";
 
 const id = z.string().regex(/^pr_[0-9a-f]{32}$/);
 const instant = z.string().datetime({ offset: true });
@@ -10,19 +11,20 @@ const chosen = z.array(z.number().int().min(1).max(9)).max(9);
 const media = z.object({ id: z.string().regex(/^[0-9a-f]{64}$/), mime: z.enum(["image/png", "image/jpeg", "image/webp", "video/mp4", "video/webm"]),
   bytes: z.number().int().min(1).max(64 * 1024 * 1024), available: z.literal(false), url: z.null() }).strict();
 const caption = z.string().max(200);
+const ownerText = z.string().refine(value => prototypeTextLength(value) <= 20_000);
 const schema = z.object({
   historyTruncated: z.literal(true).optional(),
   summary: z.object({ latestReviewId: id, waitingReviewId: id.nullable(), title: z.string().min(1).max(120), rounds: z.number().int().positive(), createdAt: instant, asks: z.literal("questions").optional(),
     decision: z.object({ answered: z.literal(true).optional(), rejected: z.literal(true).optional(), chosen: z.array(z.object({ number: z.number().int().min(1).max(9), name: z.string().min(1).max(60) }).strict()).max(9),
-      comment: z.string().max(20000), at: instant, delivery: state }).strict().optional() }).strict(),
+      comment: ownerText, at: instant, delivery: state }).strict().optional() }).strict(),
   rounds: z.array(z.object({ id, title: z.string().min(1).max(120), taskId: z.string().min(1).max(200), project: z.string().min(1).max(200), createdAt: instant,
     source: z.object({ conversationId: z.string().max(200).nullable(), pipelineId: z.string().max(200).optional(), stageId: z.string().max(200).optional(), attempt: z.number().int().positive().optional() }).strict(),
     mediaRemovedAt: instant.optional(), questions: prototypeQuestionsSchema.optional(),
     variants: z.array(z.object({ number: z.number().int().min(1).max(9), name: z.string().min(1).max(60), description: z.string().max(300),
       frames: z.array(z.object({ image: media, original: media.optional(), caption, width: z.number().int().min(240).max(3840).optional(), lang: z.enum(["en", "uk"]).optional() }).strict()).max(240),
       videos: z.array(z.object({ media, caption }).strict()).max(240) }).strict()).max(9),
-    decision: z.object({ chosen, originalReply: z.string().max(20000).optional(), recommendedWithReservation: z.literal(true).optional(), rejected: z.literal(true).optional(),
-      answers: z.array(z.object({ questionId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/), options: z.array(z.number().int().min(0).max(5)).max(6), other: z.literal(true).optional(), customText: z.string().min(1).max(20000).optional() }).strict()).min(1).max(7).optional(), skipped: z.literal(true).optional(), comment: z.string().max(20000), at: instant, delivery: z.object({ state, retryable: z.boolean() }).strict() }).strict().optional(),
+    decision: z.object({ chosen, originalReply: ownerText.optional(), recommendedWithReservation: z.literal(true).optional(), rejected: z.literal(true).optional(),
+      answers: z.array(z.object({ questionId: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/), options: z.array(z.number().int().min(0).max(5)).max(6), other: z.literal(true).optional(), customText: ownerText.refine(value => value.length > 0).optional() }).strict()).min(1).max(7).optional(), skipped: z.literal(true).optional(), comment: ownerText, at: instant, delivery: z.object({ state, retryable: z.boolean() }).strict() }).strict().optional(),
   }).strict()).max(1000),
 }).strict();
 

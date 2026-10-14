@@ -197,7 +197,7 @@ test("input string bounds count Unicode code points", () => {
 });
 
 test("a verified owner's addressed prototype reply reaches the parser up to its 20000-character cap", () => {
-  const words = `#proto-20fbd832 ${"я".repeat(20_000 - "#proto-20fbd832 ".length)}`;
+  const words = `#proto-20fbd832 ${"🙂".repeat(20_000 - [..."#proto-20fbd832 "].length)}`;
   const input = { ...contextRequest.input, requester: { ...contextRequest.input.requester!, is_owner: true },
     conversation: [{ ...contextRequest.input.conversation[0]!, text: words }] };
   const passes = (change: Partial<ExternalRelayRequest["input"]> = {}) => requestSchema.safeParse({ ...contextRequest, input: { ...input, ...change } }).success;

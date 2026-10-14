@@ -115,6 +115,33 @@ test("shorthand inside a recommendation reservation remains the owner's exact no
   expect(parsePrototypeAnswer(round, `${prototypeCopyLine(round)}${suffix}`).input!.comment).toBe(suffix);
 });
 
+test("a recommendation continuation that resembles a variant stays owner text", () => {
+  const round = telegramRound();
+  const text = `${prototypeCopyLine(round)}\nВаріант 2`;
+  expect(parsePrototypeAnswer(round, text).input).toMatchObject({
+    originalReply: text,
+    chosen: [],
+    comment: "Варіант 2",
+    recommendedWithReservation: true,
+    answers: round.questions!.map(q => ({ questionId: q.id, options: [0] })),
+  });
+  expect(parsePrototypeAnswer(round, text).input!.skip).toBeUndefined();
+  expect(parsePrototypeAnswer(round, `${prototypeCopyLine(round, 2)}`).input!.chosen).toEqual([2]);
+});
+
+test("numbered custom answer boundaries after punctuation keep each question attribution", () => {
+  const round = telegramRound();
+  const custom = `${prototypeReference(round)} · 1: Мій гайд;2: Реальна телега;3: Перший ролик`;
+  const parsed = parsePrototypeAnswer(round, custom).input!;
+  expect(parsed.answers!.map(answer => answer.customText)).toEqual([
+    "1: Мій гайд", "2: Реальна телега", "3: Перший ролик",
+  ]);
+  const mixed = `${prototypeCopyLine(round)};2: Потрібен реальний Telegram UI.`;
+  const reservation = parsePrototypeAnswer(round, mixed).input!;
+  expect(reservation.answers![1]!.customText).toBe("2: Потрібен реальний Telegram UI.");
+  expect(reservation.comment).toBe(";2: Потрібен реальний Telegram UI.");
+});
+
 test("unknown dot segments are custom text and every reply retains original whitespace after NFC and escaping", () => {
   const round = telegramRound();
   const text = `  ${prototypeCopyLine(round, 1)} · Extra  words.\r\n  Keep  these.  `;
@@ -136,6 +163,25 @@ test("identity across the entire reply and the full 20000-character limit remain
   expect(parsePrototypeAnswer(round, text + "я")).toHaveProperty("error");
   delete round.questions;
   expect(parsePrototypeAnswer(round, `${ref} · Мій власний варіант`).input).toMatchObject({ chosen: [], comment: "Мій власний варіант" });
+});
+
+test("the reply cap counts Unicode code points through parser normalization", () => {
+  const round = telegramRound();
+  const ref = prototypeReference(round);
+  const text = `${ref} ${"🙂".repeat(20_000 - [...ref].length - 1)}`;
+  expect([...text]).toHaveLength(20_000);
+  expect(parsePrototypeAnswer(round, text).input!.originalReply).toBe(text);
+  expect(parsePrototypeAnswer(round, `${text}🙂`)).toMatchObject({ error: "скоротіть відповідь до 20000 символів" });
+});
+
+test("custom answer text uses the same code-point cap as owner replies", () => {
+  const round = telegramRound();
+  const customText = "🙂".repeat(20_000);
+  const answers = round.questions!.map((q, i) => i === 0
+    ? { questionId: q.id, options: [], other: true as const, customText }
+    : { questionId: q.id, options: [0] });
+  expect(normalizePrototypeAnswers(round.questions!, answers, "", true)[0]!.customText).toBe(customText);
+  expect(() => normalizePrototypeAnswers(round.questions!, [{ ...answers[0]!, customText: `${customText}🙂` }, ...answers.slice(1)], "", true)).toThrow();
 });
 
 test("only an unambiguous newest local waiting round is recognized", () => {

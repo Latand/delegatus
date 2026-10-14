@@ -14,6 +14,7 @@ import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 import { normalizePrototypeAnswers, recommendedAnswers } from "./questions";
 import type { DecidePrototypeInput, PrototypeDecision, PrototypeDeliveryState, PrototypeReviewRound } from "./types";
 import { prototypeWorld, type PrototypeWorld } from "./world";
+import { prototypeTextLength } from "./textLength";
 
 export type PrototypeDeliveryContext = NextRequest | { kind: "operator-in-process"; authorize: () => void };
 const inProcess = (request: PrototypeDeliveryContext): request is Extract<PrototypeDeliveryContext, { kind: string }> => "kind" in request && request.kind === "operator-in-process";
@@ -162,14 +163,14 @@ export function decidePrototype(request: PrototypeDeliveryContext,taskId: string
     }
     if (input.reject !== undefined && input.reject !== true) throw new PrototypeError("invalid reject");
     const ownerReply = input.originalReply !== undefined;
-    if (ownerReply && (typeof input.originalReply !== "string" || input.originalReply.length > PROTOTYPE_LIMITS.comment)) throw new PrototypeError("original reply exceeds 20000 characters");
+    if (ownerReply && (typeof input.originalReply !== "string" || prototypeTextLength(input.originalReply) > PROTOTYPE_LIMITS.comment)) throw new PrototypeError("original reply exceeds 20000 characters");
     if (input.recommendedWithReservation !== undefined && (input.recommendedWithReservation !== true || !ownerReply || input.skip || typeof input.comment !== "string" || !input.comment.trim())) throw new PrototypeError("reservation requires the owner's note and explicit answers");
     if (input.reject && !round.variants.length) throw new PrototypeError("reject: this round has no variants to reject");
     if (input.reject && Array.isArray(input.chosen) && input.chosen.length) throw new PrototypeError("chosen: a rejection chooses no variant");
     if (input.reject && (typeof input.comment !== "string" || !input.comment.trim())) throw new PrototypeError("comment: write or dictate what to redo");
     if (!Array.isArray(input.chosen) || (!input.chosen.length && !round.questions?.length && !input.reject && !ownerReply) || input.chosen.length > 9 || new Set(input.chosen).size !== input.chosen.length
       || input.chosen.some(n => !round.variants.some(v => v.number === n))) throw new PrototypeError("choose one or more declared variants");
-    if (typeof input.comment !== "string" || input.comment.length > PROTOTYPE_LIMITS.comment) throw new PrototypeError("comment exceeds 20000 characters");
+    if (typeof input.comment !== "string" || prototypeTextLength(input.comment) > PROTOTYPE_LIMITS.comment) throw new PrototypeError("comment exceeds 20000 characters");
     const questionnaire = Boolean(round.questions?.length);
     if (input.skip !== undefined && input.skip !== true) throw new PrototypeError("invalid skip");
     if (questionnaire ? (input.skip === true ? input.answers !== undefined : input.answers === undefined)
