@@ -621,6 +621,52 @@ describe("short questionnaire", () => {
     return posted;
   }
   const click = async (selector: string) => act(async () => { document.querySelector<HTMLElement>(selector)!.click(); });
+  test.each([false, true])("skip one question, save once and read the decided skip (phone=%s)", async phone => {
+    const posted = await mountQuestions(phone);
+    const row = document.querySelector<HTMLButtonElement>('[data-prototype-question-skip="scope"]');
+    expect(row).not.toBeNull();
+    expect(row!.getAttribute("role")).toBe("checkbox");
+    expect(row!.tabIndex).toBe(0);
+    expect(row!.closest('[role="group"], [role="radiogroup"]')).toBeNull();
+    await click('[data-prototype-question-skip="scope"]');
+    expect(document.querySelector('[data-prototype-question="scope"]')?.hasAttribute("data-prototype-question-skipped")).toBe(true);
+    expect(document.querySelector('[data-prototype-option="scope:0"]')?.getAttribute("aria-checked")).toBe("false");
+    expect(document.querySelector('[data-prototype-question="scope"] [data-prototype-hint]')).toBeNull();
+    await click("[data-prototype-save]");
+    expect(posted).toEqual([{ reviewId: `pr_${"a".repeat(32)}`, chosen: [], comment: "", answers: [{ questionId: "place", options: [0] }, { questionId: "scope", options: [], skipped: true }, { questionId: "timing", options: [0] }] }]);
+    const saved = document.querySelector<HTMLButtonElement>('[data-prototype-question-skip="scope"]')!;
+    expect(saved.disabled).toBe(true); expect(saved.getAttribute("aria-checked")).toBe("true");
+    expect(saved.textContent).toBe("Skipped: already decided or no longer relevant");
+    expect(saved.className).not.toContain("opacity-60");
+    expect(document.querySelector('[data-prototype-question="place"] [data-prototype-question-skip]')).toBeNull();
+    expect(document.querySelector('[data-prototype-question="timing"] [data-prototype-question-skip]')).toBeNull();
+  });
+  test.each([false, true])("a skip toggles back to the recommendation or un-skips with an option (phone=%s)", async phone => {
+    await mountQuestions(phone);
+    expect(document.querySelector('[data-prototype-question-skip="place"]')).not.toBeNull();
+    await click('[data-prototype-question-skip="place"]');
+    await click('[data-prototype-option="place:1"]');
+    expect(document.querySelector('[data-prototype-question-skip="place"]')!.getAttribute("aria-checked")).toBe("false");
+    expect(document.querySelector('[data-prototype-option="place:1"]')!.getAttribute("aria-checked")).toBe("true");
+    await click('[data-prototype-question-skip="place"]');
+    await click('[data-prototype-question-skip="place"]');
+    expect(document.querySelector('[data-prototype-option="place:0"]')!.getAttribute("aria-checked")).toBe("true");
+    await click('[data-prototype-other="timing"]');
+    expect(document.querySelector<HTMLButtonElement>("[data-prototype-save]")!.disabled).toBe(true);
+    await click('[data-prototype-question-skip="timing"]');
+    expect(document.querySelector<HTMLButtonElement>("[data-prototype-save]")!.disabled).toBe(false);
+    await click('[data-prototype-other="timing"]');
+    expect(document.querySelector('[data-prototype-question-skip="timing"]')!.getAttribute("aria-checked")).toBe("false");
+  });
+  test.each([false, true])("an empty multiple answer becomes savable by skipping (phone=%s)", async phone => {
+    await mountQuestions(phone);
+    await click('[data-prototype-option="scope:0"]');
+    expect(document.querySelector<HTMLButtonElement>("[data-prototype-save]")!.disabled).toBe(true);
+    expect(document.body.textContent).toContain("Answer or skip every question");
+    expect(document.querySelector('[data-prototype-question-skip="scope"]')).not.toBeNull();
+    await click('[data-prototype-question-skip="scope"]');
+    expect(document.querySelector<HTMLButtonElement>("[data-prototype-save]")!.disabled).toBe(false);
+  });
   test("questions only preselect recommendations, single and multiple choices and shared other save once", async () => {
     const posted = await mountQuestions();
     expect(Boolean(document.querySelector("[data-prototype-variants]"))).toBe(false);

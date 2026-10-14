@@ -570,7 +570,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     </div>
   ) : null;
 
-  const selectAnswer = (questionId: string, option: number | "other") => {
+  const selectAnswer = (questionId: string, option: number | "other" | "skip") => {
     if (!open) return;
     setDraft(held => ({ ...held, answers: selectPrototypeAnswer(round!.questions!, held.answers, questionId, option) }));
   };

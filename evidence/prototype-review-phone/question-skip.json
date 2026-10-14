@@ -1,0 +1,866 @@
+[
+  {
+    "lang": "en",
+    "taskId": "t-search",
+    "state": "open",
+    "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Questions",
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 199,
+        "y": 742,
+        "width": 175
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 16,
+        "y": 794,
+        "width": 175
+      }
+    ],
+    "actionsWidth": 358,
+    "readonly": false,
+    "skipped": false,
+    "skipRows": [
+      {
+        "question": "place",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "surfaces",
+        "checked": true,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "timing",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "comment",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "start",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "lang": "en",
+    "taskId": "t-search",
+    "state": "decided",
+    "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Answered",
+    "decisionText": "Answered14 Oct, 20:21Saved and sent to the orchestrator",
+    "title": "Questions",
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": false,
+    "skipRows": [
+      {
+        "question": "surfaces",
+        "checked": true,
+        "disabled": true,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "lang": "en",
+    "taskId": "t-disk",
+    "state": "open",
+    "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Questions",
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 199,
+        "y": 742,
+        "width": 175
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 16,
+        "y": 794,
+        "width": 175
+      }
+    ],
+    "actionsWidth": 358,
+    "readonly": false,
+    "skipped": false,
+    "skipRows": [
+      {
+        "question": "place",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "surfaces",
+        "checked": true,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "timing",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "lang": "en",
+    "taskId": "t-disk",
+    "state": "decided",
+    "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Answered",
+    "decisionText": "Answered14 Oct, 20:21Saved and sent to the orchestrator",
+    "title": "Questions",
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": false,
+    "skipRows": [
+      {
+        "question": "surfaces",
+        "checked": true,
+        "disabled": true,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "lang": "uk",
+    "taskId": "t-search",
+    "state": "open",
+    "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Питання",
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 199,
+        "y": 742,
+        "width": 175
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 16,
+        "y": 794,
+        "width": 175
+      }
+    ],
+    "actionsWidth": 358,
+    "readonly": false,
+    "skipped": false,
+    "skipRows": [
+      {
+        "question": "place",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "surfaces",
+        "checked": true,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "timing",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "comment",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "start",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "lang": "uk",
+    "taskId": "t-search",
+    "state": "decided",
+    "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Відповіли",
+    "decisionText": "Відповіли14 жовт., 20:21Збережено й надіслано оркестратору",
+    "title": "Питання",
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 5,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": false,
+    "skipRows": [
+      {
+        "question": "surfaces",
+        "checked": true,
+        "disabled": true,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "lang": "uk",
+    "taskId": "t-disk",
+    "state": "open",
+    "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Питання",
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 199,
+        "y": 742,
+        "width": 175
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 16,
+        "y": 794,
+        "width": 175
+      }
+    ],
+    "actionsWidth": 358,
+    "readonly": false,
+    "skipped": false,
+    "skipRows": [
+      {
+        "question": "place",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "surfaces",
+        "checked": true,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "timing",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "lang": "uk",
+    "taskId": "t-disk",
+    "state": "decided",
+    "width": 390,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Відповіли",
+    "decisionText": "Відповіли14 жовт., 20:21Збережено й надіслано оркестратору",
+    "title": "Питання",
+    "sideways": 0,
+    "questionWidth": 390,
+    "stageWidth": null,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": false,
+    "skipRows": [
+      {
+        "question": "surfaces",
+        "checked": true,
+        "disabled": true,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "pageErrors": []
+  }
+]

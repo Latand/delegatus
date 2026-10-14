@@ -821,9 +821,23 @@ export async function captureSeatMandateHandover(browser: Browser, base: string,
 }
 
 
+/** The question's last row stays within its fieldset and clear of its choices. */
+export async function capturePrototypeSkipRows(page: Page, scope: string) {
+  return page.locator(scope).evaluate(frame => [...frame.querySelectorAll<HTMLButtonElement>("[data-prototype-question-skip]")].map(row => {
+    const box = row.getBoundingClientRect(); const style = getComputedStyle(row); const fieldset = row.closest("fieldset"); const field = fieldset?.getBoundingClientRect();
+    const options = [...fieldset?.querySelectorAll("[data-prototype-option], [data-prototype-other]") ?? []];
+    return { question: row.dataset.prototypeQuestionSkip, checked: row.getAttribute("aria-checked") === "true", disabled: row.disabled, height: box.height,
+      insideFieldset: !!fieldset && fieldset.dataset.prototypeQuestion === row.dataset.prototypeQuestionSkip,
+      background: style.backgroundColor, borderStyle: style.borderTopStyle,
+      clipped: !field || box.left < field.left - 0.5 || box.right > field.right + 0.5 || box.top < field.top - 0.5 || box.bottom > field.bottom + 0.5 || row.scrollWidth > row.clientWidth + 1,
+      overlapsOptions: options.some(option => { const other = option.getBoundingClientRect(); return box.left < other.right && other.left < box.right && box.top < other.bottom && other.top < box.bottom; }) };
+  }));
+}
+
 /** Shared questionnaire readings for the board and phone evidence drivers. */
 export async function capturePrototypeQuestions(page: Page, phone: boolean) {
-  return page.evaluate((phone) => {
+  const skipRows = await capturePrototypeSkipRows(page, phone ? "[data-mobile2-sheet=prototype-review]" : "[data-prototype-review] [role=dialog]");
+  const reading = await page.evaluate((phone) => {
     const frame = document.querySelector<HTMLElement>(phone ? "[data-mobile2-sheet=prototype-review]" : "[data-prototype-review] [role=dialog]")!;
     const questions = frame.querySelector<HTMLElement>("[data-prototype-questions]")!;
     const stage = frame.querySelector<HTMLElement>("[data-prototype-gallery]");
@@ -859,6 +873,7 @@ export async function capturePrototypeQuestions(page: Page, phone: boolean) {
       actionsWidth: frame.querySelector<HTMLElement>("[data-prototype-actions]")?.getBoundingClientRect().width ?? null,
       readonly: options.every(o => (o as HTMLButtonElement).disabled), skipped: Boolean(frame.querySelector("[data-prototype-skipped]")) };
   }, phone);
+  return { ...reading, skipRows };
 }
 
 

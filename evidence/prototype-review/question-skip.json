@@ -1,0 +1,742 @@
+[
+  {
+    "lang": "en",
+    "taskId": "t-upload",
+    "state": "open",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Prototype review · Redesign attachment upload for large files",
+    "sideways": 0,
+    "questionWidth": 360,
+    "stageWidth": 766,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 1268.296875,
+        "y": 801,
+        "width": 51.34375
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 1327.640625,
+        "y": 801,
+        "width": 71.359375
+      }
+    ],
+    "actionsWidth": 190.71875,
+    "readonly": false,
+    "skipped": false,
+    "skipRows": [
+      {
+        "question": "place",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "surfaces",
+        "checked": true,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "timing",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "lang": "en",
+    "taskId": "t-upload",
+    "state": "decided",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Answered",
+    "decisionText": "Answered14 Oct, 20:18Saved. Nothing was sent: this project has no orchestrator.Send now",
+    "title": "Prototype review · Redesign attachment upload for large files",
+    "sideways": 0,
+    "questionWidth": 360,
+    "stageWidth": 766,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": false,
+    "skipRows": [
+      {
+        "question": "surfaces",
+        "checked": true,
+        "disabled": true,
+        "height": 54,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "lang": "en",
+    "taskId": "t-disk",
+    "state": "open",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Questions · Disk space: find what Docker, worktrees and temp storage hold",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Skip",
+        "visible": true,
+        "x": 952.296875,
+        "y": 801,
+        "width": 51.34375
+      },
+      {
+        "text": "Answer",
+        "visible": true,
+        "x": 1011.640625,
+        "y": 801,
+        "width": 71.359375
+      }
+    ],
+    "actionsWidth": 190.71875,
+    "readonly": false,
+    "skipped": false,
+    "skipRows": [
+      {
+        "question": "place",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "surfaces",
+        "checked": true,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "timing",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "lang": "en",
+    "taskId": "t-disk",
+    "state": "decided",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Answered",
+    "decisionText": "Answered14 Oct, 20:18Saved and sent to the orchestrator",
+    "title": "Questions · Disk space: find what Docker, worktrees and temp storage hold",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": false,
+    "skipRows": [
+      {
+        "question": "surfaces",
+        "checked": true,
+        "disabled": true,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "lang": "uk",
+    "taskId": "t-upload",
+    "state": "open",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Огляд прототипів · Redesign attachment upload for large files",
+    "sideways": 0,
+    "questionWidth": 360,
+    "stageWidth": 766,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 1202.0625,
+        "y": 801,
+        "width": 96.09375
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 1306.15625,
+        "y": 801,
+        "width": 92.84375
+      }
+    ],
+    "actionsWidth": 280.46875,
+    "readonly": false,
+    "skipped": false,
+    "skipRows": [
+      {
+        "question": "place",
+        "checked": false,
+        "disabled": false,
+        "height": 54,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "surfaces",
+        "checked": true,
+        "disabled": false,
+        "height": 54,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "timing",
+        "checked": false,
+        "disabled": false,
+        "height": 54,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "lang": "uk",
+    "taskId": "t-upload",
+    "state": "decided",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Відповіли",
+    "decisionText": "Відповіли14 жовт., 20:18Збережено. Нічого не надіслано: у проєкту немає оркестратора.Надіслати зараз",
+    "title": "Огляд прототипів · Redesign attachment upload for large files",
+    "sideways": 0,
+    "questionWidth": 360,
+    "stageWidth": 766,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": false,
+    "skipRows": [
+      {
+        "question": "surfaces",
+        "checked": true,
+        "disabled": true,
+        "height": 54,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "lang": "uk",
+    "taskId": "t-disk",
+    "state": "open",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": false,
+    "statusLine": null,
+    "decisionText": null,
+    "title": "Питання · Disk space: find what Docker, worktrees and temp storage hold",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [
+      {
+        "text": "Пропустити",
+        "visible": true,
+        "x": 886.0625,
+        "y": 801,
+        "width": 96.09375
+      },
+      {
+        "text": "Відповісти",
+        "visible": true,
+        "x": 990.15625,
+        "y": 801,
+        "width": 92.84375
+      }
+    ],
+    "actionsWidth": 280.46875,
+    "readonly": false,
+    "skipped": false,
+    "skipRows": [
+      {
+        "question": "place",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "surfaces",
+        "checked": true,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "timing",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "lang": "uk",
+    "taskId": "t-disk",
+    "state": "decided",
+    "width": 1440,
+    "heightExcess": 0,
+    "markLetters": 0,
+    "hints": 0,
+    "unpickedFaded": true,
+    "statusLine": "Відповіли",
+    "decisionText": "Відповіли14 жовт., 20:18Збережено й надіслано оркестратору",
+    "title": "Питання · Disk space: find what Docker, worktrees and temp storage hold",
+    "sideways": 0,
+    "questionWidth": 758,
+    "stageWidth": null,
+    "questionCount": 3,
+    "optionHeight": 44,
+    "pillOverflow": 0,
+    "marks": [
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": true,
+        "radius": 4,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      },
+      {
+        "multiple": false,
+        "radius": 33554400,
+        "width": 20
+      }
+    ],
+    "actions": [],
+    "actionsWidth": null,
+    "readonly": true,
+    "skipped": false,
+    "skipRows": [
+      {
+        "question": "surfaces",
+        "checked": true,
+        "disabled": true,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "pageErrors": []
+  }
+]

@@ -1,0 +1,178 @@
+[
+  {
+    "lang": "en",
+    "width": 1440,
+    "sideways": 0,
+    "skipRows": [
+      {
+        "question": "place",
+        "checked": false,
+        "disabled": false,
+        "height": 36,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "deploy",
+        "checked": true,
+        "disabled": false,
+        "height": 36,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "posted": [
+      {
+        "questionId": "place",
+        "options": [
+          0
+        ]
+      },
+      {
+        "questionId": "deploy",
+        "options": [],
+        "skipped": true
+      }
+    ],
+    "record": "Answered · 20:18· «Done»: placement and deploydelivered1Where should the «Done» list be pinned? Above «Waiting for you»2When to deploy after the merge? SkippedTelegram: no post recorded yetSend to Telegram again",
+    "pageErrors": []
+  },
+  {
+    "lang": "en",
+    "width": 390,
+    "sideways": 0,
+    "skipRows": [
+      {
+        "question": "place",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "deploy",
+        "checked": true,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "posted": [
+      {
+        "questionId": "place",
+        "options": [
+          0
+        ]
+      },
+      {
+        "questionId": "deploy",
+        "options": [],
+        "skipped": true
+      }
+    ],
+    "record": "Answered · 20:18· «Done»: placement and deploydelivered1Where should the «Done» list be pinned? Above «Waiting for you»2When to deploy after the merge? SkippedTelegram: no post recorded yetSend to Telegram again",
+    "pageErrors": []
+  },
+  {
+    "lang": "uk",
+    "width": 1440,
+    "sideways": 0,
+    "skipRows": [
+      {
+        "question": "place",
+        "checked": false,
+        "disabled": false,
+        "height": 48.78125,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "deploy",
+        "checked": true,
+        "disabled": false,
+        "height": 48.78125,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "posted": [
+      {
+        "questionId": "place",
+        "options": [
+          0
+        ]
+      },
+      {
+        "questionId": "deploy",
+        "options": [],
+        "skipped": true
+      }
+    ],
+    "record": "Відповідь · 20:18· «Готово»: місце і деплойдоставлено1Де закріпити список «Готово»? Зверху «Чекають на вас»2Коли деплоїти після мержу? ПропущеноTelegram: публікацію ще не записаноНадіслати в Telegram ще раз",
+    "pageErrors": []
+  },
+  {
+    "lang": "uk",
+    "width": 390,
+    "sideways": 0,
+    "skipRows": [
+      {
+        "question": "place",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "deploy",
+        "checked": true,
+        "disabled": false,
+        "height": 44,
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "posted": [
+      {
+        "questionId": "place",
+        "options": [
+          0
+        ]
+      },
+      {
+        "questionId": "deploy",
+        "options": [],
+        "skipped": true
+      }
+    ],
+    "record": "Відповідь · 20:18· «Готово»: місце і деплойдоставлено1Де закріпити список «Готово»? Зверху «Чекають на вас»2Коли деплоїти після мержу? ПропущеноTelegram: публікацію ще не записаноНадіслати в Telegram ще раз",
+    "pageErrors": []
+  }
+]
