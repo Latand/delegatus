@@ -642,7 +642,7 @@ test.if(process.platform !== "win32")("activation timeout awaits helper cleanup 
       while (!fs.existsSync(ready) && Date.now() < deadline) await Bun.sleep(1);
       callback(...args);
     }, 1);
-  }, { __promisify__: schedule.__promisify__ });
+  }, { __promisify__: schedule.__promisify__ }) as typeof setTimeout;
   const timer = spyOn(globalThis, "setTimeout").mockImplementation(accelerated);
   const log = spyOn(console, "error").mockImplementation(() => {});
   try {
