@@ -2072,7 +2072,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "tts.fishModelFreeEnded": "S2.1 Pro Free — безкоштовний період закінчився {date}",
   "tts.fishModelPaid": "S2.1 Pro — платно",
   "tts.fishModelLocked": "Модель задано через LLV_TTS_FISHAUDIO_MODEL.",
-  "tts.nextFreeModel": "Наступний лівий клік: безкоштовний синтез",
+  "tts.nextFreeModel": "Наступний клік: безкоштовне озвучення цієї відповіді",
   "tts.readFreeModel": "Озвучити (безкоштовна модель)",
   "tts.billingFree": "Без оплати до {date}. Fish Audio може використовувати текст для покращення своїх моделей.",
   "tts.billingBytes": "Оплата з вашого облікового запису Fish Audio за обсяг тексту. Кирилічні літери коштують приблизно вдвічі дорожче за латинські.",

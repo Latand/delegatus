@@ -290,7 +290,7 @@ export function SpeakButton({ text: suppliedText = "", scope: explicitScope, hea
         if (voice.id === option.id && voice.model === option.model && voice.voice === option.voice && (voice.language ?? "") === (option.language ?? "")) return;
         billed = voice;
         if (alive()) {
-          const notice = t("tts.backendChanged", { provider: voice.id });
+          const notice = t("tts.backendChanged", { provider: ttsProviderName(voice.id) });
           setError(notice);
           setAnnouncement(notice);
         }

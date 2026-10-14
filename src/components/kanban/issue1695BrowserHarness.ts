@@ -903,6 +903,8 @@ export async function captureFishAudioMenu(browser: Browser, mobile: boolean): P
         expect(await group.getByRole("menuitemradio").count()).toBe(2);
         expect(await menu.getByRole("menuitemradio").count()).toBe(6);
         expect(await menu.textContent()).toContain(locale === "en" ? "free until" : "безкоштовно до");
+        expect(await menu.textContent()).not.toMatch(/left click|лівий клік/);
+        expect(await menu.getByRole("menuitemradio").filter({ hasText: "Fish Audio" }).first().textContent()).toBe("Fish Audio");
         const prefix = `${mobile ? "phone" : "desktop"}-${width}-${locale}-${scheme}`;
         const readGeometry = () => menu.evaluate((node) => {
           const menu = node.getBoundingClientRect();

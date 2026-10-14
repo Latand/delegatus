@@ -2126,7 +2126,7 @@ export const en = {
   "tts.fishModelFreeEnded": "S2.1 Pro Free — free period ended {date}",
   "tts.fishModelPaid": "S2.1 Pro — paid",
   "tts.fishModelLocked": "Model is set by LLV_TTS_FISHAUDIO_MODEL.",
-  "tts.nextFreeModel": "Next left click: free synthesis",
+  "tts.nextFreeModel": "Next click: free synthesis of this answer",
   "tts.readFreeModel": "Read aloud (free model)",
   "tts.billingFree": "No charge through {date}. Fish Audio may use the text to improve its models.",
   "tts.billingBytes": "Billed to your Fish Audio account by text size. Cyrillic letters cost about twice as much as Latin ones.",

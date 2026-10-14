@@ -313,7 +313,7 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
       </div>
       <div className="px-2 pt-1 text-[10.5px] text-muted">{providerName} · {option.model} · {option.voice}{option.language ? ` · ${option.language}` : ""}</div>
       <div className="px-2 text-[10.5px] text-muted">{t("tts.characters", { count: chars.toLocaleString() })}</div>
-      {freeEnded ? null : <div className="px-2 pt-1 text-[10.5px] text-primary">{option.id === "fishaudio" ? t(freeModel ? "tts.billingFree" : "tts.billingBytes", { date }) : t("tts.billing", { provider: option.id })}</div>}
+      {freeEnded ? null : <div className="px-2 pt-1 text-[10.5px] text-primary">{option.id === "fishaudio" ? t(freeModel ? "tts.billingFree" : "tts.billingBytes", { date }) : t("tts.billing", { provider: providerName })}</div>}
       <div className="px-2 text-[10.5px] text-primary">{t("tts.disclosure")}</div>
       <div className="px-2 pb-1 text-[10.5px] text-muted">{t(option.id === "fishaudio" ? "tts.fishSeekHint" : isPcm ? "tts.batchSeekHint" : "tts.seekHint", { provider: option.id === "fishaudio" ? "Fish Audio" : "Soniox" })}</div>
       {tooLong ? (
@@ -362,7 +362,7 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
                       <span className="rounded-full bg-warning-soft px-1.5 py-px text-[9.5px] font-bold text-warning">{t("tts.noKey")}</span>
                     ) : null}
                   </span>
-                  <span className="block text-[10.5px] leading-snug text-muted">{candidate.id === "fishaudio" ? candidate.voice : `${candidate.model} · ${candidate.voice}`}</span>
+                  {candidate.id === "fishaudio" ? null : <span className="block text-[10.5px] leading-snug text-muted">{`${candidate.model} · ${candidate.voice}`}</span>}
                 </span>
               </button>
               {candidate.id === "fishaudio" ? (

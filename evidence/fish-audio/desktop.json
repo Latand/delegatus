@@ -11,12 +11,12 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 568.5,
+        "bottom": 554.0625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
           {
-            "label": "openainot set upgpt-4o-mini-tts · alloy",
+            "label": "OpenAInot set upgpt-4o-mini-tts · alloy",
             "left": 1067,
             "right": 1353,
             "top": 295.75,
@@ -25,7 +25,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
             "left": 1067,
             "right": 1353,
             "top": 340.1875,
@@ -34,7 +34,7 @@
             "width": 286
           },
           {
-            "label": "sonioxnot set uptts-rt-v2 · Adrian",
+            "label": "Sonioxnot set uptts-rt-v2 · Adrian",
             "left": 1067,
             "right": 1353,
             "top": 384.625,
@@ -43,20 +43,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 1067,
             "right": 1353,
             "top": 429.0625,
-            "bottom": 473.5,
-            "height": 44.4375,
+            "bottom": 459.0625,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — free until November 30, 2026",
+            "label": "S2.1 Pro Free — free until November 30, 2026",
             "left": 1087,
             "right": 1353,
-            "top": 473.5,
-            "bottom": 517.5,
+            "top": 459.0625,
+            "bottom": 503.0625,
             "height": 44,
             "width": 266
           },
@@ -64,8 +64,8 @@
             "label": "S2.1 Pro — paid",
             "left": 1087,
             "right": 1353,
-            "top": 517.5,
-            "bottom": 561.5,
+            "top": 503.0625,
+            "bottom": 547.0625,
             "height": 44,
             "width": 266
           }
@@ -88,12 +88,12 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 568.5,
+        "bottom": 554.0625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
           {
-            "label": "openainot set upgpt-4o-mini-tts · alloy",
+            "label": "OpenAInot set upgpt-4o-mini-tts · alloy",
             "left": 1067,
             "right": 1353,
             "top": 295.75,
@@ -102,7 +102,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
             "left": 1067,
             "right": 1353,
             "top": 340.1875,
@@ -111,7 +111,7 @@
             "width": 286
           },
           {
-            "label": "sonioxnot set uptts-rt-v2 · Adrian",
+            "label": "Sonioxnot set uptts-rt-v2 · Adrian",
             "left": 1067,
             "right": 1353,
             "top": 384.625,
@@ -120,20 +120,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 1067,
             "right": 1353,
             "top": 429.0625,
-            "bottom": 473.5,
-            "height": 44.4375,
+            "bottom": 459.0625,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — free until November 30, 2026",
+            "label": "S2.1 Pro Free — free until November 30, 2026",
             "left": 1087,
             "right": 1353,
-            "top": 473.5,
-            "bottom": 517.5,
+            "top": 459.0625,
+            "bottom": 503.0625,
             "height": 44,
             "width": 266
           },
@@ -141,8 +141,8 @@
             "label": "S2.1 Pro — paid",
             "left": 1087,
             "right": 1353,
-            "top": 517.5,
-            "bottom": 561.5,
+            "top": 503.0625,
+            "bottom": 547.0625,
             "height": 44,
             "width": 266
           }
@@ -160,12 +160,12 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 574,
+        "bottom": 559.5625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
           {
-            "label": "openainot set upgpt-4o-mini-tts · alloy",
+            "label": "OpenAInot set upgpt-4o-mini-tts · alloy",
             "left": 1067,
             "right": 1353,
             "top": 294.75,
@@ -174,7 +174,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
             "left": 1067,
             "right": 1353,
             "top": 339.1875,
@@ -183,7 +183,7 @@
             "width": 286
           },
           {
-            "label": "sonioxnot set uptts-rt-v2 · Adrian",
+            "label": "Sonioxnot set uptts-rt-v2 · Adrian",
             "left": 1067,
             "right": 1353,
             "top": 383.625,
@@ -192,20 +192,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 1067,
             "right": 1353,
             "top": 428.0625,
-            "bottom": 472.5,
-            "height": 44.4375,
+            "bottom": 458.0625,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — free period ended November 30, 2026",
+            "label": "S2.1 Pro Free — free period ended November 30, 2026",
             "left": 1087,
             "right": 1353,
-            "top": 472.5,
-            "bottom": 523,
+            "top": 458.0625,
+            "bottom": 508.5625,
             "height": 50.5,
             "width": 266
           },
@@ -213,15 +213,15 @@
             "label": "S2.1 Pro — paid",
             "left": 1087,
             "right": 1353,
-            "top": 523,
-            "bottom": 567,
+            "top": 508.5625,
+            "bottom": 552.5625,
             "height": 44,
             "width": 266
           }
         ]
       },
       "alert": {
-        "text": "Fish Audio’s free model ended on November 30, 2026. Right-click and choose S2.1 Pro (paid) to keep reading aloud.",
+        "text": "Fish Audio’s free model ended on November 30, 2026. Right-click and choose S2.1 Pro (paid) to keep reading aloud.",
         "wordBreak": "normal",
         "overflowWrap": "break-word",
         "sideways": false
@@ -237,12 +237,12 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 520.5,
+        "bottom": 506.0625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
           {
-            "label": "openainot set upgpt-4o-mini-tts · alloy",
+            "label": "OpenAInot set upgpt-4o-mini-tts · alloy",
             "left": 627,
             "right": 913,
             "top": 247.75,
@@ -251,7 +251,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
             "left": 627,
             "right": 913,
             "top": 292.1875,
@@ -260,7 +260,7 @@
             "width": 286
           },
           {
-            "label": "sonioxnot set uptts-rt-v2 · Adrian",
+            "label": "Sonioxnot set uptts-rt-v2 · Adrian",
             "left": 627,
             "right": 913,
             "top": 336.625,
@@ -269,20 +269,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 627,
             "right": 913,
             "top": 381.0625,
-            "bottom": 425.5,
-            "height": 44.4375,
+            "bottom": 411.0625,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — free until November 30, 2026",
+            "label": "S2.1 Pro Free — free until November 30, 2026",
             "left": 647,
             "right": 913,
-            "top": 425.5,
-            "bottom": 469.5,
+            "top": 411.0625,
+            "bottom": 455.0625,
             "height": 44,
             "width": 266
           },
@@ -290,8 +290,8 @@
             "label": "S2.1 Pro — paid",
             "left": 647,
             "right": 913,
-            "top": 469.5,
-            "bottom": 513.5,
+            "top": 455.0625,
+            "bottom": 499.0625,
             "height": 44,
             "width": 266
           }
@@ -314,12 +314,12 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 520.5,
+        "bottom": 506.0625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
           {
-            "label": "openainot set upgpt-4o-mini-tts · alloy",
+            "label": "OpenAInot set upgpt-4o-mini-tts · alloy",
             "left": 627,
             "right": 913,
             "top": 247.75,
@@ -328,7 +328,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
             "left": 627,
             "right": 913,
             "top": 292.1875,
@@ -337,7 +337,7 @@
             "width": 286
           },
           {
-            "label": "sonioxnot set uptts-rt-v2 · Adrian",
+            "label": "Sonioxnot set uptts-rt-v2 · Adrian",
             "left": 627,
             "right": 913,
             "top": 336.625,
@@ -346,20 +346,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 627,
             "right": 913,
             "top": 381.0625,
-            "bottom": 425.5,
-            "height": 44.4375,
+            "bottom": 411.0625,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — free until November 30, 2026",
+            "label": "S2.1 Pro Free — free until November 30, 2026",
             "left": 647,
             "right": 913,
-            "top": 425.5,
-            "bottom": 469.5,
+            "top": 411.0625,
+            "bottom": 455.0625,
             "height": 44,
             "width": 266
           },
@@ -367,8 +367,8 @@
             "label": "S2.1 Pro — paid",
             "left": 647,
             "right": 913,
-            "top": 469.5,
-            "bottom": 513.5,
+            "top": 455.0625,
+            "bottom": 499.0625,
             "height": 44,
             "width": 266
           }
@@ -386,12 +386,12 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 526,
+        "bottom": 511.5625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
           {
-            "label": "openainot set upgpt-4o-mini-tts · alloy",
+            "label": "OpenAInot set upgpt-4o-mini-tts · alloy",
             "left": 627,
             "right": 913,
             "top": 246.75,
@@ -400,7 +400,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
             "left": 627,
             "right": 913,
             "top": 291.1875,
@@ -409,7 +409,7 @@
             "width": 286
           },
           {
-            "label": "sonioxnot set uptts-rt-v2 · Adrian",
+            "label": "Sonioxnot set uptts-rt-v2 · Adrian",
             "left": 627,
             "right": 913,
             "top": 335.625,
@@ -418,20 +418,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 627,
             "right": 913,
             "top": 380.0625,
-            "bottom": 424.5,
-            "height": 44.4375,
+            "bottom": 410.0625,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — free period ended November 30, 2026",
+            "label": "S2.1 Pro Free — free period ended November 30, 2026",
             "left": 647,
             "right": 913,
-            "top": 424.5,
-            "bottom": 475,
+            "top": 410.0625,
+            "bottom": 460.5625,
             "height": 50.5,
             "width": 266
           },
@@ -439,15 +439,15 @@
             "label": "S2.1 Pro — paid",
             "left": 647,
             "right": 913,
-            "top": 475,
-            "bottom": 519,
+            "top": 460.5625,
+            "bottom": 504.5625,
             "height": 44,
             "width": 266
           }
         ]
       },
       "alert": {
-        "text": "Fish Audio’s free model ended on November 30, 2026. Right-click and choose S2.1 Pro (paid) to keep reading aloud.",
+        "text": "Fish Audio’s free model ended on November 30, 2026. Right-click and choose S2.1 Pro (paid) to keep reading aloud.",
         "wordBreak": "normal",
         "overflowWrap": "break-word",
         "sideways": false
@@ -463,12 +463,12 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 568.5,
+        "bottom": 554.0625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
           {
-            "label": "openainot set upgpt-4o-mini-tts · alloy",
+            "label": "OpenAInot set upgpt-4o-mini-tts · alloy",
             "left": 1067,
             "right": 1353,
             "top": 295.75,
@@ -477,7 +477,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
             "left": 1067,
             "right": 1353,
             "top": 340.1875,
@@ -486,7 +486,7 @@
             "width": 286
           },
           {
-            "label": "sonioxnot set uptts-rt-v2 · Adrian",
+            "label": "Sonioxnot set uptts-rt-v2 · Adrian",
             "left": 1067,
             "right": 1353,
             "top": 384.625,
@@ -495,20 +495,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 1067,
             "right": 1353,
             "top": 429.0625,
-            "bottom": 473.5,
-            "height": 44.4375,
+            "bottom": 459.0625,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — free until November 30, 2026",
+            "label": "S2.1 Pro Free — free until November 30, 2026",
             "left": 1087,
             "right": 1353,
-            "top": 473.5,
-            "bottom": 517.5,
+            "top": 459.0625,
+            "bottom": 503.0625,
             "height": 44,
             "width": 266
           },
@@ -516,8 +516,8 @@
             "label": "S2.1 Pro — paid",
             "left": 1087,
             "right": 1353,
-            "top": 517.5,
-            "bottom": 561.5,
+            "top": 503.0625,
+            "bottom": 547.0625,
             "height": 44,
             "width": 266
           }
@@ -540,12 +540,12 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 568.5,
+        "bottom": 554.0625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
           {
-            "label": "openainot set upgpt-4o-mini-tts · alloy",
+            "label": "OpenAInot set upgpt-4o-mini-tts · alloy",
             "left": 1067,
             "right": 1353,
             "top": 295.75,
@@ -554,7 +554,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
             "left": 1067,
             "right": 1353,
             "top": 340.1875,
@@ -563,7 +563,7 @@
             "width": 286
           },
           {
-            "label": "sonioxnot set uptts-rt-v2 · Adrian",
+            "label": "Sonioxnot set uptts-rt-v2 · Adrian",
             "left": 1067,
             "right": 1353,
             "top": 384.625,
@@ -572,20 +572,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 1067,
             "right": 1353,
             "top": 429.0625,
-            "bottom": 473.5,
-            "height": 44.4375,
+            "bottom": 459.0625,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — free until November 30, 2026",
+            "label": "S2.1 Pro Free — free until November 30, 2026",
             "left": 1087,
             "right": 1353,
-            "top": 473.5,
-            "bottom": 517.5,
+            "top": 459.0625,
+            "bottom": 503.0625,
             "height": 44,
             "width": 266
           },
@@ -593,8 +593,8 @@
             "label": "S2.1 Pro — paid",
             "left": 1087,
             "right": 1353,
-            "top": 517.5,
-            "bottom": 561.5,
+            "top": 503.0625,
+            "bottom": 547.0625,
             "height": 44,
             "width": 266
           }
@@ -612,12 +612,12 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 574,
+        "bottom": 559.5625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
           {
-            "label": "openainot set upgpt-4o-mini-tts · alloy",
+            "label": "OpenAInot set upgpt-4o-mini-tts · alloy",
             "left": 1067,
             "right": 1353,
             "top": 294.75,
@@ -626,7 +626,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
             "left": 1067,
             "right": 1353,
             "top": 339.1875,
@@ -635,7 +635,7 @@
             "width": 286
           },
           {
-            "label": "sonioxnot set uptts-rt-v2 · Adrian",
+            "label": "Sonioxnot set uptts-rt-v2 · Adrian",
             "left": 1067,
             "right": 1353,
             "top": 383.625,
@@ -644,20 +644,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 1067,
             "right": 1353,
             "top": 428.0625,
-            "bottom": 472.5,
-            "height": 44.4375,
+            "bottom": 458.0625,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — free period ended November 30, 2026",
+            "label": "S2.1 Pro Free — free period ended November 30, 2026",
             "left": 1087,
             "right": 1353,
-            "top": 472.5,
-            "bottom": 523,
+            "top": 458.0625,
+            "bottom": 508.5625,
             "height": 50.5,
             "width": 266
           },
@@ -665,15 +665,15 @@
             "label": "S2.1 Pro — paid",
             "left": 1087,
             "right": 1353,
-            "top": 523,
-            "bottom": 567,
+            "top": 508.5625,
+            "bottom": 552.5625,
             "height": 44,
             "width": 266
           }
         ]
       },
       "alert": {
-        "text": "Fish Audio’s free model ended on November 30, 2026. Right-click and choose S2.1 Pro (paid) to keep reading aloud.",
+        "text": "Fish Audio’s free model ended on November 30, 2026. Right-click and choose S2.1 Pro (paid) to keep reading aloud.",
         "wordBreak": "normal",
         "overflowWrap": "break-word",
         "sideways": false
@@ -689,12 +689,12 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 520.5,
+        "bottom": 506.0625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
           {
-            "label": "openainot set upgpt-4o-mini-tts · alloy",
+            "label": "OpenAInot set upgpt-4o-mini-tts · alloy",
             "left": 627,
             "right": 913,
             "top": 247.75,
@@ -703,7 +703,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
             "left": 627,
             "right": 913,
             "top": 292.1875,
@@ -712,7 +712,7 @@
             "width": 286
           },
           {
-            "label": "sonioxnot set uptts-rt-v2 · Adrian",
+            "label": "Sonioxnot set uptts-rt-v2 · Adrian",
             "left": 627,
             "right": 913,
             "top": 336.625,
@@ -721,20 +721,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 627,
             "right": 913,
             "top": 381.0625,
-            "bottom": 425.5,
-            "height": 44.4375,
+            "bottom": 411.0625,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — free until November 30, 2026",
+            "label": "S2.1 Pro Free — free until November 30, 2026",
             "left": 647,
             "right": 913,
-            "top": 425.5,
-            "bottom": 469.5,
+            "top": 411.0625,
+            "bottom": 455.0625,
             "height": 44,
             "width": 266
           },
@@ -742,8 +742,8 @@
             "label": "S2.1 Pro — paid",
             "left": 647,
             "right": 913,
-            "top": 469.5,
-            "bottom": 513.5,
+            "top": 455.0625,
+            "bottom": 499.0625,
             "height": 44,
             "width": 266
           }
@@ -766,12 +766,12 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 520.5,
+        "bottom": 506.0625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
           {
-            "label": "openainot set upgpt-4o-mini-tts · alloy",
+            "label": "OpenAInot set upgpt-4o-mini-tts · alloy",
             "left": 627,
             "right": 913,
             "top": 247.75,
@@ -780,7 +780,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
             "left": 627,
             "right": 913,
             "top": 292.1875,
@@ -789,7 +789,7 @@
             "width": 286
           },
           {
-            "label": "sonioxnot set uptts-rt-v2 · Adrian",
+            "label": "Sonioxnot set uptts-rt-v2 · Adrian",
             "left": 627,
             "right": 913,
             "top": 336.625,
@@ -798,20 +798,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 627,
             "right": 913,
             "top": 381.0625,
-            "bottom": 425.5,
-            "height": 44.4375,
+            "bottom": 411.0625,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — free until November 30, 2026",
+            "label": "S2.1 Pro Free — free until November 30, 2026",
             "left": 647,
             "right": 913,
-            "top": 425.5,
-            "bottom": 469.5,
+            "top": 411.0625,
+            "bottom": 455.0625,
             "height": 44,
             "width": 266
           },
@@ -819,8 +819,8 @@
             "label": "S2.1 Pro — paid",
             "left": 647,
             "right": 913,
-            "top": 469.5,
-            "bottom": 513.5,
+            "top": 455.0625,
+            "bottom": 499.0625,
             "height": 44,
             "width": 266
           }
@@ -838,12 +838,12 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 526,
+        "bottom": 511.5625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
           {
-            "label": "openainot set upgpt-4o-mini-tts · alloy",
+            "label": "OpenAInot set upgpt-4o-mini-tts · alloy",
             "left": 627,
             "right": 913,
             "top": 246.75,
@@ -852,7 +852,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsnot set upeleven_multilingual_v2 · default",
+            "label": "ElevenLabsnot set upeleven_multilingual_v2 · default",
             "left": 627,
             "right": 913,
             "top": 291.1875,
@@ -861,7 +861,7 @@
             "width": 286
           },
           {
-            "label": "sonioxnot set uptts-rt-v2 · Adrian",
+            "label": "Sonioxnot set uptts-rt-v2 · Adrian",
             "left": 627,
             "right": 913,
             "top": 335.625,
@@ -870,20 +870,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 627,
             "right": 913,
             "top": 380.0625,
-            "bottom": 424.5,
-            "height": 44.4375,
+            "bottom": 410.0625,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — free period ended November 30, 2026",
+            "label": "S2.1 Pro Free — free period ended November 30, 2026",
             "left": 647,
             "right": 913,
-            "top": 424.5,
-            "bottom": 475,
+            "top": 410.0625,
+            "bottom": 460.5625,
             "height": 50.5,
             "width": 266
           },
@@ -891,15 +891,15 @@
             "label": "S2.1 Pro — paid",
             "left": 647,
             "right": 913,
-            "top": 475,
-            "bottom": 519,
+            "top": 460.5625,
+            "bottom": 504.5625,
             "height": 44,
             "width": 266
           }
         ]
       },
       "alert": {
-        "text": "Fish Audio’s free model ended on November 30, 2026. Right-click and choose S2.1 Pro (paid) to keep reading aloud.",
+        "text": "Fish Audio’s free model ended on November 30, 2026. Right-click and choose S2.1 Pro (paid) to keep reading aloud.",
         "wordBreak": "normal",
         "overflowWrap": "break-word",
         "sideways": false
@@ -915,52 +915,52 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 590.75,
+        "bottom": 593.5625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
           {
-            "label": "openaiне налаштованоgpt-4o-mini-tts · alloy",
+            "label": "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
             "left": 1067,
             "right": 1353,
-            "top": 311.5,
-            "bottom": 355.9375,
+            "top": 328.75,
+            "bottom": 373.1875,
             "height": 44.4375,
             "width": 286
           },
           {
-            "label": "elevenlabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
             "left": 1067,
             "right": 1353,
-            "top": 355.9375,
-            "bottom": 400.375,
+            "top": 373.1875,
+            "bottom": 417.625,
             "height": 44.4375,
             "width": 286
           },
           {
-            "label": "sonioxне налаштованоtts-rt-v2 · Adrian",
+            "label": "Sonioxне налаштованоtts-rt-v2 · Adrian",
             "left": 1067,
             "right": 1353,
-            "top": 400.375,
-            "bottom": 444.8125,
+            "top": 417.625,
+            "bottom": 462.0625,
             "height": 44.4375,
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 1067,
             "right": 1353,
-            "top": 444.8125,
-            "bottom": 489.25,
-            "height": 44.4375,
+            "top": 462.0625,
+            "bottom": 492.0625,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — безкоштовно до 30 листопада 2026",
+            "label": "S2.1 Pro Free — безкоштовно до 30 листопада 2026",
             "left": 1087,
             "right": 1353,
-            "top": 489.25,
-            "bottom": 539.75,
+            "top": 492.0625,
+            "bottom": 542.5625,
             "height": 50.5,
             "width": 266
           },
@@ -968,8 +968,8 @@
             "label": "S2.1 Pro — платно",
             "left": 1087,
             "right": 1353,
-            "top": 539.75,
-            "bottom": 583.75,
+            "top": 542.5625,
+            "bottom": 586.5625,
             "height": 44,
             "width": 266
           }
@@ -992,12 +992,12 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 623.75,
+        "bottom": 609.3125,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
           {
-            "label": "openaiне налаштованоgpt-4o-mini-tts · alloy",
+            "label": "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
             "left": 1067,
             "right": 1353,
             "top": 344.5,
@@ -1006,7 +1006,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
             "left": 1067,
             "right": 1353,
             "top": 388.9375,
@@ -1015,7 +1015,7 @@
             "width": 286
           },
           {
-            "label": "sonioxне налаштованоtts-rt-v2 · Adrian",
+            "label": "Sonioxне налаштованоtts-rt-v2 · Adrian",
             "left": 1067,
             "right": 1353,
             "top": 433.375,
@@ -1024,20 +1024,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 1067,
             "right": 1353,
             "top": 477.8125,
-            "bottom": 522.25,
-            "height": 44.4375,
+            "bottom": 507.8125,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — безкоштовно до 30 листопада 2026",
+            "label": "S2.1 Pro Free — безкоштовно до 30 листопада 2026",
             "left": 1087,
             "right": 1353,
-            "top": 522.25,
-            "bottom": 572.75,
+            "top": 507.8125,
+            "bottom": 558.3125,
             "height": 50.5,
             "width": 266
           },
@@ -1045,8 +1045,8 @@
             "label": "S2.1 Pro — платно",
             "left": 1087,
             "right": 1353,
-            "top": 572.75,
-            "bottom": 616.75,
+            "top": 558.3125,
+            "bottom": 602.3125,
             "height": 44,
             "width": 266
           }
@@ -1064,12 +1064,12 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 589.75,
+        "bottom": 575.3125,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
           {
-            "label": "openaiне налаштованоgpt-4o-mini-tts · alloy",
+            "label": "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
             "left": 1067,
             "right": 1353,
             "top": 310.5,
@@ -1078,7 +1078,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
             "left": 1067,
             "right": 1353,
             "top": 354.9375,
@@ -1087,7 +1087,7 @@
             "width": 286
           },
           {
-            "label": "sonioxне налаштованоtts-rt-v2 · Adrian",
+            "label": "Sonioxне налаштованоtts-rt-v2 · Adrian",
             "left": 1067,
             "right": 1353,
             "top": 399.375,
@@ -1096,20 +1096,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 1067,
             "right": 1353,
             "top": 443.8125,
-            "bottom": 488.25,
-            "height": 44.4375,
+            "bottom": 473.8125,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — безкоштовний період закінчився 30 листопада 2026",
+            "label": "S2.1 Pro Free — безкоштовний період закінчився 30 листопада 2026",
             "left": 1087,
             "right": 1353,
-            "top": 488.25,
-            "bottom": 538.75,
+            "top": 473.8125,
+            "bottom": 524.3125,
             "height": 50.5,
             "width": 266
           },
@@ -1117,15 +1117,15 @@
             "label": "S2.1 Pro — платно",
             "left": 1087,
             "right": 1353,
-            "top": 538.75,
-            "bottom": 582.75,
+            "top": 524.3125,
+            "bottom": 568.3125,
             "height": 44,
             "width": 266
           }
         ]
       },
       "alert": {
-        "text": "Безкоштовна модель Fish Audio закінчилася 30 листопада 2026. Натисніть правою кнопкою й оберіть S2.1 Pro (платно), щоб продовжити озвучку.",
+        "text": "Безкоштовна модель Fish Audio закінчилася 30 листопада 2026. Натисніть правою кнопкою й оберіть S2.1 Pro (платно), щоб продовжити озвучку.",
         "wordBreak": "normal",
         "overflowWrap": "break-word",
         "sideways": false
@@ -1141,52 +1141,52 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 542.75,
+        "bottom": 545.5625,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
           {
-            "label": "openaiне налаштованоgpt-4o-mini-tts · alloy",
+            "label": "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
             "left": 627,
             "right": 913,
-            "top": 263.5,
-            "bottom": 307.9375,
+            "top": 280.75,
+            "bottom": 325.1875,
             "height": 44.4375,
             "width": 286
           },
           {
-            "label": "elevenlabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
             "left": 627,
             "right": 913,
-            "top": 307.9375,
-            "bottom": 352.375,
+            "top": 325.1875,
+            "bottom": 369.625,
             "height": 44.4375,
             "width": 286
           },
           {
-            "label": "sonioxне налаштованоtts-rt-v2 · Adrian",
+            "label": "Sonioxне налаштованоtts-rt-v2 · Adrian",
             "left": 627,
             "right": 913,
-            "top": 352.375,
-            "bottom": 396.8125,
+            "top": 369.625,
+            "bottom": 414.0625,
             "height": 44.4375,
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 627,
             "right": 913,
-            "top": 396.8125,
-            "bottom": 441.25,
-            "height": 44.4375,
+            "top": 414.0625,
+            "bottom": 444.0625,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — безкоштовно до 30 листопада 2026",
+            "label": "S2.1 Pro Free — безкоштовно до 30 листопада 2026",
             "left": 647,
             "right": 913,
-            "top": 441.25,
-            "bottom": 491.75,
+            "top": 444.0625,
+            "bottom": 494.5625,
             "height": 50.5,
             "width": 266
           },
@@ -1194,8 +1194,8 @@
             "label": "S2.1 Pro — платно",
             "left": 647,
             "right": 913,
-            "top": 491.75,
-            "bottom": 535.75,
+            "top": 494.5625,
+            "bottom": 538.5625,
             "height": 44,
             "width": 266
           }
@@ -1218,12 +1218,12 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 575.75,
+        "bottom": 561.3125,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
           {
-            "label": "openaiне налаштованоgpt-4o-mini-tts · alloy",
+            "label": "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
             "left": 627,
             "right": 913,
             "top": 296.5,
@@ -1232,7 +1232,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
             "left": 627,
             "right": 913,
             "top": 340.9375,
@@ -1241,7 +1241,7 @@
             "width": 286
           },
           {
-            "label": "sonioxне налаштованоtts-rt-v2 · Adrian",
+            "label": "Sonioxне налаштованоtts-rt-v2 · Adrian",
             "left": 627,
             "right": 913,
             "top": 385.375,
@@ -1250,20 +1250,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 627,
             "right": 913,
             "top": 429.8125,
-            "bottom": 474.25,
-            "height": 44.4375,
+            "bottom": 459.8125,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — безкоштовно до 30 листопада 2026",
+            "label": "S2.1 Pro Free — безкоштовно до 30 листопада 2026",
             "left": 647,
             "right": 913,
-            "top": 474.25,
-            "bottom": 524.75,
+            "top": 459.8125,
+            "bottom": 510.3125,
             "height": 50.5,
             "width": 266
           },
@@ -1271,8 +1271,8 @@
             "label": "S2.1 Pro — платно",
             "left": 647,
             "right": 913,
-            "top": 524.75,
-            "bottom": 568.75,
+            "top": 510.3125,
+            "bottom": 554.3125,
             "height": 44,
             "width": 266
           }
@@ -1290,12 +1290,12 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 541.75,
+        "bottom": 527.3125,
         "background": "rgb(255, 253, 250)",
         "sideways": false,
         "controls": [
           {
-            "label": "openaiне налаштованоgpt-4o-mini-tts · alloy",
+            "label": "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
             "left": 627,
             "right": 913,
             "top": 262.5,
@@ -1304,7 +1304,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
             "left": 627,
             "right": 913,
             "top": 306.9375,
@@ -1313,7 +1313,7 @@
             "width": 286
           },
           {
-            "label": "sonioxне налаштованоtts-rt-v2 · Adrian",
+            "label": "Sonioxне налаштованоtts-rt-v2 · Adrian",
             "left": 627,
             "right": 913,
             "top": 351.375,
@@ -1322,20 +1322,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 627,
             "right": 913,
             "top": 395.8125,
-            "bottom": 440.25,
-            "height": 44.4375,
+            "bottom": 425.8125,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — безкоштовний період закінчився 30 листопада 2026",
+            "label": "S2.1 Pro Free — безкоштовний період закінчився 30 листопада 2026",
             "left": 647,
             "right": 913,
-            "top": 440.25,
-            "bottom": 490.75,
+            "top": 425.8125,
+            "bottom": 476.3125,
             "height": 50.5,
             "width": 266
           },
@@ -1343,15 +1343,15 @@
             "label": "S2.1 Pro — платно",
             "left": 647,
             "right": 913,
-            "top": 490.75,
-            "bottom": 534.75,
+            "top": 476.3125,
+            "bottom": 520.3125,
             "height": 44,
             "width": 266
           }
         ]
       },
       "alert": {
-        "text": "Безкоштовна модель Fish Audio закінчилася 30 листопада 2026. Натисніть правою кнопкою й оберіть S2.1 Pro (платно), щоб продовжити озвучку.",
+        "text": "Безкоштовна модель Fish Audio закінчилася 30 листопада 2026. Натисніть правою кнопкою й оберіть S2.1 Pro (платно), щоб продовжити озвучку.",
         "wordBreak": "normal",
         "overflowWrap": "break-word",
         "sideways": false
@@ -1367,52 +1367,52 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 590.75,
+        "bottom": 593.5625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
           {
-            "label": "openaiне налаштованоgpt-4o-mini-tts · alloy",
+            "label": "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
             "left": 1067,
             "right": 1353,
-            "top": 311.5,
-            "bottom": 355.9375,
+            "top": 328.75,
+            "bottom": 373.1875,
             "height": 44.4375,
             "width": 286
           },
           {
-            "label": "elevenlabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
             "left": 1067,
             "right": 1353,
-            "top": 355.9375,
-            "bottom": 400.375,
+            "top": 373.1875,
+            "bottom": 417.625,
             "height": 44.4375,
             "width": 286
           },
           {
-            "label": "sonioxне налаштованоtts-rt-v2 · Adrian",
+            "label": "Sonioxне налаштованоtts-rt-v2 · Adrian",
             "left": 1067,
             "right": 1353,
-            "top": 400.375,
-            "bottom": 444.8125,
+            "top": 417.625,
+            "bottom": 462.0625,
             "height": 44.4375,
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 1067,
             "right": 1353,
-            "top": 444.8125,
-            "bottom": 489.25,
-            "height": 44.4375,
+            "top": 462.0625,
+            "bottom": 492.0625,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — безкоштовно до 30 листопада 2026",
+            "label": "S2.1 Pro Free — безкоштовно до 30 листопада 2026",
             "left": 1087,
             "right": 1353,
-            "top": 489.25,
-            "bottom": 539.75,
+            "top": 492.0625,
+            "bottom": 542.5625,
             "height": 50.5,
             "width": 266
           },
@@ -1420,8 +1420,8 @@
             "label": "S2.1 Pro — платно",
             "left": 1087,
             "right": 1353,
-            "top": 539.75,
-            "bottom": 583.75,
+            "top": 542.5625,
+            "bottom": 586.5625,
             "height": 44,
             "width": 266
           }
@@ -1444,12 +1444,12 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 623.75,
+        "bottom": 609.3125,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
           {
-            "label": "openaiне налаштованоgpt-4o-mini-tts · alloy",
+            "label": "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
             "left": 1067,
             "right": 1353,
             "top": 344.5,
@@ -1458,7 +1458,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
             "left": 1067,
             "right": 1353,
             "top": 388.9375,
@@ -1467,7 +1467,7 @@
             "width": 286
           },
           {
-            "label": "sonioxне налаштованоtts-rt-v2 · Adrian",
+            "label": "Sonioxне налаштованоtts-rt-v2 · Adrian",
             "left": 1067,
             "right": 1353,
             "top": 433.375,
@@ -1476,20 +1476,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 1067,
             "right": 1353,
             "top": 477.8125,
-            "bottom": 522.25,
-            "height": 44.4375,
+            "bottom": 507.8125,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — безкоштовно до 30 листопада 2026",
+            "label": "S2.1 Pro Free — безкоштовно до 30 листопада 2026",
             "left": 1087,
             "right": 1353,
-            "top": 522.25,
-            "bottom": 572.75,
+            "top": 507.8125,
+            "bottom": 558.3125,
             "height": 50.5,
             "width": 266
           },
@@ -1497,8 +1497,8 @@
             "label": "S2.1 Pro — платно",
             "left": 1087,
             "right": 1353,
-            "top": 572.75,
-            "bottom": 616.75,
+            "top": 558.3125,
+            "bottom": 602.3125,
             "height": 44,
             "width": 266
           }
@@ -1516,12 +1516,12 @@
         "left": 1060,
         "right": 1360,
         "top": 98,
-        "bottom": 589.75,
+        "bottom": 575.3125,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
           {
-            "label": "openaiне налаштованоgpt-4o-mini-tts · alloy",
+            "label": "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
             "left": 1067,
             "right": 1353,
             "top": 310.5,
@@ -1530,7 +1530,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
             "left": 1067,
             "right": 1353,
             "top": 354.9375,
@@ -1539,7 +1539,7 @@
             "width": 286
           },
           {
-            "label": "sonioxне налаштованоtts-rt-v2 · Adrian",
+            "label": "Sonioxне налаштованоtts-rt-v2 · Adrian",
             "left": 1067,
             "right": 1353,
             "top": 399.375,
@@ -1548,20 +1548,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 1067,
             "right": 1353,
             "top": 443.8125,
-            "bottom": 488.25,
-            "height": 44.4375,
+            "bottom": 473.8125,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — безкоштовний період закінчився 30 листопада 2026",
+            "label": "S2.1 Pro Free — безкоштовний період закінчився 30 листопада 2026",
             "left": 1087,
             "right": 1353,
-            "top": 488.25,
-            "bottom": 538.75,
+            "top": 473.8125,
+            "bottom": 524.3125,
             "height": 50.5,
             "width": 266
           },
@@ -1569,15 +1569,15 @@
             "label": "S2.1 Pro — платно",
             "left": 1087,
             "right": 1353,
-            "top": 538.75,
-            "bottom": 582.75,
+            "top": 524.3125,
+            "bottom": 568.3125,
             "height": 44,
             "width": 266
           }
         ]
       },
       "alert": {
-        "text": "Безкоштовна модель Fish Audio закінчилася 30 листопада 2026. Натисніть правою кнопкою й оберіть S2.1 Pro (платно), щоб продовжити озвучку.",
+        "text": "Безкоштовна модель Fish Audio закінчилася 30 листопада 2026. Натисніть правою кнопкою й оберіть S2.1 Pro (платно), щоб продовжити озвучку.",
         "wordBreak": "normal",
         "overflowWrap": "break-word",
         "sideways": false
@@ -1593,52 +1593,52 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 542.75,
+        "bottom": 545.5625,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
           {
-            "label": "openaiне налаштованоgpt-4o-mini-tts · alloy",
+            "label": "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
             "left": 627,
             "right": 913,
-            "top": 263.5,
-            "bottom": 307.9375,
+            "top": 280.75,
+            "bottom": 325.1875,
             "height": 44.4375,
             "width": 286
           },
           {
-            "label": "elevenlabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
             "left": 627,
             "right": 913,
-            "top": 307.9375,
-            "bottom": 352.375,
+            "top": 325.1875,
+            "bottom": 369.625,
             "height": 44.4375,
             "width": 286
           },
           {
-            "label": "sonioxне налаштованоtts-rt-v2 · Adrian",
+            "label": "Sonioxне налаштованоtts-rt-v2 · Adrian",
             "left": 627,
             "right": 913,
-            "top": 352.375,
-            "bottom": 396.8125,
+            "top": 369.625,
+            "bottom": 414.0625,
             "height": 44.4375,
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 627,
             "right": 913,
-            "top": 396.8125,
-            "bottom": 441.25,
-            "height": 44.4375,
+            "top": 414.0625,
+            "bottom": 444.0625,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — безкоштовно до 30 листопада 2026",
+            "label": "S2.1 Pro Free — безкоштовно до 30 листопада 2026",
             "left": 647,
             "right": 913,
-            "top": 441.25,
-            "bottom": 491.75,
+            "top": 444.0625,
+            "bottom": 494.5625,
             "height": 50.5,
             "width": 266
           },
@@ -1646,8 +1646,8 @@
             "label": "S2.1 Pro — платно",
             "left": 647,
             "right": 913,
-            "top": 491.75,
-            "bottom": 535.75,
+            "top": 494.5625,
+            "bottom": 538.5625,
             "height": 44,
             "width": 266
           }
@@ -1670,12 +1670,12 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 575.75,
+        "bottom": 561.3125,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
           {
-            "label": "openaiне налаштованоgpt-4o-mini-tts · alloy",
+            "label": "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
             "left": 627,
             "right": 913,
             "top": 296.5,
@@ -1684,7 +1684,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
             "left": 627,
             "right": 913,
             "top": 340.9375,
@@ -1693,7 +1693,7 @@
             "width": 286
           },
           {
-            "label": "sonioxне налаштованоtts-rt-v2 · Adrian",
+            "label": "Sonioxне налаштованоtts-rt-v2 · Adrian",
             "left": 627,
             "right": 913,
             "top": 385.375,
@@ -1702,20 +1702,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 627,
             "right": 913,
             "top": 429.8125,
-            "bottom": 474.25,
-            "height": 44.4375,
+            "bottom": 459.8125,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — безкоштовно до 30 листопада 2026",
+            "label": "S2.1 Pro Free — безкоштовно до 30 листопада 2026",
             "left": 647,
             "right": 913,
-            "top": 474.25,
-            "bottom": 524.75,
+            "top": 459.8125,
+            "bottom": 510.3125,
             "height": 50.5,
             "width": 266
           },
@@ -1723,8 +1723,8 @@
             "label": "S2.1 Pro — платно",
             "left": 647,
             "right": 913,
-            "top": 524.75,
-            "bottom": 568.75,
+            "top": 510.3125,
+            "bottom": 554.3125,
             "height": 44,
             "width": 266
           }
@@ -1742,12 +1742,12 @@
         "left": 620,
         "right": 920,
         "top": 50,
-        "bottom": 541.75,
+        "bottom": 527.3125,
         "background": "rgb(25, 27, 35)",
         "sideways": false,
         "controls": [
           {
-            "label": "openaiне налаштованоgpt-4o-mini-tts · alloy",
+            "label": "OpenAIне налаштованоgpt-4o-mini-tts · alloy",
             "left": 627,
             "right": 913,
             "top": 262.5,
@@ -1756,7 +1756,7 @@
             "width": 286
           },
           {
-            "label": "elevenlabsне налаштованоeleven_multilingual_v2 · default",
+            "label": "ElevenLabsне налаштованоeleven_multilingual_v2 · default",
             "left": 627,
             "right": 913,
             "top": 306.9375,
@@ -1765,7 +1765,7 @@
             "width": 286
           },
           {
-            "label": "sonioxне налаштованоtts-rt-v2 · Adrian",
+            "label": "Sonioxне налаштованоtts-rt-v2 · Adrian",
             "left": 627,
             "right": 913,
             "top": 351.375,
@@ -1774,20 +1774,20 @@
             "width": 286
           },
           {
-            "label": "Fish Audiodefault",
+            "label": "Fish Audio",
             "left": 627,
             "right": 913,
             "top": 395.8125,
-            "bottom": 440.25,
-            "height": 44.4375,
+            "bottom": 425.8125,
+            "height": 30,
             "width": 286
           },
           {
-            "label": "S2.1 Pro Free — безкоштовний період закінчився 30 листопада 2026",
+            "label": "S2.1 Pro Free — безкоштовний період закінчився 30 листопада 2026",
             "left": 647,
             "right": 913,
-            "top": 440.25,
-            "bottom": 490.75,
+            "top": 425.8125,
+            "bottom": 476.3125,
             "height": 50.5,
             "width": 266
           },
@@ -1795,15 +1795,15 @@
             "label": "S2.1 Pro — платно",
             "left": 647,
             "right": 913,
-            "top": 490.75,
-            "bottom": 534.75,
+            "top": 476.3125,
+            "bottom": 520.3125,
             "height": 44,
             "width": 266
           }
         ]
       },
       "alert": {
-        "text": "Безкоштовна модель Fish Audio закінчилася 30 листопада 2026. Натисніть правою кнопкою й оберіть S2.1 Pro (платно), щоб продовжити озвучку.",
+        "text": "Безкоштовна модель Fish Audio закінчилася 30 листопада 2026. Натисніть правою кнопкою й оберіть S2.1 Pro (платно), щоб продовжити озвучку.",
         "wordBreak": "normal",
         "overflowWrap": "break-word",
         "sideways": false

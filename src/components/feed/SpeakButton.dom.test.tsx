@@ -391,7 +391,7 @@ test("a message stopped after the first chunk never advertises a free replay", a
   expect(view.button.getAttribute("aria-label")).toBe("Read answer aloud");
   const menu = await openMenu(view);
   expect(menu.textContent).toContain("Next click: paid synthesis of this answer");
-  expect(menu.textContent).toContain("Billed to your openai account per character");
+  expect(menu.textContent).toContain("Billed to your OpenAI account per character");
   expect(menu.textContent).toContain("AI-generated voice");
   expect(menu.textContent).not.toContain("free replay");
 
@@ -750,13 +750,13 @@ test("the menu switches provider, and every answer control follows", async () =>
   const first = await mount("Provider first");
   const second = await mount("Provider second");
   const menu = await openMenu(first);
-  const eleven = [...menu.querySelectorAll("button")].find((button) => button.textContent?.startsWith("elevenlabs"))!;
+  const eleven = [...menu.querySelectorAll("button")].find((button) => button.textContent?.startsWith("ElevenLabs"))!;
   flushSync(() => { eleven.click(); });
   await drainUpdates();
   expect(menuOpen()).toBe(false);
 
   const other = await openMenu(second);
-  expect(other.textContent).toContain("elevenlabs · eleven_multilingual_v2 · Rachel");
+  expect(other.textContent).toContain("ElevenLabs · eleven_multilingual_v2 · Rachel");
   expect(first.button.getAttribute("title")).toBe("Read aloud (paid) · right-click: voice & billing");
   flushSync(() => { first.root.unmount(); second.root.unmount(); });
   first.host.remove();
@@ -777,11 +777,11 @@ test("a provider with no key refuses out loud and names the file to drop it into
   /* Opening the menu is what re-reads the configuration, so the control learns
      the provider changed under it without a round trip on the play path. */
   const menu = await openMenu(view);
-  expect(menu.textContent).toContain("Add the elevenlabs API key at /keys/elevenlabs");
+  expect(menu.textContent).toContain("Add the ElevenLabs API key at /keys/elevenlabs");
   /* And the tooltip, the surface that has to be right BEFORE the click, names
      the missing key instead of promising a paid read it cannot perform
      (#1030). */
-  expect(view.button.getAttribute("title")).toBe("Add the elevenlabs API key at /keys/elevenlabs");
+  expect(view.button.getAttribute("title")).toBe("Add the ElevenLabs API key at /keys/elevenlabs");
   flushSync(() => {
     document.body.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as unknown as Event);
   });
@@ -789,7 +789,7 @@ test("a provider with no key refuses out loud and names the file to drop it into
   await speak(view);
 
   expect(posts).toBe(0);
-  expect(alertNode()!.textContent).toBe("Add the elevenlabs API key at /keys/elevenlabs");
+  expect(alertNode()!.textContent).toBe("Add the ElevenLabs API key at /keys/elevenlabs");
   flushSync(() => { view.root.unmount(); });
   view.host.remove();
 });
@@ -824,7 +824,7 @@ test("a provider switched under a stale tab is keyed and named by what the route
   const view = await mount(TEXT);
   /* This tab last read the configuration while openai was active. */
   const before = await openMenu(view);
-  expect(before.textContent).toContain("openai · gpt-4o-mini-tts · alloy");
+  expect(before.textContent).toContain("OpenAI · gpt-4o-mini-tts · alloy");
   flushSync(() => {
     document.body.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as unknown as Event);
   });
@@ -843,10 +843,10 @@ test("a provider switched under a stale tab is keyed and named by what the route
 
   /* And the surface names the provider that was charged, without the click
      having waited on /api/tts/backend to find out. */
-  expect(alertNode()!.textContent).toBe("The voice provider changed — this read is billed to elevenlabs.");
+  expect(alertNode()!.textContent).toBe("The voice provider changed — this read is billed to ElevenLabs.");
   const after = await openMenu(view);
-  expect(after.textContent).toContain("elevenlabs · eleven_multilingual_v2 · Rachel");
-  expect(after.textContent).toContain("Billed to your elevenlabs account per character");
+  expect(after.textContent).toContain("ElevenLabs · eleven_multilingual_v2 · Rachel");
+  expect(after.textContent).toContain("Billed to your ElevenLabs account per character");
   /* The replay it now offers is a replay of the audio that was actually paid
      for, so it is genuinely free. */
   expect(after.textContent).toContain("Next click: free replay from the cache");
@@ -982,9 +982,13 @@ test("menu chooses a persisted model and states free and paid billing", async ()
   try {
     let menu = await openMenu(view);
     expect(menu.textContent).toContain("Fish Audio");
-    expect(menu.textContent).toContain("free until November 30, 2026");
-    expect(menu.textContent).toContain("Next left click: free synthesis");
+    expect(menu.textContent).toContain("free until November\u00a030,\u00a02026");
+    expect(menu.textContent).toContain("Next click: free synthesis of this answer");
     expect(menu.textContent).toContain("may use the text");
+    expect(menu.textContent).not.toContain("left click");
+    const rows = [...menu.querySelectorAll<HTMLButtonElement>(':scope > div > button[role="menuitemradio"]')];
+    expect(rows.map((row) => row.querySelector(".min-w-0 > span")?.textContent)).toEqual(["OpenAI", "ElevenLabsnot set up", "Fish Audio"]);
+    expect(rows[2]!.textContent).toBe("Fish Audio");
     expect(view.button.title).toContain("Read aloud (free model)");
     const group = menu.querySelector('[role="group"]')!;
     const paid = group.querySelectorAll<HTMLButtonElement>("button")[1]!;
@@ -1019,7 +1023,7 @@ test("expired free model refuses in Ukrainian without synthesis", async () => {
   const view = await mount("Привіт світе");
   try {
     const menu = await openMenu(view);
-    expect(menu.textContent).toContain("безкоштовний період закінчився 30 листопада 2026");
+    expect(menu.textContent).toContain("безкоштовний період закінчився 30\u00a0листопада\u00a02026");
     expect(menu.textContent).not.toContain("р.");
     expect(menu.textContent).not.toContain("..");
     expect(menu.textContent).not.toContain("Без оплати");
