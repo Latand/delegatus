@@ -5,6 +5,7 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 
+import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { UnixRuntimeHostClient } from "@/lib/runtime/client";
 import { HOT_STATE_BACKEND, markHotStateActivationReady, publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
@@ -17,7 +18,7 @@ test.each([
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-consumer-fence-"));
   const socketPath = path.join(directory, "runtime-host.sock");
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
-  const launch = (launcher?: string) => {
+  const launch = (launcher?: ViewerConversationId) => {
     const begun = registry.beginSpawnRequest({
       engine: "codex", cwd: directory, transport: "structured", origin: { kind: "operator" },
       launchProfile: { title: launcher ? "Review the release" : "Coordinate the release" },
@@ -46,7 +47,7 @@ test.each([
   const child = spawn(process.execPath, ["run", "src/runtime-host/main.ts"], {
     cwd: path.resolve(import.meta.dir, "../.."),
     env: { ...environment, ...inherited, LLV_STATE_DIR: directory, LLV_AGENT_REGISTRY_SQLITE: "sqlite",
-      LLV_RUNTIME_HOST_SOCKET: socketPath, LLV_VIEWER_DEPLOYMENTS: "0", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
+      LLV_RUNTIME_HOST_SOCKET: socketPath, LLV_VIEWER_DEPLOYMENTS: "0", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" } as NodeJS.ProcessEnv,
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
