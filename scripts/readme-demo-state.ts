@@ -684,6 +684,38 @@ export async function seedDemoOrchestrator(layout: DemoLayout & { files: Record<
     report("retries", 3, "status", "Back off webhook retries stopped on a decision the spec leaves open: stop retrying after 24 or 72 hours. It waits on the card."),
     report("review", 1, "status", "Idempotent refunds is in Review: the reviewer is checking two requests with the same key arriving together."),
   ]);
+
+  /* A stage's question goes to the orchestrator first, and a seat that cannot
+     decide it hands it on as a decision form, which is then the operator's
+     only row for it. Seeded as already handed on: the seat owes no wake for
+     it during the capture (a wake would resume the seat in a pane, a stray
+     card), and the form waits in Decisions, sent to Telegram. */
+  const { publishPrototype, mutatePrototypeRound } = await import("@/lib/prototypeReview/store");
+  const round = await publishPrototype({
+    clientRequestId: "readme-demo-retry-window",
+    title: "Retry window for failed webhook deliveries",
+    questions: [{
+      id: "retry-window",
+      text: "How long should a failed webhook delivery keep retrying? The spec leaves it open, and it sets how many attempts a delivery gets.",
+      options: [
+        { label: "24 hours, about 12 attempts" },
+        { label: "72 hours, about 18 attempts: covers an endpoint that is down over a weekend", recommended: true },
+      ],
+    }],
+  }, null, { conversationId }, project);
+  mutatePrototypeRound(null, round.id, (held) => {
+    held.telegramPost = { key: held.id, state: "sent", at: held.createdAt };
+  });
+  const { loadPipelines } = await import("@/lib/pipelines/store");
+  const { laneNeedKind, laneRouteKey } = await import("@/lib/attention/routeTypes");
+  const { writeAttentionEscalation } = await import("@/lib/attention/dismissals");
+  const retries = loadPipelines().find((pipeline) => pipeline.id === "b17e5a90");
+  const need = retries ? laneNeedKind(retries) : null;
+  if (!retries || !need) throw new Error("the demo's parked retries lane waits on nothing to hand on");
+  writeAttentionEscalation(
+    { key: laneRouteKey(retries, need), seat: conversationId, taskId: null, reviewId: round.id },
+    { kind: "agent", conversationId, role: "orchestrator" },
+  );
 }
 
 /** The projects are plain folders on purpose: a repository identity would

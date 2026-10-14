@@ -102,19 +102,22 @@ export const SHOTS: ReadmeShot[] = [
     id: "board",
     target: { kind: "project", project: "harbor-api" },
     viewport: WIDE,
-    requiredText: ["Idempotent refunds", "Rotate webhook signing keys", "Move invoices to the new ledger", "Document refund error codes", "needs a decision · build"],
-    absentText: ["tmux", "Untitled task"],
+    requiredText: ["Idempotent refunds", "Rotate webhook signing keys", "Move invoices to the new ledger", "Document refund error codes", "Needs your answer"],
+    /* "resume ·" is a pane recovery opened for the seat: a stray agent card. */
+    absentText: ["tmux", "Untitled task", "resume ·"],
     prepare: foldOrchestrator,
-    description: "A project's board: tasks by status with their icons, the agents working on each, a running pipeline's stages, and a card that names why it needs you; account limits in the sidebar.",
+    description: "A project's board: tasks by status with their icons, the agents working on each, a running pipeline's stages, and a card waiting on your answer; account limits in the sidebar.",
   },
   {
     id: "orchestrator",
     target: { kind: "project", project: "harbor-api" },
     /* Below 800 px the seat folds its Reports log away. */
     viewport: { width: WIDE.width, height: 800 },
-    requiredText: ["Orchestrator", "Reports", "Take the open harbor-api work", "Paginate GET /charges is done", "review verdict"],
+    /* The column opens on Decisions while a form waits: the seeded retry
+       window, which the seat handed on and Telegram received. */
+    requiredText: ["Orchestrator", "workers ", "Decisions", "Reports", "Take the open harbor-api work", "Retry window for failed webhook deliveries", "Sent to Telegram"],
     /* A seat nothing hosts reads as finished, with the resume banner. */
-    absentText: ["tmux", "Untitled task", "has not reported anything yet", "finished", "has finished its run"],
+    absentText: ["tmux", "Untitled task", "resume ·", "has not reported anything yet", "finished", "has finished its run"],
     /* The demo seat's conversation is not in the agent registry, so the
        header has no model to size the context window by and would show a
        bare byte estimate; a real seat shows its share of the window. */
@@ -123,21 +126,20 @@ export const SHOTS: ReadmeShot[] = [
         for (const element of elements) (element as HTMLElement).style.setProperty("display", "none", "important");
       });
     },
-    description: "A project's orchestrator on top of its board: its chat with the operator, and beside it the log of the reports it filed.",
+    description: "A project's orchestrator on top of its board: its chat with the operator, its worker count against the limit, and beside it a decision form waiting for an answer, already sent to Telegram.",
   },
   {
     id: "conversation",
     target: { kind: "conversation", key: "refunds-builder" },
     viewport: { width: 1440, height: 1080 },
     requiredText: ["Idempotency-Key", "4 pass", "UPDATE"],
+    /* A conversation opens in the agent window; the frame is its reader. */
     prepare: async (page) => {
-      await clickLabel(page, "Open as a full pane");
-      await page.waitForTimeout(800);
       await clickText(page, "1 search");
       await page.waitForTimeout(500);
       await clickText(page, "wrote 1 file");
     },
-    crop: cropTo("[data-reader-full] .reader.conv"),
+    crop: cropTo(".reader.conv"),
     description: "A Claude Code conversation read as a chat: an edit shown as a diff, a test run with its output, and the answer.",
   },
   {
@@ -150,7 +152,10 @@ export const SHOTS: ReadmeShot[] = [
     prepare: async (page) => {
       await foldOrchestrator(page);
       await page.waitForTimeout(500);
-      /* The lane row's head opens the pipeline: its graph over the stages. */
+      /* A card is closed until opened; the lane row's head inside it opens
+         the pipeline: its graph over the stages. */
+      await clickLabel(page, "Expand «Idempotent refunds»");
+      await page.waitForTimeout(500);
       await page.locator('[data-open-stages][aria-label^="Idempotent refunds"]').first().click();
       await page.waitForSelector("[data-stages-sheet]");
     },
@@ -162,7 +167,7 @@ export const SHOTS: ReadmeShot[] = [
     target: { kind: "project", project: "harbor-api" },
     viewport: WIDE,
     requiredText: ["Idempotent refunds", "Inbox", "Done", "Top of the Inbox", "Appearance", "Pipeline actions", "keeps working"],
-    absentText: ["tmux", "Untitled task"],
+    absentText: ["tmux", "Untitled task", "resume ·"],
     prepare: async (page) => {
       await foldOrchestrator(page);
       await page.waitForTimeout(500);
@@ -205,12 +210,12 @@ export const SHOTS: ReadmeShot[] = [
     target: { kind: "project", project: "harbor-api" },
     viewport: PHONE,
     requiredText: ["Inbox", "In progress", "Waiting", "Done", "Back off webhook retries", "Idempotent refunds"],
-    absentText: ["Untitled task"],
+    absentText: ["Untitled task", "resume ·"],
     prepare: async (page) => {
       await page.locator('[data-phone-kanban-tab="assigned"]').first().click();
       await page.waitForTimeout(600);
     },
-    description: "A project's board on a phone: the four status columns as tabs, with the card that needs you pinned first.",
+    description: "A project's board on a phone: the four status columns as tabs, the orchestrator's question for you, and a card waiting on your answer.",
   },
 ];
 
@@ -244,6 +249,10 @@ export function buildCaptureEnvironment(root: string, source = process.env): Nod
     NEXT_TELEMETRY_DISABLED: "1",
     /* A production server: without this it would send the install ping. */
     DELEGATUS_TELEMETRY: "0",
+    /* One multiplexed stream is a request that never ends, so a page using
+       it never reaches network idle; each stream on its own connection
+       draws the same page and lets the capture wait for it. */
+    LLV_STREAM_MUX: "0",
     TZ: "UTC",
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
@@ -813,8 +822,13 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
       const png = path.join(EVIDENCE_DIR, `${shot.id}.png`);
       const frame = await page.screenshot({ path: png, ...(crop ? { clip: crop } : {}) });
       /* A browser raster never carries provenance, so those two classes are
-         expected here; anything else the gate finds in the pixels is not. */
-      const rasterFindings = [...inspectPaths([png]).keys()].filter((finding) => !finding.startsWith("provenance_"));
+         expected here; anything else the gate finds in the pixels is not.
+         OCR is a second reader of a finished frame and never a capture
+         prerequisite: without tesseract the frame goes unread by OCR, and
+         the person committing it looks at every PNG themselves. */
+      const rasterClasses = [...inspectPaths([png]).keys()];
+      if (rasterClasses.includes("tool_unavailable")) process.stdout.write(`${shot.id}: no OCR on this machine; look at ${png} before committing its SVG\n`);
+      const rasterFindings = rasterClasses.filter((finding) => !finding.startsWith("provenance_") && finding !== "tool_unavailable");
       if (rasterFindings.length) throw new Error(`${shot.id}: the gate finds ${rasterFindings.join(", ")} in the rendered frame`);
       await page.emulateMedia({ media: "screen", colorScheme: "dark" });
       /* The print is one page the size of the screen: a card that crosses its
