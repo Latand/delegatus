@@ -63,6 +63,9 @@ export function speechLanguage(text: string, fallback: ProseLanguage = "uk"): Pr
   let uk = 0;
   let ru = 0;
   for (const token of stripNonProse(text).split(/\s+/u)) {
+    /* Keep the raw token: edge punctuation cleanup below would erase the
+       leading slash from single-segment absolute paths such as `/reports`. */
+    if (/[\\/]/u.test(token)) continue;
     const word = token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
     /* Paths and filename-like tokens describe the text; they are not spoken
        language evidence. Filter them before either script gets a vote. */

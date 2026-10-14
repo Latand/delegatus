@@ -64,6 +64,9 @@ test.each([
   ["Теперь всё готово: docs/перевірки.md docs/інтерфейс.md", "ru"],
   ["Пушу знову. docs/отчёты/проверки.md", "uk"],
   ["Codex-панелі вже готові: src/lib/ttsBackend.ts", "uk"],
+  ["Пушу знову. /отчёты", "uk"],
+  ["Теперь всё готово. /перевірки /інтерфейс", "ru"],
+  ["All checks passed. /перевірки /інтерфейс /звіти", "en"],
 ] as const)("speech language ignores paths in %p", (text, language) => {
   expect(speechLanguage(text)).toBe(language);
   expect(speechLanguage(spokenAnswerText(text))).toBe(language);

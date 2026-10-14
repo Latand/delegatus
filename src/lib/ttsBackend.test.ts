@@ -5,7 +5,8 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { configFilePath } from "./configDir";
-import { isTtsBackend, readFishAudioApiKey, writeFishAudioModel, readOpenAiApiKey, resolveTtsBackend, TTS_BACKENDS, ttsBackendInfo, writeTtsBackend } from "./ttsBackend";
+import { isTtsBackend, readFishAudioApiKey, writeFishAudioModel, readOpenAiApiKey, resolveTtsBackend, TTS_BACKENDS, ttsBackendInfo, ttsOptionFor, writeTtsBackend } from "./ttsBackend";
+import { spokenAnswerText } from "./tts";
 
 const originalConfigHome = process.env.XDG_CONFIG_HOME;
 const originalBackend = process.env.LLV_TTS_BACKEND;
@@ -179,6 +180,19 @@ describe("message language routes", () => {
     expect(info.routes.uk).toMatchObject({ id: "soniox", model: "tts-rt-v2", voice: "Adrian", language: "uk" });
     expect(JSON.stringify(info)).not.toContain("fish-fixture");
     expect(JSON.stringify(info)).not.toContain("soniox-fixture");
+  });
+  test("single-segment absolute paths do not change the selected language route", () => {
+    setup();
+    const cases = [
+      ["Пушу знову. /отчёты", "uk", "soniox", "Adrian"],
+      ["Теперь всё готово. /перевірки /інтерфейс", "ru", "fishaudio", "0c7fd46820854a9e8c4010d911687b7a"],
+      ["All checks passed. /перевірки /інтерфейс /звіти", "en", "fishaudio", "536d3a5e000945adb7038665781a4aca"],
+    ] as const;
+    for (const [text, language, provider, voice] of cases) {
+      expect(ttsOptionFor(undefined, text)).toMatchObject({ id: provider, voice });
+      expect(ttsOptionFor(undefined, spokenAnswerText(text))).toMatchObject({ id: provider, voice });
+      expect(ttsOptionFor(undefined, text).language).toBe(language === "uk" ? "uk" : undefined);
+    }
   });
   test("env overrides files, inheritance follows provider settings and invalid routes fall back", () => {
     const dir = setup();
