@@ -32,6 +32,7 @@ import {
 } from "./privacy-publication-gate";
 
 import { runPrivacyTestProcess } from "./privacy-test-process";
+import { assertPrivacyWorkBound } from "./privacy-work-bound";
 
 const gate = join(import.meta.dir, "privacy-publication-gate.ts");
 const temporaryDirectories: string[] = [];
@@ -2290,96 +2291,99 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nknown_value: 6\n");
       expect(result.stderr.toString()).toBe("");
     }, 15000);
+    // The original full-size adversarial corpus is 8x the calibration input.
+    // Preserve each shape and its verdict at both sizes.
     const boundedCases = [
-      ...[
-        ["block comments", "/* ".repeat(200_000)],
-        ["templates", tick + String.fromCharCode(92, 96).repeat(200_000)],
-        ["double quotes", String.fromCharCode(34) + String.fromCharCode(92, 34).repeat(200_000)],
-        ["single quotes", String.fromCharCode(39) + String.fromCharCode(92, 39).repeat(200_000)],
-      ].map(([name, fragment]) => ({ name: `unclosed ${name}`, text: `${fragment} ${host}`, pass: false, budget: 30_000 })),
-      ...["/private", "", ";"].map((suffix, index) => ({ name: `nested closing delimiters ${index}`, text: "(".repeat(200_000) + `"${host}"` + ")".repeat(200_000) + suffix, pass: false, budget: 30_000 })),
-      { name: "unclosed regex classes", text: `${"/[".repeat(100_000)} "${host}"`, pass: false, budget: 30_000 },
-      { name: "long identifiers", text: `${"a".repeat(200_000)},"${host}"`, pass: true, budget: 30_000 },
-      { name: "repeated declarations", text: `${"const a: ".repeat(30_000)}"${host}"`, pass: true, budget: 30_000 },
-      { name: "long template identifiers", text: `export default ${"a".repeat(200_000)} /*c*/ ${tick}${host}${tick}`, pass: false, budget: 30_000 },
-      { name: "long prose whitespace", text: " ".repeat(200_000) + host, pass: true, budget: 30_000 },
-      { name: "large unquoted tokens", text: `(${host})`.repeat(4000), pass: false, budget: 30_000 },
-      { name: "large chained calls", text: `relay${`("${host}")`.repeat(100_000)};`, pass: false, budget: 31_000 },
-      { name: "large quoted JSON", text: JSON.stringify(Array(10_000).fill(host)), pass: true, budget: 30_000 },
+      { name: "unclosed block comments", text: (n: number) => `${"/* ".repeat(n * 25_000)} ${host}`, pass: false },
+      ...[["templates", 96], ["double quotes", 34], ["single quotes", 39]].map(([name, quote]) => ({
+        name: `unclosed ${name}`, text: (n: number) => String.fromCharCode(Number(quote))
+          + String.fromCharCode(92, Number(quote)).repeat(n * 25_000) + ` ${host}`, pass: false,
+      })),
+      ...["/private", "", ";"].map((suffix, index) => ({ name: `nested closing delimiters ${index}`,
+        text: (n: number) => "(".repeat(n * 25_000) + `"${host}"` + ")".repeat(n * 25_000) + suffix, pass: false })),
+      { name: "unclosed regex classes", text: (n: number) => `${"/[".repeat(n * 12_500)} "${host}"`, pass: false },
+      { name: "long identifiers", text: (n: number) => `${"a".repeat(n * 25_000)},"${host}"`, pass: true },
+      { name: "repeated declarations", text: (n: number) => `${"const a: ".repeat(n * 3750)}"${host}"`, pass: true },
+      { name: "long template identifiers", text: (n: number) => `export default ${"a".repeat(n * 25_000)} /*c*/ ${tick}${host}${tick}`, pass: false },
+      { name: "long prose whitespace", text: (n: number) => " ".repeat(n * 25_000) + host, pass: true },
+      { name: "large unquoted tokens", text: (n: number) => `(${host})`.repeat(n * 500), pass: false },
+      { name: "large chained calls", text: (n: number) => `relay${`("${host}")`.repeat(n * 12_500)};`, pass: false },
+      { name: "large quoted JSON", text: (n: number) => JSON.stringify(Array(n * 1250).fill(host)), pass: true },
     ];
-    // Hosted whole-case upper bound, including reruns: 10025.04 ms.
-    // The chained-call bound is 31 s; other scans retain 30 s. Each gives
-    // at least 3x its worst observation and still rejects minute-scale scans.
-    // Load each configuration once in an isolated child, then measure every
-    // input alone. Reusing immutable scanner instances avoids 126 extra imports.
-    let boundedRun: Promise<{ code: number; stderr: string; results: Array<Array<{
-      source: string; elapsed: number; findings: string[]; report: string;
-    }>> }> | undefined;
-    function runBoundedCases(): NonNullable<typeof boundedRun> {
-      return boundedRun ??= (async () => {
-        const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
-        temporaryDirectories.push(directory);
-        const publications = boundedCases.map((specimen, index) => {
-          const publication = join(directory, `bounded-${index}.ts`);
-          writeFileSync(publication, specimen.text);
-          return publication;
-        });
-        const batches = sources.map((source, index) => {
-          const root = join(directory, `source-${index}`);
-          mkdirSync(join(root, ".git"), { recursive: true });
-          return { source, environment: configuration(root, source) };
-        });
-        const child = Bun.spawn([process.execPath, "--eval", `
+    for (const specimen of boundedCases) test.serial(`${specimen.name}: all sources stay bounded`, async () => {
+      // Every case owns its result and child. Cancellation of one specimen
+      // cannot cache a failed batch for the remaining specimens.
+      const directory = mkdtempSync(join(tmpdir(), "llv-privacy-public-"));
+      temporaryDirectories.push(directory);
+      const batches = sources.map((source, index) => {
+        const root = join(directory, `source-${index}`);
+        mkdirSync(join(root, ".git"), { recursive: true });
+        return { source, environment: configuration(root, source) };
+      });
+      const result = await runPrivacyTestProcess({
+        cmd: [process.execPath, "--eval", `
+          const { measurePrivacyWork } = await import(${JSON.stringify(join(import.meta.dir, "privacy-work-bound.ts"))});
           const request = JSON.parse(await Bun.stdin.text());
+          if (request.stall) { setInterval(() => {}, 1000); await new Promise(() => {}); }
           const scanners = [];
+          const results = request.batches.map(batch => ({ source: batch.source, small: [], large: [] }));
           for (const [index, batch] of request.batches.entries()) {
             Object.assign(process.env, batch.environment);
             scanners.push(await import(request.gate + "?bounded=" + index));
           }
-          const results = [];
-          for (const publication of request.publications) {
-            const batchResults = [];
-            for (const [index, batch] of request.batches.entries()) {
-              Object.assign(process.env, batch.environment);
-              const scanner = scanners[index];
-              const started = performance.now();
-              const findings = scanner.inspectPaths([publication], false, true);
-              const elapsed = performance.now() - started;
-              batchResults.push({ source: batch.source, elapsed,
-                findings: [...findings.keys()], report: scanner.formatPrivacyReport(findings) });
+          const publication = request.directory + "/bounded.ts";
+          for (let sample = 0; sample < 4; sample++) {
+            for (const [size, text] of request.texts.entries()) {
+              if (sample === 0 && size === 1) continue;
+              // Fresh bytes per pair keep preparation cold for the first
+              // source and shared for the following sources, at both sizes.
+              // A small warm-up primes runtime code; retain three CPU pairs.
+              const contents = text + "\\n" + " ".repeat(sample + 1);
+              require("node:fs").writeFileSync(publication, contents);
+              for (const [index, batch] of request.batches.entries()) {
+                Object.assign(process.env, batch.environment);
+                const scanner = scanners[index];
+                const measurement = measurePrivacyWork(() => {
+                  let findings;
+                  const scans = request.quadratic ? (size === 0 ? 1 : 8) : 1;
+                  for (let i = 0; i < scans; i++) {
+                    if (request.quadratic) require("node:fs").writeFileSync(publication, contents + " ".repeat(i + 1));
+                    findings = scanner.inspectPaths([publication], false, true);
+                  }
+                  return { findings: [...findings.keys()], report: scanner.formatPrivacyReport(findings) };
+                });
+                if (sample > 0) results[index][size === 0 ? "small" : "large"].push(measurement);
+              }
             }
-            results.push(batchResults);
           }
           process.stdout.write(JSON.stringify(results));
-        `], { stdin: Buffer.from(JSON.stringify({ gate, publications, batches })), stdout: "pipe", stderr: "pipe" });
-        // Bound the whole batch as well as each scan. A hung scanner cannot
-        // occupy the suite until its outer 100 s test deadline.
-        const timeout = setTimeout(() => child.kill("SIGKILL"), 60_000);
-        try {
-          const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-          return { code, stderr, results: code === 0 ? JSON.parse(stdout) : [] };
-        } finally {
-          clearTimeout(timeout);
-          if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; }
+        `],
+        stdin: Buffer.from(JSON.stringify({ gate, directory, batches, texts: [specimen.text(1), specimen.text(8)],
+          quadratic: process.env.LLV_PRIVACY_TEST_QUADRATIC === "1",
+          stall: process.env.LLV_PRIVACY_TEST_STALL_CASE === specimen.name })), stdout: "pipe", stderr: "pipe",
+      }, {
+        timeoutMs: process.env.LLV_PRIVACY_TEST_STALL_CASE === specimen.name ? 100 : 600_000,
+        cpuBudgetMs: 120_000,
+      }); // Linux CPU cancellation ignores descheduling; scaling determines bounded work.
+      expect(result.exitCode, `${specimen.name} (${result.stoppedBy ?? "exit"}): ${result.stderr}`).toBe(0);
+      expect(result.stderr.toString()).toBe("");
+      const results = JSON.parse(result.stdout.toString()) as Array<{
+        source: string; small: Array<{ cpu: number; value: { findings: string[]; report: string } }>;
+        large: Array<{ cpu: number; value: { findings: string[]; report: string } }>;
+      }>;
+      expect(results.map((entry) => entry.source)).toEqual(sources);
+      for (const entry of results) {
+        assertPrivacyWorkBound(entry.small.map(sample => sample.cpu), entry.large.map(sample => sample.cpu), entry.source);
+        for (const { value } of [...entry.small, ...entry.large]) {
+          expect(value.findings.length === 0, entry.source).toBe(specimen.pass);
+          expect(value.findings.includes("known_value"), entry.source).toBe(!specimen.pass);
+          expect(value.report).not.toContain(domain);
         }
-      })();
-    }
-    for (const [index, specimen] of boundedCases.entries()) test.serial(`${specimen.name}: all sources stay bounded`, async () => {
-      const { code, stderr, results: allResults } = await runBoundedCases();
-      expect(code).toBe(0);
-      expect(stderr).toBe("");
-      const results = allResults[index];
-      if (process.env.LLV_PRIVACY_TEST_TIMINGS === "1") {
-        console.error("privacy timing " + JSON.stringify({ case: specimen.name, limit: specimen.budget, results: results.map(({ source, elapsed }) => ({ source, elapsed })) }));
+        if (process.env.LLV_PRIVACY_TEST_TIMINGS === "1") console.error("privacy work " + JSON.stringify({
+          case: specimen.name, source: entry.source, small: entry.small.map(sample => sample.cpu), large: entry.large.map(sample => sample.cpu),
+        }));
       }
-      expect(results.map((result) => result.source)).toEqual(sources);
-      for (const result of results) {
-        expect(result.elapsed, result.source).toBeLessThan(specimen.budget);
-        expect(result.findings.length === 0, result.source).toBe(specimen.pass);
-        expect(result.findings.includes("known_value"), result.source).toBe(!specimen.pass);
-        expect(result.report).not.toContain(domain);
-      }
-    }, 100_000);
+    }, 660_000);
     // Read each immutable corpus across all configurations before moving to
     // the next channel. This keeps the production preparation cache useful
     // without sharing configuration-specific verdicts. Every scanner still
@@ -3156,14 +3160,15 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(workflow).toContain('--base "$PRIVACY_BASE_SHA"');
   });
 
-  test("runs candidate privacy tests last under the 130-second budget", () => {
+  test("runs candidate privacy tests last with an owned cancellation deadline", () => {
     const workflow = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "privacy-publication.yml"), "utf8");
     const trustedCheck = workflow.indexOf("- name: Verify privacy gate behavior");
     const candidateCheck = workflow.indexOf("- name: Verify candidate privacy gate behavior within budget");
 
     expect(trustedCheck).toBeGreaterThanOrEqual(0);
     expect(candidateCheck).toBeGreaterThan(trustedCheck);
-    expect(workflow.slice(candidateCheck)).toContain("timeout --kill-after=5s 130s bun test scripts/privacy-*.test.ts");
+    expect(workflow.slice(candidateCheck)).toContain("LLV_OWNED_RUN_TIMEOUT_MS=600000 bun scripts/owned-runner.ts bun test scripts/privacy-*.test.ts");
+    expect(workflow.slice(candidateCheck)).not.toContain("timeout --kill-after");
   });
 
   test("scopes issue-comment audits to the triggering comment", () => {
@@ -5431,7 +5436,7 @@ describe("mergeBoundaryReview", () => {
 // A final serial test runs after the concurrent CLI checks have returned.
 // Deleting hundreds of Git fixtures exceeded Bun's default five-second hook
 // timeout on hosted runners. Give cleanup a named failure and a 30-second
-// budget, inside the workflow's unchanged 130-second suite deadline.
+// cancellation guard, inside the owned suite deadline.
 test.serial("releases privacy fixtures after all concurrent CLI checks", () => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { force: true, recursive: true });
