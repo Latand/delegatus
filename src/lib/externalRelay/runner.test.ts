@@ -2799,23 +2799,23 @@ for (const explicitReply of [false, true])
   const filename = path.join(directory, "bot.sqlite");
   const db = new Database(filename);
   db.exec("CREATE TABLE chats (chat_id TEXT PRIMARY KEY, alias TEXT)");
-  const chatId = String(2 ** 6), messageId = 2 ** 5;
+  const chatId = String(2 ** 6), messageId = 2 ** 5 + Number(explicitReply);
   db.query("INSERT INTO chats VALUES (?, ?)").run(chatId, "report-room");
   db.close();
   const body = "Create a clone with one button? Confirm the start.";
-  const report = appendBridgeReports([{ key: "owner-report", project: "project-b", targetSeatConversationId: "seat-b",
+  const report = appendBridgeReports([{ key: `owner-report-${explicitReply}`, project: "project-b", targetSeatConversationId: "seat-b",
     origin: { kind: "manager", conversationId: "seat-b", role: "orchestrator" }, class: "question", at: new Date().toISOString(), body,
     telegram: { chat: "report-room", html: body } }]).appended[0];
   recordBridgeReportTelegram(report.id, { state: "sent", messageIds: [messageId], at: new Date().toISOString() });
-  recordPublishedRelayReference(paired.api_base, "/targets/target_1/messages", "POST", { chat_id: Number(chatId), message_id: messageId }, 200, { message_key: "posted-report", replayed: false });
+  recordPublishedRelayReference(paired.api_base, "/targets/target_1/messages", "POST", { chat_id: Number(chatId), message_id: messageId }, 200, { message_key: `posted-report-${explicitReply}`, replayed: false });
   let launches = 0;
   const accessor = spyOn(ownerContext, "resolveOwnerReplyContext");
   try {
     const result = await runClaimedRequest(paired, { ...contextRequest, request_id: "owner-report-reply", answer: { max_chars: 1000, progress: "none" },
       input: { ...contextRequest.input, request_text: "implement X in project-a", requester: { ...contextRequest.input.requester, is_owner: true },
         conversation: [
-          { ...contextRequest.input.conversation[0], id: "posted-report", text: "An altered history copy of the report." },
-          ...contextRequest.input.conversation.map(message => ({ ...message, text: "/ai implement X in project-a", reply_to: explicitReply ? "posted-report" : null })),
+          { ...contextRequest.input.conversation[0], id: `posted-report-${explicitReply}`, text: "An altered history copy of the report." },
+          ...contextRequest.input.conversation.map(message => ({ ...message, text: "/ai implement X in project-a", reply_to: explicitReply ? `posted-report-${explicitReply}` : null })),
         ] } }, undefined,
       { ownerPorts: { launch: async () => {
         launches++;
