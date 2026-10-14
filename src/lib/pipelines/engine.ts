@@ -8222,6 +8222,16 @@ async function providerCutActivity(pipeline: Pipeline, attempt: PipelineStageAtt
       && durable.terminalProviderMessage?.ts === saved.turnTs ? "unchanged" : "unknown";
 }
 
+const PROVIDER_RETRY_CANCELLED_BY_PAUSE = "automatic provider retry cancelled by pause; waiting for operator decision";
+
+function needsProviderContinuationCancellation(attempt: PipelineStageAttempt | undefined): boolean {
+  const wait = attempt?.providerWait;
+  // A successful pause already withdrew the host's continuation fence. Other
+  // retry cancellations can be local only, so their flag alone proves nothing.
+  return Boolean(attempt?.conversationId && (wait?.actionAt || wait?.continuationRequestedAt)
+    && !(wait.retryCancelled && attempt.error === PROVIDER_RETRY_CANCELLED_BY_PAUSE));
+}
+
 function cancelProviderStageRetry(pipeline: Pipeline, attempt: PipelineStageAttempt, detail: string): void {
   const wait = attempt.providerWait;
   if (!wait || wait.retryCancelled) return;
@@ -11110,7 +11120,7 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
           }
         }
         retainCloseHosts(live, report, plan);
-        if (report.pending.length) {
+        if (report.pending.length || report.pendingContinuations?.length) {
           report.status = "pending";
           if (plan.phase === "settled") plan.phase = "pending";
         }
@@ -11127,6 +11137,16 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
       });
       const deadline = ports.monotonicNow() + CLOSE_TEARDOWN_BUDGET_MS;
       let processed = 0;
+      for (const target of [...(report.pendingContinuations ?? [])]) {
+        if (processed++ > 0 && ports.monotonicNow() >= deadline) break;
+        try {
+          await ports.invalidateProviderContinuation?.(target.conversationId);
+          report.pendingContinuations = report.pendingContinuations!.filter((item) => item !== target);
+        } catch (error) {
+          target.detail = `runtime-host automatic continuation cancellation failed: ${String(error)}`;
+        }
+        await checkpoint();
+      }
       for (const target of [...report.pending]) {
         if (processed++ > 0 && ports.monotonicNow() >= deadline) break;
         const attempt = runFor(claimed, target.stageId)?.attempts.find((item) => item.n === target.attempt);
@@ -11145,7 +11165,7 @@ async function drainPipelineCloses(ports: PipelinePorts): Promise<void> {
         report.pending.shift();
         await checkpoint(candidate);
       }
-      if (report.pending.length) {
+      if (report.pending.length || report.pendingContinuations?.length) {
         plan.phase = "pending";
         delete plan.owner;
         await checkpoint();
@@ -12264,14 +12284,14 @@ export async function patchPipeline(
     } else if (req.action === "pause") {
       if (pipeline.state === "draft") return { error: "draft pipelines can only be started, edited, or deleted", status: 409 };
       if (!TERMINAL_STATES.has(pipeline.state) && pipeline.state !== "paused") {
-        if ((attempt?.providerWait?.actionAt || attempt?.providerWait?.continuationRequestedAt) && attempt.conversationId) {
+        if (attempt?.conversationId && needsProviderContinuationCancellation(attempt)) {
           try { await ports.invalidateProviderContinuation?.(attempt.conversationId); }
-          catch (error) { return { error: `automatic continuation cancellation failed: ${String(error)}`, status: 503 }; }
+          catch (error) { return { error: `pause blocked: runtime-host automatic continuation cancellation failed; restore the runtime host and retry pause: ${String(error)}`, status: 503 }; }
         }
         for (const run of pipeline.runs) for (const attempt of run.attempts) {
           if (attempt.activation) attempt.activation.cancelRequested = true;
         }
-        if (attempt) cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled by pause; waiting for operator decision");
+        if (attempt) cancelProviderStageRetry(pipeline, attempt, PROVIDER_RETRY_CANCELLED_BY_PAUSE);
         pipeline.pausedState = pipeline.state;
         pipeline.state = "paused";
         pipeline.pausedAt = ports.now();
@@ -12790,9 +12810,16 @@ export async function patchPipeline(
         persist();
         return { pipeline };
       }
-      if ((attempt?.providerWait?.actionAt || attempt?.providerWait?.continuationRequestedAt) && attempt.conversationId) {
+      const pendingContinuations: NonNullable<PipelineCloseReport["pendingContinuations"]> = [];
+      if (attempt?.conversationId && stage && needsProviderContinuationCancellation(attempt)) {
+        // Withdraw an admitted continuation before close returns. A host outage
+        // leaves a durable cancellation obligation without refusing the close.
         try { await ports.invalidateProviderContinuation?.(attempt.conversationId); }
-        catch (error) { return { error: `automatic continuation cancellation failed: ${String(error)}`, status: 503 }; }
+        catch (error) {
+          pendingContinuations.push({ stageId: stage.id, attempt: attempt.n, conversationId: attempt.conversationId,
+            agentPath: attempt.agentPath, paneId: attempt.paneId, launchId: attempt.launchId,
+            detail: `runtime-host automatic continuation cancellation failed: ${String(error)}` });
+        }
       }
       for (const run of pipeline.runs) for (const item of run.attempts) {
         const pendingSwitch = openRuntimeSwitch(item);
@@ -12803,7 +12830,7 @@ export async function patchPipeline(
       // Freeze recorded identities before releasing the collection. A permitted
       // activation appends its original launch only after reconciliation.
       const pending = launchedStageHosts(pipeline).map(({ target }) => target);
-      pipeline.closeReport = { status: "pending", pending, stopped: [], alreadyStopped: [],
+      pipeline.closeReport = { status: "pending", pending, ...(pendingContinuations.length ? { pendingContinuations } : {}), stopped: [], alreadyStopped: [],
         unconfirmed: [], acknowledged: [], reviewers: [], stillRunning: [], notes: [], worktree: null };
       pipeline.closeTeardown = {
         id: crypto.randomUUID(), phase: "pending", waitingForActivation: activations.length > 0,
