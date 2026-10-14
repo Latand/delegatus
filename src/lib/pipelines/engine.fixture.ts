@@ -213,7 +213,8 @@ function harness() {
       ? "conversation_creator"
       : pathname.includes("stage-1") ? "conversation_stage_1" : pathname.includes("stage-2") ? "conversation_stage_2" : null,
     pipelineAdoptionCandidates: () => [],
-    createFlow: async (req) => {
+    createFlow: async (req, _entries, _preparedGit, assertAuthorized) => {
+      assertAuthorized?.();
       flowRequests.push(structuredClone(req));
       calls.push(`flow:${req.implementerPath}:${req.baseRef}:${req.targetSha}:${req.spec}`);
       const flow = { id: `flow-${flows.size + 1}`, implementerPath: req.implementerPath, baseRef: req.baseRef, headRef: req.headRef, targetSha: req.targetSha, state: "waiting_ready", rounds: [], createdAt: new Date(clock).toISOString(), closedAt: null } as unknown as Flow;

@@ -1,5 +1,5 @@
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
-import { controllerSnapshotPorts } from "./controllerSnapshot";
+import { controllerSnapshotPorts, StaleControllerFlowError } from "./controllerSnapshot";
 import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement, runtimeSwitchReconfigureOutcome } from "./runtimeSwitch";
 import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
 import type { RuntimeSwitchDelivery } from "./runtimeSwitch";
@@ -432,7 +432,7 @@ export interface PipelinePorts {
       gone. Optional: a harness without deputies leaves lineage as given. */
   deputySeatFor?(conversationId: string): { conversationId: string; path: string | null } | null;
   pipelineAdoptionCandidates(pipelineId: string): PipelineAdoptionCandidate[];
-  createFlow(req: CreateFlowRequest, entries: FileEntry[], preparedGit?: PreparedFlowGit): Promise<{ flow?: Flow; error?: string }>;
+  createFlow(req: CreateFlowRequest, entries: FileEntry[], preparedGit?: PreparedFlowGit, assertAuthorized?: () => void): Promise<{ flow?: Flow; error?: string }>;
   patchFlow(id: string, action: "advance" | "pause" | "resume" | "retry-round", note?: string, actor?: PauseResumeActor | null): { error?: string; status?: number };
   closeFlow(id: string): Promise<{
     flow?: Flow;
@@ -1897,8 +1897,8 @@ export function defaultPipelinePorts(
       return principal ? { conversationId: principal.seatConversationId, path: principal.seatPath } : null;
     },
     pipelineAdoptionCandidates: adoptionCandidates,
-    createFlow: async (request, entries, preparedGit) => {
-      const result = await createFlowFromRequest(request, entries, undefined, preparedGit);
+    createFlow: async (request, entries, preparedGit, assertAuthorized) => {
+      const result = await createFlowFromRequest(request, entries, undefined, preparedGit, assertAuthorized);
       flowSnapshot = null;
       return result;
     },
@@ -9874,6 +9874,10 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
   } catch (error) {
     if (error instanceof StateSnapshotChangedError) {
       followUp = true;
+      if (error instanceof StaleControllerFlowError) {
+        const cleanup = await ports.closeFlow(error.flowId);
+        if (cleanup?.error) console.error("[pipelines] stale review flow cleanup failed", { flowId: error.flowId, error: cleanup.error });
+      }
       return { pipelines: loadPipelines(), changed: false };
     }
     /* The store fails closed on malformed state, but this tick runs inside

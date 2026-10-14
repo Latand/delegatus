@@ -1,4 +1,4 @@
-import { expect, spyOn, test, crypto, spawn, fs, os, path, engineModule, IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail, defaultPipelinePorts, reconcileEmbeddedReviewFlows, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, durableStageTurnEvidence, patchPipeline, closeAndDrain, RUN_STAGES, entry, harness, create, withRuntimeSnapshot, HISTORICAL_VERDICT_MISS, PASS_TEXT, makeStructuredAttempt, pinStageHead, BUDGET_STAGES, movingHeadHarness, driveWithController, stagedRecoveryHarness, activationDrainFixture, reserveActivationOnly, expectPipelineLeaseAbsent, frozenSurvivorStartup, restartCutStage, cutByRestart, idleStageHostFixture, runtimeReleaseOf, SILENT_RUN, attemptThatWorkedOnAfterRestart, stageWhoseStopMovesTheTranscript } from "./engine.fixture";
+import { expect, spyOn, test, crypto, fs, os, path, engineModule, IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail, defaultPipelinePorts, reconcileEmbeddedReviewFlows, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, durableStageTurnEvidence, patchPipeline, closeAndDrain, RUN_STAGES, entry, harness, create, withRuntimeSnapshot, HISTORICAL_VERDICT_MISS, PASS_TEXT, makeStructuredAttempt, pinStageHead, BUDGET_STAGES, movingHeadHarness, driveWithController, stagedRecoveryHarness, activationDrainFixture, reserveActivationOnly, expectPipelineLeaseAbsent, frozenSurvivorStartup, restartCutStage, cutByRestart, idleStageHostFixture, runtimeReleaseOf, SILENT_RUN, attemptThatWorkedOnAfterRestart, stageWhoseStopMovesTheTranscript } from "./engine.fixture";
 import type { Flow, BoardTask, PipelinePorts } from "./engine.fixture";
 
 async function continuationCloseFixture(marker: "actionAt" | "continuationRequestedAt" = "continuationRequestedAt") {
@@ -17,6 +17,51 @@ async function continuationCloseFixture(marker: "actionAt" | "continuationReques
   savePipelines(records);
   return { h, pipeline };
 }
+
+test.each(["before-persist", "after-persist"] as const)("closing a lane during review flow creation preserves custody %s", async (seam) => {
+  const h = harness();
+  const pipeline = await create(h.ports, [
+    { id: "build", kind: "run", prompt: "Build", next: "review" },
+    { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "Review {{prev.output}}", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "ready for review")], h.ports);
+
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const createFlow = h.ports.createFlow;
+  h.ports.createFlow = async (...args) => {
+    if (seam === "before-persist") {
+      entered();
+      await gate;
+      return createFlow(...args);
+    }
+    const created = await createFlow(...args);
+    entered();
+    await gate;
+    return created;
+  };
+
+  const creating = tickPipelines([], h.ports);
+  await started;
+  const releaseIfCloseWaits = setTimeout(release, 50);
+  const closed = await patchPipeline(pipeline.id, { action: "close" }, h.ports);
+  clearTimeout(releaseIfCloseWaits);
+  expect(closed.pipeline?.state).toBe("closed");
+  release();
+  await creating;
+  await engineModule.drainStageActivations(h.ports);
+
+  const closedLane = loadPipelines()[0]!;
+  expect(closedLane.state).toBe("closed");
+  const attachedFlowId = closedLane.runs.find(run => run.stageId === "review")!.attempts.at(-1)!.flowId;
+  expect(!attachedFlowId || h.flows.get(attachedFlowId)?.state === "closed").toBe(true);
+  expect(h.flows.size).toBeLessThanOrEqual(1);
+  expect([...h.flows.values()].every(flow => flow.state === "closed")).toBe(true);
+});
 
 test.each(["actionAt", "continuationRequestedAt"] as const)("close persists a paused lane while runtime-host continuation cancellation is unavailable (%s)", async (marker) => {
   const { h, pipeline } = await continuationCloseFixture(marker);
