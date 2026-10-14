@@ -1005,15 +1005,17 @@ export async function captureReadAloudVoiceMenu(browser: Browser, mobile: boolea
   fs.mkdirSync(out, { recursive: true });
   const server = await serveEvidenceFixture(path.resolve(".artifacts/read-aloud-voice", mobile ? "phone" : "desktop"), mobile ? "src/components/mobile/issue1671Evidence.fixture.tsx" : undefined);
   const readings: unknown[] = [];
-  const states = ["loaded", "filtered", "typed-unlisted", "loading", "failed", "unconfigured", "locked", "fish-jarvis", "selected-unknown", "alert-voice-not-found"] as const;
+  const states = ["loaded", "filtered", "typed-unlisted", "loading", "failed", "unconfigured", "locked", "fish-jarvis", "selected-unknown", "long-selected-name", "alert-voice-not-found"] as const;
   try {
     for (const locale of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const width of mobile ? [320, 390] : [1440, 1000]) {
       const height = mobile ? (width === 320 ? 640 : 844) : width === 1000 ? 700 : 900;
       const { context, page, pageErrors } = await openFixture(browser, `${server.base}?${mobile ? "fast-tts=1&runtime=structured#c=conversation_running" : "scenario=fast-tts#c=conversation_export-impl"}`, { width, height }, scheme, locale, "reduce", mobile);
       let state: typeof states[number] = "loaded";
-      const voices = Array.from({ length: 12 }, (_, i) => ({ id: `voice-${i}`, name: i === 0 ? "Delegatus" : `Narrator ${i}`, own: i < 2 }));
+      const longVoiceName = `Narrator${"A".repeat(80)}`;
+      const voices = () => Array.from({ length: 12 }, (_, i) => ({ id: `voice-${i}`, name: i === 0 ? state === "long-selected-name" ? longVoiceName : "Delegatus" : `Narrator ${i}`, own: i < 2 }));
       let listCalls = 0; let synthesisCalls = 0; const saves: unknown[] = [];
       let release: (() => void) | undefined;
+      let controlsReachable: { provider: boolean; voiceInput: boolean } | undefined;
       const speech = () => ({ backend: state === "fish-jarvis" ? "fishaudio" : "elevenlabs", lockedByEnv: false, options: [
         { id: "openai", available: false, keyPath: "$CONFIG/openai-api-key", model: "gpt-4o-mini-tts", voice: "alloy", cap: 4000 },
         { id: "elevenlabs", available: state !== "unconfigured", keyPath: "$CONFIG/elevenlabs-api-key", model: "eleven_v4_turbo", voice: state === "selected-unknown" || state === "alert-voice-not-found" ? "unknown-voice" : "voice-0", voiceLockedByEnv: state === "locked", cap: 4000 },
@@ -1030,7 +1032,7 @@ export async function captureReadAloudVoiceMenu(browser: Browser, mobile: boolea
           if (state === "loading") await new Promise<void>((resolve) => { release = resolve; });
           if (state === "failed") { await route.fulfill({ status: 502, json: { error: "Missing voices_read permission", code: "provider-refused" } }); return; }
           const fish = state === "fish-jarvis";
-          await route.fulfill({ json: { backend: fish ? "fishaudio" : "elevenlabs", voices: fish ? [{ id: "public-jarvis", name: "Jarvis", own: false }] : voices, truncated: false, selected: { id: fish ? "public-jarvis" : state === "selected-unknown" ? "unknown-voice" : "voice-0", name: fish ? "Jarvis" : state === "selected-unknown" ? null : "Delegatus", known: state !== "selected-unknown" } } });
+          await route.fulfill({ json: { backend: fish ? "fishaudio" : "elevenlabs", voices: fish ? [{ id: "public-jarvis", name: "Jarvis", own: false }] : voices(), truncated: false, selected: { id: fish ? "public-jarvis" : state === "selected-unknown" ? "unknown-voice" : "voice-0", name: fish ? "Jarvis" : state === "selected-unknown" ? null : state === "long-selected-name" ? longVoiceName : "Delegatus", known: state !== "selected-unknown" } } });
         });
         await page.route("**/api/tts", async (route) => {
           if (route.request().method() !== "POST") { await route.fallback(); return; }
@@ -1064,7 +1066,11 @@ export async function captureReadAloudVoiceMenu(browser: Browser, mobile: boolea
           const reading = await menu.evaluate((node) => {
             const box = node.getBoundingClientRect(); const input = node.querySelector("input")!;
             const rows = [...node.querySelectorAll("[data-tts-voice]")].map((row) => { const r = row.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: r.height }; });
-            return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, background: getComputedStyle(node).backgroundColor, sideways: node.scrollWidth > node.clientWidth, inputHeight: input.getBoundingClientRect().height, inputFont: getComputedStyle(input).fontSize, rows, more: node.querySelector("[data-tts-voice-more]")?.textContent };
+            const summary = node.querySelector<HTMLElement>("[data-tts-summary]");
+            const providerVoice = node.querySelector<HTMLElement>('[data-tts-provider][aria-checked="true"] [data-tts-provider-voice]');
+            const selectedVoice = node.querySelector<HTMLElement>('[data-tts-voice][aria-checked="true"] span.min-w-0.flex-1');
+            const textFits = (element: HTMLElement | null) => element ? element.scrollWidth <= element.clientWidth + 1 : false;
+            return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, background: getComputedStyle(node).backgroundColor, sideways: node.scrollWidth > node.clientWidth, inputHeight: input.getBoundingClientRect().height, inputFont: getComputedStyle(input).fontSize, rows, more: node.querySelector("[data-tts-voice-more]")?.textContent, summaryText: summary?.textContent, providerVoiceText: providerVoice?.textContent, selectedVoiceText: selectedVoice?.textContent, summaryFits: textFits(summary), providerVoiceFits: textFits(providerVoice), selectedVoiceFits: textFits(selectedVoice) };
           });
           expect(reading.left).toBeGreaterThanOrEqual(0); expect(reading.right).toBeLessThanOrEqual(width); expect(reading.top).toBeGreaterThanOrEqual(0); expect(reading.bottom).toBeLessThanOrEqual(height);
           expect(reading.sideways).toBe(false); expect(reading.background).not.toBe("rgba(0, 0, 0, 0)"); expect(reading.rows.length).toBeLessThanOrEqual(6);
@@ -1072,6 +1078,22 @@ export async function captureReadAloudVoiceMenu(browser: Browser, mobile: boolea
           for (let i = 1; i < reading.rows.length; i++) expect(reading.rows[i]!.top).toBeGreaterThanOrEqual(reading.rows[i - 1]!.bottom);
           if (mobile) { expect(reading.inputHeight).toBeGreaterThanOrEqual(44); expect(reading.inputFont).toBe("16px"); for (const row of reading.rows) expect(row.height).toBeGreaterThanOrEqual(44); }
           if (state === "loaded") expect(reading.more).toContain("6");
+          if (state === "long-selected-name") {
+            expect(reading.summaryText).toContain(longVoiceName);
+            expect(reading.providerVoiceText).toContain(longVoiceName);
+            expect(reading.selectedVoiceText).toContain(longVoiceName);
+            expect(reading.summaryFits).toBe(true);
+            expect(reading.providerVoiceFits).toBe(true);
+            expect(reading.selectedVoiceFits).toBe(true);
+            const provider = menu.locator('[data-tts-provider][aria-checked="true"]');
+            await provider.scrollIntoViewIfNeeded();
+            const providerReachable = await provider.isVisible();
+            expect(providerReachable).toBe(true);
+            await input.scrollIntoViewIfNeeded();
+            const voiceInputReachable = await input.isVisible();
+            expect(voiceInputReachable).toBe(true);
+            controlsReachable = { provider: providerReachable, voiceInput: voiceInputReachable };
+          }
           if (state === "unconfigured") expect(listCalls).toBe(beforeCalls);
           if (state === "locked") expect(await input.isDisabled()).toBe(true);
           if (state === "fish-jarvis") expect(await menu.textContent()).toContain("s2.1-pro · Jarvis");
@@ -1081,7 +1103,7 @@ export async function captureReadAloudVoiceMenu(browser: Browser, mobile: boolea
           if (state === "filtered") { await group.locator("[data-tts-voice]").first().click(); await menu.waitFor({ state: "hidden" }); expect(saves.slice(beforeSaves)).toEqual([{ backend: "elevenlabs", voice: "voice-1" }]); }
           if (state === "typed-unlisted") { await input.press("Enter"); await menu.waitFor({ state: "hidden" }); expect(saves.slice(beforeSaves)).toEqual([{ backend: "elevenlabs", voice: "typed-voice-id" }]); }
           release?.(); release = undefined;
-          readings.push({ width, height, locale, scheme, state, reading });
+          readings.push({ width, height, locale, scheme, state, reading, ...(controlsReachable ? { controlsReachable } : {}) });
         }
         expect(pageErrors).toEqual([]);
       } finally { release?.(); await context.close(); }

@@ -47,7 +47,13 @@
             "height": 30
           }
         ],
-        "more": "+6 more — type to narrow"
+        "more": "+6 more — type to narrow",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "selectedVoiceText": "Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -81,7 +87,12 @@
             "bottom": 606.375,
             "height": 30
           }
-        ]
+        ],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -99,7 +110,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -117,7 +133,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -135,7 +156,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -153,7 +179,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -203,7 +234,13 @@
             "height": 30
           }
         ],
-        "more": "+6 more — type to narrow"
+        "more": "+6 more — type to narrow",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "selectedVoiceText": "Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -227,7 +264,12 @@
             "bottom": 716.5625,
             "height": 30
           }
-        ]
+        ],
+        "summaryText": "Fish Audio · s2.1-pro · Jarvis",
+        "selectedVoiceText": "Jarvis",
+        "summaryFits": true,
+        "providerVoiceFits": false,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -277,7 +319,72 @@
             "height": 30
           }
         ],
-        "more": "+6 more — type to narrow"
+        "more": "+6 more — type to narrow",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · unknown-voice",
+        "providerVoiceText": "eleven_v4_turbo · unknown-voice",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "light",
+      "state": "long-selected-name",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 23,
+        "bottom": 892.125,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 444.9375,
+            "bottom": 528.9375,
+            "height": 84
+          },
+          {
+            "top": 532.9375,
+            "bottom": 562.9375,
+            "height": 30
+          },
+          {
+            "top": 566.9375,
+            "bottom": 596.9375,
+            "height": 30
+          },
+          {
+            "top": 600.9375,
+            "bottom": 630.9375,
+            "height": 30
+          },
+          {
+            "top": 634.9375,
+            "bottom": 664.9375,
+            "height": 30
+          },
+          {
+            "top": 668.9375,
+            "bottom": 698.9375,
+            "height": 30
+          }
+        ],
+        "more": "+6 more — type to narrow",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "providerVoiceText": "eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "selectedVoiceText": "NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
+      },
+      "controlsReachable": {
+        "provider": true,
+        "voiceInput": true
       }
     },
     {
@@ -339,7 +446,13 @@
             "height": 30
           }
         ],
-        "more": "+6 more — type to narrow"
+        "more": "+6 more — type to narrow",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "selectedVoiceText": "Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -373,7 +486,12 @@
             "bottom": 450.375,
             "height": 30
           }
-        ]
+        ],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -391,7 +509,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -409,7 +532,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -427,7 +555,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -445,7 +578,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -495,7 +633,13 @@
             "height": 30
           }
         ],
-        "more": "+6 more — type to narrow"
+        "more": "+6 more — type to narrow",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "selectedVoiceText": "Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -519,7 +663,12 @@
             "bottom": 668.5625,
             "height": 30
           }
-        ]
+        ],
+        "summaryText": "Fish Audio · s2.1-pro · Jarvis",
+        "selectedVoiceText": "Jarvis",
+        "summaryFits": true,
+        "providerVoiceFits": false,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -569,7 +718,72 @@
             "height": 30
           }
         ],
-        "more": "+6 more — type to narrow"
+        "more": "+6 more — type to narrow",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · unknown-voice",
+        "providerVoiceText": "eleven_v4_turbo · unknown-voice",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "light",
+      "state": "long-selected-name",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 394.9375,
+            "bottom": 496.9375,
+            "height": 102
+          },
+          {
+            "top": 500.9375,
+            "bottom": 530.9375,
+            "height": 30
+          },
+          {
+            "top": 534.9375,
+            "bottom": 564.9375,
+            "height": 30
+          },
+          {
+            "top": 568.9375,
+            "bottom": 598.9375,
+            "height": 30
+          },
+          {
+            "top": 602.9375,
+            "bottom": 632.9375,
+            "height": 30
+          },
+          {
+            "top": 636.9375,
+            "bottom": 666.9375,
+            "height": 30
+          }
+        ],
+        "more": "+6 more — type to narrow",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "providerVoiceText": "eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "selectedVoiceText": "NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
+      },
+      "controlsReachable": {
+        "provider": true,
+        "voiceInput": true
       }
     },
     {
@@ -631,7 +845,13 @@
             "height": 30
           }
         ],
-        "more": "+6 more — type to narrow"
+        "more": "+6 more — type to narrow",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "selectedVoiceText": "Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -665,7 +885,12 @@
             "bottom": 606.375,
             "height": 30
           }
-        ]
+        ],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -683,7 +908,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -701,7 +931,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -719,7 +954,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -737,7 +977,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -787,7 +1032,13 @@
             "height": 30
           }
         ],
-        "more": "+6 more — type to narrow"
+        "more": "+6 more — type to narrow",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "selectedVoiceText": "Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -811,7 +1062,12 @@
             "bottom": 716.5625,
             "height": 30
           }
-        ]
+        ],
+        "summaryText": "Fish Audio · s2.1-pro · Jarvis",
+        "selectedVoiceText": "Jarvis",
+        "summaryFits": true,
+        "providerVoiceFits": false,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -861,7 +1117,72 @@
             "height": 30
           }
         ],
-        "more": "+6 more — type to narrow"
+        "more": "+6 more — type to narrow",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · unknown-voice",
+        "providerVoiceText": "eleven_v4_turbo · unknown-voice",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "long-selected-name",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 23,
+        "bottom": 892.125,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 444.9375,
+            "bottom": 528.9375,
+            "height": 84
+          },
+          {
+            "top": 532.9375,
+            "bottom": 562.9375,
+            "height": 30
+          },
+          {
+            "top": 566.9375,
+            "bottom": 596.9375,
+            "height": 30
+          },
+          {
+            "top": 600.9375,
+            "bottom": 630.9375,
+            "height": 30
+          },
+          {
+            "top": 634.9375,
+            "bottom": 664.9375,
+            "height": 30
+          },
+          {
+            "top": 668.9375,
+            "bottom": 698.9375,
+            "height": 30
+          }
+        ],
+        "more": "+6 more — type to narrow",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "providerVoiceText": "eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "selectedVoiceText": "NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
+      },
+      "controlsReachable": {
+        "provider": true,
+        "voiceInput": true
       }
     },
     {
@@ -923,7 +1244,13 @@
             "height": 30
           }
         ],
-        "more": "+6 more — type to narrow"
+        "more": "+6 more — type to narrow",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "selectedVoiceText": "Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -957,7 +1284,12 @@
             "bottom": 450.375,
             "height": 30
           }
-        ]
+        ],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -975,7 +1307,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -993,7 +1330,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1011,7 +1353,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1029,7 +1376,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1079,7 +1431,13 @@
             "height": 30
           }
         ],
-        "more": "+6 more — type to narrow"
+        "more": "+6 more — type to narrow",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "selectedVoiceText": "Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -1103,7 +1461,12 @@
             "bottom": 668.5625,
             "height": 30
           }
-        ]
+        ],
+        "summaryText": "Fish Audio · s2.1-pro · Jarvis",
+        "selectedVoiceText": "Jarvis",
+        "summaryFits": true,
+        "providerVoiceFits": false,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -1153,7 +1516,72 @@
             "height": 30
           }
         ],
-        "more": "+6 more — type to narrow"
+        "more": "+6 more — type to narrow",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · unknown-voice",
+        "providerVoiceText": "eleven_v4_turbo · unknown-voice",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "en",
+      "scheme": "dark",
+      "state": "long-selected-name",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 394.9375,
+            "bottom": 496.9375,
+            "height": 102
+          },
+          {
+            "top": 500.9375,
+            "bottom": 530.9375,
+            "height": 30
+          },
+          {
+            "top": 534.9375,
+            "bottom": 564.9375,
+            "height": 30
+          },
+          {
+            "top": 568.9375,
+            "bottom": 598.9375,
+            "height": 30
+          },
+          {
+            "top": 602.9375,
+            "bottom": 632.9375,
+            "height": 30
+          },
+          {
+            "top": 636.9375,
+            "bottom": 666.9375,
+            "height": 30
+          }
+        ],
+        "more": "+6 more — type to narrow",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "providerVoiceText": "eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "selectedVoiceText": "NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
+      },
+      "controlsReachable": {
+        "provider": true,
+        "voiceInput": true
       }
     },
     {
@@ -1215,7 +1643,13 @@
             "height": 30
           }
         ],
-        "more": "ще +6 — уточніть пошук"
+        "more": "ще +6 — уточніть пошук",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "selectedVoiceText": "Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -1249,7 +1683,12 @@
             "bottom": 644.125,
             "height": 30
           }
-        ]
+        ],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1267,7 +1706,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1285,7 +1729,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1303,7 +1752,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1321,7 +1775,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1371,7 +1830,13 @@
             "height": 30
           }
         ],
-        "more": "ще +6 — уточніть пошук"
+        "more": "ще +6 — уточніть пошук",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "selectedVoiceText": "Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -1395,7 +1860,12 @@
             "bottom": 771.8125,
             "height": 30
           }
-        ]
+        ],
+        "summaryText": "Fish Audio · s2.1-pro · Jarvis",
+        "selectedVoiceText": "Jarvis",
+        "summaryFits": true,
+        "providerVoiceFits": false,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -1445,7 +1915,72 @@
             "height": 30
           }
         ],
-        "more": "ще +6 — уточніть пошук"
+        "more": "ще +6 — уточніть пошук",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · unknown-voice",
+        "providerVoiceText": "eleven_v4_turbo · unknown-voice",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "long-selected-name",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 8,
+        "bottom": 892,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 494.4375,
+            "bottom": 578.4375,
+            "height": 84
+          },
+          {
+            "top": 582.4375,
+            "bottom": 612.4375,
+            "height": 30
+          },
+          {
+            "top": 616.4375,
+            "bottom": 646.4375,
+            "height": 30
+          },
+          {
+            "top": 650.4375,
+            "bottom": 680.4375,
+            "height": 30
+          },
+          {
+            "top": 684.4375,
+            "bottom": 714.4375,
+            "height": 30
+          },
+          {
+            "top": 718.4375,
+            "bottom": 748.4375,
+            "height": 30
+          }
+        ],
+        "more": "ще +6 — уточніть пошук",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "providerVoiceText": "eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "selectedVoiceText": "NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
+      },
+      "controlsReachable": {
+        "provider": true,
+        "voiceInput": true
       }
     },
     {
@@ -1507,7 +2042,13 @@
             "height": 30
           }
         ],
-        "more": "ще +6 — уточніть пошук"
+        "more": "ще +6 — уточніть пошук",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "selectedVoiceText": "Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -1541,7 +2082,12 @@
             "bottom": 501.875,
             "height": 30
           }
-        ]
+        ],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1559,7 +2105,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1577,7 +2128,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1595,7 +2151,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1613,7 +2174,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1663,7 +2229,13 @@
             "height": 30
           }
         ],
-        "more": "ще +6 — уточніть пошук"
+        "more": "ще +6 — уточніть пошук",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "selectedVoiceText": "Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -1687,7 +2259,12 @@
             "bottom": 680.8125,
             "height": 30
           }
-        ]
+        ],
+        "summaryText": "Fish Audio · s2.1-pro · Jarvis",
+        "selectedVoiceText": "Jarvis",
+        "summaryFits": true,
+        "providerVoiceFits": false,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -1737,7 +2314,72 @@
             "height": 30
           }
         ],
-        "more": "ще +6 — уточніть пошук"
+        "more": "ще +6 — уточніть пошук",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · unknown-voice",
+        "providerVoiceText": "eleven_v4_turbo · unknown-voice",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "light",
+      "state": "long-selected-name",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(255, 253, 250)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 413.4375,
+            "bottom": 497.4375,
+            "height": 84
+          },
+          {
+            "top": 501.4375,
+            "bottom": 531.4375,
+            "height": 30
+          },
+          {
+            "top": 535.4375,
+            "bottom": 565.4375,
+            "height": 30
+          },
+          {
+            "top": 569.4375,
+            "bottom": 599.4375,
+            "height": 30
+          },
+          {
+            "top": 603.4375,
+            "bottom": 633.4375,
+            "height": 30
+          },
+          {
+            "top": 637.4375,
+            "bottom": 667.4375,
+            "height": 30
+          }
+        ],
+        "more": "ще +6 — уточніть пошук",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "providerVoiceText": "eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "selectedVoiceText": "NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
+      },
+      "controlsReachable": {
+        "provider": true,
+        "voiceInput": true
       }
     },
     {
@@ -1799,7 +2441,13 @@
             "height": 30
           }
         ],
-        "more": "ще +6 — уточніть пошук"
+        "more": "ще +6 — уточніть пошук",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "selectedVoiceText": "Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -1833,7 +2481,12 @@
             "bottom": 644.125,
             "height": 30
           }
-        ]
+        ],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1851,7 +2504,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1869,7 +2527,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1887,7 +2550,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1905,7 +2573,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -1955,7 +2628,13 @@
             "height": 30
           }
         ],
-        "more": "ще +6 — уточніть пошук"
+        "more": "ще +6 — уточніть пошук",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "selectedVoiceText": "Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -1979,7 +2658,12 @@
             "bottom": 771.8125,
             "height": 30
           }
-        ]
+        ],
+        "summaryText": "Fish Audio · s2.1-pro · Jarvis",
+        "selectedVoiceText": "Jarvis",
+        "summaryFits": true,
+        "providerVoiceFits": false,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -2029,7 +2713,72 @@
             "height": 30
           }
         ],
-        "more": "ще +6 — уточніть пошук"
+        "more": "ще +6 — уточніть пошук",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · unknown-voice",
+        "providerVoiceText": "eleven_v4_turbo · unknown-voice",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
+      }
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "long-selected-name",
+      "reading": {
+        "left": 950.984375,
+        "right": 1250.984375,
+        "top": 8,
+        "bottom": 892,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 494.4375,
+            "bottom": 578.4375,
+            "height": 84
+          },
+          {
+            "top": 582.4375,
+            "bottom": 612.4375,
+            "height": 30
+          },
+          {
+            "top": 616.4375,
+            "bottom": 646.4375,
+            "height": 30
+          },
+          {
+            "top": 650.4375,
+            "bottom": 680.4375,
+            "height": 30
+          },
+          {
+            "top": 684.4375,
+            "bottom": 714.4375,
+            "height": 30
+          },
+          {
+            "top": 718.4375,
+            "bottom": 748.4375,
+            "height": 30
+          }
+        ],
+        "more": "ще +6 — уточніть пошук",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "providerVoiceText": "eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "selectedVoiceText": "NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
+      },
+      "controlsReachable": {
+        "provider": true,
+        "voiceInput": true
       }
     },
     {
@@ -2091,7 +2840,13 @@
             "height": 30
           }
         ],
-        "more": "ще +6 — уточніть пошук"
+        "more": "ще +6 — уточніть пошук",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "selectedVoiceText": "Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -2125,7 +2880,12 @@
             "bottom": 501.875,
             "height": 30
           }
-        ]
+        ],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -2143,7 +2903,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -2161,7 +2926,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -2179,7 +2949,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -2197,7 +2972,12 @@
         "sideways": false,
         "inputHeight": 32,
         "inputFont": "12px",
-        "rows": []
+        "rows": [],
+        "summaryText": "ElevenLabs · eleven_v4_turbo · voice-0",
+        "providerVoiceText": "eleven_v4_turbo · voice-0",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
       }
     },
     {
@@ -2247,7 +3027,13 @@
             "height": 30
           }
         ],
-        "more": "ще +6 — уточніть пошук"
+        "more": "ще +6 — уточніть пошук",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · Delegatus",
+        "providerVoiceText": "eleven_v4_turbo · Delegatus",
+        "selectedVoiceText": "Delegatus",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -2271,7 +3057,12 @@
             "bottom": 680.8125,
             "height": 30
           }
-        ]
+        ],
+        "summaryText": "Fish Audio · s2.1-pro · Jarvis",
+        "selectedVoiceText": "Jarvis",
+        "summaryFits": true,
+        "providerVoiceFits": false,
+        "selectedVoiceFits": true
       }
     },
     {
@@ -2321,7 +3112,72 @@
             "height": 30
           }
         ],
-        "more": "ще +6 — уточніть пошук"
+        "more": "ще +6 — уточніть пошук",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · unknown-voice",
+        "providerVoiceText": "eleven_v4_turbo · unknown-voice",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": false
+      }
+    },
+    {
+      "width": 1000,
+      "height": 700,
+      "locale": "uk",
+      "scheme": "dark",
+      "state": "long-selected-name",
+      "reading": {
+        "left": 581,
+        "right": 881,
+        "top": 8,
+        "bottom": 692,
+        "background": "rgb(25, 27, 35)",
+        "sideways": false,
+        "inputHeight": 32,
+        "inputFont": "12px",
+        "rows": [
+          {
+            "top": 413.4375,
+            "bottom": 497.4375,
+            "height": 84
+          },
+          {
+            "top": 501.4375,
+            "bottom": 531.4375,
+            "height": 30
+          },
+          {
+            "top": 535.4375,
+            "bottom": 565.4375,
+            "height": 30
+          },
+          {
+            "top": 569.4375,
+            "bottom": 599.4375,
+            "height": 30
+          },
+          {
+            "top": 603.4375,
+            "bottom": 633.4375,
+            "height": 30
+          },
+          {
+            "top": 637.4375,
+            "bottom": 667.4375,
+            "height": 30
+          }
+        ],
+        "more": "ще +6 — уточніть пошук",
+        "summaryText": "ElevenLabs · eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "providerVoiceText": "eleven_v4_turbo · NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "selectedVoiceText": "NarratorAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "summaryFits": true,
+        "providerVoiceFits": true,
+        "selectedVoiceFits": true
+      },
+      "controlsReachable": {
+        "provider": true,
+        "voiceInput": true
       }
     },
     {

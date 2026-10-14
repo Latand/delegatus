@@ -339,7 +339,7 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
     onClick={() => void pickVoice(voice.id)}
     className={`flex w-full min-w-0 items-center gap-2 rounded-control px-2 text-left text-[12px] text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60 ${isMobile ? "min-h-11 py-2" : "py-1.5"} ${voice.id === option.voice ? "bg-accent/10" : "hover:bg-canvas"}`}>
     {voice.id === option.voice ? <Check className="h-3.5 w-3.5 shrink-0" aria-hidden /> : null}
-    <span className="min-w-0 flex-1 truncate">{voice.id === "default" && option.id === "fishaudio" ? t("tts.fishDefaultVoice") : voice.name}</span>
+    <span className="min-w-0 flex-1 break-words">{voice.id === "default" && option.id === "fishaudio" ? t("tts.fishDefaultVoice") : voice.name}</span>
     {voice.own ? <span className="shrink-0 text-[10px] text-muted">{t("tts.voiceOwn")}</span> : null}
   </button>;
 
@@ -363,7 +363,7 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
       <div className={`px-2 text-[11.5px] font-semibold ${active ? "text-secondary" : freeReplay() ? "text-success" : "text-primary"}`}>
         {active ? t("tts.nextStop") : freeReplay() ? t("tts.nextFree") : freeModel ? t(freeEnded ? "tts.fishFreeEnded" : "tts.nextFreeModel", { date, action: t("tts.fishChoosePaidMenu") }) : t("tts.nextPaid")}
       </div>
-      <div className="px-2 pt-1 text-[10.5px] text-muted">{providerName} · {option.model} · {voiceName(option)}{option.language ? ` · ${option.language}` : ""}</div>
+      <div data-tts-summary className="break-words px-2 pt-1 text-[10.5px] text-muted">{providerName} · {option.model} · {voiceName(option)}{option.language ? ` · ${option.language}` : ""}</div>
       <div className="px-2 text-[10.5px] text-muted">{t("tts.characters", { count: chars.toLocaleString() })}</div>
       {freeEnded ? null : <div className="px-2 pt-1 text-[10.5px] text-primary">{option.id === "fishaudio" ? t(freeModel ? "tts.billingFree" : "tts.billingBytes", { date }) : t("tts.billing", { provider: providerName })}</div>}
       <div className="px-2 text-[10.5px] text-primary">{t("tts.disclosure")}</div>
@@ -415,7 +415,7 @@ export function SpeakMenu({ anchorRef, info, option, chars, notice, freeReplay, 
                       <span className="rounded-full bg-warning-soft px-1.5 py-px text-[9.5px] font-bold text-warning">{t("tts.noKey")}</span>
                     ) : null}
                   </span>
-                  {candidate.id === "fishaudio" ? null : <span className="block text-[10.5px] leading-snug text-muted">{`${candidate.model} · ${voiceName(candidate)}`}</span>}
+                  {candidate.id === "fishaudio" ? null : <span data-tts-provider-voice className="block break-words text-[10.5px] leading-snug text-muted">{`${candidate.model} · ${voiceName(candidate)}`}</span>}
                 </span>
               </button>
               {candidate.id === "fishaudio" ? (
