@@ -61,3 +61,24 @@ test("a column's cards never shrink, and a column gives up scroll anchoring only
   });
   expect(unanchored).toEqual([".kb[data-column-layout-active] .board:not(.tabs) .col-body"]);
 });
+
+/* The seat's conversation and a column are two panels. Neither passes a scroll
+   that reaches its end on to `.kb-page`, which holds the seat and a full page
+   of board and so always has somewhere to go. Only the vertical axis is
+   contained: the shorthand also stops the sideways wheel and trackpad that move
+   the board's columns, and the browser's back and forward swipe. The page
+   scrolls from its own scrollbar and from the heads
+   (docs/design/independent-panel-scroll.md). The browser half is the kanban
+   driver's "independent panel scroll" case. */
+test("the seat's conversation and a column keep their vertical scroll to themselves", () => {
+  const SEAT_CONVERSATION = ".kb .seat [data-orchestrator-conversation] [data-log-feed-scroller]";
+  for (const selector of [".kb .col-body", SEAT_CONVERSATION]) {
+    expect({ selector, overscroll: declarationsFor(selector).get("overscroll-behavior-y") ?? null }).toEqual({ selector, overscroll: "contain" });
+  }
+  const sideways: string[] = [];
+  root.walkDecls(/^overscroll-behavior(-x|-inline)?$/, (declaration) => {
+    const rule = declaration.parent as postcss.Rule;
+    if (rule.selectors.some((selector) => selector.includes(".col-body") || selector.includes("data-log-feed-scroller"))) sideways.push(`${rule.selector} { ${declaration.prop} }`);
+  });
+  expect(sideways).toEqual([]);
+});

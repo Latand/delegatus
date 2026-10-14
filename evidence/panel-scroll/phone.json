@@ -1,0 +1,459 @@
+{
+  "results": [
+    {
+      "viewport": "390x844",
+      "resting": {
+        "scrollers": [
+          {
+            "name": "column:inbox",
+            "top": 0,
+            "range": 152,
+            "overscrollY": "contain",
+            "column": true
+          },
+          {
+            "name": "column:assigned",
+            "top": 0,
+            "range": 752,
+            "overscrollY": "contain",
+            "column": true
+          },
+          {
+            "name": "column:done",
+            "top": 0,
+            "range": 1151,
+            "overscrollY": "contain",
+            "column": true
+          }
+        ],
+        "seat": [
+          0,
+          52,
+          390,
+          66
+        ],
+        "tabs": [
+          0,
+          118,
+          390,
+          49
+        ],
+        "dock": [
+          0,
+          0,
+          390,
+          52
+        ],
+        "scrollY": 0
+      },
+      "top": {
+        "before": {
+          "scrollers": [
+            {
+              "name": "column:inbox",
+              "top": 0,
+              "range": 152,
+              "overscrollY": "contain",
+              "column": true
+            },
+            {
+              "name": "column:assigned",
+              "top": 0,
+              "range": 752,
+              "overscrollY": "contain",
+              "column": true
+            },
+            {
+              "name": "column:done",
+              "top": 0,
+              "range": 1151,
+              "overscrollY": "contain",
+              "column": true
+            }
+          ],
+          "seat": [
+            0,
+            52,
+            390,
+            66
+          ],
+          "tabs": [
+            0,
+            118,
+            390,
+            49
+          ],
+          "dock": [
+            0,
+            0,
+            390,
+            52
+          ],
+          "scrollY": 0
+        },
+        "after": {
+          "scrollers": [
+            {
+              "name": "column:inbox",
+              "top": 0,
+              "range": 152,
+              "overscrollY": "contain",
+              "column": true
+            },
+            {
+              "name": "column:assigned",
+              "top": 0,
+              "range": 752,
+              "overscrollY": "contain",
+              "column": true
+            },
+            {
+              "name": "column:done",
+              "top": 0,
+              "range": 1151,
+              "overscrollY": "contain",
+              "column": true
+            }
+          ],
+          "seat": [
+            0,
+            52,
+            390,
+            66
+          ],
+          "tabs": [
+            0,
+            118,
+            390,
+            49
+          ],
+          "dock": [
+            0,
+            0,
+            390,
+            52
+          ],
+          "scrollY": 0
+        }
+      },
+      "end": {
+        "before": {
+          "scrollers": [
+            {
+              "name": "column:inbox",
+              "top": 0,
+              "range": 152,
+              "overscrollY": "contain",
+              "column": true
+            },
+            {
+              "name": "column:assigned",
+              "top": 752,
+              "range": 752,
+              "overscrollY": "contain",
+              "column": true
+            },
+            {
+              "name": "column:done",
+              "top": 0,
+              "range": 1151,
+              "overscrollY": "contain",
+              "column": true
+            }
+          ],
+          "seat": [
+            0,
+            52,
+            390,
+            66
+          ],
+          "tabs": [
+            0,
+            118,
+            390,
+            49
+          ],
+          "dock": [
+            0,
+            0,
+            390,
+            52
+          ],
+          "scrollY": 0
+        },
+        "after": {
+          "scrollers": [
+            {
+              "name": "column:inbox",
+              "top": 0,
+              "range": 152,
+              "overscrollY": "contain",
+              "column": true
+            },
+            {
+              "name": "column:assigned",
+              "top": 752,
+              "range": 752,
+              "overscrollY": "contain",
+              "column": true
+            },
+            {
+              "name": "column:done",
+              "top": 0,
+              "range": 1151,
+              "overscrollY": "contain",
+              "column": true
+            }
+          ],
+          "seat": [
+            0,
+            52,
+            390,
+            66
+          ],
+          "tabs": [
+            0,
+            118,
+            390,
+            49
+          ],
+          "dock": [
+            0,
+            0,
+            390,
+            52
+          ],
+          "scrollY": 0
+        }
+      }
+    },
+    {
+      "viewport": "430x932",
+      "resting": {
+        "scrollers": [
+          {
+            "name": "column:inbox",
+            "top": 0,
+            "range": 64,
+            "overscrollY": "contain",
+            "column": true
+          },
+          {
+            "name": "column:assigned",
+            "top": 0,
+            "range": 613,
+            "overscrollY": "contain",
+            "column": true
+          },
+          {
+            "name": "column:done",
+            "top": 0,
+            "range": 1063,
+            "overscrollY": "contain",
+            "column": true
+          }
+        ],
+        "seat": [
+          0,
+          52,
+          430,
+          66
+        ],
+        "tabs": [
+          0,
+          118,
+          430,
+          49
+        ],
+        "dock": [
+          0,
+          0,
+          430,
+          52
+        ],
+        "scrollY": 0
+      },
+      "top": {
+        "before": {
+          "scrollers": [
+            {
+              "name": "column:inbox",
+              "top": 0,
+              "range": 64,
+              "overscrollY": "contain",
+              "column": true
+            },
+            {
+              "name": "column:assigned",
+              "top": 0,
+              "range": 613,
+              "overscrollY": "contain",
+              "column": true
+            },
+            {
+              "name": "column:done",
+              "top": 0,
+              "range": 1063,
+              "overscrollY": "contain",
+              "column": true
+            }
+          ],
+          "seat": [
+            0,
+            52,
+            430,
+            66
+          ],
+          "tabs": [
+            0,
+            118,
+            430,
+            49
+          ],
+          "dock": [
+            0,
+            0,
+            430,
+            52
+          ],
+          "scrollY": 0
+        },
+        "after": {
+          "scrollers": [
+            {
+              "name": "column:inbox",
+              "top": 0,
+              "range": 64,
+              "overscrollY": "contain",
+              "column": true
+            },
+            {
+              "name": "column:assigned",
+              "top": 0,
+              "range": 613,
+              "overscrollY": "contain",
+              "column": true
+            },
+            {
+              "name": "column:done",
+              "top": 0,
+              "range": 1063,
+              "overscrollY": "contain",
+              "column": true
+            }
+          ],
+          "seat": [
+            0,
+            52,
+            430,
+            66
+          ],
+          "tabs": [
+            0,
+            118,
+            430,
+            49
+          ],
+          "dock": [
+            0,
+            0,
+            430,
+            52
+          ],
+          "scrollY": 0
+        }
+      },
+      "end": {
+        "before": {
+          "scrollers": [
+            {
+              "name": "column:inbox",
+              "top": 0,
+              "range": 64,
+              "overscrollY": "contain",
+              "column": true
+            },
+            {
+              "name": "column:assigned",
+              "top": 613,
+              "range": 613,
+              "overscrollY": "contain",
+              "column": true
+            },
+            {
+              "name": "column:done",
+              "top": 0,
+              "range": 1063,
+              "overscrollY": "contain",
+              "column": true
+            }
+          ],
+          "seat": [
+            0,
+            52,
+            430,
+            66
+          ],
+          "tabs": [
+            0,
+            118,
+            430,
+            49
+          ],
+          "dock": [
+            0,
+            0,
+            430,
+            52
+          ],
+          "scrollY": 0
+        },
+        "after": {
+          "scrollers": [
+            {
+              "name": "column:inbox",
+              "top": 0,
+              "range": 64,
+              "overscrollY": "contain",
+              "column": true
+            },
+            {
+              "name": "column:assigned",
+              "top": 613,
+              "range": 613,
+              "overscrollY": "contain",
+              "column": true
+            },
+            {
+              "name": "column:done",
+              "top": 0,
+              "range": 1063,
+              "overscrollY": "contain",
+              "column": true
+            }
+          ],
+          "seat": [
+            0,
+            52,
+            430,
+            66
+          ],
+          "tabs": [
+            0,
+            118,
+            430,
+            49
+          ],
+          "dock": [
+            0,
+            0,
+            430,
+            52
+          ],
+          "scrollY": 0
+        }
+      }
+    }
+  ],
+  "failures": []
+}
