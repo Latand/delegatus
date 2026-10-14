@@ -107,7 +107,10 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
   for (const seat of authorized) if (seat.project) add(seat.project);
   if (caller) add(caller);
   for (const key of extraKeys) add(key);
-  for (const row of last?.projectCatalog ?? []) if (row.projectRoot) index(path.basename(row.projectRoot), row.project);
+  for (const row of last?.projectCatalog ?? []) if (row.projectRoot) {
+    index(path.basename(row.projectRoot), row.project);
+    identify(normalizeProjectName(path.resolve(row.projectRoot)), row.project);
+  }
   for (const [key, remote] of Object.entries(recordedProjectRemotes())) {
     if (!labels.has(canonical(key))) continue;
     const parts = remote.replace(/\.git$/u, "").split("/");
@@ -139,7 +142,11 @@ export class ProjectNameRefusal extends Error {
 export function resolveNamedProject(named: string, directory: NamedProjectDirectory, requireActiveSeat = false): string {
   const requested = named.trim();
   const folded = requested.toLowerCase();
-  const identity = [...(directory.identities.get(folded) ?? [])].sort();
+  const normalized = normalizeProjectName(folded);
+  const identity = [...new Set([
+    ...(directory.identities.get(folded) ?? []),
+    ...(normalized ? directory.identities.get(normalized) ?? [] : []),
+  ])].sort();
   const namedCandidates = [...(directory.names.get(folded) ?? [])];
   const identityCollision = identity.length > 0 && namedCandidates.some(project => !identity.includes(project));
   const seatedNames = namedCandidates.filter(project => directory.active.has(project));
@@ -154,20 +161,7 @@ export function resolveNamedProject(named: string, directory: NamedProjectDirect
     });
   }
   const all = namedCandidates.sort();
-  let candidatesForName = all;
-  if (!candidatesForName.length) {
-    const wanted = normalizeProjectName(folded);
-    let specificity = 0;
-    const matched = new Set<string>();
-    for (const [name, projects] of directory.names) {
-      const candidate = normalizeProjectName(name);
-      if (candidate && (wanted === candidate || wanted.endsWith(`-${candidate}`))) {
-        if (candidate.length > specificity) { matched.clear(); specificity = candidate.length; }
-        if (candidate.length === specificity) for (const project of projects) matched.add(project);
-      }
-    }
-    candidatesForName = [...matched].sort();
-  }
+  const candidatesForName = all;
   const seated = candidatesForName.filter(key => directory.active.has(key));
   const candidates = seated.length ? seated : candidatesForName;
   const details = { outcome: "not-executed", evidence: "project-resolution", nextAction: "new-request-permitted", retryable: false };

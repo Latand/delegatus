@@ -255,6 +255,44 @@ test("project names resolve from the real catalog and ambiguity never widens a v
   replaceConversationCatalog([]);
 });
 
+test("an unknown qualified namesake cannot read tasks or send a voice request to its seat", async () => {
+  const { replaceConversationCatalog } = await import("@/lib/scanner/conversationCatalog");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const { CompanionAdmission } = await import("./admission");
+  const { CompanionStorage } = await import("./storage");
+  const { runCompanionTool } = await import("./tools");
+  const at = "2026-10-10T12:00:00.000Z";
+  replaceConversationCatalog(["known-orion", "bound-project"].map(project => ({
+    path: path.join(root, `${project}.jsonl`), root: "claude-projects" as const, name: "fixture", project,
+    projectName: project === "known-orion" ? "Orion" : "Bound project", title: "Fixture", firstPrompt: "", engine: "claude" as const,
+    kind: "session" as const, fmt: "claude" as const, mtime: 0, size: 0,
+  })));
+  saveTasks([{ id: "foreign-orion-task", project: "known-orion", text: "Foreign task content", status: "inbox", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at }]);
+  beginOrchestratorSeatIntent({ project: "known-orion", mandate: "Own this board", clientRequestId: "seat-known-orion", mode: "spawn", promptVersion: null });
+  completeOrchestratorSeatIntent({ project: "known-orion", clientRequestId: "seat-known-orion", conversationId: "conversation_known_orion", path: null });
+  const recipientProjects: string[] = [];
+  const sent: string[] = [];
+  const admission = new CompanionAdmission(new CompanionStorage(), {
+    recipient: project => { recipientProjects.push(project); return { project, conversationId: "conversation_known_orion", seatEpoch: 1, engine: "claude" }; },
+    reports: () => [], send: async ({ text }) => { sent.push(text); return { status: "delivered", operationId: "delivery-known-orion" }; },
+  });
+  const session = admission.create({ project: "bound-project", locale: "en", authority: "live-model" });
+  const reads = new CompanionBoardReads(createCompanionBoardReadPaths());
+  const context = { project: "bound-project", sessionId: session.id, callId: "unknown-qualified", delegationId: "unknown-qualified", admission, reads, endConversation: () => undefined };
+  try {
+    await expect(runCompanionTool(context, "list_tasks", { project: "other-owner/orion", statuses: null, openOnly: null }))
+      .rejects.toThrow("PROJECT_REFUSED");
+    await expect(runCompanionTool(context, "request_orchestrator_delegation", {
+      project: "other-owner/orion", instruction: "Review the foreign task", pending_request: null, confirmation_reason: null, asked_again: null,
+    })).rejects.toThrow("PROJECT_REFUSED");
+    expect(recipientProjects).toEqual([]);
+    expect(sent).toEqual([]);
+  } finally {
+    admission.retire(session.id);
+    replaceConversationCatalog([]);
+  }
+});
+
 
 test("activity pages retain every observed agent and disclose pending evidence without claiming a complete total", async () => {
   const { selectConversationEntries } = await import("@/lib/lifecycle/inventorySelection");
