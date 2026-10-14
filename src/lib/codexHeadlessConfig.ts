@@ -129,7 +129,7 @@ export function headlessCodexThreadConfig(
            carries this agent's capability instead. */
         ...(name === "viewer" && viewerStdio
           ? {
-            env: { ...viewerMcpServerEnv(), ...record(record(server)?.env) },
+            env: viewerMcpServerEnv(process.env, record(record(server)?.env) ?? {}),
             /* Codex filters the stdio child's environment. Forward the
                app-server's current launch capability by name so the launcher
                writes the receipt's liveness record, including after re-host.

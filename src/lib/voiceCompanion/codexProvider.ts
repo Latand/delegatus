@@ -15,7 +15,7 @@ import { mapAppServerRateLimits } from "@/lib/limits";
 import { CodexAppServerClient, codexAccountBinary, type AppServerNotification, type AppServerRateLimits, type CodexAppServerChild } from "@/lib/accounts/codexAppServer";
 import type { CompanionPlan, Locale, PlanWindow } from "./contract";
 import { jsonObject, type LiveConnection, type LiveProvider, type LiveToolHandler } from "./provider";
-import { BACKEND_INSTRUCTIONS, LIVE_BACKEND_MODEL, liveInstructions } from "./sessionConfig";
+import { BACKEND_INSTRUCTIONS, LIVE_BACKEND_MODEL, interfaceLanguage, liveInstructions } from "./sessionConfig";
 import { COMPANION_TOOL_REGISTRY } from "./tools";
 import { CodexVoiceTranscript } from "./codexTranscript";
 import { VOICE_IMAGES, type SpeechReadResult } from "./boardReads";
@@ -59,8 +59,8 @@ export const CODEX_VOICE_ARGS = ["-c", "cli_auth_credentials_store=file", "-c", 
 export function codexVoiceEnvironment(home: string, source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { ...Object.fromEntries(Object.entries(source).filter(([name]) => !/_API_KEY$/i.test(name) && !/^(OPENAI_|CHATGPT_)/i.test(name))), NODE_ENV: source.NODE_ENV, CODEX_HOME: home };
 }
-export function codexVoiceThread(cwd: string, compactPrompt = true, memory = "") {
-  const instructions = BACKEND_INSTRUCTIONS.replace("whose answer is under Reads earlier in this call", "whose answer is in this thread") + (memory ? `\n\n${memory}` : "");
+export function codexVoiceThread(cwd: string, compactPrompt = true, memory = "", locale: Locale = "en") {
+  const instructions = BACKEND_INSTRUCTIONS.replace("whose answer is under Reads earlier in this call", "whose answer is in this thread") + `\n\n${interfaceLanguage(locale)}` + (memory ? `\n\n${memory}` : "");
   return { model: LIVE_BACKEND_MODEL, cwd, approvalPolicy: "never", sandbox: "read-only", ephemeral: true,
     dynamicTools: COMPANION_TOOL_REGISTRY.map(({ name, description, parameters }) => ({ type: "function", name, description, inputSchema: parameters })),
     developerInstructions: instructions, ...(compactPrompt ? { environments: [], baseInstructions: instructions } : {}) };
@@ -133,7 +133,7 @@ export class CodexLiveProvider implements LiveProvider {
         } });
       if ((await client.readAccount()).account?.type !== "chatgpt") throw new CodexVoiceError("CODEX_AUTH_REQUIRED");
       // The window the call starts from is read beside the thread, so it costs the start no time.
-      const [started, reading] = await Promise.all([client.request("thread/start", codexVoiceThread(cwd, this.options.compactPrompt, memory)).then(jsonObject),
+      const [started, reading] = await Promise.all([client.request("thread/start", codexVoiceThread(cwd, this.options.compactPrompt, memory, locale)).then(jsonObject),
         client.request("account/rateLimits/read").then(jsonObject, () => null)]);
       const id = jsonObject(started?.thread)?.id;
       if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(id)) throw new CodexVoiceError("CODEX_UNSUPPORTED");

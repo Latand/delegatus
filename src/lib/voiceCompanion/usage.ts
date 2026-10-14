@@ -6,7 +6,7 @@ import { jsonObject } from "./provider";
  * https://developers.openai.com/api/docs/models/gpt-live-1
  * https://developers.openai.com/api/docs/models/gpt-6-luna */
 export const LIVE_USD_PER_SECOND = 0.05 / 60;
-export const BACKEND_MAX_OUTPUT_TOKENS = 512;
+export const BACKEND_MAX_OUTPUT_TOKENS = 2_048;
 /** The dearest one backend response can be: the model's whole context window
  * at the large-input rate for a cache write, plus every allowed output token. */
 export const BACKEND_RESPONSE_RESERVE_USD = 1_050_000 * 0.25 / 1_000_000 + BACKEND_MAX_OUTPUT_TOKENS * 0.75 / 1_000_000;

@@ -280,3 +280,25 @@ test("a key that cannot travel in a header still counts as absent", () => {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test("a missing control credential returns actionable authentication guidance", async () => {
+  const viewer = Bun.serve({ hostname: "127.0.0.1", port: 0,
+    fetch: () => Response.json({ error: "access denied: key required" }, { status: 403 }),
+  });
+  const names = ["LLV_VIEWER_CONTROL_URL", "LLV_VIEWER_CONTROL_TOKEN", "LLV_TOKEN"] as const;
+  const saved = names.map(name => process.env[name]);
+  process.env.LLV_VIEWER_CONTROL_URL = viewer.url.origin;
+  delete process.env.LLV_VIEWER_CONTROL_TOKEN;
+  delete process.env.LLV_TOKEN;
+  try {
+    const { viewerMcpBindings } = await import("./bindings");
+    await expect(viewerMcpBindings().deployment_status({})).rejects.toThrow("Configure LLV_VIEWER_CONTROL_TOKEN");
+  } finally {
+    viewer.stop(true);
+    names.forEach((name, index) => {
+      if (saved[index] === undefined) delete process.env[name];
+      else process.env[name] = saved[index];
+    });
+  }
+});

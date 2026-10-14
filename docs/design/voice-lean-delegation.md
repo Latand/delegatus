@@ -27,7 +27,7 @@ Delivery also has a code-proven loss window: `admission.ts:479` and `:482` advan
 
 1. **Read before sending.** At `sessionConfig.ts:28`, `:46`, distinguish backend reads from seat sends. Answer capabilities from the registry and status from focused reads/reports. At `liveSession.ts:284`, supply the frozen current turn, relevant structured observations and pending asks, retaining necessary referents and confirmation context. Replace the failure at `:345` with one bounded synthesis response after the fourth tool round, with tools disabled; name any remaining uncertainty.
 
-2. **Bound one ask.** At `tools.ts:72`, `:73`, `gate.ts:163` and `liveGate.ts:17`, enforce a shared 400-Unicode-scalar limit. Reject overflow for concise recomposition; never slice the task. Send one current unanswered question or work item in the operator's words/language. Answer an accompanying status question through reads. Independent work requests get separate bounded asks. Keep correlation trailers server-owned at `admission.ts:289`, `:339`.
+2. **Bound one ask.** The current contract in `tools.ts`, `gate.ts` and `liveGate.ts` permits up to 4,000 Unicode scalars. The voice writes one self-contained task in its own words and the operator's interface language, with the action, expected outcome and resolved context. It never forwards the transcript as the task, and it adds no scope. Overflow is refused for recomposition; the task is never sliced. Answer an accompanying status question through reads. Independent work requests get separate bounded tasks. Keep correlation trailers server-owned at `admission.ts:289`, `:339`.
 
 3. **Retain pending questions.** Extend proposals at `storage.ts:25` with answer state; retain project, operator source, short ask and correlation key. Supply pending references to both models. The existing backend resolves rephrasing to a held reference; `admission.ts:270` validates its session/project and returns `awaiting_report` without sending. Keep normalized-text comparison as a fallback. `asked_again` cannot bypass pending, queued or uncertain delivery. A genuinely new question passes; ambiguity gets one clarification. At `admission.ts:447`, settle only on a correlated answer or proven delivery failure. Progress, unrelated reports, time and confirmation expiry leave it pending. The backend identifies answer coverage from complete report data; admission validates the question/report references. Report class alone cannot establish an answer. Add waiting speech at `delegationOutcome.ts:5`, `tools.ts:36`. Preserve state across restart/project switches/seat succession.
 
@@ -68,3 +68,41 @@ Use the existing backing model to resolve pending question references, existing 
 ## Deferred — not currently justified
 
 Embedding services, a new workflow/queue framework, larger retrieval budgets, model replacement, capability expansion, backend-switch UI changes and redesign of the older bridge hook. The required work fits existing proposals, report storage, backing models and provider adapters. This stage publishes only the authorized note; it introduces no UI variants or prototype media.
+
+
+## Amendment, 2026-10-14: compose a complete task
+
+The operator asked that Voice Delegatus write the whole task in its own words
+and set its limit to 4,000 characters. This amendment records the accepted
+composition and length rule. Earlier observations below describe the
+then-current implementation and are historical.
+
+Every send is one self-contained task: what to do and why, the expected
+outcome, and the necessary card, PR, issue or earlier point resolved from the
+call's reads and conversation. The voice uses the operator's interface
+language unless asked otherwise. It never forwards raw speech as the task;
+one attributed sentence at the end may quote the operator. Every part comes
+from the operator's request or a read. Earlier turns resolve references, and
+an earlier request is included only when the latest turn asks to send it.
+Unresolved references are stated, and an unclear task gets a short question.
+Independent tasks remain separate. No steps, constraints or deadlines are added.
+
+Only project work and questions about it that reads cannot answer reach the
+orchestrator. General knowledge, chat, riddles, poems, translations and advice
+are answered by the voice or declined, even on an explicit request to send
+them. Possible work for another project gets a project clarification.
+
+The task cap is 4,000 Unicode scalars. It allows the action, outcome and
+resolved context to travel together; length alone cannot prevent bundling.
+A 6,000-scalar tool envelope lets the handler explain overflow and ask for
+recomposition. Admission events and delegation cards retain the whole task,
+including emoji. Compact 400-scalar task references keep pending handles in
+backend context and report reads. The API backend has 2,048 output tokens to
+write a task of this length; spoken answers keep their existing limit.
+
+Explicit-send admission, pending-request handles, explicit renewal,
+confirmation and withdrawal, project fences, private-history rules, and report
+correlation retain their existing contracts. The simulator keeps its own gate.
+An already-open page needs a reload to use the raised confirmation-card cap.
+Semantic composition and project relevance remain backend model judgments;
+these tests pin their instructions and exercise delivery with a fake provider.

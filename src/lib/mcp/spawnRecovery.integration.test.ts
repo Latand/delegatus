@@ -31,6 +31,7 @@ import {
 import {
   createMcpToolService,
   McpDispatchVerdictError,
+  McpDispatchUncertainError,
   MemoryMcpReceiptStore,
   SqliteMcpReceiptStore,
   type McpRecoveryReceiptStore,
@@ -587,5 +588,80 @@ test("a reviewer stranded for missing reviews recovers to NOT_EXECUTED on its ex
     viewer.stop(true);
     if (previousControlUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
     else process.env.LLV_VIEWER_CONTROL_URL = previousControlUrl;
+  }
+});
+
+
+test.each(["hello", "hello\n", "  hello\r\n  "])("original-key spawn recovery replays the normalized prompt %j", async prompt => {
+  const cwd = fs.mkdtempSync(path.join(sandbox, "normalized-recovery-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  let dispatches = 0;
+  let authorityReadable = true;
+  const domain: ViewerMcpDomainDependencies = {
+    ...domainDependencies(registry),
+    attentionAuthority: () => {
+      if (!authorityReadable) throw new Error("caller authority unavailable");
+      return { kind: "root", conversationId: null, role: null };
+    },
+  };
+  const control: ViewerControlDependencies = {
+    post: async () => { throw new Error("unexpected control call"); },
+    dispatch: async (_pathname, body, headers, context) => {
+      dispatches += 1;
+      if (context?.dispatch) context.dispatch.attempted = true;
+      const response = await executeSpawnRequest(routeRequest("/api/spawn", body, headers), spawnDependencies(registry, cwd));
+      expect(response.status).toBe(202);
+      throw new McpDispatchUncertainError("launch accepted but its response was lost");
+    },
+  };
+  try {
+    const live = service(registry, new MemoryMcpReceiptStore(), control, domain);
+    const args = { clientRequestId: "normalized-spawn-recovery", engine: "codex", cwd, prompt, title: "Normalize launch recovery" };
+    await live.callTool("spawn_agent", args);
+    const receipt = Object.values(registry.readOnlySnapshot().receipts)[0]!;
+    expect(receipt.launchDisplay?.prompt).toBe("hello");
+    registry.failSpawn(receipt.launchId, "fixture launch ended");
+    authorityReadable = false;
+    const unavailable = await live.callTool("spawn_agent", { ...args, recoveryOnly: true });
+    expect(unavailable).toMatchObject({ ok: false, code: "caller_unidentified", retryable: false });
+    expect(unavailable).not.toHaveProperty("launchId");
+    expect(unavailable).not.toHaveProperty("details.nextAction");
+    authorityReadable = true;
+    expect(await live.callTool("spawn_agent", { ...args, recoveryOnly: true })).toMatchObject({
+      ok: true, replayed: true, outcome: "settled", launchId: receipt.launchId, conversationId: receipt.conversationId,
+    });
+    expect(dispatches).toBe(1);
+  } finally {
+    registry.close();
+  }
+});
+
+test.each(["owner", "cwd", "prompt", "authority"])("spawn recovery identifies a genuine %s mismatch", async field => {
+  const cwd = fs.mkdtempSync(path.join(sandbox, "mismatch-recovery-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  try {
+    const args = { clientRequestId: "field-mismatch-recovery", engine: "codex", cwd, prompt: "hello", title: "Inspect recovery mismatch" };
+    const domain = { ...domainDependencies(registry), attentionAuthority: () => ({ kind: "root" as const, conversationId: null, role: null }) };
+    const tools = viewerMcpRecoverableTools({ ...domain,
+      registrySnapshot: () => {
+        const snapshot = registry.readOnlySnapshot();
+        return field === "owner" ? { ...snapshot, receipts: Object.fromEntries(Object.entries(snapshot.receipts).map(([key, receipt]) =>
+          [key, { ...receipt, parentConversationId: "conversation_original" }])) } : snapshot;
+      },
+    });
+    const input = await tools.spawn_agent!.bindForRecovery!(args);
+    const response = await executeSpawnRequest(routeRequest("/api/spawn", {
+      ...args, clientAttemptId: input.downstreamKey,
+    }), spawnDependencies(registry, cwd));
+    expect(response.status).toBe(202);
+    const binding: McpRequestBinding = { ...input, version: 1, toolName: "spawn_agent", clientRequestId: args.clientRequestId,
+      owner: { pid: process.pid, startIdentity: null }, claimedAt: new Date().toISOString() };
+    if (field === "owner") binding.caller = { kind: "worker", conversationId: "conversation_other", project: null };
+    if (field === "authority") binding.caller = { kind: "unidentified", conversationId: null, project: null };
+    if (field === "cwd") binding.target.identity = path.join(cwd, "other");
+    const recovered = await tools.spawn_agent!.recover(binding, { legacy: false, args: field === "prompt" ? { ...args, prompt: "different" } : args });
+    expect(recovered).toMatchObject({ outcome: "unknown", ids: {}, reason: expect.stringContaining(field), facts: { nextAction: "correct-request" } });
+  } finally {
+    registry.close();
   }
 });

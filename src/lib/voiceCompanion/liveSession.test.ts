@@ -1469,6 +1469,61 @@ test("refused provider arguments scrub parameter names as well as values before 
   } finally { await f.service.close(s.sessionId); }
 });
 
+test("4,000-scalar tasks survive literal and Unicode-escaped JSON arguments; decoded overflow is refused", async () => {
+  const prefix = "Перевір задачу. 🙂";
+  const task = prefix + "ї".repeat(4_000 - [...prefix].length);
+  expect([...task]).toHaveLength(4_000);
+  const escaped = [...task].map(char => {
+    const point = char.codePointAt(0)!;
+    if (point <= 0x7f) return char;
+    if (point <= 0xffff) return `\\u${point.toString(16).padStart(4, "0")}`;
+    const value = point - 0x10000;
+    return `\\u${(0xd800 + (value >> 10)).toString(16)}\\u${(0xdc00 + (value & 0x3ff)).toString(16)}`;
+  }).join("");
+
+  for (const [label, argumentsText] of [["literal", JSON.stringify({ instruction: task })], ["escaped", `{"instruction":"${escaped}"}`]] as const) {
+    const f = fixture();
+    f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output")
+      ? backendResponse(`resp_${label}_${index}`, [message("The request was sent.")])
+      : backendResponse(`resp_${label}_${index}`, [{ ...functionCall(`call_${label}`, "request_orchestrator_delegation"), arguments: argumentsText }]);
+    const session = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=0" });
+    try {
+      f.provider.replay(session.providerId, delegationCreated(`delegation_${label}`, 1));
+      await f.service.drain(session.sessionId);
+      expect(f.sends()).toBe(1);
+      const [proposal] = Object.values(f.admission.session(session.sessionId).proposals);
+      expect(proposal.proposal.instruction).toBe(task);
+    } finally { await f.service.close(session.sessionId); }
+  }
+
+  const f = fixture();
+  const overflow = task + "ї";
+  f.provider.responder = calling(functionCall("decoded-overflow", "request_orchestrator_delegation", { instruction: overflow }));
+  const session = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=0" });
+  try {
+    f.provider.replay(session.providerId, delegationCreated("decoded-overflow", 2));
+    await f.service.drain(session.sessionId);
+    expect(f.sends()).toBe(0);
+    const result = JSON.parse(f.provider.requests[1].input.find(item => item.type === "function_call_output")!.output as string);
+    expect(result).toMatchObject({ status: "too_long" });
+    expect(result.speech).toContain("Nothing was sent");
+  } finally { await f.service.close(session.sessionId); }
+});
+
+test("tool argument payloads beyond the independent wire bound produce an explicit refusal", async () => {
+  const f = fixture();
+  f.provider.responder = (_request, index) => backendResponse(`oversized_${index}`, [{
+    ...functionCall("oversized", "request_orchestrator_delegation"), arguments: `{"instruction":"${"ї".repeat(64_001)}"}`,
+  }]);
+  const session = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=0" });
+  try {
+    f.provider.replay(session.providerId, delegationCreated("oversized-wire", 3));
+    await f.service.drain(session.sessionId);
+    expect(f.sends()).toBe(0);
+    expect(spoken(f).map(row => row.content).join(" ")).toContain("Запит не надіслано");
+  } finally { await f.service.close(session.sessionId); }
+});
+
 for (const locale of ["en","uk"] as const) test(`${locale} starting and switched project labels are scrubbed before backend context and echoed speech`, async () => {
   const key = ["Zr9QvB","label","private","0123456789abcdef"].join("-");
   const privatePath = ["","home","fixture-private","label.txt"].join("/");
@@ -1945,4 +2000,37 @@ test("an unreadable project directory refuses minting without a session or reser
     expect(f.provider.sessions).toHaveLength(0);
     expect(Object.values(f.storage.read().sessions)).toHaveLength(0);
   } finally { directory.mockRestore(); }
+});
+
+
+test("composed long tasks arrive whole and preserve pending handles, tool arguments and locale", async () => {
+  const f = fixture();
+  const session = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=0" });
+  try {
+    const tasks = ["А", "Б", "В"].map(letter => letter + (letter === "В" ? "🎙" : "ї").repeat(3999));
+    for (const [index, instruction] of tasks.entries()) {
+      f.provider.responder = calling(functionCall(`long-call-${index}`, "request_orchestrator_delegation", { instruction }));
+      f.provider.replay(session.providerId, said(`Передай задачу ${index}.`, index * 1000), delegationCreated(`long-turn-${index}`, index * 1000 + 600));
+      await f.service.drain(session.sessionId);
+      const held = Object.values(f.admission.session(session.sessionId).proposals);
+      expect(held.map(row => row.proposal.instruction)).toEqual(tasks.slice(0, index + 1));
+    }
+    f.provider.responder = calling(functionCall("long-repeat", "request_orchestrator_delegation", { instruction: "Перша задача", pending_request: "r1" }));
+    f.provider.replay(session.providerId, said("Як там перша задача?", 4000), delegationCreated("long-repeat-turn", 4600));
+    await f.service.drain(session.sessionId);
+    const request = f.provider.requests.at(-1)!;
+    const context = String(request.input.find(item => item.role === "user")!.content);
+    for (const handle of ["r1", "r2", "r3"]) expect(context).toContain(`- ${handle},`);
+    expect(f.sends()).toBe(3);
+    expect(request.max_output_tokens).toBe(2048);
+    expect(request.instructions).toContain("The operator's interface language is Ukrainian.");
+    const entries = f.service.transcriptRecord(session.sessionId).entries.filter(entry => entry.kind === "tool");
+    for (const [index, instruction] of tasks.entries()) {
+      const entry = entries.find(entry => entry.data.callId === `long-call-${index}`)!;
+      expect(JSON.parse(String(entry.data.arguments))).toEqual({ instruction });
+    }
+    const reports = f.admission.callReports(session.sessionId);
+    expect(reports.requests.map(row => row.request)).toEqual(["r1", "r2", "r3"]);
+    expect(JSON.stringify(reports).length).toBeLessThan(3000);
+  } finally { await f.service.close(session.sessionId); }
 });
