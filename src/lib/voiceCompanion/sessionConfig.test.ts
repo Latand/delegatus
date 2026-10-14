@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { BACKEND_INSTRUCTIONS, backendRequest, COMPANION_TOOLS, LIVE_API_VERSION, LIVE_BACKEND_MODEL, LIVE_MODEL, liveSessionConfiguration, PROTOTYPE_BACKEND_RULES, PROTOTYPE_LIVE_RULES } from "./sessionConfig";
 import { z } from "zod";
 import { VOICE_ASK_MAX_CHARS } from "./liveGate";
-import { codexVoiceThread } from "./codexProvider";
+import { codexVoiceStart, codexVoiceThread } from "./codexProvider";
 
 // Official DataChannelConfigParam / ServerEventSelectorParam, verified on
 // 2026-10-06. Response wrappers require the nested selector; other events forbid it.
@@ -103,7 +103,6 @@ test("both voice paths require prototype evidence and stop reading on a hand-off
   }
 });
 
-
 test("Telegram history reads directly and never hands private content to the orchestrator", () => {
   for (const locale of ["en", "uk"] as const) {
     expect(liveSessionConfiguration(locale).instructions).toContain("Telegram groups");
@@ -112,4 +111,11 @@ test("Telegram history reads directly and never hands private content to the orc
   expect(BACKEND_INSTRUCTIONS).toContain("read relay_owner_history directly");
   expect(BACKEND_INSTRUCTIONS).toContain("Do not send history questions to the orchestrator");
   expect(BACKEND_INSTRUCTIONS).toContain("Never put message text, names, usernames, chat titles or chat ids");
+});
+
+test("both native voice transports receive the shared speech language restriction", () => {
+  for (const locale of ["uk", "en"] as const) {
+    expect(liveSessionConfiguration(locale).instructions).toContain("Speech recognition languages: uk, ru, en.");
+    expect(codexVoiceStart("fixture", locale, "v=0").prompt).toContain("Speech recognition languages: uk, ru, en.");
+  }
 });

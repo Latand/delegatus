@@ -33,15 +33,19 @@ describe("Soniox realtime start request", () => {
       sample_rate: 48_000,
       num_channels: 1,
       enable_endpoint_detection: true,
+      language_hints: ["uk", "ru", "en"],
+      language_hints_strict: true,
+      enable_language_identification: true,
     });
   });
 
-  test("passes language hints only when there are some, and rounds a fractional rate", () => {
-    expect(sonioxStartRequest({ token: "t", sampleRate: 44_100.4, languageHints: ["en", "uk"] })).toMatchObject({
+  test("keeps the allowed set despite caller hints, and rounds a fractional rate", () => {
+    expect(sonioxStartRequest({ token: "t", sampleRate: 44_100.4, languageHints: ["be", "fr"] })).toMatchObject({
       sample_rate: 44_100,
-      language_hints: ["en", "uk"],
+      language_hints: ["uk", "ru", "en"],
+      language_hints_strict: true,
     });
-    expect(sonioxStartRequest({ token: "t", sampleRate: 16_000, languageHints: [] })).not.toHaveProperty("language_hints");
+    expect(sonioxStartRequest({ token: "t", sampleRate: 16_000, languageHints: [] })).toHaveProperty("language_hints", ["uk", "ru", "en"]);
   });
 });
 
@@ -155,4 +159,17 @@ describe("Soniox realtime frame folding", () => {
     )!;
     expect(mixed.liveText).toBe("ok");
   });
+});
+
+test("a live provider language outside the allowed set retains text with an allowed tag", () => {
+  const update = applySonioxFrame(sonioxLiveInitialState(), JSON.stringify({
+    tokens: [{ text: "мовлення", is_final: true, language: "be" }, { text: "<end>", is_final: true }],
+  }));
+  expect(update).toMatchObject({ commit: "мовлення", language: "uk" });
+});
+
+test("a language tag survives final tokens arriving before their endpoint", () => {
+  const first = applySonioxFrame(sonioxLiveInitialState(), JSON.stringify({ tokens: [{ text: "speech", is_final: true, language: "be" }] }))!;
+  const endpoint = applySonioxFrame(first.state, frame([{ text: "<end>", is_final: true }]))!;
+  expect(endpoint).toMatchObject({ commit: "speech", language: "uk" });
 });
