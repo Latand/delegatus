@@ -100,7 +100,7 @@ const messageSchema = z.object({
     tags: z.array(boundedString(32)).max(4).optional(),
   }),
   sent_at: time,
-  text: boundedString(16000),
+  text: boundedString(20000),
   reply_to: id.nullable(),
 });
 // requester_context (relay.md §A.8): who asked, the chat's short-term memory
@@ -144,6 +144,14 @@ export const inputSchema = z.object({
       { message: "duplicate tool name" },
     )
     .optional(),
+}).superRefine((input, context) => {
+  for (const [index, message] of input.conversation.entries()) {
+    const prototypeReply = input.requester?.is_owner === true && input.requester.is_anonymous_admin === false
+      && message.id === input.respond_to && message.author.key === input.requester.key && !message.author.self
+      && /#proto-[a-f0-9]{8}\b/i.test(message.text.replace(/\\([#-])/g, "$1"));
+    if ([...message.text].length > 16000 && !prototypeReply) context.addIssue({ code: "custom",
+      path: ["conversation", index, "text"], message: "expected at most 16000 Unicode code points" });
+  }
 });
 const chatKey = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/);
 export const requestSchema = z.object({

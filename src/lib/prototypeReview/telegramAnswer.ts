@@ -2,8 +2,9 @@ import { loadTasks } from "@/lib/tasks/store";
 import { runsElsewhere } from "@/lib/links/linked";
 import { prototypeReviewSummary } from "./model";
 import { normalizePrototypeAnswers, recommendedAnswers } from "./questions";
+import { loadSeatRounds } from "./seatRounds";
 import type { BoardTask } from "@/lib/tasks/types";
-import type { DecidePrototypeInput, PrototypeReviewRound } from "./types";
+import type { DecidePrototypeInput, PrototypeAnswer, PrototypeReviewRound } from "./types";
 
 export function prototypeReference(round: Pick<PrototypeReviewRound, "id">): string {
   return `#proto-${round.id.slice(3, 11)}`;
@@ -29,61 +30,91 @@ export function normalizeTelegramAnswer(text: string): string {
 export type PrototypeAnswerMatch = { round: PrototypeReviewRound; input: DecidePrototypeInput; error?: never }
   | { round: PrototypeReviewRound; error: string; input?: never };
 
+/** Structured choices are conveniences; every remaining word is an owner note. */
 export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string): PrototypeAnswerMatch {
-  try {
-    const lines = normalizeTelegramAnswer(text).split("\n");
-    const index = lines.findIndex(line => /#proto-[a-f0-9]{8}\b/i.test(line));
-    if (index < 0) throw new Error("додайте посилання на раунд");
-    const refs = lines[index]!.match(/#proto-[a-f0-9]{8}\b/gi) ?? [];
-    if (refs.length !== 1 || refs[0]!.toLowerCase() !== prototypeReference(round)) throw new Error("вкажіть один раунд");
-    const segments = lines[index]!.split("·").slice(1).map(s => s.trim());
-    const comment = lines.filter((_, i) => i !== index).join("\n").trim();
-    let chosen: number[] = [];
-    let choicesSeen = false;
-    let answersSeen = false;
-    let skip: true | undefined;
-    let answers: DecidePrototypeInput["answers"];
-    for (const segment of segments) {
-      const choice = /^варіант(?:и)?\s+([1-9](?:\s*,\s*[1-9])*)$/i.exec(segment);
-      if (choice) {
-        if (choicesSeen) throw new Error("вкажіть варіанти один раз");
-        choicesSeen = true;
-        chosen = choice[1]!.split(",").map(n => Number(n.trim()));
-      } else if (/^відповіді\s+/i.test(segment)) {
-        if (answersSeen) throw new Error("вкажіть відповіді один раз");
-        answersSeen = true;
-        const raw = segment.replace(/^відповіді\s+/i, "");
-        if (/^рекомендовані$/i.test(raw)) skip = true;
-        else answers = raw.split(" ").map(token => {
-          const match = /^([1-7])([a-f]+\+?|\+)$/i.exec(token);
-          const q = match && round.questions?.[Number(match[1]) - 1];
-          if (!match || !q) throw new Error("використайте відповіді на кшталт 1a 2bc 3+");
-          return { questionId: q.id, options: [...match[2]!.replace("+", "").toLowerCase()].map(c => c.charCodeAt(0) - 97),
-            ...(match[2]!.includes("+") ? { other: true as const } : {}) };
-        });
-      } else throw new Error("невідомий фрагмент відповіді");
+  const originalReply = text.normalize("NFC").replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]^_`{|}~])/g, "$1");
+  const refs = originalReply.match(/#proto-[a-f0-9]{8}\b/gi) ?? [];
+  if (!refs.length) return { round, error: "додайте посилання на раунд" };
+  if (refs.length !== 1 || refs[0]!.toLowerCase() !== prototypeReference(round)) return { round, error: "вкажіть один раунд" };
+  if (originalReply.length > 20_000) return { round, error: "скоротіть відповідь до 20000 символів" };
+  const body = originalReply.replace(/^\s*Прототип «[^»]*»\s*/iu, "").replace(/#proto-[a-f0-9]{8}\b/i, "");
+  const questions = round.questions ?? [];
+  const chosen = new Set<number>();
+  const selected = new Map<string, PrototypeAnswer>();
+  const notes: string[] = [];
+  let recommended = false;
+  let reservation: string | undefined;
+  let notesBeforeRecommendation = 0;
+  for (const part of body.matchAll(/[^·\n]+/g)) {
+    const segment = part[0].trim();
+    if (!segment) continue;
+    const choice = /^варіант(?:и)?\s+([1-9](?:\s*,\s*[1-9])*)$/i.exec(segment);
+    if (choice && choice[1]!.split(",").every(n => round.variants.some(v => v.number === Number(n)))) {
+      choice[1]!.split(",").forEach(n => chosen.add(Number(n)));
+      continue;
     }
-    if (new Set(chosen).size !== chosen.length || chosen.some(n => !round.variants.some(v => v.number === n))
-      || (!chosen.length && !round.questions?.length)) throw new Error("оберіть оголошені варіанти");
-    if (round.questions?.length) {
-      if (!answersSeen) throw new Error("дайте відповідь на кожне питання");
-      if (!skip) answers = normalizePrototypeAnswers(round.questions, answers, comment);
-    } else if (answersSeen) throw new Error("цей раунд не має питань");
-    if (comment.length > 20_000) throw new Error("скоротіть коментар до 20000 символів");
-    return { round, input: { reviewId: round.id, chosen, comment, ...(skip ? { skip } : answers ? { answers } : {}) } };
-  } catch (error) { return { round, error: (error as Error).message }; }
+    if (recommended) { notes.push(segment); continue; }
+    let words = segment.replace(/^відповіді(?:\s+|$)/i, "");
+    const recommendation = /^рекомендовані(?=$|[^\p{L}\p{N}_])/iu.exec(words);
+    if (recommendation && questions.length) {
+      recommended = true;
+      words = words.slice(recommendation[0].length);
+      notesBeforeRecommendation = notes.length;
+      reservation = body.slice(part.index + part[0].indexOf(segment) + segment.length - words.length).replace(/^\r?\n/, "");
+      if (words.trim()) notes.push(words);
+      continue;
+    }
+    words = words.replace(/(?<!\S)([1-7])([a-f]+\+?|\+)(?!\S)/gi, (token, number: string, letters: string) => {
+      const q = questions[Number(number) - 1];
+      const options = [...letters.replace("+", "").toLowerCase()].map(c => c.charCodeAt(0) - 97);
+      if (!q || selected.has(q.id) || new Set(options).size !== options.length || options.some(i => i >= q.options.length)
+        || (!q.multiple && options.length > 1)) return token;
+      selected.set(q.id, { questionId: q.id, options, ...(letters.includes("+") ? { other: true as const } : {}) });
+      return "";
+    });
+    if (words.trim()) notes.push(words.trim());
+  }
+  const comment = reservation?.trim() && notes.length > notesBeforeRecommendation
+    ? [...notes.slice(0, notesBeforeRecommendation), reservation].join("\n") : notes.join("\n");
+  const answers = questions.map(q => selected.get(q.id) ?? (recommended ? recommendedAnswers([q])[0]! : { questionId: q.id, options: [], other: true as const }));
+  for (const note of notes) {
+    const numbered = [...note.matchAll(/(?<!\S)([1-7])\s*[:.)—–-]\s*/g)];
+    const named = questions.filter(q => note.toLowerCase().includes(q.text.toLowerCase()));
+    const parts = numbered.length ? numbered.map((match, i) => ({
+      question: Number(match[1]) - 1, text: note.slice(match.index, numbered[i + 1]?.index).trim(),
+    })) : named.length === 1 ? [{ question: questions.indexOf(named[0]!), text: note }] : [];
+    for (const part of parts) {
+      const answer = answers[part.question];
+      if (!answer) continue;
+      answer.customText = [answer.customText, part.text].filter(Boolean).join("\n");
+      if (!recommended) answer.other = true;
+    }
+  }
+  // A bare reference, or a bare Other token, still records exactly what was sent.
+  const needsCustom = !recommended && answers.some(a => a.other);
+  const input: DecidePrototypeInput = { reviewId: round.id, chosen: [...chosen], originalReply,
+    comment: comment || (needsCustom || (!questions.length && !chosen.size) ? originalReply : ""),
+    ...(questions.length ? recommended && !comment && !selected.size ? { skip: true as const } : { answers } : {}),
+    ...(recommended && comment ? { recommendedWithReservation: true as const } : {}) };
+  if (input.answers) input.answers = normalizePrototypeAnswers(questions, input.answers, input.comment, true);
+  return { round, input };
 }
 
 /** Match all retained rounds before filtering: a short-reference collision refuses identity.
     Only the runner's saved request record admits replay of an already recorded decision. */
-export function matchPrototypeAnswer(text: string, tasks: readonly BoardTask[] = loadTasks(), replayReviewId?: string): PrototypeAnswerMatch | null {
+export function matchPrototypeAnswer(text: string, tasks: readonly BoardTask[] = loadTasks(), replayReviewId?: string,
+  seatRounds: readonly PrototypeReviewRound[] = loadSeatRounds()): PrototypeAnswerMatch | null {
   const line = normalizeTelegramAnswer(text).split("\n").find(line => /#proto-[a-f0-9]{8}\b/i.test(line));
   const ref = line?.match(/#proto-[a-f0-9]{8}\b/i)?.[0].toLowerCase();
   if (!ref) return null;
-  const matches = tasks.flatMap(task => (task.prototypeReviews ?? []).filter(round => prototypeReference(round) === ref).map(round => ({ task, round })));
+  const matches: Array<{ task?: BoardTask; round: PrototypeReviewRound }> = [
+    ...tasks.flatMap(task => (task.prototypeReviews ?? []).filter(round => prototypeReference(round) === ref).map(round => ({ task, round }))),
+    ...seatRounds.filter(round => prototypeReference(round) === ref).map(round => ({ round })),
+  ];
   if (matches.length !== 1) return null;
   const { task, round } = matches[0]!;
   const replay = replayReviewId === round.id && !!round.decision;
-  if (runsElsewhere(task) || (!replay && prototypeReviewSummary(task.prototypeReviews ?? [])?.waitingReviewId !== round.id)) return null;
+  if (task ? runsElsewhere(task) || (!replay && prototypeReviewSummary(task.prototypeReviews ?? [])?.waitingReviewId !== round.id)
+    : !!round.decision && !replay) return null;
   return parsePrototypeAnswer(round, text);
 }

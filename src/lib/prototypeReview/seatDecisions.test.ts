@@ -15,6 +15,9 @@ import { prototypeWorld, type PrototypeWorld } from "./world";
 import type { OperatorDecisionsRead, PrototypeDecision, PrototypeReviewRead, PrototypeReviewRound, PublishPrototypeInput } from "./types";
 import { questions } from "./questionnaire.fixture";
 import { criticLane } from "./criticGate.fixture";
+import { matchPrototypeAnswer, prototypeCopyLine } from "./telegramAnswer";
+import { runPrototypeAnswer } from "@/lib/externalRelay/prototypeAnswer";
+import type { ExternalRelayAnswer } from "@/lib/externalRelay/protocol";
 
 /* docs/design/operator-decision-forms.md §2.1–§2.2: the project's seat asks
    without a task, through the same store, route and message. */
@@ -57,6 +60,26 @@ test("a project's seat asks without a task, and the round lives in its own colle
   /* The same clientRequestId replays the publication. */
   expect((await (await publishAs(seat, { clientRequestId: "seat-deploy", title: "Deploy now?", questions: one })).json()).reviewId).toBe(body.reviewId);
   expect(loadSeatRounds()).toHaveLength(1);
+});
+
+test("a Telegram owner reservation answers the asking seat's taskless round", async () => {
+  expect((await publishAs(seat, { clientRequestId: "seat-telegram", title: "Deploy now?", questions: one })).status).toBe(200);
+  const [round] = loadSeatRounds();
+  const words = `${prototypeCopyLine(round!)}, але 1: Спочатку покажіть результат.`;
+  const match = matchPrototypeAnswer(words)!;
+  expect(match.input?.recommendedWithReservation).toBe(true);
+  const { sent, delivery } = recorder();
+  const result = await runPrototypeAnswer(match, "owner-message", () => {}, { world: operator, delivery }).done;
+  expect((result.answer as ExternalRelayAnswer).text).toContain("рекомендовані з застереженням");
+  await settlePrototypeDeliveriesForTests();
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toContain("recommended with reservation");
+  expect(sent[0]).toContain("Owner's custom note:\n1: Спочатку покажіть результат.");
+  const saved = loadSeatRounds()[0]!.decision!;
+  expect(saved.originalReply).toBe(words);
+  expect(saved.delivery.conversationId).toBe("conversation_seat");
+  expect(matchPrototypeAnswer(words)).toBeNull();
+  expect(matchPrototypeAnswer(words, loadTasks(), round!.id)?.input?.originalReply).toBe(words);
 });
 
 test("only the project's designated seat may ask without a task, and only with questions", async () => {

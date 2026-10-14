@@ -195,6 +195,21 @@ test("input string bounds count Unicode code points", () => {
   }
 });
 
+test("a verified owner's addressed prototype reply reaches the parser up to its 20000-character cap", () => {
+  const words = `#proto-20fbd832 ${"я".repeat(20_000 - "#proto-20fbd832 ".length)}`;
+  const input = { ...contextRequest.input, requester: { ...contextRequest.input.requester!, is_owner: true },
+    conversation: [{ ...contextRequest.input.conversation[0]!, text: words }] };
+  const passes = (change: Partial<typeof input> = {}) => requestSchema.safeParse({ ...contextRequest, input: { ...input, ...change } }).success;
+  expect(passes()).toBe(true);
+  expect(passes({ conversation: [{ ...input.conversation[0]!, text: words + "я" }] })).toBe(false);
+  expect(passes({ requester: { ...input.requester, is_owner: false } })).toBe(false);
+  expect(passes({ requester: { ...input.requester, is_anonymous_admin: true } })).toBe(false);
+  expect(passes({ respond_to: "another-message" })).toBe(false);
+  expect(passes({ conversation: [{ ...input.conversation[0]!, author: { ...input.conversation[0]!.author, key: "other-owner" } }] })).toBe(false);
+  expect(passes({ conversation: [{ ...input.conversation[0]!, author: { ...input.conversation[0]!.author, self: true } }] })).toBe(false);
+  expect(passes({ conversation: [{ ...input.conversation[0]!, text: "я".repeat(20_000) }] })).toBe(false);
+});
+
 test("a descriptor allows a null or absent icon URL", () => {
   const descriptor = {
     protocol: "delegatus-relay", versions: [1], name: "Test", description: "Test",
