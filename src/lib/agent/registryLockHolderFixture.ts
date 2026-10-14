@@ -183,7 +183,7 @@ export async function whileRegistryWriterHeld<T>(
     const probe = loopProgressProbe();
     probe.arm(release ? async () => { await holder.release(); active = false; } : undefined);
     observed++;
-    return probe.run(() => withWriter.apply(this, args), true, release).catch(error => {
+    return probe.run(() => withWriter.apply(this, args), true, true).catch(error => {
       if (/wait timer lateness|no contended wait/.test(String(error))) progressFailures.push(error);
       throw error;
     });
@@ -209,7 +209,7 @@ export async function whileRegistryWriterHeld<T>(
     }
     return exec.apply(this, args);
   });
-  try { return { value: await probe.run(operation, false, release) }; }
+  try { return { value: await probe.run(operation, false, true) }; }
   finally {
     attempts.mockRestore();
     immediate.mockRestore();

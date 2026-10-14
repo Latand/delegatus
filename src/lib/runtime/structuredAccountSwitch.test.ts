@@ -6,7 +6,7 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 import { afterAll, expect, test } from "bun:test";
 
-import { advanceConversationMigration, drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migration/coordinator";
+import { advanceConversationMigration, reconcileMigrations } from "@/lib/accounts/migration/coordinator";
 import { emptyLaunchProfile, type ProviderReceipt, type SuccessorProviderPort } from "@/lib/accounts/migration/contracts";
 import { MigrationTargetUnavailableError } from "@/lib/accounts/migration/safeHistoryCopy";
 import { registerAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
@@ -692,7 +692,7 @@ test("a handover refused at its deadline writes nothing, says why, and the next 
     return conversationAfter;
   };
 
-  const value = await probe.run(() => reconfigure(["send-behind-pick"]), true, false);
+  const value = await probe.run(() => reconfigure(["send-behind-pick"]));
   writer!.release();
 
   expect(value).toBe("writer-busy");

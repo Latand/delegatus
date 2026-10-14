@@ -1,8 +1,9 @@
-import { afterAll, expect, spyOn, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { Worker } from "node:worker_threads";
 import type { McpToolBindings } from "./server";
 import type { Pipeline } from "@/lib/pipelines/types";
 
@@ -27,19 +28,42 @@ const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtur
 const { taskAcknowledgement } = await import("./listAnswers");
 afterAll(registerPipelineTick(async () => {}));
 
-function abortAndCountSynchronousSleeps(caller: AbortController) {
-  let calls = 0;
-  const sleepSync = Bun.sleepSync.bind(Bun);
-  const sleep = spyOn(Bun, "sleepSync").mockImplementation((milliseconds) => {
-    calls += 1;
-    sleepSync(milliseconds);
+async function createLoopProgressObserver() {
+  const shared = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const ticks = new Int32Array(shared);
+  const worker = new Worker(`
+    const { parentPort, workerData } = require("node:worker_threads");
+    const ticks = new Int32Array(workerData);
+    const timer = setInterval(() => Atomics.add(ticks, 0, 1), 1);
+    parentPort.postMessage("ready");
+    parentPort.on("message", () => { clearInterval(timer); process.exit(0); });
+  `, { eval: true, workerData: shared });
+  const ready = new Promise<void>((resolve, reject) => {
+    worker.once("message", resolve);
+    worker.once("error", reject);
   });
   try {
-    caller.abort();
-  } finally {
-    sleep.mockRestore();
+    let closed = false;
+    return {
+      async arm() {
+        await ready;
+        while (Atomics.load(ticks, 0) === 0) await new Promise(resolve => setTimeout(resolve, 1));
+      },
+      abort(caller: AbortController) {
+        const before = Atomics.load(ticks, 0);
+        caller.abort();
+        return Atomics.load(ticks, 0) - before;
+      },
+      close: async () => {
+        if (closed) return;
+        closed = true;
+        await worker.terminate();
+      },
+    };
+  } catch (error) {
+    await worker.terminate();
+    throw error;
   }
-  return calls;
 }
 
 async function protocol(bindings: McpToolBindings) {
@@ -409,6 +433,11 @@ test("a targeted agent_activity with a slow description answers inside its budge
   const byConversation = "/fixtures/targeted/by-conversation.jsonl";
   let describes = 0;
   let catalogReads = 0;
+  const observer = await createLoopProgressObserver();
+  await observer.arm();
+  const caller = new AbortController();
+  let abortTicks: number | null = null;
+  let releaseCancellationDescription!: () => void;
   const bindings = viewerMcpBindings(undefined, undefined, {
     livenessSources: () => ({
       now: () => now, probe: hostedProbe(now), pipelines: () => [],
@@ -416,7 +445,12 @@ test("a targeted agent_activity with a slow description answers inside its budge
       selectInventory: async () => { catalogReads += 1; return { entries: [], matched: 0, scanned: 0, hostedSeen: new Set<string>(), generation: 1, cacheStatus: "hit", freshScan: false, selectionMs: 0 }; },
       describeTranscript: async (pathname: string) => {
         describes += 1;
-        await new Promise((resolve) => setTimeout(resolve, 1_100));
+        if (pathname === "/fixtures/targeted/cancelled.jsonl") {
+          abortTicks = observer.abort(caller);
+          await new Promise<void>(resolve => { releaseCancellationDescription = resolve; });
+        } else {
+          await new Promise((resolve) => setTimeout(resolve, 1_100));
+        }
         return { path: pathname, project: "activity-board", title: path.basename(pathname), engine: "codex", mtimeMs: now, sizeBytes: 1024, conversationId: null, activity: null, activityReason: null };
       },
       transcriptEvidence: async () => ({ turn: "idle", lastRecordTs: now, providerProgressAt: null }),
@@ -439,12 +473,15 @@ test("a targeted agent_activity with a slow description answers inside its budge
   expect(describes).toBe(2);
   expect(catalogReads).toBe(0);
 
-  const caller = new AbortController();
   const cancelled = bindings.agent_activity({ clientRequestId: "targeted-cancel", transcriptPath: "/fixtures/targeted/cancelled.jsonl" }, { signal: caller.signal });
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  const synchronousSleeps = abortAndCountSynchronousSleeps(caller);
-  await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
-  expect(synchronousSleeps, "cancellation forwarding must not synchronously sleep").toBe(0);
+  try {
+    await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+    expect(abortTicks, "the slow description must reach cancellation").not.toBeNull();
+    expect(abortTicks, "abort dispatch must return before an independent loop timer fires").toBeLessThanOrEqual(1);
+  } finally {
+    await observer.close();
+    releaseCancellationDescription();
+  }
 }, 30_000);
 
 test("cancelling agent_activity after its catalog budget releases the scan it was waiting on", async () => {
@@ -455,6 +492,11 @@ test("cancelling agent_activity after its catalog budget releases the scan it wa
   const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
   process.on("unhandledRejection", onUnhandled);
   const scans: Array<ReturnType<typeof heldScan>> = [];
+  const observer = await createLoopProgressObserver();
+  await observer.arm();
+  const caller = new AbortController();
+  let abortTicks: number | null = null;
+  const releaseTailRead: { current: (() => void) | null } = { current: null };
   const bindings = viewerMcpBindings(undefined, undefined, {
     livenessSources: (catalog: { catalogBudgetMs?: number } = {}) => ({
       now: () => now, probe: hostedProbe(now), registrySnapshot: () => hostedRegistry(hosted, now), pipelines: () => [],
@@ -462,20 +504,19 @@ test("cancelling agent_activity after its catalog budget releases the scan it wa
         completedFileScan: scans.at(-1)!.read as never, signal: options.signal ?? null, budgetMs: Math.min(50, catalog.catalogBudgetMs ?? 50), lastCompletedFiles: () => null,
       }),
       describeTranscript: async (pathname: string) => ({ path: pathname, project: "activity-board", title: "hosted", engine: "codex", mtimeMs: now, sizeBytes: 1024, conversationId: "conversation-cancel", activity: "live", activityReason: null }),
-      transcriptEvidence: () => new Promise((resolve) => setTimeout(() => resolve({ turn: "idle", lastRecordTs: now, providerProgressAt: null }), 400)),
+      transcriptEvidence: () => new Promise((resolve) => {
+        abortTicks ??= observer.abort(caller);
+        releaseTailRead.current = () => resolve({ turn: "idle", lastRecordTs: now, providerProgressAt: null });
+      }),
     }), refreshLifecycleJournal: () => ({ appended: 0 }),
   } as never);
 
   try {
     scans.push(heldScan(() => []));
-    const caller = new AbortController();
     const cancelled = bindings.agent_activity({ clientRequestId: "cancel-after-budget" }, { signal: caller.signal });
-    /* Past the catalog budget, inside the tail read. */
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    expect(scans[0]!.signals[0]!.aborted).toBe(false);
-    const synchronousSleeps = abortAndCountSynchronousSleeps(caller);
     await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
-    expect(synchronousSleeps, "cancellation forwarding must not synchronously sleep").toBe(0);
+    expect(abortTicks, "the catalog-budget tail read must reach cancellation").not.toBeNull();
+    expect(abortTicks, "abort dispatch must return before an independent loop timer fires").toBeLessThanOrEqual(1);
     expect(scans[0]!.signals).toHaveLength(1);
     expect(scans[0]!.signals[0]!.aborted).toBe(true);
 
@@ -492,6 +533,8 @@ test("cancelling agent_activity after its catalog budget releases the scan it wa
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(unhandled).toEqual([]);
   } finally {
+    releaseTailRead.current?.();
+    await observer.close();
     process.off("unhandledRejection", onUnhandled);
   }
 }, 15_000);
