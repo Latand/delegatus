@@ -48,8 +48,8 @@ for (const schema of Object.values(READ_SCHEMAS)) schema.refresh = {
 export function validToolValue(property: ToolProperty, value: unknown): boolean {
   const types = typeof property.type === "string" ? [property.type] : property.type;
   if (value === undefined || value === null) return types.includes("null");
-  if (typeof value === "string" && types.includes("string")) return value.trim().length >= (property.minLength ?? 0)
-    && value.length <= (property.maxLength ?? 2000) && (!property.enum || property.enum.includes(value));
+  if (typeof value === "string" && types.includes("string")) return [...value.trim()].length >= (property.minLength ?? 0)
+    && [...value].length <= (property.maxLength ?? 2000) && (!property.enum || property.enum.includes(value));
   if (typeof value === "boolean") return types.includes("boolean");
   if (typeof value === "number") return types.includes("integer") && Number.isSafeInteger(value)
     && value >= (property.minimum ?? 0) && value <= (property.maximum ?? Number.MAX_SAFE_INTEGER);
