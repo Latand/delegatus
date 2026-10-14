@@ -72,6 +72,91 @@ test("an oversized single lesson is skipped with one counted warning per signatu
   }
 }, 30_000);
 
+test("a signature holding only an oversized lesson caches its empty matcher", () => {
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    store(["oversizedword ".repeat(80_000).trim()]);
+    const record = { prompt: "ordinary launch instructions" };
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect(withoutStoredLessons(record.prompt)).toBe(record.prompt);
+      expect(withoutStoredLessonsIn(record)).toBe(record);
+    }
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(warning.mock.calls[0]).toEqual([expect.stringContaining("skipped 1")]);
+  } finally {
+    warning.mockRestore();
+  }
+}, 30_000);
+
+test("compilation of 2000 long lessons is bounded and happens once per signature", () => {
+  store(Array.from({ length: 2000 }, (_, index) => longLesson(index)));
+  const NativeRegExp = globalThis.RegExp;
+  const compilations: { sourceChars: number; ms: number }[] = [];
+  class MeasuredRegExp extends NativeRegExp {
+    constructor(pattern: string | RegExp, flags?: string) {
+      const started = performance.now();
+      super(pattern, flags);
+      compilations.push({ sourceChars: this.source.length, ms: performance.now() - started });
+    }
+  }
+  globalThis.RegExp = MeasuredRegExp as typeof RegExp;
+  try {
+    const started = performance.now();
+    // Build the signature's matcher without executing it against prompt text.
+    expect(withoutStoredLessonsIn(null)).toBeNull();
+    const matcherBuildMs = performance.now() - started;
+    const compileCount = compilations.length;
+    expect(compileCount).toBeGreaterThan(0);
+    expect(compilations.every(compile => compile.sourceChars <= 32_000)).toBe(true);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect(withoutStoredLessons("ordinary launch instructions")).toBe("ordinary launch instructions");
+      expect(withoutStoredLessonsIn(null)).toBeNull();
+    }
+    expect(compilations).toHaveLength(compileCount);
+    console.info(JSON.stringify({ lessonMatcherCompilation: { lessons: 2000, compileCount,
+      maxSourceChars: Math.max(...compilations.map(compile => compile.sourceChars)),
+      regexCompileMs: Number(compilations.reduce((sum, compile) => sum + compile.ms, 0).toFixed(2)),
+      matcherBuildMs: Number(matcherBuildMs.toFixed(2)) } }));
+    store(["The signature changed after another operation completed"]);
+    withoutStoredLessonsIn(null);
+    expect(compilations.length).toBeGreaterThan(compileCount);
+  } finally {
+    globalThis.RegExp = NativeRegExp;
+  }
+}, 30_000);
+
+test("an engine-refused source is split out, skipped and cached without repeated compile attempts", () => {
+  const rejected = "EngineRejected verification required";
+  const ordinary = "Preserve the receipt until its owning operation has completed";
+  store([rejected, ordinary]);
+  const NativeRegExp = globalThis.RegExp;
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  let attempts = 0;
+  class RefusingRegExp extends NativeRegExp {
+    constructor(pattern: string | RegExp, flags?: string) {
+      attempts += 1;
+      if (String(pattern).includes("EngineRejected")) throw new SyntaxError("fixture engine size limit");
+      super(pattern, flags);
+    }
+  }
+  globalThis.RegExp = RefusingRegExp as typeof RegExp;
+  try {
+    expect(withoutStoredLessons(ordinary)).toBe(WITHHELD_LESSON);
+    const firstAttempts = attempts;
+    expect(firstAttempts).toBeGreaterThan(2);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect(withoutStoredLessons(rejected)).toBe(rejected);
+      expect(withoutStoredLessonsIn({ ordinary })).toEqual({ ordinary: WITHHELD_LESSON });
+    }
+    expect(attempts).toBe(firstAttempts);
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(warning.mock.calls[0]).toEqual([expect.stringContaining("skipped 1")]);
+  } finally {
+    globalThis.RegExp = NativeRegExp;
+    warning.mockRestore();
+  }
+});
+
 test("the cached matcher refreshes after a store write and preserves unchanged records", () => {
   const first = "Check the first operation before accepting its receipt";
   const second = "Check the second operation before accepting its receipt";
