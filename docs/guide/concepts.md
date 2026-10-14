@@ -22,6 +22,8 @@ you, how many agents are working and how long ago something last happened.
 The board shows every task in a project and what it is waiting for. A task is
 the record of one piece of work; its card is how the board draws it.
 
+![Three columns of a project's board: a task in Inbox; In progress with its working agents, a running pipeline's stages and a card that needs your answer, counted in the column's head; Waiting with a card that names what it waits for](../media/readme/board.svg)
+
 The board has four columns: **Inbox**, **In progress**, **Waiting** and
 **Done**. On each card:
 
@@ -70,6 +72,8 @@ A pipeline runs one task through a fixed set of agent stages, such as build,
 review and verify. It has up to eight stages and works in its own git
 worktree and branch, so your own checkout is left alone. Some messages call a
 pipeline a "lane".
+
+![A pipeline opened from its task: Build, Review and Verify stages, with Review's loop back to Build folded under it, and the builder's and the reviewer's conversations side by side](../media/readme/pipeline.svg)
 
 Each stage has a role, such as builder, reviewer, verifier, architect or
 visual critic. The role sets the engine, model and effort the stage runs on,

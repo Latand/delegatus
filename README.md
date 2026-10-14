@@ -152,12 +152,15 @@ More: [Pipelines in depth](docs/guide/pipelines.md).
 
 Delegatus shows every Claude Code, Codex and Copilot conversation on your
 machine as a readable chat, whoever started it, with diffs, command output and
-one search across all of them. Add several accounts per engine and switch
-before a usage limit stops you.
+one search across all of them.
 
-| Every conversation on your machine | Several accounts per engine |
-| :---: | :---: |
-| <img src="docs/media/readme/conversation.svg" width="375" alt="A Claude Code conversation: an edit shown as a diff, a test run with its output, and the answer"> | <img src="docs/media/readme/accounts.svg" width="343" alt="Claude accounts with their five-hour, weekly and per-model limits"> |
+![A Claude Code conversation: an edit shown as a diff, a test run with its output, and the answer](docs/media/readme/conversation.svg)
+
+Each account shows its five-hour, weekly and per-model limits.
+
+<p align="center">
+  <img src="docs/media/readme/accounts.svg" width="343" alt="Claude accounts with their five-hour, weekly and per-model limits">
+</p>
 
 More: [Conversations](docs/guide/interface.md#conversations) ·
 [Accounts, limits and roles](docs/guide/accounts-and-roles.md).
@@ -169,9 +172,10 @@ More: [Conversations](docs/guide/interface.md#conversations) ·
 The board's four columns become tabs you swipe between, and you hold a card to
 move it. Open Delegatus on your phone through your Tailscale network.
 
-| The board | A conversation |
-| :---: | :---: |
-| <img src="docs/media/readme/phone-board.svg" width="280" alt="A project's board on a phone: the four status columns as tabs, and In progress showing first the card that waits on your answer, counted on its tab"> | <img src="docs/media/readme/phone-conversation.svg" width="280" alt="A conversation on a phone screen, its test run expanded"> |
+<p align="center">
+  <img src="docs/media/readme/phone-board.svg" width="45%" alt="A project's board on a phone: the four status columns as tabs, and In progress showing first the card that waits on your answer, counted on its tab">
+  <img src="docs/media/readme/phone-conversation.svg" width="45%" alt="A conversation on a phone screen, its test run expanded">
+</p>
 
 More: [From your phone](docs/guide/phone.md).
 
@@ -179,17 +183,17 @@ More: [From your phone](docs/guide/phone.md).
 
 ## Everything else
 
-| Feature | What it gives you | Read |
-| --- | --- | --- |
-| Voice | Dictation, answers read aloud, voice conversations, Voice Delegatus | [Voice](docs/guide/voice.md) |
-| Telegram | A bot for reports and files; read-only access to your own account | [Telegram](docs/guide/telegram.md) |
-| External relay | A relay service's chats answered by this install | [External relay](docs/guide/telegram.md#external-relay) |
-| Team | People sign in as themselves | [Team](docs/guide/team.md#team) |
-| Linked installs | Two machines share one board | [Linked installs](docs/guide/team.md#linked-installs) |
-| Memory | Learned rules for the next agents; memory shared by Claude and Codex | [Memory](docs/guide/memory.md) |
-| MCP server | Your own Claude Code or Codex sessions get the same tools | [MCP server](docs/guide/mcp.md) |
-| Updates and services | Updates, automatic updates, memory and CPU limits for agents | [Operations](docs/guide/operations.md) |
-| Configuration | Command options, files, environment variables | [Configuration](docs/guide/configuration.md) |
+| Feature | What it gives you |
+| --- | --- |
+| [Voice](docs/guide/voice.md) | Dictation, answers read aloud, voice conversations, Voice Delegatus |
+| [Telegram](docs/guide/telegram.md) | A bot for reports and files; read-only access to your own account |
+| [External relay](docs/guide/telegram.md#external-relay) | A relay service's chats answered by this install |
+| [Team](docs/guide/team.md#team) | People sign in as themselves |
+| [Linked installs](docs/guide/team.md#linked-installs) | Two machines share one board |
+| [Memory](docs/guide/memory.md) | Learned rules for the next agents; memory shared by Claude and Codex |
+| [MCP server](docs/guide/mcp.md) | Your own Claude Code or Codex sessions get the same tools |
+| [Updates and services](docs/guide/operations.md) | Updates, automatic updates, memory and CPU limits for agents |
+| [Configuration](docs/guide/configuration.md) | Command options, files, environment variables |
 
 ## Documentation
 
@@ -207,14 +211,10 @@ More: [From your phone](docs/guide/phone.md).
   requests as one batch.
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the scanner, API routes, runtime
   host and UI fit together.
-- [CONTRIBUTING.md](CONTRIBUTING.md): commit identity, the privacy check,
-  the local hooks (the privacy check and the other pre-push checks run side
-  by side, and only failing test files are compared with `main`) and what CI
-  runs.
+- [CONTRIBUTING.md](CONTRIBUTING.md): commit identity, the privacy check, the
+  local hooks and what CI runs.
 - [docs/media/readme/](docs/media/readme/provenance.json): where the
-  screenshots come from. `scripts/capture-readme-media.ts` renders them from
-  an invented demo home and keeps a vector only after Chrome renders it back
-  identical to its PNG.
+  screenshots come from.
 
 ## Security
 

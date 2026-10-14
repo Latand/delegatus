@@ -5,8 +5,7 @@ This page covers both.
 
 ## Team
 
-One Delegatus can be shared by a team, with each person signed in as themselves.
-Until someone sets a team up, nothing changes: a Delegatus used by one
+Each person signs in as themselves. Until someone sets a team up, nothing changes: a Delegatus used by one
 person has no sign-in page and no names.
 
 ### Set up

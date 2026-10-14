@@ -4,8 +4,8 @@ Delegatus connects to Telegram in two ways, and can answer questions from a
 relay service's chats. This page covers the bot, your own account, what happens
 when Telegram is down, and the external relay.
 
-Delegatus connects to Telegram in two ways, both from the **Telegram** line
-in the sidebar's system block.
+Both Telegram connections live behind the **Telegram** line in the sidebar's
+system block.
 
 ## The bot
 
@@ -40,40 +40,56 @@ on the next start after you reconnect.
 
 ## External relay
 
-A relay service can send this install questions from its own chats.
-**Chat relay**, under **Settings** in the sidebar's ⋯ menu (the board's ⋯
-menu on a phone), or the **Relay service** step of the setup guide, pairs the
-two; **Connect
-Celestia** pairs with that service in one click. The install asks
-the service for work, so nothing reaches it from outside. Each question is
-answered by a one-shot agent on your signed-in Claude or Codex account, with
-no shell, no tools and none of your instruction files. A question can come
-with who asked it and their rights in the chat, a short memory of the chat
-and an index of the service's own tools; when one of those tools fits
-better, the agent hands the question back to the service. When the service
-offers its tools with a question, the agent can read with them and, for a
-requester who is allowed to, perform one action at a time. **Full agent for
-the owner**, off by default on each target, runs the relay owner's requests
-as ordinary Delegatus agents with full access to this computer. When the
-service offers them, the card can create a new clone, and a published
-prototype review goes to the paired owner's private chat, where a reply
-records the decision. Reading the owner's group history through
-`relay_owner_history` stays behind the owner tools switch, off by default.
-The card
-shows each relay's state and, for each target, the engine, model and effort
-it answers with; answers are kept for 30 days. The install picks up new
-service features every five minutes, whatever the owner tools switch says,
-and acknowledges a question as soon as it takes it.
+A relay service can send this install questions from its own chats. The
+install asks the service for work, so nothing reaches it from outside.
 
-When the target, the chat or the install is busy, a question waits instead
-of failing: it is acknowledged, the service sees the `queued` step if it
-shows steps, and it starts once room opens. The wait has a budget of two
-minutes from the moment the question was asked, and a question still
-waiting ten seconds before the end of that budget is declined as busy.
-The budget bounds only the wait: an answer that has started keeps running
-under the target's hard cap and may arrive after the two minutes, and a
-service that enforces its own deadline can end it there. Member quotas and
-accounts with no room answer at once.
+### Pair
+
+Open **Chat relay**, under **Settings** in the sidebar's ⋯ menu (the board's ⋯
+menu on a phone), or the **Relay service** step of the setup guide, to pair the
+two. **Connect Celestia** pairs with that service in one click. The card shows
+each relay's state and, for each target, the engine, model and effort it
+answers with.
+
+### How a question is answered
+
+- **Who answers.** A one-shot agent on your signed-in Claude or Codex account,
+  with no shell, no tools and none of your instruction files.
+- **What comes with a question.** Who asked it and their rights in the chat, a
+  short memory of the chat and an index of the service's own tools. When one of
+  those tools fits better, the agent hands the question back to the service.
+- **Service tools.** When the service offers its tools with a question, the
+  agent can read with them and, for a requester who is allowed to, perform one
+  action at a time.
+- **History.** Answers are kept for 30 days.
+- **Polling.** The install picks up new service features every five minutes,
+  whatever the owner tools switch says, and acknowledges a question as soon as
+  it takes it.
+
+### Owner tools
+
+- **Full agent for the owner**, off by default on each target, runs the relay
+  owner's requests as ordinary Delegatus agents with full access to this
+  computer.
+- When the service offers them, the card can create a new clone.
+- A published prototype review goes to the paired owner's private chat, where a
+  reply records the decision.
+- Reading the owner's group history through `relay_owner_history` stays behind
+  the owner tools switch, off by default.
+
+### When the install is busy
+
+When the target, the chat or the install is busy, a question waits instead of
+failing: it is acknowledged, the service sees the `queued` step if it shows
+steps, and it starts once room opens.
+
+The wait has a budget of two minutes from the moment the question was asked,
+and a question still waiting ten seconds before the end of that budget is
+declined as busy. The budget bounds only the wait: an answer that has started
+keeps running under the target's hard cap and may arrive after the two minutes,
+and a service that enforces its own deadline can end it there. Member quotas
+and accounts with no room answer at once.
+
 The protocol is in [docs/design/relay.md](../design/relay.md).
 
 ### Prototype reviews to the relay owner's Telegram
@@ -84,3 +100,5 @@ as a compact preview with a link to the full review. A failed or unconfirmed
 post stays on the review with its reason and reaches the orchestrator on its
 next wake. **Send to Telegram again**, in the review's actions, sends any
 round again, older ones included.
+
+![A project's orchestrator beside a task's three-question decision form that was already sent to Telegram, with a link to send it again](../media/readme/orchestrator.svg)

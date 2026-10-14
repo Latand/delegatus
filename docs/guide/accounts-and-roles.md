@@ -36,9 +36,7 @@ each one uses, and a stage may override any of them. Read and change the table
 under **Roles: engine and model** in **Settings** (sidebar's ⋯ menu). The
 orchestrator seat and your own session read the same table, and change it,
 through the MCP tool `role_presets` (see [The MCP server](mcp.md#the-tools));
-a model outside the launch catalogue is refused, and every write is logged to
-`role-presets-audit.jsonl` beside `role-presets.json`. The defaults live in
-`src/lib/roles/defaults.ts`.
+a model outside the launch catalogue is refused, and every write is logged.
 
 A stage whose role names an engine that is not connected is refused before
 any stage starts; [Getting started](getting-started.md#if-only-one-engine-is-connected)

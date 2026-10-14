@@ -5,6 +5,8 @@ give it work and steer that work. To change Delegatus itself, start at
 [ARCHITECTURE.md](../../ARCHITECTURE.md) and
 [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
+![A pipeline opened from its task: Build, Review and Verify stages, with Review's loop back to Build folded under it, and the builder's and the reviewer's conversations side by side](../media/readme/pipeline.svg)
+
 ## Start here
 
 Read these three pages in order the first time.
@@ -20,14 +22,8 @@ Read these three pages in order the first time.
 
 ## Contents
 
-Pages marked *(planned)* are not written yet.
+The three pages above come first. Pages marked *(planned)* are not written yet.
 
-- [Getting started](getting-started.md): requirements, the install paths, the
-  setup guide, the machine check, the first agent, preparing a project and
-  the engines for pipelines, and the first pipeline.
-- [Core concepts](concepts.md): one short section per idea, then how they
-  connect.
-- [Everyday workflows](workflows.md): the things an operator does every day.
 - [A tour of the interface](interface.md): the board, **Needs you**, a card's
   ⋯ menu, the agent window, the sidebar, conversations and the composer.
 - [The orchestrator in depth](orchestrator.md): creating it, the tick panel,
@@ -68,6 +64,8 @@ These technical documents go deeper than the guide.
 - [docs/macos-newcomer.md](../macos-newcomer.md): installing on macOS.
 - [docs/pipelines.md](../pipelines.md): the stage contract, verdicts,
   worktrees and recovery.
+- [docs/agent-resource-limits.md](../agent-resource-limits.md): the mechanism
+  behind the agent memory and CPU limits.
 - [docs/review-loop.md](../review-loop.md): how a review round runs in a
   pipeline.
 - [docs/merge-batch.md](../merge-batch.md): landing several reviewed pull

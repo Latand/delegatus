@@ -11,18 +11,22 @@ conversations and the composer. For the ideas behind them, read
 The board shows every task in a project and what it is waiting for.
 
 Each task is a card in one of four columns: Inbox, In progress, Waiting and
-Done. A card shows its icon and colour, the agents working on it, and each
-pipeline with its stages and pull request. A state line under the title says
-whether the task is moving, waiting or stopped; the status menu sets the
-reason for a wait, such as your decision, another task or a usage limit. A
-status note of up to 280 characters, written by an agent, the orchestrator
-or a parked pipeline, says what is happening now. Inside a column the cards
-with the newest agent work come first. A task can be high, normal or low
-priority; in the Inbox, cards worked in the last three days stand above that
-queue. A card is closed by default, and opened it shows a timeline of the
-task's events. **Images** on a card opens every screenshot and render
-its agents made. Ctrl+Z undoes your own moves, edits and hides on the board,
-and Ctrl+Shift+Z redoes them.
+Done.
+
+- **On the card.** Its icon and colour, the agents working on it, and each
+  pipeline with its stages and pull request. A state line under the title says
+  whether the task is moving, waiting or stopped; the status menu sets the
+  reason for a wait, such as your decision, another task or a usage limit.
+- **Status note.** Up to 280 characters, written by an agent, the orchestrator
+  or a parked pipeline, saying what is happening now.
+- **Order.** Inside a column the cards with the newest agent work come first.
+  A task can be high, normal or low priority; in the Inbox, cards worked in the
+  last three days stand above that queue.
+- **Timeline.** A card is closed by default; opened, it shows a timeline of the
+  task's events. **Images** on a card opens every screenshot and render its
+  agents made.
+- **Undo.** Ctrl+Z undoes your own moves, edits and hides on the board, and
+  Ctrl+Shift+Z redoes them.
 
 **Ask** on a card puts that task above the orchestrator's composer as a
 chip, so your next message is about it. On a phone the button is on the
@@ -38,19 +42,22 @@ to the card. At rest the board draws nothing.
 ## Needs you
 
 When a task needs you, its card's state line says why and shows **Answer**.
-It can be a question from an agent, a plan to approve, a permission prompt,
-a message that did not arrive, or a stage waiting on your decision. A stop
-the project's orchestrator can handle goes to it first, and the card says
-so; the manual answers, such as skip and retry, are in the card's ⋯.
-**Needs you** at the top of the board counts what waits across all
-projects. Its panel lists each item by project, with the waiting agent's
-role, and lets you dismiss an item or answer a permission prompt in place.
-It holds only what waits on you: what a rule or the orchestrator settled
-goes to the Reports log as a completed line. Its **Done** section lists what
-finished in the last seven days (landed pull requests, deploys, incidents,
-limits that came back) until you accept each item.
-While something waits, the **Needs you** filter beside the search (or the F
-key) dims every card that does not wait on you.
+It can be a question from an agent, a plan to approve, a permission prompt, a
+message that did not arrive, or a stage waiting on your decision. A stop the
+project's orchestrator can handle goes to it first, and the card says so; the
+manual answers, such as skip and retry, are in the card's ⋯.
+
+- **The counter.** **Needs you** at the top of the board counts what waits
+  across all projects.
+- **The panel.** It lists each item by project, with the waiting agent's role,
+  and lets you dismiss an item or answer a permission prompt in place.
+- **What it holds.** Only what waits on you. What a rule or the orchestrator
+  settled goes to the Reports log as a completed line.
+- **Done.** This section lists what finished in the last seven days (landed
+  pull requests, deploys, incidents, limits that came back) until you accept
+  each item.
+- **The filter.** While something waits, the **Needs you** filter beside the
+  search (or the F key) dims every card that does not wait on you.
 
 ## A card's ⋯ menu
 
@@ -135,21 +142,27 @@ compact card above the composer says so and offers **Retry** and
 
 ## Start and talk to an agent
 
-Start a Claude Code, Codex or GitHub Copilot agent from a task or from
-**+** in the board's header. The form is the composer itself: pick the engine, model
+Start a Claude Code, Codex or GitHub Copilot agent from a task or from **+**
+in the board's header. The form is the composer itself: pick the engine, model
 and reasoning in its runtime pill, type or dictate, and send; the pane then
-becomes the conversation. Send messages, images and files from the same
-composer; a message too long for the engine goes as a `message.txt`
-attachment. In the conversation of a running pipeline stage, the runtime pill
-switches the stage itself to another model, effort, speed or account. The
-transcript keeps at least 60% of its column. While the agent works, **Stop**
-stands beside **Send**, and interrupt, compact, re-check and **Copy terminal
-command** are under **More actions**. In a Codex conversation, the composer's **Context** toggle
-sends the draft into the running turn as context: Auto follows the turn, and a
-press overrides it for that card. A Codex agent can also run on a service tier
-you set per launch, stage or role. Agents use the bundled [MCP server](mcp.md)
-to reach the board, tasks, pipelines and each other's conversations. The
-orchestrator does its work through the same server.
+becomes the conversation.
+
+- **What you can send.** Messages, images and files from the same composer. A
+  message too long for the engine goes as a `message.txt` attachment.
+- **Switch a running stage.** In the conversation of a running pipeline stage,
+  the runtime pill switches the stage itself to another model, effort, speed or
+  account.
+- **Layout.** The transcript keeps at least 60% of its column.
+- **While the agent works.** **Stop** stands beside **Send**, and interrupt,
+  compact, re-check and **Copy terminal command** are under **More actions**.
+- **Codex context.** In a Codex conversation, the composer's **Context**
+  toggle sends the draft into the running turn as context: Auto follows the
+  turn, and a press overrides it for that card.
+- **Service tier.** A Codex agent can run on a service tier you set per launch,
+  stage or role.
+- **Tools.** Agents use the bundled [MCP server](mcp.md) to reach the board,
+  tasks, pipelines and each other's conversations. The orchestrator does its
+  work through the same server.
 
 ## Activity
 

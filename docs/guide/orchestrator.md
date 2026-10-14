@@ -30,8 +30,7 @@ one orchestrator and no second seat is created.
 
 Three parts of the draft are worth knowing:
 
-- **The mandate is written for you.** It is the versioned default in
-  `src/lib/orchestrator/prompt.ts`, delivered once as the first message of the
+- **The mandate is written for you.** It is a versioned default, delivered once as the first message of the
   new conversation: how work runs as a pipeline on a task, the stage contract,
   the merge bar, the report channels, when it may move your screen and how it
   asks you for decisions. You never type "you are an orchestrator" anywhere.
@@ -124,19 +123,22 @@ tells you once and moves it to another allowed account with room, or pauses its
 wakes.
 
 To rotate it yourself, press **Rotate** in the panel head. The draft opens
-prefilled with the incumbent's own parameters. The mandate box starts from the
-current built-in default when the incumbent's mandate is based on an older
-version, and the summary line says so; **Keep the incumbent's mandate** carries
-its text forward instead. A seat already on the current version, or on your own
-rules, keeps its text. The seat row flags a stale seat the same way, as
-"mandate vN, default vM". The successor receives the mandate plus a handoff:
-the predecessor's identity and the exact `conversation_messages` call, the
-project's open board tasks, your notes and one compact **Rotation history**
-section standing in for every earlier handoff, so a seat that has rotated a
-dozen times costs what a fresh one costs. The predecessor keeps its conversation,
-its card and ordinary Delegatus access; only its manager authority moves. Both
-cards stay linked, and the successor's header links back. The mandate itself
-lands in the feed as a single folded **Mandate** card.
+prefilled with the incumbent's own parameters.
+
+- **The mandate box.** It starts from the current built-in default when the
+  incumbent's mandate is based on an older version, and the summary line says
+  so; **Keep the incumbent's mandate** carries its text forward instead. A seat
+  already on the current version, or on your own rules, keeps its text.
+- **A stale seat.** The seat row flags it as "mandate vN, default vM".
+- **The handoff.** The successor receives the mandate plus the predecessor's
+  identity and a pointer to its conversation, the project's open board tasks,
+  your notes and one compact **Rotation history** section standing in for
+  every earlier handoff, so a seat that has rotated a dozen times costs what a
+  fresh one costs.
+- **The predecessor.** It keeps its conversation, its card and ordinary
+  Delegatus access; only its manager authority moves.
+- **The cards.** Both stay linked, and the successor's header links back. The
+  mandate itself lands in the feed as a single folded **Mandate** card.
 
 ## The worker limit
 
@@ -146,8 +148,7 @@ menu, from 1 to 64, 3 until you change it. The orchestrator's header shows
 it beside the running count, as "workers 2 / 5"; click it to give that
 project its own limit or to go back to the machine's. The orchestrator reads
 the current number on every wake, so a change needs no rotation. It can read
-and change the limit through `role_presets` too, with a reason that is kept
-in the limit's history.
+and change the limit too, with a reason that is kept in the limit's history.
 
 [Core concepts](concepts.md#the-worker-limit) keeps the definition.
 

@@ -458,5 +458,5 @@ swap is unbounded, and kernel OOM kills lack attribution. Agents inherit an OOM
 score of at least 500; the container restart policy still handles a dead core.
 `DELEGATUS_AGENT_MEMORY=off` disables isolation. The systemd
 drop-in needed by an existing host user-service install is in
-[Agent memory](guide/operations.md#agent-memory); the
+[Agent memory](guide/operations.md#agent-memory-and-cpu); the
 [agent memory design](design/agent-memory-isolation.md) has the reasoning.

@@ -38,6 +38,8 @@ On a phone, the project's **Orchestrator** card opens the same chat, and
 
 Read the board to see what is moving, what is stuck and what waits on you.
 
+![Three columns of a project's board: a task in Inbox; In progress with its working agents, a running pipeline's stages and a card that needs your answer, counted in the column's head; Waiting with a card that names what it waits for](../media/readme/board.svg)
+
 - The columns: **Inbox** holds new tasks, **In progress** the
   ones being worked on, **Waiting** the ones waiting on something, and
   **Done** the finished ones. Inside a column, cards with the newest agent
@@ -72,6 +74,8 @@ to another column, or let go in place for its menu.
 A decision the orchestrator cannot make alone reaches you as a form. It waits
 in the **Decisions** tab beside the orchestrator's chat and counts in **Needs
 you**.
+
+![A project's orchestrator: its chat with you, its worker count against the limit, and beside it a task's three-question decision form waiting for your answer, already sent to Telegram with a link to send it again](../media/readme/orchestrator.svg)
 
 A form has one to seven questions; a form that belongs to a task has three to
 seven. Each question has two to six options, and exactly one of them is
@@ -140,6 +144,8 @@ use **Pipeline actions** in the card's ⋯:
 - **Accept as is** takes the fixed head when a pipeline waits after its last
   review fix;
 - **Close the pipeline** ends it.
+
+![A task card's ⋯ menu open in the In progress column: the four columns in a row, icon actions to rename, describe, attach and hide with a line saying one agent keeps working, the three priorities, and the Appearance, Pipeline actions and More rows](../media/readme/card-menu.svg)
 
 [Pipelines in depth](pipelines.md) covers the stages, verdicts and review
 budget; [docs/pipelines.md](../pipelines.md) covers stage definitions, verdicts and

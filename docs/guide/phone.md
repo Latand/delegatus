@@ -6,8 +6,6 @@ layout, push notifications and the access setup.
 
 ## The phone layout
 
-On a phone Delegatus opens a layout built for a small screen.
-
 The board's four columns become tabs you swipe between. Cards that need you
 come first, and each card starts with its task's icon in the task's colour.
 Hold a card and it lifts with a dock of the four columns: let go over one to
@@ -24,9 +22,12 @@ an agent asks for your attention, the phone shows a quiet notice and leaves
 your screen where it is. [Phone access](#phone-access) explains how to reach
 Delegatus from your phone.
 
-| The board | A conversation |
-| :---: | :---: |
-| <img src="../media/readme/phone-board.svg" width="280" alt="A project's board on a phone: the four status columns as tabs, and In progress showing first the card that waits on your answer, counted on its tab"> | <img src="../media/readme/phone-conversation.svg" width="280" alt="A conversation on a phone screen, its test run expanded"> |
+<p align="center">
+  <img src="../media/readme/phone-board.svg" width="45%" alt="A project's board on a phone: the four status columns as tabs, and In progress showing first the card that waits on your answer, counted on its tab">
+  <img src="../media/readme/phone-conversation.svg" width="45%" alt="A conversation on a phone screen, its test run expanded">
+</p>
+
+The board on a phone, and a conversation with its test run expanded.
 
 ## Phone access
 
