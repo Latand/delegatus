@@ -628,7 +628,16 @@ describe("short questionnaire", () => {
     expect(row!.getAttribute("role")).toBe("checkbox");
     expect(row!.tabIndex).toBe(0);
     expect(row!.closest('[role="group"], [role="radiogroup"]')).toBeNull();
+    expect(row!.textContent).toBe("Skip");
+    expect(row!.getAttribute("aria-label")).toBe("Skip: already decided or no longer relevant");
+    expect(row!.title).toBe("Skip: already decided or no longer relevant");
     await click('[data-prototype-question-skip="scope"]');
+    const pressed = document.querySelector<HTMLButtonElement>('[data-prototype-question-skip="scope"]')!;
+    expect(pressed.textContent).toBe("Skipped");
+    expect(pressed.className).toContain("font-semibold");
+    expect(pressed.querySelector("[data-prototype-skip-mark]")!.className).toContain("bg-strong");
+    expect(document.querySelector('[data-prototype-question="scope"] [role="radiogroup"], [data-prototype-question="scope"] [role="group"]')!.className).toContain("opacity-60");
+    expect(document.querySelector('[data-prototype-question="place"] [role="radiogroup"], [data-prototype-question="place"] [role="group"]')!.className).not.toContain("opacity-60");
     expect(document.querySelector('[data-prototype-question="scope"]')?.hasAttribute("data-prototype-question-skipped")).toBe(true);
     expect(document.querySelector('[data-prototype-option="scope:0"]')?.getAttribute("aria-checked")).toBe("false");
     expect(document.querySelector('[data-prototype-question="scope"] [data-prototype-hint]')).toBeNull();

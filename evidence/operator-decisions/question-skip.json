@@ -1,6 +1,7 @@
 [
   {
     "lang": "en",
+    "scheme": "light",
     "width": 1440,
     "sideways": 0,
     "skipRows": [
@@ -9,6 +10,10 @@
         "checked": false,
         "disabled": false,
         "height": 36,
+        "label": "Skip",
+        "reason": "Skip: already decided or no longer relevant",
+        "optionsOpacity": 1,
+        "markBackground": "rgb(248, 245, 240)",
         "insideFieldset": true,
         "background": "rgba(0, 0, 0, 0)",
         "borderStyle": "dashed",
@@ -20,6 +25,10 @@
         "checked": true,
         "disabled": false,
         "height": 36,
+        "label": "Skipped",
+        "reason": "Skipped: already decided or no longer relevant",
+        "optionsOpacity": 0.6,
+        "markBackground": "rgb(203, 195, 183)",
         "insideFieldset": true,
         "background": "rgb(248, 245, 240)",
         "borderStyle": "solid",
@@ -40,11 +49,12 @@
         "skipped": true
       }
     ],
-    "record": "Answered · 20:18· «Done»: placement and deploydelivered1Where should the «Done» list be pinned? Above «Waiting for you»2When to deploy after the merge? SkippedTelegram: no post recorded yetSend to Telegram again",
+    "record": "Answered · 20:55· «Done»: placement and deploydelivered1Where should the «Done» list be pinned? Above «Waiting for you»2When to deploy after the merge? SkippedTelegram: no post recorded yetSend to Telegram again",
     "pageErrors": []
   },
   {
     "lang": "en",
+    "scheme": "light",
     "width": 390,
     "sideways": 0,
     "skipRows": [
@@ -53,6 +63,10 @@
         "checked": false,
         "disabled": false,
         "height": 44,
+        "label": "Skip",
+        "reason": "Skip: already decided or no longer relevant",
+        "optionsOpacity": 1,
+        "markBackground": "rgb(248, 245, 240)",
         "insideFieldset": true,
         "background": "rgba(0, 0, 0, 0)",
         "borderStyle": "dashed",
@@ -64,6 +78,10 @@
         "checked": true,
         "disabled": false,
         "height": 44,
+        "label": "Skipped",
+        "reason": "Skipped: already decided or no longer relevant",
+        "optionsOpacity": 0.6,
+        "markBackground": "rgb(203, 195, 183)",
         "insideFieldset": true,
         "background": "rgb(248, 245, 240)",
         "borderStyle": "solid",
@@ -84,11 +102,12 @@
         "skipped": true
       }
     ],
-    "record": "Answered · 20:18· «Done»: placement and deploydelivered1Where should the «Done» list be pinned? Above «Waiting for you»2When to deploy after the merge? SkippedTelegram: no post recorded yetSend to Telegram again",
+    "record": "Answered · 20:55· «Done»: placement and deploydelivered1Where should the «Done» list be pinned? Above «Waiting for you»2When to deploy after the merge? SkippedTelegram: no post recorded yetSend to Telegram again",
     "pageErrors": []
   },
   {
-    "lang": "uk",
+    "lang": "en",
+    "scheme": "dark",
     "width": 1440,
     "sideways": 0,
     "skipRows": [
@@ -96,7 +115,11 @@
         "question": "place",
         "checked": false,
         "disabled": false,
-        "height": 48.78125,
+        "height": 36,
+        "label": "Skip",
+        "reason": "Skip: already decided or no longer relevant",
+        "optionsOpacity": 1,
+        "markBackground": "rgb(20, 21, 27)",
         "insideFieldset": true,
         "background": "rgba(0, 0, 0, 0)",
         "borderStyle": "dashed",
@@ -107,9 +130,13 @@
         "question": "deploy",
         "checked": true,
         "disabled": false,
-        "height": 48.78125,
+        "height": 36,
+        "label": "Skipped",
+        "reason": "Skipped: already decided or no longer relevant",
+        "optionsOpacity": 0.6,
+        "markBackground": "rgb(60, 64, 76)",
         "insideFieldset": true,
-        "background": "rgb(248, 245, 240)",
+        "background": "rgb(20, 21, 27)",
         "borderStyle": "solid",
         "clipped": false,
         "overlapsOptions": false
@@ -128,11 +155,12 @@
         "skipped": true
       }
     ],
-    "record": "Відповідь · 20:18· «Готово»: місце і деплойдоставлено1Де закріпити список «Готово»? Зверху «Чекають на вас»2Коли деплоїти після мержу? ПропущеноTelegram: публікацію ще не записаноНадіслати в Telegram ще раз",
+    "record": "Answered · 20:55· «Done»: placement and deploydelivered1Where should the «Done» list be pinned? Above «Waiting for you»2When to deploy after the merge? SkippedTelegram: no post recorded yetSend to Telegram again",
     "pageErrors": []
   },
   {
-    "lang": "uk",
+    "lang": "en",
+    "scheme": "dark",
     "width": 390,
     "sideways": 0,
     "skipRows": [
@@ -141,6 +169,10 @@
         "checked": false,
         "disabled": false,
         "height": 44,
+        "label": "Skip",
+        "reason": "Skip: already decided or no longer relevant",
+        "optionsOpacity": 1,
+        "markBackground": "rgb(20, 21, 27)",
         "insideFieldset": true,
         "background": "rgba(0, 0, 0, 0)",
         "borderStyle": "dashed",
@@ -152,6 +184,63 @@
         "checked": true,
         "disabled": false,
         "height": 44,
+        "label": "Skipped",
+        "reason": "Skipped: already decided or no longer relevant",
+        "optionsOpacity": 0.6,
+        "markBackground": "rgb(60, 64, 76)",
+        "insideFieldset": true,
+        "background": "rgb(20, 21, 27)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "posted": [
+      {
+        "questionId": "place",
+        "options": [
+          0
+        ]
+      },
+      {
+        "questionId": "deploy",
+        "options": [],
+        "skipped": true
+      }
+    ],
+    "record": "Answered · 20:55· «Done»: placement and deploydelivered1Where should the «Done» list be pinned? Above «Waiting for you»2When to deploy after the merge? SkippedTelegram: no post recorded yetSend to Telegram again",
+    "pageErrors": []
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "width": 1440,
+    "sideways": 0,
+    "skipRows": [
+      {
+        "question": "place",
+        "checked": false,
+        "disabled": false,
+        "height": 36,
+        "label": "Пропустити",
+        "reason": "Пропустити: вже вирішено або неактуально",
+        "optionsOpacity": 1,
+        "markBackground": "rgb(248, 245, 240)",
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "deploy",
+        "checked": true,
+        "disabled": false,
+        "height": 36,
+        "label": "Пропущено",
+        "reason": "Пропущено: вже вирішено або неактуально",
+        "optionsOpacity": 0.6,
+        "markBackground": "rgb(203, 195, 183)",
         "insideFieldset": true,
         "background": "rgb(248, 245, 240)",
         "borderStyle": "solid",
@@ -172,7 +261,166 @@
         "skipped": true
       }
     ],
-    "record": "Відповідь · 20:18· «Готово»: місце і деплойдоставлено1Де закріпити список «Готово»? Зверху «Чекають на вас»2Коли деплоїти після мержу? ПропущеноTelegram: публікацію ще не записаноНадіслати в Telegram ще раз",
+    "record": "Відповідь · 20:55· «Готово»: місце і деплойдоставлено1Де закріпити список «Готово»? Зверху «Чекають на вас»2Коли деплоїти після мержу? ПропущеноTelegram: публікацію ще не записаноНадіслати в Telegram ще раз",
+    "pageErrors": []
+  },
+  {
+    "lang": "uk",
+    "scheme": "light",
+    "width": 390,
+    "sideways": 0,
+    "skipRows": [
+      {
+        "question": "place",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "label": "Пропустити",
+        "reason": "Пропустити: вже вирішено або неактуально",
+        "optionsOpacity": 1,
+        "markBackground": "rgb(248, 245, 240)",
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "deploy",
+        "checked": true,
+        "disabled": false,
+        "height": 44,
+        "label": "Пропущено",
+        "reason": "Пропущено: вже вирішено або неактуально",
+        "optionsOpacity": 0.6,
+        "markBackground": "rgb(203, 195, 183)",
+        "insideFieldset": true,
+        "background": "rgb(248, 245, 240)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "posted": [
+      {
+        "questionId": "place",
+        "options": [
+          0
+        ]
+      },
+      {
+        "questionId": "deploy",
+        "options": [],
+        "skipped": true
+      }
+    ],
+    "record": "Відповідь · 20:55· «Готово»: місце і деплойдоставлено1Де закріпити список «Готово»? Зверху «Чекають на вас»2Коли деплоїти після мержу? ПропущеноTelegram: публікацію ще не записаноНадіслати в Telegram ще раз",
+    "pageErrors": []
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "width": 1440,
+    "sideways": 0,
+    "skipRows": [
+      {
+        "question": "place",
+        "checked": false,
+        "disabled": false,
+        "height": 36,
+        "label": "Пропустити",
+        "reason": "Пропустити: вже вирішено або неактуально",
+        "optionsOpacity": 1,
+        "markBackground": "rgb(20, 21, 27)",
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "deploy",
+        "checked": true,
+        "disabled": false,
+        "height": 36,
+        "label": "Пропущено",
+        "reason": "Пропущено: вже вирішено або неактуально",
+        "optionsOpacity": 0.6,
+        "markBackground": "rgb(60, 64, 76)",
+        "insideFieldset": true,
+        "background": "rgb(20, 21, 27)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "posted": [
+      {
+        "questionId": "place",
+        "options": [
+          0
+        ]
+      },
+      {
+        "questionId": "deploy",
+        "options": [],
+        "skipped": true
+      }
+    ],
+    "record": "Відповідь · 20:55· «Готово»: місце і деплойдоставлено1Де закріпити список «Готово»? Зверху «Чекають на вас»2Коли деплоїти після мержу? ПропущеноTelegram: публікацію ще не записаноНадіслати в Telegram ще раз",
+    "pageErrors": []
+  },
+  {
+    "lang": "uk",
+    "scheme": "dark",
+    "width": 390,
+    "sideways": 0,
+    "skipRows": [
+      {
+        "question": "place",
+        "checked": false,
+        "disabled": false,
+        "height": 44,
+        "label": "Пропустити",
+        "reason": "Пропустити: вже вирішено або неактуально",
+        "optionsOpacity": 1,
+        "markBackground": "rgb(20, 21, 27)",
+        "insideFieldset": true,
+        "background": "rgba(0, 0, 0, 0)",
+        "borderStyle": "dashed",
+        "clipped": false,
+        "overlapsOptions": false
+      },
+      {
+        "question": "deploy",
+        "checked": true,
+        "disabled": false,
+        "height": 44,
+        "label": "Пропущено",
+        "reason": "Пропущено: вже вирішено або неактуально",
+        "optionsOpacity": 0.6,
+        "markBackground": "rgb(60, 64, 76)",
+        "insideFieldset": true,
+        "background": "rgb(20, 21, 27)",
+        "borderStyle": "solid",
+        "clipped": false,
+        "overlapsOptions": false
+      }
+    ],
+    "posted": [
+      {
+        "questionId": "place",
+        "options": [
+          0
+        ]
+      },
+      {
+        "questionId": "deploy",
+        "options": [],
+        "skipped": true
+      }
+    ],
+    "record": "Відповідь · 20:56· «Готово»: місце і деплойдоставлено1Де закріпити список «Готово»? Зверху «Чекають на вас»2Коли деплоїти після мержу? ПропущеноTelegram: публікацію ще не записаноНадіслати в Telegram ще раз",
     "pageErrors": []
   }
 ]

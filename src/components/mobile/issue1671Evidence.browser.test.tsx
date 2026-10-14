@@ -9876,8 +9876,8 @@ describe("short questionnaire rendered evidence", () => {
     const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, headless: true, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"] });
     const readings: unknown[] = [];
     try {
-      for (const lang of ["en", "uk"] as const) for (const taskId of ["t-search", "t-disk"]) {
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=questions`, { width: 390, height: 844 }, "light", lang, "reduce", true);
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const taskId of ["t-search", "t-disk"]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=questions`, { width: 390, height: 844 }, scheme, lang, "reduce", true);
         try {
           await page.waitForSelector("[data-mobile2-bar]");
           await page.locator('[data-phone-kanban-tab="assigned"]').click();
@@ -9914,10 +9914,15 @@ describe("short questionnaire rendered evidence", () => {
               expect(row.checked).toBe(row.question === question); expect(row.disabled).toBe(state === "decided");
               expect(row.borderStyle).toBe(row.checked ? "solid" : "dashed");
               if (row.checked) expect(row.background).not.toBe("rgba(0, 0, 0, 0)");
+              if (row.checked) expect(row.markBackground).not.toBe("rgba(0, 0, 0, 0)");
+              if (row.checked && state === "open") expect(row.optionsOpacity).toBeLessThan(1);
+              else expect(row.optionsOpacity).toBe(1);
+              if (!row.checked) expect(row.label).toBe(lang === "uk" ? "Пропустити" : "Skip");
+              expect(row.reason).toBe(row.checked ? (lang === "uk" ? "Пропущено: вже вирішено або неактуально" : "Skipped: already decided or no longer relevant") : (lang === "uk" ? "Пропустити: вже вирішено або неактуально" : "Skip: already decided or no longer relevant"));
             }
             expect(pageErrors).toEqual([]);
-            readings.push({ lang, taskId, state, width: 390, ...reading, pageErrors });
-            await page.screenshot({ path: path.join(out, `${lang}-${taskId}-${state}.png`) });
+            readings.push({ lang, scheme, taskId, state, width: 390, ...reading, pageErrors });
+            await page.screenshot({ path: path.join(out, `${scheme}-${lang}-${taskId}-${state}.png`) });
           }
         } finally { await context.close(); }
       }

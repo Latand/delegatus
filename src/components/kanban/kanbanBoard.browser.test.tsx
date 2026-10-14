@@ -28576,8 +28576,8 @@ describe("short questionnaire rendered evidence", () => {
     const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN, headless: true, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"] });
     const readings: unknown[] = [];
     try {
-      for (const lang of ["en", "uk"] as const) for (const taskId of ["t-upload", "t-disk"]) {
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=questions`, { width: 1440, height: 900 }, "light", lang, "reduce", false);
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const taskId of ["t-upload", "t-disk"]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=questions`, { width: 1440, height: 900 }, scheme, lang, "reduce", false);
         try {
           await page.locator(`[data-prototype-button="${taskId}"]`).click();
           await page.waitForSelector("[data-prototype-review] [data-prototype-questions]");
@@ -28606,10 +28606,15 @@ describe("short questionnaire rendered evidence", () => {
               expect(row.checked).toBe(row.question === question); expect(row.disabled).toBe(state === "decided");
               expect(row.borderStyle).toBe(row.checked ? "solid" : "dashed");
               if (row.checked) expect(row.background).not.toBe("rgba(0, 0, 0, 0)");
+              if (row.checked) expect(row.markBackground).not.toBe("rgba(0, 0, 0, 0)");
+              if (row.checked && state === "open") expect(row.optionsOpacity).toBeLessThan(1);
+              else expect(row.optionsOpacity).toBe(1);
+              if (!row.checked) expect(row.label).toBe(lang === "uk" ? "Пропустити" : "Skip");
+              expect(row.reason).toBe(row.checked ? (lang === "uk" ? "Пропущено: вже вирішено або неактуально" : "Skipped: already decided or no longer relevant") : (lang === "uk" ? "Пропустити: вже вирішено або неактуально" : "Skip: already decided or no longer relevant"));
             }
             expect(pageErrors).toEqual([]);
-            readings.push({ lang, taskId, state, width: 1440, ...reading, pageErrors });
-            await page.screenshot({ path: path.join(out, `${lang}-${taskId}-${state}.png`) });
+            readings.push({ lang, scheme, taskId, state, width: 1440, ...reading, pageErrors });
+            await page.screenshot({ path: path.join(out, `${scheme}-${lang}-${taskId}-${state}.png`) });
           }
         } finally { await context.close(); }
       }
@@ -28767,9 +28772,9 @@ describe("operator decision forms: the «Рішення» column beside the seat
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
     const readings: unknown[] = [];
     try {
-      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const width of [1440, 390]) {
         const phone = width === 390;
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?decisions=1`, { width, height: phone ? 844 : 900 }, "light", lang, "reduce", phone);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?decisions=1`, { width, height: phone ? 844 : 900 }, scheme, lang, "reduce", phone);
         try {
           if (phone) {
             await page.locator("[data-mobile2-seat-open]").click();
@@ -28789,10 +28794,13 @@ describe("operator decision forms: the «Рішення» column beside the seat
             expect(row.checked).toBe(row.question === "deploy"); expect(row.disabled).toBe(false);
             expect(row.borderStyle).toBe(row.checked ? "solid" : "dashed");
             if (row.checked) expect(row.background).not.toBe("rgba(0, 0, 0, 0)");
+            if (row.checked) expect(row.markBackground).not.toBe("rgba(0, 0, 0, 0)");
+            expect(row.optionsOpacity < 1).toBe(row.checked);
+            if (!row.checked) { expect(row.label).toBe(lang === "uk" ? "Пропустити" : "Skip"); expect(row.height).toBeLessThanOrEqual(phone ? 56 : 44); }
           }
           const sideways = await page.locator(card).evaluate(node => node.scrollWidth - node.clientWidth);
           expect(sideways).toBeLessThanOrEqual(1);
-          await page.screenshot({ path: path.join(out, `${width}-${lang}-open.png`) });
+          await page.screenshot({ path: path.join(out, `${scheme}-${width}-${lang}-open.png`) });
           await page.locator(`${card} [data-decision-send]`).click();
           const posts = await page.evaluate(() => (window as unknown as { decisionPosts: Array<{ answers: unknown[] }> }).decisionPosts);
           expect(posts).toHaveLength(1);
@@ -28803,8 +28811,8 @@ describe("operator decision forms: the «Рішення» column beside the seat
           expect(await record.locator('[data-decision-record-skipped="deploy"]').textContent()).toBe(lang === "uk" ? "Пропущено" : "Skipped");
           expect(await record.locator("[data-prototype-question-skip]").count()).toBe(0);
           expect(pageErrors).toEqual([]);
-          await page.screenshot({ path: path.join(out, `${width}-${lang}-decided.png`) });
-          readings.push({ lang, width, sideways, skipRows, posted: posts[0]!.answers, record: await record.textContent(), pageErrors });
+          await page.screenshot({ path: path.join(out, `${scheme}-${width}-${lang}-decided.png`) });
+          readings.push({ lang, scheme, width, sideways, skipRows, posted: posts[0]!.answers, record: await record.textContent(), pageErrors });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/operator-decisions", { recursive: true });

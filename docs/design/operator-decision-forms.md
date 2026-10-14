@@ -245,9 +245,14 @@ card's review button. Telegram (f3bc9ab1) posts it with the same format.
   exactly as in the review window.
 - The inline card has no whole-form «Пропустити»; the review window keeps
   that action, which takes the recommendations. In both surfaces every
-  question ends with its own «Пропустити: вже вирішено або неактуально» row,
-  stored as `{questionId, options: [], skipped: true}`. The seat is told that
-  question is settled and must not be asked again; its record reads «Пропущено».
+  question ends with its own «Пропустити» row, one line in the card and at
+  390 px; the full «Пропустити: вже вирішено або неактуально» is its tooltip and
+  accessible name. Pressed, the row reads «Пропущено» in bold with a filled
+  mark and the question's options dim, so it differs from an unanswered and an
+  answered question before saving. It is stored as
+  `{questionId, options: [], skipped: true}`. The seat is told that question is
+  settled and must not be asked again; the decided record keeps the longer
+  «Пропущено: вже вирішено або неактуально».
 - After «Відповісти» the card collapses at once to its answer record (each
   question with the chosen answer, the time, the delivery state), which is
   #2747's optimistic acceptance applied to the same route; delivery retries in

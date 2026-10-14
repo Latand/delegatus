@@ -86,15 +86,16 @@ export function DecisionQuestions({ questions, answers, open, onSelect, boxed = 
       <legend className="sr-only">{question.text}</legend>
       <div className={`${boxed ? "mb-2" : "mb-1.5"} flex items-start gap-1.5`}><span data-prototype-question-number="" className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-sm bg-sunken text-caption font-bold">{at + 1}</span><p className="m-0 min-w-0 flex-1 text-ui font-semibold text-primary [overflow-wrap:anywhere]">{question.text}</p></div>
       {question.multiple && !closed && !skipped ? <p data-prototype-hint="" className={`m-0 ${boxed ? "mb-2" : "mb-1.5"} text-label text-muted`}>{t("proto.q.multiple")}</p> : null}
-      <div role={question.multiple ? "group" : "radiogroup"} aria-label={question.text} className={`flex flex-col ${boxed ? "gap-1.5" : "gap-1"}`}>
+      <div role={question.multiple ? "group" : "radiogroup"} aria-label={question.text} className={`flex flex-col ${boxed ? "gap-1.5" : "gap-1"} ${skipped && open ? "opacity-60" : ""}`}>
         {question.options.map((option, index) => choice(index, option.label, option.recommended))}
         {question.other ? choice("other", t("proto.q.other")) : null}
       </div>
       {open || skipped ? <button type="button" role="checkbox" aria-checked={skipped} disabled={!open} data-prototype-question-skip={question.id}
-        className={`mt-1.5 flex ${row} w-full items-start gap-2 rounded-control border px-2.5 text-left text-ui focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default ${skipped ? "border-strong bg-sunken text-primary" : "border-dashed border-border bg-transparent text-secondary enabled:hover:border-accent/45"}`}
+        aria-label={t(skipped ? "proto.q.skippedOne" : "proto.q.skipOneAria")} title={t(skipped ? "proto.q.skippedOne" : "proto.q.skipOneAria")}
+        className={`mt-1.5 flex ${row} w-full items-start gap-2 rounded-control border px-2.5 text-left text-ui focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default ${skipped ? "border-strong bg-sunken font-semibold text-primary" : "border-dashed border-border bg-transparent text-secondary enabled:hover:border-accent/45"}`}
         onClick={() => onSelect(question.id, "skip")}>
-        <span aria-hidden data-prototype-skip-mark="" className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border border-border bg-sunken">{skipped ? <SkipForward className="h-3.5 w-3.5" /> : null}</span>
-        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{t(closed ? "proto.q.skippedOne" : "proto.q.skipOne")}</span>
+        <span aria-hidden data-prototype-skip-mark="" className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border ${skipped ? "border-strong bg-strong text-white" : "border-border bg-sunken"}`}>{skipped ? <SkipForward className="h-3.5 w-3.5" /> : null}</span>
+        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{t(closed ? "proto.q.skippedOne" : skipped ? "proto.q.skippedPending" : "proto.q.skipOne")}</span>
       </button> : null}
     </fieldset>;
   });

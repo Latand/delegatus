@@ -826,7 +826,10 @@ export async function capturePrototypeSkipRows(page: Page, scope: string) {
   return page.locator(scope).evaluate(frame => [...frame.querySelectorAll<HTMLButtonElement>("[data-prototype-question-skip]")].map(row => {
     const box = row.getBoundingClientRect(); const style = getComputedStyle(row); const fieldset = row.closest("fieldset"); const field = fieldset?.getBoundingClientRect();
     const options = [...fieldset?.querySelectorAll("[data-prototype-option], [data-prototype-other]") ?? []];
+    const group = fieldset?.querySelector("[role=radiogroup], [role=group]");
     return { question: row.dataset.prototypeQuestionSkip, checked: row.getAttribute("aria-checked") === "true", disabled: row.disabled, height: box.height,
+      label: row.textContent ?? "", reason: row.getAttribute("aria-label") ?? "", optionsOpacity: group ? Number(getComputedStyle(group).opacity) : 1,
+      markBackground: getComputedStyle(row.querySelector("[data-prototype-skip-mark]")!).backgroundColor,
       insideFieldset: !!fieldset && fieldset.dataset.prototypeQuestion === row.dataset.prototypeQuestionSkip,
       background: style.backgroundColor, borderStyle: style.borderTopStyle,
       clipped: !field || box.left < field.left - 0.5 || box.right > field.right + 0.5 || box.top < field.top - 0.5 || box.bottom > field.bottom + 0.5 || row.scrollWidth > row.clientWidth + 1,
