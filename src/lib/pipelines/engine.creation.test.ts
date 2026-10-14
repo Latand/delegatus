@@ -160,6 +160,7 @@ test.each(["expanded prompt", "role scaffold"] as const)("an oversized %s launch
     h.setPaneAlive(false);
     const { assertStructuredTextEnvelope } = await import("@/lib/runtime/structuredContent");
     const { renderStagePrompt } = await import("./prompts");
+    const { resolveStageTestGuidance } = await import("./testGuidance");
     const spawnAgent = h.ports.spawnAgent;
     h.ports.spawnAgent = (input, reserved) => {
       assertStructuredTextEnvelope(input.prompt);
@@ -172,7 +173,7 @@ test.each(["expanded prompt", "role scaffold"] as const)("an oversized %s launch
     }
     savePipelines([lane]);
     const previous = "Design head\n" + "🙂".repeat(12_000) + "\nDesign tail";
-    const expected = renderStagePrompt(lane, build, build.effectiveRole, previous);
+    const expected = renderStagePrompt(lane, build, build.effectiveRole, previous, undefined, resolveStageTestGuidance());
     expect(Buffer.byteLength(expected)).toBeGreaterThan(32_000);
     expect(await engineModule.reportStageCompletion({ verdict: "pass" },
       { kind: "agent", role: "architect", conversationId: "conversation_stage_1" }, h.ports))
