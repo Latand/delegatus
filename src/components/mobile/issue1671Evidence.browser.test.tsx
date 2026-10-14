@@ -1,3 +1,4 @@
+import { staleWorkingResponse } from "@/lib/agent/spawnProjection.fixture";
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
@@ -3475,6 +3476,95 @@ browserTest("#2072 slice 4 touch: the pager swipes, a column scrolls alone, a he
     stop();
   }
   fs.writeFileSync(path.join(COLUMNS_EVIDENCE, "columns-touch.json"), `${JSON.stringify({ results, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 300_000);
+
+/*
+ * Independent panel scroll on the phone (docs/design/independent-panel-scroll.md).
+ * The phone board has no page to carry a scroll to: the document does not
+ * overflow, the seat card, the tabs and the dock never leave the screen, and
+ * the four column pages are the only vertical scrollers, each contained. A
+ * finger dragged down at a column's top or up at its end moves nothing else.
+ * Readings go to `evidence/panel-scroll/phone.json`.
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=/usr/bin/google-chrome-stable \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "independent panel scroll"
+ */
+browserTest("independent panel scroll: the phone has no page to scroll, and a column at its end moves nothing else", async () => {
+  const out = path.resolve(process.env.LLV_KANBAN_FRAMES || ".artifacts/panel-scroll-phone");
+  fs.mkdirSync(out, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const results: unknown[] = [];
+  const failures: string[] = [];
+  const viewports = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
+  /* Every vertical scroller in the document with its place, and the places the board keeps on screen. */
+  const readScrollers = (page: Page) => page.evaluate(() => {
+    const tabs = document.querySelector<HTMLElement>("[data-phone-kanban-tabs]")!;
+    const seat = tabs.previousElementSibling as HTMLElement | null;
+    const box = (element: Element | null) => { const r = element?.getBoundingClientRect(); return r ? [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] : null; };
+    const scrollers = [document.documentElement, ...document.querySelectorAll<HTMLElement>("*")].filter((element) => {
+      const overflow = getComputedStyle(element).overflowY;
+      return element.scrollHeight > element.clientHeight + 1 && (element === document.documentElement || overflow === "auto" || overflow === "scroll");
+    }).map((element) => ({
+      name: element === document.documentElement ? "document" : element.getAttribute("data-phone-kanban-column") ? `column:${element.getAttribute("data-phone-kanban-column")}` : `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}${element.className ? `.${String(element.className).split(" ")[0]}` : ""}`,
+      top: Math.round(element.scrollTop), range: Math.round(element.scrollHeight - element.clientHeight),
+      overscrollY: getComputedStyle(element).overscrollBehaviorY, column: element.hasAttribute("data-phone-kanban-column"),
+    }));
+    return { scrollers, seat: box(seat), tabs: box(tabs), dock: box(document.querySelector("[data-mobile2-bar]")), scrollY: Math.round(scrollY) };
+  });
+  try {
+    for (const viewport of viewports) {
+      const key = `${viewport.width}x${viewport.height}`;
+      const fail = (label: string) => failures.push(`${key}: ${label}`);
+      const context = await browser.newContext({ viewport, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: "light" });
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const cdp = await context.newCDPSession(page);
+        await page.goto(`${fixtureBase}/?kanban=1#p=atlas`);
+        await page.waitForSelector("[data-phone-kanban] [data-phone-card]", { timeout: 20_000 });
+        await pause(page, 800);
+        const resting = await readScrollers(page);
+        const others = resting.scrollers.filter((scroller) => !scroller.column);
+        if (others.length) fail(`scrollers other than the columns overflow: ${JSON.stringify(others)}`);
+        for (const scroller of resting.scrollers) if (scroller.column && scroller.overscrollY !== "contain") fail(`${scroller.name} has overscroll-behavior-y ${scroller.overscrollY}`);
+        if (!resting.scrollers.some((scroller) => scroller.name === "column:assigned")) fail("the Assigned column does not overflow, so a finger has nothing to reach the end of");
+        const column = await rectOf(page, '[data-phone-kanban-column="assigned"]');
+        if (!column) throw new Error("no Assigned column");
+        const x = column.x + column.width / 2;
+        const midY = column.y + Math.min(column.height / 2, 200);
+        const reading: Record<string, unknown> = { viewport: key, resting };
+        for (const end of ["top", "end"] as const) {
+          await page.evaluate((end) => { const element = document.querySelector<HTMLElement>('[data-phone-kanban-column="assigned"]')!; element.scrollTop = end === "top" ? 0 : element.scrollHeight; }, end);
+          await pause(page, 400);
+          const before = await readScrollers(page);
+          /* The finger goes down the screen at the top and up it at the end, twice, the way a flick that has run out of list does. */
+          for (let drag = 0; drag < 2; drag += 1) {
+            await touch(cdp, end === "top" ? along([x, midY - 100], [x + 2, midY + 150], 12) : along([x, midY + 100], [x + 2, midY - 150], 12), 16);
+            await pause(page, 350);
+          }
+          const after = await readScrollers(page);
+          reading[end] = { before, after };
+          const named = (read: typeof before) => JSON.stringify(read.scrollers.map((scroller) => [scroller.name, scroller.top]));
+          if (named(before) !== named(after)) fail(`a finger at the ${end} of a column moved ${named(before)} → ${named(after)}`);
+          for (const place of ["seat", "tabs", "dock"] as const) if (JSON.stringify(before[place]) !== JSON.stringify(after[place])) fail(`a finger at the ${end} of a column moved the ${place}: ${JSON.stringify(before[place])} → ${JSON.stringify(after[place])}`);
+          if (after.scrollY !== 0) fail(`a finger at the ${end} of a column scrolled the document to ${after.scrollY}`);
+        }
+        await page.screenshot({ path: path.join(out, `${key}-column-end.png`) });
+        expect(pageErrors).toEqual([]);
+        results.push(reading);
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.mkdirSync("evidence/panel-scroll", { recursive: true });
+  fs.writeFileSync("evidence/panel-scroll/phone.json", `${JSON.stringify({ results, failures }, null, 2)}\n`);
   if (failures.length) throw new Error(failures.join("\n"));
 }, 300_000);
 
@@ -10963,4 +11053,74 @@ describe("delivery confirmation recovery", () => {
       fs.writeFileSync("evidence/delivery-confirmation/phone.json", JSON.stringify({ browser: browser.version(), cases: readings }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 420_000);
+});
+
+describe("stale working status", () => {
+  browserTest("stale working: phone task counts only the live neighbor", async () => {
+    const root = path.resolve(".artifacts/stale-working/phone");
+    fs.mkdirSync(root, { recursive: true });
+    const directory = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "stale-render-"));
+    const response = staleWorkingResponse(directory, Date.now());
+    const server = await serveEvidenceFixture(root, "src/components/mobile/issue1671Evidence.fixture.tsx", {
+      "/api/files": response.body, "/api/tasks": { tasks: response.body.tasks },
+    });
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
+    const viewport = { width: 390, height: 844 };
+    const readings: Record<string, unknown> = { viewport };
+    try {
+      for (const [lang, scheme] of [["uk", "light"], ["uk", "dark"], ["en", "light"], ["en", "dark"]] as const) {
+        const out = path.join(root, `${lang}-${scheme}`);
+        fs.mkdirSync(out, { recursive: true });
+        const word = (key: Parameters<typeof translate>[1]) => translate(lang, key);
+        const prefix = (key: Parameters<typeof translate>[1]) => word(key).split("{")[0]!;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stale-working#p=atlas`, viewport, scheme, lang, "reduce", true);
+        try {
+          const openTask = async () => {
+            await page.locator('[data-phone-card="task:stale-working"]').click();
+            await page.locator("[data-phone-task-body]").waitFor();
+          };
+          await openTask();
+          const surface = page.locator("[data-phone-task-body]");
+          const row = (file: { path: string }) => surface.locator(`[data-mobile2-path="${file.path}"]`);
+          const quiet = row(response.quiet), dead = row(response.dead), live = row(response.live);
+          await quiet.waitFor(); await dead.waitFor(); await live.waitFor();
+          expect(await surface.innerText()).toContain(word("kanban.motion.workingN").replace("{count}", "1"));
+          for (const quietRow of [quiet, dead]) {
+            expect(await quietRow.locator(".bg-success, .animate-pulse, [data-card-status=\"running\"]").count()).toBe(0);
+            expect(await quietRow.locator("[data-mobile2-phrase]").innerText()).not.toMatch(/\d+:\d{2}/);
+          }
+          expect(await surface.locator('[data-mobile2-state="working"]').count()).toBe(1);
+          expect(await live.locator(".bg-success").count()).toBe(1);
+          expect(await quiet.getAttribute("data-mobile2-state")).toBe("done");
+          expect(await dead.getAttribute("data-mobile2-state")).toBe("killed");
+          expect(await quiet.locator("[data-mobile2-phrase]").innerText()).toStartWith(prefix("mobile2.board.done"));
+          expect(await dead.locator("[data-mobile2-phrase]").innerText()).toStartWith(prefix("mobile2.board.killedAge"));
+          const reading: Record<string, unknown> = { quiet: await quiet.innerText(), dead: await dead.innerText(), live: await live.innerText() };
+          await page.screenshot({ path: path.join(out, "task.png"), fullPage: true });
+
+          for (const [name, file, state] of [["quiet", response.quiet, "mobile2.chat.stateDone"], ["dead", response.dead, "mobile2.chat.stateKilledAge"]] as const) {
+            await row(file).click();
+            const screen = page.locator('[data-mobile2-screen="chat"]');
+            await screen.waitFor();
+            await page.mouse.move(0, 0);
+            const header = screen.locator("[data-mobile2-chat-state]").first();
+            expect(await header.innerText()).toStartWith(prefix(state));
+            expect(await screen.locator('[data-turn-status="running"], [role="timer"]').count()).toBe(0);
+            expect(await screen.locator("[data-launch-chips], .animate-spin").count()).toBe(0);
+            expect(await screen.innerText()).not.toContain(file.spawn!.launchId.slice(0, 8));
+            const placeholder = await screen.locator("textarea").first().getAttribute("placeholder");
+            expect(placeholder).not.toBe(word("composer.placeholderSpawn"));
+            await page.screenshot({ path: path.join(out, `${name}-chat.png`) });
+            reading[`${name}Chat`] = { state: await header.innerText(), launchChips: 0, placeholder };
+            await page.locator("[data-mobile2-back]").first().click();
+            await surface.waitFor();
+          }
+          expect(pageErrors).toEqual([]);
+          readings[`${lang}-${scheme}`] = reading;
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/stale-working", { recursive: true });
+      fs.writeFileSync("evidence/stale-working/phone.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); fs.rmSync(directory, { recursive: true, force: true }); }
+  }, 300_000);
 });

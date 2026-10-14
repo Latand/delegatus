@@ -21,6 +21,8 @@ const handle: ToolProperty = { type: "string", minLength: 1, maxLength: 128 };
 const messages = { roles: optionalSet(["user", "assistant"]), since: optionalText(40), cursor, limit };
 const boardQuery = { ...optionalText(120), description: "Text query or whole PR reference (2800, #2800, PR 2800, pull request 2800). PR references match stored associations and linked tasks. Finished work is included unless status or state filters exclude it." };
 export const READ_SCHEMAS: Record<string, Record<string, ToolProperty>> = {
+  list_projects: {},
+  get_orchestrator: { project },
   list_tasks: { project, statuses: optionalSet(["inbox", "assigned", "blocked", "done"]), openOnly: { type: ["boolean", "null"] },
     query: boardQuery, ids: optionalSet(), cursor, limit },
   get_task: { project, taskId: handle },

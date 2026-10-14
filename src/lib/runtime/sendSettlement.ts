@@ -1,5 +1,6 @@
 import {
   agentRegistry,
+  conversationRegistryEntries,
   ownsItsSettlement,
   readOnlyConversationLookupFromSnapshot,
   type AgentRegistry,
@@ -1057,11 +1058,11 @@ export function lookupOriginalSend(file: RegistryFile, binding: OriginalSendBind
   if (!target) return { kind: "unresolved" };
   const matches = (conversationId: string): boolean => canonical(conversationId) === target;
   const operations = new Map<string, string | null>();
-  for (const delivery of Object.values(file.heldDeliveries)) {
+  for (const [, delivery] of conversationRegistryEntries(file, "heldDeliveries", target as ViewerConversationId)) {
     if (delivery.clientMessageId !== binding.clientMessageId || !matches(delivery.conversationId)) continue;
     operations.set(delivery.command.operationId, delivery.id);
   }
-  for (const [operationId, owner] of Object.entries(file.deliveryOperationOwners)) {
+  for (const [operationId, owner] of conversationRegistryEntries(file, "deliveryOperationOwners", target as ViewerConversationId)) {
     if (owner.clientMessageId !== binding.clientMessageId || owner.retryOfOperationId || !matches(owner.conversationId)) continue;
     if (!operations.has(operationId)) operations.set(operationId, owner.deliveryId);
   }

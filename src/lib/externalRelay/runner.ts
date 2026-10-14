@@ -3,8 +3,8 @@ import { relayRequestDeadline } from "./deadline";
 import { ownerRelayAuthorized } from "./ownerAuthority";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
-import { resolveOwnerBridgeContext, ownerNeedsClarification } from "./ownerBridgeContext";
-import { runOwnerAgent, ownerClarificationAnswer, type OwnerRunPorts } from "./ownerRun";
+import { resolveOwnerBridgeContext } from "./ownerBridgeContext";
+import { runOwnerAgent, type OwnerRunPorts } from "./ownerRun";
 import { readRelaySwitches } from "./switches";
 import { compactRequestSchema } from "./protocol";
 import { runCompactRequest } from "./compact";
@@ -488,7 +488,6 @@ export async function runClaimedRequest(
       try { owner.bridgeReport = resolveOwnerBridgeContext(request, owner, relay.api_base); }
       catch { owner.bridgeReport = null; }
     }
-    if (owner && !prototype && ownerNeedsClarification(owner)) return await finish({ lease_id: leaseId, outcome: "answered", answer: ownerClarificationAnswer(request, owner), duration_ms: 0 });
     if (owner) allowOwnerReply = () => ownerRelayAuthorized(relay.id, target.id, requestId);
     const context = conversationContext(request.input.requester);
     const usesConversation = !owner && readRelaySwitches().chat_conversations && request.chat && context;

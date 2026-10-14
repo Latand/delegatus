@@ -917,7 +917,10 @@ export type PipelineStageHostRef = {
 export type PipelineCloseReport = {
   /** Recorded hosts still awaiting teardown. */
   pending: PipelineStageHostRef[];
-  /** Pending while launch reconciliation, host, flow or worktree work is owed. */
+  /** Runtime-host continuation fences still awaiting cancellation. Older close
+      receipts omit this list. A host stop cannot settle these fences. */
+  pendingContinuations?: Array<PipelineStageHostRef & { conversationId: string; detail?: string }>;
+  /** Pending while launch reconciliation, continuation, host, flow or worktree work is owed. */
   status: "pending" | "settled";
   /** Hosts this close terminated, with termination evidenced. */
   stopped: PipelineStageHostRef[];
@@ -985,6 +988,8 @@ export type PipelineRemoteAction = {
 export type Pipeline = {
   closeTeardown?: PipelineCloseTeardown;
   closeReport?: PipelineCloseReport;
+  /** Flow ids created by a stale controller snapshot and retained until their cleanup succeeds. */
+  pendingReviewFlowCleanup?: string[];
   /** Retained until a close requested during spawn has completed teardown. */
   activationCloseRequested?: boolean;
   /** Viewer publication ownership. Agent tools remain unrestricted. */

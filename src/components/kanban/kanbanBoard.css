@@ -330,7 +330,7 @@
 .kb .col-head .spacer { flex: 1; }
 /* The bottom padding clears one receipt of two lines (56 px) and the stack's
    16 px foot, so a list scrolled to its end shows its last card above it. */
-.kb .col-body { contain: size layout style; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 4px 12px 84px; display: flex; flex-direction: column; gap: 12px; scrollbar-width: thin; }
+.kb .col-body { contain: size layout style; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 4px 12px 84px; display: flex; flex-direction: column; gap: 12px; scrollbar-width: thin; overscroll-behavior-y: contain; }
 /* A card whose contents the browser skips (`content-visibility: auto`, below)
    has no content to stop a flex item shrinking, and this column always
    overflows, so each skipped card was squeezed to its padding: 26 px in place
@@ -1044,7 +1044,12 @@
 .kb .seat:not(.side) [data-orchestrator-conversation] > [data-composer-yields] { min-height: 72px; }
 .kb .seat:not(.side) [data-orchestrator-conversation] form { max-height: none; flex-shrink: 1; min-height: 0; }
 .kb .seat [data-orchestrator-conversation] :is([data-turn-status], [data-live-tail-pill]) { display: none; }
-.kb .seat [data-orchestrator-conversation] [data-log-feed-scroller] { padding-top: 4px; padding-bottom: 0; }
+/* Each panel keeps its scroll to itself: at its top or end the wheel, a
+   trackpad or a key stops there and the page stays between the seat and the
+   board. The vertical axis only, since the sideways chain carries the board's
+   columns and the browser's back swipe. The page scrolls from its own bar and
+   from the heads (docs/design/independent-panel-scroll.md). */
+.kb .seat [data-orchestrator-conversation] [data-log-feed-scroller] { padding-top: 4px; padding-bottom: 0; overscroll-behavior-y: contain; }
 .kb .seat [data-orchestrator-conversation] [data-feed-state] { padding-bottom: 4px; }
 .kb .seat [data-orchestrator-conversation] [data-agent-control-strip] { padding-top: 2px; padding-bottom: 2px; }
 .kb .seat [data-orchestrator-conversation] form { padding-top: 4px; padding-bottom: 4px; }

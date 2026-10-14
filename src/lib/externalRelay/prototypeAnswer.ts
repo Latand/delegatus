@@ -30,7 +30,10 @@ export function runPrototypeAnswer(match: PrototypeAnswerMatch, replyTo: string,
         if (!decision) throw new Error("decision unavailable");
         const choices = decision.chosen.length ? `варіанти ${decision.chosen.join(", ")}` : "";
         const answers = decision.answers?.map((a, i) => `${i + 1}${a.options.map(n => String.fromCharCode(97 + n)).join("")}${a.other ? "+" : ""}`).join(" ");
-        text = `✅ Записав рішення «${round.title}»: ${[choices, answers ? `відповіді ${answers}` : ""].filter(Boolean).join("; ")}. ${decision.delivery.state === "no-orchestrator"
+        const note = decision.comment ? ` Слова збережено дослівно: «${decision.comment.slice(0, 500)}${decision.comment.length > 500 ? "…» (повний текст у Delegatus)" : "»"}.` : "";
+        const recorded = decision.recommendedWithReservation ? "рекомендовані з застереженням" : decision.skipped ? "рекомендовані"
+          : decision.answers?.some(a => a.other || a.customText) || (!decision.chosen.length && decision.originalReply) ? "власні відповіді" : "";
+        text = `✅ Записав рішення «${round.title}»: ${[recorded, choices, answers ? `відповіді ${answers}` : ""].filter(Boolean).join("; ")}.${note} ${decision.delivery.state === "no-orchestrator"
           ? "Оркестратора зараз немає; рішення збережено в Delegatus."
           : decision.delivery.state === "sent" ? "Оркестратор отримав його." : "Рішення збережено в Delegatus; стан доставки оркестратору — у вебрев’ю."}`;
       } catch (error) {

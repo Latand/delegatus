@@ -148,6 +148,48 @@ test("spawn catalog resolution leaves admission available", async () => {
   });
 });
 
+test("generic spawn cannot create a curator receipt without the pass admission callback", async () => {
+  const { claimPass } = await import("@/lib/memory/curation/store");
+  const { roleMemoryCollection, newRuleId, roleScope } = await import("@/lib/memory/roleStore");
+  const cwd = statePath("generic-curator-spawn-cwd");
+  fs.mkdirSync(cwd, { recursive: true });
+  const project = "generic-curator-fixture";
+  const scope = roleScope(project, "builder");
+  roleMemoryCollection(true)!.boundedPatch(20, tx => {
+    const id = newRuleId(tx);
+    const at = new Date().toISOString();
+    tx.put({ kind: "rule", id, scope, rule: "Read the current scope before changing a stored rule.", why: "Preserve scoped guidance during review.",
+      state: "active", hints: [], source: { project, pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_curator_fixture" }, createdAt: at, changedAt: at });
+    tx.put({ kind: "scope", scope, revision: 1, history: [], active: [id] });
+  });
+  const pass = claimPass({ project, repoDir: cwd, now: Date.now() });
+  expect(pass).not.toBeNull();
+  const dependencies = structuredRouteDependencies(cwd);
+  dependencies.resolveHealthySpawnAccount = async () => ({ engine: "codex", accountId: "codex-test", kind: "managed",
+    home: path.join(cwd, "codex"), transcriptRoot: path.join(cwd, "codex", "sessions"), env: { NODE_ENV: "test" } });
+  dependencies.resolveSpawnAccount = (_engine, accountId) => ({ engine: "codex", accountId: accountId ?? "codex-test", kind: "managed",
+    home: path.join(cwd, "codex"), transcriptRoot: path.join(cwd, "codex", "sessions"), env: { NODE_ENV: "test" } });
+  const previousCodexBinary = process.env.LLV_CODEX_BINARY;
+  const codexBinary = statePath("curator-codex-list-stub");
+  fs.writeFileSync(codexBinary, "#!/bin/sh\nprintf '[{\"name\":\"viewer\"}]'\n");
+  fs.chmodSync(codexBinary, 0o755);
+  process.env.LLV_CODEX_BINARY = codexBinary;
+  let response: Response;
+  try {
+    response = await executeSpawnRequest(new NextRequest("http://127.0.0.1/api/spawn", {
+      method: "POST", headers: { origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ clientAttemptId: pass!.id, title: "Role memory curation", engine: "codex", model: "gpt-6.1-sol", cwd, prompt: "inspect",
+        role: "curator", project, mcpServers: [] }),
+    }), { ...dependencies, defer: () => {} });
+  } finally {
+    if (previousCodexBinary === undefined) delete process.env.LLV_CODEX_BINARY;
+    else process.env.LLV_CODEX_BINARY = previousCodexBinary;
+  }
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ code: "curator_admission_refused" });
+  expect(agentRegistry().spawnReceiptForClientAttempt(pass!.id)).toBeNull();
+});
+
 test("seat credential capture leaves neighboring spawn, resume and send admission available", async () => {
   const auth = await import("@/lib/accounts/seatAuthCredentials");
   const { executeOrchestratorSeatRequest, productionSeatCommandDependencies } = await import("@/lib/orchestrator/seatCommand");

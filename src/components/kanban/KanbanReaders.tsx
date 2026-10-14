@@ -9,6 +9,7 @@ import type { FileEntry } from "@/lib/types";
 import { SpeakButton } from "@/components/feed/SpeakButton";
 import { BranchPane } from "@/components/BranchPane";
 import { mobileRowState, rowStateWord } from "@/components/mobile/mobileBoardModel";
+import { isSettledLaunchPlaceholder } from "@/components/launchHistoryModel";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 import { EffortScale } from "@/components/EffortPills";
 import { EngineMark } from "@/components/EngineMark";
@@ -247,7 +248,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
   /* PID and Stop host live in the actions menu, so the header keeps its title. */
   const kill = useProcessKill(file);
   const row = mobileRowState(file, now);
-  const stateWord = rowStateWord(t, row);
+  const stateWord = rowStateWord(t, { ...row, settledLaunch: isSettledLaunchPlaceholder(file) });
   const tone = DOT_TONE[row.dot] ?? "tone-neutral";
   const working = row.key === "working";
   const engine = file.engine === "claude" || file.engine === "codex" ? file.engine : null;
