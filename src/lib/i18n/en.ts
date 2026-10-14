@@ -4617,6 +4617,7 @@ export const en = {
   "kanban.memberState.working": "working",
   "kanban.memberState.returned": "turn finished",
   "kanban.memberState.done": "idle",
+  "kanban.memberState.launchDone": "done",
   "kanban.pipeline": "Pipeline",
   "kanban.pipelineAria": "{title}: {progress}",
   "kanban.actor.agent": "an agent",

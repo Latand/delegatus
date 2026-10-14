@@ -18,6 +18,7 @@ import type { FileEntry } from "@/lib/types";
 import { isAwaitingUser } from "@/hooks/useSwitchboardData";
 
 import { LaunchChips } from "./conversation/LaunchChips";
+import { isSettledLaunchPlaceholder } from "./launchHistoryModel";
 import { MandateCard, MandateConversationContext } from "./feed/cards/MandateCard";
 import { FeedSkeleton } from "./skeletons";
 import { mergeAssistantRows, retainedAssistantItems, useAssistantHandoff } from "./conversation/assistantRows";
@@ -425,6 +426,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      the launch that is still becoming it (issue #569) — the same chips either
      way, because it is the same window. */
   const launch = file?.launch ?? file?.spawn ?? null;
+  /* A placeholder the projection no longer counts live (its host is gone, or
+     its turn ended) is starting nothing: the window keeps the header's settled
+     reading and drops the launch's pending chips. */
+  const launchSettled = Boolean(file && isSettledLaunchPlaceholder(file));
   /* Exact launch ownership (issue #922): the server canonicalizes aliases and
      projects the native generation. The client joins on both durable values and
      never infers ownership from a path, queue key, or alias. */
@@ -2143,7 +2148,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
                     {mandateCard ? (
                       <MandateCard item={{ kind: "mandate", ts: mandateCard.ts, text: mandateCard.text, mandate: mandateCard.mandate }} />
                     ) : null}
-                    <LaunchChips launch={launch!} onRetry={onLaunchRetry} />
+                    {launchSettled ? null : <LaunchChips launch={launch!} onRetry={onLaunchRetry} />}
                   </div>
                 );
               }

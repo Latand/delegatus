@@ -151,12 +151,18 @@ export function entryIsLive(entry: AgentRegistryEntry, probe: LivenessProbe): bo
 /**
  * An open launch receipt is live while its admission owner, its verified host,
  * or the entry it settled into is live — otherwise only inside the unproven
- * launch grace window.
+ * launch grace window. A settled receipt also remains live while its structured
+ * entry has a verified process and an active turn.
  */
 export function receiptIsLive(file: RegistryFile, receipt: SpawnReceipt, probe: LivenessProbe): boolean {
+  const entry = receipt.key ? file.entries[sessionKeyId(receipt.key)] : undefined;
+  /* Route recovery can complete a receipt before transcript publication
+     finishes. A verified structured host with an active turn remains the
+     stronger liveness evidence until that turn ends. */
+  if (entry?.structuredHost?.activeTurnRef
+    && identityAlive(entry.structuredHost.process, probe)) return true;
   if (!OPEN_RECEIPT_STATES.has(receipt.state)) return false;
   if (receiptProcessEvidence(receipt, probe)?.state === "alive") return true;
-  const entry = receipt.key ? file.entries[sessionKeyId(receipt.key)] : undefined;
   if (entry && entryIsLive(entry, probe)) return true;
   return withinGrace(receipt.createdAt, probe);
 }

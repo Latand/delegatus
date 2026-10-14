@@ -34,6 +34,12 @@ import { ADMISSION_RETRY_DEADLINE_MS, INITIAL_MESSAGE_TIMEOUT_MS, STALE_STRUCTUR
 import { materializeStructuredTerminal } from "./structuredTerminal";
 import { structuredContentDigest } from "./structuredContent";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
+import { claimPass, patchPass, readPass } from "@/lib/memory/curation/store";
+import { newRuleId, roleMemoryCollection, roleScope } from "@/lib/memory/roleStore";
+import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
+import { defaultSeatTickSettings } from "@/lib/monitor/seatTickSettings";
+import { emptySeatTickState } from "@/lib/monitor/types";
+import { writeSeatTickState } from "@/lib/monitor/seatTickState";
 
 type UnsequencedEvent = RuntimeEvent extends infer Event
   ? Event extends RuntimeEvent ? Omit<Event, "seq"> : never
@@ -6178,6 +6184,85 @@ test.each(["healthy", "uncertain acknowledgement", "payload timeout"] as const)(
   expect(host.sent[0]?.text).toBe("recover this original first message");
   await bindStructuredDeliveryQueue([]);
   journal.close();
+});
+
+test.each(["missing seat", "eligible seat"] as const)("a recreated controller recovers a staged curator with durable admission (%s)", async seatState => {
+  const id = crypto.randomUUID();
+  const project = `repo-curator-stage-${id}`;
+  const scope = roleScope(project, "builder");
+  roleMemoryCollection(true)!.boundedPatch(20, tx => {
+    const ruleId = newRuleId(tx);
+    tx.put({ kind: "rule", id: ruleId, scope, rule: "Check the fixture project before applying memory changes.",
+      why: "This active rule opens a real curation pass.", state: "active", hints: [],
+      source: { project, pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" },
+      createdAt: new Date().toISOString(), changedAt: new Date().toISOString() });
+    tx.put({ kind: "scope", scope, revision: 1, history: [], active: [ruleId] });
+  });
+  const pass = claimPass({ project, repoDir: sandbox, now: Date.now() })!;
+  const cwd = path.join(sandbox, `durable-staged-curator-${id}`);
+  fs.mkdirSync(cwd, { recursive: true });
+  const artifactPath = path.join(cwd, `${id}.jsonl`);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeClient(journal);
+  const host = new RoundTripHost("codex", artifactPath, id);
+  const key = { engine: "codex" as const, sessionId: id };
+  await bindStructuredDeliveryQueue([], { registry, client });
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", accountId: "work",
+    role: "curator", explicitProject: project, clientAttemptId: pass.id,
+    launchProfile: { cwd, project, role: "curator" as never, title: "Role memory curation" } });
+  if (begun.kind !== "created") throw new Error("curator staged receipt did not materialize");
+  patchPass(pass.id, { state: "running", launchedAt: new Date().toISOString(), conversationId: begun.receipt.conversationId, launchId: begun.receipt.launchId });
+  const response = await spawnStructuredConversation({
+    engine: "codex", receipt: begun.receipt, registry, client, prompt: "recover this original curator message",
+    spec: { engine: "codex", command: "codex", cwd, windowName: "curator-recovery" },
+    account: { engine: "codex", accountId: "work", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+  }, {
+    startHost: async () => host,
+    bindHost: async (store, target, running, owner, epoch) => {
+      const state = await running.health();
+      store.setStructuredHostClaimed(target, {
+        kind: "codex-app-server", endpoint: state.endpoint,
+        process: { pid: process.pid, startIdentity: "recovered-test-host" },
+        eventCursor: state.eventCursor, protocolVersion: state.protocolVersion, writerClaimEpoch: epoch,
+        activeTurnRef: state.activeTurnRef, pendingAttention: state.pendingAttention, activeFlags: state.activeFlags,
+      }, "idle", owner, epoch);
+      return () => {};
+    },
+    publishHost: async () => { throw new RuntimeHostUnavailableError("runtime host request timed out"); },
+  });
+  expect(response).toMatchObject({ state: "path-pending", initialMessage: "queued" });
+  (process as typeof process & { __llvStagedContinuations?: Map<string, unknown> }).__llvStagedContinuations?.delete(begun.receipt.launchId);
+  const reopened = new AgentRegistry(registry.filename, undefined, undefined, { sqliteMode: "off" });
+  await bindStructuredDeliveryQueue([{ key, host }], { registry: reopened, client });
+  const now = Date.now();
+  writeSeatTickState(project, { ...emptySeatTickState(), seatEpoch: 1, lastWakeAt: new Date(now - 60_000).toISOString() });
+  const seatPath = path.join(cwd, "seat.jsonl"); fs.writeFileSync(seatPath, "");
+  const seat = reopened.ensureConversation("codex", seatPath, "work");
+  const sources = { ...defaultSeatTickSources(), now: () => now, registry: () => reopened,
+    settings: () => defaultSeatTickSettings(project),
+    seatFor: () => ({ active: seatState === "missing seat" ? null : { conversationId: seat.id, seatEpoch: 1,
+      designatedAt: new Date(now - 24 * 60 * 60_000).toISOString(), path: seatPath }, pending: null, history: [] }) as never,
+    liveness: async () => seatState === "missing seat" ? [] : [{ conversationId: seat.id,
+      host: { state: "alive", pid: process.pid, kind: "structured" }, lifecycle: "waiting" }] as never };
+  const { recoverStagedStructuredLaunch } = await import("./structuredSpawn");
+  try {
+    await recoverStagedStructuredLaunch(begun.receipt.launchId, reopened, client, { curationSources: sources as never });
+    await kickStructuredDeliveryQueue();
+    if (seatState === "missing seat") {
+      expect(host.sent).toEqual([]);
+      expect(readPass(pass.id)).toMatchObject({ state: "failed", failure: expect.stringContaining("abandoned") });
+      expect(stagedLaunchRecovery(reopened.snapshot().receipts[begun.receipt.launchId])?.stopped).toBe(true);
+    } else {
+      await waitFor(() => host.sent.length === 1);
+      expect(readPass(pass.id)?.state).toBe("running");
+      expect(host.sent[0]?.text).toBe("recover this original curator message");
+    }
+  } finally {
+    if (!["failed", "succeeded"].includes(readPass(pass.id)?.state ?? "")) patchPass(pass.id, { state: "failed", failure: "fixture cleanup", endedAt: new Date().toISOString() });
+    journal.close();
+    await bindStructuredDeliveryQueue([]);
+  }
 });
 
 /*

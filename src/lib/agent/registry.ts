@@ -5754,11 +5754,9 @@ export class AgentRegistry {
       const target = file.receipts[launchId];
       if (!target) throw new Error("spawn receipt is missing");
       const conversationId = resolveConversationAlias(file, target.conversationId);
-      for (const receipt of Object.values(file.receipts)) {
-        if (resolveConversationAlias(file, receipt.conversationId) === conversationId) {
-          receipt.spawnCapabilityDigest = null;
-          receipt.pendingSpawnCapability = null;
-        }
+      for (const receipt of registryRowsMatching(file, "receipts", "conversationId", conversationIdentities(file, conversationId))) {
+        receipt.spawnCapabilityDigest = null;
+        receipt.pendingSpawnCapability = null;
       }
       target.spawnCapabilityDigest = digest;
       return capability;
@@ -5787,8 +5785,7 @@ export class AgentRegistry {
         || conversation.migration.phase === "committed")) {
         throw new Error("migration capability publication ownership is stale");
       }
-      const receipts = Object.values(file.receipts)
-        .filter((receipt) => resolveConversationAlias(file, receipt.conversationId) === owner)
+      const receipts = registryRowsMatching(file, "receipts", "conversationId", conversationIdentities(file, owner))
         .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
       const current = receipts[0];
       if (!current) return null;

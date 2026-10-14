@@ -4526,6 +4526,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.memberState.working": "працює",
   "kanban.memberState.returned": "хід завершено",
   "kanban.memberState.done": "без руху",
+  "kanban.memberState.launchDone": "готово",
   "kanban.pipeline": "Пайплайн",
   "kanban.pipelineAria": "{title}: {progress}",
   "kanban.actor.agent": "агент",

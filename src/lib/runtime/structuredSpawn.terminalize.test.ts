@@ -6,6 +6,12 @@ import { expect, spyOn, test } from "bun:test";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { spawnResponseForReceipt } from "@/lib/agent/spawnResponse";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { claimPass, patchPass, readPass } from "@/lib/memory/curation/store";
+import { newRuleId, roleMemoryCollection, roleScope } from "@/lib/memory/roleStore";
+import { defaultSeatTickSettings } from "@/lib/monitor/seatTickSettings";
+import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
+import { emptySeatTickState } from "@/lib/monitor/types";
+import { writeSeatTickState } from "@/lib/monitor/seatTickState";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import {
@@ -865,12 +871,14 @@ test("the actuation cap bounds one cycle and the remainder converges on the next
   }
 });
 
-function queuedOwnerFixture(transport: "tmux" | "structured") {
+function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: string; project: string; receiptProject?: string }) {
   const store = registry();
   const cwd = path.dirname(store.filename);
-  const profile = emptyLaunchProfile({ cwd, title: "Owner queue fixture" });
+  const profile = emptyLaunchProfile({ cwd, title: curator ? "Role memory curation" : "Owner queue fixture",
+    ...(curator ? { project: curator.project, role: "curator" as never } : {}) });
   const begun = store.beginSpawnRequest({ engine: "claude", cwd, transport, ownStartingActuation: true, accountPin: true, accountId: "account-a",
-    clientAttemptId: `relay-owner-queued-${transport}`, launchProfile: profile });
+    ...(curator ? { role: "curator", explicitProject: curator.receiptProject ?? curator.project } : {}),
+    clientAttemptId: curator?.id ?? `relay-owner-queued-${transport}`, launchProfile: profile });
   if (begun.kind !== "created" || !begun.receipt.admissionOwner) throw Error("queued owner fixture unavailable");
   const prompt = "Owner queue fixture instruction";
   store.queuePinnedSpawn(begun.receipt.launchId, { version: 1, retryAt: new Date(0).toISOString(), accountId: "account-a", locale: "en",
@@ -878,6 +886,49 @@ function queuedOwnerFixture(transport: "tmux" | "structured") {
     prompt, imageRefs: [], parentArtifactPath: null, pipelineSourceConversationId: null }, "Owner queue fixture");
   store.releaseSpawnActuation(begun.receipt.launchId, begun.receipt.admissionOwner);
   return { store, cwd, receipt: begun.receipt };
+}
+
+function claimedCurator(project: string) {
+  const scope = roleScope(project, "builder");
+  roleMemoryCollection(true)!.boundedPatch(20, tx => {
+    const id = newRuleId(tx);
+    tx.put({ kind: "rule", id, scope, rule: "Inspect the scope before changing stored guidance.",
+      why: "The rule is a durable curation fixture.", state: "active", hints: [],
+      source: { project, pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" },
+      createdAt: new Date().toISOString(), changedAt: new Date().toISOString() });
+    const prior = tx.get(`s:${scope}`);
+    tx.put({ kind: "scope", scope, revision: prior?.kind === "scope" ? prior.revision + 1 : 1,
+      history: prior?.kind === "scope" ? prior.history : [], active: [...(prior?.kind === "scope" ? prior.active : []), id] });
+  });
+  return claimPass({ project, repoDir: "/repo", now: Date.now() })!;
+}
+
+function curatorSources(store: AgentRegistry, project: string, state: { seat: "live" | "missing" | "dead"; wake: "recent" | "stale" }) {
+  const now = Date.now();
+  const seatFile = path.join(path.dirname(store.filename), "curator-seat.jsonl");
+  fs.writeFileSync(seatFile, "");
+  const seat = store.ensureConversation("codex", seatFile, "account-a");
+  const sources = {
+    ...defaultSeatTickSources(),
+    now: () => now,
+    registry: () => store,
+    settings: () => defaultSeatTickSettings(project),
+    seatFor: () => ({ active: state.seat === "missing" ? null : { conversationId: seat.id, seatEpoch: 1,
+      designatedAt: new Date(now - 24 * 60 * 60_000).toISOString(), path: seatFile }, pending: null, history: [] }) as never,
+    liveness: async () => state.seat === "dead" ? [{ conversationId: seat.id, host: { state: "dead", pid: null, kind: "structured" }, lifecycle: "gone" }] as never
+      : [{ conversationId: seat.id, host: { state: "alive", pid: process.pid, kind: "structured" }, lifecycle: "waiting" }] as never,
+  };
+  writeSeatTickState(project, { ...emptySeatTickState(), seatEpoch: 1,
+    lastWakeAt: new Date(now - (state.wake === "stale" ? 30 * 24 * 60 : 1) * 60_000).toISOString() });
+  return sources;
+}
+
+function queuedCuratorFixture(transport: "tmux" | "structured", eligibility: { seat: "live" | "missing" | "dead"; wake: "recent" | "stale" }, foreignReceipt = false) {
+  const project = `repo-curator-${crypto.randomUUID()}`;
+  const pass = claimedCurator(project);
+  const { store, cwd, receipt } = queuedOwnerFixture(transport, { id: pass.id, project, ...(foreignReceipt ? { receiptProject: `${project}-foreign` } : {}) });
+  patchPass(pass.id, { state: "running", launchedAt: new Date().toISOString(), conversationId: receipt.conversationId, launchId: receipt.launchId });
+  return { project, pass, store, cwd, receipt, sources: curatorSources(store, project, eligibility) };
 }
 
 for (const transport of ["tmux", "structured"] as const)
@@ -901,6 +952,95 @@ for (const writerRefused of [false, true]) test(`queued ${transport} owner cutof
     writer.mockRestore();
     expect(await settleOwnerFirstPrompt(receipt.clientAttemptId!, receipt.conversationId, store)).toEqual({ confirmed: true, pending: false });
   } finally { writer.mockRestore(); store.close(); fs.rmSync(cwd, { recursive: true, force: true }); }
+});
+
+for (const transport of ["tmux", "structured"] as const)
+for (const ineligible of ["missing", "dead", "stale"] as const) test(`queued ${transport} curator recovery abandons a ${ineligible} seat without starting a process`, async () => {
+  const eligibility: { seat: "live" | "missing" | "dead"; wake: "recent" | "stale" } = {
+    seat: ineligible === "missing" ? "missing" : ineligible === "dead" ? "dead" : "live",
+    wake: ineligible === "stale" ? "stale" : "recent",
+  };
+  const { store, cwd, receipt, pass, sources } = queuedCuratorFixture(transport, eligibility);
+  let launches = 0;
+  try {
+    await terminalizeStaleStructuredSpawns(store, transport === "structured" ? DEAD_RUNTIME_CLIENT : null, {
+      curationSources: sources as never,
+      resolveSpawnAccount: () => ({ engine: "claude", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+      spawnTmuxAgent: async () => { launches++; throw Error("ineligible curator reached tmux launch"); },
+      spawnStructuredConversation: async () => { launches++; return { state: "running" } as never; },
+    });
+    expect(launches).toBe(0);
+    expect(store.readOnlySnapshot().receipts[receipt.launchId]).toMatchObject({ state: "failed", queuedPinnedSpawn: null });
+    expect(readPass(pass.id)).toMatchObject({ state: "failed", failure: expect.stringContaining("abandoned") });
+  } finally {
+    if (readPass(pass.id)?.state !== "failed" && readPass(pass.id)?.state !== "succeeded") patchPass(pass.id, { state: "failed", failure: "fixture cleanup", endedAt: new Date().toISOString() });
+    store.close(); fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+for (const transport of ["tmux", "structured"] as const) test(`queued ${transport} curator recovery rechecks its seat after account admission`, async () => {
+  const eligibility: { seat: "live" | "missing" | "dead"; wake: "recent" | "stale" } = { seat: "live", wake: "recent" };
+  const { store, cwd, receipt, pass, sources } = queuedCuratorFixture(transport, eligibility);
+  let launches = 0;
+  try {
+    await terminalizeStaleStructuredSpawns(store, transport === "structured" ? DEAD_RUNTIME_CLIENT : null, {
+      curationSources: sources as never,
+      resolveSpawnAccount: () => ({ engine: "claude", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => {
+        eligibility.seat = "missing";
+        return { kind: "admissible", basis: "current", stale: false, retryAt: null };
+      },
+      spawnTmuxAgent: async () => { launches++; throw Error("seat-change curator reached tmux launch"); },
+      spawnStructuredConversation: async () => { launches++; return { state: "running" } as never; },
+    });
+    expect(launches).toBe(0);
+    expect(store.readOnlySnapshot().receipts[receipt.launchId]).toMatchObject({ state: "failed", queuedPinnedSpawn: null });
+    expect(readPass(pass.id)).toMatchObject({ state: "failed", failure: expect.stringContaining("abandoned") });
+  } finally {
+    if (readPass(pass.id)?.state !== "failed" && readPass(pass.id)?.state !== "succeeded") patchPass(pass.id, { state: "failed", failure: "fixture cleanup", endedAt: new Date().toISOString() });
+    store.close(); fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+for (const transport of ["tmux", "structured"] as const) test(`queued ${transport} curator recovery actuates when its seat and delivered wake remain eligible`, async () => {
+  const { store, cwd, receipt, pass, sources } = queuedCuratorFixture(transport, { seat: "live", wake: "recent" });
+  let launches = 0;
+  try {
+    await terminalizeStaleStructuredSpawns(store, transport === "structured" ? DEAD_RUNTIME_CLIENT : null, {
+      curationSources: sources as never,
+      resolveSpawnAccount: () => ({ engine: "claude", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+      spawnTmuxAgent: async () => { launches++; return { paneId: "%curator-fixture", display: "curator-fixture" }; },
+      spawnStructuredConversation: async () => { launches++; return { state: "running" } as never; },
+    });
+    expect(launches).toBe(1);
+    expect(store.readOnlySnapshot().receipts[receipt.launchId]?.state).not.toBe("failed");
+    expect(readPass(pass.id)?.state).toBe("running");
+  } finally {
+    if (readPass(pass.id)?.state !== "failed" && readPass(pass.id)?.state !== "succeeded") patchPass(pass.id, { state: "failed", failure: "fixture cleanup", endedAt: new Date().toISOString() });
+    store.close(); fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+for (const transport of ["tmux", "structured"] as const) test(`queued ${transport} curator recovery refuses a foreign-project receipt`, async () => {
+  const { store, cwd, receipt, pass, sources } = queuedCuratorFixture(transport, { seat: "live", wake: "recent" }, true);
+  let launches = 0;
+  try {
+    await terminalizeStaleStructuredSpawns(store, transport === "structured" ? DEAD_RUNTIME_CLIENT : null, {
+      curationSources: sources as never,
+      resolveSpawnAccount: () => ({ engine: "claude", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+      spawnTmuxAgent: async () => { launches++; throw Error("foreign-project curator reached tmux launch"); },
+      spawnStructuredConversation: async () => { launches++; return { state: "running" } as never; },
+    });
+    expect(launches).toBe(0);
+    expect(store.readOnlySnapshot().receipts[receipt.launchId]).toMatchObject({ state: "failed", queuedPinnedSpawn: null });
+    expect(readPass(pass.id)?.project).toBe(pass.project);
+  } finally {
+    if (readPass(pass.id)?.state !== "failed" && readPass(pass.id)?.state !== "succeeded") patchPass(pass.id, { state: "failed", failure: "fixture cleanup", endedAt: new Date().toISOString() });
+    store.close(); fs.rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 for (const transport of ["tmux", "structured"] as const) test(`queued ${transport} owner recovery rechecks authorization after account admission waits`, async () => {

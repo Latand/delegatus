@@ -1,0 +1,66 @@
+{
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "uk-light": {
+    "quiet": "Completed launch\nготово · 30 хв 1 с\n·\ngpt-6.1-sol\n·\nзапущено 30 хв тому",
+    "dead": "Dead mid-turn\nвбито · 30 хв 1 с\n·\ngpt-6.1-sol\n·\nзапущено 30 хв тому",
+    "live": "Live agent\nпрацює 1:01\n·\ngpt-6.1-sol",
+    "quietChat": {
+      "state": "готово · 30 хв тому",
+      "launchChips": 0,
+      "placeholder": "написати агенту…"
+    },
+    "deadChat": {
+      "state": "вбито · 30 хв тому",
+      "launchChips": 0,
+      "placeholder": "вбито · текст чекає в черзі до перезапуску"
+    }
+  },
+  "uk-dark": {
+    "quiet": "Completed launch\nготово · 30 хв 2 с\n·\ngpt-6.1-sol\n·\nзапущено 30 хв тому",
+    "dead": "Dead mid-turn\nвбито · 30 хв 2 с\n·\ngpt-6.1-sol\n·\nзапущено 30 хв тому",
+    "live": "Live agent\nпрацює 1:02\n·\ngpt-6.1-sol",
+    "quietChat": {
+      "state": "готово · 30 хв тому",
+      "launchChips": 0,
+      "placeholder": "написати агенту…"
+    },
+    "deadChat": {
+      "state": "вбито · 30 хв тому",
+      "launchChips": 0,
+      "placeholder": "вбито · текст чекає в черзі до перезапуску"
+    }
+  },
+  "en-light": {
+    "quiet": "Completed launch\ndone · 30m 3s\n·\ngpt-6.1-sol\n·\nstarted 30m ago",
+    "dead": "Dead mid-turn\nkilled · 30m 3s\n·\ngpt-6.1-sol\n·\nstarted 30m ago",
+    "live": "Live agent\nworking 1:03\n·\ngpt-6.1-sol",
+    "quietChat": {
+      "state": "done · 30m ago",
+      "launchChips": 0,
+      "placeholder": "message the agent…"
+    },
+    "deadChat": {
+      "state": "killed · 30m ago",
+      "launchChips": 0,
+      "placeholder": "killed · text queues until a respawn"
+    }
+  },
+  "en-dark": {
+    "quiet": "Completed launch\ndone · 30m 4s\n·\ngpt-6.1-sol\n·\nstarted 30m ago",
+    "dead": "Dead mid-turn\nkilled · 30m 4s\n·\ngpt-6.1-sol\n·\nstarted 30m ago",
+    "live": "Live agent\nworking 1:04\n·\ngpt-6.1-sol",
+    "quietChat": {
+      "state": "done · 30m ago",
+      "launchChips": 0,
+      "placeholder": "message the agent…"
+    },
+    "deadChat": {
+      "state": "killed · 30m ago",
+      "launchChips": 0,
+      "placeholder": "killed · text queues until a respawn"
+    }
+  }
+}
