@@ -725,9 +725,13 @@ and acknowledges a question as soon as it takes it.
 
 When the target, the chat or the install is busy, a question waits instead
 of failing: it is acknowledged, the service sees the `queued` step if it
-shows steps, and it is answered once room opens, within two minutes of the
-moment it was asked. A question still waiting ten seconds before that is
-declined as busy. Member quotas and accounts with no room answer at once.
+shows steps, and it starts once room opens. The wait has a budget of two
+minutes from the moment the question was asked, and a question still
+waiting ten seconds before the end of that budget is declined as busy.
+The budget bounds only the wait: an answer that has started keeps running
+under the target's hard cap and may arrive after the two minutes, and a
+service that enforces its own deadline can end it there. Member quotas and
+accounts with no room answer at once.
 The protocol is in [docs/design/relay.md](docs/design/relay.md).
 
 <a id="connect-an-orchestrator-through-mcp"></a>
