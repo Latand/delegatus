@@ -3166,3 +3166,16 @@ test("prototype publication tells callers about the critic gate and fresh refusa
     await server.close();
   }
 });
+
+
+test("native admission refusals disclose no binding and only inventory pending is retryable", async () => {
+  for (const reason of ["session-not-scanned", "session-record-missing", "capability-unresolved"] as const) {
+    const harness = recoveryHarness({ ...UNIDENTIFIED, admission: { reason, retryable: reason === "session-not-scanned" } });
+    const answer = await harness.service.callTool("send_message", SEND);
+    expect(answer).toEqual({ ok: false, toolName: "send_message", clientRequestId: SEND.clientRequestId, replayed: false,
+      error: expect.stringContaining(`[${reason}]`), code: "caller_unidentified", retryable: reason === "session-not-scanned" });
+    expect(answer.error).toContain("open the conversation in Delegatus");
+    expect(harness.bindingCalls).toHaveLength(0); expect(harness.recoverCalls).toHaveLength(0);
+    expect(await harness.store.lookup(`send_message:${SEND.clientRequestId}`)).toBeNull();
+  }
+});

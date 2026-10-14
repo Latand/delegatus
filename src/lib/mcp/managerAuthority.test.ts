@@ -6,7 +6,7 @@ import { attentionCallerAuthority, type AttentionCallerSources } from "@/lib/att
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 
-import { capabilityConversationResolver, hostedConversationsFromSnapshot } from "./bindings";
+import { callerAttributionFrom, mcpSpawnLauncher, capabilityConversationResolver, hostedConversationsFromSnapshot } from "./bindings";
 import { mcpCallerIdentity, permitMcpTool, type ManagerTarget } from "./toolAllowlist";
 
 /* The measured production bug, reproduced end to end through the real pieces:
@@ -165,4 +165,30 @@ test("authority survives host death and generation change: the same capability k
   expect(authority).toEqual({ kind: "worker", conversationId: MANAGER_ID, role: "orchestrator" });
   const target = managerTargetFor(managerSources());
   expect(mcpCallerIdentity(authority, target)).toEqual({ kind: "unrestricted", reason: "manager" });
+});
+
+
+test("hosted PID evidence rejects PID reuse, missing start identity and boot mismatch", () => {
+  const snapshot = nullPidSnapshot();
+  const entry = Object.values(snapshot.entries)[0]!;
+  const host = { pid: 4241, startIdentity: "4241:100", bootEpoch: "boot-current" };
+  Object.assign(entry, { structuredHost: { process: host } });
+  const probe = { pidAlive: () => true, processIdentity: () => "4241:100", bootEpoch: () => "boot-current" };
+  expect(hostedConversationsFromSnapshot(snapshot, probe)[0]!.pids).toEqual([4241]);
+  expect(hostedConversationsFromSnapshot(snapshot, { ...probe, processIdentity: () => "4241:200" })[0]!.pids).toEqual([]);
+  expect(hostedConversationsFromSnapshot(snapshot, { ...probe, bootEpoch: () => "boot-new" })[0]!.pids).toEqual([]);
+  Object.assign(host, { startIdentity: null });
+  expect(hostedConversationsFromSnapshot(snapshot, probe)[0]!.pids).toEqual([]);
+});
+
+
+test("native workers, designated managers and deputies retain attribution and never become launchers", () => {
+  const authority = { kind: "worker" as const, conversationId: MANAGER_ID, role: "builder", evidence: "native-session" as const };
+  for (const attribution of [callerAttributionFrom(authority, () => false), callerAttributionFrom(authority, () => true),
+    callerAttributionFrom(authority, (id) => id === OTHER_ID, () => OTHER_ID)]) {
+    expect(attribution.native).toBe(true);
+    expect(mcpSpawnLauncher({ attentionAuthority: () => authority, callerAttribution: () => attribution })).toBeNull();
+  }
+  expect(callerAttributionFrom(authority, () => false)).toMatchObject({ kind: "agent", conversationId: MANAGER_ID });
+  expect(callerAttributionFrom(authority, () => true)).toMatchObject({ kind: "manager", conversationId: MANAGER_ID });
 });

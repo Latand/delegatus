@@ -1,11 +1,13 @@
+import { nativeCallerRefusal, type NativeCallerRefusal, type NativeCallerVerdict } from "./nativeCaller";
+
 /**
  * Who is actually calling the Viewer MCP server.
  *
  * Under B+ this identity ATTRIBUTES rather than gates: every session holds the
  * full tool surface, and what identity decides is the durable origin written
  * on attention requests and bridge reports, plus whether the caller is the
- * designated orchestrator for the one gated operation (minting a deployment
- * confirmation). `rootId` is still resolved server-side, so no caller can name
+ * designated orchestrator for deployment confirmation. Recoverable mutations
+ * require an identified caller so their receipts have an owner. `rootId` is still resolved server-side, so no caller can name
  * a root of its choosing, and a worker's ask is durably a worker's ask.
  *
  * The caller is identified from facts neither side can restate: this process's
@@ -14,7 +16,9 @@
  * and injected into the launch environment. An MCP server is a child of the
  * agent that started it, so walking up from here reaches that agent's pid, and
  * the registry says which conversation that pid is hosting; the capability
- * digest names the same conversation when every pid is gone.
+ * digest names the same conversation when every pid is gone. An external
+ * Claude process can also prove its scanned generation through a native record
+ * bound to its kernel identity, when neither existing chain names a caller.
  *
  * Deliberately pure over supplied sources: the decision is a function of an
  * ancestry and a registry snapshot, so it is testable without a process tree.
@@ -35,6 +39,8 @@ export interface HostedConversation {
 export interface AttentionCallerSources {
   /** This process first, then each ancestor. Bounded by the caller. */
   ancestry(): readonly number[];
+  capabilityPresented?(): boolean;
+  nativeCaller?(): NativeCallerVerdict;
   hosted(): readonly HostedConversation[];
   /** The conversation the root lineage currently names, when one is adopted. */
   rootConversationId(): string | null;
@@ -49,11 +55,11 @@ export interface AttentionCallerSources {
 
 export type AttentionCallerAuthority =
   /** The operator's own root session. */
-  | { kind: "root"; conversationId: string | null }
+  | { kind: "root"; conversationId: string | null; evidence?: "native-session" }
   /** A conversation that is positively NOT the root. */
-  | { kind: "worker"; conversationId: string; role: string | null }
+  | { kind: "worker"; conversationId: string; role: string | null; evidence?: "native-session" }
   /** No evidence named the caller. See {@link attentionCallerAuthority}. */
-  | { kind: "unidentified" };
+  | { kind: "unidentified"; admission?: NativeCallerRefusal };
 
 /**
  * The authority of whoever is running this process.
@@ -62,8 +68,8 @@ export type AttentionCallerAuthority =
  * session is frequently a terminal the operator started themselves, which the
  * Viewer observes rather than launches, so there are ordinary setups in which
  * no evidence names it. The label is recorded as-is wherever attribution is
- * written, and the only operation it costs anyone is the orchestrator-only
- * confirmation mint — which an unattributable caller must never hold.
+ * written. Recoverable mutations refuse it before claiming a key, with the
+ * native admission reason and the route to continue under a Delegatus host.
  */
 export function attentionCallerAuthority(sources: AttentionCallerSources): AttentionCallerAuthority {
   const hosted = sources.hosted();
@@ -96,7 +102,11 @@ export function attentionCallerAuthority(sources: AttentionCallerSources): Atten
      the caller's to restate, so a disagreement means the registry is racing,
      stale or tampered with — every reading fails closed. */
   if (pidMatch && capabilityConversationId && pidMatch.conversationId !== capabilityConversationId) {
-    return { kind: "unidentified" };
+    return { kind: "unidentified", ...(sources.nativeCaller ? { admission: nativeCallerRefusal("capability-conflict") } : {}) };
+  }
+
+  if (sources.capabilityPresented?.() && !capabilityConversationId) {
+    return { kind: "unidentified", admission: nativeCallerRefusal("capability-unresolved") };
   }
 
   /* The pid walk is physical and ephemeral; the capability is admission
@@ -104,15 +114,22 @@ export function attentionCallerAuthority(sources: AttentionCallerSources): Atten
      is what keeps a correctly designated conversation identified after its
      host pids were never recorded, changed, or died (the measured null-pid
      manager refusal). */
-  const conversation = pidMatch
+  let conversation = pidMatch
     ?? (capabilityConversationId
       ? byId.get(capabilityConversationId) ?? { conversationId: capabilityConversationId, pids: [], role: null }
       : null);
+  let evidence: { evidence?: "native-session" } = {};
+  if (!conversation && sources.nativeCaller) {
+    const native = sources.nativeCaller();
+    if (native.kind === "refused") return { kind: "unidentified", admission: native };
+    conversation = byId.get(native.conversationId) ?? null;
+    evidence = { evidence: "native-session" };
+  }
   if (!conversation) return { kind: "unidentified" };
   if (isRootConversation(conversation, sources.rootConversationId())) {
-    return { kind: "root", conversationId: conversation.conversationId };
+    return { kind: "root", conversationId: conversation.conversationId, ...evidence };
   }
-  return { kind: "worker", conversationId: conversation.conversationId, role: conversation.role };
+  return { kind: "worker", conversationId: conversation.conversationId, role: conversation.role, ...evidence };
 }
 
 /**

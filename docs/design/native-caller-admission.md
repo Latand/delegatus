@@ -432,3 +432,40 @@ lane lands first, merge main before review.
   change and act only on what reproduces.
 - Prove each new integration case red on the merge base before calling it
   fixed.
+
+
+## Implementation verification, 2026-10-15
+
+The implementation uses the native chain only after hosted ancestry and launch
+capability resolution. A presented credential that does not resolve refuses the
+call, including when ancestry would otherwise match. Native worker, manager and
+deputy attribution retain the native marker and never register a completion
+notice launcher. Receipt bindings keep their existing durable shape.
+
+The packaged stdio fixture creates a sandbox Claude-shaped parent, writes that
+parent's real kernel start token and PID domain, and reconciles its transcript
+through `AgentRegistry.reconcileConversations`. It asserts that the native
+conversation has no registry host entry before calling the packaged server.
+The controlled Viewer executes the production send and spawn handlers.
+
+On base `f746d7f2`, the test named `REGRESSION #2827: a scanned external session
+with no host can mutate and recover` fails at its first mutation with
+`caller_unidentified`. Base checks produce seven expected failures: admission, lost-response recovery,
+send attribution, cross-session recovery, duplicate live session ownership,
+stale-record diagnostics and unresolved credential diagnostics. The eighth
+case, `create_orchestrator`, passes on base;
+its reported identity refusal was not reproduced on that tool.
+
+Threat coverage in the implementation:
+
+| Threat | Explicit test paths and cases |
+| --- | --- |
+| PID reuse and process exit | `nativeCaller.test.ts`: earlier process, changed/exited process during record read, changed ancestry and final identity recheck; `managerAuthority.test.ts`: hosted PID reuse, missing start token and boot mismatch |
+| Stale metadata | `nativeCaller.test.ts`: boot/start boundary, foreign PID domain, old/archived/superseded/migrating generation, hosted or unverified generation, unscanned retry; `stdio.integration.test.ts`: stale records dispatch nothing |
+| Unrelated session | `nativeCaller.test.ts`: nearest parent, known home, bounded regular record, transcript containment, duplicate generation/session ownership, foreign host stamp and absence of cwd evidence; stdio checks caller-argument spoofing and duplicate live records through the production reader |
+| Conflicting capability | `callerAuthority.test.ts`: known capability and managed ancestry precedence, unresolved credential, conflicting chains; stdio checks unknown, malformed and empty credentials |
+| Replay | `stdio.integration.test.ts`: other native session refused without disclosure, vanished record refused, original-key recovery after lost response and a new native parent process; durable binding and single-effect counts asserted |
+
+All fixtures use isolated state, homes and temporary directories. Base evidence
+comes from an archive of the base commit; the pipeline stays on its assigned
+branch throughout.

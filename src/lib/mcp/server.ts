@@ -1,3 +1,4 @@
+import { nativeAdmissionMessage, type NativeCallerRefusal } from "@/lib/attention/nativeCaller";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -605,6 +606,8 @@ export interface McpRequestCaller {
   project: string | null;
   /** Server-derived predecessor seats that the current caller may recover. */
   predecessors?: string[];
+  /** Refusal diagnostics only; unidentified callers never persist a binding. */
+  admission?: NativeCallerRefusal;
 }
 
 export interface McpRequestTarget {
@@ -2708,7 +2711,7 @@ export function createMcpToolService(
            exists, so it discloses nothing. */
         if (!identifiedCaller(binding.caller)) {
           outcome = "failure";
-          return failure(typedTool, requestId, "caller_unidentified", CALLER_UNIDENTIFIED, false, false);
+          return failure(typedTool, requestId, "caller_unidentified", `${CALLER_UNIDENTIFIED}. ${nativeAdmissionMessage(binding.caller.admission)}`, binding.caller.admission?.retryable ?? false, false);
         }
         const notPermitted = () => {
           outcome = "failure";

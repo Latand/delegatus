@@ -50,6 +50,9 @@ import {
 import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { ENGINE_MODELS, validateLaunchModel } from "@/lib/agent/models";
+import { nativeCallerSources } from "@/lib/attention/nativeCallerSources";
+import { nativeCallerRefusal, resolveNativeCaller } from "@/lib/attention/nativeCaller";
+import { sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentityProbe } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { VIEWER_AUTONOMOUS_SPAWN_HEADER } from "@/lib/agent/capabilityHeader";
@@ -1020,6 +1023,7 @@ export interface CallerAttribution {
       §4): `conversationId` is then the SEAT's, so every surface treats the call
       as the seat's, and this keeps the deputy's own id for the audit trail. */
   via?: { deputy: string };
+  native?: true;
 }
 
 /** Fold the caller authority with "is this the designated orchestrator" into
@@ -1033,16 +1037,17 @@ export function callerAttributionFrom(
   isManagerConversation: (conversationId: string) => boolean,
   deputySeatOf?: (conversationId: string) => string | null,
 ): CallerAttribution {
-  if (authority.kind === "root") return { kind: "gateway", conversationId: authority.conversationId, role: null };
+  const native = authority.kind !== "unidentified" && authority.evidence === "native-session" ? { native: true as const } : {};
+  if (authority.kind === "root") return { kind: "gateway", conversationId: authority.conversationId, role: null, ...native };
   if (authority.kind === "unidentified") return { kind: "unidentified", conversationId: null, role: null };
   if (isManagerConversation(authority.conversationId)) {
-    return { kind: "manager", conversationId: authority.conversationId, role: authority.role };
+    return { kind: "manager", conversationId: authority.conversationId, role: authority.role, ...native };
   }
   const seat = deputySeatOf?.(authority.conversationId) ?? null;
   if (seat && isManagerConversation(seat)) {
-    return { kind: "manager", conversationId: seat, role: authority.role, via: { deputy: authority.conversationId } };
+    return { kind: "manager", conversationId: seat, role: authority.role, via: { deputy: authority.conversationId }, ...native };
   }
-  return { kind: "agent", conversationId: authority.conversationId, role: authority.role };
+  return { kind: "agent", conversationId: authority.conversationId, role: authority.role, ...native };
 }
 
 function attributionOf(dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "attentionAuthority">): CallerAttribution {
@@ -1132,6 +1137,7 @@ function rootSessionSource(): RootSessionSource {
  */
 export function hostedConversationsFromSnapshot(
   snapshot: Pick<RegistrySnapshot, "conversations" | "entries">,
+  probe?: ProcessIdentityProbe,
 ): { conversationId: string; role: string | null; pids: number[] }[] {
   const owners = new Map<string, { id: string; role: string | null }>();
   const hosted = new Map<string, { conversationId: string; role: string | null; pids: number[] }>();
@@ -1143,8 +1149,14 @@ export function hostedConversationsFromSnapshot(
   for (const entry of Object.values(snapshot.entries)) {
     const owner = owners.get(entry.artifactPath);
     if (!owner) continue;
-    const pids = [entry.host?.agent?.pid, entry.structuredHost?.process?.pid]
-      .filter((pid): pid is number => typeof pid === "number" && pid > 0);
+    const pids = [entry.host?.agent, entry.structuredHost?.process]
+      .filter((host) => {
+        if (!host || typeof host.pid !== "number" || host.pid <= 0) return false;
+        if (!probe) return true;
+        const startIdentity = probe.processIdentity(host.pid);
+        return host.startIdentity != null && startIdentity != null && probe.pidAlive(host.pid)
+          && sameRecordedProcessIdentity({ pid: host.pid, startIdentity, bootEpoch: probe.bootEpoch() }, host);
+      }).map((host) => host!.pid);
     hosted.get(owner.id)!.pids.push(...pids);
   }
   return [...hosted.values()];
@@ -1184,7 +1196,18 @@ function attentionCallerSources(): AttentionCallerSources {
        as it does for a stdio agent whose host pids were never recorded. */
     ancestry: httpCaller ? () => [] : () => processAncestry(process.pid, (pid) => procBackend.readPpid(pid)),
     rootConversationId: () => liveRootSession(rootSessionSource())?.conversationId ?? null,
-    hosted: () => hostedConversationsFromSnapshot(agentRegistry().readOnlySnapshot()),
+    hosted: () => hostedConversationsFromSnapshot(agentRegistry().readOnlySnapshot(), {
+      pidAlive: (pid) => procBackend.pidAlive(pid) && !procBackend.processExited(pid),
+      processIdentity: (pid) => procBackend.processIdentity(pid),
+      bootEpoch: systemBootEpoch,
+    }),
+    capabilityPresented: () => callerCapability() !== undefined,
+    nativeCaller: () => {
+      if (httpCaller) return nativeCallerRefusal("no-claude-ancestor");
+      if (procBackend.name !== "linux") return nativeCallerRefusal("platform-unverified");
+      try { return resolveNativeCaller(nativeCallerSources(() => agentRegistry().readOnlySnapshot())); }
+      catch { return nativeCallerRefusal("session-record-invalid"); }
+    },
     capabilityCallerConversationId: capabilityConversationResolver(
       callerCapability(),
       (digest) => agentRegistry().conversationIdForSpawnCapabilityDigest(digest),
@@ -4061,7 +4084,7 @@ export function mcpSpawnLauncher(dependencies?: Pick<ViewerMcpDomainDependencies
   if (!dependencies) return null;
   try {
     const attribution = attributionOf(dependencies);
-    if (attribution.kind !== "agent" && attribution.kind !== "manager") return null;
+    if (attribution.native || (attribution.kind !== "agent" && attribution.kind !== "manager")) return null;
     const conversationId = attribution.via?.deputy ?? attribution.conversationId;
     return conversationId?.startsWith("conversation_") ? conversationId : null;
   } catch {
@@ -7292,7 +7315,7 @@ function recoveryCaller(dependencies: Partial<Pick<ViewerMcpDomainDependencies, 
   } catch {
     return unidentified;
   }
-  if (authority.kind === "unidentified") return unidentified;
+  if (authority.kind === "unidentified") return { ...unidentified, ...(authority.admission ? { admission: authority.admission } : {}) };
   if (authority.conversationId === null) return { kind: authority.kind, conversationId: null, project: null };
   let project: string | null;
   try {
