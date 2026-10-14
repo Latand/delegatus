@@ -10526,9 +10526,14 @@ export class AgentRegistry {
       const keyFor = (candidateConversationId: ViewerConversationId, candidateOperationId: string) =>
         `${resolveConversationAlias(file, candidateConversationId)}\u0000${candidateOperationId}`;
       const deliveries = new Map<string, HeldDelivery>();
-      for (const delivery of Object.values(file.heldDeliveries)) {
-        const key = keyFor(delivery.conversationId, delivery.command.operationId);
-        if (!deliveries.has(key)) deliveries.set(key, delivery);
+      // Select all requested operations once in collection order. A terminal
+      // acknowledgement must not expand retained history under the write lock.
+      const operationIds = [...new Set(outcomes.map(outcome => outcome.operationId))];
+      for (let start = 0; start < operationIds.length; start += 500) {
+        for (const delivery of registryRowsMatching(file, "heldDeliveries", "command.operationId", operationIds.slice(start, start + 500))) {
+          const key = keyFor(delivery.conversationId, delivery.command.operationId);
+          if (!deliveries.has(key)) deliveries.set(key, delivery);
+        }
       }
       const compactConversations = new Set<ViewerConversationId>();
       const settled = outcomes.map((outcome) => {

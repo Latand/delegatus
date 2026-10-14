@@ -1682,7 +1682,7 @@ export class SqliteAgentRegistryStore {
     let merged: Record<string, unknown> | undefined;
     return () => {
       if (merged) return merged;
-      const descriptors: Record<string, PropertyDescriptor> = {};
+      const descriptors: Record<string, PropertyDescriptor> = Object.create(null);
       for (const key of order) {
         const accessor = archived.get(key);
         if (accessor) descriptors[key] = accessor;
@@ -1863,7 +1863,7 @@ export class SqliteAgentRegistryStore {
       ? (collection,key) => this.rowCache.get(collection)?.get(key)?.valueJson : undefined;
     this.readOnlyHotFile = this.readerViews.view(hot,storedJson);
     const file = { ...this.readOnlyHotFile };
-    const collections = new Map<RowCollection, Record<string, unknown>>();
+    const collections = new Map<RowCollection, Map<string, PropertyDescriptor>>();
     // Bound after all collection descriptors are installed. The narrow cell
     // permits lazy delivery assembly without retaining this view's root.
     const deliveries = { read: this.constantReader(file.heldDeliveries) };
@@ -1929,7 +1929,7 @@ export class SqliteAgentRegistryStore {
     const rebuilt = [...coldKeys.keys()].filter(collection => !reused.has(collection) && !coldReused.has(collection));
     for (const header of rebuilt.flatMap(collection => grouped.get(collection) ?? [])) {
       let rows = collections.get(header.collection);
-      if (!rows) collections.set(header.collection,rows = { ...file[header.collection] });
+      if (!rows) collections.set(header.collection,rows = new Map());
       const { collection,row_key: key,archive_id: id } = header;
       // Resolve authority while this snapshot's transaction is still open.
       // Only the effective lists escape; the row payload remains evictable.
@@ -1952,27 +1952,30 @@ export class SqliteAgentRegistryStore {
         }
         pinnedGrants = decision.lists;
       }
-      Object.defineProperty(rows,key,{ enumerable: true, configurable: false,
+      rows.set(key,{ enumerable: true, configurable: false,
         get: this.archivedRowReader(collection, key, id, identity, snapshot.stamp, pinnedGrants,
           collection === "deliveryOperationOwners" ? deliveries : undefined) });
     }
     if (syntheticOwners.size && !reused.has("deliveryOperationOwners")) {
       let rows = collections.get("deliveryOperationOwners");
-      if (!rows) collections.set("deliveryOperationOwners",rows = { ...file.deliveryOperationOwners });
+      if (!rows) collections.set("deliveryOperationOwners",rows = new Map());
       for (const [operationId,deliveryId] of syntheticOwners) {
-        Object.defineProperty(rows,operationId,{ enumerable: true,
+        rows.set(operationId,{ enumerable: true,
           get: this.syntheticOwnerReader(operationId, deliveryId, deliveries) });
       }
     }
-    for (const [collection,rows] of collections) {
-      const ordered: Record<string, unknown> = {};
-      const descriptors = Object.getOwnPropertyDescriptors(rows);
-      for (const key of this.orderedKeys(collection)) Object.defineProperty(ordered,key,descriptors[key]!);
+    // Initial builds retain descriptors without constructing each collection
+    // twice. Grant decisions above are still pinned inside this transaction.
+    for (const [collection,archived] of collections) {
+      let order = this.orderedKeys(collection);
       if (collection === "deliveryOperationOwners") {
-        for (const key of Object.keys(descriptors)) if (!Object.hasOwn(ordered,key)) Object.defineProperty(ordered,key,descriptors[key]!);
+        const stored = new Set(order);
+        order = [...order, ...[...archived.keys()].filter(key => !stored.has(key))];
       }
-      (file as unknown as Record<string, unknown>)[collection] = Object.freeze(ordered);
-      nextCache.collections.get(collection)!.built = this.constantReader(ordered);
+      const built = this.mergedArchiveReader(archived,order,file[collection] as Record<string, unknown>);
+      Object.defineProperty(file,collection,{ enumerable: true,configurable: false,get: built });
+      nextCache.collections.get(collection)!.built = built;
+      nextCache.collections.get(collection)!.cold = archived;
     }
     const deliveryDescriptor = Object.getOwnPropertyDescriptor(file, "heldDeliveries")!;
     deliveries.read = deliveryDescriptor.get as (() => RegistryFile["heldDeliveries"]) | undefined
