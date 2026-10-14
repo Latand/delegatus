@@ -1639,6 +1639,7 @@ test("a refused automatic admission is admitted again without building the relea
   };
   const commit = (label: string) => { git(checkout, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "--allow-empty", "-m", label); return git(checkout, "rev-parse", "HEAD"); };
   git(checkout, "init", "-q", "-b", "main");
+  writeFileSync(join(checkout, ".gitignore"), ".next/\n"); git(checkout, "add", ".gitignore");
   const old = commit("serving"); const target = commit("candidate");
   git(checkout, "checkout", "-q", "--detach", old);
   h.record.checkout = checkout; h.record.web.revision = h.record.runtimeHost.revision = old.slice(0, 7);
@@ -1676,7 +1677,7 @@ test("a refused automatic admission is admitted again without building the relea
     await service.autoTick();
     await until(() => existsSync(h.record.releasePointer));
     expect(JSON.parse(readFileSync(h.record.releasePointer, "utf8"))).toMatchObject({ sha: target, dir });
-    expect(commands.map(argv => argv.slice(0, 3).join(" "))).toEqual(["git fetch --no-tags", `git checkout --force`]);
+    expect(commands.map(argv => argv.slice(0, 3).join(" "))).toEqual(["git fetch --no-tags", "git checkout --detach"]);
     expect(commands.some(argv => argv.includes("install") || argv.includes("build"))).toBe(false);
     // Every runner step is done; install and build ran no command.
     const update = (await service.snapshot()).update;
