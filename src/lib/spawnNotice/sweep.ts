@@ -122,6 +122,16 @@ export function composeSpawnNotice(input: {
   final: SpawnNoticeFinalMessage;
 }): string {
   const newest = input.turns.at(-1)!;
+  if (newest.outcome === "lost") {
+    const lost = newest.lost;
+    return [
+      `Agent lost before its first turn: ${lost?.title ?? input.title} (${input.child})`,
+      `Launch ${lost?.launchId ?? newest.turnId} failed: ${lost?.reason ?? "no reason recorded"}`,
+      "No transcript was written.",
+      ...(lost?.tasks ?? []).map(task => `Task ${task.taskId}: launch row failed, ${task.from} → ${task.to}.`),
+      "Relaunch with a new clientRequestId if the work is still wanted; the original key replays this failure.",
+    ].join("\n");
+  }
   const lines = [`Agent finished: ${input.title} (${input.child})`];
   const verdict = detectedVerdict(input.final.text);
   if (verdict) lines.push(`Verdict: ${verdict}`);
@@ -222,7 +232,8 @@ async function sweepChild(child: string, rows: SpawnNoticeTurn[], ports: SpawnNo
     return;
   }
   const now = ports.now();
-  const view = await ports.child(child);
+  const lost = rows.some(row => row.outcome === "lost");
+  const view = lost ? null : await ports.child(child);
   if (view?.busy) return;
   const last = record?.lastSentAt ? Date.parse(record.lastSentAt) : Number.NaN;
   if (Number.isFinite(last) && now - last < SPAWN_NOTICE_COALESCE_MS) return;
@@ -244,7 +255,7 @@ async function sweepChild(child: string, rows: SpawnNoticeTurn[], ports: SpawnNo
     clientMessageId: spawnNoticeMessageId(child, newest.turnId),
     recipientConversationId: recipient.conversationId,
     recipientPath: recipient.path,
-    text: composeSpawnNotice({ child, title: view?.title ?? "spawned agent", turns, final: ports.finalMessage(child) }),
+    text: composeSpawnNotice({ child, title: newest.lost?.title ?? view?.title ?? "spawned agent", turns, final: lost ? { text: null, error: null } : ports.finalMessage(child) }),
     turnIds,
     attempts: 1,
     firstAttemptAt: iso(now),

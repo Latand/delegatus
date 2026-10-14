@@ -21,6 +21,7 @@ import { OUTCOME_LIMIT, readChildLedger } from "./seatTickChildLedger";
 import {
   agentRegistry,
   readOnlyConversationLookupFromSnapshot,
+  resolveConversationAlias,
   SPAWN_STARTING_ADMISSION_LEASE_MS,
   type AgentRegistryEntry,
   type RegistryFile,
@@ -1395,9 +1396,22 @@ function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatT
     found.push({ id: "deploy", label: `the last deployment ended ${last.phase}` });
   }
   const report = sources.retirementReport();
-  const undetermined = report?.refused.filter((refusal) => refusal.undetermined).length ?? 0;
+  const unknown = report?.refused.filter(refusal => refusal.undetermined) ?? [];
+  const undetermined = unknown.length;
   if (report && (report.failed.length > 0 || undetermined > 0)) {
-    found.push({ id: "host-retirement", label: `host retirement: ${report.failed.length} failed, ${undetermined} undetermined` });
+    const registry = sources.registry();
+    const file = undetermined > 0 ? registry.readOnlySnapshot() : null;
+    const subjects = unknown.map(refusal => {
+      const id = file && refusal.conversationId ? resolveConversationAlias(file, refusal.conversationId as ViewerConversationId) : null;
+      const conversation = id ? file?.conversations[id] : null;
+      const own = Boolean(seat && (conversation?.launcher?.conversationId === seat.conversationId
+        || (id ? file?.lineageEdges[id]?.parentConversationId : null) === seat.conversationId));
+      const title = conversation?.generations.at(-1)?.launchProfile.title ?? "agent";
+      return { own, label: `${redactBounded(title, 60)} (${refusal.conversationId ?? refusal.key}) ${refusal.clause}: ${redactBounded(refusal.reason, 100)}${own ? " (launched by you)" : ""}` };
+    }).sort((a, b) => Number(b.own) - Number(a.own));
+    const more = subjects.length > 3 ? `; and ${subjects.length - 3} more` : "";
+    const names = subjects.length ? `: ${subjects.slice(0, 3).map(subject => subject.label).join("; ")}${more}` : "";
+    found.push({ id: "host-retirement", actionable: subjects.some(subject => subject.own), label: redactBounded(`host retirement: ${report.failed.length} failed, ${undetermined} undetermined${names}`, 800) });
   }
   const stalled = sources.retirementJournal
     ? stalledRetirementClause(sources.retirementJournal(sources.now() - RETIREMENT_STALL_WINDOW_MS))

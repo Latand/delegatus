@@ -884,7 +884,7 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
         return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
       }
       if (begun.kind === "created") {
-        if (transport === "structured") await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, reason);
+        if (transport === "structured") await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, reason, { announce: false });
         else await registry.failSpawnOffLoop(begun.receipt.launchId, reason);
       }
       const receipt = registry.readOnlySnapshot().receipts[begun.receipt.launchId] ?? begun.receipt;
@@ -1105,14 +1105,14 @@ async function executeParsedSpawnRequest(req: NextRequest, body: SpawnCommandBod
     if (begun.kind === "conflict") return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
     if (begun.kind === "created" && requestedTelegram && !telegramLeftOut && !begun.receipt.launchProfile.mcpServers.includes("telegram")) {
       const reason = "telegram MCP grant was revoked during spawn admission";
-      if (transport === "structured") await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, reason);
+      if (transport === "structured") await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, reason, { announce: false });
       else await registry.failSpawnOffLoop(begun.receipt.launchId, reason);
       return refuse(reason);
     }
     if (begun.kind === "created" && requestedTelegram && begun.receipt.telegramSeatGrant
       && !isCurrentOperatorSeat(begun.receipt.parentConversationId ?? "", registry)) {
       const reason = TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH;
-      if (transport === "structured") await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, reason);
+      if (transport === "structured") await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, reason, { announce: false });
       else await registry.failSpawnOffLoop(begun.receipt.launchId, reason);
       return refuse(reason);
     }

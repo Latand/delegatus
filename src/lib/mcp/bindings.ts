@@ -1,3 +1,4 @@
+import { pipelinePublishesRemoteBranch } from "@/lib/pipelines/publication";
 import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal } from "@/lib/projects/nameResolution";
 import { releaseStatus } from "@/lib/release/answer";
 import { releaseControlChange } from "@/lib/release/store";
@@ -285,7 +286,7 @@ import {
 } from "./selectedContextTarget";
 import { mcpCallerIdentity, mcpToolPolicy, mcpToolNeedsCallerIdentity, permitAttentionDismissal, permitNeedsYouRead, permitAttentionHandoff, permitReplySuggestions, type ManagerTarget, type McpToolPolicy } from "./toolAllowlist";
 
-const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review", "accept-head", "retry-merge"]);
+const PIPELINE_CONTROLLER_ACTIONS = new Set<PipelineAction>(["set-delivery-remote", "start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review", "accept-head", "retry-merge"]);
 /* Writes whose clientRequestId is their durable receipt key, attributed to the caller. */
 const PIPELINE_RECEIPT_ACTIONS = new Set<PipelineAction>(["resolve-decision", "continue-review", "accept-head", "convert-legacy-review", "revert-legacy-review"]);
 const PIPELINE_GRAPH_EDIT_ACTIONS = new Set<PipelineAction>(["add-stage", "remove-stage", "reorder-stage", "set-edge", "override-stage"]);
@@ -2163,7 +2164,11 @@ async function unadmittedBeforeMutation<T>(run: () => Promise<T>): Promise<T> {
 
 function deliveryAcknowledgement(pipeline: import("@/lib/pipelines/types").Pipeline): McpToolPayload {
   const delivery = pipeline.delivery!;
-  return { target: delivery.target, disposition: delivery.disposition, publish: delivery.publish,
+  const publishes = pipelinePublishesRemoteBranch(pipeline);
+  return { target: delivery.target, disposition: delivery.disposition, publish: delivery.publish, publishes,
+    ...(!publishes && delivery.disposition === "owner" ? { note: pipeline.publication === "internal"
+      ? "publication internal: nothing is pushed while the lane runs."
+      : "This repository has no delivery remote: accepted heads stay on the local lane branch and reviews read the local head. After a remote is added, pipeline_action set-delivery-remote makes this lane publish." } : {}),
     ownerId: delivery.ownerId, epoch: delivery.epoch, active: delivery.active,
     ...(delivery.disposition === "comparison" ? { conflict: `Target owned by ${delivery.ownerId} at epoch ${delivery.epoch}; comparison lane created with Viewer publication disabled` } : {}) };
 }
@@ -2333,7 +2338,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   const beforeFields = fieldValues(before);
   if (action === "retry-stage") retryStageLaunch(request, before ?? null);
   /* Decisions, pause/resume and graph edits carry the server-attributed actor. */
-  const result = action === "takeover" || action === "publish" || action === "pause" || action === "resume" || action === "attach-link" || action === "detach-link" || PIPELINE_RECEIPT_ACTIONS.has(action) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
+  const result = action === "takeover" || action === "publish" || action === "set-delivery-remote" || action === "pause" || action === "resume" || action === "attach-link" || action === "detach-link" || PIPELINE_RECEIPT_ACTIONS.has(action) || PIPELINE_GRAPH_EDIT_ACTIONS.has(action)
     ? await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest, undefined, pauseResumeActorOf(dependencies))
     : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest);
   if (!result.pipeline) {
@@ -2343,7 +2348,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     if (result.details) throw new McpToolRefusal(message, { code: result.code, details: result.details });
     /* A refused conversion carries its editable preview. */
     if (result.legacyReviewPreview) throw new McpToolRefusal(message, { legacyReviewPreview: result.legacyReviewPreview });
-    if (action === "publish" || action === "takeover") throw new McpToolRefusal(message, { code: "delivery_refused", status: result.status });
+    if (action === "publish" || action === "takeover" || action === "set-delivery-remote") throw new McpToolRefusal(message, { code: "delivery_refused", status: result.status });
     if (action === "attach-link" || action === "detach-link") throw new McpToolRefusal(message, { code: result.code ?? "WORK_LINK_INVALID", field: "link", status: result.status });
     /* A stale guard names what moved, so the caller re-reads before retrying. */
     if (result.code === "STAGE_CHANGED") throw new McpToolRefusal(message, { code: result.code, field: result.field, status: result.status });
@@ -2373,7 +2378,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     taskIds: result.pipeline.taskIds,
     ...(fullAnswer(args) ? { pipeline: result.pipeline } : { omittedRecordCount: 1 }),
     ...answerHint(args, "get_pipeline(pipelineId, full:true) or pipeline_action with full:true returns the full record."),
-    ...(result.pipeline.delivery && (fullAnswer(args) || action === "publish" || action === "takeover" || action === "retry-stage" || beforeFields.get("delivery") !== JSON.stringify(result.pipeline.delivery)) ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
+    ...(result.pipeline.delivery && (fullAnswer(args) || action === "publish" || action === "set-delivery-remote" || action === "takeover" || action === "retry-stage" || beforeFields.get("delivery") !== JSON.stringify(result.pipeline.delivery)) ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(action === "attach-link" || action === "detach-link" ? { workLinks: pipelineWorkLinks(result.pipeline), ...(result.unchanged ? { unchanged: true } : {}) } : {}),
     ...(result.close ? { close: result.close } : {}),
     ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}),

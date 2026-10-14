@@ -1,3 +1,4 @@
+import type { FailedLaunchTaskMove } from "@/lib/tasks/membership";
 import { statePath } from "@/lib/configDir";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 
@@ -13,7 +14,7 @@ import { initializeStateCollections, SqliteStateCollection, stateCollectionsInit
  * so the sweep's read is the open obligations and never the history.
  */
 
-export type SpawnNoticeOutcome = "completed" | "interrupted" | "error";
+export type SpawnNoticeOutcome = "completed" | "interrupted" | "error" | "lost";
 
 export type SpawnNoticeSkip =
   /** The launcher is unknown to the registry or was superseded. */
@@ -25,12 +26,20 @@ export type SpawnNoticeSkip =
   /** The recipient resolved to the child itself. */
   | "self";
 
+export interface LostSpawnNotice {
+  launchId: string;
+  title: string;
+  reason: string;
+  tasks: FailedLaunchTaskMove[];
+}
+
 export interface SpawnNoticeTurn {
   kind: "turn";
   childConversationId: string;
   turnId: string;
   launcherConversationId: string;
   outcome: SpawnNoticeOutcome;
+  lost?: LostSpawnNotice;
   /** When the turn began, when the runtime can say; null otherwise. */
   startedAt: string | null;
   endedAt: string;
@@ -112,6 +121,7 @@ export interface SpawnNoticeObligation {
   turnId: string;
   launcherConversationId: string;
   outcome: SpawnNoticeOutcome;
+  lost?: LostSpawnNotice;
   startedAt: string | null;
   endedAt: string;
 }
