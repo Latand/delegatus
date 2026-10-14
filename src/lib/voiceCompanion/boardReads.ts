@@ -7,7 +7,8 @@ import { cleanStrings, withoutCredentials, withoutLocalPaths } from "./redaction
 import { READ_SCHEMAS, validToolValue } from "./readSchemas";
 import { normalizedBoardQuery } from "@/lib/mcp/pullRequestQuery";
 
-export const READ_TOOL_NAMES = ["list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages", "orchestrator_messages", "search_transcripts", "read_prototype_review", "view_prototype_frame", "agent_fleet"] as const;
+export const READ_TOOL_NAMES = ["list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages", "orchestrator_messages", "search_transcripts", "read_prototype_review", "view_prototype_frame", "agent_fleet", "get_orchestrator", "list_projects"] as const;
+export interface VoiceProject { project: string; displayName: string; liveSeat: boolean; openTaskCount: number }
 export type ReadToolName = typeof READ_TOOL_NAMES[number];
 export const VOICE_IMAGES = Symbol("voice prototype frames");
 export interface BoardReadPaths {
@@ -15,6 +16,7 @@ export interface BoardReadPaths {
   projectFor(kind: "task" | "pipeline" | "conversation", id: string): Promise<string | null>;
   recipient(project: string): string | null;
   resolveProject(current: string | null, requested?: string): string;
+  projects?(): VoiceProject[];
   review(id: string): PrototypeReviewRead;
   prototypeTasks?(project: string, taskId?: string): readonly BoardTask[];
   frame(id: string, reviewId: string, mediaId: string): Promise<{ mime: string; data: string }>;
@@ -60,6 +62,7 @@ function page(source: Record<string, unknown>, items: Record<string, unknown>[],
 export class CompanionBoardReads {
   private readonly redactors = new WeakMap<readonly string[], (text: string) => string>();
   constructor(private readonly paths: BoardReadPaths) {}
+  projects(): VoiceProject[] { return this.paths.projects?.() ?? []; }
   resolveProject(current: string | null, requested?: string) { return this.paths.resolveProject(current, requested); }
   normalize(project: string, name: string, args: Record<string, unknown>): Record<string, unknown> {
     const schema = READ_SCHEMAS[name]; if (!schema) throw new Error("TOOL_NOT_ALLOWED");
@@ -73,11 +76,16 @@ export class CompanionBoardReads {
       ...(name === "search_transcripts" ? {order:values.order ?? "relevance",limit:6} : {}) };
   }
   async call(current: string, name: string, args: Record<string, unknown>): Promise<SpeechReadResult> {
+    if (name === "list_projects") return this.read("", name, this.normalize("", name, args));
     const project = this.resolveProject(current, typeof args.project === "string" ? args.project : undefined);
     const normalized = this.normalize(project,name,args);
     return this.read(project,name,normalized);
   }
   async read(project: string, name: string, args: Record<string, unknown>, secrets: readonly string[] = NO_SECRETS): Promise<SpeechReadResult> {
+    if (name === "list_projects") {
+      const items = cleanStrings(this.projects(), text => clean(withoutCredentials(text, secrets)));
+      return { rows: items, total: items.length, speech: short(`${items.length} projects. ${items.map(row => row.displayName).join(", ")}`, 600), truncated: false };
+    }
     project = canonicalProject(project);
     const kind = (name === "agent_fleet" && args.pipelineId) || name === "get_pipeline" ? "pipeline" : name === "get_task" || name.includes("prototype") ? "task" : name === "conversation_messages" || (["agent_activity", "agent_fleet"].includes(name) && args.conversationId) ? "conversation" : null;
     const id = String(args[kind === "pipeline" ? "pipelineId" : kind === "task" ? "taskId" : "conversationId"] ?? "");
@@ -134,6 +142,10 @@ export class CompanionBoardReads {
       redactText),text=>withoutCredentials(text,secrets));
     if (name === "list_tasks") return page(source,rows(source.tasks).map(taskRow),"tasks");
     if (name === "list_pipelines") return page(source,rows(source.pipelines).map(pipelineRow),"pipelines");
+    if (name === "get_orchestrator") {
+      const seat = object(source.seat); const item = { project, liveSeat: !!seat.conversationId, engine: source.engine ?? null, conversationId: seat.conversationId ?? null };
+      return { item, speech: item.liveSeat ? `The project's orchestrator is designated (${short(item.engine)}).` : "This project has no designated orchestrator.", truncated: false };
+    }
     if (name === "get_task") {
       const row = object(source.task); const item = {...taskRow(row),note:short(object(row.note).text,320),hold:short(object(row.hold).note,200),steps:rows(row.steps).slice(0,8).map(step=>({text:short(step.text),state:short(step.state,32)}))};
       return {item,speech:short(`${item.title}: ${item.state}. ${item.note} ${item.hold} ${item.steps.map(step=>`${step.text}: ${step.state}`).join(". ")}`,600),truncated:rows(row.steps).length>8};

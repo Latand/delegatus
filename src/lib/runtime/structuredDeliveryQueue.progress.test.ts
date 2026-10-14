@@ -278,21 +278,22 @@ test("a lock delay on one conversation's delivery write leaves the other's pass 
   const progress = new DeliveryProgressStore(null);
   const slow = fakeHost(delivered);
   const fast = fakeHost(delivered);
+  const held = deferred<void>();
   journal.delayTransitions(async (operationId, status) => {
-    if (operationId === "op-slow" && status === "delivering") await sleep(300);
+    if (operationId === "op-slow" && status === "delivering") await held.promise;
   });
   journal.admit("op-slow", "conversation-slow");
   journal.admit("op-fast", "conversation-fast");
   const queue = queueFor(journal.port({ progress }), { "conversation-slow": slow.engine, "conversation-fast": fast.engine },
     { passBudgetMs: 50, safetyPassMs: 60_000 });
-  const started = performance.now();
   await queue.drain();
-  expect(performance.now() - started).toBeLessThan(250);
+  expect(slow.inputs).toEqual([]);
   expect(journal.ops.get("op-fast")!.status).toBe("delivered");
   expect(journal.ops.get("op-slow")!.status).toBe("queued");
   /* A pass during the delay leaves the slow conversation to the lane that owns it. */
   await queue.drain();
-  await sleep(400);
+  held.resolve();
+  await sleep(1);
   await queue.drain();
   expect(journal.ops.get("op-slow")!.status).toBe("delivered");
   expect(slow.inputs).toEqual(["op-slow"]);
@@ -831,9 +832,8 @@ test("a lost terminal acknowledgement whose repair hangs holds no other conversa
 
   /* The next pass restarts the repair, which hangs; B is delivered regardless. */
   journal.admit("op-b", "conversation-b");
-  const started = performance.now();
   await queue.drain();
-  expect(performance.now() - started).toBeLessThan(250);
+  expect(first.inputs).toEqual(["op-a"]);
   expect(repairs).toHaveLength(2);
   expect(second.inputs).toEqual(["op-b"]);
   expect(progress.get("op-b")?.terminal?.state).toBe("delivered");

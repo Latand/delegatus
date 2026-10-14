@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import { MAX_TTS_MESSAGE_LENGTH } from "@/lib/tts";
 import { chunkSpeech, MIN_CHUNK_CHARS } from "@/lib/ttsChunks";
@@ -523,7 +523,7 @@ describe("synthesizeChunk (#1022)", () => {
   });
 });
 
-describe("Soniox PCM production client and route", () => {
+describe("PCM production client and route", () => {
   test("signed PCM decoding handles odd fetch packets and rejects odd EOF", async () => {
     const { PcmDecoder } = await import("./ttsPcmSession");
     const decoder = new PcmDecoder();
@@ -532,14 +532,16 @@ describe("Soniox PCM production client and route", () => {
     expect([...decoder.decode(new Uint8Array([0]))]).toEqual([1 / 32768]);
     decoder.finish(); decoder.decode(new Uint8Array([1])); expect(() => decoder.finish()).toThrow();
   });
-  test("first audio precedes EOF, prefetch stays bounded, joins are contiguous and stop cancels", async () => {
+  test.each(["soniox", "fishaudio"])("%s: first audio precedes EOF, prefetch stays bounded, joins are contiguous and stop cancels", async (backend) => {
+    const clock = backend === "fishaudio" ? spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-14T00:00:00Z")) : null;
     const { PcmSession, clearPcmCache, pcmChunksCached, pcmVoice } = await import("./ttsPcmSession");
     const { POST } = await import("@/app/api/tts/route");
     const { NextRequest } = await import("next/server");
     clearPcmCache();
-    const envNames = ["LLV_TTS_BACKEND", "SONIOX_API_KEY"];
+    const envNames = ["LLV_TTS_BACKEND", backend === "soniox" ? "SONIOX_API_KEY" : "FISH_AUDIO_API_KEY"];
+    const voice = { id: backend, model: backend === "soniox" ? "tts-rt-v2" : "s2.1-pro-free", voice: backend === "soniox" ? "Adrian" : "default", language: backend === "soniox" ? "en" : "" };
     const prior = envNames.map((name) => process.env[name]);
-    process.env[envNames[0]!] = "soniox"; process.env[envNames[1]!] = "fixture-key";
+    process.env[envNames[0]!] = backend; process.env[envNames[1]!] = "fixture-key";
     const oldRaf = globalThis.requestAnimationFrame, oldCancel = globalThis.cancelAnimationFrame;
     let callback: FrameRequestCallback | null = null;
     globalThis.requestAnimationFrame = (cb) => { callback = cb; return 1; };
@@ -564,13 +566,16 @@ describe("Soniox PCM production client and route", () => {
       const bytes = new Uint8Array(24000 * 2 * 2); bytes.fill(20);
       return new Response(new ReadableStream({ start(c) { c.enqueue(bytes.subarray(0, 1)); c.enqueue(bytes.subarray(1)); if (requests.length === 1) firstEof = () => c.close(); else if (requests.length === 2) secondEof = () => c.close(); else c.close(); }, cancel: canceled }), { headers: { "content-type": "audio/pcm" } });
     }) as typeof fetch;
-    const phases: string[] = []; const errors: unknown[] = [];
-    const chunks = chunkSpeech("First. Second. Third. Fourth. Fifth. Sixth. Seventh. Eighth. Ninth. Tenth. Eleventh. Twelfth.", { backend: "soniox" });
-    const session = new PcmSession({ chunks, voice: { id: "soniox", model: "tts-rt-v2", voice: "Adrian", language: "en" }, context: audio as unknown as AudioContext, onPhase: (p) => phases.push(p), onPosition: () => undefined, onVoice: () => undefined, onError: (e) => errors.push(e), onEnd: () => undefined });
+    const phases: string[] = []; const errors: unknown[] = []; const positions: number[] = [];
+    const chunks = chunkSpeech("First. Second. Third. Fourth. Fifth. Sixth. Seventh. Eighth. Ninth. Tenth. Eleventh. Twelfth.", { backend });
+    const session = new PcmSession({ chunks, voice: voice, context: audio as unknown as AudioContext, onPhase: (p) => phases.push(p), onPosition: ({ charIndex }) => positions.push(charIndex), onVoice: () => undefined, onError: (e) => errors.push(e), onEnd: () => undefined });
     try {
       session.start(); await new Promise((r) => setTimeout(r, 20));
       expect(nodes.length).toBeGreaterThan(0); expect(requests).toEqual([chunks[0]!.text]); expect(phases).toEqual(["loading"]);
       tick(0.03); expect(phases.at(-1)).toBe("playing");
+      tick(0.6);
+      if (backend === "fishaudio") expect(positions.at(-1)!).toBeGreaterThan(chunks[0]!.start);
+      else expect(positions.at(-1)).toBe(chunks[0]!.start);
       await new Promise((r) => setTimeout(r, 1050)); expect(requests.length).toBe(2);
       firstEof(); await new Promise((r) => setTimeout(r, 1050)); expect(requests.length).toBe(3);
       expect(nodes.length).toBe(40); // chunk 2 arrived out of order and waits for chunk 1 EOF
@@ -578,16 +583,18 @@ describe("Soniox PCM production client and route", () => {
       // The cursor still plays chunk zero. Completion cannot synthesize chunk 3.
       await new Promise((r) => setTimeout(r, 1100)); expect(requests.length).toBe(3);
       for (let i = 1; i < nodes.length; i++) expect(nodes[i]!.startTime).toBeCloseTo(nodes[i - 1]!.startTime + nodes[i - 1]!.buffer!.duration, 8);
-      const retained = chunks.slice(0, 3).map((chunk) => voiceKey(pcmVoice({ id: "soniox", model: "tts-rt-v2", voice: "Adrian", language: "en" }), chunk.text));
+      const retained = chunks.slice(0, 3).map((chunk) => voiceKey(pcmVoice(voice), chunk.text));
       expect(pcmChunksCached(retained)).toBe(true);
+      const pendingNodes = nodes.filter((node) => node.startTime + (node.buffer?.duration ?? 0) > audio.currentTime);
       session.seekToChar(chunks[1]!.start); session.seekToChar(chunks[2]!.start);
-      expect(nodes.slice(0, 60).every((node) => node.stopped)).toBe(true);
+      expect(pendingNodes.every((node) => node.stopped)).toBe(true);
       clearPcmCache(); expect(pcmChunksCached(retained)).toBe(false);
-      session.stop(); expect(nodes.every((node) => node.stopped)).toBe(true); expect(callback).toBeNull(); expect(errors).toEqual([]);
+      session.stop(); expect(nodes.filter((node) => node.startTime + (node.buffer?.duration ?? 0) > audio.currentTime).every((node) => node.stopped)).toBe(true); expect(callback).toBeNull(); expect(errors).toEqual([]);
     } finally {
       session.stop(); globalThis.requestAnimationFrame = oldRaf; globalThis.cancelAnimationFrame = oldCancel;
       envNames.forEach((name, i) => { if (prior[i] === undefined) delete process.env[name]; else process.env[name] = prior[i]; });
       clearPcmCache();
+      clock?.mockRestore();
     }
   });
   test("language and output geometry participate in cache identity", () => {
@@ -606,4 +613,27 @@ test("PCM busy backoff is abortable and permanent refusals do not retry", async 
   calls = 0;
   globalThis.fetch = mock(async () => { calls++; return Response.json({ error: "speech authentication refused" }, { status: 401 }); }) as unknown as typeof fetch;
   await expect(requestPcm("Hello", new AbortController().signal)).rejects.toBeInstanceOf(TtsRequestError); expect(calls).toBe(1);
+});
+
+
+test("PCM accepts Fish Audio without a language and retains localized refusal codes", async () => {
+  const { requestPcm } = await import("./ttsPcmSession");
+  let mode = "";
+  globalThis.fetch = mock(async (_input: unknown, init?: RequestInit) => {
+    mode = JSON.parse(String(init?.body)).mode;
+    return new Response(new Uint8Array([1, 0]), { headers: { "content-type": "audio/pcm", "x-tts-backend": "fishaudio", "x-tts-model": "s2.1-pro-free", "x-tts-voice": "default", "x-tts-encoding": "pcm_s16le", "x-tts-sample-rate": "24000", "x-tts-channels": "1" } });
+  }) as unknown as typeof fetch;
+  const result = await requestPcm("Привіт", new AbortController().signal);
+  expect(mode).toBe("pcm"); expect(result.voice.id).toBe("fishaudio"); expect(result.voice.language).toBe("");
+  await result.body.cancel();
+  globalThis.fetch = mock(async () => Response.json({ error: "free refused", code: "fishaudio-free-refused" }, { status: 403 })) as unknown as typeof fetch;
+  try { await requestPcm("Hello", new AbortController().signal); throw new Error("expected refusal"); }
+  catch (error) { expect(error).toBeInstanceOf(TtsRequestError); expect((error as TtsRequestError).code).toBe("fishaudio-free-refused"); }
+});
+
+
+test("a stale legacy player retains the Fish Audio expiry code", async () => {
+  globalThis.fetch = mock(async () => Response.json({ error: "free period ended", code: "fishaudio-free-ended" }, { status: 410 })) as unknown as typeof fetch;
+  try { await synthesizeChunk("Hello", new AbortController().signal); throw new Error("expected refusal"); }
+  catch (error) { expect(error).toBeInstanceOf(TtsRequestError); expect((error as TtsRequestError).code).toBe("fishaudio-free-ended"); }
 });

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import path from "node:path";
 
 import type { AgentRegistry, ConversationObservation } from "@/lib/agent/registry";
-import { holdBeforeEachWrite, longestLoopGap, registryLockHolder, sqliteRegistryFixture, type RegistryLockHolder } from "@/lib/agent/registryLockHolderFixture";
+import { holdBeforeEachWrite, whileRegistryWriterHeld, registryLockHolder, sqliteRegistryFixture, type RegistryLockHolder } from "@/lib/agent/registryLockHolderFixture";
 import { setBoardFileForTests } from "@/lib/board/store";
 import { blockingWaitDiagnostics, resetBlockingWaitsForTests } from "@/lib/blockingWaits";
 
@@ -18,7 +18,6 @@ import { emptyLaunchProfile, type SuccessorProviderPort } from "./contracts";
  * separate process holds the lock; the heartbeat measures this process's loop.
  */
 
-const HEARTBEAT_BOUND_MS = 50;
 const cleanups: (() => void | Promise<void>)[] = [];
 
 beforeEach(() => resetBlockingWaitsForTests(() => {}));
@@ -170,13 +169,13 @@ describe("the account-migration coordinator's registry writes wait off the event
 
     resetBlockingWaitsForTests(() => {});
     const hook = holdBeforeEachWrite(store, holder, 150, /coordinator\.ts/);
-    const { gapMs } = await longestLoopGap(() => drainHeldDeliveries(conversation!.id, port(delivered), store));
+    await whileRegistryWriterHeld(holder, () => drainHeldDeliveries(conversation!.id, port(delivered), store), { alreadyHeld: false });
     hook.restore();
     expect(hook.unwrapped).toEqual([]);
 
     expect(delivered).toEqual(["drain-wait-1"]);
     expect(store.snapshot().heldDeliveries[held.id]).toMatchObject({ state: "delivered", attempts: 1 });
-    expect(gapMs).toBeLessThan(HEARTBEAT_BOUND_MS);
+
     for (const label of ["delivery.claim", "delivery.settle"]) {
       expect(waits(label)[0]).toMatchObject({ synchronous: false, operationId: held.command.operationId });
     }
@@ -193,7 +192,7 @@ describe("the account-migration coordinator's registry writes wait off the event
 
     resetBlockingWaitsForTests(() => {});
     const hook = holdBeforeEachWrite(store, holder, 120, /coordinator\.ts/);
-    const { gapMs } = await longestLoopGap(() => reconcileMigrations(switching, port(delivered), store, { passBudgetMs: 25_000 }));
+    await whileRegistryWriterHeld(holder, () => reconcileMigrations(switching, port(delivered), store, { passBudgetMs: 25_000 }), { alreadyHeld: false });
     hook.restore();
     expect(hook.unwrapped).toEqual([]);
 
@@ -201,7 +200,7 @@ describe("the account-migration coordinator's registry writes wait off the event
     expect(store.conversation(failing!.id)!.migration).toMatchObject({ phase: "failed-recoverable" });
     expect(delivered).toEqual(["advance-moving-1"]);
     expect(cleaned).toBe(1);
-    expect(gapMs).toBeLessThan(HEARTBEAT_BOUND_MS);
+
     const movingOperation = store.conversation(moving!.id)!.migration!.operationId;
     for (const label of ["migration.transition", "migration.continuity", "migration.receipt", "migration.commit"]) {
       expect(waits(label).some((sample) => sample.operationId === movingOperation)).toBe(true);
@@ -218,17 +217,17 @@ describe("the account-migration coordinator's registry writes wait off the event
     const held = store.holdDelivery(conversation!.id, "commit fixture", "commit-refused-1");
     const counts = { create: 0, verify: 0, publish: 0, successors: new Set<string>() };
     let refuse = true;
-    const switching = provider({ counts, beforeCommit: async () => { if (refuse) { refuse = false; await holder.hold(600); } } });
+    const switching = provider({ counts, beforeCommit: async () => { if (refuse) { refuse = false; await holder.hold(); } } });
     const delivered: string[] = [];
 
-    const { gapMs } = await longestLoopGap(() => reconcileMigrations(switching, port(delivered), store));
-    expect(gapMs).toBeLessThan(HEARTBEAT_BOUND_MS);
+    await whileRegistryWriterHeld(holder, () => reconcileMigrations(switching, port(delivered), store), { release: false, alreadyHeld: false });
+
     expect(store.conversation(conversation!.id)!.migration).toMatchObject({ phase: "verifying" });
     expect(store.snapshot().heldDeliveries[held.id]).toMatchObject({ state: "held" });
     expect(delivered).toEqual([]);
     expect(waits("migration.commit")[0]).toMatchObject({ operationId: store.conversation(conversation!.id)!.migration!.operationId });
 
-    await new Promise((resolve) => setTimeout(resolve, 700));
+    await holder.release();
     await reconcileMigrations(switching, port(delivered), store);
     expect(store.conversation(conversation!.id)!.migration).toMatchObject({ phase: "committed" });
     expect(delivered).toEqual(["commit-refused-1"]);
@@ -242,15 +241,15 @@ describe("the account-migration coordinator's registry writes wait off the event
     store.holdDelivery(conversation!.id, "receipt fixture", "receipt-refused-1");
     const counts = { create: 0, verify: 0, publish: 0, successors: new Set<string>() };
     let refuse = true;
-    const switching = provider({ counts, beforeReceipt: async () => { if (refuse) { refuse = false; await holder.hold(600); } } });
+    const switching = provider({ counts, beforeReceipt: async () => { if (refuse) { refuse = false; await holder.hold(); } } });
     const delivered: string[] = [];
 
-    const { gapMs } = await longestLoopGap(() => reconcileMigrations(switching, port(delivered), store));
-    expect(gapMs).toBeLessThan(HEARTBEAT_BOUND_MS);
+    await whileRegistryWriterHeld(holder, () => reconcileMigrations(switching, port(delivered), store), { release: false, alreadyHeld: false });
+
     expect(store.conversation(conversation!.id)!.migration).toMatchObject({ phase: "successor-starting", providerReceipt: null });
     expect(waits("migration.receipt").length).toBe(1);
 
-    await new Promise((resolve) => setTimeout(resolve, 700));
+    await holder.release();
     await reconcileMigrations(switching, port(delivered), store);
     expect(store.conversation(conversation!.id)!.migration).toMatchObject({ phase: "committed" });
     expect(counts).toMatchObject({ create: 2, verify: 1, publish: 1 });
@@ -267,12 +266,12 @@ describe("the account-migration coordinator's registry writes wait off the event
     const delivered: string[] = [];
     const phase = store.conversation(conversation!.id)!.migration!.phase;
 
-    await holder.hold(600);
-    const { gapMs } = await longestLoopGap(() => reconcileMigrations(switching, port(delivered), store));
-    expect(gapMs).toBeLessThan(HEARTBEAT_BOUND_MS);
+    await holder.hold();
+    await whileRegistryWriterHeld(holder, () => reconcileMigrations(switching, port(delivered), store), { release: false });
+
     expect(store.conversation(conversation!.id)!.migration!.phase).toBe(phase);
     expect(counts.create).toBe(0);
-    await new Promise((resolve) => setTimeout(resolve, 650));
+    await holder.release();
 
     let refuse = true;
     const continuing = provider({ counts, continuity: true, beforeReceipt: async () => {} });
@@ -281,7 +280,7 @@ describe("the account-migration coordinator's registry writes wait off the event
       async create(input) {
         if (!refuse) return continuing.create(input);
         refuse = false;
-        await holder.hold(600);
+        await holder.hold();
         return continuing.create(input);
       },
     };
@@ -290,7 +289,7 @@ describe("the account-migration coordinator's registry writes wait off the event
     expect(store.conversation(conversation!.id)!.continuityPaths).toEqual([]);
     expect(waits("migration.continuity").length).toBe(1);
 
-    await new Promise((resolve) => setTimeout(resolve, 700));
+    await holder.release();
     await reconcileMigrations(refusing, port(delivered), store);
     expect(store.conversation(conversation!.id)!.migration).toMatchObject({ phase: "committed" });
     expect(counts.successors.size).toBe(1);
@@ -310,14 +309,14 @@ describe("the account-migration coordinator's registry writes wait off the event
       async reconcileUncertain({ clientMessageId }) { reconciled.push(clientMessageId); return "delivered"; },
     };
 
-    await holder.hold(600);
-    const { gapMs } = await longestLoopGap(() => reconcileMigrations(provider(), reconciling, store));
-    expect(gapMs).toBeLessThan(HEARTBEAT_BOUND_MS);
+    await holder.hold();
+    await whileRegistryWriterHeld(holder, () => reconcileMigrations(provider(), reconciling, store), { release: false });
+
     expect(reconciled).toEqual([]);
     expect(store.snapshot().heldDeliveries[orphan.id]).toMatchObject({ state: "assigned" });
     expect(waits("delivery.cancel")[0]).toMatchObject({ operationId: orphan.command.operationId });
 
-    await new Promise((resolve) => setTimeout(resolve, 650));
+    await holder.release();
     await reconcileMigrations(provider(), reconciling, store);
     expect(store.snapshot().heldDeliveries[orphan.id]?.state ?? "failed").toBe("failed");
     expect(reconciled).toEqual(["orphan-claimed"]);

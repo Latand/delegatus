@@ -1876,3 +1876,73 @@ test("targets that differ only in their opening capital each send once; a handle
     await f.service.close(s.sessionId);
   }
 });
+
+
+test("voice start supplies the project directory and the cheap read refreshes it", async () => {
+  const { productionDomainDependencies } = await import("@/lib/mcp/bindings");
+  const { createCompanionBoardReadPaths } = await import("./readPaths");
+  const { CompanionBoardReads } = await import("./boardReads");
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  persistProjectAliases([{ source: "orion-old", target: "orion", displayName: "Orion Works" }]);
+  const tasks = [{ id: "orion-task", project: "orion", text: "Synthetic", status: "assigned" as const }];
+  const reads = new CompanionBoardReads(createCompanionBoardReadPaths({ domain: { ...productionDomainDependencies,
+    taskSelectionSource: undefined, pipelineSelectionSource: undefined, listTaskRecords: () => tasks as import("@/lib/tasks/types").BoardTask[], listPipelineRecords: () => [] } }));
+  const f = fixture();
+  const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => "synthetic-credential", timers: false });
+  const session = await service.start({ project: "orion", locale: "en", sdp: "v=0" });
+  try {
+    expect(f.provider.sessions[0].memory).toContain('"displayName":"Orion Works"');
+    expect(f.provider.sessions[0].memory).toContain('"openTaskCount":1');
+    f.provider.responder = calling(functionCall("directory-read", "list_projects", {}));
+    f.provider.replay(session.providerId, delegationCreated("directory-delegation", 100));
+    await service.drain(session.sessionId);
+    const output = f.provider.requests.at(-1)!.input.filter(item => item.type === "function_call_output").at(-1)!;
+    expect(JSON.parse(output.output as string)).toMatchObject({ rows: [{ project: "orion", displayName: "Orion Works", liveSeat: false, openTaskCount: 1 }] });
+    tasks.push({ id: "orion-next", project: "orion", text: "Next", status: "assigned" });
+    await service.context(session.sessionId, null);
+    f.provider.responder = calling(functionCall("directory-refresh", "list_projects", { refresh: true }));
+    f.provider.replay(session.providerId, delegationCreated("directory-refresh-delegation", 200));
+    await service.drain(session.sessionId);
+    const refreshed = f.provider.requests.at(-1)!.input.filter(item => item.type === "function_call_output").at(-1)!;
+    expect(JSON.parse(refreshed.output as string)).toMatchObject({ rows: [{ project: "orion", openTaskCount: 2 }] });
+  } finally { await service.close(session.sessionId); }
+});
+
+
+test("voice names both designated candidates on a genuine ambiguity and reads nothing", async () => {
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+  const { createCompanionBoardReadPaths } = await import("./readPaths");
+  const { CompanionBoardReads } = await import("./boardReads");
+  const f = fixture();
+  for (const [project, name] of [["orion-first", "Orion Works"], ["orion-second", "ORION WORKS"]]) {
+    persistProjectAliases([{ source: `${project}-old`, target: project, displayName: name }]);
+    beginOrchestratorSeatIntent({ project, mandate: "Own the board", clientRequestId: project, mode: "spawn", promptVersion: null });
+    completeOrchestratorSeatIntent({ project, clientRequestId: project, conversationId: `conversation_${project}`, path: null });
+  }
+  const paths = createCompanionBoardReadPaths(); let read = 0;
+  const reads = new CompanionBoardReads({ ...paths, call: async (...args) => { read++; return paths.call(...args); } });
+  const service = new CompanionLiveSessions(f.storage, f.admission, reads, f.provider, { key: () => "synthetic-credential", timers: false });
+  const session = await service.start({ project: "orion-first", locale: "en", sdp: "v=0" });
+  try {
+    f.provider.responder = calling(functionCall("ambiguity-read", "list_tasks", { project: "orion works" }));
+    f.provider.replay(session.providerId, delegationCreated("ambiguity", 100));
+    await service.drain(session.sessionId);
+    const result = JSON.parse(f.provider.requests.at(-1)!.input.filter(item => item.type === "function_call_output").at(-1)!.output as string);
+    expect(result).toMatchObject({ status: "refused", code: "PROJECT_AMBIGUOUS", candidates: [
+      { project: "orion-first", name: "Orion Works" }, { project: "orion-second", name: "ORION WORKS" },
+    ] });
+    expect(result.speech).toContain("Ask which project"); expect(read).toBe(0);
+  } finally { await service.close(session.sessionId); }
+});
+
+
+test("an unreadable project directory refuses minting without a session or reservation", async () => {
+  const f = fixture();
+  const directory = spyOn(f.reads, "projects").mockImplementation(() => { throw new Error("PROJECT_DIRECTORY_UNAVAILABLE"); });
+  try {
+    await expect(f.service.start({ project: "fixture", locale: "en", sdp: "v=0" })).rejects.toThrow("PROJECT_DIRECTORY_UNAVAILABLE");
+    expect(f.provider.sessions).toHaveLength(0);
+    expect(Object.values(f.storage.read().sessions)).toHaveLength(0);
+  } finally { directory.mockRestore(); }
+});

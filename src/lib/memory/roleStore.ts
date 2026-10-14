@@ -7,7 +7,7 @@ import { staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 
-import { appendRule, lessonPattern, retainRules, sameRule, scopeChars } from "./roleConsolidate";
+import { appendRule, lessonPatternSource, retainRules, sameRule, scopeChars } from "./roleConsolidate";
 import { roleMemoryEnabled } from "./settings";
 import { curationView } from "./curation/store";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
@@ -554,7 +554,7 @@ function readableRows(): { rows: RoleMemoryRow[]; signature: string } {
 
 function lessonTextsOf(all: readonly RoleMemoryRow[]): string[] {
   const texts = new Set<string>();
-  for (const row of all) if (row.kind === "rule") for (const text of [row.rule, row.why]) if (lessonPattern(text)) texts.add(text);
+  for (const row of all) if (row.kind === "rule") for (const text of [row.rule, row.why]) if (lessonPatternSource(text)) texts.add(text);
   return [...texts].sort((a, b) => b.length - a.length);
 }
 
@@ -563,31 +563,116 @@ export function storedLessonTexts(): string[] {
   return lessonTextsOf(readableRows().rows);
 }
 
-let matcherCache: { key: string; matcher: RegExp | null } | null = null;
-/** One pattern for every stored lesson, longest first, so a longer lesson wins where two overlap. */
-function storedLessonMatcher(): RegExp | null {
+// Leave headroom under JSC's limit and keep compilation quick on a cache miss.
+const LESSON_MATCHER_SOURCE_LIMIT = 32_000;
+interface LessonMatcher { pattern: RegExp; prefilter: RegExp | null }
+interface LessonSource { source: string; words: string[]; anchor?: string }
+let matcherCache: { key: string; matchers: LessonMatcher[] } | null = null;
+/** Bounded alternatives in longest-first order, cached for this store signature. */
+function storedLessonMatchers(): LessonMatcher[] {
   const { rows: all, signature } = readableRows();
   if (matcherCache?.key !== signature) {
-    const sources = lessonTextsOf(all).flatMap((text) => { const pattern = lessonPattern(text); return pattern ? [pattern.source] : []; });
-    matcherCache = { key: signature, matcher: sources.length ? new RegExp(sources.map((source) => `(?:${source})`).join("|"), "giu") : null };
+    const matchers: LessonMatcher[] = [];
+    let skipped = 0;
+    const sources: LessonSource[] = [];
+    const frequency = new Map<string, number>();
+    for (const text of lessonTextsOf(all)) {
+      const source = lessonPatternSource(text);
+      if (!source) continue;
+      const wrapped = `(?:${source})`;
+      if (wrapped.length > LESSON_MATCHER_SOURCE_LIMIT) { skipped += 1; continue; }
+      const words = [...new Set(text.normalize("NFKC").match(/[\p{L}\p{N}]+/gu) ?? [])];
+      sources.push({ source: wrapped, words });
+      for (const word of words) {
+        const key = word.toLowerCase();
+        frequency.set(key, (frequency.get(key) ?? 0) + 1);
+      }
+    }
+    for (const source of sources) {
+      source.anchor = source.words.sort((a, b) => frequency.get(a.toLowerCase())! - frequency.get(b.toLowerCase())! || b.length - a.length)[0];
+    }
+    const compile = (sources: LessonSource[]) => {
+      if (!sources.length) return;
+      try {
+        // Every alternative requires its anchor word. Use the same Unicode
+        // case folding and word boundaries as lessonPattern; string lowercasing
+        // alone would miss matches such as long s, Kelvin sign or final sigma.
+        const anchors = [...new Set(sources.map(source => source.anchor))];
+        const prefilter = anchors.includes(undefined) ? null
+          : new RegExp(`(?<![\\p{L}\\p{N}])(?:${anchors.join("|")})(?![\\p{L}\\p{N}])`, "iu");
+        matchers.push({ pattern: new RegExp(sources.map(source => source.source).join("|"), "giu"), prefilter });
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+        // Engine limits also depend on pattern complexity. Split a refused
+        // batch again; only an individually uncompilable lesson is skipped.
+        if (sources.length === 1) { skipped += 1; return; }
+        const middle = Math.floor(sources.length / 2);
+        compile(sources.slice(0, middle));
+        compile(sources.slice(middle));
+      }
+    };
+    let chunk: LessonSource[] = [];
+    let length = 0;
+    for (const source of sources) {
+      const added = source.source.length + Number(chunk.length > 0);
+      if (length + added > LESSON_MATCHER_SOURCE_LIMIT) {
+        compile(chunk);
+        chunk = [];
+        length = 0;
+      }
+      length += source.source.length + Number(chunk.length > 0);
+      chunk.push(source);
+    }
+    compile(chunk);
+    matcherCache = { key: signature, matchers };
+    if (skipped) console.warn(`stored-lesson matcher skipped ${skipped} oversized or uncompilable lesson text(s)`);
   }
-  return matcherCache.matcher;
+  return matcherCache.matchers;
+}
+
+/** Merge matches on the original text: earliest start wins, and a tie goes
+    to the first (longest-first) chunk. Replacing chunk by chunk would change
+    overlapping matches and could match across an inserted placeholder. */
+function withholdLessons(text: string, chunks: readonly LessonMatcher[]): string {
+  const matchers = chunks.filter(chunk => !chunk.prefilter || chunk.prefilter.test(text)).map(chunk => chunk.pattern);
+  if (!text || !matchers.length) return text;
+  const matches = matchers.map(matcher => {
+    matcher.lastIndex = 0;
+    return matcher.exec(text);
+  });
+  const pieces: string[] = [];
+  let end = 0;
+  while (true) {
+    let next: RegExpExecArray | null = null;
+    for (const match of matches) if (match && (!next || match.index < next.index)) next = match;
+    if (!next) break;
+    pieces.push(text.slice(end, next.index), WITHHELD_LESSON);
+    end = next.index + next[0].length;
+    for (let i = 0; i < matches.length; i += 1) {
+      if (matches[i] && matches[i]!.index < end) {
+        matchers[i].lastIndex = end;
+        matches[i] = matchers[i].exec(text);
+      }
+    }
+  }
+  if (!pieces.length) return text;
+  pieces.push(text.slice(end));
+  return pieces.join("");
 }
 
 /** The text with every stored lesson it quotes withheld. */
 export function withoutStoredLessons(text: string): string {
   if (!text) return text;
-  const matcher = storedLessonMatcher();
-  return matcher ? text.replace(matcher, WITHHELD_LESSON) : text;
+  return withholdLessons(text, storedLessonMatchers());
 }
 
 /** withoutStoredLessons over every text a record holds, however deep; the
     record itself when none quotes a lesson. */
 export function withoutStoredLessonsIn<T>(value: T): T {
-  const matcher = storedLessonMatcher();
-  if (!matcher) return value;
+  const matchers = storedLessonMatchers();
+  if (!matchers.length) return value;
   const walk = (item: unknown): unknown => {
-    if (typeof item === "string") return item && item.replace(matcher, WITHHELD_LESSON);
+    if (typeof item === "string") return withholdLessons(item, matchers);
     if (Array.isArray(item)) {
       const mapped = item.map(walk);
       return mapped.some((entry, index) => entry !== item[index]) ? mapped : item;

@@ -1,3 +1,4 @@
+import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal } from "@/lib/projects/nameResolution";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
@@ -6,11 +7,8 @@ import { viewerReadTools, productionDomainDependencies, type ViewerMcpDomainDepe
 import { boardSelection } from "@/lib/mcp/boardSelection";
 import { budgetPage } from "@/lib/mcp/budgetPage";
 import type { AgentLivenessSources } from "@/lib/lifecycle/liveness";
-import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
-import { projectCurationSnapshot } from "@/lib/projects/curation";
-import { reportHeaderName } from "@/lib/projects/settings";
-import { conversationCatalogSnapshot } from "@/lib/scanner/conversationCatalog";
-import { activeOrchestratorSeats, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { canonicalProject } from "@/lib/projects/aliases";
+import { orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { readPrototypeReviews } from "@/lib/prototypeReview/read";
 import { prototypeRoot, storedMediaPath, sniffPrototype } from "@/lib/prototypeReview/store";
 import { openedAt } from "@/lib/artifact/localFile";
@@ -69,28 +67,38 @@ export function createCompanionBoardReadPaths(dependencies: { domain?: ViewerMcp
       const selected = domain.selectedContext?.selectedConversation().resolve(id);
       return selected?.project ?? null;
     },
+    projects() {
+      const tasks = domain.taskSelectionSource?.();
+      const records = tasks ? [] : (domain.listTaskRecords?.() ?? domain.loadTasks());
+      const counts = tasks ? boardSelection(tasks.filename, "tasks").openTaskCounts(tasks)
+        : [...new Set(records.map(row => row.project))].map(project => ({ project, count: records.filter(row => row.project === project && ["inbox", "assigned", "blocked"].includes(row.status)).length }));
+      const pipelines = domain.pipelineSelectionSource?.();
+      const keys = pipelines ? boardSelection(pipelines.filename, "pipelines").projectKeys(pipelines)
+        : (domain.listPipelineRecords?.() ?? domain.getPipelines().pipelines).map(row => row.project);
+      const directory = namedProjectDirectory(domain, [...counts.map(row => row.project), ...keys]);
+      const totals = new Map<string, number>();
+      for (const row of counts) { const key = directory.canonical(row.project); totals.set(key, (totals.get(key) ?? 0) + row.count); }
+      return [...directory.labels].map(([project, displayName]) => ({ project, displayName, liveSeat: directory.active.has(project), openTaskCount: totals.get(project) ?? 0 }))
+        .sort((a, b) => a.displayName.localeCompare(b.displayName) || a.project.localeCompare(b.project));
+    },
     recipient: project => orchestratorSeatFor(project).active?.conversationId ?? null,
     resolveProject(current, requested) {
       if (!requested && !current) throw new Error("PROJECT_REQUIRED");
-      const names = new Map<string, Set<string>>();
-      const add = (key: string, name?: string) => {
-        key = canonicalProject(key);
-        for (const value of [key, name, reportHeaderName(key)]) if (value) {
-          const label = value.trim().toLowerCase(); const keys = names.get(label) ?? new Set<string>(); keys.add(key); names.set(label, keys);
-        }
-      };
-      for (const [key, name] of Object.entries(projectAliasSnapshot().displayNames)) add(key, name);
-      for (const row of projectCurationSnapshot().manualProjects) add(row.project, row.displayName);
-      for (const row of conversationCatalogSnapshot()) add(row.project, row.projectName);
-      for (const seat of activeOrchestratorSeats()) add(seat.project);
       const tasks = domain.taskSelectionSource?.();
       const pipelines = domain.pipelineSelectionSource?.();
-      for (const key of tasks ? boardSelection(tasks.filename, "tasks").projectKeys(tasks) : (domain.listTaskRecords?.() ?? domain.loadTasks()).map(row => row.project)) add(key);
-      for (const key of pipelines ? boardSelection(pipelines.filename, "pipelines").projectKeys(pipelines) : (domain.listPipelineRecords?.() ?? domain.getPipelines().pipelines).map(row => row.project)) add(key);
-      const input = requested ?? current!;
-      const matches = names.get(input.trim().toLowerCase()) ?? names.get(canonicalProject(input).toLowerCase());
-      if (matches?.size !== 1) throw new Error(matches?.size ? "PROJECT_AMBIGUOUS" : "PROJECT_REFUSED");
-      return [...matches][0]!;
+      const keys = [
+        ...(tasks ? boardSelection(tasks.filename, "tasks").projectKeys(tasks) : (domain.listTaskRecords?.() ?? domain.loadTasks()).map(row => row.project)),
+        ...(pipelines ? boardSelection(pipelines.filename, "pipelines").projectKeys(pipelines) : (domain.listPipelineRecords?.() ?? domain.getPipelines().pipelines).map(row => row.project)),
+      ];
+      const directory = namedProjectDirectory(domain, keys);
+      // An omitted name uses the call's bound identity, even if another
+      // project's display label happens to spell that key.
+      if (!requested && current && directory.labels.has(directory.canonical(current))) return directory.canonical(current);
+      try { return resolveNamedProject(requested ?? current!, directory); }
+      catch (error) {
+        if (error instanceof ProjectNameRefusal) throw Object.assign(new Error(error.details.code === "ambiguous_project" ? "PROJECT_AMBIGUOUS" : "PROJECT_REFUSED"), { candidates: error.details.candidateNames });
+        throw error;
+      }
     },
     review(id) { const row = task(id); if (!row) throw new Error("PROJECT_REFUSED"); return readPrototypeReviews(row); },
     prototypeTasks(project, taskId) {

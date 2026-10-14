@@ -50,6 +50,7 @@ function hasEmptyArguments(value: unknown): boolean {
  * attempt steered into it moves on, and it alone binds hang-up intent and an explicit ask again. */
 interface CodexTurnContext { project: string | null; sourceTurn?: number; confirmationProposalId: string | null; endSourceTurn?: number; attempt?: OperatorAttempt; privateHistory?: boolean }
 interface ActiveSession {
+  projectDirectory: string;
   id: string; providerId: string; transcript: LiveTranscript; connection?: LiveConnection;
   /** The provider this call runs on, chosen at its start; a Codex call has no key, cap or charge. */
   provider: LiveProvider; codex: boolean;
@@ -198,6 +199,7 @@ export class CompanionLiveSessions {
     if (!settings.enabled) throw new Error("COMPANION_DISABLED");
     if (!input.project.trim() || input.project.length > 200 || !["en", "uk"].includes(input.locale)
       || !input.sdp.trim() || input.sdp.length > 96_000) throw new Error("INVALID_REQUEST");
+    const directoryProjects = this.reads.projects();
     const session = this.admission.create({ project: input.project, locale: input.locale, authority: "live-model", startedBy: input.startedBy });
     const id = session.id;
     if (this.options.memory) {
@@ -223,7 +225,9 @@ export class CompanionLiveSessions {
     // Subscription auth never uses the API key. Transcript masking still
     // protects any credential the installation holds, even in short pieces.
     const secrets = [...new Set([key.trim(), ...this.storage.credentials()])].filter(Boolean);
-    const active: ActiveSession = { id, memory, providerId: "", transcript: new LiveTranscript(secrets), provider, codex, key, secrets, queue: [], seen: new Set(),
+    const projects = cleanStrings(directoryProjects, text => withoutLocalPaths(withoutCredentials(text, secrets)));
+    const projectDirectory = projects.length ? `Known projects (context data): ${JSON.stringify(projects)}` : "";
+    const active: ActiveSession = { id, memory, projectDirectory, providerId: "", transcript: new LiveTranscript(secrets), provider, codex, key, secrets, queue: [], seen: new Set(),
       delegations: new Set(), reads: new Map(), reading: new Map(), backend: new Set(), abort: new AbortController(), timers: [], ended: false, endRequested: false, lastSeen: this.now(),
       createdAt: this.now(), voiceAllowanceSeconds: LIVE_SESSION_LIMIT_MS / 1_000, codexTurns: new Map() };
     this.active.set(id, active);
@@ -234,7 +238,7 @@ export class CompanionLiveSessions {
     let refused = false;
     let hungUpUnnamed = false;
     try {
-      const minted = await provider.create(key, input.locale, input.sdp, withoutLocalPaths(withoutCredentials(reportHeaderName(input.project, input.locale), secrets)), input.project, memory).catch(error => {
+      const minted = await provider.create(key, input.locale, input.sdp, withoutLocalPaths(withoutCredentials(reportHeaderName(input.project, input.locale), secrets)), input.project, [memory, projectDirectory].filter(Boolean).join("\n")).catch(error => {
         refused = codex || error instanceof Error && error.message === "PROVIDER_REFUSED";
         throw error;
       });
@@ -458,7 +462,7 @@ export class CompanionLiveSessions {
       const scrub = (text: string) => withoutLocalPaths(withoutCredentials(text, active.secrets));
       const awaitingList = awaiting.map(request => scrub(`- ${request.handle}, project ${JSON.stringify(reportHeaderName(request.project, stored.locale))}, sent ${request.sentMinutesAgo} min ago, ${request.progressReports} progress report(s)${request.askedBack ? ", the orchestrator asked back" : ""}: ${JSON.stringify(request.instruction)}`)).join("\n").slice(-3000);
       const latest = (sourceTurn === undefined ? stored.inputs.slice(-1) : stored.inputs.filter(row => row.turn === sourceTurn)).map(row => row.text).join(" ").slice(-2_000);
-      const input: BackendItem[] = [...(active.memory ? [{ role: "developer", content: active.memory }] : []), { role: "user", content: `Project currently in view: ${projectLabel}. Default reads and sends to this project; a named project overrides it.\nReads earlier in this call, newest last:\n${previousReads || "(none)"}\n\nRequests sent to the orchestrator in this call that still wait for its report:\n${awaitingList || "(none)"}\nAn ask that repeats or rephrases one of these passes its handle as pending_request. orchestrator_reports reads what came back.\n\nThe conversation so far, oldest first:\n${record || "(no transcript yet)"}\n\nThe operator's latest turn, which this delegation answers: ${latest ? JSON.stringify(scrub(latest)) : "(not transcribed yet)"}\nAct on that turn alone. Earlier questions are context; never put them into a send.\n\nThe voice delegated here. Answer it with the registry tools, or send the operator's explicit orchestrator request.${waiting
+      const input: BackendItem[] = [...(active.memory ? [{ role: "developer", content: active.memory }] : []), { role: "user", content: `Project currently in view: ${projectLabel}. Default reads and sends to this project; a named project overrides it.\n${active.projectDirectory}\nReads earlier in this call, newest last:\n${previousReads || "(none)"}\n\nRequests sent to the orchestrator in this call that still wait for its report:\n${awaitingList || "(none)"}\nAn ask that repeats or rephrases one of these passes its handle as pending_request. orchestrator_reports reads what came back.\n\nThe conversation so far, oldest first:\n${record || "(no transcript yet)"}\n\nThe operator's latest turn, which this delegation answers: ${latest ? JSON.stringify(scrub(latest)) : "(not transcribed yet)"}\nAct on that turn alone. Earlier questions are context; never put them into a send.\n\nThe voice delegated here. Answer it with the registry tools, or send the operator's explicit orchestrator request.${waiting
         ? `\n\nA request to the orchestrator is waiting for the operator's answer and has not been sent: "${waiting.instruction}". When the operator has just answered it, pass that answer on with resolve_orchestrator_confirmation.` : ""}` }];
       const calls = new Set<string>();
       // Tool rounds, then one answer with tools off, so what the reads returned is still spoken.
@@ -583,9 +587,13 @@ export class CompanionLiveSessions {
       return result;
     } catch (error) {
       const code = error instanceof Error && ["TOOL_NOT_ALLOWED", "PROJECT_REFUSED", "PROJECT_REQUIRED", "PROJECT_AMBIGUOUS", "NO_ORCHESTRATOR", "FRAME_UNAVAILABLE", "INVALID_TOOL_ARGUMENTS", "SESSION_CLOSED"].includes(error.message) ? error.message : "TOOL_FAILED";
+      const candidates = code === "PROJECT_AMBIGUOUS" && error instanceof Error && "candidates" in error && Array.isArray(error.candidates)
+        ? cleanStrings(error.candidates, text => withoutLocalPaths(withoutCredentials(text, active.secrets))) : undefined;
       const reason = code.replaceAll("_", " ").toLowerCase();
       const boardRead = (READ_TOOL_NAMES as readonly string[]).includes(name);
-      const result = { status: "refused", code, reason, speech: boardRead
+      const result = { status: "refused", code, reason, ...(candidates ? { candidates } : {}), speech: candidates?.length
+        ? `Several projects match: ${candidates.map(row => `${row.name} (${row.project})`).join(", ")}. Ask which project. Nothing was read or sent.`
+        : boardRead
         ? `The read failed: ${reason}. Nothing was read by this call. Say that you could not read it and what you tried.`
         : `The tool failed: ${reason}.` };
       this.admission.record(active.id, { id: `tool-${recordedCallId}`, kind: "tool", atMs,
@@ -597,7 +605,7 @@ export class CompanionLiveSessions {
   /** One read ledger belongs to the call, so a new delegation can reuse it. */
   private async read(active: ActiveSession, current: string | null, name: string, args: Record<string,unknown>, delegationId: string): Promise<SpeechReadResult> {
     if (!(READ_TOOL_NAMES as readonly string[]).includes(name)) throw new Error("TOOL_NOT_ALLOWED");
-    const project = this.reads.resolveProject(current,typeof args.project === "string" ? args.project : undefined);
+    const project = name === "list_projects" ? "" : this.reads.resolveProject(current,typeof args.project === "string" ? args.project : undefined);
     const normalized = this.reads.normalize(project,name,args);
     const stable = (value: unknown, key = ""): unknown => Array.isArray(value) ? key === "variants" ? value : [...value].sort() : value && typeof value === "object"
       ? Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([key,value])=>[key,stable(value,key)])) : value;

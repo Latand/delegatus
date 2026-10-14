@@ -69,6 +69,8 @@ test("rich rendering labels slides, recommendations and bounded copy buttons and
   expect(rendered.markdown).not.toContain("## Питання");
   expect(rendered.markdown).toContain("+ Інше — у коментарі");
   expect(rendered.markdown).toContain("Скопіювати рекомендовані");
+  expect(rendered.markdown).toContain("відповідь своїми словами");
+  expect(rendered.plainText).toContain("Застереження теж збережуться");
   expect(rendered.markdown.match(/type="copy_text"/g)).toHaveLength(4);
   expect(rendered.markdown).toContain("1a 2a 3a");
   expect(rendered.markdown).not.toContain("<script>");

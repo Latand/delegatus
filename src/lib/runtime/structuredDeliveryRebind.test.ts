@@ -920,7 +920,7 @@ test("the watchdog runs while startup is still seating hosts: a registered conve
 
 test("startup projection waits for the lock off the loop and leaves refused outcomes owed to the journal", async () => {
   /* docs/design/delivery-progress-and-drain.md, C3. */
-  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const { sqliteRegistryFixture, registryLockHolder, whileRegistryWriterHeld } = await import("@/lib/agent/registryLockHolderFixture");
   const made = sqliteRegistryFixture("llv-startup-projection", { sqliteWriterDeadlineMs: 150 });
   const holder = registryLockHolder(made.sqliteFilename);
   const registry = made.registry;
@@ -938,11 +938,10 @@ test("startup projection waits for the lock off the loop and leaves refused outc
     journal.transitionOperation("projection-operation", "delivering");
     journal.transitionOperation("projection-operation", "delivered");
 
-    await holder.hold(600);
-    const { gapMs } = await longestLoopGap(() => bindStructuredDeliveryQueue([], { registry, client, watchdogIntervalMs: 0, settlementSweepMs: 0 }));
-    expect(gapMs).toBeLessThan(50);
+    await holder.hold();
+    await whileRegistryWriterHeld(holder, () => bindStructuredDeliveryQueue([], { registry, client, watchdogIntervalMs: 0, settlementSweepMs: 0 }), { release: false });
     expect(registry.snapshot().heldDeliveries[held.id]).toMatchObject({ state: "delivery-uncertain" });
-    await Bun.sleep(650);
+    await holder.release();
     await bindStructuredDeliveryQueue([], { registry, client, watchdogIntervalMs: 0, settlementSweepMs: 0 });
     expect(registry.snapshot().deliveryOperationOwners["projection-operation"]).toMatchObject({ terminalState: "delivered" });
   } finally {

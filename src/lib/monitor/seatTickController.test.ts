@@ -676,12 +676,12 @@ test("a deploy the seat started wakes it once when it settles, with the lanes it
   expect(second!.reasons ?? []).not.toContain("deploy-settled");
   expect(again.sent).toHaveLength(0);
 
-  /* The lanes have been shown. An unchanged hour does not repeat them;
-     a later deploy settlement makes their resume instruction actionable again. */
+  /* A later stall wake can name the still-parked lanes. The settled deploy
+     has already been announced and must not be announced again. */
   const hourly = harness({ pipelines, ...deploys, now: NOW + 70 * MINUTE, state: again.written.at(-1)! });
   const third = await runSeatTickCheck(PROJECT, hourly.deps);
-  expect(third).toMatchObject({ verdict: "quiet" });
-  expect(hourly.sent).toHaveLength(0);
+  expect(third!.reasons ?? []).not.toContain("deploy-settled");
+  expect(hourly.sent.every(message => !message.text.includes("[deploy] deploy-own"))).toBe(true);
 });
 
 test("a lane the operator paused is not the seat's work: no stall, no interval wake (#2063)", async () => {
@@ -1130,7 +1130,7 @@ test("a second interruption parking an announced running stall wakes its seat de
 
 test("a wake's journal settlement waits for the lock off the loop, and a write the lock refused answers undecided until the next tick", async () => {
   /* docs/design/delivery-progress-and-drain.md, C2. */
-  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const { sqliteRegistryFixture, registryLockHolder, whileRegistryWriterHeld } = await import("@/lib/agent/registryLockHolderFixture");
   const made = sqliteRegistryFixture("llv-wake-settlement", { sqliteWriterDeadlineMs: 150 });
   const holder = registryLockHolder(made.sqliteFilename);
   const registry = made.registry;
@@ -1139,11 +1139,11 @@ test("a wake's journal settlement waits for the lock off the loop, and a write t
     const held = registry.holdDelivery(conversation.id, "seat wake", "wake-settlement-key");
     registry.beginDeliveryAttempt(held.id, held.generationId!);
     const target = { conversationId: conversation.id, operationId: held.command.operationId, deliveryId: held.id };
-    await holder.hold(500);
-    const { value: refused, gapMs } = await longestLoopGap(() => settleRecordFromJournal(registry, target, { status: "delivered", reason: null }));
+    await holder.hold();
+    const { value: refused } = await whileRegistryWriterHeld(holder, () => settleRecordFromJournal(registry, target, { status: "delivered", reason: null }), { release: false });
     expect(refused).toBeNull();
-    expect(gapMs).toBeLessThan(50);
-    await Bun.sleep(550);
+
+    await holder.release();
     expect(await settleRecordFromJournal(registry, target, { status: "delivered", reason: null })).toMatchObject({ state: "delivered" });
   } finally {
     await holder.close();
@@ -2331,6 +2331,7 @@ describe("seat authentication recovery through production seams", () => {
       const { confirmOrchestratorSeatMaterialization } = await import("@/lib/orchestrator/seats");
       f.command.spawn = async (_body, _autonomous, admission) => {
         admission?.assertAccount?.(f.b.id);
+        (await admission?.prepareAccount?.(f.b.id))?.();
         return { status: 202, body: { ok: true, accepted: true, launched: false, state: "accepted",
           conversationId: f.successor.id, launchId: "launch_auth_baseline_pending" } };
       };

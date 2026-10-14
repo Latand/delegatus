@@ -629,7 +629,6 @@ test("a Telegram scheduler that cannot start does not take the other controllers
 
 test("cold boot enables the controller while readiness receives the first runtime turn", async () => {
   let controllerStarts = 0;
-  const startedAt = performance.now();
   scheduleAccountMigrationController(async () => {
     controllerStarts += 1;
     const busyUntil = performance.now() + 150;
@@ -637,8 +636,8 @@ test("cold boot enables the controller while readiness receives the first runtim
       // Synthetic first reconciliation work begins after readiness gets a turn.
     }
   }, 0);
-  const readinessAt = await new Promise<number>((resolve) => setTimeout(() => resolve(performance.now()), 0));
-  expect(readinessAt - startedAt).toBeLessThan(100);
+  const startsAtReadiness = await new Promise<number>((resolve) => setTimeout(() => resolve(controllerStarts), 0));
+  expect(startsAtReadiness).toBe(0);
 
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
   expect(controllerStarts).toBe(1);
@@ -764,7 +763,7 @@ test("structured-host startup retries an arbitrary recoverable adoption error", 
       },
     );
 
-    expect(logged).toEqual([["[structured hosts] startup adoption failed; retry scheduled", { category: "unknown-recoverable", attempt: 1, retryInMs: 5_000 }]]);
+    expect(logged).toEqual([["[structured hosts] startup adoption failed; retry scheduled", { category: "unknown-recoverable", attempt: 1, retryInMs: 5_000, message: "container adoption failed", hostKey: null }]]);
     expect(didStructuredHostStartupFail()).toBe(true);
     expect(scheduled).toHaveLength(1);
 
@@ -775,7 +774,7 @@ test("structured-host startup retries an arbitrary recoverable adoption error", 
     expect(attempts).toBe(2);
     expect(didStructuredHostStartupFail()).toBe(false);
     expect(logged).toEqual([
-      ["[structured hosts] startup adoption failed; retry scheduled", { category: "unknown-recoverable", attempt: 1, retryInMs: 5_000 }],
+      ["[structured hosts] startup adoption failed; retry scheduled", { category: "unknown-recoverable", attempt: 1, retryInMs: 5_000, message: "container adoption failed", hostKey: null }],
       ["[structured hosts] startup adoption recovered", { attempts: 2 }],
     ]);
   } finally {
@@ -848,7 +847,7 @@ test("structured-host startup self-heals after the runtime socket becomes ready"
     expect(logged).toEqual([
       [
         "[structured hosts] startup adoption failed; retry scheduled",
-        { category: "runtime-host-unavailable", attempt: 1, retryInMs: 5_000 },
+        { category: "runtime-host-unavailable", attempt: 1, retryInMs: 5_000, message: "runtime host is unavailable", hostKey: null },
       ],
       ["[structured hosts] startup adoption recovered", { attempts: 2 }],
     ]);
@@ -899,7 +898,7 @@ test("structured-host startup uses bounded backoff with one pending retry", asyn
     expect(logged).toEqual([
       ...[25, 50, 50, 50].map((retryInMs, index) => [
         "[structured hosts] startup adoption failed; retry scheduled",
-        { category: "runtime-host-unavailable", attempt: index + 1, retryInMs },
+        { category: "runtime-host-unavailable", attempt: index + 1, retryInMs, message: "runtime host is unavailable", hostKey: null },
       ]),
       ["[structured hosts] startup adoption recovered", { attempts: 5 }],
     ]);
@@ -914,10 +913,11 @@ test("startup failures back off into minutes and every attempt logs only safe fi
   let attempts = 0;
   let elapsedMs = 0;
   const attemptTimes: number[] = [];
+  const privateDiagnostic = path.join(os.homedir(), "fixture", "error.log");
   await runStructuredHostStartup(async () => {
     attempts += 1;
     attemptTimes.push(elapsedMs);
-    if (attempts <= 9) throw new RuntimeHostUnavailableError("private response payload");
+    if (attempts <= 9) throw new RuntimeHostUnavailableError(privateDiagnostic);
   }, (...args) => { logged.push(args); }, {
     random: () => 0.5,
     schedule: (callback, delayMs) => { scheduled.push({ callback, delayMs }); return {}; },
@@ -934,9 +934,9 @@ test("startup failures back off into minutes and every attempt logs only safe fi
   expect(delays).toEqual([5_000, 10_000, 20_000, 40_000, 80_000, 160_000, 300_000, 300_000, 300_000]);
   expect(logged.slice(0, 9)).toEqual(delays.map((retryInMs, index) => [
     "[structured hosts] startup adoption failed; retry scheduled",
-    { category: "runtime-host-unavailable", attempt: index + 1, retryInMs },
+    { category: "runtime-host-unavailable", attempt: index + 1, retryInMs, message: "~/fixture/error.log", hostKey: null },
   ]));
-  expect(JSON.stringify(logged)).not.toContain("private response payload");
+  expect(JSON.stringify(logged)).not.toContain(privateDiagnostic);
   expect(Math.max(...attemptTimes.map((start) => attemptTimes.filter((at) => at >= start && at < start + 60_000).length))).toBe(4);
 });
 
@@ -1028,6 +1028,8 @@ test("unsupported structured runtime aborts server startup", async () => {
       "[structured hosts] startup adoption failed",
       {
         category: "configuration",
+        message: "structured hosts require Bun",
+        hostKey: null,
         attempt: 1,
         action: "Correct the structured-host configuration and restart the Viewer.",
       },

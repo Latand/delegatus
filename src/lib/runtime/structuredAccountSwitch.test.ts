@@ -1,3 +1,4 @@
+import { loopProgressProbe } from "@/lib/agent/registryLockHolderFixture";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5,7 +6,7 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 import { afterAll, expect, test } from "bun:test";
 
-import { advanceConversationMigration, drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migration/coordinator";
+import { advanceConversationMigration, reconcileMigrations } from "@/lib/accounts/migration/coordinator";
 import { emptyLaunchProfile, type ProviderReceipt, type SuccessorProviderPort } from "@/lib/accounts/migration/contracts";
 import { MigrationTargetUnavailableError } from "@/lib/accounts/migration/safeHistoryCopy";
 import { registerAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
@@ -564,8 +565,16 @@ function sendClaimedBehindPick(storage: { sqliteMode: "sqlite"; sqliteWriterDead
   setBoardFileForTests(path.join(root, "board.json"));
   const sqliteFilename = path.join(root, "registry.sqlite");
   const registry = storage
-    ? new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { ...storage, sqliteFilename })
+    ? new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, {
+      ...storage,
+      sqliteFilename,
+    })
     : new AgentRegistry(path.join(root, "registry.json"));
+  if (storage?.sqliteWriterDeadlineMs !== undefined) {
+    let progressClock = 0;
+    const store = (registry as unknown as { sqliteStore: { writerClock: () => number } }).sqliteStore;
+    store.writerClock = () => (progressClock += 5);
+  }
   const sourcePath = path.join(root, "source.jsonl");
   const successorPath = path.join(root, "successor.jsonl");
   claudeTranscript(sourcePath);
@@ -619,24 +628,6 @@ function holdRegistryWriter(sqliteFilename: string) {
   return { release: () => { database.exec("ROLLBACK"); database.close(); } };
 }
 
-/** The longest stretch a 10 ms heartbeat went unserved while `work` ran. */
-async function longestHeartbeatGap<T>(work: () => Promise<T>): Promise<{ value: T; gapMs: number }> {
-  let last = performance.now();
-  let gapMs = 0;
-  const beat = setInterval(() => {
-    const at = performance.now();
-    gapMs = Math.max(gapMs, at - last);
-    last = at;
-  }, 10);
-  try {
-    const value = await work();
-    gapMs = Math.max(gapMs, performance.now() - last);
-    return { value, gapMs };
-  } finally {
-    clearInterval(beat);
-  }
-}
-
 test("a send claimed on the old account behind the pick moves with the switch and goes out on the new account", async () => {
   const { registry, conversation, successorPath, reconfigure } = sendClaimedBehindPick();
 
@@ -667,19 +658,19 @@ test("the switch hands its carried sends over without holding the Viewer while a
   /* The handover's write comes after the pick's own reseat write, so the lock
      is taken once that has committed: the next write is the handover. */
   const reseat = registry.requestConversationReseat.bind(registry);
+  const probe = loopProgressProbe();
   let writer: ReturnType<typeof holdRegistryWriter> | null = null;
   registry.requestConversationReseat = (...args) => {
     const conversationAfter = reseat(...args);
     writer = holdRegistryWriter(sqliteFilename);
-    setTimeout(() => writer!.release(), 600);
+    probe.arm(() => writer!.release());
     return conversationAfter;
   };
 
-  const { value, gapMs } = await longestHeartbeatGap(() => reconfigure(["send-behind-pick"]));
+  const value = await probe.run(() => reconfigure(["send-behind-pick"]));
 
   expect(writer).not.toBeNull();
   expect(value).toBe("applied");
-  expect(gapMs).toBeLessThan(50);
   expect(registry.conversation(conversation.id)!.generations.at(-1)).toMatchObject({ path: successorPath, accountId: "account-b" });
   expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ clientMessageId: "send-behind-pick", state: "assigned" }]);
   registry.close();
@@ -688,6 +679,7 @@ test("the switch hands its carried sends over without holding the Viewer while a
 test("a handover refused at its deadline writes nothing, says why, and the next pass carries the send once", async () => {
   const { registry, conversation, successorPath, reconfigure, sqliteFilename } = sendClaimedBehindPick({ sqliteMode: "sqlite", sqliteWriterDeadlineMs: 100 });
   const reseat = registry.requestConversationReseat.bind(registry);
+  const probe = loopProgressProbe();
   let writer: ReturnType<typeof holdRegistryWriter> | null = null;
   let deliveriesBeforeHandover: unknown = null;
   registry.requestConversationReseat = (...args) => {
@@ -695,15 +687,15 @@ test("a handover refused at its deadline writes nothing, says why, and the next 
     if (!writer) {
       deliveriesBeforeHandover = structuredClone(registry.readOnlySnapshot().heldDeliveries);
       writer = holdRegistryWriter(sqliteFilename);
+      probe.arm();
     }
     return conversationAfter;
   };
 
-  const { value, gapMs } = await longestHeartbeatGap(() => reconfigure(["send-behind-pick"]));
+  const value = await probe.run(() => reconfigure(["send-behind-pick"]));
   writer!.release();
 
   expect(value).toBe("writer-busy");
-  expect(gapMs).toBeLessThan(50);
   /* Nothing was written: the claim still sits on the old account. */
   expect(registry.readOnlySnapshot().heldDeliveries).toEqual(deliveriesBeforeHandover as never);
   expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ state: "delivery-uncertain" }]);

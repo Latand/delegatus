@@ -147,7 +147,8 @@ for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-
       const h = harness(route === "owner-relay");
       const result = await h.call(tool, " Example Board ");
       expect(result).toMatchObject({ ok: false, code: "ambiguous_project", retryable: false, details: { candidates: ["second-project", "target-project"] } });
-      expect("error" in result && result.error).toBe('ambiguous project "Example Board": second-project, target-project; pass one of these project keys');
+      expect("error" in result && result.error).toContain("Example Board (target-project)");
+      expect(result).toMatchObject({ details: { candidateNames: [{ project: "second-project", name: secondName }, { project: "target-project", name: "Example Board" }] } });
       expect(h.posts).toEqual([]);
       expect(h.receipts.lookup(`${tool}:resolve-1`)).toBeNull();
       expect(h.scans()).toBe(0);
@@ -174,7 +175,7 @@ for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-
     const result = await h.call(tool, " ATLAS ");
     expect(result).toMatchObject({ ok: false, code: "ambiguous_project", retryable: false,
       details: { candidates: ["atlas", "named-project"] } });
-    expect("error" in result && result.error).toBe('ambiguous project "ATLAS": atlas, named-project; pass one of these project keys');
+    expect("error" in result && result.error).toContain("ATLAS (named-project)");
     expect(h.posts).toEqual([]);
     expect(h.receipts.lookup(`${tool}:resolve-1`)).toBeNull();
     expect(h.scans()).toBe(0);
@@ -182,18 +183,16 @@ for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-
 }
 
 for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-relay"] as const) {
-  test(`${route} refuses a display-name collision with a known project that has no active seat`, async () => {
+  test(`${route} prefers its designated seat over a known namesake without a seat`, async () => {
     seat("atlas", "Atlas", "conversation_atlas");
     const h = harness(route === "owner-relay", { lastCompletedCatalog: () => ({ files: [], projectCatalog: [
       { project: "retired-atlas", displayName: "ATLAS", projectRoot: "/repos/RetiredAtlas", smt: 1, conversations: 1 },
     ] }) });
     const tool = route === "owner-relay" ? "send_message_to_orchestrator" : route;
     const result = await h.call(tool, " atlas ");
-    expect(result).toMatchObject({ ok: false, code: "ambiguous_project", retryable: false,
-      details: { candidates: ["atlas", "retired-atlas"] } });
-    expect("error" in result && result.error).toBe('ambiguous project "atlas": atlas, retired-atlas; pass one of these project keys');
-    expect(h.posts).toEqual([]);
-    expect(h.receipts.lookup(`${tool}:resolve-1`)).toBeNull();
+    // The pinned rule now prefers a unique designated seat among namesakes.
+    expect(result).toMatchObject({ ok: true, project: "atlas", conversationId: "conversation_atlas" });
+    expect(h.posts).toHaveLength(route === "get_orchestrator" ? 0 : 1);
     expect(h.scans()).toBe(0);
   });
 }
@@ -418,3 +417,47 @@ for (const tool of ["spawn_agent", "create_pipeline"] as const) {
     expect(h.posts).toHaveLength(count);
   });
 }
+
+
+test("MCP folds a deleted conventional worktree before comparing its designated seat", async () => {
+  const root = path.join(directory, "OrionRepo");
+  fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+  fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/OrionRepo.git\n');
+  const project = projectForCwd(root)!;
+  seat(project, "Orion Works");
+  seat("orion-deleted-worktree", "Orion Works", "conversation_worktree");
+  const h = harness(false, { lastCompletedCatalog: () => ({ files: [], projectCatalog: [
+    { project, displayName: "Orion Works", projectRoot: root, smt: 1, conversations: 1 },
+    { project: "orion-deleted-worktree", displayName: "Orion Works", projectRoot: path.join(root, ".worktrees", "gone"), smt: 1, conversations: 1 },
+  ] }) });
+  for (const name of ["Orion Works", "orion-deleted-worktree"]) expect(await h.call("get_orchestrator", name)).toMatchObject({ ok: true, project });
+  expect(h.scans()).toBe(0);
+});
+
+test("MCP prefers the one designated seat among unrelated same-name members", async () => {
+  seat("orion-seated", "Orion Works");
+  const h = harness(false, { lastCompletedCatalog: () => ({ files: [], projectCatalog: [
+    { project: "orion-other", displayName: "Orion Works", smt: 1, conversations: 1 },
+  ] }) });
+  expect(await h.call("get_orchestrator", "Orion Works")).toMatchObject({ ok: true, project: "orion-seated" });
+  expect(h.scans()).toBe(0);
+});
+
+
+test("retained conversation worktree markers cannot retarget an authoritative member project", async () => {
+  const root = path.join(directory, "OrionParent");
+  fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+  fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/OrionParent.git\n');
+  const parent = projectForCwd(root)!;
+  seat(parent, "Orion Parent", "conversation_parent");
+  seat("orion-member", "Orion Member", "conversation_member");
+  const h = harness(false, { lastCompletedCatalog: () => ({ projectCatalog: [
+    { project: parent, displayName: "Orion Parent", projectRoot: root, smt: 1, conversations: 1 },
+    { project: "orion-member", displayName: "Orion Member", projectRoot: path.join(directory, "MemberRepo"), smt: 1, conversations: 1 },
+  ], files: [{ project: "orion-member", projectName: "Orion Member", projectRoot: root,
+    cwd: path.join(root, ".worktrees", "gone"), worktree: "gone" } as import("@/lib/types").FileEntry] }) });
+  expect(await h.call("get_orchestrator", "Orion Member")).toMatchObject({ ok: true, project: "orion-member", conversationId: "conversation_member" });
+  expect(h.scans()).toBe(0);
+});

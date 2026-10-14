@@ -240,12 +240,12 @@ The speaker button on an assistant answer reads it out. Its provider is chosen
 the same way, one selector over:
 
 1. **Environment variable `LLV_TTS_BACKEND`** — accepts `openai`, `elevenlabs`,
-   or `soniox`. When set it wins and locks the in-app picker.
+   `soniox`, or `fishaudio`. When set it wins and locks the in-app picker.
 2. **Override file `~/.config/delegatus/tts-backend`**, written by that
    picker or by hand.
 3. **Default: `openai`.**
 
-Each provider reads the key file it already uses for transcription, so a Soniox
+OpenAI, ElevenLabs and Soniox share their key files with transcription, so a Soniox
 key set up above needs nothing more:
 
 ```bash
@@ -265,6 +265,23 @@ request, so set it if your agents answer in something other than English.
 Without a readable key the button reports text-to-speech as unavailable and
 names the file to drop the key into — the same degradation as the other
 providers.
+
+Fish Audio reads `FISH_AUDIO_API_KEY` or `fishaudio-api-key` in the same config
+folder. Select it in the read-aloud right-click menu, which also offers
+**S2.1 Pro Free** (the default, free through 30 November 2026) and **S2.1 Pro**
+(paid). The model is saved in `tts-model-fishaudio`; `LLV_TTS_FISHAUDIO_MODEL`
+overrides and locks it. `LLV_TTS_FISHAUDIO_VOICE` or `tts-voice-fishaudio` can
+set a reference voice; otherwise Fish uses its default voice. The server calls
+`https://api.fish.audio/v1/tts` with streamed 24 kHz PCM. Fish detects the
+language automatically. It returns no timestamps on this endpoint, so the
+client estimates word positions from the audio duration.
+
+The free model is refused locally from 1 December 2026 UTC and never switched
+to the paid model automatically. Provider refusals also point to the paid
+choice. Free requests may be used by Fish Audio to improve its models. Paid
+synthesis costs $15 per million UTF-8 bytes: a Cyrillic letter uses two bytes.
+The [research record](design/fish-audio-tts.md) links the official sources and
+lists the transport and voice quality checks still awaiting a key.
 
 ### Long answers, replay, and following along
 

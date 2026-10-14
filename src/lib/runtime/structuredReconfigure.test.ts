@@ -321,7 +321,7 @@ test("account reconfigure stays pending until the durable successor commits", as
 });
 
 test("an account switch's reseat waits for the registry lock off the loop under its operation, and a refused reseat changes nothing for the next pass", async () => {
-  const { registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const { registryLockHolder, whileRegistryWriterHeld } = await import("@/lib/agent/registryLockHolderFixture");
   const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
   for (const refused of [false, true]) {
     const target = fixture({}, "codex", refused ? { sqliteWriterDeadlineMs: 20 } : {});
@@ -338,9 +338,9 @@ test("an account switch's reseat waits for the registry lock off the loop under 
         releaseHost: async () => true,
       });
       if (!refused) {
-        const { value: outcome, gapMs } = await longestLoopGap(apply);
+        const { value: outcome } = await whileRegistryWriterHeld(holder, apply, { alreadyHeld: false });
         expect(outcome).toBe("pending");
-        expect(gapMs).toBeLessThan(50);
+
         expect(blockingWaitDiagnostics().longest.some((sample) => sample.label === "delivery.reseat" && sample.operationId === "switch-one")).toBe(true);
         expect(target.registry.conversation(target.conversationId)!.migration?.targetId).toBe("target");
         continue;

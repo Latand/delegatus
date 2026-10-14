@@ -1,10 +1,11 @@
+import { loopProgressProbe } from "@/lib/agent/registryLockHolderFixture";
 import { Database } from "bun:sqlite";
 import type { Subprocess } from "bun";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, test, spyOn } from "bun:test";
 
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { readReaperReport } from "@/lib/reaperRuntime";
@@ -528,24 +529,29 @@ test("a backup pass of a realistic database runs in the worker and leaves the Vi
   expect(backupDatabase(database, { backupDirectory: path.join(directory, "inline") }).state).toBe("taken");
   const inlineMs = performance.now() - inline;
 
-  let worstDelayMs = 0;
-  let last = performance.now();
-  const probe = setInterval(() => {
-    const now = performance.now();
-    worstDelayMs = Math.max(worstDelayMs, now - last - 5);
-    last = now;
-  }, 5);
+  const go = path.join(directory, "backup-go");
+  const workerPath = path.join(directory, "held-backup-worker.ts");
+  fs.writeFileSync(workerPath, `import fs from "node:fs";
+    while (!fs.existsSync(${JSON.stringify(go)})) await Bun.sleep(1);
+    await import(${JSON.stringify(path.resolve("src/lib/stateBackup.worker.ts"))});
+  `);
+  const helper = await import("@/lib/helperLease");
+  const spawn = helper.spawnLeasedHelper;
+  const progress = loopProgressProbe();
+  const launch = spyOn(helper, "spawnLeasedHelper").mockImplementation((...args) => {
+    const child = spawn(...args);
+    progress.arm(() => { fs.writeFileSync(go, "release"); });
+    return child;
+  });
   const lastRevisions = new Map<string, string>();
   const started = performance.now();
-  const outcomes = await runBackupPassInWorker(directory, lastRevisions);
-  const workerMs = performance.now() - started;
-  clearInterval(probe);
-
-  console.info(`[durability] backup of ${fs.statSync(database.filename).size} bytes: inline ${inlineMs.toFixed(0)} ms, `
-    + `worker ${workerMs.toFixed(0)} ms with a worst event-loop delay of ${worstDelayMs.toFixed(1)} ms`);
+  let outcomes;
+  try {
+    outcomes = await progress.run(() => runBackupPassInWorker(directory, lastRevisions, { launch: { executable: process.execPath, workerPath } }));
+  } finally { launch.mockRestore(); }
+  console.info(`[durability] backup of ${fs.statSync(database.filename).size} bytes: inline ${inlineMs.toFixed(0)} ms, worker ${(performance.now() - started).toFixed(0)} ms`);
   expect(outcomes.get("state.sqlite")?.state).toBe("taken");
   expect(lastRevisions.get("state.sqlite")).toBeString();
-  expect(worstDelayMs).toBeLessThan(50);
 }, 60_000);
 
 test("a production store held across a fresh fallback writes into the new database, not the damaged one", () => {

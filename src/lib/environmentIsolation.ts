@@ -6,7 +6,7 @@ const FORWARDED_API_KEYS = new Set([
   "ELEVENLABS_API_KEY",
   "OPENAI_API_KEY",
   "OPENROUTER_API_KEY",
-  "SONIOX_API_KEY",
+  "SONIOX_API_KEY", "FISH_AUDIO_API_KEY",
 ]);
 
 export function unsupportedApiCredentialNames(base: Readonly<Record<string, string | undefined>>): string[] {

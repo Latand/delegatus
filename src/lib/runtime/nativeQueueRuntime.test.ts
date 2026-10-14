@@ -829,7 +829,7 @@ function handOff(key: string, text = "queued for Codex") {
 }
 
 test("fresh and replayed hand-off writer waits name the returned original operation and perform one native add", async () => {
-  const { registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const { registryLockHolder, whileRegistryWriterHeld } = await import("@/lib/agent/registryLockHolderFixture");
   const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("@/lib/blockingWaits");
   const { DeliveryProgressStore } = await import("./deliveryProgress");
   const { f, registry, root, cleanup } = handOffFixture("correlation", true);
@@ -841,13 +841,13 @@ test("fresh and replayed hand-off writer waits name the returned original operat
     let operationId: string | null = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       resetBlockingWaitsForTests(() => {});
-      await holder.hold(600);
-      const { value: response, gapMs } = await longestLoopGap(() => handleNativeQueue(handOff("correlated-original-key"), dependencies as never));
+      await holder.hold();
+      const { value: response } = await whileRegistryWriterHeld(holder, () => handleNativeQueue(handOff("correlated-original-key"), dependencies as never));
       expect(response.status).toBe(202);
       const body = await response.json();
       operationId ??= body.operationId;
       expect(body.operationId).toBe(operationId);
-      expect(gapMs).toBeLessThan(50);
+
       expect(blockingWaitDiagnostics().longest.find(wait => wait.label === "delivery.direct-admission")?.operationId).toBe(operationId);
     }
     const command = { ...JSON.parse(await handOff("correlated-original-key").text()), operationId };
