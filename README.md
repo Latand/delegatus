@@ -97,21 +97,14 @@ without one (every version up to 1.9.0) it names the version and asks for
 `bunx delegatus-cli@latest`.
 
 **Automatic updates**, off by default, waits for green checks and a quiet minute.
-On a busy machine it holds new launches while the current work finishes. After
-two minutes without new starts it can apply as soon as all live turns and stages
-finish; otherwise it waits for a quiet minute. Operator activity, busy controllers,
-unreadable evidence, low memory and failing checks still block admission. Only
-verified live turns count. A host silent for ten minutes stops blocking unless
-its current tool or child process confirms an active check. New accepted turns
-receive a five-minute grace while their first transcript record is pending;
-unchanged silent claims then stop blocking. Completion preserves the two-minute
-no-start clock. Unverified launches have a separate five-minute grace period.
-
-Waiting holds new launches for at most ten minutes, then admits them for ten
-minutes before retrying. The Update dialog and `auto_updates.deferred` show the
-reason and retry time. Once a deployment is accepted, its custody stays until
-success or observed rollback. A failed automatic apply rolls back and turns the
-switch off.
+On a busy machine it holds new launches while the current work finishes, for
+at most ten minutes; after two minutes without new starts it applies as soon
+as the live turns and stages finish. Only work verified as live counts: a host
+silent for ten minutes stops blocking unless a long tool or a running check
+shows it is still busy. When the hold runs out, launches reopen for ten
+minutes before the next try, and the Update dialog and `auto_updates` show the
+reason and the retry time. Your own activity, low memory and failing checks
+still block it. A failed automatic apply rolls back and turns the switch off.
 
 ## What it does
 
@@ -188,6 +181,15 @@ since the last one, and asks you before it publishes;
 [docs/RELEASING.md](docs/RELEASING.md) has the procedure.
 [docs/orchestrator.md](docs/orchestrator.md) covers the rest.
 
+How many workers an orchestrator keeps running at once is one number for the
+whole machine: **Workers per project** under **Settings** in the sidebar's ⋯
+menu, from 1 to 64, 3 until you change it. The orchestrator's header shows
+it beside the running count, as "workers 2 / 5"; click it to give that
+project its own limit or to go back to the machine's. The orchestrator reads
+the current number on every wake, so a change needs no rotation. It can read
+and change the limit through `role_presets` too, with a reason that is kept
+in the limit's history.
+
 When a Delegatus tool fails, the orchestrator offers in its chat to prepare a
 bug report. If you agree, a reporter agent gathers the evidence, writes the
 report and checks it for private details. The chat then shows the exact
@@ -206,7 +208,7 @@ Telegram step or the **Reports** section in the orchestrator's own row. The
 **Bridge reports** switch, on the **Orchestrator** page of the board's ⋯
 menu, turns reports off for a project.
 
-![A project's orchestrator on top of its board: its chat with you, and beside it the Reports log of what it filed](docs/media/readme/orchestrator.svg)
+![A project's orchestrator: its chat with you, its worker count against the limit, and beside it a task's three-question decision form waiting for your answer, already sent to Telegram with a link to send it again](docs/media/readme/orchestrator.svg)
 
 ### Tasks and the board
 
@@ -254,7 +256,7 @@ and **Pipeline actions** opens as a page with a back row. A column's ⋯, a
 conversation's ⋯ and the board's ⋯ follow the same layout, and the board's ⋯
 keeps merging and the orchestrator's switches on pages of their own.
 
-![A task card's ⋯ menu open on the board: the four columns in a row, icon actions to rename, describe, attach and hide with a line saying one agent keeps working, the three priorities, and the Appearance, Pipeline actions and More rows](docs/media/readme/card-menu.svg)
+![A task card's ⋯ menu open in the In progress column: the four columns in a row, icon actions to rename, describe, attach and hide with a line saying one agent keeps working, the three priorities, and the Appearance, Pipeline actions and More rows](docs/media/readme/card-menu.svg)
 
 When an agent has screens for you to judge, it publishes them as a prototype
 review on the task, a few numbered variants with a name and a short
@@ -271,11 +273,12 @@ open, the review can instead hold three to seven questions; answer them in
 one message or skip to the recommended answers. On a phone the review fills
 the screen, and a tap opens a frame full screen with zoom and swipe.
 
-Published reviews also go to the paired owner's Telegram as rich carousels.
-A round over Telegram's limits is sent as a compact preview with a link to
-the full review. A failed or unconfirmed post stays visible on the review
-with its reason and appears in the project's seat wake. **Send to Telegram
-again** is available in the review's action area, including older rounds.
+With a relay clone paired, a published review also goes to the owner's
+Telegram as carousels, one per variant. A round over Telegram's limits goes
+as a compact preview with a link to the full review. A failed or unconfirmed
+post stays on the review with its reason and reaches the orchestrator on its
+next wake. **Send to Telegram again**, in the review's actions, sends any
+round again, older ones included.
 
 When the orchestrator starts a pipeline, launches a stage, creates a task or
 moves one, a wire runs from the orchestrator to that card for about a minute
@@ -289,7 +292,9 @@ Alt+K to step between them. Esc closes the window and a pill in the header
 brings it back. The orchestrator's expand button opens it in the same
 window.
 
-The Overview board shows what is running across all projects. You can also
+The Overview board shows what is running across all projects, and when a
+conversation changes it redraws only that project's part, so it stays
+responsive across hundreds of projects. You can also
 add tasks and start agents on them yourself, from **+** in the board's
 header. The header is one row: find with its filter, **+**, the orchestrator
 panel, recent agents under an icon, ⋯ and **Needs you**. Tasks the board does
@@ -307,7 +312,7 @@ with its reset time. When a disk runs low, a "Disk" line shows its free
 space and names what takes the most room, and new lanes wait while it is
 critically low.
 
-![A project's board: tasks by status with their icons, the agents working on each, a running pipeline's stages and a card that says why it needs you; on the left, the projects and the system block](docs/media/readme/board.svg)
+![Three columns of a project's board: a task in Inbox; In progress with its working agents, a running pipeline's stages and a card that needs your answer, counted in the column's head; Waiting with a card that names what it waits for](docs/media/readme/board.svg)
 
 ### Pipelines and review loops
 
@@ -473,7 +478,7 @@ an agent asks for your attention, the phone shows a quiet notice and leaves
 your screen where it is. [Phone access](#phone-access) explains how to reach
 Delegatus from your phone.
 
-<img src="docs/media/readme/phone-board.svg" width="300" alt="A project's board on a phone: the four status columns as tabs, with the card that needs you pinned first"> <img src="docs/media/readme/phone-conversation.svg" width="300" alt="A conversation on a phone screen, its test run expanded">
+<img src="docs/media/readme/phone-board.svg" width="300" alt="A project's board on a phone: the four status columns as tabs, and In progress showing first the card that waits on your answer, counted on its tab"> <img src="docs/media/readme/phone-conversation.svg" width="300" alt="A conversation on a phone screen, its test run expanded">
 
 ## Read any agent as a chat
 
@@ -578,7 +583,13 @@ Delegatus can take your messages by voice and read answers aloud.
   month cost. **Codex V3 (subscription)** needs no key and shows the call's
   length and the plan's usage window. On a phone the voice is a small head
   above the composer; **Hide** removes it and ends a live call, and **Show
-  voice** in the ⋯ menu brings it back.
+  voice** in the ⋯ menu brings it back. It remembers earlier calls: after
+  each call Claude Haiku, on one of your Claude subscription accounts, writes
+  a short summary of what you asked, what was done and decided and what is
+  still open, and the next call starts with up to five summaries from the
+  last week. The summaries stay on this machine, outside agent memory. The
+  voice settings list them with **Forget** and **Forget all**, and a switch
+  there turns remembering off.
 
 ## Telegram
 
@@ -687,13 +698,6 @@ The design is in [docs/design/linked-installs.md](docs/design/linked-installs.md
 
 ## External relay
 
-Answer requests wait through a busy target, chat or deployment hold. Delegatus
-acknowledges the wait and sends the `queued` progress step when the service
-supports steps. It gives up with an explicit busy decline ten seconds before
-the request's fixed deadline, normally 110 s from its start. Member quotas and
-a definite lack of account capacity still return their reasons immediately.
-
-
 A relay service can send this install questions from its own chats.
 **Chat relay**, under **Settings** in the sidebar's ⋯ menu (the board's ⋯
 menu on a phone), or the **Relay service** step of the setup guide, pairs the
@@ -715,14 +719,20 @@ records the decision. Reading the owner's group history through
 `relay_owner_history` stays behind the owner tools switch, off by default.
 The card
 shows each relay's state and, for each target, the engine, model and effort
-it answers with; answers are kept for 30 days. Polling refreshes the service’s
-features every five minutes and after an unknown-feature refusal. A claim is
-acknowledged before account selection or agent launch. The service journal
-records heartbeat attempts and results with request prefixes and fixed step
-names, withholding credentials and free-form progress text. A cancelled owner
-launch that has failed and has no remaining execution custody settles after
-a one-minute grace from the claim; uncertain or live work keeps its custody. The protocol is in
-[docs/design/relay.md](docs/design/relay.md).
+it answers with; answers are kept for 30 days. The install picks up new
+service features every five minutes, whatever the owner tools switch says,
+and acknowledges a question as soon as it takes it.
+
+When the target, the chat or the install is busy, a question waits instead
+of failing: it is acknowledged, the service sees the `queued` step if it
+shows steps, and it starts once room opens. The wait has a budget of two
+minutes from the moment the question was asked, and a question still
+waiting ten seconds before the end of that budget is declined as busy.
+The budget bounds only the wait: an answer that has started keeps running
+under the target's hard cap and may arrive after the two minutes, and a
+service that enforces its own deadline can end it there. Member quotas and
+accounts with no room answer at once.
+The protocol is in [docs/design/relay.md](docs/design/relay.md).
 
 <a id="connect-an-orchestrator-through-mcp"></a>
 
@@ -754,11 +764,12 @@ From a clone, point the command at `bin/mcp-server.mjs`, or run
 `scripts/install-mcp.sh`. The script registers the server in your Claude
 Code and Codex configurations and in every account Delegatus manages.
 
-For agents launched by Delegatus, large board, pipeline, transcript, prototype,
-activity and lifecycle reads execute in the running Viewer through its
-authenticated MCP endpoint. Their stdio processes return the same answers
-without keeping another copy of the Viewer's collection caches. These reads require the Viewer to be
-available. See [the memory replay](docs/investigations/mcp-memory-retention.md).
+For agents Delegatus launches, large reads (pipelines, transcripts, prototype
+reviews, activity and lifecycle events) run in Delegatus itself, so each
+agent's MCP server returns the same answers without keeping its own copy of
+the data; in a replay its peak memory fell from about 380 MB to 110 MB.
+These reads need Delegatus running. See
+[the memory replay](docs/investigations/mcp-memory-retention.md).
 
 The tools, by area:
 
@@ -789,11 +800,10 @@ The tools, by area:
   is refused with a pointer to `send_message_to_orchestrator`, which
   designates that project's orchestrator first when it has none, unless you
   asked for it and the seat quotes your request in `crossProjectRequest`.
-  Project inputs accept known keys, display names and repository names in any
-  letter case, with surrounding whitespace. Lookup uses known project
-  identities without waiting for catalog scan completion. Ambiguous names
-  refuse immediately with candidate keys; unknown names say “no such project”
-  and list close matches. Named `create_task` inputs store the canonical key;
+  A project can be named by its key, display name or repository folder, in
+  any letter case, and is found without waiting for a scan. A name that fits
+  several projects is refused with the candidates, and an unknown one with
+  the closest matches. A `create_task` given a name stores the project's key;
   optional `project` on `create_pipeline` and `spawn_agent` must agree with
   `repoDir` and `cwd`, respectively;
 - **accounts:** `account_limits`, `account_project_binding`,
@@ -863,12 +873,10 @@ launches and supervises agents. Ctrl-C stops both. Delegatus listens on
 `127.0.0.1` unless you pass `--hostname`, and opens the page in your browser
 when it can. Set `DELEGATUS_DEBUG=1` to print startup diagnostics.
 
-The web process logs `[viewer loop-gap]` when a ten-millisecond timer is more
-than 500 ms late. The entry names bounded request and controller operations,
-including operations that completed before the delayed tick. A
-`[state lease-hold]` entry names a pipelines lease held for more than one
-second, measured from durable acquisition through release. These entries carry
-operation names and durations without request bodies or account identifiers.
+When the web server stalls, its log says what held it: `[viewer loop-gap]`
+names the operations running when a timer fired more than 500 ms late, and
+`[state lease-hold]` names a pipelines lock held for more than a second.
+Both carry operation names and durations, never request bodies or accounts.
 
 Delegatus used to be called Agent Log Viewer. The old `agent-log-viewer`
 command still works and prints a one-line notice.
@@ -1007,7 +1015,11 @@ A pipeline stage, workflow setup or stage, publication install, release install
 or build, or gate waits while CPU pressure (`some avg10`) is at or above 30%
 and starts once it has stayed below 20% for ten seconds; the wait shows in the
 pipeline's or workflow's detail line and in the update step's log. Operator
-messages never wait on it.
+messages never wait on it. Waiting work starts in turn from one queue for
+the machine. A stage that stopped checking its place for a minute lets the
+next one pass, and a queue that has started nothing for too long says so on
+the card, for example "CPU queue is stalled · 7th · nothing started for
+62 min". A Delegatus run on its own state directory keeps its own queue.
 
 | Variable | Effect |
 |---|---|
@@ -1073,8 +1085,10 @@ those installs to Docker.
 
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the scanner, API routes, runtime
   host and UI fit together.
-- [CONTRIBUTING.md](CONTRIBUTING.md): commit identity, the privacy check and
-  what CI runs.
+- [CONTRIBUTING.md](CONTRIBUTING.md): commit identity, the privacy check,
+  the local hooks (the privacy check and the other pre-push checks run side
+  by side, and only failing test files are compared with `main`) and what CI
+  runs.
 - [docs/media/readme/](docs/media/readme/provenance.json): where the
   screenshots come from. `scripts/capture-readme-media.ts` renders them from
   an invented demo home and keeps a vector only after Chrome renders it back
