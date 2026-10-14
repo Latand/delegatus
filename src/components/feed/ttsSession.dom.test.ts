@@ -532,14 +532,14 @@ describe("PCM production client and route", () => {
     expect([...decoder.decode(new Uint8Array([0]))]).toEqual([1 / 32768]);
     decoder.finish(); decoder.decode(new Uint8Array([1])); expect(() => decoder.finish()).toThrow();
   });
-  test.each(["soniox", "fishaudio"])("%s: first audio precedes EOF, prefetch stays bounded, joins are contiguous and stop cancels", async (backend) => {
+  test.each(["soniox", "fishaudio", "elevenlabs"])("%s: first audio precedes EOF, prefetch stays bounded, joins are contiguous and stop cancels", async (backend) => {
     const clock = backend === "fishaudio" ? spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-14T00:00:00Z")) : null;
     const { PcmSession, clearPcmCache, pcmChunksCached, pcmVoice } = await import("./ttsPcmSession");
     const { POST } = await import("@/app/api/tts/route");
     const { NextRequest } = await import("next/server");
     clearPcmCache();
-    const envNames = ["LLV_TTS_BACKEND", backend === "soniox" ? "SONIOX_API_KEY" : "FISH_AUDIO_API_KEY"];
-    const voice = { id: backend, model: backend === "soniox" ? "tts-rt-v2" : "s2.1-pro-free", voice: backend === "soniox" ? "Adrian" : "default", language: backend === "soniox" ? "en" : "" };
+    const envNames = ["LLV_TTS_BACKEND", backend === "soniox" ? "SONIOX_API_KEY" : backend === "elevenlabs" ? "ELEVENLABS_API_KEY" : "FISH_AUDIO_API_KEY"];
+    const voice = { id: backend, model: backend === "soniox" ? "tts-rt-v2" : backend === "elevenlabs" ? "eleven_v4_turbo" : "s2.1-pro-free", voice: backend === "soniox" ? "Adrian" : backend === "elevenlabs" ? "JBFqnCBsd6RMkjVDRZzb" : "default", language: backend === "soniox" ? "en" : "" };
     const prior = envNames.map((name) => process.env[name]);
     process.env[envNames[0]!] = backend; process.env[envNames[1]!] = "fixture-key";
     const oldRaf = globalThis.requestAnimationFrame, oldCancel = globalThis.cancelAnimationFrame;
@@ -574,7 +574,7 @@ describe("PCM production client and route", () => {
       expect(nodes.length).toBeGreaterThan(0); expect(requests).toEqual([chunks[0]!.text]); expect(phases).toEqual(["loading"]);
       tick(0.03); expect(phases.at(-1)).toBe("playing");
       tick(0.6);
-      if (backend === "fishaudio") expect(positions.at(-1)!).toBeGreaterThan(chunks[0]!.start);
+      if (backend !== "soniox") expect(positions.at(-1)!).toBeGreaterThan(chunks[0]!.start);
       else expect(positions.at(-1)).toBe(chunks[0]!.start);
       await new Promise((r) => setTimeout(r, 1050)); expect(requests.length).toBe(2);
       firstEof(); await new Promise((r) => setTimeout(r, 1050)); expect(requests.length).toBe(3);
