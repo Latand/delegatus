@@ -604,6 +604,21 @@ maintenance. A pass launches when all of these hold:
    project's last claim. A failed pass counts as a pass, so a broken setup
    retries after 6 hours.
 
+**Admission amendment, 2026-10-14.** Every launch, restart recovery and
+deferred spawn admission also requires the host project's designated seat
+to have an alive host in the shared liveness record and to be present and
+unretired. Its tick settings must be enabled. The tick's existing delivery
+stamp, `lastWakeAt`, must belong to that seat's epoch and designation and
+be within two configured wake intervals. Settings alone grant no admission.
+For shared scopes, choose the eligible project with the newest delivered
+wake, breaking ties by project key. Project-only rules stay in their own
+eligible project. With no eligible host, the tick journal records the reason.
+
+An incumbent whose host becomes ineligible settles as `failed` with an
+`abandoned:` reason. Recovery keeps its original project and never transfers
+it to another seat. Its existing writes and undo history remain. The sweep
+also visits an incumbent's project after its seat and open work disappear.
+
 Thresholds are named constants beside `ROLE_MEMORY_BOUND`. The operator's
 existing switches cover it: the seat tick's on/off for the project, and the
 kill switch for the installation. The tick sweeps projects with an active
