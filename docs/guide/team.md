@@ -37,7 +37,9 @@ MCP tools.
 
 ### Revoke a member
 
-Do it from their row; every session of theirs ends at once.
+Do it from their row; every session of theirs ends at once. To take away their
+access entirely, also rotate the access key with `--new-token`
+([options](configuration.md)); the old key and its cookies stop working.
 
 If the owner loses every signed-in device, run this on the machine itself:
 

@@ -96,6 +96,7 @@ switch it on. The panel's text reaches the orchestrator on every wake as
 your standing instructions. The tick chip in the orchestrator's header is a
 switch with four stops, off, every 4 hours, every hour and every 10
 minutes: drag it to change how often Delegatus wakes the orchestrator, or
+click it to open the panel.
 
 ### Releases
 
@@ -169,6 +170,7 @@ When a Delegatus tool fails, the orchestrator offers in its chat to prepare a
 bug report. If you agree, a reporter agent gathers the evidence, writes the
 report and checks it for private details. The chat then shows the exact
 title and body with the agent's privacy judgment, and nothing is filed until
+you approve that text.
 
 ## Work for another project
 

@@ -111,7 +111,9 @@ A review is published after a visual critic has passed it. Before work on a
 request with important choices open, a review can instead hold three to seven
 questions; answer them in one message or skip to the recommended answers.
 
-On a phone the review fills the screen, and a tap opens a frame full screen.
+On a phone the review fills the screen, and a tap opens a frame full screen, where two fingers zoom, one pans and a sideways
+swipe steps to the next frame (the
+[image viewer](interface.md#conversations) works the same way).
 
 ## Watch a pipeline
 
